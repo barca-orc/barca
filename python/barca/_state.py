@@ -49,15 +49,6 @@ class ConflictError(Exception):
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
 
-def _local_path_of(uri: str) -> "Path | None":
-    """Path for file:// URIs and plain local paths; None for remote URIs."""
-    if uri.startswith("file://"):
-        return Path(uri[len("file://") :])
-    if "://" not in uri:
-        return Path(uri)
-    return None
-
-
 def _protocol(uri: str) -> str:
     return uri.split("://", 1)[0].lower()
 
@@ -229,7 +220,7 @@ def pull(state_uri: str, local_path: "Path | str") -> "str | None":
     Returns the concurrency token, or None when the remote object is absent
     (local_path is then left untouched).
     """
-    local_target = _local_path_of(state_uri)
+    local_target = _storage.local_path_of(state_uri)
     if local_target is not None:
         return _file_pull(local_target, local_path)
     if _protocol(state_uri) in ("gs", "gcs"):
@@ -248,7 +239,7 @@ def push(state_uri: str, local_path: "Path | str", token: "str | None") -> str:
     token=None → create-only. Raises ConflictError when the remote no longer
     matches the token (or already exists, for create-only).
     """
-    local_target = _local_path_of(state_uri)
+    local_target = _storage.local_path_of(state_uri)
     if local_target is not None:
         return _file_push(local_target, local_path, token)
 

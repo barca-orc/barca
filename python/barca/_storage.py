@@ -19,6 +19,8 @@ into the filesystem constructor as an escape hatch.
 
 import json
 import os
+import shutil
+import threading
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -35,6 +37,9 @@ _SCHEMES: dict[str, tuple[str, str, str | None]] = {
 }
 
 _fs_cache: dict[str, Any] = {}
+# Filesystems are built from worker threads (fan-in reads, the transfer
+# helper's pool); construct each protocol's instance exactly once.
+_fs_lock = threading.Lock()
 
 
 def _scheme(path: "str | Path") -> str | None:
@@ -49,6 +54,16 @@ def is_remote(path: "str | Path") -> bool:
     """True iff path is a URI handled by a remote backend (not local/file://)."""
     scheme = _scheme(path)
     return scheme is not None and scheme != "file"
+
+
+def local_path_of(uri: "str | Path") -> "Path | None":
+    """Path for file:// URIs and plain local paths; None for remote URIs."""
+    s = str(uri)
+    if s.startswith("file://"):
+        return Path(s[len("file://") :])
+    if "://" not in s:
+        return Path(s)
+    return None
 
 
 def storage_options(protocol: str) -> dict:
@@ -81,27 +96,55 @@ def get_fs(path: "str | Path"):
         )
     protocol, package, extra = entry
 
-    if protocol in _fs_cache:
-        return _fs_cache[protocol]
+    fs = _fs_cache.get(protocol)
+    if fs is not None:
+        return fs
 
+    with _fs_lock:
+        if protocol in _fs_cache:
+            return _fs_cache[protocol]
+
+        try:
+            import fsspec
+        except ImportError as exc:
+            hint = f"pip install 'barca[{extra}]'" if extra else "pip install fsspec"
+            raise ImportError(f"{scheme}:// paths require fsspec ({hint})") from exc
+
+        try:
+            fs = fsspec.filesystem(protocol, **storage_options(protocol))
+        except ImportError as exc:
+            hint = f"pip install 'barca[{extra}]'" if extra else f"pip install {package}"
+            raise ImportError(
+                f"{scheme}:// paths require the '{package}' package ({hint})"
+            ) from exc
+
+        _fs_cache[protocol] = fs
+        return fs
+
+
+def _copy_local(src: "str | Path", dst: "str | Path") -> None:
+    """Copy into a local store path, creating parents. Atomic at the destination."""
+    dst = Path(dst)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.with_name(f".{dst.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     try:
-        import fsspec
-    except ImportError as exc:
-        hint = f"pip install 'barca[{extra}]'" if extra else "pip install fsspec"
-        raise ImportError(f"{scheme}:// paths require fsspec ({hint})") from exc
-
-    try:
-        fs = fsspec.filesystem(protocol, **storage_options(protocol))
-    except ImportError as exc:
-        hint = f"pip install 'barca[{extra}]'" if extra else f"pip install {package}"
-        raise ImportError(f"{scheme}:// paths require the '{package}' package ({hint})") from exc
-
-    _fs_cache[protocol] = fs
-    return fs
+        shutil.copyfile(src, tmp)
+        os.replace(tmp, dst)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def put_file(local_path: "str | Path", dest: str) -> None:
-    """Upload a local file to a remote URI (chunked from disk, never in memory)."""
+    """Upload a local file to the store at dest (chunked from disk, never in memory).
+
+    dest may be a remote URI or a plain-path / file:// store root (a shared
+    local or network directory), which is a stdlib copy.
+    """
+    local_dest = local_path_of(dest)
+    if local_dest is not None:
+        _copy_local(local_path, local_dest)
+        return
     fs = get_fs(dest)
     parent = dest.rsplit("/", 1)[0]
     if "://" not in parent:
@@ -116,7 +159,14 @@ def put_file(local_path: "str | Path", dest: str) -> None:
 
 
 def get_file(src: str, local_path: "str | Path") -> None:
-    """Download a remote URI to a local file (chunked to disk)."""
+    """Download src from the store to a local file (chunked to disk).
+
+    src may be a remote URI or a plain-path / file:// store path.
+    """
+    local_src = local_path_of(src)
+    if local_src is not None:
+        shutil.copyfile(local_src, local_path)
+        return
     get_fs(src).get_file(src, str(local_path))
 
 

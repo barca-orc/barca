@@ -43,7 +43,7 @@ across machines:
 uri = "abfss://pipelines@myaccount.dfs.core.windows.net/barca/my-project"
 ```
 
-- Artifacts are written **content-addressed** to
+- Artifacts are stored **content-addressed** at
   `{uri}/{env}/artifacts/{node}/{run_hash}{ext}` — immutable objects, so a
   cache hit on one machine is valid on every machine.
 - The metadata DB (the turso/SQLite file that records materializations and
@@ -66,17 +66,83 @@ environment separation (`--env`), and env-var overrides.
 `barca serve` does not support shared state yet — set `state = "off"` for
 served projects.
 
+### Local-first artifacts, background transfer
+
+Workers never talk to the object store. They write every artifact to the
+local artifact directory (`.barca/artifacts/`, or `.barca/envs/<env>/artifacts/`)
+and read their inputs from there, so a step's critical path is local disk
+only. A single helper process per run (`python -m barca._transfer`) moves
+bytes between that directory and the store in the background, using the
+same fsspec backends and credentials as everything else:
+
+- **Upload** — the moment a step finishes, its artifact is queued for
+  upload while downstream steps keep running against the local copy.
+  Up to `transfer_concurrency` transfers run at once (default 4).
+- **Fetch** — a cache hit recorded by another machine is downloaded to its
+  local path just before the first step that reads it runs. Cached
+  intermediates that nothing in the run reads are never downloaded — a fully
+  cached `barca get` fetches only the final output.
+- **Drain** — before the run is recorded and the state blob pushed, barca
+  waits for every upload. A step whose upload fails gets no success row (it
+  recomputes next run) and the run exits with an error naming it, so the
+  shared metadata never points at an artifact missing from the store.
+
+**Retries and timeouts.** Each transfer is retried up to 3 times with
+exponential backoff (0.5s, 1s, 2s) when the error looks transient — dropped
+connections, timeouts, 5xx, 408 and 429 responses. Errors no retry can fix fail
+on the first attempt: missing objects, permission and authentication errors, and
+any other 4xx response (SDK errors are judged by the HTTP status they carry).
+The cloud SDKs also retry internally — Azure's backs off for up to ~15s on
+dropped connections — so the end-of-run wait can exceed barca's own backoff. An attempt
+that runs longer than `transfer_timeout` seconds (default 600, counted from
+when the attempt starts, not while it waits its turn) is failed as stalled and
+not retried — raise the limit if single artifacts take longer than that to
+move over your link.
+
+A failed upload is recorded as a `failed` row for that step with
+`error_type = 'UploadError'`, no artifact path, the number of attempts made,
+and the store error as `error_message` (`upload to <location> failed: …`);
+the run's status is `failed`. `barca stats <asset>` shows it like any other
+failure.
+
+The local artifact directory doubles as a cache of the store: a second run on
+the same machine reads from it without downloading anything. Nothing is
+evicted automatically — delete `.barca/artifacts/` to reclaim space; anything
+needed later is fetched again.
+
+Remote I/O is reported on stderr, so its cost is visible:
+
+```
+[barca] pulled state (48.0 KB) in 0.03s
+[barca] fetched 1 cached artifact (672.8 KB) in 0.1s
+[barca] 2/2 steps done in 0.2s
+[barca] uploaded 2 artifacts (672.8 KB); waited 0.0s at end of run
+[barca] pushed state (48.0 KB) in 0.03s
+```
+
+The "waited" figure is the only upload time the run paid for — the rest
+overlapped with execution. `BARCA_TRACE_TIMING=1` adds per-transfer timings.
+
+Using a GCS emulator such as fake-gcs-server with gcsfs 2026.10 or later? Set
+`GCSFS_EXPERIMENTAL_ZB_HNS_SUPPORT=false`: gcsfs's experimental mode makes a
+gRPC call the emulator doesn't serve, and transfers stall until
+`transfer_timeout`. Real GCS is unaffected.
+
+`[remote].uri` may also be a plain directory (a shared or network mount)
+instead of a URI; transfers are then local file copies.
+
 ### Artifacts-only mode (0.4.0 behavior)
 
-Set `BARCA_ARTIFACT_URI` to a URI prefix and every materialized asset is
-written there instead of `.barca/artifacts/`, while metadata stays local:
+Set `BARCA_ARTIFACT_URI` to a URI prefix to keep artifacts in a store while
+metadata stays local:
 
 ```bash
 export BARCA_ARTIFACT_URI=abfss://artifacts@myaccount.dfs.core.windows.net/prod
 barca get pipeline.py
 ```
 
-Downstream steps download their inputs to a local staging file on demand.
+Artifacts are written locally and transferred exactly as in remote mode; only
+the metadata DB is not shared.
 
 ## Remote sinks
 
@@ -101,9 +167,9 @@ recorded in the run's metadata.
 Serialized payloads are never buffered fully in memory — important when
 assets are multi-hundred-MB DataFrames or pickled models:
 
-1. The serializer (json/pickle/parquet) streams to a temp file — in the
-   destination directory for local writes, in `.barca/staging/` for remote
-   ones (deliberately on project disk, not `/tmp`, which is often RAM-backed
+1. The serializer (json/pickle/parquet) streams to a temp file in the
+   destination directory (or `.barca/staging/` for a remote `@sink` —
+   deliberately on project disk, not `/tmp`, which is often RAM-backed
    tmpfs).
 2. Local: the temp file is atomically renamed into place (`os.replace`).
    Remote: the temp file is uploaded with a chunked `put_file`; object
@@ -112,8 +178,9 @@ assets are multi-hundred-MB DataFrames or pickled models:
    partial artifact. Stale temp files from crashed workers are swept at
    worker startup.
 
-Remote reads are symmetric: inputs are downloaded to `.barca/staging/`,
-deserialized, and the temp file removed.
+The transfer helper follows the same rules: uploads stream from disk in
+chunks, and fetches download to a temp file that is renamed into place only
+when complete.
 
 ## Credentials
 
@@ -164,19 +231,11 @@ R2 supports the same `If-Match` conditional writes barca's shared state relies
 on. As with S3, the state blob must stay under the 48 MiB single-request limit
 (the coordinator errors clearly if it grows past that).
 
-## v1 limitations
+## Changing stores
 
-Two coordinator features read artifact files directly from local disk and
-require a local artifact store (they are unaffected by remote *sinks*):
-
-- **Dynamic partitions** (`partitions_from=...`) — the partition source
-  artifact is read by the Rust coordinator. With a remote store the run
-  fails with an explicit error.
-- **`parallel()` return values** — child results are read back from JSON
-  artifacts to resume the parent. With a remote store the parent receives
-  `null` results and a warning is printed.
-
-Both are candidates for a later release. Also note: artifacts are keyed by
-node id, not content, so re-runs overwrite the same remote names; switching
-`BARCA_ARTIFACT_URI` between runs does not invalidate cache rows that point
-at the previous store.
+Cache rows record each artifact's location in the store. If you point a
+project at a different store, rows recorded against the old one are used
+only when the artifact is still on local disk; otherwise those steps simply
+recompute. A cache row whose object has been deleted from the current store
+fails the run with the missing object named — re-run with `--no-cache` to
+recompute it.

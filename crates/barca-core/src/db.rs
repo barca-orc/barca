@@ -285,6 +285,7 @@ pub async fn init_db(db_path: &str) -> Result<(), BarcaError> {
         "ALTER TABLE materializations ADD COLUMN sinks_json TEXT",
         "ALTER TABLE materializations ADD COLUMN cpu_seconds REAL",
         "ALTER TABLE materializations ADD COLUMN max_rss_bytes INTEGER",
+        "ALTER TABLE materializations ADD COLUMN error_type TEXT",
     ] {
         conn.execute(col, ()).await.ok();
     }

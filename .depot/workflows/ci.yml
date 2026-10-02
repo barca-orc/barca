@@ -8,11 +8,16 @@ jobs:
   test:
     runs-on: depot-ubuntu-latest
     env:
-      # Build artifacts and pip downloads live on a Depot cache disk: a real
-      # filesystem that persists between runs (no upload/download step, and
-      # incremental compiles survive Cargo.lock changes). Each job uses its own
-      # subdirectory so the two jobs never write the same files concurrently.
+      # Build artifacts, crate downloads and pip downloads live on a Depot cache
+      # disk: a real filesystem that persists between runs (no upload/download
+      # step, and incremental compiles survive Cargo.lock changes). Each job uses
+      # its own subdirectory so the two jobs never write the same files
+      # concurrently. CARGO_HOME (registry + git checkouts) sits beside the
+      # target dir so cargo's package-cache lock covers it even if two runs of
+      # the same job overlap. Wheels are NOT built on the shared disk — see the
+      # build step.
       CARGO_TARGET_DIR: /mnt/cache/test/target
+      CARGO_HOME: /mnt/cache/test/cargo-home
       PIP_CACHE_DIR: /mnt/cache/test/pip
     steps:
       - uses: actions/checkout@v4
@@ -25,8 +30,8 @@ jobs:
 
       - name: Prepare cache dirs
         run: |
-          mkdir -p "$CARGO_TARGET_DIR" "$PIP_CACHE_DIR" 2>/dev/null \
-            || { sudo mkdir -p "$CARGO_TARGET_DIR" "$PIP_CACHE_DIR" && sudo chown -R "$(id -u):$(id -g)" /mnt/cache/test; }
+          mkdir -p "$CARGO_TARGET_DIR" "$CARGO_HOME" "$PIP_CACHE_DIR" 2>/dev/null \
+            || { sudo mkdir -p "$CARGO_TARGET_DIR" "$CARGO_HOME" "$PIP_CACHE_DIR" && sudo chown -R "$(id -u):$(id -g)" /mnt/cache/test; }
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -42,9 +47,12 @@ jobs:
       - name: Install maturin and build
         run: |
           pip install maturin
-          rm -rf "$CARGO_TARGET_DIR/wheels"
-          maturin build --release
-          pip install "$CARGO_TARGET_DIR"/wheels/*.whl
+          # Wheel goes to a per-run dir, not $CARGO_TARGET_DIR/wheels on the
+          # shared cache disk, where overlapping runs could delete or install
+          # each other's wheel.
+          WHEELS=$(mktemp -d)
+          maturin build --release --out "$WHEELS"
+          pip install "$WHEELS"/*.whl
 
       - name: Run integration tests
         run: |
@@ -76,6 +84,7 @@ jobs:
     runs-on: depot-ubuntu-latest
     env:
       CARGO_TARGET_DIR: /mnt/cache/backends/target
+      CARGO_HOME: /mnt/cache/backends/cargo-home
       PIP_CACHE_DIR: /mnt/cache/backends/pip
     steps:
       - uses: actions/checkout@v4
@@ -88,11 +97,13 @@ jobs:
           docker run -d --name minio -p 9100:9000 \
             -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
             bitnamilegacy/minio:2025.5.24
+          # Emulators are pinned: an unpinned :latest can change behavior with no
+          # commit here. Bump deliberately.
           docker run -d --name fake-gcs -p 9200:4443 \
-            fsouza/fake-gcs-server -scheme http -port 4443 \
+            fsouza/fake-gcs-server:1.56.1 -scheme http -port 4443 \
             -public-host localhost:9200 -external-url http://localhost:9200
           docker run -d --name azurite -p 9210:10000 \
-            mcr.microsoft.com/azure-storage/azurite \
+            mcr.microsoft.com/azure-storage/azurite:3.37.0 \
             azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck
 
       - name: Mount cache disk
@@ -103,8 +114,8 @@ jobs:
 
       - name: Prepare cache dirs
         run: |
-          mkdir -p "$CARGO_TARGET_DIR" "$PIP_CACHE_DIR" 2>/dev/null \
-            || { sudo mkdir -p "$CARGO_TARGET_DIR" "$PIP_CACHE_DIR" && sudo chown -R "$(id -u):$(id -g)" /mnt/cache/backends; }
+          mkdir -p "$CARGO_TARGET_DIR" "$CARGO_HOME" "$PIP_CACHE_DIR" 2>/dev/null \
+            || { sudo mkdir -p "$CARGO_TARGET_DIR" "$CARGO_HOME" "$PIP_CACHE_DIR" && sudo chown -R "$(id -u):$(id -g)" /mnt/cache/backends; }
 
       - name: Install Python
         uses: actions/setup-python@v5
@@ -117,9 +128,10 @@ jobs:
       - name: Build barca and install test extras
         run: |
           pip install maturin
-          rm -rf "$CARGO_TARGET_DIR/wheels"
-          maturin build --release
-          WHEEL=$(ls "$CARGO_TARGET_DIR"/wheels/*.whl)
+          # Per-run wheel dir: see the test job.
+          WHEELS=$(mktemp -d)
+          maturin build --release --out "$WHEELS"
+          WHEEL=$(ls "$WHEELS"/*.whl)
           pip install "${WHEEL}[test]"
 
       - name: Wait for emulators
@@ -128,7 +140,7 @@ jobs:
           for i in $(seq 1 60); do curl -sf http://localhost:9200/storage/v1/b >/dev/null && break; sleep 1; done
           for i in $(seq 1 60); do curl -s http://localhost:9210/devstoreaccount1 >/dev/null && break; sleep 1; done
 
-      - name: Run full Python suite (incl. backend conformance)
+      - name: Run full Python suite (incl. backend conformance and transfer fault tests)
         env:
           BARCA_TEST_S3_ENDPOINT: http://localhost:9100
           BARCA_TEST_GCS_ENDPOINT: http://localhost:9200

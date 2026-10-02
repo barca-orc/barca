@@ -89,8 +89,10 @@ Artifacts are content-addressed when a `run_hash` is available:
 
 e.g. `.barca/artifacts/pipeline.py--summary/3f9a....json`. Without a `run_hash` (older
 coordinators, `parallel()` children, batch mode), artifacts fall back to a legacy
-node-id-keyed layout: `{artifact_dir}/{safe_node_id}{ext}`. `artifact_dir` defaults to
-`.barca/artifacts` but may be a remote URI (`BARCA_ARTIFACT_URI`).
+node-id-keyed layout: `{artifact_dir}/{safe_node_id}{ext}`. Under the coordinator
+`artifact_dir` is always the local artifact directory — a remote store is synced by the
+transfer helper (`barca._transfer`, `crates/barca-core/src/transfer.rs`) — but batch mode
+and direct `BARCA_ARTIFACT_URI` use still accept a remote URI.
 
 ### Hash identity
 

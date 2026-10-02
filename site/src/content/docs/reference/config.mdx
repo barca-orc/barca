@@ -60,6 +60,12 @@ state = "optimistic"
 # Conflict retry budget for the conditional state upload.
 push_retries = 5
 
+# Concurrent background artifact uploads/downloads (see Remote Storage).
+transfer_concurrency = 4
+
+# Seconds one transfer attempt may run before it is failed as stalled.
+transfer_timeout = 600
+
 # Forwarded verbatim to fsspec.filesystem(protocol, ...) — keyed by protocol.
 [remote.storage_options.abfs]
 account_name = "acct"
@@ -77,6 +83,8 @@ Unknown keys are hard errors (typo protection), as are malformed files.
 | `BARCA_STATE_URI` | `[remote].state_uri` | Literal |
 | `BARCA_STATE` | `[remote].state` | `optimistic` / `off` |
 | `BARCA_PUSH_RETRIES` | `[remote].push_retries` | |
+| `BARCA_TRANSFER_CONCURRENCY` | `[remote].transfer_concurrency` | Positive integer |
+| `BARCA_TRANSFER_TIMEOUT` | `[remote].transfer_timeout` | Positive integer seconds, per attempt |
 | `BARCA_STORAGE_OPTIONS` | storage options | JSON keyed by protocol; merged **over** the toml tables per key |
 
 ## Environments (`--env`)

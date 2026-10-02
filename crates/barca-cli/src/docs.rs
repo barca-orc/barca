@@ -48,6 +48,11 @@ pub const TOPICS: &[Topic] = &[
         "cache.md"
     ),
     topic!(
+        "remote",
+        "Shared artifacts and state in S3/Azure/GCS: transfers, settings, failures",
+        "remote.md"
+    ),
+    topic!(
         "partitions",
         "Fan-out over keys and fan-in with collect",
         "partitions.md"

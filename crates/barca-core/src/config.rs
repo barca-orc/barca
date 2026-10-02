@@ -32,6 +32,10 @@ pub struct RemoteToml {
     pub state_uri: Option<String>,
     pub state: Option<String>,
     pub push_retries: Option<u32>,
+    /// Concurrent artifact uploads/downloads by the transfer helper.
+    pub transfer_concurrency: Option<usize>,
+    /// Seconds one transfer attempt may run before it is failed as stalled.
+    pub transfer_timeout: Option<u64>,
     /// Per-fsspec-protocol option tables, e.g. `[remote.storage_options.abfs]`.
     pub storage_options: Option<toml::Table>,
 }
@@ -52,8 +56,16 @@ pub struct ResolvedConfig {
     pub env: String,
     /// Local metadata DB path for this env (state sync overwrites this file).
     pub db_path: String,
-    /// Artifact root: local directory or remote URI. Set on every worker.
+    /// Artifact store root: the local artifact dir, or a remote URI / shared
+    /// directory. Recorded in the metadata DB; see [`Self::remote_artifacts`].
     pub artifact_root: String,
+    /// Where workers write and read artifacts for this env. Always local —
+    /// with a separate store it doubles as the local cache of that store.
+    pub local_artifact_dir: String,
+    /// Concurrent transfers to/from a separate artifact store.
+    pub transfer_concurrency: usize,
+    /// Per-attempt transfer limit, from when the attempt starts.
+    pub transfer_timeout_secs: u64,
     /// Remote location of the shared metadata blob, when remote mode is on.
     pub state_uri: Option<String>,
     pub state: StateMode,
@@ -61,6 +73,18 @@ pub struct ResolvedConfig {
     /// Merged storage options (toml ⊕ env, env keys win), serialized as the
     /// JSON that `BARCA_STORAGE_OPTIONS` carries to child processes.
     pub storage_options_json: Option<String>,
+}
+
+impl ResolvedConfig {
+    /// True when the artifact store is separate from the local artifact dir,
+    /// so artifacts are transferred in the background (upload after a step
+    /// completes, download before a cached artifact is consumed).
+    pub fn remote_artifacts(&self) -> bool {
+        fn norm(p: &str) -> &str {
+            p.trim_start_matches("./").trim_end_matches('/')
+        }
+        norm(&self.artifact_root) != norm(&self.local_artifact_dir)
+    }
 }
 
 // ─── Loading ─────────────────────────────────────────────────────────────────
@@ -140,7 +164,7 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
                 .as_deref()
                 .map(|u| join_uri(u, &format!("{env}/artifacts")))
         })
-        .unwrap_or(local.artifact_dir);
+        .unwrap_or_else(|| local.artifact_dir.clone());
 
     // state uri: BARCA_STATE_URI > [remote].state_uri > {uri}/{env}/state/metadata.db
     let state_uri = env_var("BARCA_STATE_URI").or(remote.state_uri).or_else(|| {
@@ -177,12 +201,49 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
         None => remote.push_retries.unwrap_or(5),
     };
 
+    let transfer_concurrency = match env_var("BARCA_TRANSFER_CONCURRENCY") {
+        Some(v) => v.parse::<usize>().ok().filter(|&n| n > 0).ok_or_else(|| {
+            BarcaError::Other(format!(
+                "invalid BARCA_TRANSFER_CONCURRENCY '{v}' (expected a positive integer)"
+            ))
+        })?,
+        None => match remote.transfer_concurrency {
+            Some(0) => {
+                return Err(BarcaError::Other(
+                    "[remote].transfer_concurrency must be at least 1".to_string(),
+                ));
+            }
+            Some(n) => n,
+            None => 4,
+        },
+    };
+
+    let transfer_timeout_secs = match env_var("BARCA_TRANSFER_TIMEOUT") {
+        Some(v) => v.parse::<u64>().ok().filter(|&n| n > 0).ok_or_else(|| {
+            BarcaError::Other(format!(
+                "invalid BARCA_TRANSFER_TIMEOUT '{v}' (expected a positive number of seconds)"
+            ))
+        })?,
+        None => match remote.transfer_timeout {
+            Some(0) => {
+                return Err(BarcaError::Other(
+                    "[remote].transfer_timeout must be at least 1 second".to_string(),
+                ));
+            }
+            Some(n) => n,
+            None => 600,
+        },
+    };
+
     let storage_options_json = merge_storage_options(remote.storage_options.as_ref())?;
 
     Ok(ResolvedConfig {
         env,
         db_path: local.db_path,
         artifact_root,
+        local_artifact_dir: local.artifact_dir,
+        transfer_concurrency,
+        transfer_timeout_secs,
         state_uri,
         state,
         push_retries,
@@ -266,6 +327,8 @@ mod tests {
         "BARCA_STATE",
         "BARCA_PUSH_RETRIES",
         "BARCA_STORAGE_OPTIONS",
+        "BARCA_TRANSFER_CONCURRENCY",
+        "BARCA_TRANSFER_TIMEOUT",
     ];
 
     fn clean_env() -> EnvGuard {
@@ -373,6 +436,127 @@ push_retries = 2
         assert!(cfg.artifact_root.starts_with("s3://env-bucket/proj/"));
         assert_eq!(cfg.state, StateMode::Off);
         assert_eq!(cfg.push_retries, 9);
+    }
+
+    #[test]
+    fn local_artifacts_are_not_remote_by_default() {
+        let _e = clean_env();
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = resolve_in(None, dir.path()).unwrap();
+        assert_eq!(cfg.local_artifact_dir, cfg.artifact_root);
+        assert!(!cfg.remote_artifacts());
+        assert_eq!(cfg.transfer_concurrency, 4);
+    }
+
+    #[test]
+    fn remote_uri_makes_artifacts_remote_with_env_scoped_local_dir() {
+        let _e = clean_env();
+        let dir = tempfile::tempdir().unwrap();
+        write_toml(dir.path(), "[remote]\nuri = \"s3://b/p\"\n");
+        let cfg = resolve_in(Some("dev"), dir.path()).unwrap();
+        assert!(cfg.remote_artifacts());
+        assert!(
+            cfg.local_artifact_dir
+                .ends_with(".barca/envs/dev/artifacts")
+        );
+    }
+
+    #[test]
+    fn plain_path_remote_root_is_remote() {
+        // A shared local/NFS directory is a store too — workers still write
+        // to .barca/artifacts and the transfer helper copies.
+        let _e = clean_env();
+        let dir = tempfile::tempdir().unwrap();
+        write_toml(dir.path(), "[remote]\nuri = \"/mnt/shared/proj\"\n");
+        let cfg = resolve_in(None, dir.path()).unwrap();
+        assert_eq!(cfg.artifact_root, "/mnt/shared/proj/default/artifacts");
+        assert!(cfg.remote_artifacts());
+    }
+
+    #[test]
+    fn artifact_uri_pointing_at_local_dir_is_not_remote() {
+        let _e = clean_env();
+        let dir = tempfile::tempdir().unwrap();
+        for v in [
+            ".barca/artifacts",
+            "./.barca/artifacts",
+            ".barca/artifacts/",
+        ] {
+            unsafe { std::env::set_var("BARCA_ARTIFACT_URI", v) };
+            let cfg = resolve_in(None, dir.path()).unwrap();
+            assert!(!cfg.remote_artifacts(), "{v} should be the local store");
+        }
+    }
+
+    #[test]
+    fn artifact_uri_env_makes_artifacts_remote() {
+        let _e = clean_env();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("BARCA_ARTIFACT_URI", "memory://arts") };
+        let cfg = resolve_in(None, dir.path()).unwrap();
+        assert!(cfg.remote_artifacts());
+    }
+
+    #[test]
+    fn transfer_concurrency_toml_then_env() {
+        let _e = clean_env();
+        let dir = tempfile::tempdir().unwrap();
+        write_toml(
+            dir.path(),
+            "[remote]\nuri = \"s3://b/p\"\ntransfer_concurrency = 8\n",
+        );
+        assert_eq!(
+            resolve_in(None, dir.path()).unwrap().transfer_concurrency,
+            8
+        );
+        unsafe { std::env::set_var("BARCA_TRANSFER_CONCURRENCY", "16") };
+        assert_eq!(
+            resolve_in(None, dir.path()).unwrap().transfer_concurrency,
+            16
+        );
+    }
+
+    #[test]
+    fn transfer_timeout_default_toml_and_env() {
+        let _e = clean_env();
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            resolve_in(None, dir.path()).unwrap().transfer_timeout_secs,
+            600
+        );
+        write_toml(
+            dir.path(),
+            "[remote]\nuri = \"s3://b/p\"\ntransfer_timeout = 120\n",
+        );
+        assert_eq!(
+            resolve_in(None, dir.path()).unwrap().transfer_timeout_secs,
+            120
+        );
+        unsafe { std::env::set_var("BARCA_TRANSFER_TIMEOUT", "30") };
+        assert_eq!(
+            resolve_in(None, dir.path()).unwrap().transfer_timeout_secs,
+            30
+        );
+        for bad in ["0", "soon"] {
+            unsafe { std::env::set_var("BARCA_TRANSFER_TIMEOUT", bad) };
+            assert!(
+                resolve_in(None, dir.path()).is_err(),
+                "{bad} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn transfer_concurrency_rejects_zero_and_garbage() {
+        let _e = clean_env();
+        let dir = tempfile::tempdir().unwrap();
+        for bad in ["0", "lots"] {
+            unsafe { std::env::set_var("BARCA_TRANSFER_CONCURRENCY", bad) };
+            assert!(
+                resolve_in(None, dir.path()).is_err(),
+                "{bad} should be rejected"
+            );
+        }
     }
 
     #[test]

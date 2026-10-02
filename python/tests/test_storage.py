@@ -6,7 +6,7 @@ in-process, never through a spawned worker subprocess.
 """
 
 import builtins
-import sys
+from pathlib import Path
 
 import pytest
 
@@ -193,3 +193,99 @@ class TestRemoteRoundTrip:
         assert _storage.exists(f) is True
         assert _storage.exists(tmp_path / "missing.json") is False
         assert _storage.size(f) == 2
+
+
+# ─── Local store fallback (plain path / file:// artifact roots) ─────────────
+
+
+class TestLocalStoreTransfer:
+    """put_file/get_file also serve a plain-path or file:// store root, so a
+    shared local/NFS directory works as the artifact store with no fsspec."""
+
+    def test_put_file_plain_path_creates_parents(self, tmp_path):
+        src = tmp_path / "src.bin"
+        src.write_bytes(b"abc")
+        dest = tmp_path / "store" / "node" / "hash.bin"
+        _storage.put_file(src, str(dest))
+        assert dest.read_bytes() == b"abc"
+
+    def test_put_file_file_uri(self, tmp_path):
+        src = tmp_path / "src.bin"
+        src.write_bytes(b"abc")
+        dest = tmp_path / "store" / "a.bin"
+        _storage.put_file(src, f"file://{dest}")
+        assert dest.read_bytes() == b"abc"
+
+    def test_get_file_plain_path_and_file_uri(self, tmp_path):
+        src = tmp_path / "store" / "a.bin"
+        src.parent.mkdir()
+        src.write_bytes(b"xyz")
+        out1 = tmp_path / "out1.bin"
+        out2 = tmp_path / "out2.bin"
+        _storage.get_file(str(src), out1)
+        _storage.get_file(f"file://{src}", out2)
+        assert out1.read_bytes() == b"xyz"
+        assert out2.read_bytes() == b"xyz"
+
+    def test_get_file_missing_local_raises(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            _storage.get_file(str(tmp_path / "nope.bin"), tmp_path / "out.bin")
+
+    def test_put_file_local_does_not_import_fsspec(self, tmp_path, monkeypatch):
+        real_import = builtins.__import__
+
+        def guarded(name, *args, **kwargs):
+            if name == "fsspec" or name.startswith("fsspec."):
+                raise AssertionError("fsspec imported for a local store")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", guarded)
+        src = tmp_path / "s"
+        src.write_bytes(b"1")
+        _storage.put_file(src, str(tmp_path / "d" / "s"))
+
+    def test_local_path_of(self, tmp_path):
+        assert _storage.local_path_of("/a/b") == Path("/a/b")
+        assert _storage.local_path_of("file:///a/b") == Path("/a/b")
+        assert _storage.local_path_of("s3://bucket/k") is None
+
+
+# ─── Thread safety ───────────────────────────────────────────────────────────
+
+
+class TestGetFsConcurrency:
+    def test_concurrent_get_fs_constructs_one_filesystem(self, monkeypatch):
+        """The transfer helper calls get_fs from a thread pool; construction
+        must happen once per protocol, not once per racing thread."""
+        import threading
+
+        import fsspec
+
+        calls = []
+        real = fsspec.filesystem
+        gate = threading.Barrier(8)
+
+        def slow_filesystem(protocol, **kw):
+            calls.append(protocol)
+            import time
+
+            time.sleep(0.05)
+            return real(protocol, **kw)
+
+        monkeypatch.setattr(fsspec, "filesystem", slow_filesystem)
+        _storage._fs_cache.pop("memory", None)
+
+        results = []
+
+        def worker():
+            gate.wait()
+            results.append(_storage.get_fs("memory://x"))
+
+        threads = [threading.Thread(target=worker) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert calls == ["memory"]
+        assert len({id(fs) for fs in results}) == 1

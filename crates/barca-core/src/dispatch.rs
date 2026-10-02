@@ -34,6 +34,32 @@ pub struct StepFailure {
     pub error: StepError,
 }
 
+/// The materialized output a `partitions_from` source name refers to.
+fn find_partition_source<'a>(
+    all_outputs: &'a HashMap<String, OutputRef>,
+    source_name: &str,
+) -> Option<&'a OutputRef> {
+    all_outputs
+        .iter()
+        .find(|(k, _)| k.ends_with(&format!(":{source_name}")) || k.as_str() == source_name)
+        .map(|(_, v)| v)
+}
+
+/// The partition-source outputs [`expand_pending_partitions`] will read from
+/// disk for this phase (so callers can make sure they are local first).
+pub fn partition_sources<'a>(
+    phase: &Phase,
+    all_outputs: &'a HashMap<String, OutputRef>,
+) -> Vec<&'a OutputRef> {
+    phase
+        .streams
+        .iter()
+        .flat_map(|s| &s.steps)
+        .flat_map(|st| st.pending_partitions.values())
+        .filter_map(|source| find_partition_source(all_outputs, source))
+        .collect()
+}
+
 /// Expand steps with pending_partitions using materialized source outputs.
 /// Returns None if no expansion needed, or a new Phase with expanded steps.
 pub fn expand_pending_partitions(
@@ -62,15 +88,7 @@ pub fn expand_pending_partitions(
 
             let mut dim_values: HashMap<String, Vec<String>> = HashMap::new();
             for (dim, source_name) in &step.pending_partitions {
-                let source_ref = all_outputs
-                    .iter()
-                    .find(|(k, _)| {
-                        k.ends_with(&format!(":{source_name}"))
-                            || k.as_str() == source_name.as_str()
-                    })
-                    .map(|(_, v)| v);
-
-                if let Some(oref) = source_ref {
+                if let Some(oref) = find_partition_source(all_outputs, source_name) {
                     if oref.format != "json" {
                         eprintln!(
                             "[barca] Error: partition source '{}' must be JSON format, got '{}'",
@@ -78,16 +96,8 @@ pub fn expand_pending_partitions(
                         );
                         continue;
                     }
-                    if oref.path.contains("://") {
-                        eprintln!(
-                            "[barca] Error: dynamic partitions (partitions_from) require a \
-                             local artifact store in v1 — partition source '{}' lives at \
-                             '{}'. Unset BARCA_ARTIFACT_URI to use these.",
-                            source_name, oref.path
-                        );
-                        continue;
-                    }
-                    // Read the JSON artifact file from disk.
+                    // Read the JSON artifact file from disk (always local: a
+                    // store-backed cache hit is fetched before expansion).
                     let json_str = match std::fs::read_to_string(&oref.path) {
                         Ok(s) => s,
                         Err(e) => {
@@ -550,10 +560,53 @@ mod tests {
         }
     }
 
+    fn pending_phase(source: &str) -> Phase {
+        Phase {
+            reason: PhaseReason::Initial,
+            streams: vec![WorkerStream {
+                stream_id: "w0".to_string(),
+                steps: vec![StreamStep {
+                    step_id: StepId::unpartitioned("f:transform"),
+                    kind: NodeKind::Asset,
+                    function_name: Arc::from("transform"),
+                    source_file: Arc::from("f"),
+                    inputs: HashMap::new(),
+                    pending_partitions: HashMap::from([("region".to_string(), source.to_string())]),
+                    serializer: None,
+                    sinks: vec![],
+                    run_hashes: HashMap::new(),
+                    timeout_seconds: 300,
+                    retries: 1,
+                    retry_backoff_seconds: 0.0,
+                    partition_keys: vec![],
+                    param_types: HashMap::new(),
+                    return_type: None,
+                }],
+            }],
+        }
+    }
+
     #[test]
-    fn expand_pending_partitions_rejects_remote_partition_source() {
-        // Remote artifact store: the partition source can't be read from disk.
-        // The step must fall through as passthrough (no expansion, loud error).
+    fn partition_sources_finds_the_outputs_expansion_will_read() {
+        let mut outputs = HashMap::new();
+        outputs.insert(
+            "f:get_regions".to_string(),
+            test_output_ref("/w/a/regions.json", "json"),
+        );
+        outputs.insert(
+            "f:other".to_string(),
+            test_output_ref("/w/a/o.json", "json"),
+        );
+        let found = partition_sources(&pending_phase("get_regions"), &outputs);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].path, "/w/a/regions.json");
+        assert!(partition_sources(&pending_phase("missing"), &outputs).is_empty());
+    }
+
+    #[test]
+    fn expand_pending_partitions_unreadable_source_does_not_expand() {
+        // A partition source whose file can't be read falls through as
+        // passthrough (no expansion, loud error).
         let phase = Phase {
             reason: PhaseReason::Initial,
             streams: vec![WorkerStream {
