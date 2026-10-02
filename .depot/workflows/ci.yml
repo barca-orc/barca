@@ -55,6 +55,7 @@ jobs:
           bash tests/integration/test_env.sh
           bash tests/integration/test_remote_state.sh
           bash tests/integration/test_partitions.sh
+          bash tests/integration/test_run_refresh.sh
 
       - name: Run benchmark examples as integration smoke tests
         run: |
