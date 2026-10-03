@@ -6,6 +6,7 @@ description: 'Point barca at a deployed server with one setting; every command b
 - **Status:** Draft
 - **Date:** 2026-10-03
 - **Touches:** barca-cli | HTTP server | python/barca | barca-core
+- **Prerequisite:** [#190](https://github.com/barca-orc/barca/issues/190) — server lifecycle (graceful drain, forced stop, crash recovery). Server mode is only safe to deploy on top of it.
 - **Supersedes / Related:** extends [RFC-0004](/rfcs/0004-http-server-api/) (lifts its v1 cuts: localhost-only, no streaming, memory-only run state — authentication stays out of scope, [#187](https://github.com/barca-orc/barca/issues/187)); revises the sharing story of [RFC-0006](/rfcs/0006-configuration-and-remote-state/); builds on [RFC-0002](/rfcs/0002-cli-surface/) (the output contract server mode must preserve)
 
 ---
@@ -192,8 +193,11 @@ never imports or executes user code — in server mode it doesn't parse Python a
   local cancelled run does.
 - **Dropped stream** reconnects with `Last-Event-ID`; if the run already finished, the
   client fetches the terminal result from `/status/{id}`.
-- **Server restart mid-run.** In-flight runs are recorded `failed` ("server restarted")
-  on startup; clients streaming them receive that terminal event on reconnect.
+- **Server restart mid-run.** Governed by [#190](https://github.com/barca-orc/barca/issues/190): a
+  deploy drains (in-flight runs finish, new ones get `503`), then force-cancels after the
+  drain deadline; after a crash, startup marks leftover `running` runs `failed`. Clients
+  streaming a run receive the corresponding terminal event (or `server draining`) and
+  exit with the matching code.
 - **`--env`** selects an environment that must exist on the server; unknown env → error
   naming the server's environments.
 - **Large outputs.** `-o value` streams from `/runs/{id}/output`; with a signed-URL
