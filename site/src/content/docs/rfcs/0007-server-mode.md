@@ -69,6 +69,7 @@ Then nothing changes:
 barca get daily_report                 # runs on the server, streams progress here
 barca get daily_report -o value        # prints the value (downloaded from the server)
 barca run deploy --refresh fetch       # task run on the server
+barca status daily_report              # cache state of nodes, from the server's DB
 barca get daily_report --dry-run       # what would run, decided by the server
 barca list                             # the server's deployed definitions
 barca history -l 20                    # the server's run history (everyone's runs)
@@ -136,8 +137,9 @@ New and changed endpoints:
 | `GET` | `/history?limit=N` | `barca history --json`, from the DB |
 | `GET` | `/stats/{name}` | `barca stats --json` |
 | `GET` | `/list` | `barca list --json` |
+| `GET` | `/status-nodes?targets=a,b` | `barca status --json` (node cache state) |
 | `GET` | `/project` | Deployed files with content hashes, deploy time, git commit if known — for drift detection |
-| `POST` | `/get/{target}`, `/run/{target}`, `/run` | Unchanged trigger contract; accept `?dry_run=1` and the CLI's cache flags (`no_cache`, `refresh`, `refresh_all`) |
+| `POST` | `/get/{target}`, `/run/{target}`, `/run` | Unchanged trigger contract; accept `?dry_run=1` and the CLI's refresh flags (`refresh`, `refresh_all`, `no_cascade`) |
 | `GET` | `/status/{id}` | Now backed by the DB: survives restarts; unknown ids still `404` |
 
 `GET /health` reports an `api_version`; a client refuses a server with a different major
@@ -151,11 +153,22 @@ version rather than misreading responses.
 
 - **Config:** `[server] url`; env `BARCA_SERVER`; flags `--server <url>`, `--local`.
   Server: `serve --host <addr>` (default `127.0.0.1`; non-loopback warns, §3.4).
+- **The CLI contract governs server mode.** `barca docs contract`
+  ([#181](https://github.com/barca-orc/barca/pull/181), [#186](https://github.com/barca-orc/barca/pull/186))
+  defines stdout JSON schemas, the stderr error envelope, `--agent` lines and exit codes.
+  Server mode must satisfy it unchanged; the new surface (`[server]`, `BARCA_SERVER`,
+  `--server`, `--local`) enters the contract as **experimental**. This also retires the
+  contract's current `barca serve` exception ("its JSON is the engine's own serialization,
+  not the CLI's"): the endpoints mirroring CLI commands return exactly the CLI's JSON.
 - **Output parity (the core contract):** for every command, server mode produces the same
   stdout JSON (field for field, modulo run ids and timings), the same stderr lines, and the
   same exit codes as local mode (0 ok, 1 step failed, 2 usage error, 3 barca/infra
   failure, 130 cancelled). Transport failures — server unreachable, rejected request,
-  version mismatch — are infra failures: exit 3, with a message naming the server.
+  version mismatch — are `kind: infra` (exit 3), with a message naming the server.
+- **stderr includes the steps' own output.** The contract defines stderr as carrying "your
+  steps' own `print` output", so the server captures each run's worker stdout/stderr and
+  sends it through `/runs/{id}/events`; the client writes it to stderr exactly as a local
+  run would.
 - **HTTP:** the endpoints in §3.4; response bodies for `/history`, `/stats`, `/list` are
   exactly the corresponding `--json` CLI output.
 - **DB:** `runs` gains `triggered_by` (`api` or `schedule`; a caller identity comes with auth, #187).
@@ -186,7 +199,9 @@ never imports or executes user code — in server mode it doesn't parse Python a
   named on the command line and (2) every deployed file that also exists locally at the same
   path relative to the local project root (the directory containing `barca.toml`, else the
   cwd). Deployed files absent locally are not a mismatch — a client needn't have the project
-  checked out. Any difference → exit 2 listing the files; nothing is triggered. Remedies:
+  checked out. Any difference → error `kind: usage` (exit 2) in the contract's error
+  envelope, listing the files, with remediation "deploy your change, or run with `--local`";
+  nothing is triggered. Remedies:
   deploy, or `--local`. There is deliberately no "run the deployed version anyway" override
   yet (§10).
 - **Ctrl-C** sends `DELETE /run/{id}`, waits briefly for `cancelled`, then exits 130 as a
@@ -198,6 +213,22 @@ never imports or executes user code — in server mode it doesn't parse Python a
   drain deadline; after a crash, startup marks leftover `running` runs `failed`. Clients
   streaming a run receive the corresponding terminal event (or `server draining`) and
   exit with the matching code.
+- **One server per metadata DB (decided).** `barca serve` holds a lifetime lock on
+  `.barca/serve.lock`; a second `serve` on the same DB exits with `kind: infra` naming the
+  holder. It deliberately does **not** hold the metadata DB itself — that would bring back
+  the bug [#136](https://github.com/barca-orc/barca/pull/136) fixed. Database access stays
+  on #136's short per-operation cross-process lock, so:
+
+  | Caller | Path | Concurrency |
+  |---|---|---|
+  | One-off commands from any machine, server mode | HTTP | unlimited — they never open the DB |
+  | `barca --local …` on the server host | the DB, via #136's short locks | safe; queues briefly |
+  | A second `barca serve` on the same DB | blocked by `serve.lock` | error |
+
+  A `--local` run on the server host is invisible to the server: it isn't drained on
+  deploy (#190), doesn't join in-flight duplicates, and doesn't get per-run code pinning.
+  Its cache results are still correct (as today); documented, not forbidden — operators
+  need `--local` on the box.
 - **`--env`** selects an environment that must exist on the server; unknown env → error
   naming the server's environments.
 - **Large outputs.** `-o value` streams from `/runs/{id}/output`; with a signed-URL
