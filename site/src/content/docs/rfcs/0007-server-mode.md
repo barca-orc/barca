@@ -6,7 +6,7 @@ description: 'Point barca at a deployed server with one setting; every command b
 - **Status:** Draft
 - **Date:** 2026-10-03
 - **Touches:** barca-cli | HTTP server | python/barca | barca-core
-- **Supersedes / Related:** extends [RFC-0004](/rfcs/0004-http-server-api/) (lifts its v1 cuts: localhost-only, no auth, no streaming, memory-only run state); revises the sharing story of [RFC-0006](/rfcs/0006-configuration-and-remote-state/); builds on [RFC-0002](/rfcs/0002-cli-surface/) (the output contract server mode must preserve)
+- **Supersedes / Related:** extends [RFC-0004](/rfcs/0004-http-server-api/) (lifts its v1 cuts: localhost-only, no streaming, memory-only run state — authentication stays out of scope, [#187](https://github.com/barca-orc/barca/issues/187)); revises the sharing story of [RFC-0006](/rfcs/0006-configuration-and-remote-state/); builds on [RFC-0002](/rfcs/0002-cli-surface/) (the output contract server mode must preserve)
 
 ---
 
@@ -59,8 +59,8 @@ url = "https://barca.example.com"
 
 …or per shell (`export BARCA_SERVER=https://barca.example.com`) or per command
 (`barca --server https://barca.example.com get daily_report`). Precedence is the usual
-flag > env > `barca.toml`. The token comes from `BARCA_TOKEN` (never from `barca.toml`,
-which is usually committed).
+flag > env > `barca.toml`. There is no authentication in this RFC (see §3.4 and
+[#187](https://github.com/barca-orc/barca/issues/187)).
 
 Then nothing changes:
 
@@ -108,17 +108,25 @@ minor release, warning on construction, then is removed.
 
 ### 3.4 HTTP API
 
-Server side, `barca serve` gains a bind address and token auth:
+Server side, `barca serve` gains a bind address:
 
 ```bash
-BARCA_SERVE_TOKENS_FILE=/etc/barca/tokens barca serve pipeline.py --host 0.0.0.0
+barca serve pipeline.py --host 0.0.0.0
 ```
 
-TLS is terminated by a reverse proxy; barca does not ship certificates. Starting with
-`--host` other than loopback and no tokens configured is an error.
+**No authentication in v1** — tracked in [#187](https://github.com/barca-orc/barca/issues/187).
+Anyone who can reach the server can trigger and cancel runs and read outputs and history.
+Binding beyond loopback is allowed but prints a warning on every start:
 
-New and changed endpoints (all require `Authorization: Bearer <token>` when tokens are
-configured; `/health` stays open):
+```
+[barca] warning: serving on 0.0.0.0:8274 with no authentication — anyone who can reach
+        this address can trigger and cancel runs. Keep it on a trusted network.
+```
+
+Deploy it on a private network/VPN, or behind a reverse proxy that authenticates (and
+terminates TLS — barca does not ship certificates). The default bind stays `127.0.0.1`.
+
+New and changed endpoints:
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -140,17 +148,16 @@ version rather than misreading responses.
 
 ### 4.1 Public API Surface
 
-- **Config:** `[server] url`; env `BARCA_SERVER`, `BARCA_TOKEN`; flags `--server <url>`,
-  `--local`. Server: `serve --host <addr>`, `BARCA_SERVE_TOKENS_FILE` (one token per line,
-  optional `name:` prefix recorded as the run's `triggered_by`).
+- **Config:** `[server] url`; env `BARCA_SERVER`; flags `--server <url>`, `--local`.
+  Server: `serve --host <addr>` (default `127.0.0.1`; non-loopback warns, §3.4).
 - **Output parity (the core contract):** for every command, server mode produces the same
   stdout JSON (field for field, modulo run ids and timings), the same stderr lines, and the
   same exit codes as local mode (0 ok, 1 step failed, 2 usage error, 3 barca/infra
-  failure, 130 cancelled). Transport failures — server unreachable, auth rejected,
+  failure, 130 cancelled). Transport failures — server unreachable, rejected request,
   version mismatch — are infra failures: exit 3, with a message naming the server.
 - **HTTP:** the endpoints in §3.4; response bodies for `/history`, `/stats`, `/list` are
   exactly the corresponding `--json` CLI output.
-- **DB:** `runs` gains `triggered_by` (token name, or `schedule`).
+- **DB:** `runs` gains `triggered_by` (`api` or `schedule`; a caller identity comes with auth, #187).
 
 ### 4.2 Implementation Details
 
@@ -201,8 +208,8 @@ No cache-key change: server mode moves *where* commands run, not what they compu
 - **Parity suite:** run each command locally and through an in-process server against the
   same project; diff normalized stdout JSON, stderr lines and exit codes. This is the test
   that keeps "business as usual" true.
-- Auth: missing/invalid token → 401 everywhere except `/health`; refusing to bind beyond
-  loopback without tokens.
+- Bind: default stays loopback; a non-loopback `--host` starts and prints the
+  no-authentication warning.
 - Resilience: dropped SSE connection mid-run, server restart mid-run, Ctrl-C.
 - `tests/integration/test_server_mode.sh`: start `barca serve`, run the CLI and `barca.api`
   against it.
@@ -224,7 +231,8 @@ equivalent, measured with `benchmarks/trivial` once client mode exists.
   including just fetching the deployed value with `-o value` — until they're deployed,
   stashed, or the command is run from a directory without the project.
 - The server is a single point of failure for shared runs (local mode still works).
-- Token auth only — no roles; anyone with a token can trigger or cancel anything.
+- No authentication: a server reachable by untrusted clients can be driven by anyone.
+  Safe deployment relies on network placement or an authenticating proxy until #187.
 
 ## 8. Rationale & Alternatives
 
@@ -255,8 +263,7 @@ its CLI. See [Framework Comparison](/comparisons/framework-comparison/).
 - **Drift — decided for v1: refuse** (exit 2, §4.5). Revisit later: an explicit override
   (e.g. `--deployed`) for read-only uses such as fetching a deployed value, or a
   warn-only mode for read commands (`list`, `history`, `stats`).
-- **Token management:** a tokens file is the minimum; is a `barca serve tokens` subcommand
-  (create/revoke) needed in v1?
+- **Authentication** — deferred to [#187](https://github.com/barca-orc/barca/issues/187) (tokens, roles, identity in `triggered_by`).
 - **RFC-0006 optimistic mode:** keep it for server-less teams, or deprecate it in favor of
   server mode (one canonical way to share)?
 
@@ -266,4 +273,4 @@ its CLI. See [Framework Comparison](/comparisons/framework-comparison/).
   source for planning and execution in an isolated environment.
 - **Read-through cache for local runs:** local `barca get` consults the server's cache
   index and fetches hits, then runs only what's missing locally.
-- Roles/permissions, webhooks, a web UI on the same API, remote workers.
+- Authentication and roles ([#187](https://github.com/barca-orc/barca/issues/187)), webhooks, a web UI on the same API, remote workers.
