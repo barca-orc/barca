@@ -137,7 +137,7 @@ New and changed endpoints:
 | `GET` | `/history?limit=N` | `barca history --json`, from the DB |
 | `GET` | `/stats/{name}` | `barca stats --json` |
 | `GET` | `/list` | `barca list --json` |
-| `GET` | `/status-nodes?targets=a,b` | `barca status --json` (node cache state) |
+| `GET` | `/nodes?targets=a,b` | `barca status --json` (node cache state) |
 | `GET` | `/project` | Deployed files with content hashes, deploy time, git commit if known — for drift detection |
 | `POST` | `/get/{target}`, `/run/{target}`, `/run` | Unchanged trigger contract; accept `?dry_run=1` and the CLI's refresh flags (`refresh`, `refresh_all`, `no_cascade`) |
 | `GET` | `/status/{id}` | Now backed by the DB: survives restarts; unknown ids still `404` |
