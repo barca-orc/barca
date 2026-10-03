@@ -75,12 +75,18 @@ barca stats daily_report               # timing/cache stats from the server's DB
 ```
 
 File arguments are optional in server mode — the server already has its project. If given,
-they must name files in the deployed project; local files that differ from the deployed
-version produce a warning (see §4.5):
+they must name files in the deployed project. Because the server runs the deployed code,
+a command **refuses** to run remotely when your local copy of the project differs from
+what's deployed (see §4.5) — it would otherwise silently run code you aren't looking at:
 
 ```
-[barca] warning: pipeline.py differs from the deployed version (deployed 2026-10-02 14:03,
-        commit 2dcfb19) — the server runs the deployed code
+$ barca get daily_report
+error: local files differ from the version deployed on https://barca.example.com
+       (deployed 2026-10-02 14:03, commit 2dcfb19):
+         pipeline.py
+       The server runs the deployed code. Deploy your change, or run locally with --local.
+$ echo $?
+2
 ```
 
 `--server` is ignored by commands that are inherently local: `serve`, `docs`, `version`.
@@ -167,9 +173,14 @@ never imports or executes user code — in server mode it doesn't parse Python a
 
 ### 4.5 Edge Cases
 
-- **Local edits.** The server runs deployed code. When file arguments are given, or a local
-  project is present, the client compares local content hashes with `GET /project` and
-  warns on mismatch (§10: warn vs. error).
+- **Local edits.** The server runs deployed code, so a mismatch is refused before anything
+  is sent. The client fetches `GET /project` and compares content hashes for (1) every file
+  named on the command line and (2) every deployed file that also exists locally at the same
+  path relative to the local project root (the directory containing `barca.toml`, else the
+  cwd). Deployed files absent locally are not a mismatch — a client needn't have the project
+  checked out. Any difference → exit 2 listing the files; nothing is triggered. Remedies:
+  deploy, or `--local`. There is deliberately no "run the deployed version anyway" override
+  yet (§10).
 - **Ctrl-C** sends `DELETE /run/{id}`, waits briefly for `cancelled`, then exits 130 as a
   local cancelled run does.
 - **Dropped stream** reconnects with `Last-Event-ID`; if the run already finished, the
@@ -209,6 +220,9 @@ equivalent, measured with `benchmarks/trivial` once client mode exists.
 - A deploy step: changes reach the server through whatever deploys it (git pull +
   `--watch`, a container rebuild). "Try my branch against the shared cache" is not
   possible until §11's local-code mode.
+- Refusing on drift means uncommitted local edits block *all* remote use of that project —
+  including just fetching the deployed value with `-o value` — until they're deployed,
+  stashed, or the command is run from a directory without the project.
 - The server is a single point of failure for shared runs (local mode still works).
 - Token auth only — no roles; anyone with a token can trigger or cancel anything.
 
@@ -238,9 +252,9 @@ its CLI. See [Framework Comparison](/comparisons/framework-comparison/).
 
 - **Naming:** `--server`/`[server]` (proposed) vs. `--remote`. `[remote]` already means
   artifact/state *storage* in `barca.toml`, so `--remote` would mean two unrelated things.
-- **Drift:** warn (proposed) or refuse when local files differ from the deployed version?
-  Refusing is safer for agents; warning keeps "fetch the prod value" working with
-  uncommitted local edits.
+- **Drift — decided for v1: refuse** (exit 2, §4.5). Revisit later: an explicit override
+  (e.g. `--deployed`) for read-only uses such as fetching a deployed value, or a
+  warn-only mode for read commands (`list`, `history`, `stats`).
 - **Token management:** a tokens file is the minimum; is a `barca serve tokens` subcommand
   (create/revoke) needed in v1?
 - **RFC-0006 optimistic mode:** keep it for server-less teams, or deprecate it in favor of
