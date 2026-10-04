@@ -1060,6 +1060,7 @@ fn cancel_on_ctrl_c() -> barca_core::CancellationToken {
     cancel
 }
 
+#[allow(clippy::result_large_err)] // cold path: one CliError per process, right before exiting
 async fn run_cli(cli: Cli, ctx: &Context) -> Result<(), CliError> {
     let python = barca_core::commands::find_python();
     let engine = |e: barca_core::BarcaError| CliError::from_barca(e, ctx);
