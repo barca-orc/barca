@@ -847,12 +847,11 @@ fn extract_parallel_call(call: &ast::ExprCall) -> ParallelCall {
                     Expr::Attribute(a) => a.attr.as_str() == "partial",
                     _ => false,
                 };
-                if is_partial {
-                    if let Some(first_arg) = inner_call.arguments.args.first() {
-                        if let Expr::Name(func_name) = first_arg {
-                            static_refs.push(NodeRef::FunctionName(func_name.id.to_string()));
-                        }
-                    }
+                if is_partial
+                    && let Some(first_arg) = inner_call.arguments.args.first()
+                    && let Expr::Name(func_name) = first_arg
+                {
+                    static_refs.push(NodeRef::FunctionName(func_name.id.to_string()));
                 }
             }
             // *expr — starred argument, always dynamic
@@ -877,10 +876,10 @@ fn extract_parallel_map_call(call: &ast::ExprCall) -> ParallelCall {
     let mut static_refs = Vec::new();
 
     // First arg is the function reference
-    if let Some(first_arg) = call.arguments.args.first() {
-        if let Expr::Name(func_name) = first_arg {
-            static_refs.push(NodeRef::FunctionName(func_name.id.to_string()));
-        }
+    if let Some(first_arg) = call.arguments.args.first()
+        && let Expr::Name(func_name) = first_arg
+    {
+        static_refs.push(NodeRef::FunctionName(func_name.id.to_string()));
     }
 
     // parallel_map is always dynamic (items resolved at runtime)
@@ -904,12 +903,11 @@ fn extract_refs_from_starred(expr: &Expr, refs: &mut Vec<NodeRef>) {
                     Expr::Attribute(a) => a.attr.as_str() == "partial",
                     _ => false,
                 };
-                if is_partial {
-                    if let Some(first_arg) = inner_call.arguments.args.first() {
-                        if let Expr::Name(func_name) = first_arg {
-                            refs.push(NodeRef::FunctionName(func_name.id.to_string()));
-                        }
-                    }
+                if is_partial
+                    && let Some(first_arg) = inner_call.arguments.args.first()
+                    && let Expr::Name(func_name) = first_arg
+                {
+                    refs.push(NodeRef::FunctionName(func_name.id.to_string()));
                 }
             }
         }
@@ -921,12 +919,11 @@ fn extract_refs_from_starred(expr: &Expr, refs: &mut Vec<NodeRef>) {
                     Expr::Attribute(a) => a.attr.as_str() == "partial",
                     _ => false,
                 };
-                if is_partial {
-                    if let Some(first_arg) = inner_call.arguments.args.first() {
-                        if let Expr::Name(func_name) = first_arg {
-                            refs.push(NodeRef::FunctionName(func_name.id.to_string()));
-                        }
-                    }
+                if is_partial
+                    && let Some(first_arg) = inner_call.arguments.args.first()
+                    && let Expr::Name(func_name) = first_arg
+                {
+                    refs.push(NodeRef::FunctionName(func_name.id.to_string()));
                 }
             }
         }

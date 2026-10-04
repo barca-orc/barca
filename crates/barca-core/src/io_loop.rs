@@ -281,11 +281,10 @@ impl WorkerPool {
                     }
                 } => {
                     let running = self.running_steps(coord);
-                    if !running.is_empty() {
-                        if let Some(hook) = self.running_hook.as_mut() {
+                    if !running.is_empty()
+                        && let Some(hook) = self.running_hook.as_mut() {
                             hook(&running);
                         }
-                    }
                     continue;
                 }
             };
@@ -498,12 +497,11 @@ impl WorkerPool {
                     // Worker crashed — its in-flight item failed; unstarted
                     // leases return to the queue for another worker.
                     if let Some(mut handle) = self.workers.remove(&worker_id) {
-                        if let Some(in_flight) = handle.leases.pop_front() {
-                            if let FailureAction::RetryAfter(delay) =
+                        if let Some(in_flight) = handle.leases.pop_front()
+                            && let FailureAction::RetryAfter(delay) =
                                 coord.on_item_failed(in_flight, "worker disconnected".to_string())
-                            {
-                                schedule_retry(&self.event_tx, in_flight, delay);
-                            }
+                        {
+                            schedule_retry(&self.event_tx, in_flight, delay);
                         }
                         Self::return_leases(&mut handle, coord);
                         tokio::task::spawn_blocking(move || {
@@ -803,8 +801,9 @@ impl WorkerPool {
                                             eprintln!(
                                                 "[barca] warning: parallel() result values require \
                                                  a local artifact store in v1 — artifact '{path}' \
-                                                 is remote; the parent receives null. Unset \
-                                                 BARCA_ARTIFACT_URI to use parallel() results."
+                                                 is remote; the parent receives null. Run \
+                                                 without BARCA_REMOTE_URI / [remote].uri to use \
+                                                 parallel() results (barca docs remote)."
                                             );
                                             None
                                         } else {
@@ -956,14 +955,12 @@ fn graceful_kill(child: &mut Child) {
             libc::kill(child.id() as i32, libc::SIGTERM);
         }
         // Give the process a moment to flush and exit.
-        match child.try_wait() {
-            Ok(Some(_)) => return,
-            _ => {}
+        if let Ok(Some(_)) = child.try_wait() {
+            return;
         }
         std::thread::sleep(Duration::from_millis(200));
-        match child.try_wait() {
-            Ok(Some(_)) => return,
-            _ => {}
+        if let Ok(Some(_)) = child.try_wait() {
+            return;
         }
     }
     // Fallback: SIGKILL (or platform kill on non-unix).

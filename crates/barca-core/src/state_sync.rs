@@ -60,9 +60,10 @@ pub async fn pull_state(python: &Path, cfg: &ResolvedConfig) -> Result<StateToke
         .map_err(|e| BarcaError::Other(format!("failed to spawn state helper: {e}")))?;
     if !out.status.success() {
         return Err(BarcaError::Other(format!(
-            "shared state pull from {uri} failed: {} — fix connectivity/credentials \
-             or set BARCA_STATE=off to run local-only",
-            String::from_utf8_lossy(&out.stderr).trim()
+            "shared state pull from {uri} failed: {}\n\
+             Fix the connection or credentials (barca docs remote), or set BARCA_STATE=off to \
+             run with local history only.",
+            helper_cause(&out.stderr)
         )));
     }
     let parsed: serde_json::Value = serde_json::from_slice(&out.stdout)
@@ -72,6 +73,25 @@ pub async fn pull_state(python: &Path, cfg: &ResolvedConfig) -> Result<StateToke
         .and_then(|t| t.as_str())
         .map(str::to_string);
     Ok(StateToken(token))
+}
+
+/// The reason a state helper failed: its last `error: ...` line (what `python -m barca._state`
+/// prints), else its last non-empty line. Library warnings printed before it (google-auth's
+/// quota-project notice, deprecation warnings) are dropped so they never reach the error.
+fn helper_cause(stderr: &[u8]) -> String {
+    let text = String::from_utf8_lossy(stderr);
+    let lines: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    lines
+        .iter()
+        .rev()
+        .find_map(|l| l.strip_prefix("error: "))
+        .or_else(|| lines.last().copied())
+        .unwrap_or("the state helper exited with an error")
+        .to_string()
 }
 
 /// Conditionally upload `cfg.db_path` over the shared state blob.
@@ -100,9 +120,10 @@ pub async fn push_state(
     }
     if !out.status.success() {
         return Err(BarcaError::Other(format!(
-            "shared state push to {uri} failed: {} — results were computed but the \
-             shared state was not updated; re-run, or set BARCA_STATE=off",
-            String::from_utf8_lossy(&out.stderr).trim()
+            "shared state push to {uri} failed: {}\n\
+             Results were computed but the shared history was not updated: re-run, or set \
+             BARCA_STATE=off (barca docs remote).",
+            helper_cause(&out.stderr)
         )));
     }
     let parsed: serde_json::Value = serde_json::from_slice(&out.stdout)
@@ -136,14 +157,14 @@ pub async fn checkpoint_truncate(db_path: &str) -> Result<(), BarcaError> {
 
     // Backstop: an upload of the main file is only valid if the WAL is gone.
     let wal = format!("{db_path}-wal");
-    if let Ok(meta) = std::fs::metadata(&wal) {
-        if meta.len() > 0 {
-            return Err(BarcaError::Db(format!(
-                "WAL not empty after checkpoint ({} bytes remain in {wal}) — \
+    if let Ok(meta) = std::fs::metadata(&wal)
+        && meta.len() > 0
+    {
+        return Err(BarcaError::Db(format!(
+            "WAL not empty after checkpoint ({} bytes remain in {wal}) — \
                  refusing to upload a torn database",
-                meta.len()
-            )));
-        }
+            meta.len()
+        )));
     }
     Ok(())
 }
@@ -163,6 +184,22 @@ fn _path_exists(p: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn helper_cause_drops_library_warnings() {
+        let stderr = b"/x/google/auth/_default.py:113: UserWarning: Your application has \
+authenticated using end user credentials\n  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)\n\
+error: RefreshError: Reauthentication is needed.\n";
+        assert_eq!(
+            super::helper_cause(stderr),
+            "RefreshError: Reauthentication is needed."
+        );
+        assert_eq!(super::helper_cause(b"\n  boom  \n"), "boom");
+        assert_eq!(
+            super::helper_cause(b""),
+            "the state helper exited with an error"
+        );
+    }
+
     use super::*;
     use turso::Builder;
 

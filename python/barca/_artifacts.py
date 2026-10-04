@@ -81,7 +81,7 @@ def detect_format(value: Any, explicit: str | None = None) -> str:
     return "pickle"
 
 
-def resolve_format(value: Any, fmt: str) -> str:
+def resolve_format(value: Any, fmt: str, warn: bool = True) -> str:
     """Downgrade parquet to pickle when the value has no parquet writer.
 
     Must be called before computing the artifact path so the extension,
@@ -92,13 +92,14 @@ def resolve_format(value: Any, fmt: str) -> str:
     if _frame_kind(value) is not None or hasattr(value, "to_parquet"):
         return fmt
 
-    import sys
+    if warn:
+        import sys
 
-    print(
-        f"[barca] warning: parquet format requested but value is "
-        f"{type(value).__name__}, falling back to pickle",
-        file=sys.stderr,
-    )
+        print(
+            f"[barca] warning: parquet format requested but value is "
+            f"{type(value).__name__}, falling back to pickle",
+            file=sys.stderr,
+        )
     return "pickle"
 
 

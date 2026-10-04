@@ -80,9 +80,10 @@ pub fn expand_pending_partitions(
                     }
                     if oref.path.contains("://") {
                         eprintln!(
-                            "[barca] error: dynamic partitions (partitions_from) require a \
-                             local artifact store in v1 — partition source '{}' lives at \
-                             '{}'. Unset BARCA_ARTIFACT_URI to use these.",
+                            "[barca] error: partition keys from an asset's list (partitions_from) \
+                             need a local artifact store — partition source '{}' lives at \
+                             '{}'. Run without BARCA_REMOTE_URI / [remote].uri, or declare the \
+                             keys with partitions([...]) (barca docs remote, Limitations).",
                             source_name, oref.path
                         );
                         continue;

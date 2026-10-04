@@ -11,7 +11,7 @@ use crate::commands::{self, CachePolicy, StepReport};
 use crate::db;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatusResult {
@@ -117,7 +117,7 @@ pub async fn status(
     cfg: &crate::config::ResolvedConfig,
     target_names: &[String],
     file_args: &[String],
-    python: &PathBuf,
+    python: &std::path::Path,
     sample: usize,
     shape: bool,
 ) -> Result<StatusResult, BarcaError> {

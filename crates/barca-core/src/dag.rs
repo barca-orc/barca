@@ -544,11 +544,11 @@ impl Dag {
 
             // Add partition_source edges for partitions_from.
             for spec in node.partitions.values() {
-                if let crate::model::PartitionSpec::DerivedFrom { source_ref } = spec {
-                    if let Ok(j) = refs.resolve(&node.source_file, source_ref) {
-                        let source_idx = index[refs.ids[j].as_str()];
-                        graph.add_edge(source_idx, downstream_idx, EdgeKind::PartitionSource);
-                    }
+                if let crate::model::PartitionSpec::DerivedFrom { source_ref } = spec
+                    && let Ok(j) = refs.resolve(&node.source_file, source_ref)
+                {
+                    let source_idx = index[refs.ids[j].as_str()];
+                    graph.add_edge(source_idx, downstream_idx, EdgeKind::PartitionSource);
                 }
             }
         }

@@ -129,9 +129,11 @@ released. Merging to main never publishes anything; only pushing a `v*` tag does
 - **Always use worktrees** for local development work
 - **Topic branches**: one per issue, branched off main, PRed straight into main
 - **Release**: when ready to ship, cut a short-lived release branch
-  `v<major>.<minor>.<patch>` off main (no descriptive suffix) containing only the
-  version bump; PR it into main, then tag the merge commit — the tag triggers the
-  release workflow (wheels, GitHub Release, PyPI)
+  `release/v<major>.<minor>.<patch>` off main containing only the version bump; PR it
+  into main and merge with `--delete-branch`, then tag the merge commit
+  `v<major>.<minor>.<patch>` — the tag triggers the release workflow (wheels, GitHub
+  Release, PyPI). The `release/` prefix keeps branch and tag names from colliding, so
+  `git push origin v<x.y.z>` and `git log v<x.y.z>..` are unambiguous
 
 ## Commit messages
 
