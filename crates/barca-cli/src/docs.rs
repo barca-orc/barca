@@ -57,6 +57,11 @@ pub const TOPICS: &[Topic] = &[
         "cache.md"
     ),
     topic!(
+        "remote",
+        "Share one cache across machines: S3, GCS, Azure, configured with environment variables",
+        "remote.md"
+    ),
+    topic!(
         "partitions",
         "Fan-out over keys and fan-in with collect",
         "partitions.md"

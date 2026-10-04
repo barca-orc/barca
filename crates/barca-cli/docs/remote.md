@@ -1,7 +1,4 @@
----
-title: Remote Storage
-description: Share one cache across machines with S3, GCS, Azure or Cloudflare R2, configured with environment variables.
----
+# Remote storage: one cache shared by every machine
 
 Point barca at a bucket and every machine that uses the same location shares results and run
 history: a result computed on one machine is a cache hit on the others. Configuration is one
@@ -79,8 +76,8 @@ endpoint_url = "https://<account-id>.r2.cloudflarestorage.com"
 
 Keep secrets out of it: credentials still come from the environment. Precedence, highest first:
 `BARCA_REMOTE_URI` over `[remote].uri`; `BARCA_STORAGE_OPTIONS` (JSON keyed by protocol) over
-`[remote.storage_options.*]` over `FSSPEC_*` variables. Every key is in the
-[configuration reference](/reference/config/).
+`[remote.storage_options.*]` over `FSSPEC_*` variables. Every key is in the configuration
+reference: https://barca.sh/reference/config/
 
 ## What barca keeps in the bucket
 
@@ -108,83 +105,3 @@ From a remote store, `barca get --json` reports every result as a pointer
 - `parallel()` return values come back as `null` with a remote store (a warning says so).
 - `barca serve` does not share history yet; set `BARCA_STATE=off` for it.
 - `barca status` shapes and `barca sql` read local artifacts only.
-
-## How shared history works
-
-- Artifacts are written **content-addressed** to
-  `{uri}/{env}/artifacts/{node}/{run_hash}{ext}` — immutable objects, so a
-  cache hit on one machine is valid on every machine.
-- The metadata DB (the turso/SQLite file that records materializations and
-  run history) lives as a single blob at `{uri}/{env}/state/metadata.db`.
-  Each run **pulls** it first — so cache checks see every machine's
-  materializations — and **pushes** it back at the end with an
-  etag/generation-conditional upload. If another machine pushed first, barca
-  re-pulls and replays this run's rows, so nothing is lost (bounded by
-  `push_retries`).
-- Before upload the WAL is checkpointed into the main file, so the blob is
-  always a complete standalone SQLite database — you can download it and
-  open it with stock `sqlite3`.
-- A run that pulls successfully but crashes mid-way uploads nothing; its
-  local rows are discarded by the next pull and those steps recompute.
-
-The result: a run on VM-B hits artifacts materialized by VM-A with zero
-re-execution.
-
-Every backend is held to the **same shared-state contract** — conditional
-create, cross-machine cache hit, concurrent-writer conflict → replay — by a
-backend conformance suite that runs on every PR against local emulators
-(MinIO for S3/R2, fake-gcs-server for GCS, Azurite for Azure), and the
-environment-variable setup above runs end to end against the same emulators
-(a second machine must get a cache hit). See
-[Releases](/contributing/releases/) for the guarantees each backend makes.
-
-## Remote sinks
-
-`@sink` paths accept the same URIs, independent of where the artifact store
-lives:
-
-```python
-from barca import asset, sink
-
-@asset
-@sink('abfss://exports@myaccount.dfs.core.windows.net/daily/report.parquet')
-def report():
-    return build_dataframe()
-```
-
-A sink failure (missing extra, bad credentials, unreachable account) never
-fails the parent asset — it is reported as `[barca] SINK FAILED: ...` and
-recorded in the run's metadata.
-
-## Staged writes
-
-Serialized payloads are never buffered fully in memory — important when
-assets are multi-hundred-MB DataFrames or pickled models:
-
-1. The serializer (json/pickle/parquet) streams to a temp file — in the
-   destination directory for local writes, in `.barca/staging/` for remote
-   ones (deliberately on project disk, not `/tmp`, which is often RAM-backed
-   tmpfs).
-2. Local: the temp file is atomically renamed into place (`os.replace`).
-   Remote: the temp file is uploaded with a chunked `put_file`; object
-   stores commit the object only when the upload completes.
-3. On any failure the temp file is removed — the destination never holds a
-   partial artifact. Stale temp files from crashed workers are swept at
-   worker startup.
-
-Remote reads are symmetric: inputs are downloaded to `.barca/staging/`,
-deserialized, and the temp file removed.
-
-## Artifacts only, history local (0.4.0 behavior)
-
-Set `BARCA_ARTIFACT_URI` to a URI prefix and every materialized asset is
-written there instead of `.barca/artifacts/`, while metadata stays local:
-
-```bash
-export BARCA_ARTIFACT_URI=abfss://artifacts@myaccount.dfs.core.windows.net/prod
-barca get pipeline.py
-```
-
-Downstream steps download their inputs to a local staging file on demand.
-
-Prefer `BARCA_REMOTE_URI` with `BARCA_STATE=off`, which also keeps `--env` separation.
