@@ -160,8 +160,8 @@ output, so the next `--dry-run` or `barca status` shows its consumers as stale.
 ```
 
 `<ext>` is `.json`, `.pkl` or `.parquet` (see `barca docs types`). Artifacts are
-content-addressed, so they can be shared between machines when remote state is configured
-(`barca.toml`; see https://barca.sh/reference/config/).
+content-addressed, so they can be shared between machines: set `BARCA_REMOTE_URI` and your
+cloud's credentials (`barca docs remote`).
 
 `.barca/` lives in the **project root**: the nearest directory at or above the one you run barca
 from that holds a `barca.toml`. Without a `barca.toml` above you, the current directory is the
