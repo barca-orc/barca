@@ -1,0 +1,6 @@
+# barca sql select * from frame order by n pipeline.py --json  (stdout, exit 0)
+columns : array
+columns[] : string
+rows : <user value>
+total : integer
+truncated : boolean

@@ -12,6 +12,7 @@ Commands:
   serve    Run a long-running HTTP server exposing the orchestrator as a JSON API
   list     List all discovered definitions (assets, tasks, sensors) with their deps
   status   Show every node's cache state, last materialization and artifact shape (read-only)
+  sql      Query cached results with SQL (DuckDB) — each asset is a view named after its function
   docs     Show the built-in manual: concepts, output formats, examples, agent conventions
   version  Print version information
   help     Print this message or the help of the given subcommand(s)

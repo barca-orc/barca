@@ -18,6 +18,7 @@ barca status                            # cached/stale/never_run and why, last r
 barca get total --dry-run               # preview: what would run or come from cache; writes nothing
 barca get total                         # execute an asset and its upstream cone
 barca run report                        # execute a task (always re-runs; upstream assets cached)
+barca sql "select * from total"         # look at a cached result with DuckDB; runs nothing
 ```
 
 - `get` is for assets, `run` for tasks; the wrong one exits 2 and names the right one.

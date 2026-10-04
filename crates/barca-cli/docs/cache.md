@@ -177,6 +177,9 @@ root. Barca changes into the root before doing anything, so:
 
 Put an empty `barca.toml` at the top of a project to anchor it.
 
+Never delete files under `.barca/` to force a recompute: use `--refresh <asset>` (below), which
+also keeps the metadata DB consistent. To look at a cached result, use `barca sql` (`barca docs sql`).
+
 ## Controlling the cache
 
 | Goal | Command |

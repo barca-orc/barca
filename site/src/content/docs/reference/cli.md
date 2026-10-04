@@ -23,6 +23,8 @@ barca serve [file.py|dir/ ...] [--port N] [--watch] [--no-schedule] [--timezone 
 barca list [file.py|dir/ ...] [-l N | --all] [--json]  List discovered definitions and their deps
 barca status [target[,target...]] [file.py|dir/ ...] [--json] [--sample N]
                                                Cache state, last run and artifact shape per node
+barca sql "<query>" [file.py|dir/ ...] [--json] [-l N | --all]
+                                               Query cached results with DuckDB (experimental)
 barca docs [topic] [--all] [--json]           Built-in manual
 barca version                                 Print version
 barca --help                                  Show help
@@ -360,6 +362,20 @@ every node, and the JSON reports `total` and `truncated` (see [Bounded output](#
 
 Status writes nothing: no `.barca` directory is created and no run is recorded. An unknown target
 is a usage error (exit 2). See `barca docs status`.
+
+## sql
+
+Query cached results with DuckDB. Every asset, sensor and task with a result on disk is a view
+named after its function; a partitioned asset is one view with a `partition` column. Nothing
+runs, user code is never imported, and nothing is recorded. Experimental.
+
+```bash
+barca sql "select * from revenue"
+barca sql "select region, sum(amount) from orders group by 1" --json   # {columns, rows, total, truncated}
+barca sql "select * from orders" --limit 20
+```
+
+See [barca sql](/reference/sql/) for views, errors and limits.
 
 ## docs
 

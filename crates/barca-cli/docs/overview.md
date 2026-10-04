@@ -45,6 +45,7 @@ barca get total pipeline.py      # second time: everything is a cache hit
 | `barca run task [files...]` | Run a task (always re-runs) and its dependency cone. `a,b` runs several in one run. |
 | `barca list [files...]` | List nodes with kind, freshness and dependencies (`--json`, `--limit`/`--all`, `--fields`; `barca docs agents`). |
 | `barca status [target] [files...]` | Per node: cache state and why, last run, artifact rows/columns (`--json`, `--limit`/`--all`, `--fields`). |
+| `barca sql "<query>" [files...]` | Query cached results with DuckDB; each asset is a view (`barca docs sql`). Experimental. |
 | `barca plan [files...]` | Emit the tiered execution plan as JSON. |
 | `barca history` / `barca stats` | Past runs; timing and cache statistics (`--json`, `--fields`; history takes `--limit`/`--all`). |
 | `barca serve [files...]` | HTTP API and cron scheduler. |
@@ -68,6 +69,7 @@ that; see `barca docs agents`.
 - `barca docs sinks` — export outputs to local or remote paths
 - `barca docs scheduling` — freshness, cron schedules, `barca serve`
 - `barca docs status` — one view of cache state, last run and artifact shape per node
+- `barca docs sql` — query cached results with DuckDB while debugging, without writing a step
 - `barca docs skill` — the short agent skill (also `SKILL.md` in the repo): start here if you are an AI agent
 - `barca docs agents` — output contract, exit codes and workflows for scripts and AI agents
 - `barca docs contract` — the CLI contract: every command, flag, environment variable, exit code and

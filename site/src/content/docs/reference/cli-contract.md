@@ -79,6 +79,7 @@ outside the `GENERATED` blocks is written by hand.
 | `barca serve` | `[<FILES>...]` | experimental: the HTTP API and scheduler are young: no auth, no shared remote state, routes may change | Run a long-running HTTP server exposing the orchestrator as a JSON API |
 | `barca list` | `[<FILES>...]` | stable | List all discovered definitions (assets, tasks, sensors) with their deps |
 | `barca status` | `[<ARGS>...]` | stable | Show every node's cache state, last materialization and artifact shape (read-only) |
+| `barca sql` | `<QUERY> [<FILES>...]` | experimental: new in 0.13: the view naming and the JSON result shape may change after field use | Query cached results with SQL (DuckDB) — each asset is a view named after its function |
 | `barca docs` | `[<TOPIC>]` | stable | Show the built-in manual: concepts, output formats, examples, agent conventions |
 | `barca version` | - | stable | Print version information |
 | `barca help` | - | stable | Print this message or the help of the given subcommand(s) |
@@ -208,6 +209,18 @@ default, and any aliases.
 | `--fields` | comma-separated: `id`, `name`, `kind`, `inputs`, `partitioned`, `cache`, `partitions`, `last_materialization`, `shape`, `env` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `nodes`. Implies --json. An unknown key is a usage error listing the valid ones |
 | `--sample` | `N` | - | experimental: sample rows come from a Python helper whose output may grow | Include up to N sample rows from each json/parquet artifact (off by default; pickles are never sampled) |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
+
+#### barca sql
+
+| Argument | Value | Notes | Stability | Description |
+|---|---|---|---|---|
+| `<QUERY>` | - | required | experimental (with the command) | The SQL query (DuckDB dialect); quote it as one argument |
+| `<FILES>...` | - | - | experimental (with the command) | Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`) |
+| `--json` | - | default `false` | experimental (with the command) | Emit JSON on stdout (the default when stdout is not a terminal) |
+| `--pretty` | - | default `false` | experimental (with the command) | Emit human-readable output (the default when stdout is a terminal) |
+| `-l, --limit` | `LIMIT` | default `100` | experimental (with the command) | Maximum number of rows to return |
+| `--all` | - | default `false` | experimental (with the command) | Return every row (no limit) |
+| `--env` | `ENV` | - | experimental (with the command) | Environment name (separates cache/state per environment) |
 
 #### barca docs
 
@@ -608,6 +621,23 @@ Truncated (`--limit 1`):
 `nodes[].kind` is `asset`, `task` or `sensor`; `nodes[].freshness` is `always`, `manual` or
 `schedule`, lowercase like `kind`. A scheduled node also has `schedule` (the cron expression) and
 `next_fire` (string, local time). `list` reads no state, so it takes no `--env`.
+
+### sql (experimental)
+
+The query result: `columns` in order and one object per row in `rows`, keyed by column name, with
+the same bounded-output envelope as `list` (`total` counts every row the query returns; `hint`
+appears when `truncated`). Row values are JSON scalars, arrays or objects; dates and times are ISO
+8601 strings, NaN and infinities are `null`.
+
+<!-- BEGIN GENERATED schema sql -->
+| Key | Type | Present |
+|---|---|---|
+| `columns` | array | always |
+| `columns[]` | string | always |
+| `rows` | `<user value>` | always |
+| `total` | integer | always |
+| `truncated` | boolean | always |
+<!-- END GENERATED schema sql -->
 
 ### status
 
