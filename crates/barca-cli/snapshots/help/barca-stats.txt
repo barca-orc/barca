@@ -1,10 +1,10 @@
 Show execution statistics for an asset
 
-Usage: barca stats [OPTIONS] <TARGET> <FILES>...
+Usage: barca stats [OPTIONS] <TARGET> [FILES]...
 
 Arguments:
   <TARGET>    Target asset function name
-  <FILES>...  Python source files containing @asset definitions
+  [FILES]...  Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`)
 
 Options:
       --json             Emit JSON on stdout (the default when stdout is not a terminal)
@@ -14,6 +14,7 @@ Options:
   -h, --help             Print help
 
 Examples:
+  barca stats total                         # find `total` anywhere in the project
   barca stats total pipeline.py             # timing percentiles and cache hit rate
   barca stats total pipeline.py --json      # {id, total_runs, cache_hit_rate, ..., recent_runs}, even in a terminal
   barca stats total pipeline.py --pretty    # the text report, even when piped

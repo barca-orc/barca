@@ -4,11 +4,11 @@ If the first positional arg ends in .py, all args are treated as files (no targe
 
 Each completed step writes a fully materialized artifact (never a lazy in-memory handle). If one computation should produce several cacheable outputs, define multiple assets or split the work inside a single step before returning.
 
-Usage: barca get [OPTIONS] <ARGS>...
+Usage: barca get [OPTIONS] [ARGS]...
 
 Arguments:
-  <ARGS>...
-          [TARGET[,TARGET...]] file.py [file.py ...] — target is optional
+  [ARGS]...
+          [TARGET[,TARGET...]] [file.py|dir/ ...] — both optional: no target gets every asset and sensor; no files reads the whole project (`barca docs discovery`)
 
 Options:
   -o, --output <OUTPUT>
@@ -52,6 +52,9 @@ Options:
           Print help (see a summary with '-h')
 
 Examples:
+  barca get total                          # find `total` anywhere in the project and get it
+  barca get total pipelines/               # only read files under pipelines/
+  barca get                                # every asset and sensor in the project, never tasks
   barca get pipeline.py                    # every asset and sensor, never tasks; prints the last asset's value
   barca get total pipeline.py              # one target and only its upstream cone
   barca get total,orders pipeline.py       # several targets in one run; shared upstream runs once

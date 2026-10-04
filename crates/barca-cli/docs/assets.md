@@ -97,8 +97,9 @@ upstream cones are planned together, so an asset both need materializes once, an
 output is keyed by target (`barca docs agents`).
 With no target, `barca get pipeline.py` materializes every asset and sensor in the file and skips
 tasks (previously it ran them too); run a task with `barca run <task> pipeline.py`.
-Use `asset_ref("other/file.py:raw")` inside `inputs=` to reference a node in another file
-without importing it.
+An input defined in another file is imported like any Python name (`from pipelines.sources
+import raw`, then `inputs={"r": raw}`); barca resolves the import statically. Use
+`asset_ref("other/file.py:raw")` to name one without importing it. See `barca docs discovery`.
 
 ## Naming
 

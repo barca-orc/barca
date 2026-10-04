@@ -1,14 +1,15 @@
 Parse source files and emit the execution plan as JSON
 
-Usage: barca plan <FILES>...
+Usage: barca plan [FILES]...
 
 Arguments:
-  <FILES>...  Python source files containing @asset definitions
+  [FILES]...  Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`)
 
 Options:
   -h, --help  Print help
 
 Examples:
+  barca plan                          # the whole project
   barca plan pipeline.py              # phases and steps that would run; nothing executes
   barca plan pipeline.py other.py     # several files form one DAG
 

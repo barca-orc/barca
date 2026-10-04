@@ -66,14 +66,15 @@ outside the `GENERATED` blocks is written by hand.
 <!-- BEGIN GENERATED commands -->
 | Command | Arguments | Stability | Purpose |
 |---|---|---|---|
-| `barca get` | `<ARGS>...` | stable | Get asset value(s) — cache-aware, runs only the needed subgraph |
+| `barca get` | `[<ARGS>...]` | stable | Get asset value(s) — cache-aware, runs only the needed subgraph |
 | `barca run` | `<ARGS>...` | stable | Run a task and its dependency cone — the task always re-runs |
-| `barca plan` | `<FILES>...` | experimental: prints the planner's internal phase/stream layout, which changes with scheduling work | Parse source files and emit the execution plan as JSON |
+| `barca plan` | `[<FILES>...]` | experimental: prints the planner's internal phase/stream layout, which changes with scheduling work | Parse source files and emit the execution plan as JSON |
 | `barca history` | - | stable | Show recent run history |
-| `barca stats` | `<TARGET> <FILES>...` | stable | Show execution statistics for an asset |
-| `barca serve` | `<FILES>...` | experimental: the HTTP API and scheduler are young: no auth, no shared remote state, routes may change | Run a long-running HTTP server exposing the orchestrator as a JSON API |
-| `barca list` | `<FILES>...` | stable | List all discovered definitions (assets, tasks, sensors) with their deps |
-| `barca status` | `<ARGS>...` | stable | Show every node's cache state, last materialization and artifact shape (read-only) |
+| `barca stats` | `<TARGET> [<FILES>...]` | stable | Show execution statistics for an asset |
+| `barca serve` | `[<FILES>...]` | experimental: the HTTP API and scheduler are young: no auth, no shared remote state, routes may change | Run a long-running HTTP server exposing the orchestrator as a JSON API |
+| `barca list` | `[<FILES>...]` | stable | List all discovered definitions (assets, tasks, sensors) with their deps |
+| `barca status` | `[<ARGS>...]` | stable | Show every node's cache state, last materialization and artifact shape (read-only) |
+| `barca sql` | `<QUERY> [<FILES>...]` | experimental: new in 0.13: the view naming and the JSON result shape may change after field use | Query cached results with SQL (DuckDB) — each asset is a view named after its function |
 | `barca docs` | `[<TOPIC>]` | stable | Show the built-in manual: concepts, output formats, examples, agent conventions |
 | `barca version` | - | stable | Print version information |
 | `barca help` | - | stable | Print this message or the help of the given subcommand(s) |
@@ -111,7 +112,7 @@ default, and any aliases.
 
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
-| `<ARGS>...` | - | required | stable | [TARGET[,TARGET...]] file.py [file.py ...] — target is optional |
+| `<ARGS>...` | - | - | stable | [TARGET[,TARGET...]] [file.py\|dir/ ...] — both optional: no target gets every asset and sensor; no files reads the whole project (`barca docs discovery`) |
 | `-o, --output` | `json\|value\|pretty` | - | experimental: kept for compatibility; --json / --pretty are the canonical spelling | Output format (kept for compatibility; --json / --pretty are the canonical spelling) |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
@@ -128,7 +129,7 @@ default, and any aliases.
 
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
-| `<ARGS>...` | - | required | stable | TARGET[,TARGET...] file.py [file.py ...] — one or more target tasks, comma-separated |
+| `<ARGS>...` | - | required | stable | TARGET[,TARGET...] [file.py\|dir/ ...] — one or more target tasks, comma-separated; no files reads the whole project (`barca docs discovery`) |
 | `--refresh` | comma-separated names | - | stable | Upstream assets to force re-materialize, as ONE comma-separated list (`--refresh a,b`, not `--refresh a b`). Every asset downstream of them in the task's cone re-materializes too (see --no-cascade) |
 | `--no-cascade` | - | default `false` | stable | With --refresh: re-materialize only the named assets, not what is downstream of them. Cached downstream assets then do not reflect the refresh; barca warns |
 | `--refresh-all` | - | default `false` | stable | Force re-materialize EVERY asset in the task's cone (nothing comes from cache) |
@@ -145,7 +146,7 @@ default, and any aliases.
 
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
-| `<FILES>...` | - | required | experimental (with the command) | Python source files containing @asset definitions |
+| `<FILES>...` | - | - | experimental (with the command) | Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`) |
 
 #### barca history
 
@@ -163,7 +164,7 @@ default, and any aliases.
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
 | `<TARGET>` | - | required | stable | Target asset function name |
-| `<FILES>...` | - | required | stable | Python source files containing @asset definitions |
+| `<FILES>...` | - | - | stable | Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`) |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `--fields` | comma-separated: `elapsed_seconds`, `status`, `created_at`, `error_message`, `attempts` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `recent_runs`. Implies --json. An unknown key is a usage error listing the valid ones |
@@ -173,7 +174,7 @@ default, and any aliases.
 
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
-| `<FILES>...` | - | required | experimental (with the command) | Python source files defining the DAG to serve |
+| `<FILES>...` | - | - | experimental (with the command) | Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`). With --watch, files added later are not picked up until restart |
 | `-p, --port` | `PORT` | default `8274` | experimental (with the command) | Port to bind on |
 | `--watch` | - | default `false` | experimental (with the command) | Dev mode: re-parse the DAG when source files change |
 | `--no-schedule` | - | default `false` | experimental (with the command) | Disable the cron scheduler (Schedule(...) assets will not auto-fire) |
@@ -184,7 +185,7 @@ default, and any aliases.
 
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
-| `<FILES>...` | - | required | stable | Python source files containing definitions |
+| `<FILES>...` | - | - | stable | Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`) |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `-l, --limit` | `LIMIT` | default `100` | stable | Maximum number of nodes to show, in topological order |
@@ -195,7 +196,7 @@ default, and any aliases.
 
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
-| `<ARGS>...` | - | required | stable | [TARGET[,TARGET...]] file.py [file.py ...] — target is optional |
+| `<ARGS>...` | - | - | stable | [TARGET[,TARGET...]] [file.py\|dir/ ...] — both optional; no files reads the whole project (`barca docs discovery`) |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `-l, --limit` | `LIMIT` | default `100` | stable | Maximum number of nodes to show, in topological order |
@@ -203,6 +204,18 @@ default, and any aliases.
 | `--fields` | comma-separated: `id`, `name`, `kind`, `inputs`, `partitioned`, `cache`, `partitions`, `last_materialization`, `shape`, `env` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `nodes`. Implies --json. An unknown key is a usage error listing the valid ones |
 | `--sample` | `N` | - | experimental: sample rows come from a Python helper whose output may grow | Include up to N sample rows from each json/parquet artifact (off by default; pickles are never sampled) |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
+
+#### barca sql
+
+| Argument | Value | Notes | Stability | Description |
+|---|---|---|---|---|
+| `<QUERY>` | - | required | experimental (with the command) | The SQL query (DuckDB dialect); quote it as one argument |
+| `<FILES>...` | - | - | experimental (with the command) | Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`) |
+| `--json` | - | default `false` | experimental (with the command) | Emit JSON on stdout (the default when stdout is not a terminal) |
+| `--pretty` | - | default `false` | experimental (with the command) | Emit human-readable output (the default when stdout is a terminal) |
+| `-l, --limit` | `LIMIT` | default `100` | experimental (with the command) | Maximum number of rows to return |
+| `--all` | - | default `false` | experimental (with the command) | Return every row (no limit) |
+| `--env` | `ENV` | - | experimental (with the command) | Environment name (separates cache/state per environment) |
 
 #### barca docs
 
@@ -577,6 +590,7 @@ appears only when `truncated` is true. `--fields` keeps only the named keys on e
 | `nodes[].inputs` | array | always |
 | `nodes[].inputs[]` | string | always |
 | `nodes[].kind` | string | always |
+| `root` | string | always |
 | `total` | integer | always |
 | `truncated` | boolean | always |
 <!-- END GENERATED schema list -->
@@ -594,6 +608,7 @@ Truncated (`--limit 1`):
 | `nodes[].id` | string | always |
 | `nodes[].inputs` | array | always |
 | `nodes[].kind` | string | always |
+| `root` | string | always |
 | `total` | integer | always |
 | `truncated` | boolean | always |
 <!-- END GENERATED schema list_truncated -->
@@ -601,6 +616,23 @@ Truncated (`--limit 1`):
 `nodes[].kind` is `asset`, `task` or `sensor`; `nodes[].freshness` is `always`, `manual` or
 `schedule`, lowercase like `kind`. A scheduled node also has `schedule` (the cron expression) and
 `next_fire` (string, local time). `list` reads no state, so it takes no `--env`.
+
+### sql (experimental)
+
+The query result: `columns` in order and one object per row in `rows`, keyed by column name, with
+the same bounded-output envelope as `list` (`total` counts every row the query returns; `hint`
+appears when `truncated`). Row values are JSON scalars, arrays or objects; dates and times are ISO
+8601 strings, NaN and infinities are `null`.
+
+<!-- BEGIN GENERATED schema sql -->
+| Key | Type | Present |
+|---|---|---|
+| `columns` | array | always |
+| `columns[]` | string | always |
+| `rows` | `<user value>` | always |
+| `total` | integer | always |
+| `truncated` | boolean | always |
+<!-- END GENERATED schema sql -->
 
 ### status
 
@@ -653,6 +685,7 @@ counts every node even when `nodes` is truncated.
 | `nodes[].shape.rows` | integer | sometimes |
 | `nodes[].shape.sample` | `<user value>` | always |
 | `nodes[].shape.type` | string | always |
+| `root` | string | always |
 | `summary` | object | always |
 | `summary.always_runs` | integer | always |
 | `summary.cached` | integer | always |
@@ -775,6 +808,15 @@ state and takes no `--env`.
 <!-- END GENERATED schema docs_topic -->
 
 Topic names and contents are documentation, not contract.
+
+## Project root (stable)
+
+Every command except `docs` and `version` runs from the project root: the nearest directory at or
+above the cwd holding `barca.toml`, else the cwd. File arguments are read relative to the cwd
+they were typed in and rewritten relative to the root, so node ids, `.barca/` and the working
+directory of steps do not depend on where barca was invoked. The stderr line
+`barca: project root: <path> ...`, printed when the root is not the cwd, is informational and not
+contract.
 
 ## stderr
 

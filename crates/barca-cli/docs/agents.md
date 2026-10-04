@@ -276,18 +276,37 @@ barca.run("send_email", "pipeline.py", refresh=["report"])
 raised on failure; for `get`/`run`/`plan` its `kind`, `code`, `remediation` (and for a failed step
 `node`, `traceback`, `artifact_dir`) come from the error envelope. Or read a parquet `path` directly with duckdb/pandas/polars.
 
+## Looking at cached results
+
+To inspect data (which rows failed a check, what an asset holds), query it instead of writing a
+script: `barca sql "select * from revenue where amount < 0" --json`. Every asset with a result is
+a view named after its function; the JSON is `{columns, rows, total, truncated}`. It never runs a
+step or imports user code. To recompute first, use `--refresh`; never delete files under
+`.barca/`. See `barca docs sql`.
+
 ## Targets and files
 
+- Files are optional: with none, barca reads every `.py` file in the project that imports barca
+  (`barca list`, `barca run validate`). Files or directories narrow it (`barca get total
+  pipelines/`); a directory as the first argument needs a trailing `/` (or `.`), otherwise it is
+  read as a target name. See `barca docs discovery`.
 - `barca get file.py` gets every asset and sensor (final value is the last asset). It never runs
   tasks (it used to): stderr names the skipped tasks and the `barca run` command. A file with only
   tasks gets nothing and exits 0 with `"steps": []`.
 - `barca get name file.py [more.py ...]` gets one target; `name` can be the bare function name
   or the full id `file.py:name`. A name selects exactly that node: `deploy` never selects
   `prod_deploy`. A function name defined in more than one file is a usage error (exit 2) that
-  lists the full ids to choose from. Cross-file inputs use `asset_ref("path.py:fn")`.
+  lists the full ids to choose from. Cross-file inputs are ordinary imports (`from pipelines.sources
+  import raw`, then `inputs={"r": raw}`); `asset_ref("path.py:fn")` names a node without an
+  import. A bare input name defined in several files is an error listing the candidates.
 - `barca get a,b file.py` / `barca run a,b file.py` take several targets in one run (see above);
   `barca status a,b file.py` shows the union of their cones.
 - `barca file.py` is shorthand for `barca get file.py`.
+- You can run barca from any directory inside a project with a `barca.toml`: barca changes into
+  that directory (the project root) first, reads file arguments relative to where you typed
+  them, and uses the root's `.barca/` cache. Node ids are relative to the root. See
+  `barca docs cache` ("Where things live"). `barca list --json` and `barca status --json` carry the
+  absolute `root`.
 - `get` is for assets and `run` is for tasks; using the wrong one exits 2 and says which to use.
 - The target comes before the files. If the first positional ends in `.py` and a later one does
   not, there is exactly one valid reading, so barca exits 2 and prints the corrected command

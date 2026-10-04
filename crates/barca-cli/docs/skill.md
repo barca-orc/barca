@@ -13,16 +13,22 @@ under `.barca/`. Ask the `barca` CLI what exists, what is cached and what ran. F
 ## The loop
 
 ```bash
-barca list pipeline.py                  # discover: every node, its kind, inputs, env
-barca status pipeline.py                # cached/stale/never_run and why, last run, rows/columns
-barca get total pipeline.py --dry-run   # preview: what would run or come from cache; writes nothing
-barca get total pipeline.py             # execute an asset and its upstream cone
-barca run report pipeline.py            # execute a task (always re-runs; upstream assets cached)
+barca list                              # discover: every node in the project, its kind, inputs, env
+barca status                            # cached/stale/never_run and why, last run, rows/columns
+barca get total --dry-run               # preview: what would run or come from cache; writes nothing
+barca get total                         # execute an asset and its upstream cone
+barca run report                        # execute a task (always re-runs; upstream assets cached)
+barca sql "select * from total"         # look at a cached result with DuckDB; runs nothing
 ```
 
 - `get` is for assets, `run` for tasks; the wrong one exits 2 and names the right one.
 - A second identical `get` reports `steps_executed: 0` (all cached).
-- Unsure of a name? `barca list <files>`. An unknown name exits 2 and lists the valid ones.
+- No file arguments needed: barca reads every `.py` file in the project that imports barca.
+  Add files or directories (`barca get total pipelines/`) to narrow it (`barca docs discovery`).
+- Any directory inside the project works: barca runs from the nearest `barca.toml` above you
+  and shares its `.barca/` cache. File arguments are relative to where you are. Node ids
+  (`pipelines/sources.py:ibp_model`) are relative to that root.
+- Unsure of a name? `barca list`. An unknown name exits 2 and lists the valid ones.
 
 ## Argument order: target, then files
 

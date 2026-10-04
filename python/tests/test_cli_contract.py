@@ -83,6 +83,7 @@ CASES: list[tuple[str, list[str], str, int]] = [
     ("get_dry_run", ["get", "total", "pipeline.py", "--dry-run", "--json"], "stdout", 0),
     ("get", ["get", "total", "pipeline.py", "--json"], "stdout", 0),
     ("get_artifact_pointer", ["get", "frame", "pipeline.py", "--json"], "stdout", 0),
+    ("sql", ["sql", "select * from frame order by n", "pipeline.py", "--json"], "stdout", 0),
     ("get_partitioned", ["get", "keys", "pipeline.py", "--json"], "stdout", 0),
     ("get_multi_target", ["get", "total,frame", "pipeline.py", "--json"], "stdout", 0),
     ("run", ["run", "report", "pipeline.py", "--json"], "stdout", 0),
@@ -110,7 +111,7 @@ CASES: list[tuple[str, list[str], str, int]] = [
 ]
 
 # Values that are user data, not barca's schema: recorded as `<user value>`.
-USER_VALUES = {"final_output", "targets.<name>.final_output", "nodes[].shape.sample"}
+USER_VALUES = {"final_output", "targets.<name>.final_output", "nodes[].shape.sample", "rows"}
 # Objects keyed by user-chosen names (targets, environment variables): keys become `<name>`.
 NAME_MAPS = {"steps[].env", "targets"}
 

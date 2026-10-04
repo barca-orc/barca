@@ -40,6 +40,7 @@ nodes[].shape.keys[] : string
 nodes[].shape.rows : integer  (optional)
 nodes[].shape.sample : <user value>
 nodes[].shape.type : string
+root : string
 summary : object
 summary.always_runs : integer
 summary.cached : integer

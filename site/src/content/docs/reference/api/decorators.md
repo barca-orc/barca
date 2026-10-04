@@ -111,7 +111,7 @@ barca. They are not part of the cache key, so changing one does not invalidate a
 partitions(values: list[str | int])          # static partition values
 partitions_from(source: AssetLike)            # derive partitions from an upstream asset
 collect(source: AssetLike)                    # fan-in: aggregate all partitions of an upstream asset
-asset_ref(canonical_name: str)                # reference a node by canonical id, not Python import
+asset_ref(canonical_name: str)                # reference a node by id without importing it
 ```
 
 Use `partitions=` on `@asset` to split an asset's work across a set of keys, executed as
@@ -150,9 +150,11 @@ unpartitioned asset in a partitioned asset's `inputs=` is delivered whole to eve
 once, before any key, and its run hash is part of every key's run hash, so changing it (or
 `--refresh` on it) re-runs every key.
 
-`asset_ref("path/to/file.py:function_name")`, used inside `inputs=`, references a node by its
-canonical id (source file path + function name, or its explicit `name=`) instead of importing the
-Python function directly — useful for cross-file references:
+Cross-file inputs are ordinary imports: `from other_module.assets import raw_data`, then
+`inputs={"data": raw_data}`. Barca resolves the import statically to that file's node (see
+[Discovery](/reference/discovery/)). `asset_ref("path/to/file.py:function_name")`, used inside
+`inputs=`, references a node by its canonical id (root-relative file path + function name, or its
+explicit `name=`) without importing it, for example to avoid an import cycle:
 
 ```python
 from barca import asset, asset_ref

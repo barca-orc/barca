@@ -223,21 +223,25 @@ def prices(ticker: str) -> dict:
 ## CLI
 
 ```
-barca get [target] <file.py> [file.py ...] Get asset(s) — cache-aware; `a,b` gets several
-barca run <task> <file.py> [--refresh a,b] Run a task (always re-runs) and its cone; `a,b` runs
+barca get [target] [file.py|dir/ ...]      Get asset(s) — cache-aware; `a,b` gets several
+barca run <task> [file.py|dir/ ...]        Run a task (always re-runs) and its cone; `a,b` runs
                                            several
   get/run: --refresh a,b                   re-run a, b and their downstream (--no-cascade: only a, b)
   get/run: --refresh-all                   re-run every asset in the cone
-barca plan <file.py> [file.py ...]         Emit execution plan as JSON (experimental)
-barca list <file.py> [--json|--pretty] [--limit N]  List all definitions with deps and declared env
-barca status [target] <file.py> [--json|--pretty]  Cache state, last run, artifact rows/columns per
+barca plan [file.py ...]                   Emit execution plan as JSON (experimental)
+barca list [file.py|dir/ ...] [--json|--pretty] [--limit N]  List all definitions with deps and env
+barca status [target] [file.py ...] [--json|--pretty]  Cache state, last run, artifact rows/columns per
                                            node; `a,b` shows several cones
+barca sql "<query>" [file.py ...] [--json] Query cached results with DuckDB (experimental)
 barca history [--limit N] [--json|--pretty] Show recent run history
-barca stats <target> <file.py> [--json|--pretty]  Timing/cache stats for an asset
-barca serve <file.py> [file.py ...] [--port N]  Run the HTTP API server + cron scheduler
+barca stats <target> [file.py ...] [--json|--pretty]  Timing/cache stats for an asset
+barca serve [file.py ...] [--port N]       Run the HTTP API server + cron scheduler
 barca docs [topic] [--all] [--json]        Built-in manual: concepts, formats, examples
 barca --help                               Show help (every command ends with examples)
 ```
+
+Files are optional everywhere: without them barca reads every `.py` file under the project root
+(the nearest `barca.toml`) that imports barca. See `barca docs discovery`.
 
 `barca docs` is the manual, compiled into the binary: topics for types and output formats,
 caching, tasks, partitions, scheduling, runnable examples, and conventions for scripts and AI
@@ -312,7 +316,7 @@ barca serve pipeline.py --timezone utc   # evaluate cron in UTC (default: local)
 Runs are async: `POST` returns a `run_id` immediately, then you poll `/status/{run_id}`.
 
 ```bash
-curl localhost:8274/health                       # {"status":"ok","version":"0.11.0"}
+curl localhost:8274/health                       # {"status":"ok","version":"0.13.0"}
 curl localhost:8274/assets                       # list assets + deps
 curl localhost:8274/plan                          # execution plan JSON
 curl -XPOST localhost:8274/run                    # → {"run_id":"…"}; poll /status/<id>

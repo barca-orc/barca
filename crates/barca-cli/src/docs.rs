@@ -36,6 +36,11 @@ pub const TOPICS: &[Topic] = &[
         "overview.md"
     ),
     topic!(
+        "discovery",
+        "Which files make up a project: the root, walks, [discovery], node ids",
+        "discovery.md"
+    ),
+    topic!(
         "assets",
         "@asset, inputs, freshness, retries, node ids",
         "assets.md"
@@ -75,6 +80,11 @@ pub const TOPICS: &[Topic] = &[
         "status",
         "barca status: cache state, last run and artifact shape per node",
         "status.md"
+    ),
+    topic!(
+        "sql",
+        "barca sql: query cached results with DuckDB, without writing a step",
+        "sql.md"
     ),
     topic!(
         "agents",

@@ -47,8 +47,8 @@ way: only the definitions the step uses, never the whole module. Modules outside
 
 The pipeline file can be named any way on the command line: `barca get rows pipeline.py`,
 `./pipeline.py`, an absolute path, and `barca get rows project/pipeline.py` from the parent
-directory all compute the same run hash. Node ids keep the spelling you typed (`pipeline.py:rows`
-vs `./pipeline.py:rows`), as before.
+directory all compute the same run hash and the same node id, relative to the project root
+(`pipeline.py:rows`, or `project/pipeline.py:rows` when the root is the parent directory).
 
 Not followed yet (an edit there does not change the hash; recompute with `--refresh-all` or
 `--refresh`):
@@ -162,6 +162,23 @@ output, so the next `--dry-run` or `barca status` shows its consumers as stale.
 `<ext>` is `.json`, `.pkl` or `.parquet` (see `barca docs types`). Artifacts are
 content-addressed, so they can be shared between machines when remote storage is configured
 (see `barca docs remote`).
+
+`.barca/` lives in the **project root**: the nearest directory at or above the one you run barca
+from that holds a `barca.toml`. Without a `barca.toml` above you, the current directory is the
+root. Barca changes into the root before doing anything, so:
+
+- running from a subdirectory reads and writes the same cache as running from the root
+  (`cd sub && barca get out ../pipeline.py` is a cache hit after `barca get out pipeline.py`);
+- file arguments are read relative to where you typed them, and node ids are relative to the
+  root, so `pipelines/p.py:out` is the same id from any directory;
+- steps run with the root as their working directory, so `Path("data.txt")` inside a step means
+  the root's `data.txt` wherever you invoke barca;
+- stderr says `barca: project root: <path>` whenever the root is not the current directory.
+
+Put an empty `barca.toml` at the top of a project to anchor it.
+
+Never delete files under `.barca/` to force a recompute: use `--refresh <asset>` (below), which
+also keeps the metadata DB consistent. To look at a cached result, use `barca sql` (`barca docs sql`).
 
 ## Controlling the cache
 

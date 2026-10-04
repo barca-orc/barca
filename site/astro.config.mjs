@@ -53,6 +53,8 @@ export default defineConfig({
           label: 'Reference',
           items: [
             { label: 'CLI', slug: 'reference/cli' },
+            { label: 'Discovery', slug: 'reference/discovery' },
+            { label: 'barca sql', slug: 'reference/sql' },
             { label: 'Agent Skill', slug: 'reference/agent-skill' },
             { label: 'CLI Contract', slug: 'reference/cli-contract' },
             { label: 'Configuration', slug: 'reference/config' },

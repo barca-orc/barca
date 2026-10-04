@@ -40,6 +40,10 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
         "prints the planner's internal phase/stream layout, which changes with scheduling work",
     ),
     (
+        "sql",
+        "new in 0.13: the view naming and the JSON result shape may change after field use",
+    ),
+    (
         "serve",
         "the HTTP API and scheduler are young: no auth, no shared remote state, routes may change",
     ),
