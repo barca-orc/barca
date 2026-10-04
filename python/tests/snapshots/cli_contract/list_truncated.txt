@@ -7,5 +7,6 @@ nodes[].freshness : string
 nodes[].id : string
 nodes[].inputs : array
 nodes[].kind : string
+root : string
 total : integer
 truncated : boolean

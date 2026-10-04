@@ -278,6 +278,10 @@ raised on failure; for `get`/`run`/`plan` its `kind`, `code`, `remediation` (and
 
 ## Targets and files
 
+- Files are optional: with none, barca reads every `.py` file in the project that imports barca
+  (`barca list`, `barca run validate`). Files or directories narrow it (`barca get total
+  pipelines/`); a directory as the first argument needs a trailing `/` (or `.`), otherwise it is
+  read as a target name. See `barca docs discovery`.
 - `barca get file.py` gets every asset and sensor (final value is the last asset). It never runs
   tasks (it used to): stderr names the skipped tasks and the `barca run` command. A file with only
   tasks gets nothing and exits 0 with `"steps": []`.
@@ -291,7 +295,8 @@ raised on failure; for `get`/`run`/`plan` its `kind`, `code`, `remediation` (and
 - You can run barca from any directory inside a project with a `barca.toml`: barca changes into
   that directory (the project root) first, reads file arguments relative to where you typed
   them, and uses the root's `.barca/` cache. Node ids are relative to the root. See
-  `barca docs cache` ("Where things live").
+  `barca docs cache` ("Where things live"). `barca list --json` and `barca status --json` carry the
+  absolute `root`.
 - `get` is for assets and `run` is for tasks; using the wrong one exits 2 and says which to use.
 - The target comes before the files. If the first positional ends in `.py` and a later one does
   not, there is exactly one valid reading, so barca exits 2 and prints the corrected command

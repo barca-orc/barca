@@ -1,5 +1,5 @@
 Barca runs Python asset graphs with content-addressed caching.
-Every asset output is fully materialized to an artifact file at step boundaries (json, pickle, or parquet) — that persistence is the cache checkpoint. pandas/polars DataFrames, pyarrow Tables and duckdb relations are written as parquet; parameter type annotations choose how downstream steps read it back (pandas by default, or polars, pyarrow, duckdb) but do not skip materialization. Start with `barca list <file.py>` to discover a project's assets and tasks; run `barca docs` for the manual.
+Every asset output is fully materialized to an artifact file at step boundaries (json, pickle, or parquet) — that persistence is the cache checkpoint. pandas/polars DataFrames, pyarrow Tables and duckdb relations are written as parquet; parameter type annotations choose how downstream steps read it back (pandas by default, or polars, pyarrow, duckdb) but do not skip materialization. Start with `barca list` (run inside the project) to discover a project's assets and tasks; run `barca docs` for the manual.
 
 Usage: barca <COMMAND>
 
@@ -24,7 +24,8 @@ Options:
           Print version
 
 Quick start:
-  barca list pipeline.py            # discover assets, tasks and their dependencies
+  barca list                        # discover every asset, task and dependency in the project
+  barca list pipeline.py            # ... or only those in one file
   barca get total pipeline.py       # run only what `total` needs (cached on re-run)
   barca run deploy pipeline.py      # run a task and its dependency cone
   barca docs                        # built-in manual: concepts, formats, examples

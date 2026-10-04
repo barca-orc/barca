@@ -4,7 +4,7 @@ Whichever way the pipeline file is named on the command line (bare `p.py`, `./p.
 path, or `sub/p.py` from the parent directory) and whichever import style the step uses
 (`from helpers import compute`, `import helpers` + `helpers.compute()`,
 `import pkg.mod as m` + `m.f()`), the run hash covers the helper and is the same for every
-spelling of the path. Node ids keep the spelling given on the command line, as before.
+spelling of the path. Node ids are relative to the project root, whatever the spelling (#202).
 """
 
 import json
@@ -85,8 +85,8 @@ def forms(sub: Path) -> list[tuple[Path, str, str]]:
     """(cwd, file argument, expected node id) for each way of naming the pipeline."""
     return [
         (sub, "p.py", "p.py:val"),
-        (sub, "./p.py", "./p.py:val"),
-        (sub, str(sub / "p.py"), f"{sub / 'p.py'}:val"),
+        (sub, "./p.py", "p.py:val"),
+        (sub, str(sub / "p.py"), "p.py:val"),
         (sub.parent, "sub/p.py", "sub/p.py:val"),
     ]
 
@@ -98,12 +98,12 @@ def run_hash(cwd: Path, file_arg: str) -> tuple[str, str]:
 
 
 @pytest.mark.parametrize("style", sorted(PIPELINES))
-def test_every_path_spelling_has_the_same_run_hash_and_keeps_its_id(tmp_path, style):
+def test_every_path_spelling_has_the_same_run_hash_and_a_root_relative_id(tmp_path, style):
     sub = write_project(tmp_path, style)
     seen = {}
     for cwd, arg, expected_id in forms(sub):
         node_id, h = run_hash(cwd, arg)
-        assert node_id == expected_id, "node ids keep the spelling given on the command line"
+        assert node_id == expected_id, "node ids are relative to the project root (the cwd here)"
         seen[arg] = h
     assert len(set(seen.values())) == 1, seen
 

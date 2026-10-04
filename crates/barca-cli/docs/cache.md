@@ -47,8 +47,8 @@ way: only the definitions the step uses, never the whole module. Modules outside
 
 The pipeline file can be named any way on the command line: `barca get rows pipeline.py`,
 `./pipeline.py`, an absolute path, and `barca get rows project/pipeline.py` from the parent
-directory all compute the same run hash. Node ids keep the spelling you typed (`pipeline.py:rows`
-vs `./pipeline.py:rows`), as before.
+directory all compute the same run hash and the same node id, relative to the project root
+(`pipeline.py:rows`, or `project/pipeline.py:rows` when the root is the parent directory).
 
 Not followed yet (an edit there does not change the hash; recompute with `--refresh-all` or
 `--refresh`):

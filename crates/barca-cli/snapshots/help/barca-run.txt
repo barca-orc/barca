@@ -6,7 +6,7 @@ Usage: barca run [OPTIONS] <ARGS>...
 
 Arguments:
   <ARGS>...
-          TARGET[,TARGET...] file.py [file.py ...] — one or more target tasks, comma-separated
+          TARGET[,TARGET...] [file.py|dir/ ...] — one or more target tasks, comma-separated; no files reads the whole project (`barca docs discovery`)
 
 Options:
       --refresh <REFRESH>
@@ -50,6 +50,8 @@ Options:
           Print help (see a summary with '-h')
 
 Examples:
+  barca run deploy                                     # find the task anywhere in the project and run it
+  barca run deploy pipelines/                          # only read files under pipelines/
   barca run deploy pipeline.py                         # task runs; upstream assets come from cache
   barca run deploy pipeline.py --refresh fetch,clean   # re-materialize these and everything downstream of them
   barca run deploy pipeline.py --refresh fetch --no-cascade   # re-materialize only fetch; downstream stays cached
@@ -74,7 +76,8 @@ upstream asset is an error. --no-cache is a deprecated spelling of --refresh-all
 and warns on stderr.
 The target must be a task; use `barca get` for assets. The target comes before the files:
 `barca run pipeline.py deploy` exits 2 and prints `barca run deploy pipeline.py`. Every usage
-error exits 2 and ends by pointing at `barca list <files>`.
+error exits 2 and ends by pointing at `barca list` (with the files you gave, if any).
+No files: barca reads every file in the project that imports barca (barca docs discovery).
 Errors: in JSON mode the last stderr line is one JSON object {error, code, kind, remediation}
 (see barca docs agents). Exit 1 step failed, 2 usage error, 3 barca/infra failure, 130 cancelled.
 A raising task, or one that calls sys.exit(), fails the run: exit 1, and the stdout JSON line has

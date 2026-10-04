@@ -8,5 +8,6 @@ nodes[].id : string
 nodes[].inputs : array
 nodes[].inputs[] : string
 nodes[].kind : string
+root : string
 total : integer
 truncated : boolean

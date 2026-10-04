@@ -195,7 +195,18 @@ def load_module(source_file):
     # Compiled from the source on disk, never a cached .pyc (#176); the file's directory
     # goes on sys.path so cross-file imports work, and those compile from source too.
     path = Path(source_file).resolve()
-    return load_source_module(str(path), f"_barca_{path.stem}")
+    return load_source_module(str(path), module_name_for(path))
+
+
+def module_name_for(path: Path) -> str:
+    """`sys.modules` name for a step's file: `_barca_` plus its path relative to the project
+    root (the cwd), so `east/assets.py` and `west/assets.py` stay distinct modules. A file in the
+    root keeps the plain `_barca_<stem>` name, which pickled artifacts refer to."""
+    try:
+        rel = path.relative_to(Path.cwd().resolve()).with_suffix("")
+    except ValueError:
+        return f"_barca_{path.stem}"
+    return "_barca_" + "__".join(rel.parts)
 
 
 def _run_with_timeout(fn, kwargs, timeout_seconds):

@@ -72,11 +72,20 @@ def test_every_python_block_parses(topics):
                 pytest.fail(f"docs topic '{name}', python block {i}: {e}")
 
 
+FILE_MARKER = "# file: "
+
+
+def project_files(code: str) -> str | None:
+    """A block that starts with `# file: <path>` is one file of a multi-file example."""
+    first = code.lstrip().splitlines()[0] if code.strip() else ""
+    return first[len(FILE_MARKER) :].strip() if first.startswith(FILE_MARKER) else None
+
+
 def test_every_pipeline_example_is_discovered_by_list(binary, topics, tmp_path):
     checked = 0
     for name, body in topics.items():
         for i, code in enumerate(blocks(body, "python")):
-            if not is_pipeline(code):
+            if not is_pipeline(code) or project_files(code):
                 continue
             f = tmp_path / f"{name.replace('/', '_')}_{i}.py"
             f.write_text(code)
@@ -85,6 +94,28 @@ def test_every_pipeline_example_is_discovered_by_list(binary, topics, tmp_path):
             assert nodes, f"docs topic '{name}', block {i}: `barca list` found no nodes"
             checked += 1
     assert checked >= 8, "expected the manual to contain many pipeline examples"
+
+
+def test_multi_file_examples_form_one_project(binary, topics, tmp_path):
+    """Blocks marked `# file: <path>` in a topic are written into one project, which plain
+    `barca list` (tree discovery) must read as one DAG, with every node in it."""
+    checked = 0
+    for name, body in topics.items():
+        files = [(project_files(c), c) for c in blocks(body, "python") if project_files(c)]
+        if not files:
+            continue
+        root = tmp_path / name.replace("/", "_")
+        root.mkdir()
+        (root / "barca.toml").write_text("")
+        for rel, code in files:
+            (root / rel).parent.mkdir(parents=True, exist_ok=True)
+            (root / rel).write_text(code)
+        nodes = result(barca(binary, root, "list", "--json"))["nodes"]
+        ids = {n["id"] for n in nodes}
+        for rel, code in files:
+            assert any(i.startswith(f"{rel}:") for i in ids), (name, rel, ids)
+        checked += 1
+    assert checked >= 1, "expected at least one multi-file example (barca docs discovery)"
 
 
 def test_docs_command_surface(binary, tmp_path):

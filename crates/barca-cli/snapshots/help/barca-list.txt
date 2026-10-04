@@ -2,11 +2,11 @@ List all discovered definitions (assets, tasks, sensors) with their deps
 
 Scheduled definitions also show their next fire time in local time.
 
-Usage: barca list [OPTIONS] <FILES>...
+Usage: barca list [OPTIONS] [FILES]...
 
 Arguments:
-  <FILES>...
-          Python source files containing definitions
+  [FILES]...
+          Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`)
 
 Options:
       --json
@@ -32,8 +32,11 @@ Options:
           Print help (see a summary with '-h')
 
 Examples:
+  barca list                         # every node in the project (files that import barca)
+  barca list pipelines/              # only files under pipelines/ (trailing / marks a directory)
+  barca list .                       # the current directory and below
   barca list pipeline.py             # table of nodes (in a terminal; JSON when piped)
-  barca list pipeline.py --json      # {nodes: [{id, kind, freshness, schedule?, inputs, env, next_fire?}], total, truncated}
+  barca list pipeline.py --json      # {nodes: [{id, kind, freshness, schedule?, inputs, env, next_fire?}], total, truncated, root}
   barca list pipeline.py --pretty    # the table, even when piped
   barca list pipeline.py --fields id,inputs   # JSON with only these keys per node
   barca list big.py --limit 20       # first 20 nodes (topological order)
@@ -45,6 +48,7 @@ An ENV column (and `env` in JSON) lists the environment variables each node decl
 `schedule`; a scheduled node also has `schedule` (the cron expression) and `next_fire`.
 `list` reads no state, so it takes no --env.
 
+Node ids are relative to the project root (`root` in JSON; barca docs discovery).
 Run this first to confirm barca discovered your nodes. When more nodes exist than are shown,
 JSON says `"truncated": true` with the `total`, and the table prints a note on stderr.
 More: barca docs assets, barca docs agents
