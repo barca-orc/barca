@@ -309,6 +309,10 @@ pub enum NodeRef {
     FunctionName(String),
     /// Canonical asset reference: `asset_ref("module/file.py:function_name")`.
     Canonical(String),
+    /// A name bound by an import in the referencing file: `from <module> import <name>`, or
+    /// `<module>.<name>` after `import <module>`. `module` keeps leading dots for relative
+    /// imports. Resolved against the importing file's location during DAG build.
+    Imported { module: String, name: String },
 }
 
 impl NodeRef {
@@ -317,6 +321,7 @@ impl NodeRef {
         match self {
             NodeRef::FunctionName(name) => name,
             NodeRef::Canonical(path) => path.rsplit(':').next().unwrap_or(path),
+            NodeRef::Imported { name, .. } => name,
         }
     }
 }

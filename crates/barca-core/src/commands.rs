@@ -2676,8 +2676,8 @@ pub(crate) fn build_dag_blocking(
         let source = fs::read_to_string(path)
             .map_err(|e| BarcaError::Usage(format!("{}: {e}", path.display())))?;
         let file_str = path.to_string_lossy().to_string();
-        let nodes = extract_nodes(&source, &file_str)
-            .map_err(|e| BarcaError::Parse(format!("{file_str}: {e}")))?;
+        let nodes =
+            extract_nodes(&source, &file_str).map_err(|e| BarcaError::Parse(e.to_string()))?;
         let stem = path
             .file_stem()
             .unwrap_or_default()

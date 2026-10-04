@@ -30,6 +30,30 @@ pub enum DagError {
     },
 
     #[error(
+        "input '{param}' on node '{node}' is ambiguous: '{upstream}' is not defined in that \
+         file, and more than one file defines it ({candidates}). Import it from the file you \
+         mean (`from <module> import {upstream}`) or name it with asset_ref(\"<file>:{upstream}\")"
+    )]
+    AmbiguousInput {
+        node: String,
+        param: String,
+        upstream: String,
+        candidates: String,
+    },
+
+    #[error(
+        "input '{param}' on node '{node}': '{name}' is imported from {module} ({file}), but no \
+         @asset/@task/@sensor named '{name}' is defined there"
+    )]
+    UnresolvedImport {
+        node: String,
+        param: String,
+        name: String,
+        module: String,
+        file: String,
+    },
+
+    #[error(
         "task '{task}' cannot be an input to {downstream_kind} '{downstream}' \
          (tasks are never cached, so this would poison caching)"
     )]
@@ -114,28 +138,33 @@ fn resolve_partitions_from(nodes: &[ExtractedNode]) -> Result<Vec<ExtractedNode>
     fn resolve(
         i: usize,
         nodes: &mut [ExtractedNode],
-        by_name: &HashMap<String, usize>,
+        refs: &Resolver,
         state: &mut [State],
     ) -> Result<(), DagError> {
         if state[i] != State::Todo {
             return Ok(()); // done, or a cycle (reported by `Dag::build`)
         }
         state[i] = State::Active;
-        let derived: Vec<(String, String)> = nodes[i]
+        let derived: Vec<(String, NodeRef)> = nodes[i]
             .partitions
             .iter()
             .filter_map(|(dim, spec)| match spec {
                 PartitionSpec::DerivedFrom { source_ref } => {
-                    Some((dim.clone(), source_ref.resolution_name().to_string()))
+                    Some((dim.clone(), source_ref.clone()))
                 }
                 _ => None,
             })
             .collect();
-        for (dim, source) in derived {
-            let Some(&j) = by_name.get(&source) else {
-                continue;
+        for (dim, source_ref) in derived {
+            let source = source_ref.resolution_name().to_string();
+            let j = match refs.resolve_input(&nodes[i], &source, &source_ref) {
+                Ok(j) => j,
+                // Unknown: left for `Dag::build` (the source may be a plain list). Several
+                // candidates or a bad import is an error now, as for any input.
+                Err(DagError::UnresolvedInput { .. }) => continue,
+                Err(e) => return Err(e),
             };
-            resolve(j, nodes, by_name, state)?;
+            resolve(j, nodes, refs, state)?;
             if nodes[j].partitions.is_empty() {
                 continue; // keys come from the list the source returns
             }
@@ -195,14 +224,14 @@ fn resolve_partitions_from(nodes: &[ExtractedNode]) -> Result<Vec<ExtractedNode>
             }
             let consumer = &mut nodes[i];
             consumer.partitions.insert(dim, src_spec);
-            let named = consumer
-                .inputs
-                .iter()
-                .any(|inp| !inp.collected && inp.upstream.resolution_name() == source);
+            let file = consumer.source_file.clone();
+            let named = consumer.inputs.iter().any(|inp| {
+                !inp.collected && matches!(refs.resolve(&file, &inp.upstream), Ok(k) if k == j)
+            });
             if !named {
                 consumer.inputs.push(DeclaredInput {
                     param_name: source.clone(),
-                    upstream: NodeRef::FunctionName(source.clone()),
+                    upstream: source_ref.clone(),
                     collected: false,
                 });
             }
@@ -212,16 +241,191 @@ fn resolve_partitions_from(nodes: &[ExtractedNode]) -> Result<Vec<ExtractedNode>
     }
 
     let mut out = nodes.to_vec();
-    let by_name: HashMap<String, usize> = out
-        .iter()
-        .enumerate()
-        .map(|(i, n)| (n.function_name.clone(), i))
-        .collect();
+    let refs = Resolver::new(&out);
     let mut state = vec![State::Todo; out.len()];
     for i in 0..out.len() {
-        resolve(i, &mut out, &by_name, &mut state)?;
+        resolve(i, &mut out, &refs, &mut state)?;
     }
     Ok(out)
+}
+
+/// Resolves a reference written in one file (`inputs=`, `collect(...)`, `partitions_from(...)`)
+/// to the node it means. In order:
+///
+/// - `asset_ref("file.py:name")`: the node with that id, else `name` in that file (root-relative,
+///   then relative to the referencing file), else the one node named `name`.
+/// - an imported name (`from m import name`, `m.name`): `name` in the file the import points at
+///   (relative imports from the file's package; absolute ones from the file's directory, then
+///   the root), else the one node named `name` (a re-export).
+/// - a bare name: the function in the same file, else the one node with that name anywhere.
+///
+/// Several candidates and nothing more specific is an error, never a guess (#202): before,
+/// the last file read silently won.
+struct Resolver {
+    ids: Vec<String>,
+    by_id: HashMap<String, usize>,
+    by_file: HashMap<(String, String), usize>,
+    by_name: HashMap<String, Vec<usize>>,
+}
+
+enum Miss {
+    NotFound,
+    Ambiguous(Vec<String>),
+    NotInModule { module: String, file: String },
+}
+
+fn norm_path(p: &std::path::Path) -> String {
+    crate::config::normalize_lexically(p)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+fn file_dir(file: &str) -> std::path::PathBuf {
+    std::path::Path::new(file)
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_default()
+}
+
+impl Resolver {
+    fn new(nodes: &[ExtractedNode]) -> Self {
+        let mut r = Resolver {
+            ids: Vec::with_capacity(nodes.len()),
+            by_id: HashMap::new(),
+            by_file: HashMap::new(),
+            by_name: HashMap::new(),
+        };
+        for (i, n) in nodes.iter().enumerate() {
+            let id = n.continuity_key();
+            r.by_id.insert(id.clone(), i);
+            r.ids.push(id);
+            r.by_file.insert(
+                (
+                    norm_path(std::path::Path::new(&n.source_file)),
+                    n.function_name.clone(),
+                ),
+                i,
+            );
+            r.by_name
+                .entry(n.function_name.clone())
+                .or_default()
+                .push(i);
+        }
+        r
+    }
+
+    fn in_file(&self, file: &std::path::Path, name: &str) -> Option<usize> {
+        self.by_file
+            .get(&(norm_path(file), name.to_string()))
+            .copied()
+    }
+
+    fn unique(&self, name: &str) -> Result<usize, Miss> {
+        match self.by_name.get(name).map(Vec::as_slice) {
+            Some([one]) => Ok(*one),
+            Some(many) if !many.is_empty() => Err(Miss::Ambiguous(
+                many.iter().map(|&i| self.ids[i].clone()).collect(),
+            )),
+            _ => Err(Miss::NotFound),
+        }
+    }
+
+    /// Candidate files for `module` imported from `from_file`, most specific first.
+    fn module_files(from_file: &str, module: &str) -> Vec<std::path::PathBuf> {
+        let level = module.chars().take_while(|c| *c == '.').count();
+        let rest = module[level..].replace('.', "/");
+        let mut bases = Vec::new();
+        if level > 0 {
+            let mut base = file_dir(from_file);
+            for _ in 1..level {
+                base = base.join("..");
+            }
+            bases.push(base);
+        } else {
+            bases.push(file_dir(from_file));
+            bases.push(std::path::PathBuf::new());
+        }
+        let mut out = Vec::new();
+        for base in bases {
+            if rest.is_empty() {
+                out.push(base.join("__init__.py"));
+            } else {
+                out.push(base.join(format!("{rest}.py")));
+                out.push(base.join(&rest).join("__init__.py"));
+            }
+        }
+        out
+    }
+
+    fn resolve(&self, from_file: &str, r: &crate::model::NodeRef) -> Result<usize, Miss> {
+        use crate::model::NodeRef;
+        match r {
+            NodeRef::FunctionName(name) => self
+                .in_file(std::path::Path::new(from_file), name)
+                .map_or_else(|| self.unique(name), Ok),
+            NodeRef::Canonical(s) => {
+                if let Some(&i) = self.by_id.get(s) {
+                    return Ok(i);
+                }
+                let Some((path, name)) = s.rsplit_once(':') else {
+                    return self.unique(s);
+                };
+                let rel = file_dir(from_file).join(path);
+                self.in_file(std::path::Path::new(path), name)
+                    .or_else(|| self.in_file(&rel, name))
+                    .map_or_else(|| self.unique(name), Ok)
+            }
+            NodeRef::Imported { module, name } => {
+                let files = Self::module_files(from_file, module);
+                if let Some(i) = files.iter().find_map(|f| self.in_file(f, name)) {
+                    return Ok(i);
+                }
+                match self.unique(name) {
+                    Err(Miss::NotFound) => Err(Miss::NotInModule {
+                        module: module.clone(),
+                        file: norm_path(&files[0]),
+                    }),
+                    other => other,
+                }
+            }
+        }
+    }
+
+    /// `resolve`, as the DagError for input `param` of `node`.
+    fn resolve_input(
+        &self,
+        node: &ExtractedNode,
+        param: &str,
+        r: &crate::model::NodeRef,
+    ) -> Result<usize, DagError> {
+        self.resolve(&node.source_file, r).map_err(|miss| {
+            let node_id = node.continuity_key();
+            let upstream = match r {
+                crate::model::NodeRef::Canonical(s) => s.clone(),
+                other => other.resolution_name().to_string(),
+            };
+            match miss {
+                Miss::NotFound => DagError::UnresolvedInput {
+                    node: node_id,
+                    param: param.to_string(),
+                    upstream,
+                },
+                Miss::Ambiguous(ids) => DagError::AmbiguousInput {
+                    node: node_id,
+                    param: param.to_string(),
+                    upstream,
+                    candidates: ids.join(", "),
+                },
+                Miss::NotInModule { module, file } => DagError::UnresolvedImport {
+                    node: node_id,
+                    param: param.to_string(),
+                    name: upstream,
+                    module,
+                    file,
+                },
+            }
+        })
+    }
 }
 
 impl Dag {
@@ -231,9 +435,7 @@ impl Dag {
         let nodes = resolved.as_slice();
         let mut graph = DiGraph::new();
         let mut index: HashMap<String, NodeIndex> = HashMap::new();
-
-        // Track function_name → continuity_key for resolution.
-        let mut name_to_key: HashMap<String, String> = HashMap::new();
+        let refs = Resolver::new(nodes);
 
         // First pass: add all nodes, check for duplicate keys.
         for node in nodes {
@@ -276,8 +478,7 @@ impl Dag {
             };
 
             let idx = graph.add_node(dag_node);
-            index.insert(id.clone(), idx);
-            name_to_key.insert(node.function_name.clone(), id);
+            index.insert(id, idx);
         }
 
         // Second pass: add edges, resolve inputs.
@@ -286,14 +487,8 @@ impl Dag {
             let downstream_idx = index[&downstream_key];
 
             for input in &node.inputs {
-                let upstream_name = input.upstream.resolution_name();
-                let Some(upstream_key) = name_to_key.get(upstream_name) else {
-                    return Err(DagError::UnresolvedInput {
-                        node: downstream_key.clone(),
-                        param: input.param_name.clone(),
-                        upstream: upstream_name.to_string(),
-                    });
-                };
+                let upstream_key =
+                    &refs.ids[refs.resolve_input(node, &input.param_name, &input.upstream)?];
 
                 let upstream_idx = index[upstream_key.as_str()];
 
@@ -350,9 +545,8 @@ impl Dag {
             // Add partition_source edges for partitions_from.
             for spec in node.partitions.values() {
                 if let crate::model::PartitionSpec::DerivedFrom { source_ref } = spec {
-                    let source_name = source_ref.resolution_name();
-                    if let Some(source_key) = name_to_key.get(source_name) {
-                        let source_idx = index[source_key.as_str()];
+                    if let Ok(j) = refs.resolve(&node.source_file, source_ref) {
+                        let source_idx = index[refs.ids[j].as_str()];
                         graph.add_edge(source_idx, downstream_idx, EdgeKind::PartitionSource);
                     }
                 }
@@ -529,6 +723,180 @@ mod tests {
             parallel_calls: Vec::new(),
             env: Vec::new(),
         }
+    }
+
+    fn build_files(files: &[(&str, &str)]) -> Result<Dag, DagError> {
+        let mut nodes = Vec::new();
+        for (path, src) in files {
+            nodes.extend(crate::parse::extract_nodes(src, path).unwrap());
+        }
+        Dag::build(&nodes)
+    }
+
+    fn input_of(dag: &Dag, node: &str, param: &str) -> String {
+        dag.get_node(node)
+            .unwrap_or_else(|| panic!("no node {node}"))
+            .resolved_inputs
+            .get(param)
+            .unwrap_or_else(|| panic!("{node} has no input {param}"))
+            .clone()
+    }
+
+    const SRC_ASSET: &str =
+        "from barca import asset\n\n@asset()\ndef src() -> int:\n    return 1\n";
+
+    #[test]
+    fn a_name_defined_in_the_same_file_wins_over_other_files() {
+        for order in [["a.py", "b.py"], ["b.py", "a.py"]] {
+            let a = format!(
+                "{SRC_ASSET}\n@asset(inputs={{\"s\": src}})\ndef out(s: int) -> int:\n    return s\n"
+            );
+            let files: Vec<(&str, &str)> = order
+                .iter()
+                .map(|f| {
+                    if *f == "a.py" {
+                        ("a.py", a.as_str())
+                    } else {
+                        ("b.py", SRC_ASSET)
+                    }
+                })
+                .collect();
+            let dag = build_files(&files).unwrap();
+            assert_eq!(
+                input_of(&dag, "a.py:out", "s"),
+                "a.py:src",
+                "order {order:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_imported_name_resolves_to_the_module_it_is_imported_from() {
+        let cases = [
+            (
+                "pipelines/reconcile.py",
+                "from pipelines.sources import src\n",
+                "src",
+            ),
+            (
+                "pipelines/reconcile.py",
+                "from .sources import src\n",
+                "src",
+            ),
+            ("pipelines/reconcile.py", "from sources import src\n", "src"),
+            (
+                "pipelines/reconcile.py",
+                "from pipelines.sources import src as up\n",
+                "up",
+            ),
+            (
+                "pipelines/reconcile.py",
+                "import pipelines.sources as s\n",
+                "s.src",
+            ),
+            (
+                "pipelines/reconcile.py",
+                "import pipelines.sources\n",
+                "pipelines.sources.src",
+            ),
+            (
+                "pipelines/deep/reconcile.py",
+                "from ..sources import src\n",
+                "src",
+            ),
+        ];
+        for (path, import, expr) in cases {
+            let consumer = format!(
+                "from barca import asset\n{import}\n@asset(inputs={{\"s\": {expr}}})\ndef out(s: int) -> int:\n    return s\n"
+            );
+            // A decoy with the same function name elsewhere must not be picked.
+            let dag = build_files(&[
+                ("other/sources.py", SRC_ASSET),
+                ("pipelines/sources.py", SRC_ASSET),
+                (path, consumer.as_str()),
+            ])
+            .unwrap_or_else(|e| panic!("{import}: {e}"));
+            assert_eq!(
+                input_of(&dag, &format!("{path}:out"), "s"),
+                "pipelines/sources.py:src",
+                "{import}"
+            );
+        }
+    }
+
+    #[test]
+    fn collect_of_an_imported_attribute_resolves() {
+        let up = "from barca import asset, partitions\n\n@asset(partitions={\"k\": partitions([\"a\", \"b\"])})\ndef src(k: str) -> int:\n    return 1\n";
+        let consumer = "from barca import asset, collect\nimport up\n\n@asset(inputs={\"s\": collect(up.src)})\ndef total(s: list) -> int:\n    return sum(s)\n";
+        let dag = build_files(&[("up.py", up), ("c.py", consumer)]).unwrap();
+        let n = dag.get_node("c.py:total").unwrap();
+        assert_eq!(
+            n.resolved_collected.get("s").map(String::as_str),
+            Some("up.py:src")
+        );
+    }
+
+    #[test]
+    fn an_imported_name_that_is_not_a_node_there_is_an_error() {
+        let helper = "def src():\n    return 1\n";
+        let consumer = "from barca import asset\nfrom helpers import src\n\n@asset(inputs={\"s\": src})\ndef out(s: int) -> int:\n    return s\n";
+        let err = build_files(&[("helpers.py", helper), ("c.py", consumer)]).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("'src' is imported from helpers"), "{msg}");
+        assert!(msg.contains("no @asset/@task/@sensor named 'src'"), "{msg}");
+    }
+
+    #[test]
+    fn a_reexported_name_falls_back_to_the_unique_node_with_that_name() {
+        // `from pkg import src` where pkg/__init__.py re-exports it from pkg/impl.py.
+        let consumer = "from barca import asset\nfrom pkg import src\n\n@asset(inputs={\"s\": src})\ndef out(s: int) -> int:\n    return s\n";
+        let dag = build_files(&[("pkg/impl.py", SRC_ASSET), ("c.py", consumer)]).unwrap();
+        assert_eq!(input_of(&dag, "c.py:out", "s"), "pkg/impl.py:src");
+    }
+
+    #[test]
+    fn a_bare_name_defined_in_several_other_files_is_ambiguous() {
+        let consumer = "from barca import asset\n\n@asset(inputs={\"s\": src})\ndef out(s: int) -> int:\n    return s\n";
+        let err = build_files(&[("a.py", SRC_ASSET), ("b.py", SRC_ASSET), ("c.py", consumer)])
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("a.py:src") && msg.contains("b.py:src"),
+            "{msg}"
+        );
+        assert!(msg.contains("asset_ref"), "{msg}");
+    }
+
+    #[test]
+    fn a_bare_name_defined_once_elsewhere_still_resolves() {
+        let consumer = "from barca import asset\n\n@asset(inputs={\"s\": src})\ndef out(s: int) -> int:\n    return s\n";
+        let dag = build_files(&[("a.py", SRC_ASSET), ("c.py", consumer)]).unwrap();
+        assert_eq!(input_of(&dag, "c.py:out", "s"), "a.py:src");
+    }
+
+    #[test]
+    fn asset_ref_picks_the_named_file() {
+        let consumer = "from barca import asset, asset_ref\n\n@asset(inputs={\"s\": asset_ref(\"b.py:src\")})\ndef out(s: int) -> int:\n    return s\n";
+        let dag =
+            build_files(&[("a.py", SRC_ASSET), ("b.py", SRC_ASSET), ("c.py", consumer)]).unwrap();
+        assert_eq!(input_of(&dag, "c.py:out", "s"), "b.py:src");
+        // A path relative to the referencing file's directory also works.
+        let nested = "from barca import asset, asset_ref\n\n@asset(inputs={\"s\": asset_ref(\"b.py:src\")})\ndef out(s: int) -> int:\n    return s\n";
+        let dag = build_files(&[
+            ("p/b.py", SRC_ASSET),
+            ("q/b.py", SRC_ASSET),
+            ("p/c.py", nested),
+        ])
+        .unwrap();
+        assert_eq!(input_of(&dag, "p/c.py:out", "s"), "p/b.py:src");
+    }
+
+    #[test]
+    fn partitions_from_an_imported_asset_resolves_to_that_file() {
+        let up = "from barca import asset, partitions\n\n@asset(partitions={\"k\": partitions([\"a\", \"b\"])})\ndef src(k: str) -> int:\n    return 1\n";
+        let consumer = "from barca import asset, partitions_from\nfrom up import src\n\n@asset(partitions={\"k\": partitions_from(src)})\ndef per(k: str, src: int) -> int:\n    return src\n";
+        let dag = build_files(&[("decoy.py", up), ("up.py", up), ("c.py", consumer)]).unwrap();
+        assert_eq!(input_of(&dag, "c.py:per", "src"), "up.py:src");
     }
 
     fn build_src(src: &str) -> Result<Dag, DagError> {

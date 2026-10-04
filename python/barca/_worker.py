@@ -19,7 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from barca import _duckdb, _storage
-from barca._source_import import load_source_module
+from barca._source_import import load_package_module, load_source_module
 from barca._artifacts import (
     artifact_path,
     clean_staging,
@@ -195,7 +195,31 @@ def load_module(source_file):
     # Compiled from the source on disk, never a cached .pyc (#176); the file's directory
     # goes on sys.path so cross-file imports work, and those compile from source too.
     path = Path(source_file).resolve()
+    dotted = package_module_name(path)
+    if dotted is not None:
+        return load_package_module(dotted)
     return load_source_module(str(path), module_name_for(path))
+
+
+def package_module_name(path: Path) -> str | None:
+    """The importable name of a step's file when it sits in a package under the project root
+    (every directory from the root down has an `__init__.py`): `pipelines/reconcile.py` is
+    `pipelines.reconcile`. Loading it under that name gives it a parent package, so relative
+    imports (`from .sources import x`) work, and `from pipelines.reconcile import y` elsewhere
+    gets the same module. `None` for a file in the root or outside a package."""
+    root = Path.cwd().resolve()
+    try:
+        parts = list(path.relative_to(root).with_suffix("").parts)
+    except ValueError:
+        return None
+    if parts and parts[-1] == "__init__":
+        parts.pop()
+    if len(parts) < 2:
+        return None
+    for i in range(1, len(parts)):
+        if not root.joinpath(*parts[:i], "__init__.py").is_file():
+            return None
+    return ".".join(parts)
 
 
 def module_name_for(path: Path) -> str:

@@ -79,7 +79,12 @@ are separate modules, hashed and run separately. Helper modules they import with
 
 ## Cross-file inputs
 
-An input defined in another file is named with `asset_ref("<root-relative file>:<function>")`:
+Import the upstream function the way Python would, and name it in `inputs=`. Barca reads the
+import statically (it never runs it) and wires the input to that file's node:
+
+```python
+# file: pipelines/__init__.py
+```
 
 ```python
 # file: pipelines/sources.py
@@ -93,13 +98,59 @@ def ibp_model() -> dict:
 
 ```python
 # file: pipelines/reconcile.py
-from barca import asset, asset_ref
+from barca import asset
+
+from .sources import ibp_model
 
 
-@asset(inputs={"m": asset_ref("pipelines/sources.py:ibp_model")})
+@asset(inputs={"m": ibp_model})
 def reconciled(m: dict) -> dict:
     return {"rows": m["rows"]}
 ```
+
+```python
+# file: pipelines/validate.py
+from barca import task
+
+import pipelines.sources as sources
+from pipelines.reconcile import reconciled
+
+
+@task(inputs={"r": reconciled, "m": sources.ibp_model})
+def validate(r: dict, m: dict) -> dict:
+    assert r["rows"] == m["rows"]
+    return {"status": "PASS"}
+```
+
+```bash
+barca run validate               # from the root or any directory below it
+```
+
+Every import form works: `from pipelines.sources import ibp_model`, `from .sources import
+ibp_model` (relative), `from sources import ibp_model` (a sibling file), `... import ibp_model as
+model`, and `module.ibp_model` after `import pipelines.sources [as module]`; also inside
+`collect(...)` and `partitions_from(...)`.
+
+How a name in `inputs=` is resolved, most specific first:
+
+1. a function defined in the same file;
+2. for an imported name, the function in the file the import points at (a relative import from
+   the file's package; an absolute one from the file's directory, then from the root);
+3. otherwise the one function with that name in the project (this also covers a name re-exported
+   through a package `__init__.py`).
+
+When none of these picks exactly one node, barca stops with exit 2 instead of guessing: a bare
+name defined in several other files lists every candidate id, and an imported name that is not
+an `@asset`/`@task`/`@sensor` in its module says so (`'close' is imported from pipelines.common
+(pipelines/common.py), but no @asset/@task/@sensor named 'close' is defined there`).
+
+`asset_ref("<file>:<function>")` names a node without importing it (for example, to avoid an
+import cycle). The path is relative to the root, or to the referencing file's directory.
+
+A step file inside a package (every directory from the root down has an `__init__.py`) runs as
+that package's module (`pipelines.reconcile`), so relative imports work in it and `from
+pipelines.reconcile import x` elsewhere gets the same module. Other files run as standalone
+modules, as before.
 
 ## Known limitations
 
