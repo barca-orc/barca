@@ -316,7 +316,7 @@ barca serve pipeline.py --timezone utc   # evaluate cron in UTC (default: local)
 Runs are async: `POST` returns a `run_id` immediately, then you poll `/status/{run_id}`.
 
 ```bash
-curl localhost:8274/health                       # {"status":"ok","version":"0.12.0"}
+curl localhost:8274/health                       # {"status":"ok","version":"0.13.0"}
 curl localhost:8274/assets                       # list assets + deps
 curl localhost:8274/plan                          # execution plan JSON
 curl -XPOST localhost:8274/run                    # → {"run_id":"…"}; poll /status/<id>
