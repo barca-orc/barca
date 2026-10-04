@@ -77,6 +77,11 @@ pub const TOPICS: &[Topic] = &[
         "status.md"
     ),
     topic!(
+        "sql",
+        "barca sql: query cached results with DuckDB, without writing a step",
+        "sql.md"
+    ),
+    topic!(
         "agents",
         "Output contract, exit codes and workflows for scripts and AI agents",
         "agents.md"

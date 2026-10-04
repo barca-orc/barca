@@ -276,6 +276,14 @@ barca.run("send_email", "pipeline.py", refresh=["report"])
 raised on failure; for `get`/`run`/`plan` its `kind`, `code`, `remediation` (and for a failed step
 `node`, `traceback`, `artifact_dir`) come from the error envelope. Or read a parquet `path` directly with duckdb/pandas/polars.
 
+## Looking at cached results
+
+To inspect data (which rows failed a check, what an asset holds), query it instead of writing a
+script: `barca sql "select * from revenue where amount < 0" --json`. Every asset with a result is
+a view named after its function; the JSON is `{columns, rows, total, truncated}`. It never runs a
+step or imports user code. To recompute first, use `--refresh`; never delete files under
+`.barca/`. See `barca docs sql`.
+
 ## Targets and files
 
 - Files are optional: with none, barca reads every `.py` file in the project that imports barca

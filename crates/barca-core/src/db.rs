@@ -857,6 +857,41 @@ pub async fn node_histories(
     Ok(out)
 }
 
+/// The latest successful artifact of every partition key of `base_id` (node ids
+/// `<base_id>[<key>]`), as (partition node id, artifact path, artifact format), sorted by node id.
+pub async fn latest_partition_artifacts(
+    db_path: &str,
+    base_id: &str,
+) -> Result<Vec<(String, String, String)>, BarcaError> {
+    let _g = db_guard().await;
+    let (_db, conn) = open_conn(db_path).await?;
+    let prefix = format!("{base_id}[");
+    let mut rows = conn
+        .query(
+            "SELECT node_id, artifact_path, artifact_format FROM materializations \
+             WHERE substr(node_id, 1, length(?1)) = ?1 AND status = 'success' \
+             AND artifact_path IS NOT NULL AND artifact_path != '' ORDER BY id DESC",
+            [prefix],
+        )
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to query materializations: {e}")))?;
+    let mut seen = std::collections::BTreeMap::new();
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to read row: {e}")))?
+    {
+        let node_id = row.get::<String>(0).unwrap_or_default();
+        seen.entry(node_id).or_insert_with(|| {
+            (
+                row.get::<String>(1).unwrap_or_default(),
+                row.get::<String>(2).unwrap_or_default(),
+            )
+        });
+    }
+    Ok(seen.into_iter().map(|(k, (p, f))| (k, p, f)).collect())
+}
+
 /// Compute the p-th percentile from a sorted slice of values.
 fn percentile(sorted: &[f64], p: f64) -> Option<f64> {
     if sorted.is_empty() {

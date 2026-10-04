@@ -232,6 +232,7 @@ barca plan [file.py ...]                   Emit execution plan as JSON (experime
 barca list [file.py|dir/ ...] [--json|--pretty] [--limit N]  List all definitions with deps and env
 barca status [target] [file.py ...] [--json|--pretty]  Cache state, last run, artifact rows/columns per
                                            node; `a,b` shows several cones
+barca sql "<query>" [file.py ...] [--json] Query cached results with DuckDB (experimental)
 barca history [--limit N] [--json|--pretty] Show recent run history
 barca stats <target> [file.py ...] [--json|--pretty]  Timing/cache stats for an asset
 barca serve [file.py ...] [--port N]       Run the HTTP API server + cron scheduler

@@ -233,6 +233,29 @@ Read-only: never imports your code, never writes. Shape (rows, columns, type) is
 artifact file only.
 More: barca docs status, barca docs agents";
 
+const SQL_HELP: &str = "\
+Examples:
+  barca sql \"select * from revenue\"                       # one view per asset, named after the function
+  barca sql \"select region, sum(amount) from orders group by 1\"   # any DuckDB SQL over cached results
+  barca sql \"select * from orders o join revenue r using (region)\" # join assets
+  barca sql \"select * from weekly where partition = 'week=w1'\"   # partitioned: one view, a partition column
+  barca sql \"select status from validate\"                  # a task's last result is a view too
+  barca sql \"select * from orders\" pipeline.py              # only nodes in this file become views
+  barca sql \"select * from orders\" --limit 20               # first 20 rows (default: at most 100)
+  barca sql \"select * from orders\" --all                    # every row
+  barca sql \"select * from orders\" --json                   # {columns, rows, total, truncated, hint?}
+  barca sql \"select * from orders\" --env dev                # results cached in another environment
+
+Every asset, sensor and task with a result on disk is a view named after its function (or after its
+full id, quoted, when two nodes share a name; stderr says so). An asset whose code or inputs changed
+is still queryable at its last result, with a note on stderr. Only parquet and json results can be
+queried; pickles cannot. Runs in an in-memory DuckDB over the artifact files: your code is never
+imported, nothing is recorded, nothing is written. Needs duckdb in barca's Python environment.
+Errors exit 2: a node with no result yet names the `barca get` to run first; an unknown view lists
+the views; a SQL error carries DuckDB's message.
+Experimental: barca docs contract.
+More: barca docs sql";
+
 const DOCS_HELP: &str = "\
 Examples:
   barca docs                    # topic index with one-line summaries
@@ -475,6 +498,28 @@ enum Cli {
         #[arg(long)]
         env: Option<String>,
     },
+    /// Query cached results with SQL (DuckDB) — each asset is a view named after its function
+    ///
+    /// Reads artifact files only: no step runs, user code is never imported, nothing is recorded.
+    #[command(after_help = SQL_HELP)]
+    Sql {
+        /// The SQL query (DuckDB dialect); quote it as one argument
+        query: String,
+        /// Python files or directories to read (default: every .py file under the project root
+        /// that imports barca; see `barca docs discovery`)
+        files: Vec<PathBuf>,
+        #[command(flatten)]
+        format: FormatFlags,
+        /// Maximum number of rows to return
+        #[arg(short, long, default_value_t = bounded::LIST_DEFAULT_LIMIT)]
+        limit: usize,
+        /// Return every row (no limit)
+        #[arg(long, conflicts_with = "limit")]
+        all: bool,
+        /// Environment name (separates cache/state per environment)
+        #[arg(long)]
+        env: Option<String>,
+    },
     /// Show the built-in manual: concepts, output formats, examples, agent conventions
     ///
     /// Topics are compiled into the binary, so this works offline and always matches the
@@ -686,6 +731,7 @@ fn json_output(cli: &Cli) -> bool {
             fields_json(*format, fields.as_deref()).unwrap_or(false)
         }
         Cli::Docs { json, fields, .. } => *json || fields.is_some(),
+        Cli::Sql { format, .. } => is_json(*format),
         Cli::Serve { .. } | Cli::Version => false,
     }
 }
@@ -700,6 +746,7 @@ fn context(cli: &Cli) -> Context {
         Cli::Stats { files, .. } => ("stats", paths(files)),
         Cli::Serve { files, .. } => ("serve", paths(files)),
         Cli::List { files, .. } => ("list", paths(files)),
+        Cli::Sql { files, .. } => ("sql", paths(files)),
         Cli::Status { args, .. } => ("status", paths(&split_target_files(args.clone()).1)),
         Cli::History { .. } => ("history", Vec::new()),
         Cli::Docs { .. } => ("docs", Vec::new()),
@@ -822,6 +869,7 @@ fn enter_project_root(cli: &mut Cli) -> Result<(), barca_core::BarcaError> {
         Cli::Plan { files, .. }
         | Cli::Stats { files, .. }
         | Cli::Serve { files, .. }
+        | Cli::Sql { files, .. }
         | Cli::List { files, .. } => {
             *files = expand(std::mem::take(files))?;
         }
@@ -1153,6 +1201,26 @@ async fn run_cli(cli: Cli, ctx: &Context) -> Result<(), CliError> {
             list_cmd(files, json, limit, fields.as_deref(), &python)
                 .await
                 .map_err(engine)
+        }
+        Cli::Sql {
+            query,
+            files,
+            format,
+            limit,
+            all,
+            env,
+        } => {
+            let limit = (!all).then_some(limit);
+            sql_cmd(
+                env.as_deref(),
+                &query,
+                files,
+                limit,
+                is_json(format),
+                &python,
+            )
+            .await
+            .map_err(engine)
         }
         Cli::Status {
             args,
@@ -1672,6 +1740,82 @@ fn list_node_json(
         }
     }
     v
+}
+
+async fn sql_cmd(
+    env: Option<&str>,
+    query: &str,
+    files: Vec<PathBuf>,
+    limit: Option<usize>,
+    json: bool,
+    python: &PathBuf,
+) -> Result<(), barca_core::BarcaError> {
+    let cfg = barca_core::config::resolve(env)?;
+    let file_args: Vec<String> = files.iter().map(|p| p.display().to_string()).collect();
+    let result = barca_core::sql::sql(&cfg, query, &file_args, python, limit).await?;
+    for note in &result.notes {
+        eprintln!("barca: {note}");
+    }
+    let page = bounded::Page::new(result.rows.len(), result.total as usize);
+    if json {
+        let mut out = page.envelope("rows", result.rows, "rows");
+        if let serde_json::Value::Object(obj) = &mut out {
+            obj.insert(
+                "columns".into(),
+                serde_json::Value::Array(
+                    result
+                        .columns
+                        .into_iter()
+                        .map(serde_json::Value::String)
+                        .collect(),
+                ),
+            );
+        }
+        println!("{}", serde_json::to_string_pretty(&out).unwrap());
+        return Ok(());
+    }
+    let cell = |v: &serde_json::Value| match v {
+        serde_json::Value::Null => String::new(),
+        serde_json::Value::String(s) => s.clone(),
+        other => other.to_string(),
+    };
+    let grid: Vec<Vec<String>> = result
+        .rows
+        .iter()
+        .map(|r| result.columns.iter().map(|c| cell(&r[c])).collect())
+        .collect();
+    let widths: Vec<usize> = result
+        .columns
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            grid.iter()
+                .map(|r| r[i].chars().count())
+                .chain([c.chars().count()])
+                .max()
+                .unwrap_or(0)
+        })
+        .collect();
+    let line = |cells: &[String]| {
+        cells
+            .iter()
+            .zip(&widths)
+            .map(|(c, w)| format!("{c:<w$}"))
+            .collect::<Vec<_>>()
+            .join("  ")
+            .trim_end()
+            .to_string()
+    };
+    if !result.columns.is_empty() {
+        println!("{}", line(&result.columns));
+    }
+    for row in &grid {
+        println!("{}", line(row));
+    }
+    if let Some(note) = page.note(grid.len(), "rows") {
+        eprintln!("{note}");
+    }
+    Ok(())
 }
 
 /// Add `root`, the absolute project root (the cwd once `enter_project_root` ran), to a JSON
