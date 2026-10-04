@@ -277,9 +277,7 @@ def test_failed_run_prints_nothing_on_stdout_for_value_mode(project):
     "args",
     [
         ["get", "--frobnicate", "pipeline.py"],  # clap: unknown flag
-        ["get", "good"],  # target but no files
         ["run", "pipeline.py"],  # run without a target
-        ["run", "boom"],  # run without files
         ["get", "good", "notes.txt"],  # not a .py file
         ["run", "boom", "pipeline.py", "--refresh", "good", "boom"],  # space-separated --refresh
         ["get", "missing", "pipeline.py"],  # unknown target

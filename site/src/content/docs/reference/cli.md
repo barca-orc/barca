@@ -12,16 +12,16 @@ code and JSON output schema, marked stable or experimental, with the policy for 
 ## Commands
 
 ```
-barca get [target[,target...]] <file.py> [file.py ...] [--refresh a,b [--no-cascade] | --refresh-all]
+barca get [target[,target...]] [file.py|dir/ ...] [--refresh a,b [--no-cascade] | --refresh-all]
                                                Get asset value(s) — cache-aware
-barca run <task[,task...]> <file.py> [--refresh a,b [--no-cascade] | --refresh-all]  Run task(s) (always re-run)
-barca plan <file.py> [file.py ...]           Emit the execution plan as JSON (experimental)
+barca run <task[,task...]> [file.py|dir/ ...] [--refresh a,b [--no-cascade] | --refresh-all]  Run task(s) (always re-run)
+barca plan [file.py|dir/ ...]                Emit the execution plan as JSON (experimental)
 barca history [-l N | --all] [--json|--pretty]  Show recent run history
-barca stats <target> <file.py> [file.py ...]  Show timing/cache stats for an asset
-barca serve <file.py> [file.py ...] [--port N] [--watch] [--no-schedule] [--timezone TZ]
+barca stats <target> [file.py|dir/ ...]       Show timing/cache stats for an asset
+barca serve [file.py|dir/ ...] [--port N] [--watch] [--no-schedule] [--timezone TZ]
                                                Run the HTTP API server
-barca list <file.py> ... [-l N | --all] [--json]  List discovered definitions and their deps
-barca status [target[,target...]] <file.py> [--json] [--sample N]
+barca list [file.py|dir/ ...] [-l N | --all] [--json]  List discovered definitions and their deps
+barca status [target[,target...]] [file.py|dir/ ...] [--json] [--sample N]
                                                Cache state, last run and artifact shape per node
 barca docs [topic] [--all] [--json]           Built-in manual
 barca version                                 Print version
@@ -29,6 +29,11 @@ barca --help                                  Show help
 ```
 
 Shorthand: `barca pipeline.py` is rewritten to `barca get pipeline.py`.
+
+Files are optional on every command. Without them barca reads every `.py` file under the project
+root (the nearest directory holding `barca.toml`, else the current one) that imports barca.
+Files or directories narrow it; a directory given first needs a trailing `/` or must be `.`.
+Node ids are relative to the root. See [Discovery](/reference/discovery/).
 
 ## Output format
 
@@ -247,8 +252,10 @@ dependencies. Scheduled definitions also show their next fire time in local time
 second, so sub-minute schedules are legible).
 
 ```bash
+barca list                        # every node in the project
+barca list pipelines/             # only files under pipelines/
 barca list pipeline.py
-barca list pipeline.py --json     # {"nodes": [{id, kind, freshness, schedule?, inputs, env, next_fire?}], "total", "truncated"}
+barca list pipeline.py --json     # {"nodes": [{id, kind, freshness, schedule?, inputs, env, next_fire?}], "total", "truncated", "root"}
 barca list pipeline.py --pretty   # the table, even when piped
 barca list pipeline.py --limit 20   # first 20 nodes in topological order
 barca list pipeline.py --all        # every node (default: at most 100)

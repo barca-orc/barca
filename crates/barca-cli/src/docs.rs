@@ -36,6 +36,11 @@ pub const TOPICS: &[Topic] = &[
         "overview.md"
     ),
     topic!(
+        "discovery",
+        "Which files make up a project: the root, walks, [discovery], node ids",
+        "discovery.md"
+    ),
+    topic!(
         "assets",
         "@asset, inputs, freshness, retries, node ids",
         "assets.md"

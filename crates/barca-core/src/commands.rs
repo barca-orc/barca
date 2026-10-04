@@ -2646,8 +2646,8 @@ pub async fn build_dag(file_args: &[String], python: &PathBuf) -> Result<Dag, Ba
 /// `Path::new("p.py").parent()` is `Some("")`, an empty path that `read_dir` cannot open, so a
 /// bare filename used to scan no helpers at all (#178). Every spelling of the same file must
 /// scan the same directory: `p.py` and `./p.py` give `.`, `sub/p.py` gives `sub`, and an
-/// absolute path gives its parent. Only what is scanned changes; node ids keep the spelling
-/// given on the command line.
+/// absolute path gives its parent. (The CLI already normalizes file arguments to root-relative
+/// paths, so node ids do not depend on the spelling either.)
 pub fn source_dir(file: &std::path::Path) -> PathBuf {
     match file.parent() {
         Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
@@ -2660,88 +2660,100 @@ pub(crate) fn build_dag_blocking(
     python: &PathBuf,
 ) -> Result<Dag, BarcaError> {
     let paths: Vec<PathBuf> = file_args.iter().map(PathBuf::from).collect();
-    let mut all_nodes = Vec::new();
-    let mut file_sources: HashMap<String, String> = HashMap::new();
-    // Dotted module names in `file_sources` that are `__init__.py` packages,
-    // as opposed to regular submodules — needed to resolve relative imports.
-    let mut packages: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-    for path in &paths {
+    // Parse every file once. Files are grouped by directory because that directory is what the
+    // worker puts on sys.path, so it is what a bare `import helpers` in the file refers to: two
+    // `helpers.py` (or two `assets.py`) in different directories must never share hashing state.
+    struct ParsedFile {
+        index: usize,
+        stem: String,
+        source: String,
+        nodes: Vec<crate::model::ExtractedNode>,
+    }
+    let mut by_dir: std::collections::BTreeMap<PathBuf, Vec<ParsedFile>> =
+        std::collections::BTreeMap::new();
+    for (index, path) in paths.iter().enumerate() {
         let source = fs::read_to_string(path)
             .map_err(|e| BarcaError::Usage(format!("{}: {e}", path.display())))?;
         let file_str = path.to_string_lossy().to_string();
-        let nodes =
-            extract_nodes(&source, &file_str).map_err(|e| BarcaError::Parse(e.to_string()))?;
+        let nodes = extract_nodes(&source, &file_str)
+            .map_err(|e| BarcaError::Parse(format!("{file_str}: {e}")))?;
         let stem = path
             .file_stem()
             .unwrap_or_default()
             .to_string_lossy()
             .to_string();
-        file_sources.insert(stem, source.clone());
-        {
-            let parent = source_dir(path);
-            let parent = parent.as_path();
-            // Scan subdirectories FIRST — packages (__init__.py) take precedence
-            // over same-named sibling .py files, matching Python's import semantics.
-            scan_subdirectories(parent, parent, &mut file_sources, &mut packages);
-            // Then scan sibling .py files (flat) — or_insert_with is a no-op if
-            // a package with the same name was already registered above.
-            if let Ok(entries) = std::fs::read_dir(parent) {
-                for entry in entries.flatten() {
-                    let ep = entry.path();
-                    if ep.extension().map(|e| e == "py").unwrap_or(false)
-                        && ep.file_name() != path.file_name()
+        by_dir
+            .entry(source_dir(path))
+            .or_default()
+            .push(ParsedFile {
+                index,
+                stem,
+                source,
+                nodes,
+            });
+    }
+
+    // Nodes per file, in command-line order (the last asset is `get file.py`'s final value).
+    let mut per_file: Vec<Vec<crate::model::ExtractedNode>> = vec![Vec::new(); paths.len()];
+    for (dir, files) in &by_dir {
+        // Module name -> source for everything an import in this directory can reach:
+        // the directory's own files first, then packages and modules below it, then siblings,
+        // then (as before 0.13) the other files on the command line.
+        let mut file_sources: HashMap<String, String> = HashMap::new();
+        // Dotted module names in `file_sources` that are `__init__.py` packages,
+        // as opposed to regular submodules — needed to resolve relative imports.
+        let mut packages: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for f in files {
+            file_sources.insert(f.stem.clone(), f.source.clone());
+        }
+        // Subdirectories first — packages (__init__.py) take precedence over same-named
+        // sibling .py files, matching Python's import semantics.
+        scan_subdirectories(dir, dir, &mut file_sources, &mut packages);
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let ep = entry.path();
+                if ep.extension().map(|e| e == "py").unwrap_or(false) {
+                    let estem = ep
+                        .file_stem()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    if let std::collections::hash_map::Entry::Vacant(e) = file_sources.entry(estem)
+                        && let Ok(content) = fs::read_to_string(&ep)
                     {
-                        let estem = ep
-                            .file_stem()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                            .to_string();
-                        if let std::collections::hash_map::Entry::Vacant(e) =
-                            file_sources.entry(estem)
-                            && let Ok(content) = fs::read_to_string(&ep)
-                        {
-                            e.insert(content);
-                        }
+                        e.insert(content);
                     }
                 }
             }
         }
-        all_nodes.extend(nodes);
-    }
+        for (other_dir, others) in &by_dir {
+            if other_dir != dir {
+                for f in others {
+                    file_sources
+                        .entry(f.stem.clone())
+                        .or_insert_with(|| f.source.clone());
+                }
+            }
+        }
 
-    // Parse module definitions once per source file, then compute cone hashes.
-    // This avoids re-parsing the same file for every node (O(n) parses instead of O(n²)).
-    let mut cached_defs: HashMap<String, HashMap<String, crate::cone::ModuleDef>> = HashMap::new();
-    for (key, src) in &file_sources {
-        cached_defs.insert(key.clone(), crate::cone::collect_module_definitions(src));
-    }
-
-    for node in &mut all_nodes {
-        let stem_from_path = node
-            .source_file
-            .rsplit('/')
-            .next()
-            .unwrap_or("")
-            .replace(".py", "");
-        let defs = cached_defs.get(&stem_from_path).or_else(|| {
-            let stem = PathBuf::from(&node.source_file);
-            let s = stem.file_stem()?.to_str()?;
-            cached_defs.get(s)
-        });
-        if let Some(defs) = defs {
-            node.cone_hash = crate::cone::cone_hash_from_defs(
-                defs,
-                &node.function_name,
-                &file_sources,
-                &packages,
-            );
+        // Each file's own definitions are parsed once, then shared by its nodes.
+        for f in files {
+            let defs = crate::cone::collect_module_definitions(&f.source);
+            for node in &f.nodes {
+                let mut node = node.clone();
+                node.cone_hash = crate::cone::cone_hash_from_defs(
+                    &defs,
+                    &node.function_name,
+                    &file_sources,
+                    &packages,
+                );
+                per_file[f.index].push(node);
+            }
         }
     }
-
-    // Free source text memory before execution starts.
-    drop(file_sources);
-    drop(packages);
+    drop(by_dir);
+    let mut all_nodes: Vec<crate::model::ExtractedNode> = per_file.into_iter().flatten().collect();
 
     resolve_dynamic_partitions(&mut all_nodes, python);
 

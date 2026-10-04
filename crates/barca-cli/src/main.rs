@@ -45,7 +45,8 @@ impl OutputMode {
 
 const TOP_HELP: &str = "\
 Quick start:
-  barca list pipeline.py            # discover assets, tasks and their dependencies
+  barca list                        # discover every asset, task and dependency in the project
+  barca list pipeline.py            # ... or only those in one file
   barca get total pipeline.py       # run only what `total` needs (cached on re-run)
   barca run deploy pipeline.py      # run a task and its dependency cone
   barca docs                        # built-in manual: concepts, formats, examples
@@ -58,6 +59,9 @@ Scripts and AI agents: barca docs skill (short, start here), barca docs agents (
 
 const GET_HELP: &str = "\
 Examples:
+  barca get total                          # find `total` anywhere in the project and get it
+  barca get total pipelines/               # only read files under pipelines/
+  barca get                                # every asset and sensor in the project, never tasks
   barca get pipeline.py                    # every asset and sensor, never tasks; prints the last asset's value
   barca get total pipeline.py              # one target and only its upstream cone
   barca get total,orders pipeline.py       # several targets in one run; shared upstream runs once
@@ -102,6 +106,8 @@ More: barca docs cache, barca docs types, barca docs agents";
 
 const RUN_HELP: &str = "\
 Examples:
+  barca run deploy                                     # find the task anywhere in the project and run it
+  barca run deploy pipelines/                          # only read files under pipelines/
   barca run deploy pipeline.py                         # task runs; upstream assets come from cache
   barca run deploy pipeline.py --refresh fetch,clean   # re-materialize these and everything downstream of them
   barca run deploy pipeline.py --refresh fetch --no-cascade   # re-materialize only fetch; downstream stays cached
@@ -126,7 +132,8 @@ upstream asset is an error. --no-cache is a deprecated spelling of --refresh-all
 and warns on stderr.
 The target must be a task; use `barca get` for assets. The target comes before the files:
 `barca run pipeline.py deploy` exits 2 and prints `barca run deploy pipeline.py`. Every usage
-error exits 2 and ends by pointing at `barca list <files>`.
+error exits 2 and ends by pointing at `barca list` (with the files you gave, if any).
+No files: barca reads every file in the project that imports barca (barca docs discovery).
 Errors: in JSON mode the last stderr line is one JSON object {error, code, kind, remediation}
 (see barca docs agents). Exit 1 step failed, 2 usage error, 3 barca/infra failure, 130 cancelled.
 A raising task, or one that calls sys.exit(), fails the run: exit 1, and the stdout JSON line has
@@ -135,6 +142,7 @@ More: barca docs tasks, barca docs cache, barca docs agents";
 
 const PLAN_HELP: &str = "\
 Examples:
+  barca plan                          # the whole project
   barca plan pipeline.py              # phases and steps that would run; nothing executes
   barca plan pipeline.py other.py     # several files form one DAG
 
@@ -161,6 +169,7 @@ More: barca docs agents, barca docs cache";
 
 const STATS_HELP: &str = "\
 Examples:
+  barca stats total                         # find `total` anywhere in the project
   barca stats total pipeline.py             # timing percentiles and cache hit rate
   barca stats total pipeline.py --json      # {id, total_runs, cache_hit_rate, ..., recent_runs}, even in a terminal
   barca stats total pipeline.py --pretty    # the text report, even when piped
@@ -170,7 +179,8 @@ More: barca docs cache";
 
 const SERVE_HELP: &str = "\
 Examples:
-  barca serve pipeline.py                    # HTTP API on 127.0.0.1:8274 plus the scheduler (files required)
+  barca serve                                # every file in the project; files added later need a restart
+  barca serve pipeline.py                    # HTTP API on 127.0.0.1:8274 plus the scheduler
   barca serve pipeline.py --port 8400        # custom port
   barca serve pipeline.py --watch            # dev: re-parse the DAG when files change
   barca serve pipeline.py --no-schedule      # API only; Schedule(...) nodes do not fire
@@ -181,8 +191,11 @@ More: barca docs scheduling";
 
 const LIST_HELP: &str = "\
 Examples:
+  barca list                         # every node in the project (files that import barca)
+  barca list pipelines/              # only files under pipelines/ (trailing / marks a directory)
+  barca list .                       # the current directory and below
   barca list pipeline.py             # table of nodes (in a terminal; JSON when piped)
-  barca list pipeline.py --json      # {nodes: [{id, kind, freshness, schedule?, inputs, env, next_fire?}], total, truncated}
+  barca list pipeline.py --json      # {nodes: [{id, kind, freshness, schedule?, inputs, env, next_fire?}], total, truncated, root}
   barca list pipeline.py --pretty    # the table, even when piped
   barca list pipeline.py --fields id,inputs   # JSON with only these keys per node
   barca list big.py --limit 20       # first 20 nodes (topological order)
@@ -194,16 +207,18 @@ An ENV column (and `env` in JSON) lists the environment variables each node decl
 `schedule`; a scheduled node also has `schedule` (the cron expression) and `next_fire`.
 `list` reads no state, so it takes no --env.
 
+Node ids are relative to the project root (`root` in JSON; barca docs discovery).
 Run this first to confirm barca discovered your nodes. When more nodes exist than are shown,
 JSON says `\"truncated\": true` with the `total`, and the table prints a note on stderr.
 More: barca docs assets, barca docs agents";
 
 const STATUS_HELP: &str = "\
 Examples:
+  barca status                             # every node in the project
   barca status pipeline.py                 # table in a terminal (JSON when piped): kind, cache state, last run, shape
   barca status total pipeline.py           # only `total` and its upstream cone
   barca status total,orders pipeline.py    # several targets: the union of their cones
-  barca status pipeline.py --json          # {target, targets, nodes, summary, total, truncated}, even in a terminal
+  barca status pipeline.py --json          # {target, targets, nodes, summary, total, truncated, root}, even in a terminal
   barca status pipeline.py --pretty        # the table, even when piped
   barca status pipeline.py --fields id,cache   # JSON with only these keys per node
   barca status big.py --limit 20           # first 20 nodes (default: at most 100); the summary counts all
@@ -241,7 +256,7 @@ Topics are compiled into the binary: offline, and always matching this version."
                   checkpoint. pandas/polars DataFrames, pyarrow Tables and duckdb relations \
                   are written as parquet; parameter type annotations choose how downstream \
                   steps read it back (pandas by default, or polars, pyarrow, duckdb) but do \
-                  not skip materialization. Start with `barca list <file.py>` to discover a \
+                  not skip materialization. Start with `barca list` (run inside the project) to discover a \
                   project's assets and tasks; run `barca docs` for the manual.",
     after_help = TOP_HELP,
     version
@@ -259,8 +274,8 @@ enum Cli {
     /// multiple assets or split the work inside a single step before returning.
     #[command(after_help = GET_HELP)]
     Get {
-        /// [TARGET[,TARGET...]] file.py [file.py ...] — target is optional
-        #[arg(required = true)]
+        /// [TARGET[,TARGET...]] [file.py|dir/ ...] — both optional: no target gets every asset
+        /// and sensor; no files reads the whole project (`barca docs discovery`)
         args: Vec<String>,
         /// Output format (kept for compatibility; --json / --pretty are the canonical spelling)
         #[arg(short, long, conflicts_with_all = ["json", "pretty"])]
@@ -304,7 +319,8 @@ enum Cli {
     /// upstream assets, or `--refresh-all` to refresh the entire upstream cone.
     #[command(after_help = RUN_HELP)]
     Run {
-        /// TARGET[,TARGET...] file.py [file.py ...] — one or more target tasks, comma-separated
+        /// TARGET[,TARGET...] [file.py|dir/ ...] — one or more target tasks, comma-separated; no
+        /// files reads the whole project (`barca docs discovery`)
         #[arg(required = true)]
         args: Vec<String>,
         /// Upstream assets to force re-materialize, as ONE comma-separated list
@@ -345,8 +361,7 @@ enum Cli {
     /// Parse source files and emit the execution plan as JSON
     #[command(after_help = PLAN_HELP)]
     Plan {
-        /// Python source files containing @asset definitions
-        #[arg(required = true)]
+        /// Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`)
         files: Vec<PathBuf>,
     },
     /// Show recent run history
@@ -373,8 +388,7 @@ enum Cli {
     Stats {
         /// Target asset function name
         target: String,
-        /// Python source files containing @asset definitions
-        #[arg(required = true)]
+        /// Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`)
         files: Vec<PathBuf>,
         #[command(flatten)]
         format: FormatFlags,
@@ -392,8 +406,7 @@ enum Cli {
     /// async runs; poll GET /status/<run_id> for results.
     #[command(after_help = SERVE_HELP)]
     Serve {
-        /// Python source files defining the DAG to serve
-        #[arg(required = true)]
+        /// Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`). With --watch, files added later are not picked up until restart
         files: Vec<PathBuf>,
         /// Port to bind on
         #[arg(short, long, default_value = "8274")]
@@ -416,8 +429,7 @@ enum Cli {
     /// Scheduled definitions also show their next fire time in local time.
     #[command(after_help = LIST_HELP)]
     List {
-        /// Python source files containing definitions
-        #[arg(required = true)]
+        /// Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`)
         files: Vec<PathBuf>,
         #[command(flatten)]
         format: FormatFlags,
@@ -440,8 +452,8 @@ enum Cli {
     /// upstream cones of the targets are shown.
     #[command(after_help = STATUS_HELP)]
     Status {
-        /// [TARGET[,TARGET...]] file.py [file.py ...] — target is optional
-        #[arg(required = true)]
+        /// [TARGET[,TARGET...]] [file.py|dir/ ...] — both optional; no files reads the whole
+        /// project (`barca docs discovery`)
         args: Vec<String>,
         #[command(flatten)]
         format: FormatFlags,
@@ -744,54 +756,99 @@ fn project_docs_json(out: String, fields: Option<&[String]>) -> String {
     serde_json::to_string_pretty(&v).unwrap_or_default() + "\n"
 }
 
-/// Change into the project root when it is above the cwd, rewriting every file argument so it
-/// names the same file from there. A note on stderr says which root is in use. Without a
-/// barca.toml above the cwd (or with the cwd being the root) nothing changes.
-fn enter_project_root(cli: &mut Cli) -> Result<(), String> {
-    let cwd = std::env::current_dir().map_err(|e| format!("cannot determine cwd: {e}"))?;
-    let Some(root) = barca_core::config::find_root(&cwd) else {
-        return Ok(());
-    };
-    if root == cwd {
-        return Ok(());
+/// Change into the project root (the nearest barca.toml at or above the cwd, else the cwd) and
+/// turn the file arguments into the project's file list: paths are rebased onto the root, and
+/// directories, or no files at all, are expanded by tree discovery (`barca_core::discover`).
+/// A note on stderr names the root when it is not the cwd.
+fn enter_project_root(cli: &mut Cli) -> Result<(), barca_core::BarcaError> {
+    use barca_core::BarcaError;
+    let cwd = std::env::current_dir()
+        .map_err(|e| BarcaError::Other(format!("cannot determine cwd: {e}")))?;
+    let root = barca_core::config::find_root(&cwd).unwrap_or_else(|| cwd.clone());
+    if root != cwd {
+        std::env::set_current_dir(&root).map_err(|e| {
+            BarcaError::Other(format!(
+                "cannot change into project root {}: {e}",
+                root.display()
+            ))
+        })?;
+        eprintln!(
+            "barca: project root: {} ({} found above the cwd)",
+            root.display(),
+            barca_core::config::CONFIG_FILE
+        );
     }
     let rebase = |p: &Path| barca_core::config::rebase_onto_root(p, &cwd, &root);
+    // Discovery needs [discovery] from barca.toml; an invalid file is reported here once.
+    let mut discovery: Option<barca_core::config::DiscoveryToml> = None;
+    let mut expand = |files: Vec<PathBuf>| -> Result<Vec<PathBuf>, BarcaError> {
+        let files: Vec<PathBuf> = files.iter().map(|f| rebase(f)).collect();
+        // A stray non-path argument (`--refresh a b`) is left for the usage checks to explain.
+        if files
+            .iter()
+            .any(|f| !f.to_string_lossy().ends_with(".py") && !f.is_dir())
+        {
+            return Ok(files);
+        }
+        let walk = files.is_empty() || files.iter().any(|f| f.is_dir());
+        if !walk {
+            return Ok(files);
+        }
+        if discovery.is_none() {
+            discovery = Some(
+                barca_core::config::load_toml(Path::new("."))?
+                    .and_then(|t| t.discovery)
+                    .unwrap_or_default(),
+            );
+        }
+        let cfg = discovery.as_ref().expect("loaded above");
+        Ok(barca_core::discover::discover(Path::new("."), &files, cfg)?
+            .into_iter()
+            .map(PathBuf::from)
+            .collect())
+    };
     match cli {
         Cli::Get { args, .. } | Cli::Run { args, .. } | Cli::Status { args, .. } => {
-            for arg in args.iter_mut().filter(|a| a.ends_with(".py")) {
-                *arg = rebase(Path::new(arg.as_str()))
-                    .to_string_lossy()
-                    .into_owned();
-            }
+            let (target, files) = split_target_files(std::mem::take(args));
+            // A target with stray words after it (wrong order) is left for check_order.
+            let files = if files.iter().all(|f| is_path_arg(&f.to_string_lossy())) {
+                expand(files)?
+            } else {
+                files
+            };
+            args.extend(target);
+            args.extend(files.iter().map(|f| f.to_string_lossy().into_owned()));
         }
         Cli::Plan { files, .. }
         | Cli::Stats { files, .. }
         | Cli::Serve { files, .. }
         | Cli::List { files, .. } => {
-            for file in files.iter_mut() {
-                *file = rebase(file);
-            }
+            *files = expand(std::mem::take(files))?;
         }
         Cli::History { .. } | Cli::Docs { .. } | Cli::Version => {}
     }
-    std::env::set_current_dir(&root)
-        .map_err(|e| format!("cannot change into project root {}: {e}", root.display()))?;
-    eprintln!(
-        "barca: project root: {} ({} found above the cwd)",
-        root.display(),
-        barca_core::config::CONFIG_FILE
-    );
     Ok(())
 }
 
+/// Whether a positional names files rather than a target: a `.py` file, a path written with a
+/// trailing `/`, `.` or `..`, or an existing directory written with a `/` in it. A bare word is
+/// always a target, even when a directory has that name (write `name/` for the directory).
+fn is_path_arg(arg: &str) -> bool {
+    arg.ends_with(".py")
+        || arg.ends_with('/')
+        || arg == "."
+        || arg == ".."
+        || (arg.contains('/') && !arg.contains(':') && Path::new(arg).is_dir())
+}
+
 /// Split the raw positional args into (optional target, files).
-/// If the first arg ends in `.py`, all args are files (no target).
+/// If the first arg names files (`is_path_arg`), all args are files (no target).
 /// Otherwise, the first arg is the target and the rest are files.
 fn split_target_files(args: Vec<String>) -> (Option<String>, Vec<PathBuf>) {
     if args.is_empty() {
         return (None, Vec::new());
     }
-    if args[0].ends_with(".py") {
+    if is_path_arg(&args[0]) {
         // All args are files.
         let files = args.into_iter().map(PathBuf::from).collect();
         (None, files)
@@ -883,8 +940,14 @@ fn main() {
     let ctx = context(&cli);
     // Run from the project root (the nearest barca.toml at or above the cwd), so `.barca/`,
     // node ids and relative paths inside steps are the same wherever barca is invoked.
-    if let Err(msg) = enter_project_root(&mut cli) {
-        CliError::from_barca(barca_core::BarcaError::Other(msg), &ctx).emit(json);
+    if let Err(e) = enter_project_root(&mut cli) {
+        let usage = matches!(e, barca_core::BarcaError::Usage(_));
+        let err = CliError::from_barca(e, &ctx);
+        if usage {
+            err.with_final_hint(list_hint(&[])).emit(json)
+        } else {
+            err.emit(json)
+        }
     }
 
     // The one runtime for the whole process — barca-core is async-native and
@@ -982,8 +1045,8 @@ async fn run_cli(cli: Cli, ctx: &Context) -> Result<(), CliError> {
                     &files,
                 ));
             }
-            let hint_files = files.clone();
-            let targets = targets_arg(target.as_deref(), &files)?;
+            let hint_files: Vec<PathBuf> = ctx.files.iter().map(PathBuf::from).collect();
+            let targets = targets_arg(target.as_deref(), &hint_files)?;
             let policy = cache_policy(refresh, no_cascade, refresh_all, no_cache);
             get_cmd(
                 env.as_deref(),
@@ -1028,9 +1091,9 @@ async fn run_cli(cli: Cli, ctx: &Context) -> Result<(), CliError> {
                     &files,
                 ));
             }
-            let hint_files = files.clone();
+            let hint_files: Vec<PathBuf> = ctx.files.iter().map(PathBuf::from).collect();
             let policy = cache_policy(refresh, no_cascade, refresh_all, no_cache);
-            let targets = targets_arg(Some(&target), &files)?;
+            let targets = targets_arg(Some(&target), &hint_files)?;
             run_cmd(
                 env.as_deref(),
                 targets,
@@ -1110,8 +1173,8 @@ async fn run_cli(cli: Cli, ctx: &Context) -> Result<(), CliError> {
                     &files,
                 ));
             }
-            let hint_files = files.clone();
-            let targets = targets_arg(target.as_deref(), &files)?;
+            let hint_files: Vec<PathBuf> = ctx.files.iter().map(PathBuf::from).collect();
+            let targets = targets_arg(target.as_deref(), &hint_files)?;
             let limit = (!all).then_some(limit);
             status_cmd(
                 env.as_deref(),
@@ -1611,6 +1674,17 @@ fn list_node_json(
     v
 }
 
+/// Add `root`, the absolute project root (the cwd once `enter_project_root` ran), to a JSON
+/// object, so callers can resolve the root-relative node ids to files.
+fn insert_root(out: &mut serde_json::Value) {
+    if let (serde_json::Value::Object(obj), Ok(cwd)) = (out, std::env::current_dir()) {
+        obj.insert(
+            "root".to_string(),
+            serde_json::Value::String(cwd.display().to_string()),
+        );
+    }
+}
+
 async fn list_cmd(
     files: Vec<PathBuf>,
     json: bool,
@@ -1641,7 +1715,8 @@ async fn list_cmd(
         if let Some(f) = fields {
             bounded::project(&mut nodes, f);
         }
-        let out = page.envelope("nodes", nodes, "nodes");
+        let mut out = page.envelope("nodes", nodes, "nodes");
+        insert_root(&mut out);
         println!("{}", serde_json::to_string_pretty(&out).unwrap());
         return Ok(());
     }
@@ -1773,6 +1848,7 @@ async fn status_cmd(
                 }
             }
         }
+        insert_root(&mut out);
         println!("{}", serde_json::to_string_pretty(&out).unwrap());
         return Ok(());
     }
@@ -2352,7 +2428,7 @@ mod tests {
         );
         assert_eq!(
             list_hint(&[]),
-            "Run `barca list <file.py>` to see available assets and tasks."
+            "Run `barca list` to see available assets and tasks."
         );
     }
 

@@ -23,6 +23,17 @@ pub const DEFAULT_ENV: &str = "default";
 pub struct BarcaToml {
     pub default_env: Option<String>,
     pub remote: Option<RemoteToml>,
+    pub discovery: Option<DiscoveryToml>,
+}
+
+/// `[discovery]`: which files a walk of the project finds (see `discover`).
+#[derive(Debug, Deserialize, Default, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct DiscoveryToml {
+    /// Root-relative globs; when set, only matching files are discovered.
+    pub include: Option<Vec<String>>,
+    /// Root-relative globs removed from what the walk finds.
+    pub exclude: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -75,13 +86,20 @@ pub fn find_root(start: &Path) -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
-/// Re-express a path typed in `cwd` relative to `root` (an ancestor of `cwd`), so it still
-/// names the same file once the process changes into `root`. Absolute paths are unchanged.
+/// Re-express a path typed in `cwd` relative to `root` (an ancestor of `cwd`, or `cwd`
+/// itself), so it still names the same file once the process changes into `root`. An absolute
+/// path inside the root becomes root-relative too, so node ids do not depend on how a file was
+/// spelled; an absolute path outside the root is unchanged.
 /// `.` and `..` are resolved lexically: `sub` + `../p.py` is `p.py`, the spelling a user in the
 /// root would type, so node ids built from it match.
 pub fn rebase_onto_root(path: &Path, cwd: &Path, root: &Path) -> PathBuf {
     if path.is_absolute() {
-        return path.to_path_buf();
+        let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        return match canon(path).strip_prefix(canon(root)) {
+            Ok(rel) if !rel.as_os_str().is_empty() => rel.to_path_buf(),
+            Ok(_) => PathBuf::from("."),
+            Err(_) => path.to_path_buf(),
+        };
     }
     let rel_cwd = cwd.strip_prefix(root).unwrap_or(Path::new(""));
     normalize_lexically(&rel_cwd.join(path))
@@ -325,6 +343,8 @@ mod tests {
         assert_eq!(rebase("../../x.py", "/p/a/b"), PathBuf::from("x.py"));
         assert_eq!(rebase("../../x.py", "/p/a"), PathBuf::from("../x.py"));
         assert_eq!(rebase("/abs/x.py", "/p/sub"), PathBuf::from("/abs/x.py"));
+        assert_eq!(rebase("/p/q/x.py", "/p/sub"), PathBuf::from("q/x.py"));
+        assert_eq!(rebase("/p", "/p/sub"), PathBuf::from("."));
         assert_eq!(rebase("..", "/p/sub"), PathBuf::from("."));
     }
     use std::sync::{Mutex, MutexGuard};

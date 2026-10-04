@@ -2,11 +2,11 @@ Show every node's cache state, last materialization and artifact shape (read-onl
 
 One aggregated view: what `barca list`, `--dry-run`, `barca history` and a look inside the artifact would each tell you. If the first positional arg ends in .py, all args are files; otherwise the first is a target (or several, comma-separated: `a,b`) and only the upstream cones of the targets are shown.
 
-Usage: barca status [OPTIONS] <ARGS>...
+Usage: barca status [OPTIONS] [ARGS]...
 
 Arguments:
-  <ARGS>...
-          [TARGET[,TARGET...]] file.py [file.py ...] — target is optional
+  [ARGS]...
+          [TARGET[,TARGET...]] [file.py|dir/ ...] — both optional; no files reads the whole project (`barca docs discovery`)
 
 Options:
       --json
@@ -38,10 +38,11 @@ Options:
           Print help (see a summary with '-h')
 
 Examples:
+  barca status                             # every node in the project
   barca status pipeline.py                 # table in a terminal (JSON when piped): kind, cache state, last run, shape
   barca status total pipeline.py           # only `total` and its upstream cone
   barca status total,orders pipeline.py    # several targets: the union of their cones
-  barca status pipeline.py --json          # {target, targets, nodes, summary, total, truncated}, even in a terminal
+  barca status pipeline.py --json          # {target, targets, nodes, summary, total, truncated, root}, even in a terminal
   barca status pipeline.py --pretty        # the table, even when piped
   barca status pipeline.py --fields id,cache   # JSON with only these keys per node
   barca status big.py --limit 20           # first 20 nodes (default: at most 100); the summary counts all

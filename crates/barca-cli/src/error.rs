@@ -92,10 +92,11 @@ pub fn shell_quote(s: &str) -> String {
     }
 }
 
-/// `barca list <files>`, quoted for the shell (`<file.py>` when no file is known).
+/// `barca list <files>`, quoted for the shell (plain `barca list`, the whole project, when no
+/// file is known).
 pub fn list_cmd(files: &[String]) -> String {
     if files.is_empty() {
-        "barca list <file.py>".to_string()
+        "barca list".to_string()
     } else {
         let quoted: Vec<String> = files.iter().map(|f| shell_quote(f)).collect();
         format!("barca list {}", quoted.join(" "))

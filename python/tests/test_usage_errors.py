@@ -114,11 +114,14 @@ def test_run_without_a_target(project):
     assert last_line(err) == "Run `barca list pipeline.py` to see available assets and tasks."
 
 
-def test_target_without_files(project):
-    for cmd in ("get", "run"):
-        err = usage_error(barca(project, cmd, "report"))
-        assert "error: no .py files provided" in err
-        assert last_line(err) == "Run `barca list <file.py>` to see available assets and tasks."
+def test_target_without_files_reads_the_whole_project(project):
+    # No files means tree discovery (#202), so a bare target just works...
+    ran = barca(project, "run", "report")
+    assert ran.returncode == 0, ran.stderr
+    # ...and misuse errors point at the project-wide `barca list`.
+    err = usage_error(barca(project, "get", "report"))
+    assert "'report' is a task" in err
+    assert last_line(err) == "Run `barca list` to see available assets and tasks."
 
 
 def test_space_separated_refresh_still_says_to_use_commas(project):

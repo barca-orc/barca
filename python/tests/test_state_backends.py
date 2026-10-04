@@ -165,9 +165,7 @@ class AzureBackend:
     def env(self):
         import json
 
-        return {
-            "BARCA_STORAGE_OPTIONS": json.dumps({"abfs": {"connection_string": AZURITE_CONN}})
-        }
+        return {"BARCA_STORAGE_OPTIONS": json.dumps({"abfs": {"connection_string": AZURITE_CONN}})}
 
     def make_uri(self, tmp_path):
         import adlfs

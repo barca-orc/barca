@@ -9,6 +9,7 @@ is about 1500 tokens and covers what an agent needs before its first command:
 
 - when to use barca, and the loop: `barca list` / `barca status` to discover, `barca get` (assets)
   and `barca run` (tasks) to execute, `--dry-run` to preview;
+- no file arguments needed: barca reads the whole project (`barca docs discovery`);
 - the argument order (target, then files) and comma-separated targets and `--refresh`, which
   cascades downstream unless `--no-cascade`;
 - the output contract: the JSON result on stdout (its last line), the error envelope as the last
