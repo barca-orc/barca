@@ -1,8 +1,9 @@
 //! Configuration resolution — barca.toml, environment variables, CLI flags.
 //!
-//! barca.toml is discovered in the current working directory only (no
-//! walk-up): everything barca persists is already cwd-anchored (`.barca/`),
-//! so the config governing that state is anchored the same way.
+//! The project root is the nearest directory at or above the cwd holding barca.toml
+//! (`find_root`); without one, the cwd is the root. The CLI changes into the root before
+//! anything else runs, so `.barca/`, relative paths in user code, and node ids are anchored
+//! there wherever barca is invoked from. barca.toml is then read from the (new) cwd.
 //!
 //! Precedence for every value: CLI flag > environment variable > barca.toml
 //! > built-in default.
@@ -10,7 +11,7 @@
 use crate::BarcaError;
 use serde::Deserialize;
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 pub const CONFIG_FILE: &str = "barca.toml";
 pub const DEFAULT_ENV: &str = "default";
@@ -61,6 +62,49 @@ pub struct ResolvedConfig {
     /// Merged storage options (toml ⊕ env, env keys win), serialized as the
     /// JSON that `BARCA_STORAGE_OPTIONS` carries to child processes.
     pub storage_options_json: Option<String>,
+}
+
+// ─── Project root ────────────────────────────────────────────────────────────
+
+/// The project root: the nearest directory at or above `start` that holds barca.toml.
+/// `None` when there is none, in which case the caller's cwd is the root.
+pub fn find_root(start: &Path) -> Option<PathBuf> {
+    start
+        .ancestors()
+        .find(|dir| dir.join(CONFIG_FILE).is_file())
+        .map(Path::to_path_buf)
+}
+
+/// Re-express a path typed in `cwd` relative to `root` (an ancestor of `cwd`), so it still
+/// names the same file once the process changes into `root`. Absolute paths are unchanged.
+/// `.` and `..` are resolved lexically: `sub` + `../p.py` is `p.py`, the spelling a user in the
+/// root would type, so node ids built from it match.
+pub fn rebase_onto_root(path: &Path, cwd: &Path, root: &Path) -> PathBuf {
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+    let rel_cwd = cwd.strip_prefix(root).unwrap_or(Path::new(""));
+    normalize_lexically(&rel_cwd.join(path))
+}
+
+fn normalize_lexically(path: &Path) -> PathBuf {
+    let mut out: Vec<Component> = Vec::new();
+    for c in path.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => match out.last() {
+                Some(Component::Normal(_)) => {
+                    out.pop();
+                }
+                _ => out.push(c),
+            },
+            other => out.push(other),
+        }
+    }
+    if out.is_empty() {
+        return PathBuf::from(".");
+    }
+    out.iter().collect()
 }
 
 // ─── Loading ─────────────────────────────────────────────────────────────────
@@ -248,6 +292,41 @@ fn merge_storage_options(from_toml: Option<&toml::Table>) -> Result<Option<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn find_root_walks_up_to_the_nearest_barca_toml() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("proj");
+        let deep = root.join("a").join("b");
+        std::fs::create_dir_all(&deep).unwrap();
+        assert_eq!(find_root(&deep), None);
+        std::fs::write(root.join(CONFIG_FILE), "").unwrap();
+        assert_eq!(find_root(&deep), Some(root.clone()));
+        assert_eq!(find_root(&root), Some(root.clone()));
+        std::fs::write(root.join("a").join(CONFIG_FILE), "").unwrap();
+        assert_eq!(find_root(&deep), Some(root.join("a")));
+    }
+
+    #[test]
+    fn find_root_ignores_a_directory_named_barca_toml() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(CONFIG_FILE)).unwrap();
+        assert_eq!(find_root(tmp.path()), None);
+    }
+
+    #[test]
+    fn paths_typed_in_a_subdirectory_are_rebased_onto_the_root() {
+        let root = Path::new("/p");
+        let rebase =
+            |path: &str, cwd: &str| rebase_onto_root(Path::new(path), Path::new(cwd), root);
+        assert_eq!(rebase("../x.py", "/p/sub"), PathBuf::from("x.py"));
+        assert_eq!(rebase("x.py", "/p/sub"), PathBuf::from("sub/x.py"));
+        assert_eq!(rebase("./x.py", "/p"), PathBuf::from("x.py"));
+        assert_eq!(rebase("../../x.py", "/p/a/b"), PathBuf::from("x.py"));
+        assert_eq!(rebase("../../x.py", "/p/a"), PathBuf::from("../x.py"));
+        assert_eq!(rebase("/abs/x.py", "/p/sub"), PathBuf::from("/abs/x.py"));
+        assert_eq!(rebase("..", "/p/sub"), PathBuf::from("."));
+    }
     use std::sync::{Mutex, MutexGuard};
 
     /// Env-var tests mutate process state — serialize them.

@@ -22,6 +22,8 @@ barca run report pipeline.py            # execute a task (always re-runs; upstre
 
 - `get` is for assets, `run` for tasks; the wrong one exits 2 and names the right one.
 - A second identical `get` reports `steps_executed: 0` (all cached).
+- Any directory inside the project works: barca runs from the nearest `barca.toml` above you
+  and shares its `.barca/` cache. File arguments are relative to where you are.
 - Unsure of a name? `barca list <files>`. An unknown name exits 2 and lists the valid ones.
 
 ## Argument order: target, then files

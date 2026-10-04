@@ -776,6 +776,15 @@ state and takes no `--env`.
 
 Topic names and contents are documentation, not contract.
 
+## Project root (stable)
+
+Every command except `docs` and `version` runs from the project root: the nearest directory at or
+above the cwd holding `barca.toml`, else the cwd. File arguments are read relative to the cwd
+they were typed in and rewritten relative to the root, so node ids, `.barca/` and the working
+directory of steps do not depend on where barca was invoked. The stderr line
+`barca: project root: <path> ...`, printed when the root is not the cwd, is informational and not
+contract.
+
 ## stderr
 
 stderr carries progress, warnings, your steps' own `print` output and errors. Only the error

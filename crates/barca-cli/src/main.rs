@@ -13,7 +13,7 @@ use clap::builder::PossibleValuesParser;
 use clap::{Parser, ValueEnum};
 use output::{Format, FormatFlags};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// `-o` on get/run. Without `-o`, `--json` / `--pretty` / BARCA_OUTPUT / the terminal decide.
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -744,6 +744,46 @@ fn project_docs_json(out: String, fields: Option<&[String]>) -> String {
     serde_json::to_string_pretty(&v).unwrap_or_default() + "\n"
 }
 
+/// Change into the project root when it is above the cwd, rewriting every file argument so it
+/// names the same file from there. A note on stderr says which root is in use. Without a
+/// barca.toml above the cwd (or with the cwd being the root) nothing changes.
+fn enter_project_root(cli: &mut Cli) -> Result<(), String> {
+    let cwd = std::env::current_dir().map_err(|e| format!("cannot determine cwd: {e}"))?;
+    let Some(root) = barca_core::config::find_root(&cwd) else {
+        return Ok(());
+    };
+    if root == cwd {
+        return Ok(());
+    }
+    let rebase = |p: &Path| barca_core::config::rebase_onto_root(p, &cwd, &root);
+    match cli {
+        Cli::Get { args, .. } | Cli::Run { args, .. } | Cli::Status { args, .. } => {
+            for arg in args.iter_mut().filter(|a| a.ends_with(".py")) {
+                *arg = rebase(Path::new(arg.as_str()))
+                    .to_string_lossy()
+                    .into_owned();
+            }
+        }
+        Cli::Plan { files, .. }
+        | Cli::Stats { files, .. }
+        | Cli::Serve { files, .. }
+        | Cli::List { files, .. } => {
+            for file in files.iter_mut() {
+                *file = rebase(file);
+            }
+        }
+        Cli::History { .. } | Cli::Docs { .. } | Cli::Version => {}
+    }
+    std::env::set_current_dir(&root)
+        .map_err(|e| format!("cannot change into project root {}: {e}", root.display()))?;
+    eprintln!(
+        "barca: project root: {} ({} found above the cwd)",
+        root.display(),
+        barca_core::config::CONFIG_FILE
+    );
+    Ok(())
+}
+
 /// Split the raw positional args into (optional target, files).
 /// If the first arg ends in `.py`, all args are files (no target).
 /// Otherwise, the first arg is the target and the rest are files.
@@ -805,7 +845,7 @@ fn main() {
             Err(first)
         }
     });
-    let cli = match parsed {
+    let mut cli = match parsed {
         Ok(cli) => cli,
         // `--help` / `--version` are not errors: clap prints them to stdout and exits 0.
         Err(e) if !e.use_stderr() => e.exit(),
@@ -839,6 +879,14 @@ fn main() {
         return;
     }
 
+    // Hints in errors name files as the user typed them, so take them before rebasing.
+    let ctx = context(&cli);
+    // Run from the project root (the nearest barca.toml at or above the cwd), so `.barca/`,
+    // node ids and relative paths inside steps are the same wherever barca is invoked.
+    if let Err(msg) = enter_project_root(&mut cli) {
+        CliError::from_barca(barca_core::BarcaError::Other(msg), &ctx).emit(json);
+    }
+
     // The one runtime for the whole process — barca-core is async-native and
     // runs on whatever runtime the caller provides.
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -851,7 +899,6 @@ fn main() {
             )
             .emit(json)
         });
-    let ctx = context(&cli);
     if let Err(e) = rt.block_on(run_cli(cli, &ctx)) {
         // A failed run gets one greppable line naming the step, right before the error.
         if e.kind == ErrorKind::StepFailed

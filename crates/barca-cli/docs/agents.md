@@ -288,6 +288,10 @@ raised on failure; for `get`/`run`/`plan` its `kind`, `code`, `remediation` (and
 - `barca get a,b file.py` / `barca run a,b file.py` take several targets in one run (see above);
   `barca status a,b file.py` shows the union of their cones.
 - `barca file.py` is shorthand for `barca get file.py`.
+- You can run barca from any directory inside a project with a `barca.toml`: barca changes into
+  that directory (the project root) first, reads file arguments relative to where you typed
+  them, and uses the root's `.barca/` cache. Node ids are relative to the root. See
+  `barca docs cache` ("Where things live").
 - `get` is for assets and `run` is for tasks; using the wrong one exits 2 and says which to use.
 - The target comes before the files. If the first positional ends in `.py` and a later one does
   not, there is exactly one valid reading, so barca exits 2 and prints the corrected command

@@ -163,6 +163,20 @@ output, so the next `--dry-run` or `barca status` shows its consumers as stale.
 content-addressed, so they can be shared between machines when remote state is configured
 (`barca.toml`; see https://barca.sh/reference/config/).
 
+`.barca/` lives in the **project root**: the nearest directory at or above the one you run barca
+from that holds a `barca.toml`. Without a `barca.toml` above you, the current directory is the
+root. Barca changes into the root before doing anything, so:
+
+- running from a subdirectory reads and writes the same cache as running from the root
+  (`cd sub && barca get out ../pipeline.py` is a cache hit after `barca get out pipeline.py`);
+- file arguments are read relative to where you typed them, and node ids are relative to the
+  root, so `pipelines/p.py:out` is the same id from any directory;
+- steps run with the root as their working directory, so `Path("data.txt")` inside a step means
+  the root's `data.txt` wherever you invoke barca;
+- stderr says `barca: project root: <path>` whenever the root is not the current directory.
+
+Put an empty `barca.toml` at the top of a project to anchor it.
+
 ## Controlling the cache
 
 | Goal | Command |

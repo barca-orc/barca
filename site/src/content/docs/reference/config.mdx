@@ -33,9 +33,14 @@ For example, here are three equivalent ways to select the `staging` environment:
 
 ## barca.toml
 
-Discovered in the **current working directory only** (no walk-up): everything
-barca persists is cwd-anchored (`.barca/`), so the config governing that
-state is anchored the same way. Run barca from your project root.
+The nearest `barca.toml` at or above the directory you run barca from marks the
+**project root**. Barca changes into the root before doing anything, so the config,
+`.barca/`, node ids and the working directory of every step are the same wherever
+in the project you invoke it. File arguments are read relative to where you typed
+them. Without a `barca.toml` above you, the current directory is the root.
+
+An empty `barca.toml` is enough to anchor a project. When the root is not the
+current directory, barca prints `barca: project root: <path>` on stderr.
 
 ```toml
 # The environment used when --env / BARCA_ENV are not given.
