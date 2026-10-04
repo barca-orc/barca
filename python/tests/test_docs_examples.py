@@ -113,9 +113,32 @@ def test_multi_file_examples_form_one_project(binary, topics, tmp_path):
         nodes = result(barca(binary, root, "list", "--json"))["nodes"]
         ids = {n["id"] for n in nodes}
         for rel, code in files:
-            assert any(i.startswith(f"{rel}:") for i in ids), (name, rel, ids)
+            if is_pipeline(code):
+                assert any(i.startswith(f"{rel}:") for i in ids), (name, rel, ids)
         checked += 1
     assert checked >= 1, "expected at least one multi-file example (barca docs discovery)"
+
+
+def write_project(topics: dict[str, str], name: str, root: Path) -> Path:
+    """Write a topic's `# file: <path>` blocks into `root` (with a barca.toml)."""
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "barca.toml").write_text("")
+    for code in blocks(topics[name], "python"):
+        rel = project_files(code)
+        if rel:
+            (root / rel).parent.mkdir(parents=True, exist_ok=True)
+            (root / rel).write_text(code)
+    return root
+
+
+def test_discovery_topic_cross_file_example_runs(binary, topics, tmp_path):
+    root = write_project(topics, "discovery", tmp_path / "proj")
+    run = result(barca(binary, root, "run", "validate"))
+    assert run["final_output"] == {"status": "PASS"}
+    assert run["steps_executed"] == 3
+    # "from the root or any directory below it"
+    again = result(barca(binary, root / "pipelines", "run", "validate"))
+    assert again["steps_executed"] == 1
 
 
 def test_docs_command_surface(binary, tmp_path):

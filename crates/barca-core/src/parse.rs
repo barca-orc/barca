@@ -51,10 +51,11 @@ pub fn extract_nodes(source: &str, file_path: &str) -> Result<Vec<ExtractedNode>
 
     let module = parsed.into_syntax();
     let mut nodes = Vec::new();
+    let names = FileNames::collect(&module.body);
 
     for stmt in &module.body {
         if let Stmt::FunctionDef(func) = stmt
-            && let Some(extracted) = try_extract_function(func, file_path, source)?
+            && let Some(extracted) = try_extract_function(func, file_path, source, &names)?
         {
             // Cone hash computed later in build_dag with cached module definitions.
             nodes.push(extracted);
@@ -64,10 +65,103 @@ pub fn extract_nodes(source: &str, file_path: &str) -> Result<Vec<ExtractedNode>
     Ok(nodes)
 }
 
+/// What the top-level names of a file are bound to, for resolving `inputs=` references:
+/// functions defined in the file, names imported with `from M import x [as y]`, and modules
+/// imported with `import M [as m]`. Module names keep their leading dots (`.sources`).
+#[derive(Default)]
+struct FileNames {
+    local: std::collections::HashSet<String>,
+    /// local name -> (module, name in that module)
+    from_imports: HashMap<String, (String, String)>,
+    /// local dotted name -> module (`s` -> `pipelines.sources`, `a.b` -> `a.b`)
+    modules: HashMap<String, String>,
+}
+
+impl FileNames {
+    fn collect(body: &[Stmt]) -> Self {
+        let mut names = FileNames::default();
+        for stmt in body {
+            match stmt {
+                Stmt::FunctionDef(f) => {
+                    names.local.insert(f.name.to_string());
+                }
+                Stmt::ImportFrom(imp) => {
+                    let module = format!(
+                        "{}{}",
+                        ".".repeat(imp.level as usize),
+                        imp.module.as_ref().map(|m| m.as_str()).unwrap_or("")
+                    );
+                    for alias in &imp.names {
+                        let name = alias.name.to_string();
+                        let local = alias
+                            .asname
+                            .as_ref()
+                            .map(|a| a.to_string())
+                            .unwrap_or_else(|| name.clone());
+                        names.from_imports.insert(local, (module.clone(), name));
+                    }
+                }
+                Stmt::Import(imp) => {
+                    for alias in &imp.names {
+                        let module = alias.name.to_string();
+                        let local = alias
+                            .asname
+                            .as_ref()
+                            .map(|a| a.to_string())
+                            .unwrap_or_else(|| module.clone());
+                        names.modules.insert(local, module);
+                    }
+                }
+                _ => {}
+            }
+        }
+        names
+    }
+
+    /// The node an `inputs=` value (or `collect(...)` / `partitions_from(...)` argument) refers
+    /// to: a function in this file, a name imported from a module, or `module.name`.
+    fn node_ref(&self, expr: &Expr) -> Option<NodeRef> {
+        match expr {
+            Expr::Name(n) => {
+                let id = n.id.to_string();
+                if self.local.contains(&id) {
+                    return Some(NodeRef::FunctionName(id));
+                }
+                Some(match self.from_imports.get(&id) {
+                    Some((module, name)) => NodeRef::Imported {
+                        module: module.clone(),
+                        name: name.clone(),
+                    },
+                    None => NodeRef::FunctionName(id),
+                })
+            }
+            Expr::Attribute(attr) => {
+                let dotted = dotted_expr(&attr.value)?;
+                let module = self.modules.get(&dotted)?;
+                Some(NodeRef::Imported {
+                    module: module.clone(),
+                    name: attr.attr.to_string(),
+                })
+            }
+            _ => None,
+        }
+    }
+}
+
+/// `a.b.c` as a string, for a chain of names.
+fn dotted_expr(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::Name(n) => Some(n.id.to_string()),
+        Expr::Attribute(a) => Some(format!("{}.{}", dotted_expr(&a.value)?, a.attr)),
+        _ => None,
+    }
+}
+
 fn try_extract_function(
     func: &ast::StmtFunctionDef,
     file_path: &str,
     source: &str,
+    names: &FileNames,
 ) -> Result<Option<ExtractedNode>, ParseError> {
     let mut kind = None;
     let mut keywords: Vec<&Keyword> = Vec::new();
@@ -100,8 +194,8 @@ fn try_extract_function(
 
     let freshness = extract_freshness(&keywords, file_path, func.name.as_str())?
         .unwrap_or(Freshness::default_for(kind));
-    let inputs = extract_inputs(&keywords);
-    let partitions = extract_partitions(&keywords, source);
+    let inputs = extract_inputs(&keywords, names);
+    let partitions = extract_partitions(&keywords, source, names);
     let explicit_name = extract_string_kwarg(&keywords, "name");
     let description = extract_string_kwarg(&keywords, "description");
     let timeout_seconds = extract_int_kwarg(&keywords, "timeout_seconds").unwrap_or(300);
@@ -344,20 +438,23 @@ fn extract_freshness(
     Ok(None)
 }
 
-fn extract_inputs(keywords: &[&Keyword]) -> SmallVec<[DeclaredInput; 4]> {
+fn extract_inputs(keywords: &[&Keyword], names: &FileNames) -> SmallVec<[DeclaredInput; 4]> {
     for kw in keywords {
         let Some(ref ident) = kw.arg else { continue };
         if ident.as_str() != "inputs" {
             continue;
         }
         if let Expr::Dict(dict) = &kw.value {
-            return extract_inputs_from_dict(dict);
+            return extract_inputs_from_dict(dict, names);
         }
     }
     SmallVec::new()
 }
 
-fn extract_inputs_from_dict(dict: &ast::ExprDict) -> SmallVec<[DeclaredInput; 4]> {
+fn extract_inputs_from_dict(
+    dict: &ast::ExprDict,
+    names: &FileNames,
+) -> SmallVec<[DeclaredInput; 4]> {
     let mut inputs = SmallVec::new();
 
     for item in &dict.items {
@@ -370,15 +467,17 @@ fn extract_inputs_from_dict(dict: &ast::ExprDict) -> SmallVec<[DeclaredInput; 4]
         };
 
         let (upstream, collected) = match &item.value {
-            Expr::Name(n) => (NodeRef::FunctionName(n.id.to_string()), false),
+            e @ (Expr::Name(_) | Expr::Attribute(_)) => match names.node_ref(e) {
+                Some(r) => (r, false),
+                None => continue,
+            },
             Expr::Call(call) => {
                 let is_collect =
                     matches!(call.func.as_ref(), Expr::Name(n) if n.id.as_str() == "collect");
                 if is_collect {
-                    if let Some(Expr::Name(n)) = call.arguments.args.first() {
-                        (NodeRef::FunctionName(n.id.to_string()), true)
-                    } else {
-                        continue;
+                    match call.arguments.args.first().and_then(|a| names.node_ref(a)) {
+                        Some(r) => (r, true),
+                        None => continue,
                     }
                 } else if let Expr::Name(n) = call.func.as_ref() {
                     // asset_ref("...") or other call
@@ -412,7 +511,11 @@ fn extract_inputs_from_dict(dict: &ast::ExprDict) -> SmallVec<[DeclaredInput; 4]
     inputs
 }
 
-fn extract_partitions(keywords: &[&Keyword], source: &str) -> HashMap<String, PartitionSpec> {
+fn extract_partitions(
+    keywords: &[&Keyword],
+    source: &str,
+    names: &FileNames,
+) -> HashMap<String, PartitionSpec> {
     let mut result = HashMap::new();
 
     for kw in keywords {
@@ -436,13 +539,8 @@ fn extract_partitions(keywords: &[&Keyword], source: &str) -> HashMap<String, Pa
                             match n.id.as_str() {
                                 "partitions" => extract_partition_spec(call, source),
                                 "partitions_from" => {
-                                    let source_ref = call.arguments.args.first().and_then(|a| {
-                                        if let Expr::Name(n) = a {
-                                            Some(NodeRef::FunctionName(n.id.to_string()))
-                                        } else {
-                                            None
-                                        }
-                                    });
+                                    let source_ref =
+                                        call.arguments.args.first().and_then(|a| names.node_ref(a));
                                     if let Some(source_ref) = source_ref {
                                         PartitionSpec::DerivedFrom { source_ref }
                                     } else {

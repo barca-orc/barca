@@ -105,7 +105,7 @@ pub fn rebase_onto_root(path: &Path, cwd: &Path, root: &Path) -> PathBuf {
     normalize_lexically(&rel_cwd.join(path))
 }
 
-fn normalize_lexically(path: &Path) -> PathBuf {
+pub(crate) fn normalize_lexically(path: &Path) -> PathBuf {
     let mut out: Vec<Component> = Vec::new();
     for c in path.components() {
         match c {
