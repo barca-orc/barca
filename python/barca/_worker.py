@@ -361,13 +361,15 @@ def _execute(fn, kwargs, step):
     return result, elapsed
 
 
-def _sink_dest(path: str, node_id: str, base_node_id: str) -> str:
+def _sink_dest(path: str, node_id: str) -> str:
     """Sink destination path, with a partition suffix injected before the
     extension for partitioned assets so partitions don't clobber each other
-    (e.g. out.parquet → out_ticker_AAPL.parquet)."""
-    if node_id == base_node_id or not node_id.startswith(base_node_id):
+    (e.g. out.parquet → out_ticker_AAPL.parquet). A partition step's id is
+    `<base>[<key>]`; the suffix comes from the bracketed key."""
+    bracket = node_id.find("[")
+    if bracket < 0:
         return path
-    part = safe_node_id(node_id[len(base_node_id) :])
+    part = safe_node_id(node_id[bracket:])
     ext = _storage.suffix(path)
     if ext:
         return path[: -len(ext)] + part + ext
@@ -378,7 +380,6 @@ def _write_sinks(result, step, node_id, primary_fmt):
     """Write each @sink declared on the step. Error-isolated: a sink failure
     never fails the parent asset — it is logged and reported in the outcome."""
     outcomes = []
-    base_id = step.get("node_id", node_id)
     for sink in step.get("sinks") or []:
         dest = sink.get("path", "")
         try:
@@ -388,8 +389,14 @@ def _write_sinks(result, step, node_id, primary_fmt):
                     f"sink serializer '{fmt}' is not supported yet "
                     "(supported: json, pickle, parquet)"
                 )
-            fmt = resolve_format(result, fmt)
-            dest = _sink_dest(dest, node_id, base_id)
+            if fmt == "parquet" and resolve_format(result, fmt, warn=False) != "parquet":
+                # An artifact may fall back to pickle (barca picks its file name), but a sink's
+                # path is the user's promise to another system: never write pickle bytes there.
+                raise ValueError(
+                    f"a {type(result).__name__} cannot be written as parquet; return a DataFrame, "
+                    "Arrow table or DuckDB relation, or sink it as json or pickle"
+                )
+            dest = _sink_dest(dest, node_id)
             size = serialize(result, dest, fmt)
             outcomes.append({"path": str(dest), "status": "ok", "size_bytes": size})
         except Exception as exc:

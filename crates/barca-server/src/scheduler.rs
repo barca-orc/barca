@@ -22,7 +22,6 @@ use chrono::{DateTime, FixedOffset, Local, TimeZone, Timelike, Utc};
 use croner::Cron;
 use serde::Serialize;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
@@ -40,7 +39,7 @@ pub struct ScheduleInfo {
 
 /// Enumerate scheduled jobs from source and compute each one's next fire time.
 /// Pure static analysis — used by the `barca schedule` CLI, no running server.
-pub async fn describe_schedule(files: &[String], python: &PathBuf) -> Vec<ScheduleInfo> {
+pub async fn describe_schedule(files: &[String], python: &std::path::Path) -> Vec<ScheduleInfo> {
     let now = Local::now();
     collect_jobs(files, python)
         .await
@@ -74,7 +73,7 @@ struct ScheduledJob {
 /// Enumerate every node whose freshness is `Schedule(cron)` and parse each cron.
 /// A DAG-analysis failure disables the scheduler (returns empty); individual
 /// invalid/empty cron strings are logged and skipped rather than aborting.
-async fn collect_jobs(files: &[String], python: &PathBuf) -> Vec<ScheduledJob> {
+async fn collect_jobs(files: &[String], python: &std::path::Path) -> Vec<ScheduledJob> {
     match commands::list_assets(files, python).await {
         Ok(summaries) => jobs_from_summaries(summaries),
         Err(e) => {
@@ -464,7 +463,7 @@ mod tests {
             watch: false,
             schedule: true,
             timezone: "local".to_string(),
-            python: PathBuf::from("python3"),
+            python: std::path::PathBuf::from("python3"),
             resolved: barca_core::config::resolve_in(None, std::path::Path::new("/nonexistent"))
                 .unwrap(),
         })

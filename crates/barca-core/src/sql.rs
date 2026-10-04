@@ -12,7 +12,7 @@ use crate::config::ResolvedConfig;
 use crate::status;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 #[derive(Debug, Clone, Serialize)]
 struct ViewFile {
@@ -78,7 +78,7 @@ pub async fn sql(
     cfg: &ResolvedConfig,
     query: &str,
     file_args: &[String],
-    python: &PathBuf,
+    python: &std::path::Path,
     limit: Option<usize>,
 ) -> Result<SqlResult, BarcaError> {
     let st = status::status(cfg, &[], file_args, python, 0, false).await?;

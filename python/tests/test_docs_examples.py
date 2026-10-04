@@ -336,10 +336,97 @@ def test_env_must_be_a_literal_list(binary, tmp_path):
     assert "invalid env=" in error and 'env=["SOURCE_CSV"' in error
 
 
+def steps(run: dict) -> dict:
+    return {s["id"].split(":")[-1]: s for s in run["steps"]}
+
+
 def test_tasks_topic_example(binary, topics, tmp_path):
     write_example(topics, "tasks", tmp_path)
-    for target in ("send_email", "notify"):
-        assert result(barca(binary, tmp_path, "run", target, "pipeline.py"))["run_id"]
+
+    # send_email receives the report: the asset runs, then the task.
+    first = barca(binary, tmp_path, "run", "send_email", "pipeline.py")
+    assert "sending report with 42 rows" in first.stderr  # a step's print goes to stderr
+    assert {k: v["status"] for k, v in steps(result(first)).items()} == {
+        "report": "ran",
+        "send_email": "ran",
+    }
+
+    # "task runs; upstream assets come from cache"
+    again = result(barca(binary, tmp_path, "run", "send_email", "pipeline.py"))
+    assert steps(again)["report"]["status"] == "cached"
+    assert steps(again)["send_email"]["status"] == "ran"
+
+    # --refresh report / --no-cascade / --refresh-all re-materialize report.
+    for flags in (
+        ["--refresh", "report"],
+        ["--refresh", "report", "--no-cascade"],
+        ["--refresh-all"],
+    ):
+        run = result(barca(binary, tmp_path, "run", "send_email", "pipeline.py", *flags))
+        assert steps(run)["report"]["status"] == "ran", flags
+
+    # notify runs after migrate; `_migrate` is ordering only and receives None.
+    notify = barca(binary, tmp_path, "run", "notify", "pipeline.py")
+    assert set(steps(result(notify))) == {"migrate", "notify"}
+    assert notify.stderr.index("migrating") < notify.stderr.index("migration done")
+
+    # get on a task is an error; a bare get never runs tasks and says how to run them.
+    wrong = barca(binary, tmp_path, "get", "send_email", "pipeline.py")
+    assert wrong.returncode == 2 and "barca run" in wrong.stderr
+    bare = barca(binary, tmp_path, "get", "pipeline.py")
+    assert set(steps(result(bare))) == {"report"}
+    assert "barca run" in bare.stderr
+
+
+def test_sinks_topic_example(binary, topics, tmp_path):
+    pytest.importorskip("pyarrow")
+    pd = pytest.importorskip("pandas")
+
+    code = blocks(topics["sinks"], "python")[0]
+    remote = "s3://my-bucket/exports/orders.parquet"
+    assert remote in code
+    # Same pipeline, with the remote sink pointed at a local path.
+    (tmp_path / "pipeline.py").write_text(code.replace(remote, "./remote/orders.parquet"))
+    result(barca(binary, tmp_path, "get", "pipeline.py"))
+    expected = [{"id": 1, "amount": 9.5}, {"id": 2, "amount": 20.0}]
+    for path in ("exports/orders.parquet", "remote/orders.parquet"):
+        assert pd.read_parquet(tmp_path / path).to_dict("records") == expected, path
+    assert json.loads((tmp_path / "exports" / "summary.json").read_text()) == {"orders": 2}
+
+
+def test_a_parquet_sink_of_a_non_frame_fails_the_sink_not_the_asset(binary, tmp_path):
+    (tmp_path / "pipeline.py").write_text(
+        "from barca import asset, sink\n\n\n"
+        "@asset()\n@sink('./exports/banana.parquet')\n"
+        "def banana() -> dict:\n    return {'a': 1}\n"
+    )
+    run = barca(binary, tmp_path, "get", "banana", "pipeline.py")
+    assert result(run)["final_output"] == {"a": 1}
+    assert "[barca] SINK FAILED" in run.stderr and "cannot be written as parquet" in run.stderr
+    assert not (tmp_path / "exports" / "banana.parquet").exists()
+
+
+def test_a_failing_sink_does_not_fail_its_asset(binary, tmp_path):
+    (tmp_path / "pipeline.py").write_text(
+        "from barca import asset, sink\n\n\n"
+        "@asset()\n@sink('nosuchscheme://bucket/x.json')\n"
+        "def banana() -> dict:\n    return {'a': 1}\n"
+    )
+    run = barca(binary, tmp_path, "get", "banana", "pipeline.py")
+    assert result(run)["final_output"] == {"a": 1}
+    assert "[barca] SINK FAILED" in run.stderr
+
+
+def test_partitioned_sinks_insert_the_key_before_the_extension(binary, tmp_path):
+    (tmp_path / "pipeline.py").write_text(
+        "from barca import asset, partitions, sink\n\n\n"
+        "@asset(partitions={'region': partitions(['emea', 'amer'])})\n"
+        "@sink('./out/out.json')\n"
+        "def per_region(region: str) -> dict:\n    return {'region': region}\n"
+    )
+    result(barca(binary, tmp_path, "get", "per_region", "pipeline.py"))
+    written = sorted(p.name for p in (tmp_path / "out").iterdir())
+    assert written == ["out_region_amer.json", "out_region_emea.json"]
 
 
 def test_tasks_topic_several_targets_example(binary, topics, tmp_path):
