@@ -258,7 +258,10 @@ history. A machine uses that hash to decide whether its own copy is current:
   the run still uses it and prints a warning naming the step. This is not an error: an
   artifact's path is `<node>/<run_hash>`, which identifies the computation and not the bytes,
   so a `--refresh`, or two machines computing the same step at once, overwrites the object.
-  `barca get <name> --refresh <name>` recomputes it and clears the warning.
+  The warning names the step; `--refresh <file.py:name>` recomputes it, which clears the
+  warning for every machine that shares this history. Until then, machines can hold
+  different copies of that one result: a machine whose copy matches the recorded hash keeps
+  it, and the others use the store's.
 
 Only artifacts a run reads are hashed, once per run. Not checked: a parquet input that is read
 in place (only byte ranges are fetched), and results recorded before barca stored a hash.

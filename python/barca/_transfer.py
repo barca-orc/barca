@@ -106,6 +106,17 @@ def _sha256(path: "str | Path") -> str:
     return h.hexdigest()
 
 
+def _local_sha256(path: "str | Path") -> str | None:
+    """The hash of a local copy, or None when there is no readable file to hash.
+
+    An unreadable copy is then replaced like any other that does not match.
+    """
+    try:
+        return _sha256(path)
+    except OSError:
+        return None
+
+
 def _staged_get(remote: str, local: str, expected: str | None) -> dict:
     """Make `local` the store's copy of `remote`, through a temp file renamed into place.
 
@@ -121,7 +132,7 @@ def _staged_get(remote: str, local: str, expected: str | None) -> dict:
         _storage.get_file(remote, tmp)
         digest = _sha256(tmp)
         mismatch = expected is not None and digest != expected
-        fetched = not (mismatch and dest.is_file() and _sha256(dest) == digest)
+        fetched = not (mismatch and _local_sha256(dest) == digest)
         if fetched:
             os.replace(tmp, dest)
         return {"sha256": digest, "fetched": fetched, "mismatch": mismatch}
@@ -137,7 +148,7 @@ def _transfer(msg: dict) -> dict:
         result = {"sha256": _sha256(local), "fetched": True, "mismatch": False}
     else:
         expected = msg.get("sha256")
-        if expected is not None and os.path.isfile(local) and _sha256(local) == expected:
+        if expected is not None and _local_sha256(local) == expected:
             result = {"sha256": expected, "fetched": False, "mismatch": False}
         else:
             result = _staged_get(msg["remote"], local, expected)

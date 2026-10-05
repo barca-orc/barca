@@ -193,6 +193,14 @@ class TestChecksums:
         assert local.stat().st_mtime_ns == before
         assert sorted(p.name for p in tmp_path.iterdir()) == ["h.json"]
 
+    def test_unreadable_local_copy_is_replaced_like_any_other_mismatch(self, helper, tmp_path):
+        local = tmp_path / "h.json"
+        local.write_bytes(b'{"x": 2}')
+        local.chmod(0)
+        reply = self._get(helper, self._store(), local)
+        assert (reply["type"], reply["fetched"], reply["mismatch"]) == ("done", True, False)
+        assert local.read_bytes() == self.BODY
+
     def test_without_a_recorded_hash_the_download_is_taken_as_it_is(self, helper, tmp_path):
         local = tmp_path / "h.json"
         reply = self._get(helper, self._store(b'{"x": 2}'), local, sha256=None)

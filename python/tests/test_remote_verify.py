@@ -114,7 +114,7 @@ def test_a_store_copy_that_differs_from_the_recorded_hash_is_used_with_a_warning
     assert proc.returncode == 0, proc.stderr
     assert json.loads(proc.stdout)["final_output"] == {"sum": 7}
     assert "warning" in proc.stderr and "total" in proc.stderr, proc.stderr
-    assert "--refresh total" in proc.stderr, proc.stderr
+    assert "--refresh pipeline.py:total" in proc.stderr, proc.stderr
 
     again = cli(root, store, "get", "total", "--json")
     assert again.returncode == 0, again.stderr

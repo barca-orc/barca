@@ -1048,16 +1048,23 @@ impl StoreSync {
         // An artifact path is `{node}/{run_hash}`, so a refresh or another machine computing
         // the same step overwrites it; the store's copy is as valid a result as the recorded
         // one. Say so rather than fail.
+        let mut differing: Vec<(String, &str, usize)> = Vec::new();
         for (node, at) in &report.mismatched {
+            let base = crate::StepId::parse(node).base_id().to_string();
+            match differing.iter_mut().find(|(b, _, _)| *b == base) {
+                Some((_, _, count)) => *count += 1,
+                None => differing.push((base, at, 1)),
+            }
+        }
+        for (base, at, count) in differing {
+            let others = match count - 1 {
+                0 => String::new(),
+                n => format!(" (and {n} more of its partitions)"),
+            };
             let msg = format!(
-                "[barca] warning: {node}: the copy at {at} is not the one this result was \
-                 recorded with (another run overwrote it, or it was changed). Using it. \
-                 Recompute with --refresh {}.",
-                crate::StepId::parse(node)
-                    .base_id()
-                    .rsplit(':')
-                    .next()
-                    .unwrap_or(node)
+                "[barca] warning: {base}: the copy at {at}{others} is not the one this result \
+                 was recorded with (another run overwrote it, or it was changed). Using it. \
+                 Recompute with --refresh {base}."
             );
             match pb {
                 Some(bar) if !bar.is_hidden() => bar.println(&msg),
