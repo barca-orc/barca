@@ -21,6 +21,8 @@ from pathlib import Path
 from barca import _duckdb, _storage
 from barca._source_import import load_package_module, load_source_module
 from barca._artifacts import (
+    LAZY_FRAME_TYPES,
+    _frame_kind,
     artifact_path,
     clean_staging,
     deserialize,
@@ -60,6 +62,30 @@ def _peak_rss_bytes() -> int:
 # guards against mutation would cost more than the disk read it saves.
 # Remote artifacts always cache — skipping a network fetch beats any copy.
 _LRU_MAX_ARTIFACT_BYTES = 8 * 1024 * 1024
+
+
+def _lru_frame_type(frame_type: str | None) -> bool:
+    """Whether values read with this frame type may be cached.
+
+    Lazy values (duckdb relations, polars LazyFrames) are cheap to recreate and read their file
+    when queried; a remote input's file is deleted when the step ends, so a cached one would
+    break the next step that used it.
+    """
+    return frame_type not in LAZY_FRAME_TYPES
+
+
+def _result_frame_type(value) -> "str | None | bool":
+    """The reader frame type a step's result is equivalent to, for caching it.
+
+    Returns the frame type (None for non-frame values, which every reader ignores), or False
+    when the result must not be cached: a lazy value, or a frame of a type no reader returns.
+    """
+    kind = _frame_kind(value)
+    if kind is None:
+        return None
+    if kind == "duckdb" or type(value).__name__ == "LazyFrame":
+        return False
+    return kind
 
 
 def _lru_cacheable(path: str, size_bytes=None) -> bool:
@@ -279,7 +305,8 @@ def _resolve_input(raw_value, *, frame_type=None):
 def _load_artifact(path, lru, fmt=None, *, frame_type=None):
     """Resolve one artifact path to its deserialized value via the tier-1 LRU
     cache, falling through to the artifact store on miss."""
-    hot = lru.get(path, frame_type)
+    cacheable = _lru_frame_type(frame_type)
+    hot = lru.get(path, frame_type) if cacheable else None
     if hot is not None:
         return hot
     if not _storage.exists(path):
@@ -287,7 +314,7 @@ def _load_artifact(path, lru, fmt=None, *, frame_type=None):
     if fmt is None:
         fmt = _EXT_FORMATS.get(_storage.suffix(path), "json")
     value = deserialize(path, fmt, frame_type=frame_type)
-    if _lru_cacheable(path):
+    if cacheable and _lru_cacheable(path):
         lru.put(path, value, frame_type)
     return value
 
@@ -317,6 +344,8 @@ def _load_collected_artifacts(artifacts, lru=None, *, param=None, frame_type=Non
     """
     results = [None] * len(artifacts)
     to_fetch = []
+    if not _lru_frame_type(frame_type):
+        lru = None
     for i, artifact in enumerate(artifacts):
         hot = lru.get(artifact["path"], frame_type) if lru is not None else None
         if hot is not None:
@@ -719,9 +748,13 @@ def _run_daemon_step(step, modules, art_dir, lru):
             elapsed_in_artifact=True,
             timing={"cpu_seconds": cpu, "max_rss_bytes": _peak_rss_bytes()},
         )
-        # A downstream step in this worker may consume what we just produced.
-        if _lru_cacheable(artifact["path"], artifact.get("size_bytes")):
-            lru.put(artifact["path"], result)
+        # A downstream step in this worker may consume what we just produced, keyed by the
+        # reader it is equivalent to so a consumer never gets a different frame type.
+        result_type = _result_frame_type(result)
+        if result_type is not False and _lru_cacheable(
+            artifact["path"], artifact.get("size_bytes")
+        ):
+            lru.put(artifact["path"], result, result_type)
         return True
 
     except BaseException as exc:
