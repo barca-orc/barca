@@ -5,7 +5,8 @@
 //! partitioned asset as one view over its keys with a `partition` column. The view is named after
 //! the function, or after the full node id when two nodes share a function name. The query runs
 //! in `python -m barca._sql`, an in-memory DuckDB that opens artifact files only: user code is
-//! never imported, nothing is recorded, and nothing is written.
+//! never imported and nothing is recorded. An artifact in remote storage is fetched, when the
+//! query names its view, into [`CACHE_DIR`] and queried from there.
 
 use crate::BarcaError;
 use crate::config::ResolvedConfig;
@@ -13,6 +14,10 @@ use crate::status;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
+
+/// Local copies of remote artifacts, laid out as `<scheme>/<bucket>/<path>`. Every environment
+/// shares it: the object's full URI is the key.
+pub const CACHE_DIR: &str = ".barca/sql-cache";
 
 #[derive(Debug, Clone, Serialize)]
 struct ViewFile {
@@ -48,6 +53,22 @@ struct HelperError {
     table: Option<String>,
 }
 
+/// Why a remote view could not be fetched: a missing fsspec driver (`driver`, the caller's
+/// environment) or anything else (`fetch`: credentials, the network, a missing object).
+#[derive(Deserialize, Clone)]
+struct Unreachable {
+    kind: String,
+    reason: String,
+}
+
+#[derive(Deserialize, Default)]
+struct Fetched {
+    #[serde(default)]
+    files: u64,
+    #[serde(default)]
+    bytes: u64,
+}
+
 #[derive(Deserialize)]
 struct HelperOutput {
     #[serde(default)]
@@ -60,7 +81,22 @@ struct HelperOutput {
     truncated: bool,
     #[serde(default)]
     unavailable: BTreeMap<String, String>,
+    #[serde(default)]
+    unreachable: BTreeMap<String, Unreachable>,
+    #[serde(default)]
+    fetched: Fetched,
     error: Option<HelperError>,
+}
+
+fn human_size(bytes: u64) -> String {
+    let kb = bytes as f64 / 1024.0;
+    if bytes < 1024 {
+        format!("{bytes} bytes")
+    } else if kb < 1024.0 {
+        format!("{kb:.1} KB")
+    } else {
+        format!("{:.1} MB", kb / 1024.0)
+    }
 }
 
 fn format_of(path: &str) -> String {
@@ -184,9 +220,18 @@ pub async fn sql(
     let request = serde_json::json!({
         "query": query,
         "limit": limit,
+        "cache_dir": CACHE_DIR,
         "views": views,
     });
-    let out = run_helper(python, &request).await?;
+    let out = run_helper(python, cfg, &request).await?;
+    if out.fetched.files > 0 {
+        let n = out.fetched.files;
+        notes.push(format!(
+            "fetched {n} remote artifact{} ({}) into {CACHE_DIR}/",
+            if n == 1 { "" } else { "s" },
+            human_size(out.fetched.bytes)
+        ));
+    }
     let Some(err) = out.error else {
         return Ok(SqlResult {
             columns: out.columns,
@@ -225,6 +270,23 @@ pub async fn sql(
                     "'{name}' has no result yet, so there is no view for it\n\
                      Run `{cmd}` first, then re-run this query."
                 ))
+            } else if let Some((name, why)) = out
+                .unreachable
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case(&table))
+            {
+                let msg = format!(
+                    "'{name}' is in remote storage and could not be fetched: {}",
+                    why.reason
+                );
+                if why.kind == "driver" {
+                    BarcaError::Usage(msg)
+                } else {
+                    BarcaError::Other(format!(
+                        "{msg}\nCheck the credentials and network this machine uses for the \
+                         remote store (`barca docs remote`), then re-run this query."
+                    ))
+                }
             } else if let Some((name, why)) = find(&unavailable) {
                 BarcaError::Usage(format!(
                     "'{name}' cannot be queried: {why}\n\
@@ -249,11 +311,17 @@ pub async fn sql(
 
 async fn run_helper(
     python: &Path,
+    cfg: &ResolvedConfig,
     request: &serde_json::Value,
 ) -> Result<HelperOutput, BarcaError> {
     use tokio::io::AsyncWriteExt;
-    let mut child = tokio::process::Command::new(python)
-        .args(["-m", "barca._sql"])
+    let mut cmd = tokio::process::Command::new(python);
+    cmd.args(["-m", "barca._sql"]);
+    // Remote artifacts are fetched with the same storage options workers get.
+    if let Some(ref opts) = cfg.storage_options_json {
+        cmd.env("BARCA_STORAGE_OPTIONS", opts);
+    }
+    let mut child = cmd
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -293,5 +361,12 @@ mod tests {
         assert_eq!(format_of("x.json"), "json");
         assert_eq!(format_of("x.pkl"), "pickle");
         assert_eq!(format_of("x"), "unknown");
+    }
+
+    #[test]
+    fn fetched_sizes_are_readable() {
+        assert_eq!(human_size(40), "40 bytes");
+        assert_eq!(human_size(2048), "2.0 KB");
+        assert_eq!(human_size(3 * 1024 * 1024), "3.0 MB");
     }
 }

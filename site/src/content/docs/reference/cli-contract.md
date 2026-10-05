@@ -52,7 +52,7 @@ outside the `GENERATED` blocks is written by hand.
 | `barca serve` and all its flags | the HTTP API and scheduler are young: no auth, no shared remote state, routes may change. Its JSON is the engine's own serialization (for example `GET /assets` has `freshness: {"type": "Always"}` and `stats.node_id`), not the CLI's |
 | `get -o/--output`, `run -o/--output` | kept for compatibility; `--json` / `--pretty` are the canonical spelling |
 | `get --no-cache`, `run --no-cache` | deprecated (hidden): the old spelling of `--refresh-all`. Still works, prints `[barca] warning: --no-cache is deprecated ...` on stderr, and will be removed in a future minor release |
-| `status --sample` and `nodes[].shape` | read by a Python helper (`barca._inspect`) whose output may grow per format |
+| `status --sample` and `nodes[].shape` | read by a Python helper (`barca._inspect`) whose output may grow per format; the wording of `shape.note` (an unreadable, too large or unreachable artifact) may change |
 | `BARCA_PROGRESS_SECS`, `BARCA_POOL_SIZE`, `BARCA_COMM_COST_SECONDS`, `BARCA_TRACE_TIMING` | tuning and benchmarking knobs |
 | the `[barca] <n> more: ...` line | collapsing repeated library warnings is new; which output counts as a warning may change |
 | `BARCA_ARTIFACT_URI` | 0.4.0 back-compat override, superseded by `BARCA_REMOTE_URI` / `[remote].artifacts_uri` |
@@ -629,6 +629,11 @@ The query result: `columns` in order and one object per row in `rows`, keyed by 
 the same bounded-output envelope as `list` (`total` counts every row the query returns; `hint`
 appears when `truncated`). Row values are JSON scalars, arrays or objects; dates and times are ISO
 8601 strings, NaN and infinities are `null`.
+
+With remote storage, the artifacts of the views a query names are downloaded into
+`.barca/sql-cache/`; a download is reported on stderr (`barca: fetched 1 remote artifact ...`) and
+the JSON is the same. A remote artifact that cannot be downloaded exits 3 (`infra`); a missing
+storage driver exits 2 (`usage`).
 
 <!-- BEGIN GENERATED schema sql -->
 | Key | Type | Present |

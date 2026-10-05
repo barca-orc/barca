@@ -107,13 +107,28 @@ only results.
 From a remote store, `barca get --json` reports every result as a pointer
 (`{"_barca_artifact": {"path", ...}}`), json ones included; `barca.get()` in Python loads it.
 
+## Looking at results in the bucket
+
+Nothing has to be downloaded by hand or re-run to inspect a remote result:
+
+```bash
+barca status total --json --sample 2     # rows, columns and sample rows, read from the bucket
+barca sql "select * from total"          # downloads `total` into .barca/sql-cache/ and queries it
+```
+
+`barca status` reads a parquet footer by ranged requests and downloads json or pickle results of
+up to 16 MB; a store it cannot read is a `note` on each shape, not a failed command
+(`barca docs status`). `barca sql` downloads the artifacts of the views a query names and reuses
+the copies while the objects are unchanged (`barca docs sql`).
+
 ## Limitations
 
 - Keys from `partitions_from(<asset returning a list>)` are read from local disk: with a remote
   store the step errors.
 - `parallel()` return values come back as `null` with a remote store (a warning says so).
 - `barca serve` does not share history yet; set `BARCA_STATE=off` for it.
-- `barca status` shapes and `barca sql` read local artifacts only.
+- `barca status` does not describe a remote json or pickle result larger than 16 MB, and
+  `barca sql` downloads a whole artifact before querying it.
 
 ## How shared history works
 
