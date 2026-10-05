@@ -101,6 +101,26 @@ Two machines finishing runs at the same time do not lose history: the second det
 conflict, re-reads and merges. Set `BARCA_STATE=off` to keep history on each machine and share
 only results.
 
+### The local copy of the history
+
+Each machine works on a local copy, `.barca/metadata.db`. `barca get` and `barca run` replace it
+with the shared history when they start and upload it when they end; `--dry-run` and
+`barca status` replace it before they look, and upload nothing. `barca history` and `barca stats`
+read the local copy as it is.
+
+- **A pull replaces, it does not merge.** After it the local copy is exactly the shared history.
+  Anything recorded only locally is discarded: in particular a run that was killed (`kill -9`,
+  out of memory, a lost machine) before it could upload leaves no trace in `barca history` once
+  the next command pulls, and its steps run again. A run that ends normally, failed and
+  cancelled runs included, uploads before it returns.
+- **Commands that only look do not pull over a run.** While a `barca get` or `barca run` is in
+  progress in the project, `--dry-run` and `barca status` skip the pull, read the local copy the
+  run is working on, and say so in one line on stderr:
+  `barca: a run is in progress in this project: not pulling the shared state, reading the local copy`.
+  They do not see what other machines uploaded since that run started.
+- A second `barca get` or `barca run` started while one is in progress does pull. Both runs
+  finish and upload; the one that ends second merges as described above.
+
 From a remote store, `barca get --json` reports every result as a pointer
 (`{"_barca_artifact": {"path", ...}}`), json ones included; `barca.get()` in Python loads it.
 

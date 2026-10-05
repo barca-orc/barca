@@ -51,6 +51,11 @@ the same remediation as `get` and `run`. A target is one name or several, comma-
 spaces (`a,b`), parsed exactly as `get` and `run` parse them; the JSON names them in `targets`
 (and the single one in `target`).
 
+With shared remote state (`barca docs remote`), status first replaces the local copy of the
+history with the shared one, as a run does, so it also shows what other machines computed. It
+skips that while a `barca get` or `barca run` is in progress in the project, reads the local copy
+instead, and says so in one line on stderr.
+
 Like `list`, status shows at most 100 nodes unless you pass `--limit N` or `--all`. The
 `summary` still counts every node, and the JSON adds `total` and `truncated` (with a `hint` when
 truncated). Each node also lists `env`, the environment variables it declares with `env=[...]`

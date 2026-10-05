@@ -194,6 +194,97 @@ async fn acquire_file_lock(db_path: &str, wait: Duration) -> Result<fs::File, Ba
     }
 }
 
+/// Replace the database at `db_path` with `new_file` (a complete database file in the same
+/// directory), so that the local database is exactly that file afterwards.
+///
+/// A database is its main file *plus* its write-ahead log: frames left in `<db>-wal` are applied
+/// on top of whatever main file is there. Replacing only the main file would therefore lay the
+/// old database's uncommitted-to-main changes over the new one (#221). So the sidecars are
+/// removed first, then the file is renamed into place, all under the in-process guard and the
+/// cross-process lock: no barca process has the database open across the replacement. Anything
+/// that was only in the old local database is gone afterwards; that is what replacing means.
+///
+/// The WAL goes before the rename, never after: a crash in between leaves the old main file
+/// without its log (an older, consistent database), not a new main file under an old log.
+pub(crate) async fn replace_db(db_path: &str, new_file: &Path) -> Result<(), BarcaError> {
+    let _g = db_guard().await;
+    let _lock = acquire_file_lock(db_path, DB_FILE_LOCK_WAIT).await?;
+    for suffix in ["-wal", "-shm"] {
+        let sidecar = format!("{db_path}{suffix}");
+        match fs::remove_file(&sidecar) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(BarcaError::Db(format!("failed to remove {sidecar}: {e}")));
+            }
+        }
+    }
+    fs::rename(new_file, db_path).map_err(|e| {
+        BarcaError::Db(format!(
+            "failed to move {} to {db_path}: {e}",
+            new_file.display()
+        ))
+    })
+}
+
+/// Held by a run (`barca get` / `barca run`, and each run under `barca serve`) from before its
+/// first database access until it returns: a shared lock on `<db>.run`. The operating system
+/// releases it when the process exits, however it exits, so it never goes stale.
+pub struct RunLive {
+    _file: fs::File,
+}
+
+fn run_lock_path(db_path: &str) -> String {
+    format!("{db_path}.run")
+}
+
+/// Announce that a run is live on the database at `db_path` (see [`RunLive`]). Best effort:
+/// `None` if the lock file cannot be opened or locked, in which case the run goes on unannounced.
+pub async fn mark_run_live(db_path: &str) -> Option<RunLive> {
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(run_lock_path(db_path))
+        .ok()?;
+    // Shared locks only ever wait for a prober's exclusive lock, which is held for an instant.
+    for _ in 0..50 {
+        match file.try_lock_shared() {
+            Ok(()) => return Some(RunLive { _file: file }),
+            Err(fs::TryLockError::WouldBlock) => {
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+            Err(fs::TryLockError::Error(_)) => return None,
+        }
+    }
+    None
+}
+
+/// True when some run holds [`RunLive`] on the database at `db_path`, in this process or
+/// another. Used by commands that only read: they must not replace the local database with the
+/// shared one while a run is using it.
+pub async fn run_is_live(db_path: &str) -> bool {
+    let Ok(file) = fs::OpenOptions::new()
+        .write(true)
+        .open(run_lock_path(db_path))
+    else {
+        // No lock file: no run has ever started here.
+        return false;
+    };
+    // An exclusive lock is refused while any run holds its shared one. Another prober can
+    // also refuse it, for an instant: ask a few times before believing it.
+    for _ in 0..5 {
+        match file.try_lock() {
+            Ok(()) => return false,
+            Err(fs::TryLockError::WouldBlock) => {
+                tokio::time::sleep(Duration::from_millis(3)).await;
+            }
+            Err(fs::TryLockError::Error(_)) => return false,
+        }
+    }
+    true
+}
+
 /// Wrap a Turso open failure, adding a hint when the DB is locked by something that
 /// does not follow barca's own locking.
 fn db_open_error(detail: impl std::fmt::Display) -> BarcaError {
@@ -1111,6 +1202,73 @@ mod tests {
         }
         assert!(columns.contains(&"cpu_seconds".to_string()));
         assert!(columns.contains(&"max_rss_bytes".to_string()));
+    }
+
+    async fn run_ids(db_path: &str) -> Vec<String> {
+        let mut ids: Vec<String> = get_recent_runs(db_path, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|r| r.run_id)
+            .collect();
+        ids.sort();
+        ids
+    }
+
+    #[tokio::test]
+    async fn replacing_the_db_discards_the_old_write_ahead_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = |name: &str| dir.path().join(name).to_string_lossy().to_string();
+
+        // The database another machine pushed: two runs, folded into its main file.
+        let pushed = path("pushed.db");
+        init_db(&pushed).await.unwrap();
+        for run in ["theirs-1", "theirs-2"] {
+            create_run(&pushed, run, "get", "f.py", None, Some(1))
+                .await
+                .unwrap();
+        }
+        crate::state_sync::checkpoint_truncate(&pushed)
+            .await
+            .unwrap();
+
+        // The local database: a run that was never pushed, still in the write-ahead log.
+        let local = path("local.db");
+        init_db(&local).await.unwrap();
+        create_run(&local, "ours-unpushed", "get", "f.py", None, Some(1))
+            .await
+            .unwrap();
+        let wal = format!("{local}-wal");
+        assert!(
+            fs::metadata(&wal).unwrap().len() > 0,
+            "the test needs a non-empty local WAL"
+        );
+
+        replace_db(&local, Path::new(&pushed)).await.unwrap();
+
+        // Exactly the pushed database: their runs, and nothing of the old local one.
+        assert!(!Path::new(&wal).exists());
+        assert_eq!(run_ids(&local).await, ["theirs-1", "theirs-2"]);
+        assert!(!Path::new(&pushed).exists(), "the file is moved into place");
+    }
+
+    #[tokio::test]
+    async fn a_run_is_live_exactly_while_its_marker_is_held() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db").to_string_lossy().to_string();
+        assert!(!run_is_live(&db_path).await, "no run has ever started");
+
+        let first = mark_run_live(&db_path).await.expect("first run");
+        let second = mark_run_live(&db_path)
+            .await
+            .expect("runs do not exclude each other");
+        assert!(run_is_live(&db_path).await);
+        drop(first);
+        assert!(run_is_live(&db_path).await, "the second run is still going");
+        drop(second);
+        assert!(!run_is_live(&db_path).await);
+        // Probing leaves nothing behind that would stop the next run.
+        assert!(mark_run_live(&db_path).await.is_some());
     }
 
     #[tokio::test(flavor = "multi_thread")]

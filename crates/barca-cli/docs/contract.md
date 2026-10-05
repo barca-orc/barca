@@ -822,7 +822,11 @@ contract.
 ## stderr
 
 stderr carries progress, warnings, your steps' own `print` output and errors. Only the error
-envelope and the `--agent` lines below are contract.
+envelope and the `--agent` lines below are contract. The line
+`barca: a run is in progress in this project: not pulling the shared state, reading the local copy`,
+printed by `--dry-run` and `barca status` with shared remote state while a run is live in the
+project (`barca docs remote`), is informational and not contract; the output on stdout has the
+same shape either way.
 
 ### Error envelope (stable)
 

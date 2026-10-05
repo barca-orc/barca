@@ -42,19 +42,39 @@ fn state_cmd(python: &Path, cfg: &ResolvedConfig) -> Command {
     cmd
 }
 
-/// Download the shared state blob over `cfg.db_path`. Returns its token, or
-/// `StateToken(None)` when the remote object doesn't exist yet (the local
-/// file is left untouched for bootstrap).
+/// Replace the local database at `cfg.db_path` with the shared state blob. Returns its token,
+/// or `StateToken(None)` when the remote object doesn't exist yet (the local database is left
+/// untouched for bootstrap).
+///
+/// Afterwards the local database is exactly the pulled blob: the blob is downloaded next to
+/// the database and swapped in by [`crate::db::replace_db`], which also removes the old
+/// database's write-ahead log so it is never applied to the new file (#221). Local rows that
+/// were never pushed are discarded. The download itself holds no lock, so other barca
+/// processes are not kept waiting on the network.
 pub async fn pull_state(python: &Path, cfg: &ResolvedConfig) -> Result<StateToken, BarcaError> {
     let uri = cfg
         .state_uri
         .as_deref()
         .ok_or_else(|| BarcaError::Other("pull_state called without a state uri".into()))?;
-    let _g = crate::db::db_guard().await;
+    // Same directory as the database, so the swap is a rename on one filesystem.
+    let staged = std::path::PathBuf::from(format!("{}.pull-{}", cfg.db_path, std::process::id()));
+    let _ = std::fs::remove_file(&staged);
+    let result = pull_into(python, cfg, uri, &staged).await;
+    // Gone already when it was swapped in; left behind only when the pull failed part-way.
+    let _ = std::fs::remove_file(&staged);
+    result
+}
+
+async fn pull_into(
+    python: &Path,
+    cfg: &ResolvedConfig,
+    uri: &str,
+    staged: &Path,
+) -> Result<StateToken, BarcaError> {
     let out = state_cmd(python, cfg)
         .arg("pull")
         .arg(uri)
-        .arg(&cfg.db_path)
+        .arg(staged)
         .output()
         .await
         .map_err(|e| BarcaError::Other(format!("failed to spawn state helper: {e}")))?;
@@ -72,6 +92,15 @@ pub async fn pull_state(python: &Path, cfg: &ResolvedConfig) -> Result<StateToke
         .get("token")
         .and_then(|t| t.as_str())
         .map(str::to_string);
+    // The helper writes the file exactly when the remote object exists (it then has a token).
+    if token.is_some() {
+        if !staged.exists() {
+            return Err(BarcaError::Other(format!(
+                "shared state pull from {uri}: the helper reported a state object but wrote no file"
+            )));
+        }
+        crate::db::replace_db(&cfg.db_path, staged).await?;
+    }
     Ok(StateToken(token))
 }
 

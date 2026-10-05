@@ -1327,6 +1327,11 @@ pub async fn explain(
     .await
 }
 
+/// Printed on stderr by `--dry-run` and `barca status` when they skip the shared-state pull
+/// because a run is live in the project.
+pub const RUN_LIVE_NOTE: &str = "barca: a run is in progress in this project: not pulling the \
+     shared state, reading the local copy";
+
 /// [`explain`] on an already-built DAG (`barca status` reuses its DAG for the node listing).
 pub(crate) async fn explain_dag(
     dag: &Dag,
@@ -1350,9 +1355,15 @@ pub(crate) async fn explain_dag(
     }
 
     // Shared remote state: pull it like a real run, so the cache check sees every machine's
-    // materializations.
+    // materializations. Not while a run is live in this project, though: a pull replaces the
+    // local database, and a command that only looks must not take it away from a run that is
+    // using it (#221). It reads the local database instead, which is that run's view.
     if cfg.state == crate::config::StateMode::Optimistic && cfg.state_uri.is_some() {
-        state_sync::pull_state(python, cfg).await?;
+        if db::run_is_live(&cfg.db_path).await {
+            eprintln!("{RUN_LIVE_NOTE}");
+        } else {
+            state_sync::pull_state(python, cfg).await?;
+        }
     }
 
     // No metadata DB yet means nothing is cached. Do not create one just to look.
@@ -1634,6 +1645,10 @@ async fn execute(
 
     db::ensure_env_dirs(&cfg.env)?;
     let db_path = cfg.db_path.clone();
+
+    // From here until this function returns, a run is live on this database: `--dry-run` and
+    // `barca status` in other processes read the local copy instead of pulling over it.
+    let _run_live = db::mark_run_live(&db_path).await;
 
     // Shared remote state: pull the metadata DB before opening it, so cache
     // checks below see every machine's materializations. Pull failure is a
