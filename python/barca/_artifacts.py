@@ -18,6 +18,7 @@ import os
 import pickle
 import re
 import tempfile
+import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -167,15 +168,9 @@ def clean_staging() -> None:
 # Frame types whose value reads its parquet file when queried, not when it is loaded.
 LAZY_FRAME_TYPES = frozenset({"duckdb", "polars_lazy"})
 
-# Fetched files a returned value still reads from (see deserialize). Appended from the
-# collect() thread pool; list.append is atomic.
-_held_fetches: list[Path] = []
-
-
-def release_fetched() -> None:
-    """Remove the fetched files kept for lazy readers. Call once their values are done with."""
-    while _held_fetches:
-        _held_fetches.pop().unlink(missing_ok=True)
+# Range-read filesystems registered on barca's duckdb connection, by protocol name.
+_duckdb_registered: dict[str, Any] = {}
+_duckdb_register_lock = threading.Lock()
 
 
 def _make_temp(directory: Path, prefix: str = "stage-") -> Path:
@@ -295,26 +290,46 @@ def deserialize(path: "Path | str", fmt: str, *, frame_type: str | None = None) 
     ``frame_type`` selects the parquet reader when ``fmt == "parquet"``.
     Supported values: ``pandas`` (default), ``polars``, ``polars_lazy``, ``pyarrow``, ``duckdb``.
 
-    A remote artifact is downloaded to a staging file that is removed before returning, except
-    for the lazy types (``duckdb``, ``polars_lazy``): they read the file when queried, so it is
-    kept until ``release_fetched()``.
+    A remote parquet artifact read with a lazy type (``duckdb``, ``polars_lazy``) is read in
+    place: only the byte ranges the step's query touches are fetched. Any other remote artifact
+    is downloaded to a staging file that is removed before returning.
     """
     if _storage.is_remote(path):
+        if fmt == "parquet" and frame_type in LAZY_FRAME_TYPES:
+            return _scan_remote_parquet(str(path), frame_type)
         tmp = _make_temp(_staging_dir(), prefix="fetch-")
         try:
             _storage.get_file(str(path), tmp)
-            value = _deserialize_local(tmp, fmt, frame_type=frame_type)
-        except BaseException:
+            return _deserialize_local(tmp, fmt, frame_type=frame_type)
+        finally:
             tmp.unlink(missing_ok=True)
-            raise
-        if fmt == "parquet" and frame_type in LAZY_FRAME_TYPES:
-            # A duckdb relation or polars LazyFrame scans the file when the step queries it, so
-            # the file has to outlive this call. The caller removes it with release_fetched().
-            _held_fetches.append(tmp)
-        else:
-            tmp.unlink(missing_ok=True)
-        return value
     return _deserialize_local(Path(path), fmt, frame_type=frame_type)
+
+
+def _scan_remote_parquet(uri: str, frame_type: str) -> Any:
+    """A lazy reader over a remote parquet object, reading byte ranges in place."""
+    fs = _storage.range_read_fs(uri)
+    if frame_type == "duckdb":
+        from barca import _duckdb
+
+        con = _duckdb.connection()
+        name = fs.protocol[0]
+        with _duckdb_register_lock:
+            if _duckdb_registered.get(name) is not fs:
+                if name in _duckdb_registered:
+                    con.unregister_filesystem(name)
+                con.register_filesystem(fs)
+                _duckdb_registered[name] = fs
+        return con.read_parquet(_storage.range_read_uri(uri))
+
+    import polars as pl
+    import pyarrow.dataset as ds
+    from pyarrow.fs import FSSpecHandler, PyFileSystem
+
+    dataset = ds.dataset(
+        fs.inner._strip_protocol(uri), filesystem=PyFileSystem(FSSpecHandler(fs)), format="parquet"
+    )
+    return pl.scan_pyarrow_dataset(dataset)
 
 
 def _deserialize_local(path: Path, fmt: str, *, frame_type: str | None = None) -> Any:

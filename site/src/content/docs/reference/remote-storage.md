@@ -107,6 +107,21 @@ only results.
 From a remote store, `barca get --json` reports every result as a pointer
 (`{"_barca_artifact": {"path", ...}}`), json ones included; `barca.get()` in Python loads it.
 
+## How steps read remote inputs
+
+The input's annotation decides how many bytes a step moves (`barca docs types`):
+
+- A parquet input annotated `duckdb.DuckDBPyRelation` or `pl.LazyFrame` is read in place:
+  only the byte ranges the step's query touches are fetched. A query over one column of eight
+  fetches about that column's share of the object; a selective filter skips row groups.
+- Every other input (no annotation, `pd.DataFrame`, `pl.DataFrame`, `pyarrow.Table`, json,
+  pickle) is downloaded whole to `.barca/staging/{pid}/`, loaded, and the file removed.
+
+For a large upstream that a step filters, projects or aggregates, annotate the input as lazy.
+DuckDB reads barca's artifacts through a `barca<protocol>://` filesystem registered on its
+connection, so `s3://`, `abfss://` and `gs://` URLs in your own SQL keep using DuckDB's own
+extensions and credentials.
+
 ## Looking at results in the bucket
 
 Nothing has to be downloaded by hand or re-run to inspect a remote result:
@@ -193,10 +208,11 @@ assets are multi-hundred-MB DataFrames or pickled models:
    partial artifact. The staging directories of workers that are no longer
    running are swept at worker startup; a live worker's files are never touched.
 
-Remote reads are symmetric: inputs are downloaded to the worker's staging
-directory, deserialized, and the temp file removed. An input typed
-`duckdb.DuckDBPyRelation` is read lazily by DuckDB, so its file is kept until
-the step has finished and its result is written.
+Eager remote reads are symmetric: the input is downloaded to the worker's
+staging directory, deserialized, and the temp file removed. A parquet input typed
+`duckdb.DuckDBPyRelation` or `pl.LazyFrame` is not downloaded: it is read in
+place, fetching only the byte ranges the step's query touches (see "How steps
+read remote inputs" above).
 
 ## Artifacts only, history local (0.4.0 behavior)
 
@@ -208,6 +224,7 @@ export BARCA_ARTIFACT_URI=abfss://artifacts@myaccount.dfs.core.windows.net/prod
 barca get pipeline.py
 ```
 
-Downstream steps download their inputs to a local staging file on demand.
+Downstream steps download eager inputs to a local staging file on demand and
+read lazy (`duckdb.DuckDBPyRelation`, `pl.LazyFrame`) parquet inputs in place.
 
 Prefer `BARCA_REMOTE_URI` with `BARCA_STATE=off`, which also keeps `--env` separation.

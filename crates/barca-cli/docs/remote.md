@@ -104,6 +104,21 @@ only results.
 From a remote store, `barca get --json` reports every result as a pointer
 (`{"_barca_artifact": {"path", ...}}`), json ones included; `barca.get()` in Python loads it.
 
+## How steps read remote inputs
+
+The input's annotation decides how many bytes a step moves (`barca docs types`):
+
+- A parquet input annotated `duckdb.DuckDBPyRelation` or `pl.LazyFrame` is read in place:
+  only the byte ranges the step's query touches are fetched. A query over one column of eight
+  fetches about that column's share of the object; a selective filter skips row groups.
+- Every other input (no annotation, `pd.DataFrame`, `pl.DataFrame`, `pyarrow.Table`, json,
+  pickle) is downloaded whole to `.barca/staging/{pid}/`, loaded, and the file removed.
+
+For a large upstream that a step filters, projects or aggregates, annotate the input as lazy.
+DuckDB reads barca's artifacts through a `barca<protocol>://` filesystem registered on its
+connection, so `s3://`, `abfss://` and `gs://` URLs in your own SQL keep using DuckDB's own
+extensions and credentials.
+
 ## Looking at results in the bucket
 
 Nothing has to be downloaded by hand or re-run to inspect a remote result:

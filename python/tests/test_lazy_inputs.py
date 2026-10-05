@@ -19,7 +19,6 @@ def project(tmp_path, monkeypatch):
     """Run in an empty project directory with a clean memory:// store."""
     monkeypatch.chdir(tmp_path)
     yield tmp_path
-    _artifacts.release_fetched()
     fs = _storage._fs_cache.get("memory")
     if fs is not None:
         fs.store.clear()

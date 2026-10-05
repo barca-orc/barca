@@ -27,7 +27,6 @@ from barca._artifacts import (
     clean_staging,
     deserialize,
     detect_format,
-    release_fetched,
     resolve_format,
     safe_node_id,
     serialize,
@@ -784,9 +783,6 @@ def _run_daemon_step(step, modules, art_dir, lru):
 
     finally:
         _duckdb.unbind_inputs(bound_views)
-        # Remote duckdb inputs scan their fetched files lazily; the step and its
-        # materialization are over, so nothing reads them any more.
-        release_fetched()
 
 
 def run_daemon():
@@ -818,12 +814,6 @@ def run_daemon():
         try:
             sys.stdout.flush()
             sys.stderr.flush()
-        except Exception:
-            pass
-        # The coordinator stops workers as soon as the last result arrives, which can be
-        # before a step's `finally` has removed its fetched inputs.
-        try:
-            release_fetched()
         except Exception:
             pass
         os._exit(0)
