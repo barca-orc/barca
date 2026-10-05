@@ -18,6 +18,7 @@ import os
 import pickle
 import re
 import tempfile
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -113,21 +114,65 @@ def _is_json_serializable(value: Any) -> bool:
 
 
 def _staging_dir() -> Path:
-    d = Path(_STAGING_DIR)
+    """This process's staging directory, ``.barca/staging/{pid}/``.
+
+    One directory per process: workers start and stop throughout a run, and a shared
+    directory would let one worker's cleanup remove a file another is still using.
+    """
+    d = Path(_STAGING_DIR) / str(os.getpid())
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True  # exists, owned by someone else
+    return True
+
+
+# Loose temp files directly in .barca/staging/ come from versions that shared one directory.
+# They have no owner to check, so only ones old enough to be abandoned are removed.
+_LEGACY_TEMP_MAX_AGE_SECONDS = 3600
+
+
 def clean_staging() -> None:
-    """Best-effort removal of stale temp files left by crashed workers."""
-    d = Path(_STAGING_DIR)
-    if not d.is_dir():
+    """Best-effort removal of temp files left by workers that are no longer running.
+
+    Removes the staging directories of dead processes and never touches a live one's: its
+    owner may be in the middle of an upload or download.
+    """
+    root = Path(_STAGING_DIR)
+    if not root.is_dir():
         return
-    for tmp in d.glob("*.tmp"):
+    now = time.time()
+    for entry in root.iterdir():
         try:
-            tmp.unlink()
+            if entry.is_dir():
+                if not entry.name.isdigit() or _pid_alive(int(entry.name)):
+                    continue
+                for tmp in entry.iterdir():
+                    tmp.unlink()
+                entry.rmdir()
+            elif entry.suffix == ".tmp":
+                if now - entry.stat().st_mtime > _LEGACY_TEMP_MAX_AGE_SECONDS:
+                    entry.unlink()
         except OSError:
             pass
+
+
+# Fetched files a returned value still reads from (see deserialize). Appended from the
+# collect() thread pool; list.append is atomic.
+_held_fetches: list[Path] = []
+
+
+def release_fetched() -> None:
+    """Remove the fetched files kept for lazy readers. Call once their values are done with."""
+    while _held_fetches:
+        _held_fetches.pop().unlink(missing_ok=True)
 
 
 def _make_temp(directory: Path, prefix: str = "stage-") -> Path:
@@ -246,14 +291,25 @@ def deserialize(path: "Path | str", fmt: str, *, frame_type: str | None = None) 
 
     ``frame_type`` selects the parquet reader when ``fmt == "parquet"``.
     Supported values: ``pandas`` (default), ``polars``, ``pyarrow``, ``duckdb``.
+
+    A remote artifact is downloaded to a staging file that is removed before returning, except
+    for ``duckdb``: the relation reads the file lazily, so it is kept until ``release_fetched()``.
     """
     if _storage.is_remote(path):
         tmp = _make_temp(_staging_dir(), prefix="fetch-")
         try:
             _storage.get_file(str(path), tmp)
-            return _deserialize_local(tmp, fmt, frame_type=frame_type)
-        finally:
+            value = _deserialize_local(tmp, fmt, frame_type=frame_type)
+        except BaseException:
             tmp.unlink(missing_ok=True)
+            raise
+        if fmt == "parquet" and frame_type == "duckdb":
+            # A duckdb relation is lazy: it scans the file when the step queries it, so the
+            # file has to outlive this call. The caller removes it with release_fetched().
+            _held_fetches.append(tmp)
+        else:
+            tmp.unlink(missing_ok=True)
+        return value
     return _deserialize_local(Path(path), fmt, frame_type=frame_type)
 
 

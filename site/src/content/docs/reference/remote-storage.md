@@ -162,18 +162,20 @@ Serialized payloads are never buffered fully in memory — important when
 assets are multi-hundred-MB DataFrames or pickled models:
 
 1. The serializer (json/pickle/parquet) streams to a temp file — in the
-   destination directory for local writes, in `.barca/staging/` for remote
-   ones (deliberately on project disk, not `/tmp`, which is often RAM-backed
-   tmpfs).
+   destination directory for local writes, in `.barca/staging/{pid}/` (one
+   directory per worker process) for remote ones (deliberately on project
+   disk, not `/tmp`, which is often RAM-backed tmpfs).
 2. Local: the temp file is atomically renamed into place (`os.replace`).
    Remote: the temp file is uploaded with a chunked `put_file`; object
    stores commit the object only when the upload completes.
 3. On any failure the temp file is removed — the destination never holds a
-   partial artifact. Stale temp files from crashed workers are swept at
-   worker startup.
+   partial artifact. The staging directories of workers that are no longer
+   running are swept at worker startup; a live worker's files are never touched.
 
-Remote reads are symmetric: inputs are downloaded to `.barca/staging/`,
-deserialized, and the temp file removed.
+Remote reads are symmetric: inputs are downloaded to the worker's staging
+directory, deserialized, and the temp file removed. An input typed
+`duckdb.DuckDBPyRelation` is read lazily by DuckDB, so its file is kept until
+the step has finished and its result is written.
 
 ## Artifacts only, history local (0.4.0 behavior)
 
