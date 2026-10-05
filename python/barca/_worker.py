@@ -767,6 +767,11 @@ def run_daemon():
         sys.exit(1)
     _use_socket = True
 
+    # Collapse repeated library warnings (barca docs agents, "Repeated warnings").
+    from barca import _dedupe
+
+    _dedupe.install(os.environ.get("BARCA_SOCKET"))
+
     # Install SIGTERM handler so graceful_kill flushes buffered progress output
     # before the process goes away. Exit via os._exit, not sys.exit(0): a
     # SystemExit raised from the handler while the interpreter is already

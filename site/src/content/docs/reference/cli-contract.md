@@ -54,6 +54,7 @@ outside the `GENERATED` blocks is written by hand.
 | `get --no-cache`, `run --no-cache` | deprecated (hidden): the old spelling of `--refresh-all`. Still works, prints `[barca] warning: --no-cache is deprecated ...` on stderr, and will be removed in a future minor release |
 | `status --sample` and `nodes[].shape` | read by a Python helper (`barca._inspect`) whose output may grow per format; the wording of `shape.note` (an unreadable, too large or unreachable artifact) may change |
 | `BARCA_PROGRESS_SECS`, `BARCA_POOL_SIZE`, `BARCA_COMM_COST_SECONDS`, `BARCA_TRACE_TIMING` | tuning and benchmarking knobs |
+| the `[barca] <n> more: ...` line | collapsing repeated library warnings is new; which output counts as a warning may change |
 | `BARCA_ARTIFACT_URI` | 0.4.0 back-compat override, superseded by `BARCA_REMOTE_URI` / `[remote].artifacts_uri` |
 | `--agent` lines other than `step:`, the end-of-run line and `run failed:` | progress notes (`still running`, skipped tasks, the text of warnings, `SINK FAILED`) whose wording may change |
 
@@ -903,6 +904,7 @@ placeholders:
 | `[barca] run failed: step '<id>' failed (exit <code>)` | just before the error envelope of a failed step (every mode) | stable |
 | `[barca] <n>/<total> steps \| done in <secs>s` | end of a run that executed steps, with or without `--agent`; `failed in` when a step failed, `cancelled after` on Ctrl-C (never `done` then) | stable |
 | `[barca] still running (<n>s): <id>` | a step in flight for `BARCA_PROGRESS_SECS` (every mode) | experimental |
+| `[barca] <n> more: <first line of a warning>` | before the end-of-run line (every mode): a `logging` WARNING printed because logging is unconfigured, or a `warnings` warning, from a step's process was printed once and suppressed `<n>` more times in this run; beyond ten texts, one `[barca] <n> more: <k> other repeated warnings` (`barca docs agents`) | experimental |
 | `[barca] skipped N task(s) ...`, `[barca] nothing to get ...` | `get` with no target skipped tasks | experimental |
 | `[barca] warning: ...`, `[barca] SINK FAILED: ...` | warnings (always this lowercase prefix; the text after it may change) and failed sinks | experimental |
 
