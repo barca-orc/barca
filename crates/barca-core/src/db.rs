@@ -997,6 +997,7 @@ mod tests {
                 format: "json".to_string(),
                 size_bytes: 15,
                 elapsed_seconds: None,
+                content_hash: None,
             },
         );
         persist_outputs(&db_path, &outputs, &HashMap::new())
@@ -1163,6 +1164,7 @@ mod tests {
                 format: "json".to_string(),
                 size_bytes: 42,
                 elapsed_seconds: None,
+                content_hash: None,
             },
         );
 
@@ -1206,6 +1208,7 @@ mod tests {
                 format: "json".to_string(),
                 size_bytes: 100,
                 elapsed_seconds: None,
+                content_hash: None,
             },
         );
         outputs.insert(
@@ -1215,6 +1218,7 @@ mod tests {
                 format: "parquet".to_string(),
                 size_bytes: 8192,
                 elapsed_seconds: None,
+                content_hash: None,
             },
         );
         outputs.insert(
@@ -1224,6 +1228,7 @@ mod tests {
                 format: "pickle".to_string(),
                 size_bytes: 512,
                 elapsed_seconds: None,
+                content_hash: None,
             },
         );
 
@@ -1357,6 +1362,7 @@ mod tests {
             format: row.get::<String>(1).unwrap(),
             size_bytes: row.get::<i64>(2).unwrap() as u64,
             elapsed_seconds: None,
+            content_hash: None,
         });
 
         let output_ref = result.unwrap();

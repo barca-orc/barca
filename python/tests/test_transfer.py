@@ -5,6 +5,7 @@ The helper is driven in-process over a socketpair (the coordinator's end is
 pinned by crates/barca-core/src/protocol.rs (TransferRequest/TransferReply).
 """
 
+import hashlib
 import json
 import socket
 import struct
@@ -41,6 +42,11 @@ def _recv(sock: socket.socket) -> dict:
 
     (n,) = struct.unpack(">I", exact(4))
     return json.loads(exact(n))
+
+
+def _sized(reply: dict) -> dict:
+    """A done reply without its hash and fetched flag (TestChecksums covers those)."""
+    return {k: v for k, v in reply.items() if k not in ("sha256", "fetched")}
 
 
 class Helper:
@@ -85,19 +91,23 @@ def helper():
     h.close()
 
 
+_SHA_V1 = "9ab2253fc38981f5be9c25cf0a34b62cdf334652344bdef16b3d5dbc0b74f2f1"
+
+
 class TestPutGet:
     def test_put_then_get_round_trips_bytes(self, helper, tmp_path):
         src = tmp_path / "a.json"
         src.write_bytes(b'{"v": 1}')
         helper.request({"type": "put", "id": 1, "local": str(src), "remote": "memory://s/n/h.json"})
-        assert helper.reply() == {"type": "done", "id": 1, "size_bytes": 8}
+        done = {"type": "done", "size_bytes": 8, "sha256": _SHA_V1, "fetched": True}
+        assert helper.reply() == {**done, "id": 1}
         assert _storage.exists("memory://s/n/h.json")
 
         dest = tmp_path / "mirror" / "n" / "h.json"
         helper.request(
             {"type": "get", "id": 2, "remote": "memory://s/n/h.json", "local": str(dest)}
         )
-        assert helper.reply() == {"type": "done", "id": 2, "size_bytes": 8}
+        assert helper.reply() == {**done, "id": 2}
         assert dest.read_bytes() == b'{"v": 1}'
 
     def test_get_is_atomic_no_temp_left_behind(self, helper, tmp_path):
@@ -123,6 +133,61 @@ class TestPutGet:
         assert back.read_bytes() == b"abc"
 
 
+class TestChecksums:
+    """A recorded SHA-256 decides whether a local copy is kept, replaced or refused."""
+
+    BODY = b'{"x": 1}'
+    SHA = hashlib.sha256(BODY).hexdigest()
+
+    def _store(self, body: bytes = BODY) -> str:
+        remote = "memory://store/a/h.json"
+        with _storage.get_fs(remote).open(remote, "wb") as f:
+            f.write(body)
+        return remote
+
+    def _get(self, helper, remote, local, sha256=SHA) -> dict:
+        helper.request(
+            {"type": "get", "id": 1, "remote": remote, "local": str(local), "sha256": sha256}
+        )
+        return helper.reply()
+
+    def test_put_reports_the_hash_of_the_uploaded_bytes(self, helper, tmp_path):
+        src = tmp_path / "h.json"
+        src.write_bytes(self.BODY)
+        helper.request({"type": "put", "id": 1, "local": str(src), "remote": "memory://s/h.json"})
+        reply = helper.reply()
+        assert (reply["sha256"], reply["fetched"]) == (self.SHA, True)
+
+    def test_matching_local_copy_is_kept_and_nothing_is_downloaded(
+        self, helper, tmp_path, monkeypatch
+    ):
+        local = tmp_path / "h.json"
+        local.write_bytes(self.BODY)
+        monkeypatch.setattr(_storage, "get_file", lambda *a: pytest.fail("downloaded"))
+        reply = self._get(helper, self._store(), local)
+        assert (reply["type"], reply["sha256"], reply["fetched"]) == ("done", self.SHA, False)
+
+    def test_local_copy_with_other_bytes_is_replaced_from_the_store(self, helper, tmp_path):
+        local = tmp_path / "h.json"
+        local.write_bytes(b'{"x": 2}')  # same size, different bytes
+        reply = self._get(helper, self._store(), local)
+        assert (reply["type"], reply["fetched"]) == ("done", True)
+        assert local.read_bytes() == self.BODY
+
+    def test_store_copy_with_other_bytes_fails_once_and_leaves_nothing(self, helper, tmp_path):
+        local = tmp_path / "h.json"
+        reply = self._get(helper, self._store(b'{"x": 2}'), local)
+        assert reply["type"] == "error" and reply["attempts"] == 1
+        assert "ChecksumMismatch" in reply["message"] and self.SHA in reply["message"]
+        assert list(tmp_path.iterdir()) == []
+
+    def test_without_a_recorded_hash_the_download_is_taken_as_it_is(self, helper, tmp_path):
+        local = tmp_path / "h.json"
+        reply = self._get(helper, self._store(b'{"x": 2}'), local, sha256=None)
+        assert (reply["type"], reply["fetched"]) == ("done", True)
+        assert reply["sha256"] == hashlib.sha256(b'{"x": 2}').hexdigest()
+
+
 class TestConcurrency:
     def test_many_in_flight_all_answered_by_id(self, tmp_path):
         h = Helper(concurrency=4)
@@ -141,7 +206,7 @@ class TestConcurrency:
             got = h.replies(8)
             assert set(got) == {100 + i for i in range(8)}
             for i in range(8):
-                assert got[100 + i] == {"type": "done", "id": 100 + i, "size_bytes": i + 1}
+                assert _sized(got[100 + i]) == {"type": "done", "id": 100 + i, "size_bytes": i + 1}
         finally:
             h.close()
 
@@ -180,7 +245,7 @@ class TestErrors:
         src = tmp_path / "ok.bin"
         src.write_bytes(b"ok")
         helper.request({"type": "put", "id": 2, "local": str(src), "remote": "memory://ok/x"})
-        assert helper.reply() == {"type": "done", "id": 2, "size_bytes": 2}
+        assert _sized(helper.reply()) == {"type": "done", "id": 2, "size_bytes": 2}
 
     def test_missing_local_put_errors(self, helper, tmp_path):
         helper.request(
@@ -271,7 +336,7 @@ class TestLifecycle:
         src.write_bytes(b"1")
         h.request({"type": "put", "id": 1, "local": str(src), "remote": "memory://l/a"})
         h.request({"type": "shutdown"})
-        assert h.reply() == {"type": "done", "id": 1, "size_bytes": 1}
+        assert _sized(h.reply()) == {"type": "done", "id": 1, "size_bytes": 1}
         h.thread.join(timeout=5)
         assert not h.thread.is_alive()
         assert _storage.exists("memory://l/a")
@@ -404,7 +469,7 @@ class TestTimeout:
             b.write_bytes(b"22")
             h.request({"type": "put", "id": 2, "local": str(b), "remote": "memory://t/b"})
             # The next reply is for request 2, not a stale "done" for 1.
-            assert h.reply() == {"type": "done", "id": 2, "size_bytes": 2}
+            assert _sized(h.reply()) == {"type": "done", "id": 2, "size_bytes": 2}
         finally:
             gate.set()
             h.close()
