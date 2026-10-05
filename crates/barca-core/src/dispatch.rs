@@ -4,7 +4,7 @@
 
 use crate::planner::{Phase, StreamStep, WorkerStream, expand_partition_combos};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Reference to a materialized artifact on disk.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -324,9 +324,29 @@ pub fn build_provided_inputs(
     provided
 }
 
+/// Upstream ids that every consumer in this phase reads through a lazy type
+/// (`duckdb.DuckDBPyRelation`, `pl.LazyFrame`). One eager consumer needs the
+/// whole artifact, so its upstream is left out.
+pub fn lazily_read_inputs(phase: &Phase) -> HashSet<String> {
+    let mut lazy = HashSet::new();
+    let mut eager = HashSet::new();
+    for step in phase.streams.iter().flat_map(|s| &s.steps) {
+        for (param, upstream_id) in &step.inputs {
+            if step.param_types.get(param).is_some_and(|t| t.is_lazy()) {
+                lazy.insert(upstream_id.clone());
+            } else {
+                eager.insert(upstream_id.clone());
+            }
+        }
+    }
+    lazy.retain(|id| !eager.contains(id));
+    lazy
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::ValueType;
     use crate::planner::PhaseReason;
     use crate::{NodeKind, PartitionKey, StepId};
     use std::sync::Arc;
@@ -338,6 +358,49 @@ mod tests {
             size_bytes: 100,
             elapsed_seconds: None,
         }
+    }
+
+    fn reader_step(id: &str, param: &str, upstream: &str, ty: Option<ValueType>) -> StreamStep {
+        StreamStep {
+            step_id: StepId::unpartitioned(id),
+            kind: NodeKind::Asset,
+            function_name: Arc::from(id),
+            source_file: Arc::from("f"),
+            inputs: HashMap::from([(param.to_string(), upstream.to_string())]),
+            pending_partitions: HashMap::new(),
+            serializer: None,
+            sinks: vec![],
+            run_hashes: HashMap::new(),
+            timeout_seconds: 300,
+            retries: 1,
+            retry_backoff_seconds: 0.0,
+            partition_keys: vec![],
+            param_types: ty
+                .map(|t| HashMap::from([(param.to_string(), t)]))
+                .unwrap_or_default(),
+            return_type: None,
+        }
+    }
+
+    #[test]
+    fn lazily_read_inputs_needs_every_consumer_lazy() {
+        let phase = Phase {
+            reason: PhaseReason::Initial,
+            streams: vec![WorkerStream {
+                stream_id: "w0".to_string(),
+                steps: vec![
+                    reader_step("f:b", "x", "f:all_lazy", Some(ValueType::DuckDB)),
+                    reader_step("f:c", "x", "f:all_lazy", Some(ValueType::PolarsLazy)),
+                    reader_step("f:d", "x", "f:mixed", Some(ValueType::DuckDB)),
+                    reader_step("f:e", "x", "f:mixed", Some(ValueType::Pandas)),
+                    reader_step("f:g", "x", "f:untyped", None),
+                ],
+            }],
+        };
+        assert_eq!(
+            lazily_read_inputs(&phase),
+            HashSet::from(["f:all_lazy".to_string()])
+        );
     }
 
     #[test]

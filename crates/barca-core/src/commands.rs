@@ -16,7 +16,7 @@ use crate::planner::{self, ExecutionPlan, Phase, ResourceConfig};
 use crate::state_sync;
 use crate::transfer::{ArtifactLayout, TransferClient};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -975,6 +975,31 @@ struct StoreSync {
 }
 
 impl StoreSync {
+    /// Point lazily read parquet inputs that are not on this disk at the store,
+    /// so the step's reader fetches only the byte ranges its query uses. They
+    /// stay fetchable: a later eager reader still downloads the whole artifact.
+    fn read_in_place(
+        &self,
+        provided: &mut HashMap<String, dispatch::ProvidedInput>,
+        lazy: &HashSet<String>,
+    ) {
+        for (key, input) in provided.iter_mut() {
+            let base = key.split_once('[').map_or(key.as_str(), |(b, _)| b);
+            if !lazy.contains(key) && !lazy.contains(base) {
+                continue;
+            }
+            let dispatch::ProvidedInput::Single(oref) = input else {
+                continue;
+            };
+            if oref.format != "parquet" || std::path::Path::new(&oref.path).exists() {
+                continue;
+            }
+            if let Some((_, at)) = self.fetchable.get(&oref.path) {
+                oref.path = at.clone();
+            }
+        }
+    }
+
     /// Make the store-backed artifacts among `paths` local, reporting any
     /// fetch on stderr (through the progress bar when one is live). Errors
     /// name what could not be fetched.
@@ -1005,8 +1030,8 @@ impl StoreSync {
                 started.elapsed().as_secs_f64()
             );
             match pb {
-                Some(bar) => bar.println(&msg),
-                None => eprintln!("{msg}"),
+                Some(bar) if !bar.is_hidden() => bar.println(&msg),
+                _ => eprintln!("{msg}"),
             }
         }
         if report.failures.is_empty() {
@@ -2210,11 +2235,16 @@ async fn execute(
             })
             .sum::<usize>();
 
-        let provided = dispatch::build_provided_inputs(&filtered_phase, &all_outputs);
+        let mut provided = dispatch::build_provided_inputs(&filtered_phase, &all_outputs);
 
         // Cache hits recorded by other machines are fetched before the steps
-        // that read them run — exactly the inputs this phase was provided.
+        // that read them run — exactly the inputs this phase was provided,
+        // less the parquet inputs every reader in the phase scans lazily.
         if let Some(s) = store.as_mut() {
+            s.read_in_place(
+                &mut provided,
+                &dispatch::lazily_read_inputs(&filtered_phase),
+            );
             let paths = provided.values().flat_map(|p| match p {
                 dispatch::ProvidedInput::Single(o) => std::slice::from_ref(o),
                 dispatch::ProvidedInput::Collected(v) => v.as_slice(),

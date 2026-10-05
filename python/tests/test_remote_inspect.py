@@ -12,6 +12,7 @@ reachable: memory:// does not cross processes.
 import json
 import os
 import pickle
+import shutil
 import socket
 import subprocess
 import threading
@@ -496,9 +497,8 @@ def remote_project(tmp_path_factory) -> Path:
     )
     for target in ("orders", "keys", "blob", "weekly"):
         ok(cli(root, "get", target, "--json"))
-    assert not (root / ".barca" / "artifacts").exists() or not any(
-        p.is_file() for p in (root / ".barca" / "artifacts").rglob("*")
-    ), "the artifacts must be only in the bucket"
+    # Workers write locally and the copies are uploaded; drop them to leave only the bucket's.
+    shutil.rmtree(root / ".barca" / "artifacts")
     return root
 
 
