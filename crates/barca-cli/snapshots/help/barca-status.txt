@@ -54,5 +54,7 @@ Cache state per node: cached, stale (ran before; code or inputs changed), never_
 sensors), with a reason. JSON spells the states in snake_case, the same as the `summary` keys
 (the table prints never-run, always-runs). It is the same decision `--dry-run` makes.
 Read-only: never imports your code, never writes. Shape (rows, columns, type) is read from the
-artifact file only.
+artifact file only. With remote storage it is read from the bucket: a parquet footer by ranged
+requests, json and pickle by a download of up to 16 MB (larger ones get a `note`). A store that
+cannot be reached is a `note` on each shape, not a failed command.
 More: barca docs status, barca docs agents

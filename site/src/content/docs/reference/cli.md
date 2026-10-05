@@ -350,7 +350,10 @@ imported:
   objects); an object adds `keys`.
 - pickle: `type` only (e.g. `myproject.Model`), read from the pickle opcodes without unpickling.
   Pickles are never sampled.
-- Remote artifacts (`artifacts = "az://..."` and the like) are not opened; `shape.note` says so.
+- Remote artifacts are read from the bucket with the credentials the steps use: a parquet footer
+  by ranged requests (the object is not downloaded; `--sample N` also reads the first row group),
+  json and pickle by a download of up to 16 MB. A larger one, a missing driver, rejected
+  credentials or a network error is reported in `shape.note`; the command still exits 0.
 
 **Partitioned assets** appear as one node with `partitions: {total, cached, missing,
 missing_keys}` (up to 20 keys). `last_materialization` is the most recently run key (named in its
@@ -367,7 +370,8 @@ is a usage error (exit 2). See `barca docs status`.
 
 Query cached results with DuckDB. Every asset, sensor and task with a result on disk is a view
 named after its function; a partitioned asset is one view with a `partition` column. Nothing
-runs, user code is never imported, and nothing is recorded. Experimental.
+runs, user code is never imported, and nothing is recorded. With remote storage, the artifacts of
+the views a query names are downloaded into `.barca/sql-cache/` and reused. Experimental.
 
 ```bash
 barca sql "select * from revenue"

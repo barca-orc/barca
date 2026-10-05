@@ -112,8 +112,35 @@ object), or the value (other json). It is off by default to keep output small. P
 sampled: loading one would import and run code.
 
 When the shape cannot be read, `shape` has a `note` instead of `rows`/`columns`: parquet without
-pyarrow installed (`pip install 'barca[parquet]'`), a remote artifact (shape is only read for local
-files), or a file that no longer exists.
+pyarrow installed (`pip install 'barca[parquet]'`), a file that no longer exists, or a remote
+artifact that is too large or cannot be reached (below).
+
+### Remote artifacts
+
+With remote storage (`barca docs remote`) the shape is read from the bucket, through the same
+filesystem, credentials and `[remote.storage_options.*]` the steps use. There is no flag for it:
+
+```bash
+barca status total --json --sample 2    # rows, columns and 2 sample rows, read from the bucket
+```
+
+- parquet: `rows` and `columns` come from the file footer by ranged requests; the object is not
+  downloaded. `--sample N` also reads the first row group, not the whole file. Measured on a
+  160 MB file of 20 row groups in S3-compatible storage: 64 KB read for the shape, 8 MB with
+  `--sample 5`.
+- json and pickle have to be downloaded to be described, so only objects up to 16 MB are. A
+  larger one has `"note": "remote json artifact too large to inspect: 25.1 MB (limit 16 MB)"`.
+  `barca sql` can still query a large json result.
+
+Each node with a result costs one or two requests, and up to 8 artifacts are read at a time.
+`barca status` with no target reads every node; name a target to read only its upstream cone.
+
+A store that cannot be read never fails the command. A missing driver
+(`pip install 'barca[s3]'`), rejected credentials or a network error is the `note` of each
+shape, the rest of the status is complete, and the exit code is 0. After the first such failure
+the artifacts not yet read report it without another attempt, so an unreachable bucket costs one
+wait for the driver's retries (about 10 seconds for an S3 endpoint that refuses connections),
+not one per node.
 
 ## Partitioned assets
 
