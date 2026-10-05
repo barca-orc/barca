@@ -164,6 +164,43 @@ step, the process is genuinely stuck. The last progress line of a run that execu
 same with and without `--agent`: `[barca] N/M steps | done in Xs`, or `| failed in Xs` when a step
 failed (never "done").
 
+## Repeated warnings
+
+Workers write straight to barca's stderr, so a library that warns on every call would print the
+same line hundreds of times: aiohttp logs `Could not parse .netrc file` for each client session
+when `~/.netrc` is malformed, which is every Azure operation. Within one run a warning with the
+same text is printed the first time only, by whichever worker reaches it first, and the rest are
+counted on stderr just before the end-of-run line, in every mode:
+
+```
+Could not parse .netrc file
+[barca] step:pipeline.py:fetch[k=a] completed 0.1s (1/9)
+...
+[barca] 79 more: Could not parse .netrc file
+[barca] 9/9 steps | done in 0.5s
+```
+
+- What is collapsed: a `logging` record at exactly WARNING level that is printed only because
+  logging is not configured (Python then writes the bare message to stderr), and a warning
+  shown by the `warnings` module. Two warnings are the same when their text is the same.
+- If the project configures logging (`logging.basicConfig()`, or any handler on the logger or
+  one of its parents), nothing from `logging` is collapsed, library warnings included: every
+  record is printed by your handlers, in your format. That is also how to see every line.
+- What is never touched: `print` and direct writes to stdout or stderr, log records at any other
+  level, a record logged with a traceback (`exc_info`), any handler you or a library installed
+  (terminal or file), a step's error and traceback, barca's own `[barca]` lines and the error
+  envelope.
+- A warning seen once prints no summary line. The count is the number of suppressed repeats; repeats
+  from a worker process that dies before its step reports (the step crashed the interpreter)
+  are not in it.
+- The ten most repeated texts get a summary line each; any others share one,
+  `[barca] 502 more: 502 other repeated warnings` (suppressed lines, then distinct texts).
+- A worker stops collapsing after 512 distinct texts, so warnings that differ every time (an id
+  or a counter in the text) are printed as they come.
+
+Fix the cause when you can (here: repair or remove `~/.netrc`); the summary line tells you how
+much of it there was.
+
 ## Environment variables
 
 A node that declares `env=["SOURCE_CSV"]` has those values in its cache key, and each `--agent`

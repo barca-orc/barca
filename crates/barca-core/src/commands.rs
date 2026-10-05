@@ -2156,12 +2156,27 @@ async fn execute(
 
     // All phases done (or aborted/cancelled) — release the worker pool before
     // persisting.
+    let repeated_warnings = pool.take_repeated_warnings();
     pool.shutdown().await;
     trace_point!("pool_shutdown");
 
     // Finish progress bar. The end-of-run line is the same with and without --agent.
     if let Some(ref bar) = pb {
         bar.finish_and_clear();
+    }
+    // Library warnings the workers printed once and then suppressed (every mode).
+    // The ten most repeated get a line each, so the summary cannot become the noise it removes.
+    const SUMMARY_LINES: usize = 10;
+    for (text, n) in repeated_warnings.iter().take(SUMMARY_LINES) {
+        eprintln!("[barca] {n} more: {text}");
+    }
+    if repeated_warnings.len() > SUMMARY_LINES {
+        let rest = &repeated_warnings[SUMMARY_LINES..];
+        eprintln!(
+            "[barca] {} more: {} other repeated warnings",
+            rest.iter().map(|(_, n)| n).sum::<u64>(),
+            rest.len()
+        );
     }
     if (pb.is_some() || agent_mode) && steps_executed > 0 {
         let outcome = if cancel.is_cancelled() {

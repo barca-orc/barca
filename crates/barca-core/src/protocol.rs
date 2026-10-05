@@ -38,6 +38,9 @@ pub enum WorkerMessage {
     Submit { items: Vec<SubmitItem> },
     /// Periodic heartbeat — worker is alive and working.
     Heartbeat,
+    /// Library warnings the worker suppressed as repeats since its last report: first line of
+    /// the warning → how many times. Sent ahead of a step result (`python/barca/_dedupe.py`).
+    RepeatedWarnings { counts: HashMap<String, u64> },
 }
 
 /// A work item submitted via parallel().
@@ -284,6 +287,18 @@ mod tests {
                 );
             }
             _ => panic!("expected StepCompleted"),
+        }
+    }
+
+    #[test]
+    fn test_repeated_warnings_decodes_what_the_worker_sends() {
+        // The exact frame `python/barca/_runtime.py` sends ahead of a step result.
+        let frame = r#"{"type":"repeated_warnings","counts":{"Could not parse .netrc file":214}}"#;
+        match serde_json::from_str::<WorkerMessage>(frame).unwrap() {
+            WorkerMessage::RepeatedWarnings { counts } => {
+                assert_eq!(counts["Could not parse .netrc file"], 214);
+            }
+            _ => panic!("expected RepeatedWarnings"),
         }
     }
 
