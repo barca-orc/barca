@@ -273,6 +273,8 @@ impl fmt::Display for StepId {
 pub enum ValueType {
     Pandas,
     Polars,
+    /// `pl.LazyFrame`: the worker hands the step a scan, so only what its query uses is read.
+    PolarsLazy,
     PyArrow,
     DuckDB,
 }
@@ -282,6 +284,7 @@ impl ValueType {
         match self {
             ValueType::Pandas => "pandas",
             ValueType::Polars => "polars",
+            ValueType::PolarsLazy => "polars_lazy",
             ValueType::PyArrow => "pyarrow",
             ValueType::DuckDB => "duckdb",
         }

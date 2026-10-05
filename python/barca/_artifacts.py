@@ -164,6 +164,9 @@ def clean_staging() -> None:
             pass
 
 
+# Frame types whose value reads its parquet file when queried, not when it is loaded.
+LAZY_FRAME_TYPES = frozenset({"duckdb", "polars_lazy"})
+
 # Fetched files a returned value still reads from (see deserialize). Appended from the
 # collect() thread pool; list.append is atomic.
 _held_fetches: list[Path] = []
@@ -290,10 +293,11 @@ def deserialize(path: "Path | str", fmt: str, *, frame_type: str | None = None) 
     """Read an artifact from a local path or remote URI using the given format.
 
     ``frame_type`` selects the parquet reader when ``fmt == "parquet"``.
-    Supported values: ``pandas`` (default), ``polars``, ``pyarrow``, ``duckdb``.
+    Supported values: ``pandas`` (default), ``polars``, ``polars_lazy``, ``pyarrow``, ``duckdb``.
 
     A remote artifact is downloaded to a staging file that is removed before returning, except
-    for ``duckdb``: the relation reads the file lazily, so it is kept until ``release_fetched()``.
+    for the lazy types (``duckdb``, ``polars_lazy``): they read the file when queried, so it is
+    kept until ``release_fetched()``.
     """
     if _storage.is_remote(path):
         tmp = _make_temp(_staging_dir(), prefix="fetch-")
@@ -303,9 +307,9 @@ def deserialize(path: "Path | str", fmt: str, *, frame_type: str | None = None) 
         except BaseException:
             tmp.unlink(missing_ok=True)
             raise
-        if fmt == "parquet" and frame_type == "duckdb":
-            # A duckdb relation is lazy: it scans the file when the step queries it, so the
-            # file has to outlive this call. The caller removes it with release_fetched().
+        if fmt == "parquet" and frame_type in LAZY_FRAME_TYPES:
+            # A duckdb relation or polars LazyFrame scans the file when the step queries it, so
+            # the file has to outlive this call. The caller removes it with release_fetched().
             _held_fetches.append(tmp)
         else:
             tmp.unlink(missing_ok=True)
@@ -335,6 +339,11 @@ def _deserialize_parquet(path: Path, *, frame_type: str = "pandas") -> Any:
 
         return pl.read_parquet(str(path))
 
+    if frame_type == "polars_lazy":
+        import polars as pl
+
+        return pl.scan_parquet(str(path))
+
     if frame_type == "pyarrow":
         import pyarrow.parquet as pq
 
@@ -351,7 +360,7 @@ def _deserialize_parquet(path: Path, *, frame_type: str = "pandas") -> Any:
         return pd.read_parquet(str(path))
 
     raise ValueError(
-        f"Unknown frame type {frame_type!r} (supported: pandas, polars, pyarrow, duckdb)"
+        f"Unknown frame type {frame_type!r} (supported: pandas, polars, polars_lazy, pyarrow, duckdb)"
     )
 
 
