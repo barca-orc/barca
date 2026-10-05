@@ -138,8 +138,13 @@ def _parquet_shape(source: "str | IO[bytes]", sample: int) -> dict:
     }
     if sample > 0:
         rows: list = []
-        for batch in pf.iter_batches(batch_size=sample):
-            rows.extend(batch.to_pylist())
+        # One row group at a time: asked for the whole file, pyarrow (25 and later) reads ahead
+        # through every row group, which for a remote artifact is the whole object.
+        for group in range(pf.num_row_groups):
+            for batch in pf.iter_batches(batch_size=sample, row_groups=[group]):
+                rows.extend(batch.to_pylist())
+                if len(rows) >= sample:
+                    break
             if len(rows) >= sample:
                 break
         out["sample"] = _jsonable(rows[:sample])

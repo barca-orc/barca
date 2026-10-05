@@ -126,7 +126,7 @@ barca status total --json --sample 2    # rows, columns and 2 sample rows, read 
 
 - parquet: `rows` and `columns` come from the file footer by ranged requests; the object is not
   downloaded. `--sample N` also reads the first row group, not the whole file. Measured on a
-  160 MB file of 20 row groups in S3-compatible storage: 64 KB read for the shape, 8 MB with
+  160 MB file of 20 row groups in S3-compatible storage: 64 KB read for the shape, 8 to 9 MB with
   `--sample 5`.
 - json and pickle have to be downloaded to be described, so only objects up to 16 MB are. A
   larger one has `"note": "remote json artifact too large to inspect: 25.1 MB (limit 16 MB)"`.
