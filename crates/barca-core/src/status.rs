@@ -11,7 +11,7 @@ use crate::commands::{self, CachePolicy, StepReport};
 use crate::db;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatusResult {
@@ -117,7 +117,7 @@ pub async fn status(
     cfg: &crate::config::ResolvedConfig,
     target_names: &[String],
     file_args: &[String],
-    python: &PathBuf,
+    python: &std::path::Path,
     sample: usize,
     shape: bool,
 ) -> Result<StatusResult, BarcaError> {
@@ -207,7 +207,7 @@ pub async fn status(
     }
 
     if shape {
-        read_shapes(python, &mut nodes, sample).await;
+        read_shapes(python, cfg, &mut nodes, sample).await;
     }
 
     let mut summary = StatusSummary::default();
@@ -355,9 +355,15 @@ fn short_name(node_id: &str) -> &str {
 }
 
 /// Fill `shape` for every node whose last materialization produced an artifact, with one call
-/// to `python -m barca._inspect`. A failure to run the reader is reported in each shape's `note`
-/// rather than failing the command.
-async fn read_shapes(python: &Path, nodes: &mut [NodeStatus], sample: usize) {
+/// to `python -m barca._inspect`. A remote artifact is read through the same fsspec filesystem
+/// the workers use, so the reader gets the same storage options. A failure to run the reader is
+/// reported in each shape's `note` rather than failing the command.
+async fn read_shapes(
+    python: &Path,
+    cfg: &crate::config::ResolvedConfig,
+    nodes: &mut [NodeStatus],
+    sample: usize,
+) {
     let wanted: Vec<(usize, String, String)> = nodes
         .iter()
         .enumerate()
@@ -379,7 +385,7 @@ async fn read_shapes(python: &Path, nodes: &mut [NodeStatus], sample: usize) {
             .map(|(_, path, format)| serde_json::json!({"path": path, "format": format}))
             .collect::<Vec<_>>(),
     });
-    let shapes = match run_inspector(python, &request).await {
+    let shapes = match run_inspector(python, cfg, &request).await {
         Ok(shapes) if shapes.len() == wanted.len() => shapes,
         Ok(_) => vec![note("the shape reader returned an unexpected result"); wanted.len()],
         Err(e) => vec![note(&format!("could not run the shape reader: {e}")); wanted.len()],
@@ -395,11 +401,17 @@ fn note(msg: &str) -> serde_json::Value {
 
 async fn run_inspector(
     python: &Path,
+    cfg: &crate::config::ResolvedConfig,
     request: &serde_json::Value,
 ) -> Result<Vec<serde_json::Value>, String> {
     use tokio::io::AsyncWriteExt;
-    let mut child = tokio::process::Command::new(python)
-        .args(["-m", "barca._inspect"])
+    let mut cmd = tokio::process::Command::new(python);
+    cmd.args(["-m", "barca._inspect"]);
+    // The same options workers get (`[remote.storage_options.*]` merged with the environment).
+    if let Some(ref opts) = cfg.storage_options_json {
+        cmd.env("BARCA_STORAGE_OPTIONS", opts);
+    }
+    let mut child = cmd
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())

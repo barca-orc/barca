@@ -57,7 +57,10 @@ they tell barca which parquet **reader** or **writer** to use on step boundaries
 
 **Every asset output is still fully materialized** to an artifact file at the end of the step.
 Barca does not keep lazy polars `LazyFrame`s or duckdb relations alive across workers; the
-artifact on disk is the cache checkpoint. If you materialize an asset, you get a durable,
+artifact on disk is the cache checkpoint. On the reading side, a `pl.LazyFrame` or
+`duckdb.DuckDBPyRelation` input reads nothing up front: the step's query decides which columns
+and row groups are read, from a remote artifact store too (only those byte ranges are
+fetched). If you materialize an asset, you get a durable,
 content-addressed file that any downstream step (or machine) can hit.
 
 To run one efficient computation and cache multiple results, define multiple `@asset` functions
@@ -70,7 +73,7 @@ Supported annotation shapes (statically parsed, no import):
 | *(none)* | pandas reader (default) |
 | `pd.DataFrame` / `pandas.DataFrame` | pandas |
 | `pl.DataFrame` / `polars.DataFrame` | polars |
-| `pl.LazyFrame` | polars (materialized on write; read back as `DataFrame`) |
+| `pl.LazyFrame` | polars, lazy (a `LazyFrame` scanning the parquet file on read; collected on write) |
 | `pyarrow.Table` | pyarrow (written with `pyarrow.parquet`) |
 | `duckdb.DuckDBPyRelation` | duckdb (relation on read; materialized to parquet on write) |
 

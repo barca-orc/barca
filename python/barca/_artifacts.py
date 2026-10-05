@@ -18,6 +18,8 @@ import os
 import pickle
 import re
 import tempfile
+import threading
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -81,7 +83,7 @@ def detect_format(value: Any, explicit: str | None = None) -> str:
     return "pickle"
 
 
-def resolve_format(value: Any, fmt: str) -> str:
+def resolve_format(value: Any, fmt: str, warn: bool = True) -> str:
     """Downgrade parquet to pickle when the value has no parquet writer.
 
     Must be called before computing the artifact path so the extension,
@@ -92,13 +94,14 @@ def resolve_format(value: Any, fmt: str) -> str:
     if _frame_kind(value) is not None or hasattr(value, "to_parquet"):
         return fmt
 
-    import sys
+    if warn:
+        import sys
 
-    print(
-        f"[barca] warning: parquet format requested but value is "
-        f"{type(value).__name__}, falling back to pickle",
-        file=sys.stderr,
-    )
+        print(
+            f"[barca] warning: parquet format requested but value is "
+            f"{type(value).__name__}, falling back to pickle",
+            file=sys.stderr,
+        )
     return "pickle"
 
 
@@ -112,21 +115,62 @@ def _is_json_serializable(value: Any) -> bool:
 
 
 def _staging_dir() -> Path:
-    d = Path(_STAGING_DIR)
+    """This process's staging directory, ``.barca/staging/{pid}/``.
+
+    One directory per process: workers start and stop throughout a run, and a shared
+    directory would let one worker's cleanup remove a file another is still using.
+    """
+    d = Path(_STAGING_DIR) / str(os.getpid())
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True  # exists, owned by someone else
+    return True
+
+
+# Loose temp files directly in .barca/staging/ come from versions that shared one directory.
+# They have no owner to check, so only ones old enough to be abandoned are removed.
+_LEGACY_TEMP_MAX_AGE_SECONDS = 3600
+
+
 def clean_staging() -> None:
-    """Best-effort removal of stale temp files left by crashed workers."""
-    d = Path(_STAGING_DIR)
-    if not d.is_dir():
+    """Best-effort removal of temp files left by workers that are no longer running.
+
+    Removes the staging directories of dead processes and never touches a live one's: its
+    owner may be in the middle of an upload or download.
+    """
+    root = Path(_STAGING_DIR)
+    if not root.is_dir():
         return
-    for tmp in d.glob("*.tmp"):
+    now = time.time()
+    for entry in root.iterdir():
         try:
-            tmp.unlink()
+            if entry.is_dir():
+                if not entry.name.isdigit() or _pid_alive(int(entry.name)):
+                    continue
+                for tmp in entry.iterdir():
+                    tmp.unlink()
+                entry.rmdir()
+            elif entry.suffix == ".tmp":
+                if now - entry.stat().st_mtime > _LEGACY_TEMP_MAX_AGE_SECONDS:
+                    entry.unlink()
         except OSError:
             pass
+
+
+# Frame types whose value reads its parquet file when queried, not when it is loaded.
+LAZY_FRAME_TYPES = frozenset({"duckdb", "polars_lazy"})
+
+# Range-read filesystems registered on barca's duckdb connection, by protocol name.
+_duckdb_registered: dict[str, Any] = {}
+_duckdb_register_lock = threading.Lock()
 
 
 def _make_temp(directory: Path, prefix: str = "stage-") -> Path:
@@ -244,9 +288,15 @@ def deserialize(path: "Path | str", fmt: str, *, frame_type: str | None = None) 
     """Read an artifact from a local path or remote URI using the given format.
 
     ``frame_type`` selects the parquet reader when ``fmt == "parquet"``.
-    Supported values: ``pandas`` (default), ``polars``, ``pyarrow``, ``duckdb``.
+    Supported values: ``pandas`` (default), ``polars``, ``polars_lazy``, ``pyarrow``, ``duckdb``.
+
+    A remote parquet artifact read with a lazy type (``duckdb``, ``polars_lazy``) is read in
+    place: only the byte ranges the step's query touches are fetched. Any other remote artifact
+    is downloaded to a staging file that is removed before returning.
     """
     if _storage.is_remote(path):
+        if fmt == "parquet" and frame_type in LAZY_FRAME_TYPES:
+            return _scan_remote_parquet(str(path), frame_type)
         tmp = _make_temp(_staging_dir(), prefix="fetch-")
         try:
             _storage.get_file(str(path), tmp)
@@ -254,6 +304,32 @@ def deserialize(path: "Path | str", fmt: str, *, frame_type: str | None = None) 
         finally:
             tmp.unlink(missing_ok=True)
     return _deserialize_local(Path(path), fmt, frame_type=frame_type)
+
+
+def _scan_remote_parquet(uri: str, frame_type: str) -> Any:
+    """A lazy reader over a remote parquet object, reading byte ranges in place."""
+    fs = _storage.range_read_fs(uri)
+    if frame_type == "duckdb":
+        from barca import _duckdb
+
+        con = _duckdb.connection()
+        name = fs.protocol[0]
+        with _duckdb_register_lock:
+            if _duckdb_registered.get(name) is not fs:
+                if name in _duckdb_registered:
+                    con.unregister_filesystem(name)
+                con.register_filesystem(fs)
+                _duckdb_registered[name] = fs
+        return con.read_parquet(_storage.range_read_uri(uri))
+
+    import polars as pl
+    import pyarrow.dataset as ds
+    from pyarrow.fs import FSSpecHandler, PyFileSystem
+
+    dataset = ds.dataset(
+        fs.inner._strip_protocol(uri), filesystem=PyFileSystem(FSSpecHandler(fs)), format="parquet"
+    )
+    return pl.scan_pyarrow_dataset(dataset)
 
 
 def _deserialize_local(path: Path, fmt: str, *, frame_type: str | None = None) -> Any:
@@ -278,6 +354,11 @@ def _deserialize_parquet(path: Path, *, frame_type: str = "pandas") -> Any:
 
         return pl.read_parquet(str(path))
 
+    if frame_type == "polars_lazy":
+        import polars as pl
+
+        return pl.scan_parquet(str(path))
+
     if frame_type == "pyarrow":
         import pyarrow.parquet as pq
 
@@ -294,7 +375,7 @@ def _deserialize_parquet(path: Path, *, frame_type: str = "pandas") -> Any:
         return pd.read_parquet(str(path))
 
     raise ValueError(
-        f"Unknown frame type {frame_type!r} (supported: pandas, polars, pyarrow, duckdb)"
+        f"Unknown frame type {frame_type!r} (supported: pandas, polars, polars_lazy, pyarrow, duckdb)"
     )
 
 

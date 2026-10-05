@@ -21,6 +21,8 @@ from pathlib import Path
 from barca import _duckdb, _storage
 from barca._source_import import load_package_module, load_source_module
 from barca._artifacts import (
+    LAZY_FRAME_TYPES,
+    _frame_kind,
     artifact_path,
     clean_staging,
     deserialize,
@@ -59,6 +61,30 @@ def _peak_rss_bytes() -> int:
 # guards against mutation would cost more than the disk read it saves.
 # Remote artifacts always cache — skipping a network fetch beats any copy.
 _LRU_MAX_ARTIFACT_BYTES = 8 * 1024 * 1024
+
+
+def _lru_frame_type(frame_type: str | None) -> bool:
+    """Whether values read with this frame type may be cached.
+
+    Lazy values (duckdb relations, polars LazyFrames) are cheap to recreate and read their file
+    when queried; a remote input's file is deleted when the step ends, so a cached one would
+    break the next step that used it.
+    """
+    return frame_type not in LAZY_FRAME_TYPES
+
+
+def _result_frame_type(value) -> "str | None | bool":
+    """The reader frame type a step's result is equivalent to, for caching it.
+
+    Returns the frame type (None for non-frame values, which every reader ignores), or False
+    when the result must not be cached: a lazy value, or a frame of a type no reader returns.
+    """
+    kind = _frame_kind(value)
+    if kind is None:
+        return None
+    if kind == "duckdb" or type(value).__name__ == "LazyFrame":
+        return False
+    return kind
 
 
 def _lru_cacheable(path: str, size_bytes=None) -> bool:
@@ -278,7 +304,8 @@ def _resolve_input(raw_value, *, frame_type=None):
 def _load_artifact(path, lru, fmt=None, *, frame_type=None):
     """Resolve one artifact path to its deserialized value via the tier-1 LRU
     cache, falling through to the artifact store on miss."""
-    hot = lru.get(path, frame_type)
+    cacheable = _lru_frame_type(frame_type)
+    hot = lru.get(path, frame_type) if cacheable else None
     if hot is not None:
         return hot
     if not _storage.exists(path):
@@ -286,7 +313,7 @@ def _load_artifact(path, lru, fmt=None, *, frame_type=None):
     if fmt is None:
         fmt = _EXT_FORMATS.get(_storage.suffix(path), "json")
     value = deserialize(path, fmt, frame_type=frame_type)
-    if _lru_cacheable(path):
+    if cacheable and _lru_cacheable(path):
         lru.put(path, value, frame_type)
     return value
 
@@ -316,6 +343,8 @@ def _load_collected_artifacts(artifacts, lru=None, *, param=None, frame_type=Non
     """
     results = [None] * len(artifacts)
     to_fetch = []
+    if not _lru_frame_type(frame_type):
+        lru = None
     for i, artifact in enumerate(artifacts):
         hot = lru.get(artifact["path"], frame_type) if lru is not None else None
         if hot is not None:
@@ -361,13 +390,15 @@ def _execute(fn, kwargs, step):
     return result, elapsed
 
 
-def _sink_dest(path: str, node_id: str, base_node_id: str) -> str:
+def _sink_dest(path: str, node_id: str) -> str:
     """Sink destination path, with a partition suffix injected before the
     extension for partitioned assets so partitions don't clobber each other
-    (e.g. out.parquet → out_ticker_AAPL.parquet)."""
-    if node_id == base_node_id or not node_id.startswith(base_node_id):
+    (e.g. out.parquet → out_ticker_AAPL.parquet). A partition step's id is
+    `<base>[<key>]`; the suffix comes from the bracketed key."""
+    bracket = node_id.find("[")
+    if bracket < 0:
         return path
-    part = safe_node_id(node_id[len(base_node_id) :])
+    part = safe_node_id(node_id[bracket:])
     ext = _storage.suffix(path)
     if ext:
         return path[: -len(ext)] + part + ext
@@ -378,7 +409,6 @@ def _write_sinks(result, step, node_id, primary_fmt):
     """Write each @sink declared on the step. Error-isolated: a sink failure
     never fails the parent asset — it is logged and reported in the outcome."""
     outcomes = []
-    base_id = step.get("node_id", node_id)
     for sink in step.get("sinks") or []:
         dest = sink.get("path", "")
         try:
@@ -388,8 +418,14 @@ def _write_sinks(result, step, node_id, primary_fmt):
                     f"sink serializer '{fmt}' is not supported yet "
                     "(supported: json, pickle, parquet)"
                 )
-            fmt = resolve_format(result, fmt)
-            dest = _sink_dest(dest, node_id, base_id)
+            if fmt == "parquet" and resolve_format(result, fmt, warn=False) != "parquet":
+                # An artifact may fall back to pickle (barca picks its file name), but a sink's
+                # path is the user's promise to another system: never write pickle bytes there.
+                raise ValueError(
+                    f"a {type(result).__name__} cannot be written as parquet; return a DataFrame, "
+                    "Arrow table or DuckDB relation, or sink it as json or pickle"
+                )
+            dest = _sink_dest(dest, node_id)
             size = serialize(result, dest, fmt)
             outcomes.append({"path": str(dest), "status": "ok", "size_bytes": size})
         except Exception as exc:
@@ -711,9 +747,13 @@ def _run_daemon_step(step, modules, art_dir, lru):
             elapsed_in_artifact=True,
             timing={"cpu_seconds": cpu, "max_rss_bytes": _peak_rss_bytes()},
         )
-        # A downstream step in this worker may consume what we just produced.
-        if _lru_cacheable(artifact["path"], artifact.get("size_bytes")):
-            lru.put(artifact["path"], result)
+        # A downstream step in this worker may consume what we just produced, keyed by the
+        # reader it is equivalent to so a consumer never gets a different frame type.
+        result_type = _result_frame_type(result)
+        if result_type is not False and _lru_cacheable(
+            artifact["path"], artifact.get("size_bytes")
+        ):
+            lru.put(artifact["path"], result, result_type)
         return True
 
     except BaseException as exc:
@@ -755,6 +795,11 @@ def run_daemon():
         print("BARCA_SOCKET not set", file=sys.stderr)
         sys.exit(1)
     _use_socket = True
+
+    # Collapse repeated library warnings (barca docs agents, "Repeated warnings").
+    from barca import _dedupe
+
+    _dedupe.install(os.environ.get("BARCA_SOCKET"))
 
     # Install SIGTERM handler so graceful_kill flushes buffered progress output
     # before the process goes away. Exit via os._exit, not sys.exit(0): a

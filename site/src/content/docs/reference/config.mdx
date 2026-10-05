@@ -91,6 +91,10 @@ Unknown keys are hard errors (typo protection), as are malformed files.
 | `BARCA_TRANSFER_CONCURRENCY` | `[remote].transfer_concurrency` | Positive integer |
 | `BARCA_TRANSFER_TIMEOUT` | `[remote].transfer_timeout` | Positive integer seconds, per attempt |
 | `BARCA_STORAGE_OPTIONS` | storage options | JSON keyed by protocol; merged **over** the toml tables per key |
+| `FSSPEC_<PROTOCOL>_<OPTION>` | one storage option | fsspec's own convention (`FSSPEC_S3_ENDPOINT_URL`, `FSSPEC_GCS_PROJECT`); beaten by both of the above |
+
+Remote storage needs no `barca.toml`: `BARCA_REMOTE_URI` plus your cloud's usual credential
+variables is a complete setup. See [Remote Storage](/reference/remote-storage/).
 
 ## Environments (`--env`)
 

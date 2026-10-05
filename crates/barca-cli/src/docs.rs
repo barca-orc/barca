@@ -58,7 +58,7 @@ pub const TOPICS: &[Topic] = &[
     ),
     topic!(
         "remote",
-        "Shared artifacts and state in S3/Azure/GCS: transfers, settings, failures",
+        "Share one cache across machines: S3, GCS, Azure, configured with environment variables",
         "remote.md"
     ),
     topic!(

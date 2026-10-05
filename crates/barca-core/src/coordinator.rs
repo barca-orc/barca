@@ -156,6 +156,12 @@ pub struct Coordinator {
     next_group_id: u64,
 }
 
+impl Default for Coordinator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Coordinator {
     // ─── Construction ──────────────────────────────────────────────────────
 

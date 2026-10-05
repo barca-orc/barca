@@ -91,8 +91,22 @@ def _recv_exact(n: int) -> bytes | None:
 # ─── High-level protocol ─────────────────────────────────────────────────────
 
 
+def _report_repeated_warnings() -> None:
+    """Send the warnings this worker suppressed as repeats since the last report.
+
+    Called ahead of every step result, so the coordinator has the counts before it can
+    consider the run finished.
+    """
+    from barca import _dedupe
+
+    counts = _dedupe.take()
+    if counts:
+        send_message({"type": "repeated_warnings", "counts": counts})
+
+
 def emit_step_completed(node_id: str, artifact: dict) -> None:
     """Report a step completed successfully."""
+    _report_repeated_warnings()
     send_message(
         {
             "type": "step_completed",
@@ -106,6 +120,7 @@ def emit_step_error(
     node_id: str, error_type: str, message: str, traceback: str, elapsed: float
 ) -> None:
     """Report a step failed."""
+    _report_repeated_warnings()
     send_message(
         {
             "type": "step_error",
@@ -120,6 +135,7 @@ def emit_step_error(
 
 def emit_blocked(node_id: str, reason: str) -> None:
     """Report a step was blocked."""
+    _report_repeated_warnings()
     send_message(
         {
             "type": "blocked",

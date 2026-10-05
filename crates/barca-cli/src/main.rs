@@ -230,7 +230,9 @@ Cache state per node: cached, stale (ran before; code or inputs changed), never_
 sensors), with a reason. JSON spells the states in snake_case, the same as the `summary` keys
 (the table prints never-run, always-runs). It is the same decision `--dry-run` makes.
 Read-only: never imports your code, never writes. Shape (rows, columns, type) is read from the
-artifact file only.
+artifact file only. With remote storage it is read from the bucket: a parquet footer by ranged
+requests, json and pickle by a download of up to 16 MB (larger ones get a `note`). A store that
+cannot be reached is a `note` on each shape, not a failed command.
 More: barca docs status, barca docs agents";
 
 const SQL_HELP: &str = "\
@@ -250,9 +252,12 @@ Every asset, sensor and task with a result on disk is a view named after its fun
 full id, quoted, when two nodes share a name; stderr says so). An asset whose code or inputs changed
 is still queryable at its last result, with a note on stderr. Only parquet and json results can be
 queried; pickles cannot. Runs in an in-memory DuckDB over the artifact files: your code is never
-imported, nothing is recorded, nothing is written. Needs duckdb in barca's Python environment.
+imported and nothing is recorded. Needs duckdb in barca's Python environment.
+With remote storage, the artifacts of the views a query names are downloaded into
+.barca/sql-cache/ (stderr says so) and reused while the objects are unchanged; nothing else is
+written.
 Errors exit 2: a node with no result yet names the `barca get` to run first; an unknown view lists
-the views; a SQL error carries DuckDB's message.
+the views; a SQL error carries DuckDB's message. A remote artifact that cannot be fetched exits 3.
 Experimental: barca docs contract.
 More: barca docs sql";
 
@@ -1060,6 +1065,7 @@ fn cancel_on_ctrl_c() -> barca_core::CancellationToken {
     cancel
 }
 
+#[allow(clippy::result_large_err)] // cold path: one CliError per process, right before exiting
 async fn run_cli(cli: Cli, ctx: &Context) -> Result<(), CliError> {
     let python = barca_core::commands::find_python();
     let engine = |e: barca_core::BarcaError| CliError::from_barca(e, ctx);
@@ -1293,7 +1299,7 @@ async fn get_cmd(
     env: Option<&str>,
     targets: Vec<String>,
     files: Vec<PathBuf>,
-    python: &PathBuf,
+    python: &std::path::Path,
     mode: OutputMode,
     policy: barca_core::commands::CachePolicy,
     dry_run: bool,
@@ -1382,7 +1388,7 @@ async fn run_cmd(
     env: Option<&str>,
     targets: Vec<String>,
     files: Vec<PathBuf>,
-    python: &PathBuf,
+    python: &std::path::Path,
     policy: barca_core::commands::CachePolicy,
     dry_run: bool,
     mode: OutputMode,
@@ -1467,7 +1473,7 @@ async fn explain_cmd(
     cfg: &barca_core::config::ResolvedConfig,
     targets: &[String],
     file_args: &[String],
-    python: &PathBuf,
+    python: &std::path::Path,
     policy: barca_core::commands::CachePolicy,
     label: &str,
     mode: OutputMode,
@@ -1706,7 +1712,10 @@ fn print_step_table(steps: &[barca_core::commands::StepReport], dry: bool) {
     }
 }
 
-async fn plan_cmd(files: Vec<PathBuf>, python: &PathBuf) -> Result<(), barca_core::BarcaError> {
+async fn plan_cmd(
+    files: Vec<PathBuf>,
+    python: &std::path::Path,
+) -> Result<(), barca_core::BarcaError> {
     let file_args: Vec<String> = files.iter().map(|p| p.display().to_string()).collect();
     let result = barca_core::commands::plan(&file_args, python).await?;
     println!("{}", serde_json::to_string_pretty(&result).unwrap());
@@ -1748,7 +1757,7 @@ async fn sql_cmd(
     files: Vec<PathBuf>,
     limit: Option<usize>,
     json: bool,
-    python: &PathBuf,
+    python: &std::path::Path,
 ) -> Result<(), barca_core::BarcaError> {
     let cfg = barca_core::config::resolve(env)?;
     let file_args: Vec<String> = files.iter().map(|p| p.display().to_string()).collect();
@@ -1834,7 +1843,7 @@ async fn list_cmd(
     json: bool,
     limit: Option<usize>,
     fields: Option<&[String]>,
-    python: &PathBuf,
+    python: &std::path::Path,
 ) -> Result<(), barca_core::BarcaError> {
     let file_args: Vec<String> = files.iter().map(|p| p.display().to_string()).collect();
     let mut assets = barca_core::commands::list_assets(&file_args, python).await?;
@@ -1894,7 +1903,7 @@ async fn list_cmd(
     let rows: Vec<Vec<String>> = assets
         .iter()
         .map(|a| {
-            let kind = serde_json::to_value(&a.kind)
+            let kind = serde_json::to_value(a.kind)
                 .ok()
                 .and_then(|v| v.as_str().map(String::from))
                 .unwrap_or_else(|| format!("{:?}", a.kind).to_lowercase());
@@ -1967,7 +1976,7 @@ async fn status_cmd(
     targets: Vec<String>,
     files: Vec<PathBuf>,
     opts: StatusOpts<'_>,
-    python: &PathBuf,
+    python: &std::path::Path,
 ) -> Result<(), barca_core::BarcaError> {
     let cfg = barca_core::config::resolve(env)?;
     let file_args: Vec<String> = files.iter().map(|p| p.display().to_string()).collect();
@@ -2204,7 +2213,7 @@ async fn stats_cmd(
     files: Vec<PathBuf>,
     json: bool,
     fields: Option<&[String]>,
-    python: &PathBuf,
+    python: &std::path::Path,
 ) -> Result<(), barca_core::BarcaError> {
     let cfg = barca_core::config::resolve(env)?;
     let file_args: Vec<String> = files.iter().map(|p| p.display().to_string()).collect();

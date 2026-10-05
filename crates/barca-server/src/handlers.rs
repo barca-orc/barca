@@ -325,7 +325,7 @@ pub async fn evict_finished_runs(state: AppState, interval: Duration, max_age: D
             match run.status {
                 RunStatus::Complete | RunStatus::Failed | RunStatus::Cancelled => {
                     // Keep if it finished recently (or hasn't finished yet somehow).
-                    run.finished_at.map_or(true, |t| t > cutoff)
+                    run.finished_at.is_none_or(|t| t > cutoff)
                 }
                 _ => true,
             }

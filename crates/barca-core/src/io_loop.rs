@@ -175,6 +175,16 @@ pub struct WorkerPool {
     /// `BARCA_PROGRESS_SECS`, default 15.
     progress_interval: Duration,
     running_hook: Option<RunningHook>,
+    /// Library warnings the workers suppressed as repeats: (first line, times suppressed).
+    repeated_warnings: Vec<(String, u64)>,
+}
+
+/// Where workers claim "first in this run to print this warning": a directory next to the
+/// coordination socket. `python/barca/_dedupe.py` derives the same path from `BARCA_SOCKET`.
+fn warning_claims_dir(socket_path: &Path) -> PathBuf {
+    let mut dir = socket_path.as_os_str().to_owned();
+    dir.push(".warnings");
+    PathBuf::from(dir)
 }
 
 impl WorkerPool {
@@ -184,6 +194,11 @@ impl WorkerPool {
         let socket_path = crate::protocol::socket_path(&config.run_id, "main");
         std::fs::remove_file(&socket_path).ok();
         let listener = UnixListener::bind(&socket_path).map_err(|e| format!("socket bind: {e}"))?;
+        // Best effort: without the directory each worker prints a repeated warning once
+        // instead of the run printing it once.
+        let claims = warning_claims_dir(&socket_path);
+        std::fs::remove_dir_all(&claims).ok();
+        std::fs::create_dir_all(&claims).ok();
         let (event_tx, event_rx) = mpsc::channel::<IoEvent>(config.pool_size.max(1) * 8);
         Ok(Self {
             config,
@@ -203,7 +218,16 @@ impl WorkerPool {
                     .unwrap_or(15),
             ),
             running_hook: None,
+            repeated_warnings: Vec::new(),
         })
+    }
+
+    /// Library warnings the workers printed once and then suppressed, with how many times
+    /// each was suppressed, most repeated first. Drains the tally.
+    pub fn take_repeated_warnings(&mut self) -> Vec<(String, u64)> {
+        let mut out = std::mem::take(&mut self.repeated_warnings);
+        out.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        out
     }
 
     /// Report steps that stay in flight longer than the progress interval, so a long
@@ -282,11 +306,10 @@ impl WorkerPool {
                     }
                 } => {
                     let running = self.running_steps(coord);
-                    if !running.is_empty() {
-                        if let Some(hook) = self.running_hook.as_mut() {
+                    if !running.is_empty()
+                        && let Some(hook) = self.running_hook.as_mut() {
                             hook(&running);
                         }
-                    }
                     continue;
                 }
             };
@@ -494,17 +517,24 @@ impl WorkerPool {
                         self.assign_ready(coord, cost).await;
                     }
                     WorkerMessage::Heartbeat => {}
+                    WorkerMessage::RepeatedWarnings { counts } => {
+                        for (text, n) in counts {
+                            match self.repeated_warnings.iter_mut().find(|(t, _)| *t == text) {
+                                Some((_, total)) => *total += n,
+                                None => self.repeated_warnings.push((text, n)),
+                            }
+                        }
+                    }
                 },
                 IoEvent::Disconnected { worker_id } => {
                     // Worker crashed — its in-flight item failed; unstarted
                     // leases return to the queue for another worker.
                     if let Some(mut handle) = self.workers.remove(&worker_id) {
-                        if let Some(in_flight) = handle.leases.pop_front() {
-                            if let FailureAction::RetryAfter(delay) =
+                        if let Some(in_flight) = handle.leases.pop_front()
+                            && let FailureAction::RetryAfter(delay) =
                                 coord.on_item_failed(in_flight, "worker disconnected".to_string())
-                            {
-                                schedule_retry(&self.event_tx, in_flight, delay);
-                            }
+                        {
+                            schedule_retry(&self.event_tx, in_flight, delay);
                         }
                         Self::return_leases(&mut handle, coord);
                         tokio::task::spawn_blocking(move || {
@@ -589,6 +619,7 @@ impl WorkerPool {
         });
         let _ = kill_task.await;
         std::fs::remove_file(&self.socket_path).ok();
+        std::fs::remove_dir_all(warning_claims_dir(&self.socket_path)).ok();
     }
 
     /// Close a worker's lease for `node_id`. Workers execute their batch in
@@ -919,14 +950,12 @@ fn graceful_kill(child: &mut Child) {
             libc::kill(child.id() as i32, libc::SIGTERM);
         }
         // Give the process a moment to flush and exit.
-        match child.try_wait() {
-            Ok(Some(_)) => return,
-            _ => {}
+        if let Ok(Some(_)) = child.try_wait() {
+            return;
         }
         std::thread::sleep(Duration::from_millis(200));
-        match child.try_wait() {
-            Ok(Some(_)) => return,
-            _ => {}
+        if let Ok(Some(_)) = child.try_wait() {
+            return;
         }
     }
     // Fallback: SIGKILL (or platform kill on non-unix).
@@ -1258,6 +1287,7 @@ mod tests {
                 trace_on: false,
                 progress_interval: Duration::ZERO,
                 running_hook: None,
+                repeated_warnings: Vec::new(),
             };
 
             let start = std::time::Instant::now();

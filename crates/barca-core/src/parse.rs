@@ -312,7 +312,8 @@ fn parse_type_path(path: &str) -> Option<ValueType> {
 
 fn classify_type(module: &str, name: &str) -> Option<ValueType> {
     match (module, name) {
-        ("pl" | "polars", "DataFrame" | "LazyFrame") => Some(ValueType::Polars),
+        ("pl" | "polars", "DataFrame") => Some(ValueType::Polars),
+        ("pl" | "polars", "LazyFrame") => Some(ValueType::PolarsLazy),
         ("pd" | "pandas", "DataFrame") => Some(ValueType::Pandas),
         ("pyarrow", "Table") => Some(ValueType::PyArrow),
         ("duckdb", "DuckDBPyRelation") => Some(ValueType::DuckDB),
@@ -847,12 +848,11 @@ fn extract_parallel_call(call: &ast::ExprCall) -> ParallelCall {
                     Expr::Attribute(a) => a.attr.as_str() == "partial",
                     _ => false,
                 };
-                if is_partial {
-                    if let Some(first_arg) = inner_call.arguments.args.first() {
-                        if let Expr::Name(func_name) = first_arg {
-                            static_refs.push(NodeRef::FunctionName(func_name.id.to_string()));
-                        }
-                    }
+                if is_partial
+                    && let Some(first_arg) = inner_call.arguments.args.first()
+                    && let Expr::Name(func_name) = first_arg
+                {
+                    static_refs.push(NodeRef::FunctionName(func_name.id.to_string()));
                 }
             }
             // *expr — starred argument, always dynamic
@@ -877,10 +877,10 @@ fn extract_parallel_map_call(call: &ast::ExprCall) -> ParallelCall {
     let mut static_refs = Vec::new();
 
     // First arg is the function reference
-    if let Some(first_arg) = call.arguments.args.first() {
-        if let Expr::Name(func_name) = first_arg {
-            static_refs.push(NodeRef::FunctionName(func_name.id.to_string()));
-        }
+    if let Some(first_arg) = call.arguments.args.first()
+        && let Expr::Name(func_name) = first_arg
+    {
+        static_refs.push(NodeRef::FunctionName(func_name.id.to_string()));
     }
 
     // parallel_map is always dynamic (items resolved at runtime)
@@ -904,12 +904,11 @@ fn extract_refs_from_starred(expr: &Expr, refs: &mut Vec<NodeRef>) {
                     Expr::Attribute(a) => a.attr.as_str() == "partial",
                     _ => false,
                 };
-                if is_partial {
-                    if let Some(first_arg) = inner_call.arguments.args.first() {
-                        if let Expr::Name(func_name) = first_arg {
-                            refs.push(NodeRef::FunctionName(func_name.id.to_string()));
-                        }
-                    }
+                if is_partial
+                    && let Some(first_arg) = inner_call.arguments.args.first()
+                    && let Expr::Name(func_name) = first_arg
+                {
+                    refs.push(NodeRef::FunctionName(func_name.id.to_string()));
                 }
             }
         }
@@ -921,12 +920,11 @@ fn extract_refs_from_starred(expr: &Expr, refs: &mut Vec<NodeRef>) {
                     Expr::Attribute(a) => a.attr.as_str() == "partial",
                     _ => false,
                 };
-                if is_partial {
-                    if let Some(first_arg) = inner_call.arguments.args.first() {
-                        if let Expr::Name(func_name) = first_arg {
-                            refs.push(NodeRef::FunctionName(func_name.id.to_string()));
-                        }
-                    }
+                if is_partial
+                    && let Some(first_arg) = inner_call.arguments.args.first()
+                    && let Expr::Name(func_name) = first_arg
+                {
+                    refs.push(NodeRef::FunctionName(func_name.id.to_string()));
                 }
             }
         }
@@ -1085,6 +1083,43 @@ def collected(parts: list[pl.DataFrame]) -> pl.DataFrame:
 
         assert_eq!(nodes[2].return_type, Some(ValueType::Polars));
         assert_eq!(nodes[2].param_types.get("parts"), Some(&ValueType::Polars));
+    }
+
+    #[test]
+    fn lazyframe_annotation_is_its_own_value_type() {
+        use crate::model::ValueType;
+
+        let src = r#"
+from barca import asset
+
+@asset()
+def raw() -> pl.LazyFrame:
+    ...
+
+@asset(inputs={"orders": raw, "eager": raw})
+def stg(orders: pl.LazyFrame, eager: polars.DataFrame) -> dict:
+    ...
+
+@asset(inputs={"parts": raw})
+def collected(parts: list[polars.LazyFrame]) -> dict:
+    ...
+"#;
+        let nodes = extract_nodes(src, "test.py").unwrap();
+        assert_eq!(nodes[0].return_type, Some(ValueType::PolarsLazy));
+        assert_eq!(
+            nodes[1].param_types.get("orders"),
+            Some(&ValueType::PolarsLazy)
+        );
+        assert_eq!(nodes[1].param_types.get("eager"), Some(&ValueType::Polars));
+        assert_eq!(
+            nodes[2].param_types.get("parts"),
+            Some(&ValueType::PolarsLazy)
+        );
+        assert_eq!(ValueType::PolarsLazy.as_str(), "polars_lazy");
+        assert_eq!(
+            serde_json::to_value(ValueType::PolarsLazy).unwrap(),
+            "polars_lazy"
+        );
     }
 
     #[test]

@@ -2,7 +2,7 @@
 name = "barca-basic-app"
 version = "0.1.0"
 description = "Example Barca app demonstrating assets, tasks, sensors, and partitions."
-requires-python = ">=3.14"
+requires-python = ">=3.12"
 dependencies = ["barca"]
 
 # For local development, uncomment the next two lines to use the local build:

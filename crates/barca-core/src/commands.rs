@@ -1360,7 +1360,7 @@ pub async fn get(
     cfg: &crate::config::ResolvedConfig,
     target_name: Option<&str>,
     file_args: &[String],
-    python: &PathBuf,
+    python: &std::path::Path,
     policy: CachePolicy,
     agent_mode: bool,
     cancel: CancellationToken,
@@ -1379,7 +1379,7 @@ pub async fn run(
     cfg: &crate::config::ResolvedConfig,
     target_name: &str,
     file_args: &[String],
-    python: &PathBuf,
+    python: &std::path::Path,
     policy: CachePolicy,
     agent_mode: bool,
     cancel: CancellationToken,
@@ -1406,7 +1406,7 @@ pub async fn get_many(
     cfg: &crate::config::ResolvedConfig,
     target_names: &[String],
     file_args: &[String],
-    python: &PathBuf,
+    python: &std::path::Path,
     policy: CachePolicy,
     agent_mode: bool,
     cancel: CancellationToken,
@@ -1432,7 +1432,7 @@ pub async fn run_many(
     cfg: &crate::config::ResolvedConfig,
     target_names: &[String],
     file_args: &[String],
-    python: &PathBuf,
+    python: &std::path::Path,
     policy: CachePolicy,
     agent_mode: bool,
     cancel: CancellationToken,
@@ -1506,7 +1506,7 @@ pub async fn explain(
     cfg: &crate::config::ResolvedConfig,
     target_names: &[String],
     file_args: &[String],
-    python: &PathBuf,
+    python: &std::path::Path,
     policy: CachePolicy,
     no_cache: bool,
     command_label: &str,
@@ -1772,7 +1772,7 @@ async fn execute(
     cfg: &crate::config::ResolvedConfig,
     target_names: &[String],
     file_args: &[String],
-    python: &PathBuf,
+    python: &std::path::Path,
     no_cache: bool,
     agent_mode: bool,
     policy: CachePolicy,
@@ -1805,7 +1805,7 @@ async fn execute(
     let state_sync_on =
         cfg.state == crate::config::StateMode::Optimistic && cfg.state_uri.is_some();
     let pull = state_sync_on.then(|| {
-        let (python, cfg) = (python.clone(), cfg.clone());
+        let (python, cfg) = (python.to_path_buf(), cfg.clone());
         Background::spawn(async move {
             let started = Instant::now();
             let token = state_sync::pull_state(&python, &cfg).await?;
@@ -1813,7 +1813,7 @@ async fn execute(
         })
     });
     let transfer_start = cfg.remote_artifacts().then(|| {
-        let (python, cfg, run_id) = (python.clone(), cfg.clone(), run_id.clone());
+        let (python, cfg, run_id) = (python.to_path_buf(), cfg.clone(), run_id.clone());
         Background::spawn(async move { TransferClient::start(&python, &cfg, &run_id).await })
     });
 
@@ -2021,7 +2021,7 @@ async fn execute(
     // phases so workers keep their interpreter (and imported user modules)
     // warm between phases.
     let io_config = crate::io_loop::IoConfig {
-        python: python.clone(),
+        python: python.to_path_buf(),
         pool_size,
         run_id: run_id.clone(),
         artifact_root: worker_artifact_root,
@@ -2326,10 +2326,10 @@ async fn execute(
             .run_phase(&mut coord, &mut cost_model, Some(on_step_cb), &cancel)
             .await;
         trace_point!("phase{phase_idx}_run_phase_done");
-        if let Err(e) = phase_err {
-            if phase_error.is_none() {
-                phase_error = Some(e);
-            }
+        if let Err(e) = phase_err
+            && phase_error.is_none()
+        {
+            phase_error = Some(e);
         }
 
         // Collect results from coordinator
@@ -2453,12 +2453,27 @@ async fn execute(
 
     // All phases done (or aborted/cancelled) — release the worker pool before
     // persisting.
+    let repeated_warnings = pool.take_repeated_warnings();
     pool.shutdown().await;
     trace_point!("pool_shutdown");
 
     // Finish progress bar. The end-of-run line is the same with and without --agent.
     if let Some(ref bar) = pb {
         bar.finish_and_clear();
+    }
+    // Library warnings the workers printed once and then suppressed (every mode).
+    // The ten most repeated get a line each, so the summary cannot become the noise it removes.
+    const SUMMARY_LINES: usize = 10;
+    for (text, n) in repeated_warnings.iter().take(SUMMARY_LINES) {
+        eprintln!("[barca] {n} more: {text}");
+    }
+    if repeated_warnings.len() > SUMMARY_LINES {
+        let rest = &repeated_warnings[SUMMARY_LINES..];
+        eprintln!(
+            "[barca] {} more: {} other repeated warnings",
+            rest.iter().map(|(_, n)| n).sum::<u64>(),
+            rest.len()
+        );
     }
     if (pb.is_some() || agent_mode) && steps_executed > 0 {
         let outcome = if cancel.is_cancelled() {
@@ -2862,7 +2877,10 @@ async fn persist_run(db_path: &str, l: &RunLedger<'_>) -> Result<(), BarcaError>
 
 // ─── plan ────────────────────────────────────────────────────────────────────
 
-pub async fn plan(file_args: &[String], python: &PathBuf) -> Result<PlanResult, BarcaError> {
+pub async fn plan(
+    file_args: &[String],
+    python: &std::path::Path,
+) -> Result<PlanResult, BarcaError> {
     let dag = build_dag(file_args, python).await?;
     let config = ResourceConfig {
         pool_size: 10,
@@ -2911,7 +2929,7 @@ pub async fn stats(
     cfg: &crate::config::ResolvedConfig,
     target_name: &str,
     file_args: &[String],
-    python: &PathBuf,
+    python: &std::path::Path,
 ) -> Result<db::AssetStats, BarcaError> {
     let dag = build_dag(file_args, python).await?;
 
@@ -2928,7 +2946,7 @@ pub async fn stats(
 /// Pure static analysis — no execution, no DB. Used by the server's `/assets` route.
 pub async fn list_assets(
     file_args: &[String],
-    python: &PathBuf,
+    python: &std::path::Path,
 ) -> Result<Vec<AssetSummary>, BarcaError> {
     let dag = build_dag(file_args, python).await?;
     let summaries = dag
@@ -3013,9 +3031,9 @@ fn filter_plan_to_subgraph(plan: ExecutionPlan, subgraph_ids: &[&str]) -> Execut
 /// Build the DAG from source files. The work is genuinely blocking (file I/O,
 /// parsing, and a Python subprocess for dynamic partitions), so it runs on the
 /// blocking pool rather than an async worker thread.
-pub async fn build_dag(file_args: &[String], python: &PathBuf) -> Result<Dag, BarcaError> {
+pub async fn build_dag(file_args: &[String], python: &std::path::Path) -> Result<Dag, BarcaError> {
     let files = file_args.to_vec();
-    let py = python.clone();
+    let py = python.to_path_buf();
     tokio::task::spawn_blocking(move || build_dag_blocking(&files, &py))
         .await
         .map_err(|e| BarcaError::Other(format!("DAG analysis task failed: {e}")))?
@@ -3038,7 +3056,7 @@ pub fn source_dir(file: &std::path::Path) -> PathBuf {
 
 pub(crate) fn build_dag_blocking(
     file_args: &[String],
-    python: &PathBuf,
+    python: &std::path::Path,
 ) -> Result<Dag, BarcaError> {
     let paths: Vec<PathBuf> = file_args.iter().map(PathBuf::from).collect();
 
@@ -3207,7 +3225,7 @@ fn scan_subdirectories(
     }
 }
 
-fn resolve_dynamic_partitions(nodes: &mut [crate::model::ExtractedNode], python: &PathBuf) {
+fn resolve_dynamic_partitions(nodes: &mut [crate::model::ExtractedNode], python: &std::path::Path) {
     for node in nodes.iter_mut() {
         let mut resolved: Vec<(String, Vec<crate::model::PartitionValue>)> = Vec::new();
 
