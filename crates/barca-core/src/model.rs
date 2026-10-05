@@ -289,6 +289,11 @@ impl ValueType {
             ValueType::DuckDB => "duckdb",
         }
     }
+
+    /// True for types whose reader fetches only what the step's query uses.
+    pub fn is_lazy(self) -> bool {
+        matches!(self, ValueType::PolarsLazy | ValueType::DuckDB)
+    }
 }
 
 // ─── Input references ────────────────────────────────────────────────────────

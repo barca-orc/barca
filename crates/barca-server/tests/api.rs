@@ -250,7 +250,11 @@ async fn delete_cancels_in_flight_run() {
     config.python = wrapper;
     // Absolute tempdir paths so the run's DB and artifacts never land in the repo.
     config.resolved.db_path = dir.path().join("metadata.db").display().to_string();
+    // Both: a local artifact dir and a store root that differ would make the
+    // run sync through the transfer helper (and workers would get the local
+    // dir, not the marker below).
     config.resolved.artifact_root = dir.path().join("artifacts").display().to_string();
+    config.resolved.local_artifact_dir = config.resolved.artifact_root.clone();
     let marker = config.resolved.artifact_root.clone();
     std::fs::create_dir_all(&marker).unwrap();
     let app = app(config);

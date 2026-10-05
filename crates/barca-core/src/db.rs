@@ -305,6 +305,7 @@ pub async fn init_db(db_path: &str) -> Result<(), BarcaError> {
         // Content hash of a sensor's output (#183): folded into its consumers' run hashes, and
         // what `--dry-run` / `barca status` assume the sensor returns next.
         "ALTER TABLE materializations ADD COLUMN output_hash TEXT",
+        "ALTER TABLE materializations ADD COLUMN error_type TEXT",
     ] {
         conn.execute(col, ()).await.ok();
     }

@@ -21,6 +21,7 @@ python/barca/
   __init__.py           ← No-op decorator stubs (identity functions)
   _worker.py            ← Batch worker (invoked by Rust via `python -m barca._worker`)
   _artifacts.py         ← Serialization: json, pickle, parquet format detection + I/O
+  _transfer.py          ← Artifact transfer helper (local dir ↔ remote store, background)
   __main__.py           ← Entry point for `python -m barca` (delegates to `_worker.main()`)
   py.typed              ← PEP 561 marker
 pyproject.toml          ← Maturin build config (binary + Python stubs in one wheel)
@@ -44,6 +45,9 @@ pyproject.toml          ← Maturin build config (binary + Python stubs in one w
    - For `parallel()`: coordinator freezes the caller (SIGSTOP), spawns a temp replacement,
      adds children to the ready queue; on completion kills the temp, resumes the caller (SIGCONT)
    - No DB access — Rust owns all persistence
+   - Artifacts are always local; with a remote store, `python -m barca._transfer` (one per run,
+     driven by `transfer.rs` over its own UDS) uploads them in the background and fetches
+     other machines' cache hits before they are read
 
 3. **Python stubs** (`from barca import asset, ...`):
    - Pure no-ops — decorators return the function unchanged

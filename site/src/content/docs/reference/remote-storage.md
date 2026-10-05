@@ -104,18 +104,23 @@ Two machines finishing runs at the same time do not lose history: the second det
 conflict, re-reads and merges. Set `BARCA_STATE=off` to keep history on each machine and share
 only results.
 
-From a remote store, `barca get --json` reports every result as a pointer
-(`{"_barca_artifact": {"path", ...}}`), json ones included; `barca.get()` in Python loads it.
+`barca get --json` reports a result as it does without a store: json values inline, parquet and
+pickle as a pointer (`{"_barca_artifact": {"path", ...}}`) to the copy in `.barca/artifacts/`.
+A final output another machine produced is downloaded first.
 
-## How steps read remote inputs
+## How steps read inputs from the store
 
-The input's annotation decides how many bytes a step moves (`barca docs types`):
+A result produced on this machine is already on disk, and steps read that file. For a cache hit
+recorded by another machine, the input's annotation decides how many bytes move
+(`barca docs types`):
 
 - A parquet input annotated `duckdb.DuckDBPyRelation` or `pl.LazyFrame` is read in place:
-  only the byte ranges the step's query touches are fetched. A query over one column of eight
-  fetches about that column's share of the object; a selective filter skips row groups.
+  only the byte ranges the step's query touches are fetched, and nothing is downloaded. A query
+  over one column of eight fetches about that column's share of the object; a selective filter
+  skips row groups. This applies when every step in the phase that reads the result is lazy.
 - Every other input (no annotation, `pd.DataFrame`, `pl.DataFrame`, `pyarrow.Table`, json,
-  pickle) is downloaded whole to `.barca/staging/{pid}/`, loaded, and the file removed.
+  pickle) is downloaded once into `.barca/artifacts/` and read from there by this run and
+  later ones.
 
 For a large upstream that a step filters, projects or aggregates, annotate the input as lazy.
 DuckDB reads barca's artifacts through a `barca<protocol>://` filesystem registered on its
@@ -138,12 +143,10 @@ the copies while the objects are unchanged (`barca docs sql`).
 
 ## Limitations
 
-- Keys from `partitions_from(<asset returning a list>)` are read from local disk: with a remote
-  store the step errors.
-- `parallel()` return values come back as `null` with a remote store (a warning says so).
 - `barca serve` does not share history yet; set `BARCA_STATE=off` for it.
 - `barca status` does not describe a remote json or pickle result larger than 16 MB, and
   `barca sql` downloads a whole artifact before querying it.
+- The local artifact directory has no size cap (see "Local-first artifacts" below).
 
 ## How shared history works
 
@@ -174,6 +177,74 @@ environment-variable setup above runs end to end against the same emulators
 (a second machine must get a cache hit). See
 [Releases](/contributing/releases/) for the guarantees each backend makes.
 
+### Local-first artifacts, background transfer
+
+Workers never write to the object store. They write every artifact to the
+local artifact directory (`.barca/artifacts/`, or `.barca/envs/<env>/artifacts/`)
+and read their inputs from there (lazy parquet inputs excepted, below), so a
+step's critical path is local disk. A single helper process per run (`python -m barca._transfer`) moves
+bytes between that directory and the store in the background, using the
+same fsspec backends and credentials as everything else:
+
+- **Upload** — the moment a step finishes, its artifact is queued for
+  upload while downstream steps keep running against the local copy.
+  Up to `transfer_concurrency` transfers run at once (default 4).
+- **Fetch** — a cache hit recorded by another machine is downloaded to its
+  local path just before the first step that reads it eagerly runs. Cached
+  intermediates that nothing in the run reads are never downloaded — a fully
+  cached `barca get` fetches only the final output. A parquet result that
+  every reader in a phase takes as `duckdb.DuckDBPyRelation` or `pl.LazyFrame`
+  is not downloaded either: those steps read it in place (see "How steps read
+  inputs from the store" above).
+- **Drain** — before the run is recorded and the state blob pushed, barca
+  waits for every upload. A step whose upload fails gets no success row (it
+  recomputes next run) and the run exits with an error naming it, so the
+  shared metadata never points at an artifact missing from the store.
+
+**Retries and timeouts.** Each transfer is retried up to 3 times with
+exponential backoff (0.5s, 1s, 2s) when the error looks transient — dropped
+connections, timeouts, 5xx, 408 and 429 responses. Errors no retry can fix fail
+on the first attempt: missing objects, permission and authentication errors, and
+any other 4xx response (SDK errors are judged by the HTTP status they carry).
+The cloud SDKs also retry internally — Azure's backs off for up to ~15s on
+dropped connections — so the end-of-run wait can exceed barca's own backoff. An attempt
+that runs longer than `transfer_timeout` seconds (default 600, counted from
+when the attempt starts, not while it waits its turn) is failed as stalled and
+not retried — raise the limit if single artifacts take longer than that to
+move over your link.
+
+A failed upload is recorded as a `failed` row for that step with
+`error_type = 'UploadError'`, no artifact path, the number of attempts made,
+and the store error as `error_message` (`upload to <location> failed: …`);
+the run's status is `failed`. `barca stats <asset>` shows it like any other
+failure.
+
+The local artifact directory doubles as a cache of the store: a second run on
+the same machine reads from it without downloading anything. Nothing is
+evicted automatically — delete `.barca/artifacts/` to reclaim space; anything
+needed later is fetched again.
+
+Remote I/O is reported on stderr, so its cost is visible:
+
+```
+[barca] pulled state (48.0 KB) in 0.03s
+[barca] fetched 1 cached artifact (672.8 KB) in 0.1s
+[barca] 2/2 steps done in 0.2s
+[barca] uploaded 2 artifacts (672.8 KB); waited 0.0s at end of run
+[barca] pushed state (48.0 KB) in 0.03s
+```
+
+The "waited" figure is the only upload time the run paid for — the rest
+overlapped with execution. `BARCA_TRACE_TIMING=1` adds per-transfer timings.
+
+Using a GCS emulator such as fake-gcs-server with gcsfs 2026.10 or later? Set
+`GCSFS_EXPERIMENTAL_ZB_HNS_SUPPORT=false`: gcsfs's experimental mode makes a
+gRPC call the emulator doesn't serve, and transfers stall until
+`transfer_timeout`. Real GCS is unaffected.
+
+`[remote].uri` may also be a plain directory (a shared or network mount)
+instead of a URI; transfers are then local file copies.
+
 ## Remote sinks
 
 `@sink` paths accept the same URIs, independent of where the artifact store
@@ -197,10 +268,10 @@ recorded in the run's metadata.
 Serialized payloads are never buffered fully in memory — important when
 assets are multi-hundred-MB DataFrames or pickled models:
 
-1. The serializer (json/pickle/parquet) streams to a temp file — in the
-   destination directory for local writes, in `.barca/staging/{pid}/` (one
-   directory per worker process) for remote ones (deliberately on project
-   disk, not `/tmp`, which is often RAM-backed tmpfs).
+1. The serializer (json/pickle/parquet) streams to a temp file in the
+   destination directory (or `.barca/staging/` for a remote `@sink` —
+   deliberately on project disk, not `/tmp`, which is often RAM-backed
+   tmpfs).
 2. Local: the temp file is atomically renamed into place (`os.replace`).
    Remote: the temp file is uploaded with a chunked `put_file`; object
    stores commit the object only when the upload completes.
@@ -208,23 +279,30 @@ assets are multi-hundred-MB DataFrames or pickled models:
    partial artifact. The staging directories of workers that are no longer
    running are swept at worker startup; a live worker's files are never touched.
 
-Eager remote reads are symmetric: the input is downloaded to the worker's
-staging directory, deserialized, and the temp file removed. A parquet input typed
-`duckdb.DuckDBPyRelation` or `pl.LazyFrame` is not downloaded: it is read in
-place, fetching only the byte ranges the step's query touches (see "How steps
-read remote inputs" above).
+The transfer helper follows the same rules: uploads stream from disk in
+chunks, and fetches download to a temp file that is renamed into place only
+when complete.
 
 ## Artifacts only, history local (0.4.0 behavior)
 
-Set `BARCA_ARTIFACT_URI` to a URI prefix and every materialized asset is
-written there instead of `.barca/artifacts/`, while metadata stays local:
+Set `BARCA_ARTIFACT_URI` to a URI prefix to keep artifacts in a store while
+metadata stays local:
 
 ```bash
 export BARCA_ARTIFACT_URI=abfss://artifacts@myaccount.dfs.core.windows.net/prod
 barca get pipeline.py
 ```
 
-Downstream steps download eager inputs to a local staging file on demand and
-read lazy (`duckdb.DuckDBPyRelation`, `pl.LazyFrame`) parquet inputs in place.
+Artifacts are written locally and transferred exactly as in remote mode; only
+the metadata DB is not shared.
 
 Prefer `BARCA_REMOTE_URI` with `BARCA_STATE=off`, which also keeps `--env` separation.
+
+## Changing stores
+
+Cache rows record each artifact's location in the store. If you point a
+project at a different store, rows recorded against the old one are used
+only when the artifact is still on local disk; otherwise those steps simply
+recompute. A cache row whose object has been deleted from the current store
+fails the run with the missing object named — re-run with `--refresh-all` to
+recompute it.

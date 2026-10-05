@@ -21,7 +21,11 @@ except ImportError:
 # ─── Socket connection ────────────────────────────────────────────────────────
 
 _socket: socket.socket | None = None
-_socket_lock = threading.Lock()
+# Separate locks: whole frames never interleave on either direction, and a
+# thread parked in recv_message never blocks senders (heartbeats, or the
+# transfer helper's pool threads replying while its main thread reads).
+_send_lock = threading.Lock()
+_recv_lock = threading.Lock()
 
 
 def connect() -> socket.socket | None:
@@ -53,7 +57,7 @@ def is_worker() -> bool:
 def send_message(msg: dict) -> None:
     """Send a length-prefixed JSON message to the executor."""
     assert _socket is not None, "send_message called before connect()"
-    with _socket_lock:
+    with _send_lock:
         payload = orjson.dumps(msg) if orjson else json.dumps(msg).encode("utf-8")
         header = struct.pack(">I", len(payload))
         _socket.sendall(header + payload)
@@ -61,7 +65,7 @@ def send_message(msg: dict) -> None:
 
 def recv_message() -> dict:
     """Read a length-prefixed JSON message from the executor (blocks)."""
-    with _socket_lock:
+    with _recv_lock:
         header = _recv_exact(4)
         if not header:
             raise RuntimeError("executor disconnected")

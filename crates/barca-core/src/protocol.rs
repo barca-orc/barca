@@ -111,6 +111,51 @@ pub enum ParallelResult {
     Error { error: String },
 }
 
+// ─── Coordinator ↔ transfer helper ───────────────────────────────────────────
+
+/// Requests to the artifact transfer helper (`python -m barca._transfer`).
+/// Many may be in flight at once; replies are matched by `id`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum TransferRequest {
+    /// Upload a local artifact file to the artifact store.
+    Put {
+        id: u64,
+        local: String,
+        remote: String,
+    },
+    /// Download an artifact from the store to a local path (atomic).
+    Get {
+        id: u64,
+        remote: String,
+        local: String,
+    },
+    /// Finish in-flight transfers, then exit.
+    Shutdown,
+}
+
+/// Replies from the transfer helper. `Error` is final — the helper has
+/// already retried transient failures.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum TransferReply {
+    Done {
+        id: u64,
+        size_bytes: u64,
+    },
+    Error {
+        id: u64,
+        message: String,
+        /// Attempts the helper made (retries plus the first try).
+        #[serde(default = "one")]
+        attempts: u32,
+    },
+}
+
+fn one() -> u32 {
+    1
+}
+
 // ─── Framing functions ───────────────────────────────────────────────────────
 
 /// Encode a message as a length-prefixed JSON frame.
@@ -157,6 +202,46 @@ pub fn read_message<R: Read, T: for<'de> Deserialize<'de>>(
     let msg = serde_json::from_slice(&payload)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     Ok(Some(msg))
+}
+
+/// Async [`write_message`]: write one length-prefixed JSON frame.
+pub async fn write_frame<W, T>(writer: &mut W, msg: &T) -> io::Result<()>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+    T: Serialize,
+{
+    use tokio::io::AsyncWriteExt;
+    let frame = encode_message(msg)?;
+    writer.write_all(&frame).await?;
+    writer.flush().await
+}
+
+/// Async [`read_message`]: read one length-prefixed JSON frame.
+/// Returns `None` on a clean EOF at a frame boundary.
+pub async fn read_frame<R, T>(reader: &mut R) -> io::Result<Option<T>>
+where
+    R: tokio::io::AsyncRead + Unpin,
+    T: for<'de> Deserialize<'de>,
+{
+    use tokio::io::AsyncReadExt;
+    let mut len_buf = [0u8; 4];
+    match reader.read_exact(&mut len_buf).await {
+        Ok(_) => {}
+        Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
+        Err(e) => return Err(e),
+    }
+    let len = u32::from_be_bytes(len_buf) as usize;
+    if len > 256 * 1024 * 1024 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("message too large: {len} bytes"),
+        ));
+    }
+    let mut payload = vec![0u8; len];
+    reader.read_exact(&mut payload).await?;
+    serde_json::from_slice(&payload)
+        .map(Some)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
 // ─── Socket path helper ──────────────────────────────────────────────────────
@@ -535,5 +620,98 @@ mod tests {
             }
             _ => panic!("expected ParallelResponse"),
         }
+    }
+
+    // ─── Transfer helper wire format ────────────────────────────────────────
+    // python/barca/_transfer.py parses these exact shapes; pin them.
+
+    #[test]
+    fn transfer_request_wire_shapes() {
+        let put = TransferRequest::Put {
+            id: 7,
+            local: "/w/.barca/artifacts/a/h.json".into(),
+            remote: "s3://b/p/default/artifacts/a/h.json".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(&put).unwrap(),
+            serde_json::json!({"type": "put", "id": 7,
+                "local": "/w/.barca/artifacts/a/h.json",
+                "remote": "s3://b/p/default/artifacts/a/h.json"})
+        );
+        let get = TransferRequest::Get {
+            id: 8,
+            remote: "s3://b/x".into(),
+            local: "/w/x".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(&get).unwrap(),
+            serde_json::json!({"type": "get", "id": 8, "remote": "s3://b/x", "local": "/w/x"})
+        );
+        assert_eq!(
+            serde_json::to_value(&TransferRequest::Shutdown).unwrap(),
+            serde_json::json!({"type": "shutdown"})
+        );
+    }
+
+    #[test]
+    fn transfer_reply_parses_done_and_error() {
+        let done: TransferReply =
+            serde_json::from_str(r#"{"type":"done","id":3,"size_bytes":42}"#).unwrap();
+        assert!(matches!(
+            done,
+            TransferReply::Done {
+                id: 3,
+                size_bytes: 42
+            }
+        ));
+        let err: TransferReply = serde_json::from_str(
+            r#"{"type":"error","id":4,"message":"PermissionError: no","attempts":3}"#,
+        )
+        .unwrap();
+        match err {
+            TransferReply::Error {
+                id,
+                message,
+                attempts,
+            } => {
+                assert_eq!(id, 4);
+                assert_eq!(message, "PermissionError: no");
+                assert_eq!(attempts, 3);
+            }
+            _ => panic!("expected Error"),
+        }
+        // A reply without attempts (older helper) counts as one attempt.
+        let bare: TransferReply =
+            serde_json::from_str(r#"{"type":"error","id":5,"message":"x"}"#).unwrap();
+        assert!(matches!(bare, TransferReply::Error { attempts: 1, .. }));
+    }
+
+    #[tokio::test]
+    async fn async_frames_round_trip_and_eof_is_none() {
+        let (mut a, mut b) = tokio::io::duplex(1024);
+        let msg = TransferRequest::Get {
+            id: 1,
+            remote: "r".into(),
+            local: "l".into(),
+        };
+        write_frame(&mut a, &msg).await.unwrap();
+        drop(a);
+        let got: serde_json::Value = read_frame(&mut b).await.unwrap().unwrap();
+        assert_eq!(got["type"], "get");
+        let eof: Option<serde_json::Value> = read_frame(&mut b).await.unwrap();
+        assert!(eof.is_none());
+    }
+
+    #[tokio::test]
+    async fn async_frame_interops_with_sync_encoding() {
+        // A frame produced by the sync encoder (what the Python side mirrors)
+        // must decode with the async reader.
+        let frame = encode_message(&TransferRequest::Shutdown).unwrap();
+        let (mut a, mut b) = tokio::io::duplex(64);
+        tokio::io::AsyncWriteExt::write_all(&mut a, &frame)
+            .await
+            .unwrap();
+        let got: serde_json::Value = read_frame(&mut b).await.unwrap().unwrap();
+        assert_eq!(got, serde_json::json!({"type": "shutdown"}));
     }
 }
