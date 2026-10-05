@@ -106,10 +106,21 @@ pub struct TransferReport {
     pub transferred: usize,
     pub bytes: u64,
     pub failures: Vec<TransferFailure>,
+    /// SHA-256 of each uploaded artifact, by the caller's key.
+    pub hashes: HashMap<String, String>,
 }
 
-/// Bytes transferred, or the error message and attempts made.
-type Outcome = Result<u64, (String, u32)>;
+/// A finished transfer: the local file's size and hash, and whether bytes moved
+/// (false when a fetch found a local copy with the recorded hash).
+#[derive(Debug, Clone)]
+pub struct Transferred {
+    pub bytes: u64,
+    pub sha256: Option<String>,
+    pub fetched: bool,
+}
+
+/// The finished transfer, or the error message and attempts made.
+type Outcome = Result<Transferred, (String, u32)>;
 type ReplyRx = oneshot::Receiver<Outcome>;
 type ReplyTx = oneshot::Sender<Outcome>;
 
@@ -248,15 +259,20 @@ impl TransferClient {
     /// Ensure the artifact stored at `store` is present at its local mirror
     /// path, queueing a download if needed. Returns the local path, or None
     /// when `store` is not under the store root.
-    pub fn fetch(&mut self, key: &str, store: &str) -> Option<PathBuf> {
+    ///
+    /// `sha256` is the hash the artifact was recorded with. With it, a local
+    /// copy is hashed and replaced unless it matches, and a download that
+    /// does not match fails. Without it, any local copy is taken as it is.
+    pub fn fetch(&mut self, key: &str, store: &str, sha256: Option<&str>) -> Option<PathBuf> {
         let local = self.layout.local_for(store)?;
-        if local.exists() || self.fetches.contains_key(&local) {
+        if (sha256.is_none() && local.exists()) || self.fetches.contains_key(&local) {
             return Some(local);
         }
         let rx = self.send(|id| TransferRequest::Get {
             id,
             remote: store.to_string(),
             local: local.to_string_lossy().into_owned(),
+            sha256: sha256.map(str::to_string),
         });
         self.fetches.insert(
             local.clone(),
@@ -277,10 +293,11 @@ impl TransferClient {
                 continue;
             };
             match settle(p.rx).await {
-                Ok(bytes) => {
+                Ok(t) if t.fetched => {
                     report.transferred += 1;
-                    report.bytes += bytes;
+                    report.bytes += t.bytes;
                 }
+                Ok(_) => {}
                 Err((message, attempts)) => report.failures.push(TransferFailure {
                     key: p.key,
                     store: p.store,
@@ -310,9 +327,12 @@ impl TransferClient {
             .collect();
         while let Some((key, store, r)) = inflight.next().await {
             match r {
-                Ok(bytes) => {
+                Ok(t) => {
                     report.transferred += 1;
-                    report.bytes += bytes;
+                    report.bytes += t.bytes;
+                    if let Some(h) = t.sha256 {
+                        report.hashes.insert(key, h);
+                    }
                 }
                 Err((message, attempts)) => report.failures.push(TransferFailure {
                     key,
@@ -389,7 +409,9 @@ async fn io_task(
             }
             reply = read_frame::<_, TransferReply>(&mut stream) => {
                 let (id, result) = match reply {
-                    Ok(Some(TransferReply::Done { id, size_bytes })) => (id, Ok(size_bytes)),
+                    Ok(Some(TransferReply::Done { id, size_bytes, sha256, fetched })) => {
+                        (id, Ok(Transferred { bytes: size_bytes, sha256, fetched }))
+                    }
                     Ok(Some(TransferReply::Error { id, message, attempts })) => {
                         (id, Err((message, attempts)))
                     }
@@ -651,7 +673,7 @@ for t in threads: t.join()
         let fx = Fixture::new();
         let store = fx.write_store("n/h.json", b"{\"v\":1}");
         let mut c = fx.client().await;
-        let local = c.fetch("n", &store).unwrap();
+        let local = c.fetch("n", &store, None).unwrap();
         assert_eq!(local, fx.local.join("n/h.json"));
         let failures = within(c.await_fetches(std::slice::from_ref(&local)))
             .await
@@ -667,7 +689,7 @@ for t in threads: t.join()
         let store = fx.write_store("n/h.json", b"1");
         fx.write_local("n/h.json", b"1");
         let mut c = fx.client().await;
-        let local = c.fetch("n", &store).unwrap();
+        let local = c.fetch("n", &store, None).unwrap();
         assert!(within(c.await_fetches(&[local])).await.failures.is_empty());
         within(c.shutdown()).await;
         assert_eq!(fx.requests(), vec!["shutdown"]);
@@ -678,8 +700,8 @@ for t in threads: t.join()
         let fx = Fixture::new();
         let store = fx.write_store("n/h.json", b"1");
         let mut c = fx.client().await;
-        let a = c.fetch("x", &store).unwrap();
-        let b = c.fetch("y", &store).unwrap();
+        let a = c.fetch("x", &store, None).unwrap();
+        let b = c.fetch("y", &store, None).unwrap();
         assert_eq!(a, b);
         assert!(within(c.await_fetches(&[a, b])).await.failures.is_empty());
         within(c.shutdown()).await;
@@ -690,7 +712,7 @@ for t in threads: t.join()
     async fn fetch_outside_store_root_is_none() {
         let fx = Fixture::new();
         let mut c = fx.client().await;
-        assert!(c.fetch("n", "/somewhere/else/h.json").is_none());
+        assert!(c.fetch("n", "/somewhere/else/h.json", None).is_none());
         within(c.shutdown()).await;
     }
 
@@ -699,7 +721,7 @@ for t in threads: t.join()
         let fx = Fixture::new();
         let store = fx.write_store("fail/h.json", b"1");
         let mut c = fx.client().await;
-        let local = c.fetch("n", &store).unwrap();
+        let local = c.fetch("n", &store, None).unwrap();
         let failures = within(c.await_fetches(std::slice::from_ref(&local)))
             .await
             .failures;
@@ -824,14 +846,14 @@ for t in threads: t.join()
         assert_eq!(std::fs::read(&store).unwrap(), b"[1,2,3]");
 
         std::fs::remove_file(&local).unwrap();
-        let back = c.fetch("a", &store).unwrap();
+        let back = c.fetch("a", &store, None).unwrap();
         let fetched = within(c.await_fetches(std::slice::from_ref(&back))).await;
         assert!(fetched.failures.is_empty());
         assert_eq!((fetched.transferred, fetched.bytes), (1, 7));
         assert_eq!(std::fs::read(&back).unwrap(), b"[1,2,3]");
 
         let missing = c
-            .fetch("gone", &format!("{}/gone/h.json", fx.store.display()))
+            .fetch("gone", &format!("{}/gone/h.json", fx.store.display()), None)
             .unwrap();
         let failures = within(c.await_fetches(&[missing])).await.failures;
         assert_eq!(failures.len(), 1);

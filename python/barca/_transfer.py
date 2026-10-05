@@ -12,8 +12,11 @@ reply carries the request id.
 
   → {"type": "put", "id", "local", "remote"}    upload local → remote
   → {"type": "get", "id", "remote", "local"}    download remote → local (atomic)
+       optional "sha256": the hash recorded for the artifact. A local copy with that hash
+       is kept as it is; any other is replaced, and a download that does not match fails.
   → {"type": "shutdown"}                        finish in-flight work, exit
-  ← {"type": "done", "id", "size_bytes"}
+  ← {"type": "done", "id", "size_bytes", "sha256", "fetched"}
+       "sha256" is the local file's; "fetched" is false when a get moved no bytes.
   ← {"type": "error", "id", "message", "attempts"}
                                                 final — transient errors are retried here;
                                                 a stalled attempt fails after
@@ -23,6 +26,7 @@ Transfers go through barca._storage, so credentials and BARCA_STORAGE_OPTIONS
 behave exactly as they do for workers and the state helper.
 """
 
+import hashlib
 import os
 import socket
 import sys
@@ -91,27 +95,54 @@ def _is_permanent(exc: BaseException) -> bool:
     return status is not None and 400 <= status < 500 and status not in (408, 429)
 
 
-def _staged_get(remote: str, local: str) -> None:
-    """Download into a temp file beside `local`, then rename into place."""
+class ChecksumMismatch(ValueError):
+    """The store's copy is not the bytes the artifact was recorded with. Permanent."""
+
+
+def _sha256(path: "str | Path") -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _staged_get(remote: str, local: str, expected: str | None) -> str:
+    """Download into a temp file beside `local`, then rename into place. Returns its SHA-256.
+
+    With `expected`, a download that hashes differently is discarded and never renamed.
+    """
     dest = Path(local)
     dest.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=dest.parent, prefix=f".{dest.name}.", suffix=".tmp")
     os.close(fd)
     try:
         _storage.get_file(remote, tmp)
+        digest = _sha256(tmp)
+        if expected is not None and digest != expected:
+            raise ChecksumMismatch(
+                f"{remote} has sha256 {digest}, but it was recorded with {expected}"
+            )
         os.replace(tmp, dest)
+        return digest
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
 
 
-def _transfer(msg: dict) -> int:
-    """Perform one put/get; return the transferred file's size."""
+def _transfer(msg: dict) -> dict:
+    """Perform one put/get; return the local file's size and hash, and whether bytes moved."""
+    local = msg["local"]
     if msg["type"] == "put":
-        _storage.put_file(msg["local"], msg["remote"])
-        return os.stat(msg["local"]).st_size
-    _staged_get(msg["remote"], msg["local"])
-    return os.stat(msg["local"]).st_size
+        _storage.put_file(local, msg["remote"])
+        digest, fetched = _sha256(local), True
+    else:
+        expected = msg.get("sha256")
+        if expected is not None and os.path.isfile(local) and _sha256(local) == expected:
+            digest, fetched = expected, False
+        else:
+            digest, fetched = _staged_get(msg["remote"], local, expected), True
+    return {"size_bytes": os.stat(local).st_size, "sha256": digest, "fetched": fetched}
 
 
 class _Requests:
@@ -205,8 +236,7 @@ def _handle(msg: dict, requests: _Requests, retries: int, backoff: float) -> Non
         if not requests.start_attempt(req_id, attempt):
             return  # timed out (or abandoned) meanwhile: never retried
         try:
-            size = _transfer(msg)
-            requests.resolve({"type": "done", "id": req_id, "size_bytes": size})
+            requests.resolve({"type": "done", "id": req_id, **_transfer(msg)})
             return
         except Exception as exc:
             if _is_permanent(exc) or attempt > retries:

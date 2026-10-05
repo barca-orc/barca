@@ -821,20 +821,28 @@ async fn lookup_cached(
     node_id: &str,
     run_hash: &str,
 ) -> Option<dispatch::OutputRef> {
-    let mut rows = cache
-        .conn()
-        .query(
-            "SELECT artifact_path, artifact_format, artifact_size_bytes FROM materializations WHERE node_id = ?1 AND run_hash = ?2 AND status = 'success' ORDER BY id DESC LIMIT 1",
+    const COLUMNS: &str = "artifact_path, artifact_format, artifact_size_bytes";
+    let query = |columns: String| {
+        cache.conn().query(
+            format!(
+                "SELECT {columns} FROM materializations WHERE node_id = ?1 AND run_hash = ?2 \
+                 AND status = 'success' ORDER BY id DESC LIMIT 1"
+            ),
             [node_id.to_string(), run_hash.to_string()],
         )
-        .await
-        .unwrap();
+    };
+    // A database from before barca recorded output hashes has no such column.
+    let mut rows = match query(format!("{COLUMNS}, output_hash")).await {
+        Ok(rows) => rows,
+        Err(_) => query(COLUMNS.to_string()).await.unwrap(),
+    };
     rows.next().await.unwrap().and_then(|row| {
         Some(dispatch::OutputRef {
             path: row.get::<String>(0).ok()?,
             format: row.get::<String>(1).ok()?,
             size_bytes: row.get::<i64>(2).ok()? as u64,
             elapsed_seconds: None,
+            content_hash: row.get::<String>(3).ok().filter(|h| !h.is_empty()),
         })
     })
 }
@@ -914,8 +922,10 @@ fn accept_cache_hit(
         CacheHit::Local(o) => Some(o),
         CacheHit::Store { local, store: at } => {
             if let Some(s) = store.as_mut() {
-                s.fetchable
-                    .insert(local.path.clone(), (node_id.to_string(), at));
+                s.fetchable.insert(
+                    local.path.clone(),
+                    (node_id.to_string(), at, local.content_hash.clone()),
+                );
             }
             Some(local)
         }
@@ -968,10 +978,11 @@ fn localize_decision(
 struct StoreSync {
     client: TransferClient,
     layout: ArtifactLayout,
-    /// Local mirror path → (node id, store location), for store-backed cache
-    /// hits. Fetched on first use, so fully-cached intermediates a run never
-    /// reads are never downloaded.
-    fetchable: HashMap<String, (String, String)>,
+    /// Local mirror path → (node id, store location, recorded SHA-256), for
+    /// store-backed cache hits. Fetched on first use, so fully-cached
+    /// intermediates a run never reads are never downloaded. With a recorded
+    /// hash, a copy already on disk is checked against it on first use too.
+    fetchable: HashMap<String, (String, String, Option<String>)>,
 }
 
 impl StoreSync {
@@ -994,7 +1005,7 @@ impl StoreSync {
             if oref.format != "parquet" || std::path::Path::new(&oref.path).exists() {
                 continue;
             }
-            if let Some((_, at)) = self.fetchable.get(&oref.path) {
+            if let Some((_, at, _)) = self.fetchable.get(&oref.path) {
                 oref.path = at.clone();
             }
         }
@@ -1010,8 +1021,8 @@ impl StoreSync {
     ) -> Result<(), String> {
         let mut locals = Vec::new();
         for path in paths {
-            if let Some((node, store)) = self.fetchable.remove(path)
-                && let Some(local) = self.client.fetch(&node, &store)
+            if let Some((node, store, sha256)) = self.fetchable.remove(path)
+                && let Some(local) = self.client.fetch(&node, &store, sha256.as_deref())
             {
                 locals.push(local);
             }
@@ -2389,6 +2400,10 @@ async fn execute(
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0),
                 elapsed_seconds: artifact_val.get("elapsed_seconds").and_then(|v| v.as_f64()),
+                content_hash: artifact_val
+                    .get("content_hash")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
             };
             if let Some(sinks) = artifact_val.get("sinks").and_then(|v| v.as_array())
                 && !sinks.is_empty()
@@ -2536,6 +2551,13 @@ async fn execute(
         let t_drain = Instant::now();
         let report = s.client.drain().await;
         trace_point!("store_sync_drained ({queued} uploads)");
+        // The hash of the bytes that reached the store is recorded with the row, so any
+        // machine can check its copy of the artifact against it.
+        for (node, sha256) in &report.hashes {
+            if let Some(oref) = all_outputs.get_mut(node) {
+                oref.content_hash.get_or_insert_with(|| sha256.clone());
+            }
+        }
         if report.transferred > 0 {
             eprintln!(
                 "[barca] uploaded {} artifact{} ({}); waited {:.1}s at end of run",
@@ -2778,7 +2800,8 @@ struct RunLedger<'a> {
     all_timings: &'a HashMap<String, (Option<f64>, Option<u64>)>,
     cached_node_ids: &'a std::collections::HashSet<String>,
     run_hashes: &'a HashMap<String, String>,
-    /// Sensor step -> content hash of the output it returned in this run.
+    /// Sensor step -> content hash of the output it returned in this run. Other steps
+    /// record the hash on their `OutputRef`, when the artifact went through a store.
     output_hashes: &'a HashMap<String, String>,
     /// Artifact-store location of each uploaded output, recorded instead of
     /// its local path so cache hits resolve on every machine.
@@ -2850,7 +2873,11 @@ async fn persist_run(db_path: &str, l: &RunLedger<'_>) -> Result<(), BarcaError>
                     l.all_sinks.get(node_id).cloned().unwrap_or_default(),
                     cpu.map(|c| c.to_string()).unwrap_or_default(),
                     rss.map(|r| r.to_string()).unwrap_or_default(),
-                    l.output_hashes.get(node_id).cloned().unwrap_or_default(),
+                    l.output_hashes
+                        .get(node_id)
+                        .or(oref.content_hash.as_ref())
+                        .cloned()
+                        .unwrap_or_default(),
                 ],
             )
             .await
@@ -3425,6 +3452,7 @@ def lone() -> int:
             format: "json".to_string(),
             size_bytes: 1,
             elapsed_seconds: None,
+            content_hash: None,
         }
     }
 
@@ -3754,6 +3782,7 @@ mod store_tests {
             format: "json".to_string(),
             size_bytes: 3,
             elapsed_seconds: None,
+            content_hash: None,
         }
     }
 

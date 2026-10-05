@@ -14,6 +14,10 @@ pub struct OutputRef {
     pub size_bytes: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub elapsed_seconds: Option<f64>,
+    /// SHA-256 of the artifact's bytes, when one was recorded. Never sent to
+    /// workers or printed: it is what a local copy is checked against.
+    #[serde(default, skip_serializing)]
+    pub content_hash: Option<String>,
 }
 
 /// A structured failure reported by a worker for a single step.
@@ -357,6 +361,7 @@ mod tests {
             format: format.to_string(),
             size_bytes: 100,
             elapsed_seconds: None,
+            content_hash: None,
         }
     }
 
@@ -548,6 +553,7 @@ mod tests {
                 format: "json".to_string(),
                 size_bytes: 12,
                 elapsed_seconds: None,
+                content_hash: None,
             },
         );
 
@@ -756,6 +762,7 @@ mod tests {
                 format: "json".to_string(),
                 size_bytes: 14,
                 elapsed_seconds: None,
+                content_hash: None,
             },
         );
 
@@ -810,6 +817,7 @@ mod tests {
                 format: "json".to_string(),
                 size_bytes: 100,
                 elapsed_seconds: None,
+                content_hash: None,
             },
         );
 
@@ -854,6 +862,7 @@ mod tests {
                 format: "parquet".to_string(),
                 size_bytes: 5000,
                 elapsed_seconds: None,
+                content_hash: None,
             },
         );
 

@@ -245,6 +245,21 @@ gRPC call the emulator doesn't serve, and transfers stall until
 `[remote].uri` may also be a plain directory (a shared or network mount)
 instead of a URI; transfers are then local file copies.
 
+## Checking a local copy against the store
+
+When an artifact is uploaded, the SHA-256 of its bytes is recorded with it in the shared
+history. Every machine checks its copy against that hash:
+
+- A downloaded artifact is hashed before it is moved into `.barca/artifacts/`. If it does not
+  match, the download is discarded and the run exits 3 with `ChecksumMismatch`, naming the
+  object: the store's copy is not what was recorded. Recompute it with `--refresh <name>`.
+- A copy already in `.barca/artifacts/` is hashed the first time a run reads it. If it does not
+  match (edited by hand, or left from before another machine refreshed the result), it is
+  replaced from the store and reported as a fetch.
+
+Only artifacts a run reads are hashed, once per run. Not checked: a parquet input that is read
+in place (only byte ranges are fetched), and results recorded before barca stored a hash.
+
 ## Remote sinks
 
 `@sink` paths accept the same URIs, independent of where the artifact store

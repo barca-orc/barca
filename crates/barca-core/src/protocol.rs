@@ -129,6 +129,10 @@ pub enum TransferRequest {
         id: u64,
         remote: String,
         local: String,
+        /// The hash recorded for the artifact. A local copy with this hash is
+        /// kept; any other is replaced, and a download that differs fails.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        sha256: Option<String>,
     },
     /// Finish in-flight transfers, then exit.
     Shutdown,
@@ -142,6 +146,12 @@ pub enum TransferReply {
     Done {
         id: u64,
         size_bytes: u64,
+        /// SHA-256 of the local file.
+        #[serde(default)]
+        sha256: Option<String>,
+        /// False when a `Get` found a matching local copy and moved no bytes.
+        #[serde(default = "yes")]
+        fetched: bool,
     },
     Error {
         id: u64,
@@ -154,6 +164,10 @@ pub enum TransferReply {
 
 fn one() -> u32 {
     1
+}
+
+fn yes() -> bool {
+    true
 }
 
 // ─── Framing functions ───────────────────────────────────────────────────────
@@ -642,10 +656,21 @@ mod tests {
             id: 8,
             remote: "s3://b/x".into(),
             local: "/w/x".into(),
+            sha256: None,
         };
         assert_eq!(
             serde_json::to_value(&get).unwrap(),
             serde_json::json!({"type": "get", "id": 8, "remote": "s3://b/x", "local": "/w/x"})
+        );
+        let checked = TransferRequest::Get {
+            id: 9,
+            remote: "s3://b/x".into(),
+            local: "/w/x".into(),
+            sha256: Some("ab12".into()),
+        };
+        assert_eq!(
+            serde_json::to_value(&checked).unwrap()["sha256"],
+            serde_json::json!("ab12")
         );
         assert_eq!(
             serde_json::to_value(&TransferRequest::Shutdown).unwrap(),
@@ -661,8 +686,18 @@ mod tests {
             done,
             TransferReply::Done {
                 id: 3,
-                size_bytes: 42
+                size_bytes: 42,
+                sha256: None,
+                fetched: true,
             }
+        ));
+        let hashed: TransferReply = serde_json::from_str(
+            r#"{"type":"done","id":5,"size_bytes":1,"sha256":"ab12","fetched":false}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            hashed,
+            TransferReply::Done { sha256: Some(h), fetched: false, .. } if h == "ab12"
         ));
         let err: TransferReply = serde_json::from_str(
             r#"{"type":"error","id":4,"message":"PermissionError: no","attempts":3}"#,
@@ -693,6 +728,7 @@ mod tests {
             id: 1,
             remote: "r".into(),
             local: "l".into(),
+            sha256: None,
         };
         write_frame(&mut a, &msg).await.unwrap();
         drop(a);
