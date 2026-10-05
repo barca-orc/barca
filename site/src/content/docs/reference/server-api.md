@@ -105,7 +105,7 @@ GET /health
 ```
 
 ```json
-{ "status": "ok", "version": "0.14.0" }
+{ "status": "ok", "version": "0.15.0" }
 ```
 
 ### Assets
