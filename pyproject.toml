@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "barca"
-version = "0.13.3"
+version = "0.13.4"
 description = "Invisible asset orchestrator"
 requires-python = ">=3.12"
 license = "MIT"
