@@ -180,14 +180,15 @@ Could not parse .netrc file
 [barca] 9/9 steps | done in 0.5s
 ```
 
-- What is collapsed: a `logging` record at exactly WARNING level that would be written to the
-  terminal (by a `logging.StreamHandler` on stderr or stdout, or by logging's default output
-  when the step configures no logging), and a warning shown by the `warnings` module. That
-  includes your own `logging.warning(...)` calls: two records are the same when their message
-  text is the same.
+- What is collapsed: a `logging` record at exactly WARNING level that is printed only because
+  logging is not configured (Python then writes the bare message to stderr), and a warning
+  shown by the `warnings` module. Two warnings are the same when their text is the same.
+- If the project configures logging (`logging.basicConfig()`, or any handler on the logger or
+  one of its parents), nothing from `logging` is collapsed, library warnings included: every
+  record is printed by your handlers, in your format. That is also how to see every line.
 - What is never touched: `print` and direct writes to stdout or stderr, log records at any other
-  level, a record logged with a traceback (`exc_info`), a handler writing to a file (a log file
-  keeps every record), a step's error and traceback, barca's own `[barca]` lines and the error
+  level, a record logged with a traceback (`exc_info`), any handler you or a library installed
+  (terminal or file), a step's error and traceback, barca's own `[barca]` lines and the error
   envelope.
 - A warning seen once prints no summary line. The count is the number of suppressed repeats; repeats
   from a worker process that dies before its step reports (the step crashed the interpreter)
@@ -196,7 +197,6 @@ Could not parse .netrc file
   `[barca] 502 more: 502 other repeated warnings` (suppressed lines, then distinct texts).
 - A worker stops collapsing after 512 distinct texts, so warnings that differ every time (an id
   or a counter in the text) are printed as they come.
-- `BARCA_WARNINGS=all` turns this off and prints every line.
 
 Fix the cause when you can (here: repair or remove `~/.netrc`); the summary line tells you how
 much of it there was.

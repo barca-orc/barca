@@ -5,25 +5,23 @@ session, for one) prints the same line hundreds of times in a long run and burie
 output. Workers write straight to the terminal (they inherit barca's stderr), so the only place
 to collapse the repeats is here, in the worker process.
 
-What is collapsed: a `logging` record at exactly WARNING level on its way to a `StreamHandler`
-writing to the terminal (that includes logging's last-resort handler, which is what prints a
-library's warning when the step configured no logging), and a warning shown by the `warnings`
-module. Nothing else is touched: `print`, raw writes to stdout/stderr, records at other levels,
-records with a traceback attached, handlers writing to files, and exceptions all pass unchanged.
+What is collapsed: a `logging` record at exactly WARNING level that is printed by logging's
+last-resort handler, i.e. only because nobody configured logging (that is how a library's
+warning reaches the terminal in a step that sets up no logging), and a warning shown by the
+`warnings` module. A handler that the project or a library installed is never touched: once
+logging is configured, every record is printed. `print`, raw writes to stdout/stderr, records at
+other levels, records with a traceback attached, and exceptions all pass unchanged.
 
-The first occurrence of a text in a run is printed where it happens, by whichever handler would
-have printed it. "First in the run" is decided across workers with a claim file per text in a
-directory the coordinator creates next to its socket (`O_CREAT | O_EXCL`: one worker wins).
-Later occurrences are counted, and the counts go back to the coordinator ahead of each step
-result (`_runtime`), which prints `[barca] N more: <text>` once the run is over.
-
-`BARCA_WARNINGS=all` turns this off.
+The first occurrence of a text in a run is printed where it happens. "First in the run" is
+decided across workers with a claim file per text in a directory the coordinator creates next to
+its socket (`O_CREAT | O_EXCL`: one worker wins). Later occurrences are counted, and the counts
+go back to the coordinator ahead of each step result (`_runtime`), which prints
+`[barca] N more: <text>` once the run is over.
 """
 
 import hashlib
 import logging
 import os
-import sys
 import threading
 import warnings
 
@@ -80,47 +78,34 @@ def take() -> dict[str, int]:
     return out
 
 
-def _to_terminal(handler) -> bool:
-    stream = getattr(handler, "stream", None)
-    return (
-        stream is sys.stderr
-        or stream is sys.stdout
-        or stream is sys.__stderr__
-        or stream is sys.__stdout__
-    )
-
-
 def install(socket_path: str | None) -> None:
-    """Hook `logging.StreamHandler.emit` and `warnings.showwarning` (once per process)."""
+    """Replace `logging.lastResort` and hook `warnings.showwarning` (once per process)."""
     global _claim_dir, _installed
-    if _installed or os.environ.get("BARCA_WARNINGS", "").strip().lower() == "all":
+    if _installed:
         return
     _installed = True
     if socket_path:
         _claim_dir = socket_path + ".warnings"
 
-    stream_emit = logging.StreamHandler.emit
+    last_resort = logging.lastResort
+    if last_resort is not None:  # None: the project turned the last-resort output off
 
-    def emit(self, record):
-        if (
-            record.levelno == logging.WARNING
-            and not record.exc_info
-            and not record.stack_info
-            and _to_terminal(self)
-        ):
-            # Decide once per record: it may reach several terminal handlers.
-            repeat = record.__dict__.get("_barca_repeat")
-            if repeat is None:
-                try:
-                    repeat = is_repeat(record.getMessage())
-                except Exception:
-                    repeat = False
-                record.__dict__["_barca_repeat"] = repeat
-            if repeat:
-                return
-        stream_emit(self, record)
+        class _LastResort(type(last_resort)):
+            def emit(self, record):
+                if (
+                    record.levelno == logging.WARNING
+                    and not record.exc_info
+                    and not record.stack_info
+                ):
+                    try:
+                        repeat = is_repeat(record.getMessage())
+                    except Exception:
+                        repeat = False
+                    if repeat:
+                        return
+                super().emit(record)
 
-    logging.StreamHandler.emit = emit  # ty: ignore[invalid-assignment]
+        logging.lastResort = _LastResort(last_resort.level)
 
     showwarning = warnings.showwarning
 

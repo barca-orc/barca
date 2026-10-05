@@ -67,7 +67,9 @@ the cloud's own error (expired login, access denied). A missing extra says which
 
 A warning that a storage library repeats on every operation (aiohttp's `Could not parse .netrc
 file` under adlfs, when `~/.netrc` is malformed) is printed once per run, then counted:
-`[barca] 79 more: Could not parse .netrc file`. See `barca docs agents`, "Repeated warnings".
+`[barca] 79 more: Could not parse .netrc file`. This applies while logging is unconfigured; if
+the project configures logging, every record is printed. See `barca docs agents`, "Repeated
+warnings".
 
 ## In barca.toml instead
 
