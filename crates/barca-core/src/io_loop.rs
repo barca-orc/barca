@@ -51,9 +51,9 @@ pub struct IoConfig {
     pub storage_options_json: Option<String>,
 }
 
-/// Callback invoked on each step completion with (node_id, artifact_json).
+/// Callback invoked on each step completion with (node_id, artifact_json, attempts made).
 /// `Send` so the whole run future can be spawned onto a multi-thread runtime.
-pub type StepCallback<'a> = Box<dyn FnMut(&str, &serde_json::Value) + Send + 'a>;
+pub type StepCallback<'a> = Box<dyn FnMut(&str, &serde_json::Value, u32) + Send + 'a>;
 
 /// Called periodically while steps are running, with `(node_id, seconds running)` for each
 /// step that has been in flight longer than the progress interval.
@@ -326,7 +326,7 @@ impl WorkerPool {
                         let artifact_val = serde_json::to_value(artifact).unwrap_or_default();
                         coord.record_output(item_id, artifact_val.clone());
                         if let Some(ref mut cb) = on_step {
-                            cb(node_id, &artifact_val);
+                            cb(node_id, &artifact_val, coord.item(item_id).attempts);
                         }
                         coord.on_item_completed(item_id);
 

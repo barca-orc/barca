@@ -2164,17 +2164,17 @@ async fn history_cmd(
     }
     // Table header.
     println!(
-        "{:<14} {:<7} {:<9} {:>5} {:>6} {:>6} {:<20}",
+        "{:<14} {:<7} {:<11} {:>5} {:>6} {:>6} {:<20}",
         "RUN_ID", "CMD", "STATUS", "STEPS", "CACHED", "TIME", "STARTED"
     );
-    println!("{}", "-".repeat(75));
+    println!("{}", "-".repeat(77));
     for r in &runs {
         let elapsed_str = r
             .elapsed_seconds
             .map(|e| format!("{:.1}s", e))
             .unwrap_or_else(|| "-".to_string());
         println!(
-            "{:<14} {:<7} {:<9} {:>5} {:>6} {:>6} {:<20}",
+            "{:<14} {:<7} {:<11} {:>5} {:>6} {:>6} {:<20}",
             r.run_id,
             r.command,
             r.status,
