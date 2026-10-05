@@ -17,8 +17,10 @@ by fsspec protocol, e.g. '{"abfs": {"account_name": "myacct"}}') is splatted
 into the filesystem constructor as an escape hatch.
 """
 
+import datetime
 import json
 import os
+import threading
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -139,6 +141,96 @@ def join(base: "str | Path", name: str) -> "str | Path":
     if is_remote(base) or _scheme(base) == "file":
         return str(base).rstrip("/") + "/" + name
     return Path(base) / name
+
+
+# ─── In-place reads for lazy readers ──────────────────────────────────────────
+#
+# A duckdb relation or polars LazyFrame input reads only what the step's query touches, so a
+# remote artifact is read in place rather than downloaded (see _artifacts.deserialize). Two
+# details make that cheap and safe:
+#
+# - Exact range reads. fsspec's buffered files read ahead by a block (adlfs: 50 MB), which turns
+#   a parquet reader's many small column-chunk reads into far more bytes than the whole file.
+#   The view below opens every file with cache_type="none": each read fetches exactly its range.
+# - A private scheme. duckdb routes a URL to a registered fsspec filesystem ahead of its own
+#   httpfs/azure extensions, so registering the store under `abfss://` would take over the URLs
+#   in the user's own SQL. The view is registered as `barca<protocol>://` instead, and only
+#   barca's artifact URIs are rewritten to it.
+
+_RANGE_SCHEME_PREFIX = "barca"
+# duckdb caches what it reads per (path, mtime). A refresh can rewrite an artifact path, so the
+# store's real mtime is passed through; a store that has none gets this constant.
+_UNKNOWN_MTIME = datetime.datetime(2000, 1, 1, tzinfo=datetime.timezone.utc)
+_range_fs_cache: dict[str, Any] = {}
+_range_fs_lock = threading.Lock()
+
+
+def range_read_uri(path: str) -> str:
+    """``path`` (a remote artifact URI) under the private scheme of its range-read view."""
+    scheme, rest = str(path).split("://", 1)
+    return f"{_RANGE_SCHEME_PREFIX}{_SCHEMES[scheme.lower()][0]}://{rest}"
+
+
+def range_read_fs(path: str):
+    """A read-only fsspec view of the store holding ``path`` that reads exact byte ranges.
+
+    It wraps the store's own filesystem (``get_fs``), so credentials and options are the same.
+    Paths may be private-scheme URIs (``range_read_uri``, what duckdb passes) or the store
+    filesystem's own stripped paths (what pyarrow passes).
+    """
+    inner = get_fs(path)  # validates the scheme
+    protocol = _SCHEMES[str(_scheme(path))][0]
+    with _range_fs_lock:
+        fs = _range_fs_cache.get(protocol)
+        if fs is None or fs.inner is not inner:
+            fs = _make_range_fs(inner, protocol)
+            _range_fs_cache[protocol] = fs
+        return fs
+
+
+def _make_range_fs(inner, protocol: str):
+    from fsspec.spec import AbstractFileSystem
+
+    private = f"{_RANGE_SCHEME_PREFIX}{protocol}"
+
+    class RangeReadFileSystem(AbstractFileSystem):
+        cachable = False
+
+        def __init__(self):
+            super().__init__()
+            self.inner = inner
+
+        @classmethod
+        def _strip_protocol(cls, path):
+            return str(path)  # _real() translates; the inner fs strips its own scheme
+
+        def _real(self, path) -> str:
+            path = str(path)
+            if path.startswith(f"{private}://"):
+                return inner._strip_protocol(f"{protocol}://{path[len(private) + 3 :]}")
+            return path
+
+        def info(self, path, **kwargs):
+            return inner.info(self._real(path), **kwargs)
+
+        def ls(self, path, detail=True, **kwargs):
+            return inner.ls(self._real(path), detail=detail, **kwargs)
+
+        def modified(self, path):
+            try:
+                return inner.modified(self._real(path))
+            except NotImplementedError:
+                return _UNKNOWN_MTIME
+
+        def _open(
+            self, path, mode="rb", block_size=None, autocommit=True, cache_options=None, **kwargs
+        ):
+            if mode != "rb":
+                raise PermissionError(f"{private}:// is read-only")
+            return inner.open(self._real(path), "rb", cache_type="none")
+
+    RangeReadFileSystem.protocol = (private,)
+    return RangeReadFileSystem()
 
 
 def suffix(path: "str | Path") -> str:

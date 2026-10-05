@@ -38,8 +38,8 @@ json and pickle artifacts ignore annotations.
 **Lazy inputs read only what the step uses.** The eager readers load the whole file. A
 `pl.LazyFrame` or duckdb relation reads nothing up front: the query the step builds decides
 which columns and row groups are read when it runs. For a large upstream that a step filters,
-projects or aggregates, annotate the input as lazy. Known limitation: with a remote artifact
-store, the whole file is still downloaded before the lazy read.
+projects or aggregates, annotate the input as lazy. With a remote artifact store, a lazy input
+is read in place and only the byte ranges its query touches are fetched (`barca docs remote`).
 
 ```python
 import duckdb
