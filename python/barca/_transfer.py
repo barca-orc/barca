@@ -13,10 +13,13 @@ reply carries the request id.
   → {"type": "put", "id", "local", "remote"}    upload local → remote
   → {"type": "get", "id", "remote", "local"}    download remote → local (atomic)
        optional "sha256": the hash recorded for the artifact. A local copy with that hash
-       is kept as it is; any other is replaced, and a download that does not match fails.
+       is kept as it is; any other is replaced by the store's copy.
   → {"type": "shutdown"}                        finish in-flight work, exit
-  ← {"type": "done", "id", "size_bytes", "sha256", "fetched"}
-       "sha256" is the local file's; "fetched" is false when a get moved no bytes.
+  ← {"type": "done", "id", "size_bytes", "sha256", "fetched", "mismatch"}
+       "sha256" is the local file's; "fetched" is false when a get left the local file as it
+       was; "mismatch" is true when the store's copy does not have the recorded hash. That
+       is not an error: an artifact path is `{node}/{run_hash}`, so a refresh or a second
+       machine computing the same step overwrites it, and the store's copy is still used.
   ← {"type": "error", "id", "message", "attempts"}
                                                 final — transient errors are retried here;
                                                 a stalled attempt fails after
@@ -95,10 +98,6 @@ def _is_permanent(exc: BaseException) -> bool:
     return status is not None and 400 <= status < 500 and status not in (408, 429)
 
 
-class ChecksumMismatch(ValueError):
-    """The store's copy is not the bytes the artifact was recorded with. Permanent."""
-
-
 def _sha256(path: "str | Path") -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -107,10 +106,23 @@ def _sha256(path: "str | Path") -> str:
     return h.hexdigest()
 
 
-def _staged_get(remote: str, local: str, expected: str | None) -> str:
-    """Download into a temp file beside `local`, then rename into place. Returns its SHA-256.
+def _local_sha256(path: "str | Path") -> str | None:
+    """The hash of a local copy, or None when there is no readable file to hash.
 
-    With `expected`, a download that hashes differently is discarded and never renamed.
+    An unreadable copy is then replaced like any other that does not match.
+    """
+    try:
+        return _sha256(path)
+    except OSError:
+        return None
+
+
+def _staged_get(remote: str, local: str, expected: str | None) -> dict:
+    """Make `local` the store's copy of `remote`, through a temp file renamed into place.
+
+    Returns the reply fields. The store's copy is used even when it does not have the
+    `expected` hash; the caller is told so it can warn. A local file that already holds the
+    store's bytes is left untouched.
     """
     dest = Path(local)
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -119,30 +131,28 @@ def _staged_get(remote: str, local: str, expected: str | None) -> str:
     try:
         _storage.get_file(remote, tmp)
         digest = _sha256(tmp)
-        if expected is not None and digest != expected:
-            raise ChecksumMismatch(
-                f"{remote} has sha256 {digest}, but it was recorded with {expected}"
-            )
-        os.replace(tmp, dest)
-        return digest
-    except BaseException:
+        mismatch = expected is not None and digest != expected
+        fetched = not (mismatch and _local_sha256(dest) == digest)
+        if fetched:
+            os.replace(tmp, dest)
+        return {"sha256": digest, "fetched": fetched, "mismatch": mismatch}
+    finally:
         Path(tmp).unlink(missing_ok=True)
-        raise
 
 
 def _transfer(msg: dict) -> dict:
-    """Perform one put/get; return the local file's size and hash, and whether bytes moved."""
+    """Perform one put/get; return the reply fields describing the local file."""
     local = msg["local"]
     if msg["type"] == "put":
         _storage.put_file(local, msg["remote"])
-        digest, fetched = _sha256(local), True
+        result = {"sha256": _sha256(local), "fetched": True, "mismatch": False}
     else:
         expected = msg.get("sha256")
-        if expected is not None and os.path.isfile(local) and _sha256(local) == expected:
-            digest, fetched = expected, False
+        if expected is not None and _local_sha256(local) == expected:
+            result = {"sha256": expected, "fetched": False, "mismatch": False}
         else:
-            digest, fetched = _staged_get(msg["remote"], local, expected), True
-    return {"size_bytes": os.stat(local).st_size, "sha256": digest, "fetched": fetched}
+            result = _staged_get(msg["remote"], local, expected)
+    return {"size_bytes": os.stat(local).st_size, **result}
 
 
 class _Requests:

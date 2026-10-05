@@ -130,7 +130,7 @@ pub enum TransferRequest {
         remote: String,
         local: String,
         /// The hash recorded for the artifact. A local copy with this hash is
-        /// kept; any other is replaced, and a download that differs fails.
+        /// kept; any other is replaced by the store's copy.
         #[serde(skip_serializing_if = "Option::is_none")]
         sha256: Option<String>,
     },
@@ -149,9 +149,12 @@ pub enum TransferReply {
         /// SHA-256 of the local file.
         #[serde(default)]
         sha256: Option<String>,
-        /// False when a `Get` found a matching local copy and moved no bytes.
+        /// False when a `Get` left the local file as it was.
         #[serde(default = "yes")]
         fetched: bool,
+        /// True when the store's copy does not have the hash a `Get` carried.
+        #[serde(default)]
+        mismatch: bool,
     },
     Error {
         id: u64,
@@ -689,15 +692,16 @@ mod tests {
                 size_bytes: 42,
                 sha256: None,
                 fetched: true,
+                mismatch: false,
             }
         ));
         let hashed: TransferReply = serde_json::from_str(
-            r#"{"type":"done","id":5,"size_bytes":1,"sha256":"ab12","fetched":false}"#,
+            r#"{"type":"done","id":5,"size_bytes":1,"sha256":"ab12","fetched":false,"mismatch":true}"#,
         )
         .unwrap();
         assert!(matches!(
             hashed,
-            TransferReply::Done { sha256: Some(h), fetched: false, .. } if h == "ab12"
+            TransferReply::Done { sha256: Some(h), fetched: false, mismatch: true, .. } if h == "ab12"
         ));
         let err: TransferReply = serde_json::from_str(
             r#"{"type":"error","id":4,"message":"PermissionError: no","attempts":3}"#,

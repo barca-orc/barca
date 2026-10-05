@@ -91,7 +91,7 @@ Keep secrets out of it: credentials still come from the environment. Precedence,
 ## What barca keeps in the bucket
 
 ```
-<uri>/<env>/artifacts/<node>/<run_hash>.<ext>   one immutable file per result
+<uri>/<env>/artifacts/<node>/<run_hash>.<ext>   one file per result
 <uri>/<env>/state/metadata.db                   run history, pulled at the start of a run
 ```
 
@@ -150,9 +150,10 @@ the copies while the objects are unchanged (`barca docs sql`).
 
 ## How shared history works
 
-- Artifacts are written **content-addressed** to
-  `{uri}/{env}/artifacts/{node}/{run_hash}{ext}` — immutable objects, so a
-  cache hit on one machine is valid on every machine.
+- Artifacts are written to `{uri}/{env}/artifacts/{node}/{run_hash}{ext}`,
+  addressed by the hash of the step's code and inputs, so a cache hit on one
+  machine is valid on every machine. A `--refresh`, or two machines computing
+  the same step at once, overwrites the object.
 - The metadata DB (the turso/SQLite file that records materializations and
   run history) lives as a single blob at `{uri}/{env}/state/metadata.db`.
   Each run **pulls** it first — so cache checks see every machine's
@@ -247,15 +248,20 @@ instead of a URI; transfers are then local file copies.
 
 ## Checking a local copy against the store
 
-When an artifact is uploaded, the SHA-256 of its bytes is recorded with it in the shared
-history. Every machine checks its copy against that hash:
+When an artifact is uploaded, the SHA-256 of the local file is recorded with it in the shared
+history. A machine uses that hash to decide whether its own copy is current:
 
-- A downloaded artifact is hashed before it is moved into `.barca/artifacts/`. If it does not
-  match, the download is discarded and the run exits 3 with `ChecksumMismatch`, naming the
-  object: the store's copy is not what was recorded. Recompute it with `--refresh <name>`.
 - A copy already in `.barca/artifacts/` is hashed the first time a run reads it. If it does not
   match (edited by hand, or left from before another machine refreshed the result), it is
-  replaced from the store and reported as a fetch.
+  replaced by the store's copy and reported as a fetch.
+- A downloaded artifact is hashed too. If the store's copy does not match the recorded hash,
+  the run still uses it and prints a warning naming the step. This is not an error: an
+  artifact's path is `<node>/<run_hash>`, which identifies the computation and not the bytes,
+  so a `--refresh`, or two machines computing the same step at once, overwrites the object.
+  The warning names the step; `--refresh <file.py:name>` recomputes it, which clears the
+  warning for every machine that shares this history. Until then, machines can hold
+  different copies of that one result: a machine whose copy matches the recorded hash keeps
+  it, and the others use the store's.
 
 Only artifacts a run reads are hashed, once per run. Not checked: a parquet input that is read
 in place (only byte ranges are fetched), and results recorded before barca stored a hash.

@@ -108,6 +108,9 @@ pub struct TransferReport {
     pub failures: Vec<TransferFailure>,
     /// SHA-256 of each uploaded artifact, by the caller's key.
     pub hashes: HashMap<String, String>,
+    /// Fetches (key, store location) whose store copy does not have the
+    /// recorded hash. The store's copy was used.
+    pub mismatched: Vec<(String, String)>,
 }
 
 /// A finished transfer: the local file's size and hash, and whether bytes moved
@@ -117,6 +120,8 @@ pub struct Transferred {
     pub bytes: u64,
     pub sha256: Option<String>,
     pub fetched: bool,
+    /// The store's copy does not have the hash the fetch carried.
+    pub mismatch: bool,
 }
 
 /// The finished transfer, or the error message and attempts made.
@@ -261,8 +266,10 @@ impl TransferClient {
     /// when `store` is not under the store root.
     ///
     /// `sha256` is the hash the artifact was recorded with. With it, a local
-    /// copy is hashed and replaced unless it matches, and a download that
-    /// does not match fails. Without it, any local copy is taken as it is.
+    /// copy is hashed and replaced by the store's copy unless it matches; a
+    /// store copy that does not match either is still used, and reported in
+    /// `TransferReport::mismatched`. Without it, any local copy is taken as
+    /// it is.
     pub fn fetch(&mut self, key: &str, store: &str, sha256: Option<&str>) -> Option<PathBuf> {
         let local = self.layout.local_for(store)?;
         if (sha256.is_none() && local.exists()) || self.fetches.contains_key(&local) {
@@ -293,11 +300,15 @@ impl TransferClient {
                 continue;
             };
             match settle(p.rx).await {
-                Ok(t) if t.fetched => {
-                    report.transferred += 1;
-                    report.bytes += t.bytes;
+                Ok(t) => {
+                    if t.fetched {
+                        report.transferred += 1;
+                        report.bytes += t.bytes;
+                    }
+                    if t.mismatch {
+                        report.mismatched.push((p.key, p.store));
+                    }
                 }
-                Ok(_) => {}
                 Err((message, attempts)) => report.failures.push(TransferFailure {
                     key: p.key,
                     store: p.store,
@@ -362,17 +373,25 @@ impl TransferClient {
 
     /// Stop the helper immediately, abandoning queued transfers. Returns the
     /// keys of uploads not confirmed complete — their artifacts may be
-    /// missing from the store, so they must not be recorded.
-    pub async fn abort(mut self) -> Vec<String> {
-        let unconfirmed = self
-            .uploads
-            .iter_mut()
-            .filter_map(|p| (!matches!(p.rx.try_recv(), Ok(Ok(_)))).then(|| p.key.clone()))
-            .collect();
+    /// missing from the store, so they must not be recorded — and the hash
+    /// of each upload that was confirmed.
+    pub async fn abort(mut self) -> (Vec<String>, HashMap<String, String>) {
+        let mut unconfirmed = Vec::new();
+        let mut hashes = HashMap::new();
+        for p in &mut self.uploads {
+            match p.rx.try_recv() {
+                Ok(Ok(t)) => {
+                    if let Some(h) = t.sha256 {
+                        hashes.insert(p.key.clone(), h);
+                    }
+                }
+                _ => unconfirmed.push(p.key.clone()),
+            }
+        }
         let _ = self.child.kill().await;
         self.io_task.abort();
         std::fs::remove_file(&self.socket_path).ok();
-        unconfirmed
+        (unconfirmed, hashes)
     }
 }
 
@@ -409,8 +428,8 @@ async fn io_task(
             }
             reply = read_frame::<_, TransferReply>(&mut stream) => {
                 let (id, result) = match reply {
-                    Ok(Some(TransferReply::Done { id, size_bytes, sha256, fetched })) => {
-                        (id, Ok(Transferred { bytes: size_bytes, sha256, fetched }))
+                    Ok(Some(TransferReply::Done { id, size_bytes, sha256, fetched, mismatch })) => {
+                        (id, Ok(Transferred { bytes: size_bytes, sha256, fetched, mismatch }))
                     }
                     Ok(Some(TransferReply::Error { id, message, attempts })) => {
                         (id, Err((message, attempts)))
@@ -770,9 +789,11 @@ for t in threads: t.join()
         c.upload("bad", &bad).unwrap();
         tokio::time::sleep(Duration::from_millis(150)).await;
         c.upload("slow", &slow).unwrap();
-        let mut un = within(c.abort()).await;
+        let (mut un, hashes) = within(c.abort()).await;
         un.sort();
         assert_eq!(un, vec!["bad", "slow"]);
+        // The fake helper reports no hash; a real one does (python/tests/test_transfer.py).
+        assert!(hashes.is_empty());
     }
 
     #[tokio::test]
