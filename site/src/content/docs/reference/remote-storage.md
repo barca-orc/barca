@@ -65,6 +65,10 @@ convention, so other fsspec tools on the machine read the same settings.
 A failure to reach the bucket stops the run before any step: exit 3, naming the location, with
 the cloud's own error (expired login, access denied). A missing extra says which one to install.
 
+A warning that a storage library repeats on every operation (aiohttp's `Could not parse .netrc
+file` under adlfs, when `~/.netrc` is malformed) is printed once per run, then counted:
+`[barca] 79 more: Could not parse .netrc file`. See `barca docs agents`, "Repeated warnings".
+
 ## In barca.toml instead
 
 The same settings can live in the project, so everyone who clones it gets them:

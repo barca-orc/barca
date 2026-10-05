@@ -61,6 +61,12 @@ BARCA_OUTPUT=json barca get summary pipeline.py
 errors always go to stderr; the progress bar (the only ANSI output) draws only when stderr is a
 terminal, and `--agent` replaces it with plain progress lines.
 
+A library warning that a step's process repeats (the same `logging` WARNING or `warnings` text) is
+printed the first time in a run and then counted: `[barca] 79 more: Could not parse .netrc file`
+on stderr before the end-of-run line. `print` output, other log levels, log files and errors are
+never collapsed, and `BARCA_WARNINGS=all` prints every line (`barca docs agents`, "Repeated
+warnings").
+
 > **Behavior change:** `get` and `run` used to print JSON by default even in a terminal.
 > They now print the human summary there; scripts and agents that capture stdout still get JSON.
 > The Python API (`barca.get`, `barca.history`, ...) always requests JSON.
