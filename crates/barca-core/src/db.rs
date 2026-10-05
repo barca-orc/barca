@@ -424,8 +424,12 @@ pub async fn last_output_hashes(
         else {
             return Ok(HashMap::new());
         };
+        // LIKE treats `_` in a node id as a wildcard, and assets record output hashes too.
+        let partition_prefix = format!("{base}[");
         while let Ok(Some(row)) = rows.next().await {
-            if let (Ok(id), Ok(h)) = (row.get::<String>(0), row.get::<String>(1)) {
+            if let (Ok(id), Ok(h)) = (row.get::<String>(0), row.get::<String>(1))
+                && (id == *base || id.starts_with(&partition_prefix))
+            {
                 out.insert(id, h);
             }
         }

@@ -88,7 +88,7 @@ reference: https://barca.sh/reference/config/
 ## What barca keeps in the bucket
 
 ```
-<uri>/<env>/artifacts/<node>/<run_hash>.<ext>   one immutable file per result
+<uri>/<env>/artifacts/<node>/<run_hash>.<ext>   one file per result
 <uri>/<env>/state/metadata.db                   run history, pulled at the start of a run
 ```
 
@@ -147,15 +147,17 @@ extensions and credentials.
 
 ## Checking a local copy against the store
 
-When an artifact is uploaded, the SHA-256 of its bytes is recorded with it in the shared
-history. Every machine checks its copy against that hash:
+When an artifact is uploaded, the SHA-256 of the local file is recorded with it in the shared
+history. A machine uses that hash to decide whether its own copy is current:
 
-- A downloaded artifact is hashed before it is moved into `.barca/artifacts/`. If it does not
-  match, the download is discarded and the run exits 3 with `ChecksumMismatch`, naming the
-  object: the store's copy is not what was recorded. Recompute it with `--refresh <name>`.
 - A copy already in `.barca/artifacts/` is hashed the first time a run reads it. If it does not
   match (edited by hand, or left from before another machine refreshed the result), it is
-  replaced from the store and reported as a fetch.
+  replaced by the store's copy and reported as a fetch.
+- A downloaded artifact is hashed too. If the store's copy does not match the recorded hash,
+  the run still uses it and prints a warning naming the step. This is not an error: an
+  artifact's path is `<node>/<run_hash>`, which identifies the computation and not the bytes,
+  so a `--refresh`, or two machines computing the same step at once, overwrites the object.
+  `barca get <name> --refresh <name>` recomputes it and clears the warning.
 
 Only artifacts a run reads are hashed, once per run. Not checked: a parquet input that is read
 in place (only byte ranges are fetched), and results recorded before barca stored a hash.
@@ -175,11 +177,11 @@ dropped connections, timeouts, 5xx, 408 and 429. Missing objects, permission and
 authentication errors, and other 4xx responses fail on the first attempt. An attempt that
 exceeds `transfer_timeout` fails as stalled and is not retried.
 
-- **Upload failed**: the run exits 1 and names the step. The step gets a `failed` row with
+- **Upload failed**: the run exits 3 and names the step. The step gets a `failed` row with
   `error_type = 'UploadError'`, no artifact path, and the attempt count; it recomputes on
   the next run. `barca stats target pipeline.py` shows the failure.
 - **Cached artifact missing from the store** (deleted, or a different bucket): the run exits
-  1 with `could not fetch ... cached artifact(s)`. Recompute with
+  3 with `could not fetch ... cached artifact(s)`. Recompute with
   `barca get target pipeline.py --refresh-all`.
 - **Stalled store**: lower `transfer_timeout` to fail faster; raise it if single artifacts
   legitimately take longer than 10 minutes to move.

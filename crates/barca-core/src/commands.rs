@@ -1045,6 +1045,25 @@ impl StoreSync {
                 _ => eprintln!("{msg}"),
             }
         }
+        // An artifact path is `{node}/{run_hash}`, so a refresh or another machine computing
+        // the same step overwrites it; the store's copy is as valid a result as the recorded
+        // one. Say so rather than fail.
+        for (node, at) in &report.mismatched {
+            let msg = format!(
+                "[barca] warning: {node}: the copy at {at} is not the one this result was \
+                 recorded with (another run overwrote it, or it was changed). Using it. \
+                 Recompute with --refresh {}.",
+                crate::StepId::parse(node)
+                    .base_id()
+                    .rsplit(':')
+                    .next()
+                    .unwrap_or(node)
+            );
+            match pb {
+                Some(bar) if !bar.is_hidden() => bar.println(&msg),
+                _ => eprintln!("{msg}"),
+            }
+        }
         if report.failures.is_empty() {
             return Ok(());
         }
@@ -2541,9 +2560,15 @@ async fn execute(
     // object. The transfer client stays up to fetch the final outputs below.
     if was_cancelled {
         if let Some(s) = store.take() {
-            for node in s.client.abort().await {
+            let (unconfirmed, hashes) = s.client.abort().await;
+            for node in unconfirmed {
                 all_outputs.remove(&node);
                 store_paths.remove(&node);
+            }
+            for (node, sha256) in hashes {
+                if let Some(oref) = all_outputs.get_mut(&node) {
+                    oref.content_hash.get_or_insert(sha256);
+                }
             }
         }
     } else if let Some(s) = store.as_mut() {

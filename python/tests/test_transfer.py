@@ -46,7 +46,7 @@ def _recv(sock: socket.socket) -> dict:
 
 def _sized(reply: dict) -> dict:
     """A done reply without its hash and fetched flag (TestChecksums covers those)."""
-    return {k: v for k, v in reply.items() if k not in ("sha256", "fetched")}
+    return {k: v for k, v in reply.items() if k not in ("sha256", "fetched", "mismatch")}
 
 
 class Helper:
@@ -100,6 +100,7 @@ class TestPutGet:
         src.write_bytes(b'{"v": 1}')
         helper.request({"type": "put", "id": 1, "local": str(src), "remote": "memory://s/n/h.json"})
         done = {"type": "done", "size_bytes": 8, "sha256": _SHA_V1, "fetched": True}
+        done["mismatch"] = False
         assert helper.reply() == {**done, "id": 1}
         assert _storage.exists("memory://s/n/h.json")
 
@@ -166,6 +167,7 @@ class TestChecksums:
         monkeypatch.setattr(_storage, "get_file", lambda *a: pytest.fail("downloaded"))
         reply = self._get(helper, self._store(), local)
         assert (reply["type"], reply["sha256"], reply["fetched"]) == ("done", self.SHA, False)
+        assert reply["mismatch"] is False
 
     def test_local_copy_with_other_bytes_is_replaced_from_the_store(self, helper, tmp_path):
         local = tmp_path / "h.json"
@@ -174,12 +176,22 @@ class TestChecksums:
         assert (reply["type"], reply["fetched"]) == ("done", True)
         assert local.read_bytes() == self.BODY
 
-    def test_store_copy_with_other_bytes_fails_once_and_leaves_nothing(self, helper, tmp_path):
+    def test_store_copy_with_other_bytes_is_used_and_flagged(self, helper, tmp_path):
+        # The path is {node}/{run_hash}: a refresh or another machine overwrites it.
         local = tmp_path / "h.json"
         reply = self._get(helper, self._store(b'{"x": 2}'), local)
-        assert reply["type"] == "error" and reply["attempts"] == 1
-        assert "ChecksumMismatch" in reply["message"] and self.SHA in reply["message"]
-        assert list(tmp_path.iterdir()) == []
+        assert (reply["type"], reply["fetched"], reply["mismatch"]) == ("done", True, True)
+        assert local.read_bytes() == b'{"x": 2}'
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["h.json"]
+
+    def test_local_copy_equal_to_a_mismatched_store_copy_is_left_alone(self, helper, tmp_path):
+        local = tmp_path / "h.json"
+        local.write_bytes(b'{"x": 2}')
+        before = local.stat().st_mtime_ns
+        reply = self._get(helper, self._store(b'{"x": 2}'), local)
+        assert (reply["type"], reply["fetched"], reply["mismatch"]) == ("done", False, True)
+        assert local.stat().st_mtime_ns == before
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["h.json"]
 
     def test_without_a_recorded_hash_the_download_is_taken_as_it_is(self, helper, tmp_path):
         local = tmp_path / "h.json"
