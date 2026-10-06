@@ -21,7 +21,11 @@ except ImportError:
 # ─── Socket connection ────────────────────────────────────────────────────────
 
 _socket: socket.socket | None = None
-_socket_lock = threading.Lock()
+# Separate locks: whole frames never interleave on either direction, and a
+# thread parked in recv_message never blocks senders (heartbeats, or the
+# transfer helper's pool threads replying while its main thread reads).
+_send_lock = threading.Lock()
+_recv_lock = threading.Lock()
 
 
 def connect() -> socket.socket | None:
@@ -53,7 +57,7 @@ def is_worker() -> bool:
 def send_message(msg: dict) -> None:
     """Send a length-prefixed JSON message to the executor."""
     assert _socket is not None, "send_message called before connect()"
-    with _socket_lock:
+    with _send_lock:
         payload = orjson.dumps(msg) if orjson else json.dumps(msg).encode("utf-8")
         header = struct.pack(">I", len(payload))
         _socket.sendall(header + payload)
@@ -61,7 +65,7 @@ def send_message(msg: dict) -> None:
 
 def recv_message() -> dict:
     """Read a length-prefixed JSON message from the executor (blocks)."""
-    with _socket_lock:
+    with _recv_lock:
         header = _recv_exact(4)
         if not header:
             raise RuntimeError("executor disconnected")
@@ -87,8 +91,22 @@ def _recv_exact(n: int) -> bytes | None:
 # ─── High-level protocol ─────────────────────────────────────────────────────
 
 
+def _report_repeated_warnings() -> None:
+    """Send the warnings this worker suppressed as repeats since the last report.
+
+    Called ahead of every step result, so the coordinator has the counts before it can
+    consider the run finished.
+    """
+    from barca import _dedupe
+
+    counts = _dedupe.take()
+    if counts:
+        send_message({"type": "repeated_warnings", "counts": counts})
+
+
 def emit_step_completed(node_id: str, artifact: dict) -> None:
     """Report a step completed successfully."""
+    _report_repeated_warnings()
     send_message(
         {
             "type": "step_completed",
@@ -102,6 +120,7 @@ def emit_step_error(
     node_id: str, error_type: str, message: str, traceback: str, elapsed: float
 ) -> None:
     """Report a step failed."""
+    _report_repeated_warnings()
     send_message(
         {
             "type": "step_error",
@@ -116,6 +135,7 @@ def emit_step_error(
 
 def emit_blocked(node_id: str, reason: str) -> None:
     """Report a step was blocked."""
+    _report_repeated_warnings()
     send_message(
         {
             "type": "blocked",
@@ -128,6 +148,11 @@ def emit_blocked(node_id: str, reason: str) -> None:
 def emit_heartbeat() -> None:
     """Send a heartbeat."""
     send_message({"type": "heartbeat"})
+
+
+def emit_log(node_id: str, line: str) -> None:
+    """Stream a line of user stdout captured during a step."""
+    send_message({"type": "log", "node_id": node_id, "line": line})
 
 
 def submit_and_wait(work_items: list[dict]) -> list[dict]:

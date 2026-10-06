@@ -150,6 +150,85 @@ class TestFraming:
             s1.close()
             s2.close()
 
+    def test_send_from_thread_while_recv_blocks(self):
+        """A thread can send while another thread is parked in recv_message.
+
+        The transfer helper's main thread sits in recv while pool threads
+        send replies; a single shared lock would deadlock that.
+        """
+        from barca import _runtime
+
+        s1, s2 = self._make_socketpair()
+        s2.settimeout(5)
+        original_socket = _runtime._socket
+        _runtime._socket = s1
+        try:
+            received = []
+            reader = threading.Thread(target=lambda: received.append(_runtime.recv_message()))
+            reader.start()
+            # Give the reader time to take its lock and block in recv.
+            reader.join(timeout=0.1)
+            assert reader.is_alive()
+
+            sender = threading.Thread(target=_runtime.send_message, args=({"type": "done"},))
+            sender.start()
+            sender.join(timeout=2)
+            assert not sender.is_alive(), "send blocked behind a pending recv"
+
+            header = s2.recv(4)
+            payload = s2.recv(struct.unpack(">I", header)[0])
+            assert json.loads(payload) == {"type": "done"}
+
+            # Unblock the reader.
+            body = json.dumps({"type": "shutdown"}).encode()
+            s2.sendall(struct.pack(">I", len(body)) + body)
+            reader.join(timeout=2)
+            assert received == [{"type": "shutdown"}]
+        finally:
+            _runtime._socket = original_socket
+            s1.close()
+            s2.close()
+
+    def test_concurrent_sends_never_interleave(self):
+        """Frames from many sender threads arrive whole."""
+        from barca import _runtime
+
+        s1, s2 = self._make_socketpair()
+        s2.settimeout(5)
+        original_socket = _runtime._socket
+        _runtime._socket = s1
+        try:
+            big = "x" * 200_000  # bigger than a socket buffer → partial writes
+            threads = [
+                threading.Thread(target=_runtime.send_message, args=({"id": i, "pad": big},))
+                for i in range(8)
+            ]
+            got = []
+
+            def drain():
+                for _ in range(8):
+                    header = b""
+                    while len(header) < 4:
+                        header += s2.recv(4 - len(header))
+                    n = struct.unpack(">I", header)[0]
+                    buf = b""
+                    while len(buf) < n:
+                        buf += s2.recv(n - len(buf))
+                    got.append(json.loads(buf)["id"])
+
+            d = threading.Thread(target=drain)
+            d.start()
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=5)
+            d.join(timeout=5)
+            assert sorted(got) == list(range(8))
+        finally:
+            _runtime._socket = original_socket
+            s1.close()
+            s2.close()
+
 
 # ─── is_worker() ─────────────────────────────────────────────────────────────
 

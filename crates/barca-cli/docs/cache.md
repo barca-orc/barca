@@ -314,6 +314,9 @@ Known limits:
 
 - With shared remote state (`barca docs remote`) these apply to the machine the run is on only,
   and not reliably: see "Limitations" there.
+- With a remote artifact store, steps are not recorded as they finish: a row is written only
+  once the artifact's upload is confirmed, which happens when the run ends. Such a run shows no
+  progress in `barca status`, and a killed one records nothing.
 - `interrupted` is decided by looking for the run's process on this machine. A run started by an
   older barca, or on another machine, stays `running`; so does a run whose process id has since
   been reused by another program.

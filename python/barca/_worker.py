@@ -10,6 +10,8 @@ Protocol:
   - No DB access — Rust owns all persistence
 """
 
+import contextlib
+import io
 import json
 import os
 import sys
@@ -21,11 +23,12 @@ from pathlib import Path
 from barca import _duckdb, _storage
 from barca._source_import import load_package_module, load_source_module
 from barca._artifacts import (
+    LAZY_FRAME_TYPES,
+    _frame_kind,
     artifact_path,
     clean_staging,
     deserialize,
     detect_format,
-    release_fetched,
     resolve_format,
     safe_node_id,
     serialize,
@@ -38,6 +41,45 @@ _EXT_FORMATS = {
     ".pickle": "pickle",
     ".parquet": "parquet",
 }
+
+
+class _LineEmitter(io.TextIOBase):
+    """A stdout proxy that streams complete lines to the coordinator as they
+    are written, so user `print()` output shows up live in the UI — while still
+    passing the text through to the real stdout, preserving the terminal
+    behaviour CLI users expect. Buffers a partial trailing line until the next
+    newline or an explicit flush."""
+
+    def __init__(self, node_id):
+        self.node_id = node_id
+        self._buf = ""
+        # The real stdout, captured before redirect_stdout swaps sys.stdout.
+        self._passthrough = sys.stdout
+
+    def write(self, s):
+        from barca import _runtime
+
+        # Tee to the real stdout so `print()` still shows on the terminal.
+        try:
+            self._passthrough.write(s)
+        except Exception:
+            pass
+        self._buf += s
+        while "\n" in self._buf:
+            line, self._buf = self._buf.split("\n", 1)
+            _runtime.emit_log(self.node_id, line)
+        return len(s)
+
+    def flush(self):
+        from barca import _runtime
+
+        try:
+            self._passthrough.flush()
+        except Exception:
+            pass
+        if self._buf:
+            _runtime.emit_log(self.node_id, self._buf)
+            self._buf = ""
 
 
 def _peak_rss_bytes() -> int:
@@ -60,6 +102,30 @@ def _peak_rss_bytes() -> int:
 # guards against mutation would cost more than the disk read it saves.
 # Remote artifacts always cache — skipping a network fetch beats any copy.
 _LRU_MAX_ARTIFACT_BYTES = 8 * 1024 * 1024
+
+
+def _lru_frame_type(frame_type: str | None) -> bool:
+    """Whether values read with this frame type may be cached.
+
+    Lazy values (duckdb relations, polars LazyFrames) are cheap to recreate and read their file
+    when queried; a remote input's file is deleted when the step ends, so a cached one would
+    break the next step that used it.
+    """
+    return frame_type not in LAZY_FRAME_TYPES
+
+
+def _result_frame_type(value) -> "str | None | bool":
+    """The reader frame type a step's result is equivalent to, for caching it.
+
+    Returns the frame type (None for non-frame values, which every reader ignores), or False
+    when the result must not be cached: a lazy value, or a frame of a type no reader returns.
+    """
+    kind = _frame_kind(value)
+    if kind is None:
+        return None
+    if kind == "duckdb" or type(value).__name__ == "LazyFrame":
+        return False
+    return kind
 
 
 def _lru_cacheable(path: str, size_bytes=None) -> bool:
@@ -279,7 +345,8 @@ def _resolve_input(raw_value, *, frame_type=None):
 def _load_artifact(path, lru, fmt=None, *, frame_type=None):
     """Resolve one artifact path to its deserialized value via the tier-1 LRU
     cache, falling through to the artifact store on miss."""
-    hot = lru.get(path, frame_type)
+    cacheable = _lru_frame_type(frame_type)
+    hot = lru.get(path, frame_type) if cacheable else None
     if hot is not None:
         return hot
     if not _storage.exists(path):
@@ -287,7 +354,7 @@ def _load_artifact(path, lru, fmt=None, *, frame_type=None):
     if fmt is None:
         fmt = _EXT_FORMATS.get(_storage.suffix(path), "json")
     value = deserialize(path, fmt, frame_type=frame_type)
-    if _lru_cacheable(path):
+    if cacheable and _lru_cacheable(path):
         lru.put(path, value, frame_type)
     return value
 
@@ -317,6 +384,8 @@ def _load_collected_artifacts(artifacts, lru=None, *, param=None, frame_type=Non
     """
     results = [None] * len(artifacts)
     to_fetch = []
+    if not _lru_frame_type(frame_type):
+        lru = None
     for i, artifact in enumerate(artifacts):
         hot = lru.get(artifact["path"], frame_type) if lru is not None else None
         if hot is not None:
@@ -451,13 +520,16 @@ def _materialize(result, node_id, art_dir, step, elapsed, elapsed_in_artifact=Fa
             **timing,
             "cpu_seconds": timing["cpu_seconds"] + (time.process_time() - _ser_cpu0),
         }
-    artifact = {"path": str(path), "format": fmt, "size_bytes": size}
+    artifact: dict = {"path": str(path), "format": fmt, "size_bytes": size}
     if content_hash is not None:
         artifact["content_hash"] = content_hash
     if elapsed_in_artifact:
         artifact["elapsed_seconds"] = elapsed
     if timing:
         artifact.update(timing)
+    # When the step finished and how long it took, for telemetry: a span needs wall-clock times.
+    artifact["finished_at"] = time.time()
+    artifact["wall_seconds"] = elapsed
     sink_outcomes = _write_sinks(result, step, node_id, fmt)
     if sink_outcomes:
         artifact["sinks"] = sink_outcomes
@@ -679,16 +751,23 @@ def _run_daemon_step(step, modules, art_dir, lru):
         bound_views = _duckdb.bind_inputs(kwargs, param_types)
 
         timeout = step.get("timeout_seconds", 0)
-        if d_args:
-            if timeout and timeout > 0:
-                result = _run_with_timeout(lambda: fn(*d_args, **kwargs), {}, timeout)
-            else:
-                result = fn(*d_args, **kwargs)
-        else:
-            if timeout and timeout > 0:
-                result = _run_with_timeout(lambda: fn(**kwargs), {}, timeout)
-            else:
-                result = fn(**kwargs)
+        # Capture user stdout and stream it live, line by line.
+        emitter = _LineEmitter(node_id)
+        with contextlib.redirect_stdout(emitter):
+            try:
+                if d_args:
+                    if timeout and timeout > 0:
+                        result = _run_with_timeout(lambda: fn(*d_args, **kwargs), {}, timeout)
+                    else:
+                        result = fn(*d_args, **kwargs)
+                else:
+                    if timeout and timeout > 0:
+                        result = _run_with_timeout(lambda: fn(**kwargs), {}, timeout)
+                    else:
+                        result = fn(**kwargs)
+            finally:
+                # Emit any trailing partial line, even if the step raised.
+                emitter.flush()
 
         wall = time.perf_counter() - t0
         cpu = time.process_time() - c0
@@ -719,9 +798,13 @@ def _run_daemon_step(step, modules, art_dir, lru):
             elapsed_in_artifact=True,
             timing={"cpu_seconds": cpu, "max_rss_bytes": _peak_rss_bytes()},
         )
-        # A downstream step in this worker may consume what we just produced.
-        if _lru_cacheable(artifact["path"], artifact.get("size_bytes")):
-            lru.put(artifact["path"], result)
+        # A downstream step in this worker may consume what we just produced, keyed by the
+        # reader it is equivalent to so a consumer never gets a different frame type.
+        result_type = _result_frame_type(result)
+        if result_type is not False and _lru_cacheable(
+            artifact["path"], artifact.get("size_bytes")
+        ):
+            lru.put(artifact["path"], result, result_type)
         return True
 
     except BaseException as exc:
@@ -751,9 +834,6 @@ def _run_daemon_step(step, modules, art_dir, lru):
 
     finally:
         _duckdb.unbind_inputs(bound_views)
-        # Remote duckdb inputs scan their fetched files lazily; the step and its
-        # materialization are over, so nothing reads them any more.
-        release_fetched()
 
 
 def run_daemon():
@@ -766,6 +846,11 @@ def run_daemon():
         print("BARCA_SOCKET not set", file=sys.stderr)
         sys.exit(1)
     _use_socket = True
+
+    # Collapse repeated library warnings (barca docs agents, "Repeated warnings").
+    from barca import _dedupe
+
+    _dedupe.install(os.environ.get("BARCA_SOCKET"))
 
     # Install SIGTERM handler so graceful_kill flushes buffered progress output
     # before the process goes away. Exit via os._exit, not sys.exit(0): a
@@ -780,12 +865,6 @@ def run_daemon():
         try:
             sys.stdout.flush()
             sys.stderr.flush()
-        except Exception:
-            pass
-        # The coordinator stops workers as soon as the last result arrives, which can be
-        # before a step's `finally` has removed its fetched inputs.
-        try:
-            release_fetched()
         except Exception:
             pass
         os._exit(0)

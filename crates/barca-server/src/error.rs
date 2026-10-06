@@ -17,6 +17,8 @@ pub enum ApiError {
     NotFound(String),
     /// Ambiguous lookup — multiple matches.
     Conflict(String),
+    /// Refused by server mode (e.g. a run requested of a `--read-only` server).
+    Forbidden(String),
 }
 
 impl From<BarcaError> for ApiError {
@@ -30,6 +32,7 @@ impl IntoResponse for ApiError {
         let (status, message) = match self {
             ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
             ApiError::Conflict(msg) => (StatusCode::CONFLICT, msg),
+            ApiError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg),
             ApiError::Barca(err) => {
                 let status = match &err {
                     BarcaError::AssetNotFound(..) => StatusCode::NOT_FOUND,

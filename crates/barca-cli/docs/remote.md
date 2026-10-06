@@ -62,6 +62,12 @@ convention, so other fsspec tools on the machine read the same settings.
 A failure to reach the bucket stops the run before any step: exit 3, naming the location, with
 the cloud's own error (expired login, access denied). A missing extra says which one to install.
 
+A warning that a storage library repeats on every operation (aiohttp's `Could not parse .netrc
+file` under adlfs, when `~/.netrc` is malformed) is printed once per run, then counted:
+`[barca] 79 more: Could not parse .netrc file`. This applies while logging is unconfigured; if
+the project configures logging, every record is printed. See `barca docs agents`, "Repeated
+warnings".
+
 ## In barca.toml instead
 
 The same settings can live in the project, so everyone who clones it gets them:
@@ -82,7 +88,7 @@ reference: https://barca.sh/reference/config/
 ## What barca keeps in the bucket
 
 ```
-<uri>/<env>/artifacts/<node>/<run_hash>.<ext>   one immutable file per result
+<uri>/<env>/artifacts/<node>/<run_hash>.<ext>   one file per result
 <uri>/<env>/state/metadata.db                   run history, pulled at the start of a run
 ```
 
@@ -95,18 +101,123 @@ Two machines finishing runs at the same time do not lose history: the second det
 conflict, re-reads and merges. Set `BARCA_STATE=off` to keep history on each machine and share
 only results.
 
-From a remote store, `barca get --json` reports every result as a pointer
-(`{"_barca_artifact": {"path", ...}}`), json ones included; `barca.get()` in Python loads it.
+`barca get --json` reports a result as it does without a store: json values inline, parquet and
+pickle as a pointer (`{"_barca_artifact": {"path", ...}}`) to the copy in `.barca/artifacts/`.
+A final output another machine produced is downloaded first.
+
+## What happens during a run
+
+- The shared metadata DB is pulled before the run and pushed after it (conditional upload;
+  a concurrent push from another machine is merged by replaying this run's rows).
+- Steps always read and write local files under `.barca/artifacts/`. A helper process
+  uploads each artifact in the background as soon as its step finishes.
+- A cache hit recorded by another machine is downloaded just before the first step that
+  reads it eagerly. Cached intermediates nothing reads are never downloaded, and neither are
+  parquet results that are only read lazily (below).
+- Before results are recorded, barca waits for every upload. The shared state never points
+  at an artifact that is missing from the store.
+
+stderr reports each part, so remote cost is visible:
+
+```
+[barca] pulled state (48.0 KB) in 0.03s
+[barca] fetched 1 cached artifact (672.8 KB) in 0.1s
+[barca] uploaded 2 artifacts (672.8 KB); waited 0.0s at end of run
+[barca] pushed state (48.0 KB) in 0.03s
+```
+
+## How steps read inputs from the store
+
+A result produced on this machine is already on disk, and steps read that file. For a cache hit
+recorded by another machine, the input's annotation decides how many bytes move
+(`barca docs types`):
+
+- A parquet input annotated `duckdb.DuckDBPyRelation` or `pl.LazyFrame` is read in place:
+  only the byte ranges the step's query touches are fetched, and nothing is downloaded. A query
+  over one column of eight fetches about that column's share of the object; a selective filter
+  skips row groups. This applies when every step in the phase that reads the result is lazy.
+- Every other input (no annotation, `pd.DataFrame`, `pl.DataFrame`, `pyarrow.Table`, json,
+  pickle) is downloaded once into `.barca/artifacts/` and read from there by this run and
+  later ones.
+
+For a large upstream that a step filters, projects or aggregates, annotate the input as lazy.
+DuckDB reads barca's artifacts through a `barca<protocol>://` filesystem registered on its
+connection, so `s3://`, `abfss://` and `gs://` URLs in your own SQL keep using DuckDB's own
+extensions and credentials.
+
+## Checking a local copy against the store
+
+When an artifact is uploaded, the SHA-256 of the local file is recorded with it in the shared
+history. A machine uses that hash to decide whether its own copy is current:
+
+- A copy already in `.barca/artifacts/` is hashed the first time a run reads it. If it does not
+  match (edited by hand, or left from before another machine refreshed the result), it is
+  replaced by the store's copy and reported as a fetch.
+- A downloaded artifact is hashed too. If the store's copy does not match the recorded hash,
+  the run still uses it and prints a warning naming the step. This is not an error: an
+  artifact's path is `<node>/<run_hash>`, which identifies the computation and not the bytes,
+  so a `--refresh`, or two machines computing the same step at once, overwrites the object.
+  The warning names the step; `--refresh <file.py:name>` recomputes it, which clears the
+  warning for every machine that shares this history. Until then, machines can hold
+  different copies of that one result: a machine whose copy matches the recorded hash keeps
+  it, and the others use the store's.
+
+Only artifacts a run reads are hashed, once per run. Not checked: a parquet input that is read
+in place (only byte ranges are fetched), and results recorded before barca stored a hash.
+
+## Settings
+
+| `[remote]` key | Env var | Default | Meaning |
+|---|---|---|---|
+| `transfer_concurrency` | `BARCA_TRANSFER_CONCURRENCY` | 4 | Uploads/downloads in flight at once |
+| `transfer_timeout` | `BARCA_TRANSFER_TIMEOUT` | 600 | Seconds one transfer attempt may run (counted from when it starts) |
+| `push_retries` | `BARCA_PUSH_RETRIES` | 5 | Conflict retries for the state push |
+
+## Failures
+
+Transfers are retried up to 3 times (0.5s, 1s, 2s backoff) when the error looks transient:
+dropped connections, timeouts, 5xx, 408 and 429. Missing objects, permission and
+authentication errors, and other 4xx responses fail on the first attempt. An attempt that
+exceeds `transfer_timeout` fails as stalled and is not retried.
+
+- **Upload failed**: the run exits 3 and names the step. The step gets a `failed` row with
+  `error_type = 'UploadError'`, no artifact path, and the attempt count; it recomputes on
+  the next run. `barca stats target pipeline.py` shows the failure.
+- **Cached artifact missing from the store** (deleted, or a different bucket): the run exits
+  3 with `could not fetch ... cached artifact(s)`. Recompute with
+  `barca get target pipeline.py --refresh-all`.
+- **Stalled store**: lower `transfer_timeout` to fail faster; raise it if single artifacts
+  legitimately take longer than 10 minutes to move.
+
+`.barca/artifacts/` doubles as a local cache of the store and is never pruned automatically;
+deleting it is safe (anything needed later is downloaded again).
+
+Using a GCS emulator (e.g. fake-gcs-server) with gcsfs 2026.10 or later: set
+`GCSFS_EXPERIMENTAL_ZB_HNS_SUPPORT=false`. gcsfs's experimental mode calls a gRPC API the
+emulator doesn't serve, and transfers stall until `transfer_timeout`.
+
+## Looking at results in the bucket
+
+Nothing has to be downloaded by hand or re-run to inspect a remote result:
+
+```bash
+barca status total --json --sample 2     # rows, columns and sample rows, read from the bucket
+barca sql "select * from total"          # downloads `total` into .barca/sql-cache/ and queries it
+```
+
+`barca status` reads a parquet footer by ranged requests and downloads json or pickle results of
+up to 16 MB; a store it cannot read is a `note` on each shape, not a failed command
+(`barca docs status`). `barca sql` downloads the artifacts of the views a query names and reuses
+the copies while the objects are unchanged (`barca docs sql`).
 
 ## Limitations
 
-- Keys from `partitions_from(<asset returning a list>)` are read from local disk: with a remote
-  store the step errors.
-- `parallel()` return values come back as `null` with a remote store (a warning says so).
 - `barca serve` does not share history yet; set `BARCA_STATE=off` for it.
 - The shared history is updated once, when a run ends. A run records each finished step in the
   local copy as it goes (`barca docs cache`, "While a run is going, and after one is killed"), but
-  other machines see none of it until the run ends, and never see a run that was killed.
+  other machines see none of it until the run ends, and never see a run that was killed. With a
+  remote artifact store a run records nothing early: a step is recorded once its upload is
+  confirmed, when the run ends.
 - On the machine a run is on, `barca status` during the run and resuming after `kill -9` can be
   relied on only while no other machine updates the shared history in the meantime:
   every `barca get`, `barca run`, `--dry-run` and `barca status` starts by replacing the local
@@ -115,4 +226,6 @@ From a remote store, `barca get --json` reports every result as a pointer
   those steps run again). If a run was killed and other machines are active, delete
   `.barca/metadata.db` and `.barca/metadata.db-wal` on that machine before the next run: it
   then starts from the shared history alone, and recomputes what the killed run had finished.
-- `barca status` shapes and `barca sql` read local artifacts only.
+- `barca status` does not describe a remote json or pickle result larger than 16 MB, and
+  `barca sql` downloads a whole artifact before querying it.
+- `.barca/artifacts/` has no size cap (see Failures).

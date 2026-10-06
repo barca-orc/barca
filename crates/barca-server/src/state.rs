@@ -1,14 +1,15 @@
 //! Shared server state and in-memory run tracking.
 
 use barca_core::CancellationToken;
+use barca_core::RunEvent;
 use barca_core::commands::{AssetSummary, GetResult, PlanResult};
 use dashmap::DashMap;
 use serde::Serialize;
 use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
-use std::sync::{Arc, RwLock};
-use tokio::sync::Semaphore;
+use std::sync::{Arc, Mutex, RwLock};
+use tokio::sync::{Semaphore, broadcast};
 
 /// How many runs may execute concurrently by default (one per available core).
 fn default_run_concurrency() -> usize {
@@ -40,10 +41,16 @@ pub struct ServeConfig {
     pub python: PathBuf,
     /// Resolved barca configuration (environment, DB path, artifact root, state).
     pub resolved: barca_core::config::ResolvedConfig,
+    /// Inspect-only mode (`--read-only`): endpoints that run or cancel work
+    /// return 403, the scheduler never starts, and every DB read goes through a
+    /// private snapshot — the metadata DB is never opened, locked, created, or
+    /// written. Safe to point at a project another process is running.
+    pub read_only: bool,
 }
 
 /// Lifecycle of an async run tracked by the server.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum RunStatus {
     /// Accepted, not yet started.
@@ -61,6 +68,7 @@ pub enum RunStatus {
 /// In-memory record of a single run. The server-side `handle` is the polling id
 /// returned by `POST /run`; the real DB run id lives inside `result` once complete.
 #[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct RunState {
     /// Server-side polling handle (see `/status/{run_id}`).
     pub handle: String,
@@ -88,6 +96,75 @@ pub struct DagCache {
     pub plan: Option<PlanResult>,
 }
 
+/// One row of `GET /state`: the node's `barca status` entry plus what the
+/// table needs beyond it — typical durations and the next cron fire time.
+#[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct NodeState {
+    #[serde(flatten)]
+    #[cfg_attr(feature = "ts", ts(flatten))]
+    pub status: barca_core::status::NodeStatus,
+    /// Typical wall time over the most recent successful materializations.
+    pub durations: Option<Durations>,
+    /// Next cron fire time (local time, unix epoch seconds), if scheduled.
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub next_run: Option<i64>,
+}
+
+/// Median and p95 wall time over a node's most recent successful materializations.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct Durations {
+    pub median_seconds: f64,
+    pub p95_seconds: f64,
+    /// How many materializations these are computed from (at most 20).
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub samples: usize,
+}
+
+/// Live event channel for one run: a broadcast for subscribers plus a backlog
+/// so a client that subscribes a beat after the run starts still receives the
+/// events emitted before it connected (the "replay backlog, then stream live"
+/// pattern). Durable history lives in the DB; this is the live tap.
+#[derive(Clone)]
+pub struct RunChannel {
+    tx: broadcast::Sender<RunEvent>,
+    backlog: Arc<Mutex<Vec<RunEvent>>>,
+}
+
+impl Default for RunChannel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl RunChannel {
+    pub fn new() -> Self {
+        let (tx, _) = broadcast::channel(1024);
+        Self {
+            tx,
+            backlog: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    /// Record an event to the backlog and broadcast it to live subscribers.
+    /// Push-before-send under the lock so a subscriber snapshotting the backlog
+    /// (while holding the lock) can't miss or duplicate an event.
+    pub fn emit(&self, event: RunEvent) {
+        let mut backlog = self.backlog.lock().unwrap();
+        backlog.push(event.clone());
+        let _ = self.tx.send(event);
+    }
+
+    /// Snapshot the current backlog and subscribe to live events atomically.
+    pub fn snapshot_and_subscribe(&self) -> (Vec<RunEvent>, broadcast::Receiver<RunEvent>) {
+        let backlog = self.backlog.lock().unwrap();
+        let snapshot = backlog.clone();
+        let rx = self.tx.subscribe();
+        (snapshot, rx)
+    }
+}
+
 /// Durable, mutable view of one scheduled job, published by the scheduler and
 /// read by `GET /schedule`. The volatile bits (next fire time, live run status)
 /// are computed at request time from `cron` and `last_handle`.
@@ -111,6 +188,8 @@ pub struct AppState {
     pub config: Arc<ServeConfig>,
     pub runs: Arc<DashMap<String, RunState>>,
     pub cache: Arc<RwLock<DagCache>>,
+    /// Live event channels per run handle (logs + step/run lifecycle).
+    pub events: Arc<DashMap<String, RunChannel>>,
     /// Bounds how many runs execute concurrently. Runs execute Python in
     /// parallel; the shared metadata.db is kept race-free by a process-wide DB
     /// lock in `barca-core`, not by serializing whole runs.
@@ -135,6 +214,7 @@ impl AppState {
             config: Arc::new(config),
             runs: Arc::new(DashMap::new()),
             cache: Arc::new(RwLock::new(DagCache::default())),
+            events: Arc::new(DashMap::new()),
             run_slots: Arc::new(Semaphore::new(run_slot_count)),
             run_slot_count,
             shutdown: CancellationToken::new(),

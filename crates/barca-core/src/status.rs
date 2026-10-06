@@ -28,12 +28,14 @@ pub struct StatusResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct NodeStatus {
     /// Node id, e.g. `pipeline.py:clean`.
     pub id: String,
     /// The function name (what `get`, `run` and `--refresh` accept).
     pub name: String,
     /// `asset`, `task` or `sensor`.
+    #[cfg_attr(feature = "ts", ts(type = "\"asset\" | \"task\" | \"sensor\""))]
     pub kind: String,
     /// Upstream node ids (direct inputs and `collect(...)` inputs), sorted.
     pub inputs: Vec<String>,
@@ -46,6 +48,7 @@ pub struct NodeStatus {
     /// are not executions and do not appear here.
     pub last_materialization: Option<LastMaterialization>,
     /// Shape of `last_materialization`'s artifact (`null` when there is none).
+    #[cfg_attr(feature = "ts", ts(type = "unknown"))]
     pub shape: Option<serde_json::Value>,
     /// Environment variables the node declares with `env=[...]` (empty when none); their values
     /// are part of its run hash.
@@ -54,12 +57,25 @@ pub struct NodeStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct CacheStatus {
     /// `cached`, `stale`, `never_run`, `partial`, `unknown` or `always_runs`.
+    #[cfg_attr(
+        feature = "ts",
+        ts(
+            type = "\"cached\" | \"stale\" | \"never_run\" | \"partial\" | \"unknown\" | \"always_runs\""
+        )
+    )]
     pub state: String,
     /// Machine-readable reason: `materialized`, `changed`, `upstream_stale`, `failed`,
     /// `no_record`, `partitions_missing`, `partitions_unknown`, `sensor_output_unknown`, `task`
     /// or `sensor`.
+    #[cfg_attr(
+        feature = "ts",
+        ts(
+            type = "\"materialized\" | \"changed\" | \"upstream_stale\" | \"failed\" | \"no_record\" | \"partitions_missing\" | \"partitions_unknown\" | \"sensor_output_unknown\" | \"task\" | \"sensor\""
+        )
+    )]
     pub reason: String,
     /// The reason in words.
     pub detail: String,
@@ -72,6 +88,7 @@ pub struct CacheStatus {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct PartitionState {
     pub total: usize,
     pub cached: usize,
@@ -81,6 +98,7 @@ pub struct PartitionState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct LastMaterialization {
     /// `success` or `failed`.
     pub status: String,
@@ -91,6 +109,7 @@ pub struct LastMaterialization {
     pub artifact: Option<String>,
     /// `json`, `pickle` or `parquet`.
     pub format: Option<String>,
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub size_bytes: Option<i64>,
     /// For a partitioned node: which key this was (e.g. `k=a`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -207,7 +226,7 @@ pub async fn status(
     }
 
     if shape {
-        read_shapes(python, &mut nodes, sample).await;
+        read_shapes(python, cfg, &mut nodes, sample).await;
     }
 
     let mut summary = StatusSummary::default();
@@ -355,9 +374,15 @@ fn short_name(node_id: &str) -> &str {
 }
 
 /// Fill `shape` for every node whose last materialization produced an artifact, with one call
-/// to `python -m barca._inspect`. A failure to run the reader is reported in each shape's `note`
-/// rather than failing the command.
-async fn read_shapes(python: &Path, nodes: &mut [NodeStatus], sample: usize) {
+/// to `python -m barca._inspect`. A remote artifact is read through the same fsspec filesystem
+/// the workers use, so the reader gets the same storage options. A failure to run the reader is
+/// reported in each shape's `note` rather than failing the command.
+async fn read_shapes(
+    python: &Path,
+    cfg: &crate::config::ResolvedConfig,
+    nodes: &mut [NodeStatus],
+    sample: usize,
+) {
     let wanted: Vec<(usize, String, String)> = nodes
         .iter()
         .enumerate()
@@ -379,7 +404,7 @@ async fn read_shapes(python: &Path, nodes: &mut [NodeStatus], sample: usize) {
             .map(|(_, path, format)| serde_json::json!({"path": path, "format": format}))
             .collect::<Vec<_>>(),
     });
-    let shapes = match run_inspector(python, &request).await {
+    let shapes = match run_inspector(python, cfg, &request).await {
         Ok(shapes) if shapes.len() == wanted.len() => shapes,
         Ok(_) => vec![note("the shape reader returned an unexpected result"); wanted.len()],
         Err(e) => vec![note(&format!("could not run the shape reader: {e}")); wanted.len()],
@@ -395,11 +420,17 @@ fn note(msg: &str) -> serde_json::Value {
 
 async fn run_inspector(
     python: &Path,
+    cfg: &crate::config::ResolvedConfig,
     request: &serde_json::Value,
 ) -> Result<Vec<serde_json::Value>, String> {
     use tokio::io::AsyncWriteExt;
-    let mut child = tokio::process::Command::new(python)
-        .args(["-m", "barca._inspect"])
+    let mut cmd = tokio::process::Command::new(python);
+    cmd.args(["-m", "barca._inspect"]);
+    // The same options workers get (`[remote.storage_options.*]` merged with the environment).
+    if let Some(ref opts) = cfg.storage_options_json {
+        cmd.env("BARCA_STORAGE_OPTIONS", opts);
+    }
+    let mut child = cmd
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())

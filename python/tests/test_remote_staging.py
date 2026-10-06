@@ -1,8 +1,9 @@
 """Staging files for remote artifacts live as long as something reads them, and no longer.
 
-A remote input is downloaded to `.barca/staging/{pid}/` before it is loaded. Two things used to
-remove that file too early: a duckdb-typed input is lazy and was read after its file was deleted,
-and a worker starting up swept the temp files of every other worker.
+An eager remote input is downloaded to `.barca/staging/{pid}/` before it is loaded. Two things
+used to remove that file too early: a duckdb-typed input is lazy and was read after its file was
+deleted (lazy inputs now read the remote object in place and stage nothing; see
+test_remote_lazy.py), and a worker starting up swept the temp files of every other worker.
 """
 
 import os
@@ -22,7 +23,6 @@ def project(tmp_path, monkeypatch):
     """Run in an empty project directory with a clean memory:// store."""
     monkeypatch.chdir(tmp_path)
     yield tmp_path
-    _artifacts.release_fetched()
     fs = _storage._fs_cache.get("memory")
     if fs is not None:
         fs.store.clear()

@@ -1513,12 +1513,14 @@ mod tests {
             format: "json".to_string(),
             size_bytes: 10,
             elapsed_seconds: None,
+            content_hash: None,
         };
         let oref_b = OutputRef {
             path: "f--source_key_b.json".to_string(),
             format: "json".to_string(),
             size_bytes: 12,
             elapsed_seconds: None,
+            content_hash: None,
         };
         let provided = HashMap::from([(
             "f:source".to_string(),

@@ -18,7 +18,7 @@ barca run <task[,task...]> [file.py|dir/ ...] [--refresh a,b [--no-cascade] | --
 barca plan [file.py|dir/ ...]                Emit the execution plan as JSON (experimental)
 barca history [-l N | --all] [--json|--pretty]  Show recent run history
 barca stats <target> [file.py|dir/ ...]       Show timing/cache stats for an asset
-barca serve [file.py|dir/ ...] [--port N] [--watch] [--no-schedule] [--timezone TZ]
+barca serve [file.py|dir/ ...] [--port N] [--watch] [--no-schedule] [--timezone TZ] [--read-only]
                                                Run the HTTP API server
 barca list [file.py|dir/ ...] [-l N | --all] [--json]  List discovered definitions and their deps
 barca status [target[,target...]] [file.py|dir/ ...] [--json] [--sample N]
@@ -60,6 +60,13 @@ BARCA_OUTPUT=json barca get summary pipeline.py
 `plan` always prints JSON and `docs` always prints markdown (`docs --json` for JSON). Progress and
 errors always go to stderr; the progress bar (the only ANSI output) draws only when stderr is a
 terminal, and `--agent` replaces it with plain progress lines.
+
+A library warning that a step's process repeats is printed the first time in a run and then
+counted: `[barca] 79 more: Could not parse .netrc file` on stderr before the end-of-run line. Only
+`logging` WARNINGs printed because logging is unconfigured, and `warnings` module output, are
+collapsed. If the project configures logging, nothing from `logging` is collapsed, library
+warnings included; `print` output, other log levels and errors are never collapsed
+(`barca docs agents`, "Repeated warnings").
 
 > **Behavior change:** `get` and `run` used to print JSON by default even in a terminal.
 > They now print the human summary there; scripts and agents that capture stdout still get JSON.
@@ -234,9 +241,9 @@ barca stats summary pipeline.py --fields status,error_message   # JSON; trims re
 
 ## serve
 
-Start a long-running HTTP server that exposes the orchestrator as a JSON API. Binds to
-`127.0.0.1` (local only, no auth). See [Server API](/reference/server-api/) for the full endpoint
-reference.
+Start a long-running HTTP server that exposes the orchestrator as a JSON API and serves the web UI
+at `/ui/`. Binds to `127.0.0.1` (local only, no auth). See [Server API](/reference/server-api/) for
+the full endpoint reference and [Deploying](/deploying/) for running it behind nginx.
 
 ```bash
 barca serve pipeline.py                 # default port 8274
@@ -244,7 +251,13 @@ barca serve pipeline.py --port 8400     # custom port
 barca serve pipeline.py --watch         # dev mode: re-parse the DAG on file change
 barca serve pipeline.py --no-schedule   # disable the cron scheduler
 barca serve pipeline.py --timezone utc  # evaluate cron in UTC (default: local)
+barca serve pipeline.py --read-only     # inspect only: no runs, no scheduler, DB never written
 ```
+
+`--read-only` serves the API and UI without the ability to change anything: run and cancel
+endpoints return `403`, the scheduler never starts, and every read of the metadata DB goes through
+a private copy. Use it to share a view of a project, including one another barca process is
+running.
 
 `--watch` is a local-development convenience and is off by default; a production deployment serves
 a fixed set of files and does not need it.
@@ -357,7 +370,10 @@ imported:
   objects); an object adds `keys`.
 - pickle: `type` only (e.g. `myproject.Model`), read from the pickle opcodes without unpickling.
   Pickles are never sampled.
-- Remote artifacts (`artifacts = "az://..."` and the like) are not opened; `shape.note` says so.
+- Remote artifacts are read from the bucket with the credentials the steps use: a parquet footer
+  by ranged requests (the object is not downloaded; `--sample N` also reads the first row group),
+  json and pickle by a download of up to 16 MB. A larger one, a missing driver, rejected
+  credentials or a network error is reported in `shape.note`; the command still exits 0.
 
 **Partitioned assets** appear as one node with `partitions: {total, cached, missing,
 missing_keys}` (up to 20 keys). `last_materialization` is the most recently run key (named in its
@@ -377,7 +393,8 @@ is a usage error (exit 2). See `barca docs status`.
 
 Query cached results with DuckDB. Every asset, sensor and task with a result on disk is a view
 named after its function; a partitioned asset is one view with a `partition` column. Nothing
-runs, user code is never imported, and nothing is recorded. Experimental.
+runs, user code is never imported, and nothing is recorded. With remote storage, the artifacts of
+the views a query names are downloaded into `.barca/sql-cache/` and reused. Experimental.
 
 ```bash
 barca sql "select * from revenue"

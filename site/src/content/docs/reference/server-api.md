@@ -19,11 +19,13 @@ barca serve pipeline.py --port 8400       # custom port
 barca serve pipeline.py --watch           # dev mode: re-parse DAG on file change
 barca serve pipeline.py --no-schedule     # disable the cron scheduler
 barca serve pipeline.py --timezone utc    # evaluate cron in UTC (default: local)
+barca serve pipeline.py --read-only       # inspect only: no runs, no scheduler, DB never written
 barca serve a.py b.py                      # multiple source files
 ```
 
 The server binds to `127.0.0.1` (local only). There is no authentication in v1 — do not
-expose it to untrusted networks.
+expose it to untrusted networks. It also serves the web UI at `/ui/`; see
+[Deploying](/deploying/) for running it behind nginx.
 
 `--watch` is a **local development convenience**: it re-parses the DAG when a source file
 changes so `/assets` and `/plan` reflect edits without a restart. It is off by default and
@@ -31,11 +33,12 @@ has no effect on the production serving path.
 
 ## Endpoints (v1)
 
-All responses are JSON.
+All API responses are JSON, except the event stream and the UI.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET`  | `/health` | Liveness + version. |
+| `GET`  | `/health` | Liveness, version, whether the server is read-only, and whether it runs the scheduler. |
+| `GET`  | `/state` | Every node: its `barca status` entry plus typical durations and next run. |
 | `GET`  | `/assets` | List every node with kind, freshness, and upstream inputs. |
 | `GET`  | `/assets/{name}` | One asset's summary joined with timing/cache stats. |
 | `GET`  | `/plan` | Execution plan (phases and streams) as JSON. |
@@ -45,6 +48,10 @@ All responses are JSON.
 | `DELETE` | `/run/{run_id}` | Cancel an in-flight run (workers terminated, status → `cancelled`). |
 | `GET`  | `/status/{run_id}` | Poll the status and result of a run. |
 | `GET`  | `/schedule` | List scheduled jobs with next fire time and last run status. |
+| `GET`  | `/events/{run_id}` | Server-Sent Events: a run's live log lines and step/run lifecycle. |
+| `GET`  | `/logs/{run_id}` | A run's captured output lines, persisted after it finishes. |
+| `GET`  | `/`, `/ui` | Redirect (relative `Location: ui/`) to the web UI. |
+| `GET`  | `/ui/` | The web UI, compiled into the binary. |
 
 ### Async runs
 
@@ -105,8 +112,47 @@ GET /health
 ```
 
 ```json
-{ "status": "ok", "version": "0.13.3" }
+{ "status": "ok", "version": "0.16.0", "read_only": false, "scheduler": true }
 ```
+
+`scheduler` is `true` when this server fires `Schedule(...)` nodes: on by default, `false` with
+`--no-schedule` or `--read-only`.
+
+### State
+
+```
+GET /state             → [NodeState, ...]   (dependency order)
+```
+
+Each `NodeState` is a `barca status --json` node (`id`, `name`, `kind`, `inputs`, `partitioned`,
+`cache`, `partitions`, `last_materialization`, `shape`, `env`) plus `durations` — `{ median_seconds,
+p95_seconds, samples }` over the last 20 successful runs, or `null` — and `next_run`, the next cron
+fire time in unix seconds for scheduled nodes. `cache` is the `barca status` cache entry: `state` is `cached`, `stale`, `never_run`, `partial`,
+`unknown` or `always_runs`, with a machine-readable `reason` and a `detail` in words (see
+[`barca status`](/reference/cli/#status)). `shape` is always `null` here:
+reading artifact shapes starts a reader process, too slow for an endpoint the UI polls. The cache
+check reads a private copy of the metadata DB, so this endpoint never writes it.
+
+### Live events and logs
+
+```
+GET /events/{run_id}   → text/event-stream of RunEvent JSON
+GET /logs/{run_id}     → { "logs": [{ node_id, seq, line }, ...] }
+```
+
+Events are `run_started`, `log` (`{ node_id, line }`, one per line a step prints), `step_finished`
+(`{ node_id, ok, elapsed_seconds?, error? }`) and `run_finished` (`{ run_id, ok }`). A client that
+connects after the run started first receives the events it missed; the stream stays open after
+`run_finished` (with a keep-alive every 15s) until the run is evicted. The response carries
+`X-Accel-Buffering: no` so nginx passes events through as they happen. `/logs` accepts either the
+`run_id` returned by `POST /run` or the run id stored in run history.
+
+### Read-only mode
+
+With `--read-only`, `POST /run`, `POST /run/{target}`, `POST /get/{target}` and
+`DELETE /run/{run_id}` return `403`, the scheduler does not start, and `/state`, `/assets/{name}`
+and `/logs` read a private copy of the metadata DB — the database is never opened in place,
+created or written.
 
 ### Assets
 
@@ -135,14 +181,15 @@ At startup the server enumerates every node whose freshness is `Schedule(cron)`,
 each cron expression (standard 5-field, or 6-field with a leading seconds field for
 sub-minute schedules), and logs the schedule (invalid or empty cron strings are logged and
 skipped, not fatal). A background task then wakes at each second boundary and, for every
-job whose cron matches the current second, triggers a run through the same path as
+job whose cron matches the current second, triggers a run through the same run pool as
 `POST /run` / `POST /run/{target}`:
 
-- **Assets and sensors** are materialized via the `get` path.
-- **Tasks** are executed via the `run` path.
+- **Assets and sensors** are materialized via the `get` path, cache-aware.
+- **Tasks** are executed via the `run` path. A tick reuses cached upstream assets, as
+  `barca run <task>` does; `POST /run/{task}` recomputes every upstream asset.
 
 Each scheduled run gets a normal `run_id`, is visible via `GET /status/{run_id}`, and is
-persisted to `.barca/metadata.db` (`barca history`) — identical to a manually triggered run.
+persisted to `.barca/metadata.db` (`barca history`), like a manually triggered run.
 Inspect the live schedule with `GET /schedule` or, statically, with `barca list <files>`
 (scheduled definitions show their next fire time).
 
@@ -212,13 +259,12 @@ which shells out to the binary for one-shot commands rather than talking to a se
 ## Errors
 
 Errors return a JSON body `{ "error": "..." }` with an appropriate status code: `404` for an
-unknown asset or run, `400` for parse/DAG errors, `409` for conflicts (an ambiguous `{name}` match
+unknown asset or run, `400` for parse/DAG errors, `403` for a run or cancel requested of a
+`--read-only` server, `409` for conflicts (an ambiguous `{name}` match
 in `GET /assets/{name}`, or cancelling a run that already finished), and `500` for execution or
 database failures.
 
 ## Not in v1
 
-No authentication, no WebSocket/SSE streaming (poll `/status`), no web UI, no distributed
-execution, and no persistence of the in-memory run queue across restarts. A future UI is a
-separate package that consumes this API; it could later be served from the same server via a
-static-file route.
+No authentication (put it at a reverse proxy — see [Deploying](/deploying/)), no distributed
+execution, and no persistence of the in-memory run queue across restarts.

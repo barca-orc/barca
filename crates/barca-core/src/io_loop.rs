@@ -27,7 +27,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -35,7 +34,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::coordinator::{Coordinator, FailureAction, GroupId, ItemId, ItemSpec};
 use crate::cost::CostModel;
-use crate::protocol::{CoordinatorMessage, ParallelResult, WorkerMessage};
+use crate::events::RunEvent;
+use crate::protocol::{CoordinatorMessage, ParallelResult, WorkerMessage, read_frame, write_frame};
 
 // ─── Configuration ───────────────────────────────────────────────────────────
 
@@ -43,17 +43,22 @@ pub struct IoConfig {
     pub python: PathBuf,
     pub pool_size: usize,
     pub run_id: String,
-    /// Artifact store root for this run — a local directory or a remote URI.
-    /// Set explicitly on every worker so env-separated and remote layouts work
+    /// Local artifact directory workers write to and read from. Always local:
+    /// a separate artifact store is synced by `transfer::TransferClient`.
+    /// Set explicitly on every worker so env-separated layouts work
     /// regardless of the coordinator's own environment.
     pub artifact_root: String,
-    /// Merged fsspec storage options (JSON), forwarded to workers.
+    /// Merged fsspec storage options (JSON), forwarded to workers (for remote
+    /// `@sink` destinations).
     pub storage_options_json: Option<String>,
 }
 
 /// Callback invoked on each step completion with (node_id, artifact_json, attempts made).
 /// `Send` so the whole run future can be spawned onto a multi-thread runtime.
 pub type StepCallback<'a> = Box<dyn FnMut(&str, &serde_json::Value, u32) + Send + 'a>;
+
+/// Callback invoked with each live [`RunEvent`] as a run progresses.
+pub type EventCallback<'a> = Box<dyn FnMut(RunEvent) + Send + 'a>;
 
 /// Called periodically while steps are running, with `(node_id, seconds running)` for each
 /// step that has been in flight longer than the progress interval.
@@ -92,7 +97,7 @@ struct FrozenWorker {
 enum IoEvent {
     Message {
         worker_id: usize,
-        msg: WorkerMessage,
+        msg: Box<WorkerMessage>,
     },
     Disconnected {
         worker_id: usize,
@@ -123,14 +128,14 @@ async fn worker_io_task(
 ) {
     loop {
         tokio::select! {
-            result = read_one_message(&mut stream) => {
+            result = read_frame::<_, WorkerMessage>(&mut stream) => {
                 match result {
-                    Ok(msg) => {
-                        if event_tx.send(IoEvent::Message { worker_id, msg }).await.is_err() {
+                    Ok(Some(msg)) => {
+                        if event_tx.send(IoEvent::Message { worker_id, msg: Box::new(msg) }).await.is_err() {
                             break;
                         }
                     }
-                    Err(_) => {
+                    Ok(None) | Err(_) => {
                         let _ = event_tx.send(IoEvent::Disconnected { worker_id }).await;
                         break;
                     }
@@ -139,7 +144,7 @@ async fn worker_io_task(
             cmd = cmd_rx.recv() => {
                 match cmd {
                     Some(msg) => {
-                        if write_message(&mut stream, &msg).await.is_err() {
+                        if write_frame(&mut stream, &msg).await.is_err() {
                             let _ = event_tx.send(IoEvent::Disconnected { worker_id }).await;
                             break;
                         }
@@ -174,6 +179,16 @@ pub struct WorkerPool {
     /// `BARCA_PROGRESS_SECS`, default 15.
     progress_interval: Duration,
     running_hook: Option<RunningHook>,
+    /// Library warnings the workers suppressed as repeats: (first line, times suppressed).
+    repeated_warnings: Vec<(String, u64)>,
+}
+
+/// Where workers claim "first in this run to print this warning": a directory next to the
+/// coordination socket. `python/barca/_dedupe.py` derives the same path from `BARCA_SOCKET`.
+fn warning_claims_dir(socket_path: &Path) -> PathBuf {
+    let mut dir = socket_path.as_os_str().to_owned();
+    dir.push(".warnings");
+    PathBuf::from(dir)
 }
 
 impl WorkerPool {
@@ -183,6 +198,11 @@ impl WorkerPool {
         let socket_path = crate::protocol::socket_path(&config.run_id, "main");
         std::fs::remove_file(&socket_path).ok();
         let listener = UnixListener::bind(&socket_path).map_err(|e| format!("socket bind: {e}"))?;
+        // Best effort: without the directory each worker prints a repeated warning once
+        // instead of the run printing it once.
+        let claims = warning_claims_dir(&socket_path);
+        std::fs::remove_dir_all(&claims).ok();
+        std::fs::create_dir_all(&claims).ok();
         let (event_tx, event_rx) = mpsc::channel::<IoEvent>(config.pool_size.max(1) * 8);
         Ok(Self {
             config,
@@ -202,7 +222,16 @@ impl WorkerPool {
                     .unwrap_or(15),
             ),
             running_hook: None,
+            repeated_warnings: Vec::new(),
         })
+    }
+
+    /// Library warnings the workers printed once and then suppressed, with how many times
+    /// each was suppressed, most repeated first. Drains the tally.
+    pub fn take_repeated_warnings(&mut self) -> Vec<(String, u64)> {
+        let mut out = std::mem::take(&mut self.repeated_warnings);
+        out.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        out
     }
 
     /// Report steps that stay in flight longer than the progress interval, so a long
@@ -238,6 +267,7 @@ impl WorkerPool {
         coord: &mut Coordinator,
         cost: &mut CostModel,
         mut on_step: Option<StepCallback<'_>>,
+        mut on_event: Option<EventCallback<'_>>,
         cancel: &CancellationToken,
     ) -> Result<(), String> {
         if cancel.is_cancelled() {
@@ -290,7 +320,7 @@ impl WorkerPool {
             };
 
             match event {
-                IoEvent::Message { worker_id, msg } => match msg {
+                IoEvent::Message { worker_id, msg } => match *msg {
                     WorkerMessage::StepCompleted {
                         ref node_id,
                         ref artifact,
@@ -328,6 +358,14 @@ impl WorkerPool {
                         if let Some(ref mut cb) = on_step {
                             cb(node_id, &artifact_val, coord.item(item_id).attempts);
                         }
+                        if let Some(ref mut ev) = on_event {
+                            ev(RunEvent::StepFinished {
+                                node_id: node_id.clone(),
+                                ok: true,
+                                elapsed_seconds: artifact.elapsed_seconds,
+                                error: None,
+                            });
+                        }
                         coord.on_item_completed(item_id);
 
                         // Check if any frozen worker's group is now complete
@@ -355,6 +393,14 @@ impl WorkerPool {
                         if !traceback.trim().is_empty() {
                             error.push('\n');
                             error.push_str(&traceback);
+                        }
+                        if let Some(ref mut ev) = on_event {
+                            ev(RunEvent::StepFinished {
+                                node_id: node_id.clone(),
+                                ok: false,
+                                elapsed_seconds: None,
+                                error: Some(error.clone()),
+                            });
                         }
                         if let FailureAction::RetryAfter(delay) =
                             coord.on_item_failed(item_id, error)
@@ -492,6 +538,21 @@ impl WorkerPool {
                         self.assign_ready(coord, cost).await;
                     }
                     WorkerMessage::Heartbeat => {}
+                    WorkerMessage::Log { node_id, line } => {
+                        // A line of user stdout — forward live; the caller persists
+                        // it to the DB. Does not change worker/coordinator state.
+                        if let Some(ref mut ev) = on_event {
+                            ev(RunEvent::Log { node_id, line });
+                        }
+                    }
+                    WorkerMessage::RepeatedWarnings { counts } => {
+                        for (text, n) in counts {
+                            match self.repeated_warnings.iter_mut().find(|(t, _)| *t == text) {
+                                Some((_, total)) => *total += n,
+                                None => self.repeated_warnings.push((text, n)),
+                            }
+                        }
+                    }
                 },
                 IoEvent::Disconnected { worker_id } => {
                     // Worker crashed — its in-flight item failed; unstarted
@@ -586,6 +647,7 @@ impl WorkerPool {
         });
         let _ = kill_task.await;
         std::fs::remove_file(&self.socket_path).ok();
+        std::fs::remove_dir_all(warning_claims_dir(&self.socket_path)).ok();
     }
 
     /// Close a worker's lease for `node_id`. Workers execute their batch in
@@ -796,21 +858,12 @@ impl WorkerPool {
                                         .unwrap_or("");
                                     let path =
                                         artifact.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                                    // Workers always write locally, so the
+                                    // child's artifact is on this disk.
                                     if fmt == "json" && !path.is_empty() {
-                                        if path.contains("://") {
-                                            eprintln!(
-                                                "[barca] warning: parallel() result values require \
-                                                 a local artifact store in v1 — artifact '{path}' \
-                                                 is remote; the parent receives null. Run \
-                                                 without BARCA_REMOTE_URI / [remote].uri to use \
-                                                 parallel() results (barca docs remote)."
-                                            );
-                                            None
-                                        } else {
-                                            std::fs::read_to_string(path)
-                                                .ok()
-                                                .and_then(|s| serde_json::from_str(&s).ok())
-                                        }
+                                        std::fs::read_to_string(path)
+                                            .ok()
+                                            .and_then(|s| serde_json::from_str(&s).ok())
                                     } else {
                                         None
                                     }
@@ -852,36 +905,6 @@ impl WorkerPool {
             }
         }
     }
-}
-
-// ─── Message I/O ─────────────────────────────────────────────────────────────
-
-async fn read_one_message(stream: &mut UnixStream) -> Result<WorkerMessage, std::io::Error> {
-    let mut len_buf = [0u8; 4];
-    stream.read_exact(&mut len_buf).await?;
-    let len = u32::from_be_bytes(len_buf) as usize;
-    if len > 256 * 1024 * 1024 {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "message too large",
-        ));
-    }
-    let mut payload = vec![0u8; len];
-    stream.read_exact(&mut payload).await?;
-    serde_json::from_slice(&payload)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
-}
-
-async fn write_message(
-    stream: &mut UnixStream,
-    msg: &impl serde::Serialize,
-) -> Result<(), std::io::Error> {
-    let payload = serde_json::to_vec(msg)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    let header = (payload.len() as u32).to_be_bytes();
-    stream.write_all(&header).await?;
-    stream.write_all(&payload).await?;
-    stream.flush().await
 }
 
 // ─── Worker spawning ─────────────────────────────────────────────────────────
@@ -1191,12 +1214,14 @@ mod tests {
                     format: "json".to_string(),
                     size_bytes: 10,
                     elapsed_seconds: None,
+                    content_hash: None,
                 },
                 crate::dispatch::OutputRef {
                     path: "f--source_key_b.json".to_string(),
                     format: "json".to_string(),
                     size_bytes: 12,
                     elapsed_seconds: None,
+                    content_hash: None,
                 },
             ],
         );
@@ -1292,6 +1317,7 @@ mod tests {
                 trace_on: false,
                 progress_interval: Duration::ZERO,
                 running_hook: None,
+                repeated_warnings: Vec::new(),
             };
 
             let start = std::time::Instant::now();

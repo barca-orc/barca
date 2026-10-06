@@ -1,6 +1,6 @@
 [package]
 name = "barca-server"
-version = "0.13.3"
+version = "0.16.0"
 edition = "2024"
 
 [dependencies]
@@ -12,9 +12,18 @@ notify = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+tokio-stream = { version = "0.1", features = ["sync"] }
+futures = "0.3"
 croner = "3.0.1"
 chrono = "0.4.45"
 chrono-tz = "0.10.4"
+tempfile = "3"
+rust-embed = "8"
+ts-rs = { version = "12", optional = true }
+
+[features]
+# Generate TS type bindings for the frontend (also enables barca-core's).
+ts = ["dep:ts-rs", "barca-core/ts"]
 
 [dev-dependencies]
 tower = { workspace = true }

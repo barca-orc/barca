@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 /// The three kinds of node in a barca DAG.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum NodeKind {
     /// `@asset` — produces and caches a value.
@@ -35,6 +36,7 @@ pub enum NodeKind {
 
 /// Freshness policy — determines when a node is eligible for execution.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(tag = "type", content = "value")]
 pub enum Freshness {
     /// Auto-materializes whenever stale and all upstreams are fresh.
@@ -57,10 +59,14 @@ impl Freshness {
 
 /// A validated cron expression. Accepts standard 5-field, minute-granular cron
 /// (`minute hour dom month dow`) and 6-field cron with a leading seconds field
-/// (`*/5 * * * * *` — every 5 seconds). Barca's scheduler evaluates at 1-second
+/// (`0/5 * * * * *` — every 5 seconds). Barca's scheduler evaluates at 1-second
 /// resolution: a 6-field expression fires at its seconds cadence, while a 5-field
 /// expression pins seconds to `0` and fires once per matching minute.
+//
+// Keep `*/` out of this doc comment: ts-rs copies it into a JSDoc block in the
+// generated UI bindings, where `*/` would terminate the comment.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct CronExpr(pub String);
 
 impl CronExpr {
@@ -273,6 +279,8 @@ impl fmt::Display for StepId {
 pub enum ValueType {
     Pandas,
     Polars,
+    /// `pl.LazyFrame`: the worker hands the step a scan, so only what its query uses is read.
+    PolarsLazy,
     PyArrow,
     DuckDB,
 }
@@ -282,9 +290,15 @@ impl ValueType {
         match self {
             ValueType::Pandas => "pandas",
             ValueType::Polars => "polars",
+            ValueType::PolarsLazy => "polars_lazy",
             ValueType::PyArrow => "pyarrow",
             ValueType::DuckDB => "duckdb",
         }
+    }
+
+    /// True for types whose reader fetches only what the step's query uses.
+    pub fn is_lazy(self) -> bool {
+        matches!(self, ValueType::PolarsLazy | ValueType::DuckDB)
     }
 }
 

@@ -17,8 +17,11 @@ by fsspec protocol, e.g. '{"abfs": {"account_name": "myacct"}}') is splatted
 into the filesystem constructor as an escape hatch.
 """
 
+import datetime
 import json
 import os
+import shutil
+import threading
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -35,6 +38,9 @@ _SCHEMES: dict[str, tuple[str, str, str | None]] = {
 }
 
 _fs_cache: dict[str, Any] = {}
+# Filesystems are built from worker threads (fan-in reads, the transfer
+# helper's pool); construct each protocol's instance exactly once.
+_fs_lock = threading.Lock()
 
 
 def _scheme(path: "str | Path") -> str | None:
@@ -49,6 +55,16 @@ def is_remote(path: "str | Path") -> bool:
     """True iff path is a URI handled by a remote backend (not local/file://)."""
     scheme = _scheme(path)
     return scheme is not None and scheme != "file"
+
+
+def local_path_of(uri: "str | Path") -> "Path | None":
+    """Path for file:// URIs and plain local paths; None for remote URIs."""
+    s = str(uri)
+    if s.startswith("file://"):
+        return Path(s[len("file://") :])
+    if "://" not in s:
+        return Path(s)
+    return None
 
 
 def storage_options(protocol: str) -> dict:
@@ -81,27 +97,55 @@ def get_fs(path: "str | Path"):
         )
     protocol, package, extra = entry
 
-    if protocol in _fs_cache:
-        return _fs_cache[protocol]
+    fs = _fs_cache.get(protocol)
+    if fs is not None:
+        return fs
 
+    with _fs_lock:
+        if protocol in _fs_cache:
+            return _fs_cache[protocol]
+
+        try:
+            import fsspec
+        except ImportError as exc:
+            hint = f"pip install 'barca[{extra}]'" if extra else "pip install fsspec"
+            raise ImportError(f"{scheme}:// paths require fsspec ({hint})") from exc
+
+        try:
+            fs = fsspec.filesystem(protocol, **storage_options(protocol))
+        except ImportError as exc:
+            hint = f"pip install 'barca[{extra}]'" if extra else f"pip install {package}"
+            raise ImportError(
+                f"{scheme}:// paths require the '{package}' package ({hint})"
+            ) from exc
+
+        _fs_cache[protocol] = fs
+        return fs
+
+
+def _copy_local(src: "str | Path", dst: "str | Path") -> None:
+    """Copy into a local store path, creating parents. Atomic at the destination."""
+    dst = Path(dst)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.with_name(f".{dst.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     try:
-        import fsspec
-    except ImportError as exc:
-        hint = f"pip install 'barca[{extra}]'" if extra else "pip install fsspec"
-        raise ImportError(f"{scheme}:// paths require fsspec ({hint})") from exc
-
-    try:
-        fs = fsspec.filesystem(protocol, **storage_options(protocol))
-    except ImportError as exc:
-        hint = f"pip install 'barca[{extra}]'" if extra else f"pip install {package}"
-        raise ImportError(f"{scheme}:// paths require the '{package}' package ({hint})") from exc
-
-    _fs_cache[protocol] = fs
-    return fs
+        shutil.copyfile(src, tmp)
+        os.replace(tmp, dst)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def put_file(local_path: "str | Path", dest: str) -> None:
-    """Upload a local file to a remote URI (chunked from disk, never in memory)."""
+    """Upload a local file to the store at dest (chunked from disk, never in memory).
+
+    dest may be a remote URI or a plain-path / file:// store root (a shared
+    local or network directory), which is a stdlib copy.
+    """
+    local_dest = local_path_of(dest)
+    if local_dest is not None:
+        _copy_local(local_path, local_dest)
+        return
     fs = get_fs(dest)
     parent = dest.rsplit("/", 1)[0]
     if "://" not in parent:
@@ -116,7 +160,14 @@ def put_file(local_path: "str | Path", dest: str) -> None:
 
 
 def get_file(src: str, local_path: "str | Path") -> None:
-    """Download a remote URI to a local file (chunked to disk)."""
+    """Download src from the store to a local file (chunked to disk).
+
+    src may be a remote URI or a plain-path / file:// store path.
+    """
+    local_src = local_path_of(src)
+    if local_src is not None:
+        shutil.copyfile(local_src, local_path)
+        return
     get_fs(src).get_file(src, str(local_path))
 
 
@@ -139,6 +190,96 @@ def join(base: "str | Path", name: str) -> "str | Path":
     if is_remote(base) or _scheme(base) == "file":
         return str(base).rstrip("/") + "/" + name
     return Path(base) / name
+
+
+# ─── In-place reads for lazy readers ──────────────────────────────────────────
+#
+# A duckdb relation or polars LazyFrame input reads only what the step's query touches, so a
+# remote artifact is read in place rather than downloaded (see _artifacts.deserialize). Two
+# details make that cheap and safe:
+#
+# - Exact range reads. fsspec's buffered files read ahead by a block (adlfs: 50 MB), which turns
+#   a parquet reader's many small column-chunk reads into far more bytes than the whole file.
+#   The view below opens every file with cache_type="none": each read fetches exactly its range.
+# - A private scheme. duckdb routes a URL to a registered fsspec filesystem ahead of its own
+#   httpfs/azure extensions, so registering the store under `abfss://` would take over the URLs
+#   in the user's own SQL. The view is registered as `barca<protocol>://` instead, and only
+#   barca's artifact URIs are rewritten to it.
+
+_RANGE_SCHEME_PREFIX = "barca"
+# duckdb caches what it reads per (path, mtime). A refresh can rewrite an artifact path, so the
+# store's real mtime is passed through; a store that has none gets this constant.
+_UNKNOWN_MTIME = datetime.datetime(2000, 1, 1, tzinfo=datetime.timezone.utc)
+_range_fs_cache: dict[str, Any] = {}
+_range_fs_lock = threading.Lock()
+
+
+def range_read_uri(path: str) -> str:
+    """``path`` (a remote artifact URI) under the private scheme of its range-read view."""
+    scheme, rest = str(path).split("://", 1)
+    return f"{_RANGE_SCHEME_PREFIX}{_SCHEMES[scheme.lower()][0]}://{rest}"
+
+
+def range_read_fs(path: str):
+    """A read-only fsspec view of the store holding ``path`` that reads exact byte ranges.
+
+    It wraps the store's own filesystem (``get_fs``), so credentials and options are the same.
+    Paths may be private-scheme URIs (``range_read_uri``, what duckdb passes) or the store
+    filesystem's own stripped paths (what pyarrow passes).
+    """
+    inner = get_fs(path)  # validates the scheme
+    protocol = _SCHEMES[str(_scheme(path))][0]
+    with _range_fs_lock:
+        fs = _range_fs_cache.get(protocol)
+        if fs is None or fs.inner is not inner:
+            fs = _make_range_fs(inner, protocol)
+            _range_fs_cache[protocol] = fs
+        return fs
+
+
+def _make_range_fs(inner, protocol: str):
+    from fsspec.spec import AbstractFileSystem
+
+    private = f"{_RANGE_SCHEME_PREFIX}{protocol}"
+
+    class RangeReadFileSystem(AbstractFileSystem):
+        cachable = False
+
+        def __init__(self):
+            super().__init__()
+            self.inner = inner
+
+        @classmethod
+        def _strip_protocol(cls, path):
+            return str(path)  # _real() translates; the inner fs strips its own scheme
+
+        def _real(self, path) -> str:
+            path = str(path)
+            if path.startswith(f"{private}://"):
+                return inner._strip_protocol(f"{protocol}://{path[len(private) + 3 :]}")
+            return path
+
+        def info(self, path, **kwargs):
+            return inner.info(self._real(path), **kwargs)
+
+        def ls(self, path, detail=True, **kwargs):
+            return inner.ls(self._real(path), detail=detail, **kwargs)
+
+        def modified(self, path):
+            try:
+                return inner.modified(self._real(path))
+            except NotImplementedError:
+                return _UNKNOWN_MTIME
+
+        def _open(
+            self, path, mode="rb", block_size=None, autocommit=True, cache_options=None, **kwargs
+        ):
+            if mode != "rb":
+                raise PermissionError(f"{private}:// is read-only")
+            return inner.open(self._real(path), "rb", cache_type="none")
+
+    RangeReadFileSystem.protocol = (private,)
+    return RangeReadFileSystem()
 
 
 def suffix(path: "str | Path") -> str:

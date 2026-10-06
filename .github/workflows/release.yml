@@ -16,7 +16,33 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # The web UI is built once and embedded in every wheel's barca binary
+  # (crates/barca-server/src/ui.rs embeds ui/dist at compile time), and shipped
+  # prebuilt in the sdist so building from source does not need Node.
+  build-ui:
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: ui/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+      - name: Build the UI
+        run: |
+          pnpm --dir ui install --frozen-lockfile
+          pnpm --dir ui test
+          pnpm --dir ui build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ui-dist
+          path: ui/dist/
+
   build-wheels:
+    needs: build-ui
     strategy:
       fail-fast: false
       matrix:
@@ -32,6 +58,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ui-dist
+          path: ui/dist
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -70,6 +101,9 @@ jobs:
         run: |
           BIN="target/${{ matrix.target }}/release/barca"
           [ -f "$BIN" ] || BIN="target/release/barca"
+          # The release binary must carry the web UI (a missing ui/dist still
+          # compiles, so check rather than trust it).
+          grep -qa '<div id="root">' "$BIN" || { echo "barca binary has no embedded web UI"; exit 1; }
           cp "$BIN" barca-${{ matrix.name }}
           chmod +x barca-${{ matrix.name }}
           tar czf barca-${{ matrix.name }}.tar.gz barca-${{ matrix.name }}
@@ -85,9 +119,15 @@ jobs:
           path: barca-${{ matrix.name }}.tar.gz
 
   build-sdist:
+    needs: build-ui
     runs-on: depot-ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ui-dist
+          path: ui/dist
 
       - name: Build sdist
         uses: PyO3/maturin-action@v1

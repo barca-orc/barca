@@ -185,6 +185,7 @@ Examples:
   barca serve pipeline.py --watch            # dev: re-parse the DAG when files change
   barca serve pipeline.py --no-schedule      # API only; Schedule(...) nodes do not fire
   barca serve pipeline.py --timezone utc     # evaluate cron in UTC (default: local)
+  barca serve pipeline.py --read-only        # inspect only: no runs, no scheduler, DB never written
 
 Binds to localhost with no authentication.
 More: barca docs scheduling";
@@ -230,7 +231,9 @@ Cache state per node: cached, stale (ran before; code or inputs changed), never_
 sensors), with a reason. JSON spells the states in snake_case, the same as the `summary` keys
 (the table prints never-run, always-runs). It is the same decision `--dry-run` makes.
 Read-only: never imports your code, never writes. Shape (rows, columns, type) is read from the
-artifact file only.
+artifact file only. With remote storage it is read from the bucket: a parquet footer by ranged
+requests, json and pickle by a download of up to 16 MB (larger ones get a `note`). A store that
+cannot be reached is a `note` on each shape, not a failed command.
 More: barca docs status, barca docs agents";
 
 const SQL_HELP: &str = "\
@@ -250,9 +253,12 @@ Every asset, sensor and task with a result on disk is a view named after its fun
 full id, quoted, when two nodes share a name; stderr says so). An asset whose code or inputs changed
 is still queryable at its last result, with a note on stderr. Only parquet and json results can be
 queried; pickles cannot. Runs in an in-memory DuckDB over the artifact files: your code is never
-imported, nothing is recorded, nothing is written. Needs duckdb in barca's Python environment.
+imported and nothing is recorded. Needs duckdb in barca's Python environment.
+With remote storage, the artifacts of the views a query names are downloaded into
+.barca/sql-cache/ (stderr says so) and reused while the objects are unchanged; nothing else is
+written.
 Errors exit 2: a node with no result yet names the `barca get` to run first; an unknown view lists
-the views; a SQL error carries DuckDB's message.
+the views; a SQL error carries DuckDB's message. A remote artifact that cannot be fetched exits 3.
 Experimental: barca docs contract.
 More: barca docs sql";
 
@@ -443,6 +449,9 @@ enum Cli {
         /// Timezone for cron evaluation: local (default), utc, or an IANA name
         #[arg(long, default_value = "local")]
         timezone: String,
+        /// Inspect only: refuse runs, never schedule, read the metadata DB from snapshots
+        #[arg(long)]
+        read_only: bool,
         /// Environment name (separates cache/state per environment)
         #[arg(long)]
         env: Option<String>,
@@ -1266,6 +1275,7 @@ async fn run_cli(cli: Cli, ctx: &Context) -> Result<(), CliError> {
             watch,
             no_schedule,
             timezone,
+            read_only,
             env,
         } => serve_cmd(
             env.as_deref(),
@@ -1274,6 +1284,7 @@ async fn run_cli(cli: Cli, ctx: &Context) -> Result<(), CliError> {
             watch,
             !no_schedule,
             timezone,
+            read_only,
             &python,
         )
         .await
@@ -2264,6 +2275,7 @@ async fn serve_cmd(
     watch: bool,
     schedule: bool,
     timezone: String,
+    read_only: bool,
     python: &std::path::Path,
 ) -> Result<(), barca_core::BarcaError> {
     let resolved = barca_core::config::resolve(env)?;
@@ -2283,6 +2295,7 @@ async fn serve_cmd(
         timezone,
         python: python.to_path_buf(),
         resolved,
+        read_only,
     };
     barca_server::serve(config)
         .await
