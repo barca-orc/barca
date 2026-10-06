@@ -302,21 +302,23 @@ See the [Scheduling guide](https://barca.sh/scheduling/) for the full story
 ## Server
 
 `barca serve` starts a long-running HTTP server that exposes the orchestrator as a
-JSON API — for triggering runs programmatically, polling status, and (in the future)
-a web UI. It also runs the built-in cron scheduler above. It binds to `127.0.0.1`
-by default (local only, no auth).
+JSON API — for triggering runs programmatically and polling status — and serves the
+web UI at `http://127.0.0.1:8274/ui/`. It also runs the built-in cron scheduler above.
+It binds to `127.0.0.1` by default (local only, no auth); to run it behind nginx, see
+[Deploying](https://barca.sh/deploying/).
 
 ```bash
 barca serve pipeline.py --port 8274      # default port 8274
 barca serve pipeline.py --watch          # dev mode: re-parse DAG on file change
 barca serve pipeline.py --no-schedule    # HTTP API only, don't fire scheduled jobs
 barca serve pipeline.py --timezone utc   # evaluate cron in UTC (default: local)
+barca serve pipeline.py --read-only      # inspect only: no runs, no scheduler, DB never written
 ```
 
 Runs are async: `POST` returns a `run_id` immediately, then you poll `/status/{run_id}`.
 
 ```bash
-curl localhost:8274/health                       # {"status":"ok","version":"0.15.0"}
+curl localhost:8274/health                       # {"status":"ok","version":"0.16.0"}
 curl localhost:8274/assets                       # list assets + deps
 curl localhost:8274/plan                          # execution plan JSON
 curl -XPOST localhost:8274/run                    # → {"run_id":"…"}; poll /status/<id>

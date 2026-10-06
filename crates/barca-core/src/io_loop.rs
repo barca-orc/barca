@@ -34,6 +34,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::coordinator::{Coordinator, FailureAction, GroupId, ItemId, ItemSpec};
 use crate::cost::CostModel;
+use crate::events::RunEvent;
 use crate::protocol::{CoordinatorMessage, ParallelResult, WorkerMessage, read_frame, write_frame};
 
 // ─── Configuration ───────────────────────────────────────────────────────────
@@ -55,6 +56,9 @@ pub struct IoConfig {
 /// Callback invoked on each step completion with (node_id, artifact_json).
 /// `Send` so the whole run future can be spawned onto a multi-thread runtime.
 pub type StepCallback<'a> = Box<dyn FnMut(&str, &serde_json::Value) + Send + 'a>;
+
+/// Callback invoked with each live [`RunEvent`] as a run progresses.
+pub type EventCallback<'a> = Box<dyn FnMut(RunEvent) + Send + 'a>;
 
 /// Called periodically while steps are running, with `(node_id, seconds running)` for each
 /// step that has been in flight longer than the progress interval.
@@ -93,7 +97,7 @@ struct FrozenWorker {
 enum IoEvent {
     Message {
         worker_id: usize,
-        msg: WorkerMessage,
+        msg: Box<WorkerMessage>,
     },
     Disconnected {
         worker_id: usize,
@@ -127,7 +131,7 @@ async fn worker_io_task(
             result = read_frame::<_, WorkerMessage>(&mut stream) => {
                 match result {
                     Ok(Some(msg)) => {
-                        if event_tx.send(IoEvent::Message { worker_id, msg }).await.is_err() {
+                        if event_tx.send(IoEvent::Message { worker_id, msg: Box::new(msg) }).await.is_err() {
                             break;
                         }
                     }
@@ -263,6 +267,7 @@ impl WorkerPool {
         coord: &mut Coordinator,
         cost: &mut CostModel,
         mut on_step: Option<StepCallback<'_>>,
+        mut on_event: Option<EventCallback<'_>>,
         cancel: &CancellationToken,
     ) -> Result<(), String> {
         if cancel.is_cancelled() {
@@ -315,7 +320,7 @@ impl WorkerPool {
             };
 
             match event {
-                IoEvent::Message { worker_id, msg } => match msg {
+                IoEvent::Message { worker_id, msg } => match *msg {
                     WorkerMessage::StepCompleted {
                         ref node_id,
                         ref artifact,
@@ -353,6 +358,14 @@ impl WorkerPool {
                         if let Some(ref mut cb) = on_step {
                             cb(node_id, &artifact_val);
                         }
+                        if let Some(ref mut ev) = on_event {
+                            ev(RunEvent::StepFinished {
+                                node_id: node_id.clone(),
+                                ok: true,
+                                elapsed_seconds: artifact.elapsed_seconds,
+                                error: None,
+                            });
+                        }
                         coord.on_item_completed(item_id);
 
                         // Check if any frozen worker's group is now complete
@@ -380,6 +393,14 @@ impl WorkerPool {
                         if !traceback.trim().is_empty() {
                             error.push('\n');
                             error.push_str(&traceback);
+                        }
+                        if let Some(ref mut ev) = on_event {
+                            ev(RunEvent::StepFinished {
+                                node_id: node_id.clone(),
+                                ok: false,
+                                elapsed_seconds: None,
+                                error: Some(error.clone()),
+                            });
                         }
                         if let FailureAction::RetryAfter(delay) =
                             coord.on_item_failed(item_id, error)
@@ -517,6 +538,13 @@ impl WorkerPool {
                         self.assign_ready(coord, cost).await;
                     }
                     WorkerMessage::Heartbeat => {}
+                    WorkerMessage::Log { node_id, line } => {
+                        // A line of user stdout — forward live; the caller persists
+                        // it to the DB. Does not change worker/coordinator state.
+                        if let Some(ref mut ev) = on_event {
+                            ev(RunEvent::Log { node_id, line });
+                        }
+                    }
                     WorkerMessage::RepeatedWarnings { counts } => {
                         for (text, n) in counts {
                             match self.repeated_warnings.iter_mut().find(|(t, _)| *t == text) {

@@ -8,11 +8,15 @@ use std::collections::{HashMap, HashSet};
 
 /// Reference to a materialized artifact on disk.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct OutputRef {
     pub path: String,
     pub format: String,
+    // serde_json emits u64/i64 as JSON numbers; map to `number`, not bigint.
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub size_bytes: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub elapsed_seconds: Option<f64>,
     /// SHA-256 of the artifact's bytes, when one was recorded. Never sent to
     /// workers or printed: it is what a local copy is checked against.

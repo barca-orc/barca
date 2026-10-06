@@ -1,0 +1,132 @@
+/* ============================================================
+   barca · colors
+   Dark-first, terminal/console. Green-tinted near-black with a
+   cool emerald "signal" green and a calm cyan secondary accent.
+   Base values first, semantic aliases at the bottom.
+   ============================================================ */
+
+:root {
+  /* ---- Neutral ramp (green-tinted charcoal -> off-white) ---- */
+  --c-black:      #050706;
+  --c-ink-900:    #080B0A;  /* page canvas */
+  --c-ink-850:    #0B0F0D;
+  --c-ink-800:    #0F1311;  /* surface / panels */
+  --c-ink-750:    #131815;
+  --c-ink-700:    #171D19;  /* raised / hover */
+  --c-ink-600:    #1D241F;  /* overlay */
+  --c-ink-500:    #252E28;
+  --c-ink-400:    #313B34;
+  --c-ink-300:    #475149;
+  --c-ink-200:    #6A746C;
+  --c-ink-100:    #97A19A;
+  --c-ink-050:    #C2CCC5;
+  --c-white:      #E9F1EC;  /* near-white, faint green cast */
+  --c-pure-white: #FFFFFF;
+
+  /* ---- Signal green (cool emerald "hacker green") ---- */
+  --c-green-200:  #BCF0D5;
+  --c-green-300:  #8CE6B6;
+  --c-green-400:  #5BDD9A;  /* brighter / hover */
+  --c-green-500:  #3FD181;  /* THE signal */
+  --c-green-600:  #2DB46C;  /* interactive hover/darker */
+  --c-green-700:  #209156;  /* pressed */
+  --c-green-800:  #145A38;
+  --c-green-900:  #0C2E1F;  /* faint tinted fills */
+  --c-green-950:  #081C13;
+
+  /* ---- Cyan (secondary accent / running / info) ---- */
+  --c-cyan-300:   #9BEEF0;
+  --c-cyan-400:   #5FDDE2;
+  --c-cyan-500:   #36CBD3;
+  --c-cyan-600:   #1F9FA8;
+  --c-cyan-900:   #0B2A2C;
+
+  /* ---- Status hues ---- */
+  --c-red-400:    #FF7A7A;
+  --c-red-500:    #FF5A5A;
+  --c-red-600:    #E03B3B;
+  --c-red-900:    #2E1212;
+
+  --c-amber-400:  #F7C65A;
+  --c-amber-500:  #F5B544;
+  --c-amber-600:  #D99520;
+  --c-amber-900:  #2C2008;
+
+  --c-violet-400: #B79BFF;
+  --c-violet-500: #9B7CF0;
+  --c-violet-900: #1E1633;
+
+  /* ---- Translucent signal washes (for glows / tints over dark) ---- */
+  --c-green-wash:  rgba(63, 209, 129, 0.12);
+  --c-green-line:  rgba(63, 209, 129, 0.34);
+  --c-green-glow:  rgba(63, 209, 129, 0.48);
+  --c-cyan-wash:   rgba(54, 203, 211, 0.12);
+  --c-cyan-line:   rgba(54, 203, 211, 0.34);
+  --c-red-wash:    rgba(255, 90, 90, 0.12);
+  --c-red-line:    rgba(255, 90, 90, 0.34);
+  --c-amber-wash:  rgba(245, 181, 68, 0.12);
+  --c-amber-line:  rgba(245, 181, 68, 0.34);
+
+  /* ============================================================
+     Semantic aliases (use THESE in components)
+     ============================================================ */
+
+  /* Surfaces */
+  --bg-canvas:    var(--c-ink-900);
+  --bg-surface:   var(--c-ink-800);
+  --bg-raised:    var(--c-ink-700);
+  --bg-overlay:   var(--c-ink-600);
+  --bg-inset:     var(--c-ink-850);
+  --bg-hover:     rgba(255, 255, 255, 0.035);
+  --bg-active:    rgba(255, 255, 255, 0.06);
+  --bg-selected:  var(--c-green-wash);
+
+  /* Borders / hairlines */
+  --border-subtle:  #161B18;
+  --border-default: #232B26;
+  --border-strong:  #313B34;
+  --border-accent:  var(--c-green-line);
+
+  /* Text */
+  --text-strong:   var(--c-white);
+  --text-default:  var(--c-ink-050);
+  --text-muted:    var(--c-ink-100);
+  --text-faint:    var(--c-ink-200);
+  --text-disabled: var(--c-ink-300);
+  --text-on-signal: var(--c-black);   /* black text on green */
+  --text-link:     var(--c-cyan-400);
+
+  /* Brand signal */
+  --signal:        var(--c-green-500);
+  --signal-hover:  var(--c-green-400);
+  --signal-press:  var(--c-green-600);
+  --signal-dim:    var(--c-green-700);
+
+  /* Focus */
+  --focus-ring:    var(--c-green-500);
+  --focus-glow:    0 0 0 1px var(--c-ink-900), 0 0 0 3px var(--c-green-line);
+
+  /* Status (run states) */
+  --status-success:      var(--c-green-500);
+  --status-success-bg:   var(--c-green-wash);
+  --status-success-line: var(--c-green-line);
+
+  --status-running:      var(--c-cyan-500);
+  --status-running-bg:   var(--c-cyan-wash);
+  --status-running-line: var(--c-cyan-line);
+
+  --status-failed:       var(--c-red-500);
+  --status-failed-bg:    var(--c-red-wash);
+  --status-failed-line:  var(--c-red-line);
+
+  --status-warning:      var(--c-amber-500);
+  --status-warning-bg:   var(--c-amber-wash);
+  --status-warning-line: var(--c-amber-line);
+
+  --status-queued:       var(--c-ink-200);
+  --status-queued-bg:    rgba(150, 161, 154, 0.10);
+  --status-queued-line:  rgba(150, 161, 154, 0.26);
+
+  --status-skipped:      var(--c-ink-300);
+  --status-skipped-bg:   rgba(71, 81, 73, 0.18);
+}

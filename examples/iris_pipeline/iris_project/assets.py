@@ -23,9 +23,17 @@ from barca import asset, sink, task
 @asset()
 def raw_data() -> dict:
     """Load the iris dataset."""
+    import time
+
     from sklearn.datasets import load_iris
 
+    print("loading iris dataset…")
     iris = load_iris()
+    n = len(iris.data)
+    for i in range(0, n, 30):
+        print(f"  read {min(i + 30, n)}/{n} samples")
+        time.sleep(0.4)
+    print(f"done · {n} samples, {len(iris.feature_names)} features")
     return {
         "features": iris.data.tolist(),
         "targets": iris.target.tolist(),

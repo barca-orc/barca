@@ -152,6 +152,25 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      # The web UI, checked and built so this job's barca binary embeds it
+      # (crates/barca-server/src/ui.rs) and the reverse-proxy test below can
+      # load it through nginx.
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: ui/package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Check and build the web UI
+        run: |
+          pnpm --dir ui install --frozen-lockfile
+          pnpm --dir ui typecheck
+          pnpm --dir ui lint
+          pnpm --dir ui test
+          pnpm --dir ui build
+
       - name: Build barca and install test extras
         run: |
           pip install maturin
@@ -173,3 +192,6 @@ jobs:
           BARCA_TEST_GCS_ENDPOINT: http://localhost:9200
           BARCA_TEST_AZURITE_HOST: 127.0.0.1:9210
         run: pytest python/tests -q
+
+      - name: barca serve behind nginx (prefix, embedded UI, live events)
+        run: bash tests/integration/test_reverse_proxy.sh
