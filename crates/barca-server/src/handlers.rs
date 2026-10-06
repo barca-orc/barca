@@ -21,13 +21,17 @@ use tokio_stream::wrappers::BroadcastStream;
 /// Default timeout for a single run (10 minutes).
 const RUN_TIMEOUT: Duration = Duration::from_secs(600);
 
-/// `GET /health` — liveness, version, and whether this server is read-only.
+/// `GET /health` — liveness, version, whether this server is read-only, and
+/// whether it runs the scheduler.
 /// No core work.
 pub async fn health(State(state): State<AppState>) -> Json<Value> {
     Json(json!({
         "status": "ok",
         "version": env!("CARGO_PKG_VERSION"),
         "read_only": state.config.read_only,
+        // Whether this server fires `Schedule(...)` nodes: the same rule `serve`
+        // uses to start the scheduler (on unless --no-schedule or --read-only).
+        "scheduler": state.config.schedule && !state.config.read_only,
     }))
 }
 
