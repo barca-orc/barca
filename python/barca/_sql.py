@@ -150,11 +150,6 @@ def fetch(uri: str, cache_dir: str) -> tuple[str, int]:
     return dest, os.path.getsize(dest)
 
 
-def _one_line(e: BaseException) -> str:
-    lines = str(e).strip().splitlines()
-    return lines[0] if lines else type(e).__name__
-
-
 def _localize(views: list[dict], query: str, cache_dir: str) -> tuple[list[dict], dict, dict]:
     """Replace remote artifact paths with local copies, for the views the query names.
 
@@ -179,12 +174,6 @@ def _localize(views: list[dict], query: str, cache_dir: str) -> tuple[list[dict]
 
     uris = sorted({f["path"] for v in wanted for f in v["files"] if _storage.is_remote(f["path"])})
     results: dict[str, str | Exception] = {}
-    # Build each filesystem once, here: the per-protocol cache is not locked.
-    for scheme in {u.split("://", 1)[0] for u in uris}:
-        try:
-            _storage.get_fs(f"{scheme}://")
-        except Exception:  # noqa: BLE001 - reported per view below
-            pass
     gitignore = os.path.join(os.path.dirname(cache_dir) or ".", ".gitignore")
     os.makedirs(cache_dir, exist_ok=True)
     if os.path.basename(os.path.dirname(cache_dir)) == ".barca" and not os.path.exists(gitignore):
@@ -213,7 +202,7 @@ def _localize(views: list[dict], query: str, cache_dir: str) -> tuple[list[dict]
             got = results.get(f["path"], f["path"])
             if isinstance(got, Exception):
                 kind = "driver" if isinstance(got, ImportError) else "fetch"
-                reason = _one_line(got)
+                reason = _storage.one_line(got)
                 if isinstance(got, FileNotFoundError):
                     reason = f"{f['path']} is not in the remote store"
                 elif kind == "fetch":

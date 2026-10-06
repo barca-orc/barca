@@ -43,6 +43,12 @@ _fs_cache: dict[str, Any] = {}
 _fs_lock = threading.Lock()
 
 
+def one_line(e: BaseException) -> str:
+    """First line of an exception's message (its type name when the message is empty)."""
+    lines = str(e).strip().splitlines()
+    return lines[0] if lines else type(e).__name__
+
+
 def _scheme(path: "str | Path") -> str | None:
     """Return the URI scheme of path, or None for plain local paths."""
     s = str(path)

@@ -60,12 +60,7 @@ def shape(path: str, fmt: str, sample: int = 0) -> dict:
         return {"note": f"unknown format '{fmt}'"}
     except Exception as e:  # noqa: BLE001 — report, never fail the status command
         where = "remote artifact" if _storage.is_remote(path) else "artifact"
-        return {"note": f"could not read {where}: {type(e).__name__}: {_one_line(e)}"}
-
-
-def _one_line(e: BaseException) -> str:
-    lines = str(e).strip().splitlines()
-    return lines[0] if lines else ""
+        return {"note": f"could not read {where}: {type(e).__name__}: {_storage.one_line(e)}"}
 
 
 # ─── remote ───────────────────────────────────────────────────────────────────
@@ -83,7 +78,7 @@ def _remote_shape(path: str, fmt: str, sample: int) -> dict:
     try:
         fs = _storage.get_fs(path)
     except (ImportError, ValueError) as e:  # missing driver, bad BARCA_STORAGE_OPTIONS
-        return {"note": f"could not read remote artifact: {_one_line(e)}"}
+        return {"note": f"could not read remote artifact: {_storage.one_line(e)}"}
     scheme = path.split("://", 1)[0].lower()
     if scheme in _store_down:
         return {
@@ -106,7 +101,7 @@ def _remote_shape(path: str, fmt: str, sample: int) -> dict:
         return {"note": "artifact file not found"}
     except Exception as e:
         if not type(e).__module__.startswith("pyarrow"):  # the store, not this file's content
-            _store_down.setdefault(scheme, f"{type(e).__name__}: {_one_line(e)}")
+            _store_down.setdefault(scheme, f"{type(e).__name__}: {_storage.one_line(e)}")
         raise
     if fmt == "json":
         return _json_shape(data, sample)
@@ -393,12 +388,6 @@ def shapes(artifacts: list[dict], sample: int = 0) -> list[dict]:
         else:
             out[i] = shape(a["path"], a.get("format", ""), sample)
     if remote:
-        # Build each filesystem once, here: the per-protocol cache is not locked.
-        for scheme in {artifacts[i]["path"].split("://", 1)[0] for i in remote}:
-            try:
-                _storage.get_fs(f"{scheme}://")
-            except Exception:  # noqa: BLE001 — each shape reports it in its own note
-                pass
         with ThreadPoolExecutor(max_workers=min(MAX_REMOTE_READERS, len(remote))) as pool:
             done = pool.map(
                 lambda i: shape(artifacts[i]["path"], artifacts[i].get("format", ""), sample),
