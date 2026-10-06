@@ -41,7 +41,7 @@ jobs:
           rm -rf /mnt/cache/test/cargo-home
           # The old shared target dir (corrupted by overlapping runs), and the dirs
           # of PRs that have gone quiet: nothing else garbage-collects them.
-          rm -rf /mnt/cache/test/target
+          rm -rf /mnt/cache/test/target 2>/dev/null || true
           find /mnt/cache/test -maxdepth 1 -name 'target-pr*' -mtime +3 -exec rm -rf {} + 2>/dev/null || true
           # The cache disk persists and nothing garbage-collects target/. A full disk
           # truncates object files mid-build ("failed to map object file: memory map
@@ -147,7 +147,7 @@ jobs:
           rm -rf /mnt/cache/backends/cargo-home
           # The old shared target dir (corrupted by overlapping runs), and the dirs
           # of PRs that have gone quiet: nothing else garbage-collects them.
-          rm -rf /mnt/cache/backends/target
+          rm -rf /mnt/cache/backends/target 2>/dev/null || true
           find /mnt/cache/backends -maxdepth 1 -name 'target-pr*' -mtime +3 -exec rm -rf {} + 2>/dev/null || true
           # The cache disk persists and nothing garbage-collects target/. A full disk
           # truncates object files mid-build ("failed to map object file: memory map
