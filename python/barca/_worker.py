@@ -11,7 +11,6 @@ Protocol:
 """
 
 import contextlib
-import importlib.util
 import io
 import json
 import os
@@ -22,7 +21,10 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from barca import _duckdb, _storage
+from barca._source_import import load_package_module, load_source_module
 from barca._artifacts import (
+    LAZY_FRAME_TYPES,
+    _frame_kind,
     artifact_path,
     clean_staging,
     deserialize,
@@ -30,6 +32,7 @@ from barca._artifacts import (
     resolve_format,
     safe_node_id,
     serialize,
+    serialize_hashed,
 )
 
 _EXT_FORMATS = {
@@ -99,6 +102,30 @@ def _peak_rss_bytes() -> int:
 # guards against mutation would cost more than the disk read it saves.
 # Remote artifacts always cache — skipping a network fetch beats any copy.
 _LRU_MAX_ARTIFACT_BYTES = 8 * 1024 * 1024
+
+
+def _lru_frame_type(frame_type: str | None) -> bool:
+    """Whether values read with this frame type may be cached.
+
+    Lazy values (duckdb relations, polars LazyFrames) are cheap to recreate and read their file
+    when queried; a remote input's file is deleted when the step ends, so a cached one would
+    break the next step that used it.
+    """
+    return frame_type not in LAZY_FRAME_TYPES
+
+
+def _result_frame_type(value) -> "str | None | bool":
+    """The reader frame type a step's result is equivalent to, for caching it.
+
+    Returns the frame type (None for non-frame values, which every reader ignores), or False
+    when the result must not be cached: a lazy value, or a frame of a type no reader returns.
+    """
+    kind = _frame_kind(value)
+    if kind is None:
+        return None
+    if kind == "duckdb" or type(value).__name__ == "LazyFrame":
+        return False
+    return kind
 
 
 def _lru_cacheable(path: str, size_bytes=None) -> bool:
@@ -232,22 +259,45 @@ def _emit_error(node_id, exc, elapsed=0.0):
 
 
 def load_module(source_file):
+    # Compiled from the source on disk, never a cached .pyc (#176); the file's directory
+    # goes on sys.path so cross-file imports work, and those compile from source too.
     path = Path(source_file).resolve()
-    # Add the file's directory to sys.path so cross-file imports work.
-    module_dir = str(path.parent)
-    if module_dir not in sys.path:
-        sys.path.insert(0, module_dir)
-    mod_name = f"_barca_{path.stem}"
-    spec = importlib.util.spec_from_file_location(mod_name, str(path))
-    if spec is None:
-        raise RuntimeError(f"Could not load module spec for {path}")
-    mod = importlib.util.module_from_spec(spec)
-    # Register in sys.modules so pickle can find classes defined in user code.
-    sys.modules[mod_name] = mod
-    if spec.loader is None:
-        raise RuntimeError(f"No loader for {path}")
-    spec.loader.exec_module(mod)
-    return mod
+    dotted = package_module_name(path)
+    if dotted is not None:
+        return load_package_module(dotted)
+    return load_source_module(str(path), module_name_for(path))
+
+
+def package_module_name(path: Path) -> str | None:
+    """The importable name of a step's file when it sits in a package under the project root
+    (every directory from the root down has an `__init__.py`): `pipelines/reconcile.py` is
+    `pipelines.reconcile`. Loading it under that name gives it a parent package, so relative
+    imports (`from .sources import x`) work, and `from pipelines.reconcile import y` elsewhere
+    gets the same module. `None` for a file in the root or outside a package."""
+    root = Path.cwd().resolve()
+    try:
+        parts = list(path.relative_to(root).with_suffix("").parts)
+    except ValueError:
+        return None
+    if parts and parts[-1] == "__init__":
+        parts.pop()
+    if len(parts) < 2:
+        return None
+    for i in range(1, len(parts)):
+        if not root.joinpath(*parts[:i], "__init__.py").is_file():
+            return None
+    return ".".join(parts)
+
+
+def module_name_for(path: Path) -> str:
+    """`sys.modules` name for a step's file: `_barca_` plus its path relative to the project
+    root (the cwd), so `east/assets.py` and `west/assets.py` stay distinct modules. A file in the
+    root keeps the plain `_barca_<stem>` name, which pickled artifacts refer to."""
+    try:
+        rel = path.relative_to(Path.cwd().resolve()).with_suffix("")
+    except ValueError:
+        return f"_barca_{path.stem}"
+    return "_barca_" + "__".join(rel.parts)
 
 
 def _run_with_timeout(fn, kwargs, timeout_seconds):
@@ -261,7 +311,10 @@ def _run_with_timeout(fn, kwargs, timeout_seconds):
         nonlocal result, exception
         try:
             result = fn(**kwargs) if kwargs else fn()
-        except Exception as e:
+        except BaseException as e:
+            # BaseException, not Exception: a SystemExit (sys.exit()) or KeyboardInterrupt
+            # raised by the step must fail it. Caught as Exception, they ended the thread
+            # silently and the step "succeeded" with a None result (issue #149).
             exception = e
 
     thread = threading.Thread(target=target)
@@ -292,7 +345,8 @@ def _resolve_input(raw_value, *, frame_type=None):
 def _load_artifact(path, lru, fmt=None, *, frame_type=None):
     """Resolve one artifact path to its deserialized value via the tier-1 LRU
     cache, falling through to the artifact store on miss."""
-    hot = lru.get(path, frame_type)
+    cacheable = _lru_frame_type(frame_type)
+    hot = lru.get(path, frame_type) if cacheable else None
     if hot is not None:
         return hot
     if not _storage.exists(path):
@@ -300,7 +354,7 @@ def _load_artifact(path, lru, fmt=None, *, frame_type=None):
     if fmt is None:
         fmt = _EXT_FORMATS.get(_storage.suffix(path), "json")
     value = deserialize(path, fmt, frame_type=frame_type)
-    if _lru_cacheable(path):
+    if cacheable and _lru_cacheable(path):
         lru.put(path, value, frame_type)
     return value
 
@@ -330,6 +384,8 @@ def _load_collected_artifacts(artifacts, lru=None, *, param=None, frame_type=Non
     """
     results = [None] * len(artifacts)
     to_fetch = []
+    if not _lru_frame_type(frame_type):
+        lru = None
     for i, artifact in enumerate(artifacts):
         hot = lru.get(artifact["path"], frame_type) if lru is not None else None
         if hot is not None:
@@ -375,13 +431,15 @@ def _execute(fn, kwargs, step):
     return result, elapsed
 
 
-def _sink_dest(path: str, node_id: str, base_node_id: str) -> str:
+def _sink_dest(path: str, node_id: str) -> str:
     """Sink destination path, with a partition suffix injected before the
     extension for partitioned assets so partitions don't clobber each other
-    (e.g. out.parquet → out_ticker_AAPL.parquet)."""
-    if node_id == base_node_id or not node_id.startswith(base_node_id):
+    (e.g. out.parquet → out_ticker_AAPL.parquet). A partition step's id is
+    `<base>[<key>]`; the suffix comes from the bracketed key."""
+    bracket = node_id.find("[")
+    if bracket < 0:
         return path
-    part = safe_node_id(node_id[len(base_node_id) :])
+    part = safe_node_id(node_id[bracket:])
     ext = _storage.suffix(path)
     if ext:
         return path[: -len(ext)] + part + ext
@@ -392,7 +450,6 @@ def _write_sinks(result, step, node_id, primary_fmt):
     """Write each @sink declared on the step. Error-isolated: a sink failure
     never fails the parent asset — it is logged and reported in the outcome."""
     outcomes = []
-    base_id = step.get("node_id", node_id)
     for sink in step.get("sinks") or []:
         dest = sink.get("path", "")
         try:
@@ -402,8 +459,14 @@ def _write_sinks(result, step, node_id, primary_fmt):
                     f"sink serializer '{fmt}' is not supported yet "
                     "(supported: json, pickle, parquet)"
                 )
-            fmt = resolve_format(result, fmt)
-            dest = _sink_dest(dest, node_id, base_id)
+            if fmt == "parquet" and resolve_format(result, fmt, warn=False) != "parquet":
+                # An artifact may fall back to pickle (barca picks its file name), but a sink's
+                # path is the user's promise to another system: never write pickle bytes there.
+                raise ValueError(
+                    f"a {type(result).__name__} cannot be written as parquet; return a DataFrame, "
+                    "Arrow table or DuckDB relation, or sink it as json or pickle"
+                )
+            dest = _sink_dest(dest, node_id)
             size = serialize(result, dest, fmt)
             outcomes.append({"path": str(dest), "status": "ok", "size_bytes": size})
         except Exception as exc:
@@ -444,7 +507,13 @@ def _materialize(result, node_id, art_dir, step, elapsed, elapsed_in_artifact=Fa
     path = artifact_path(art_dir, node_id, fmt, run_hash)
     _ser_wall0 = time.perf_counter()
     _ser_cpu0 = time.process_time()
-    size = serialize(result, path, fmt)
+    # A sensor's output is hashed: the coordinator folds the hash into the run hash of every
+    # asset that reads the sensor, so a changed output re-runs them.
+    content_hash = None
+    if step.get("kind") == "sensor":
+        size, content_hash = serialize_hashed(result, path, fmt)
+    else:
+        size = serialize(result, path, fmt)
     elapsed += time.perf_counter() - _ser_wall0
     if timing and timing.get("cpu_seconds") is not None:
         timing = {
@@ -452,6 +521,8 @@ def _materialize(result, node_id, art_dir, step, elapsed, elapsed_in_artifact=Fa
             "cpu_seconds": timing["cpu_seconds"] + (time.process_time() - _ser_cpu0),
         }
     artifact = {"path": str(path), "format": fmt, "size_bytes": size}
+    if content_hash is not None:
+        artifact["content_hash"] = content_hash
     if elapsed_in_artifact:
         artifact["elapsed_seconds"] = elapsed
     if timing:
@@ -724,9 +795,13 @@ def _run_daemon_step(step, modules, art_dir, lru):
             elapsed_in_artifact=True,
             timing={"cpu_seconds": cpu, "max_rss_bytes": _peak_rss_bytes()},
         )
-        # A downstream step in this worker may consume what we just produced.
-        if _lru_cacheable(artifact["path"], artifact.get("size_bytes")):
-            lru.put(artifact["path"], result)
+        # A downstream step in this worker may consume what we just produced, keyed by the
+        # reader it is equivalent to so a consumer never gets a different frame type.
+        result_type = _result_frame_type(result)
+        if result_type is not False and _lru_cacheable(
+            artifact["path"], artifact.get("size_bytes")
+        ):
+            lru.put(artifact["path"], result, result_type)
         return True
 
     except BaseException as exc:
@@ -737,6 +812,11 @@ def _run_daemon_step(step, modules, art_dir, lru):
         # fails, and that propagates to the caller.)
         wall = time.perf_counter() - t0
         message = str(exc)
+        if isinstance(exc, SystemExit):
+            message = (
+                f"{message} (the step called sys.exit(); a step must return a value or raise "
+                "an exception, and barca reports any sys.exit() as a failure)"
+            )
         note = _duckdb.explain_error(exc, bound_views)
         if note:
             message = f"{message}\n\n{note}"
@@ -763,6 +843,11 @@ def run_daemon():
         print("BARCA_SOCKET not set", file=sys.stderr)
         sys.exit(1)
     _use_socket = True
+
+    # Collapse repeated library warnings (barca docs agents, "Repeated warnings").
+    from barca import _dedupe
+
+    _dedupe.install(os.environ.get("BARCA_SOCKET"))
 
     # Install SIGTERM handler so graceful_kill flushes buffered progress output
     # before the process goes away. Exit via os._exit, not sys.exit(0): a

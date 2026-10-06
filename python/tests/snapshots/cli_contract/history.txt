@@ -1,0 +1,18 @@
+# barca history --json --limit 1  (stdout, exit 0)
+hint : string
+runs : array
+runs[] : object
+runs[].command : string
+runs[].elapsed_seconds : number
+runs[].files : array
+runs[].files[] : string
+runs[].finished_at : string
+runs[].run_id : string
+runs[].started_at : string
+runs[].status : string
+runs[].steps_cached : integer
+runs[].steps_executed : integer
+runs[].steps_total : integer
+runs[].target : string
+total : integer
+truncated : boolean

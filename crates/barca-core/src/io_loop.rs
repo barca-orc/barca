@@ -27,7 +27,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -36,7 +35,7 @@ use tokio_util::sync::CancellationToken;
 use crate::coordinator::{Coordinator, FailureAction, GroupId, ItemId, ItemSpec};
 use crate::cost::CostModel;
 use crate::events::RunEvent;
-use crate::protocol::{CoordinatorMessage, ParallelResult, WorkerMessage};
+use crate::protocol::{CoordinatorMessage, ParallelResult, WorkerMessage, read_frame, write_frame};
 
 // ─── Configuration ───────────────────────────────────────────────────────────
 
@@ -44,11 +43,13 @@ pub struct IoConfig {
     pub python: PathBuf,
     pub pool_size: usize,
     pub run_id: String,
-    /// Artifact store root for this run — a local directory or a remote URI.
-    /// Set explicitly on every worker so env-separated and remote layouts work
+    /// Local artifact directory workers write to and read from. Always local:
+    /// a separate artifact store is synced by `transfer::TransferClient`.
+    /// Set explicitly on every worker so env-separated layouts work
     /// regardless of the coordinator's own environment.
     pub artifact_root: String,
-    /// Merged fsspec storage options (JSON), forwarded to workers.
+    /// Merged fsspec storage options (JSON), forwarded to workers (for remote
+    /// `@sink` destinations).
     pub storage_options_json: Option<String>,
 }
 
@@ -127,14 +128,14 @@ async fn worker_io_task(
 ) {
     loop {
         tokio::select! {
-            result = read_one_message(&mut stream) => {
+            result = read_frame::<_, WorkerMessage>(&mut stream) => {
                 match result {
-                    Ok(msg) => {
+                    Ok(Some(msg)) => {
                         if event_tx.send(IoEvent::Message { worker_id, msg }).await.is_err() {
                             break;
                         }
                     }
-                    Err(_) => {
+                    Ok(None) | Err(_) => {
                         let _ = event_tx.send(IoEvent::Disconnected { worker_id }).await;
                         break;
                     }
@@ -143,7 +144,7 @@ async fn worker_io_task(
             cmd = cmd_rx.recv() => {
                 match cmd {
                     Some(msg) => {
-                        if write_message(&mut stream, &msg).await.is_err() {
+                        if write_frame(&mut stream, &msg).await.is_err() {
                             let _ = event_tx.send(IoEvent::Disconnected { worker_id }).await;
                             break;
                         }
@@ -178,6 +179,16 @@ pub struct WorkerPool {
     /// `BARCA_PROGRESS_SECS`, default 15.
     progress_interval: Duration,
     running_hook: Option<RunningHook>,
+    /// Library warnings the workers suppressed as repeats: (first line, times suppressed).
+    repeated_warnings: Vec<(String, u64)>,
+}
+
+/// Where workers claim "first in this run to print this warning": a directory next to the
+/// coordination socket. `python/barca/_dedupe.py` derives the same path from `BARCA_SOCKET`.
+fn warning_claims_dir(socket_path: &Path) -> PathBuf {
+    let mut dir = socket_path.as_os_str().to_owned();
+    dir.push(".warnings");
+    PathBuf::from(dir)
 }
 
 impl WorkerPool {
@@ -187,6 +198,11 @@ impl WorkerPool {
         let socket_path = crate::protocol::socket_path(&config.run_id, "main");
         std::fs::remove_file(&socket_path).ok();
         let listener = UnixListener::bind(&socket_path).map_err(|e| format!("socket bind: {e}"))?;
+        // Best effort: without the directory each worker prints a repeated warning once
+        // instead of the run printing it once.
+        let claims = warning_claims_dir(&socket_path);
+        std::fs::remove_dir_all(&claims).ok();
+        std::fs::create_dir_all(&claims).ok();
         let (event_tx, event_rx) = mpsc::channel::<IoEvent>(config.pool_size.max(1) * 8);
         Ok(Self {
             config,
@@ -206,7 +222,16 @@ impl WorkerPool {
                     .unwrap_or(15),
             ),
             running_hook: None,
+            repeated_warnings: Vec::new(),
         })
+    }
+
+    /// Library warnings the workers printed once and then suppressed, with how many times
+    /// each was suppressed, most repeated first. Drains the tally.
+    pub fn take_repeated_warnings(&mut self) -> Vec<(String, u64)> {
+        let mut out = std::mem::take(&mut self.repeated_warnings);
+        out.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        out
     }
 
     /// Report steps that stay in flight longer than the progress interval, so a long
@@ -286,11 +311,10 @@ impl WorkerPool {
                     }
                 } => {
                     let running = self.running_steps(coord);
-                    if !running.is_empty() {
-                        if let Some(hook) = self.running_hook.as_mut() {
+                    if !running.is_empty()
+                        && let Some(hook) = self.running_hook.as_mut() {
                             hook(&running);
                         }
-                    }
                     continue;
                 }
             };
@@ -521,17 +545,24 @@ impl WorkerPool {
                             ev(RunEvent::Log { node_id, line });
                         }
                     }
+                    WorkerMessage::RepeatedWarnings { counts } => {
+                        for (text, n) in counts {
+                            match self.repeated_warnings.iter_mut().find(|(t, _)| *t == text) {
+                                Some((_, total)) => *total += n,
+                                None => self.repeated_warnings.push((text, n)),
+                            }
+                        }
+                    }
                 },
                 IoEvent::Disconnected { worker_id } => {
                     // Worker crashed — its in-flight item failed; unstarted
                     // leases return to the queue for another worker.
                     if let Some(mut handle) = self.workers.remove(&worker_id) {
-                        if let Some(in_flight) = handle.leases.pop_front() {
-                            if let FailureAction::RetryAfter(delay) =
+                        if let Some(in_flight) = handle.leases.pop_front()
+                            && let FailureAction::RetryAfter(delay) =
                                 coord.on_item_failed(in_flight, "worker disconnected".to_string())
-                            {
-                                schedule_retry(&self.event_tx, in_flight, delay);
-                            }
+                        {
+                            schedule_retry(&self.event_tx, in_flight, delay);
                         }
                         Self::return_leases(&mut handle, coord);
                         tokio::task::spawn_blocking(move || {
@@ -616,6 +647,7 @@ impl WorkerPool {
         });
         let _ = kill_task.await;
         std::fs::remove_file(&self.socket_path).ok();
+        std::fs::remove_dir_all(warning_claims_dir(&self.socket_path)).ok();
     }
 
     /// Close a worker's lease for `node_id`. Workers execute their batch in
@@ -826,20 +858,12 @@ impl WorkerPool {
                                         .unwrap_or("");
                                     let path =
                                         artifact.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                                    // Workers always write locally, so the
+                                    // child's artifact is on this disk.
                                     if fmt == "json" && !path.is_empty() {
-                                        if path.contains("://") {
-                                            eprintln!(
-                                                "[barca] Warning: parallel() result values require \
-                                                 a local artifact store in v1 — artifact '{path}' \
-                                                 is remote; the parent receives null. Unset \
-                                                 BARCA_ARTIFACT_URI to use parallel() results."
-                                            );
-                                            None
-                                        } else {
-                                            std::fs::read_to_string(path)
-                                                .ok()
-                                                .and_then(|s| serde_json::from_str(&s).ok())
-                                        }
+                                        std::fs::read_to_string(path)
+                                            .ok()
+                                            .and_then(|s| serde_json::from_str(&s).ok())
                                     } else {
                                         None
                                     }
@@ -883,36 +907,6 @@ impl WorkerPool {
     }
 }
 
-// ─── Message I/O ─────────────────────────────────────────────────────────────
-
-async fn read_one_message(stream: &mut UnixStream) -> Result<WorkerMessage, std::io::Error> {
-    let mut len_buf = [0u8; 4];
-    stream.read_exact(&mut len_buf).await?;
-    let len = u32::from_be_bytes(len_buf) as usize;
-    if len > 256 * 1024 * 1024 {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "message too large",
-        ));
-    }
-    let mut payload = vec![0u8; len];
-    stream.read_exact(&mut payload).await?;
-    serde_json::from_slice(&payload)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
-}
-
-async fn write_message(
-    stream: &mut UnixStream,
-    msg: &impl serde::Serialize,
-) -> Result<(), std::io::Error> {
-    let payload = serde_json::to_vec(msg)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    let header = (payload.len() as u32).to_be_bytes();
-    stream.write_all(&header).await?;
-    stream.write_all(&payload).await?;
-    stream.flush().await
-}
-
 // ─── Worker spawning ─────────────────────────────────────────────────────────
 
 async fn spawn_worker(
@@ -928,7 +922,9 @@ async fn spawn_worker(
         .env("BARCA_WORKER", "1")
         .env("BARCA_WORKER_ID", worker_id.to_string())
         .env("BARCA_ARTIFACT_URI", &config.artifact_root)
-        .stdout(Stdio::inherit())
+        // A step's own print() output goes to barca's stderr, never stdout: stdout carries
+        // only barca's result, so `barca run ... | jq` works when steps print.
+        .stdout(Stdio::from(std::io::stderr()))
         .stderr(Stdio::inherit())
         .stdin(Stdio::null());
     if let Some(ref opts) = config.storage_options_json {
@@ -982,14 +978,12 @@ fn graceful_kill(child: &mut Child) {
             libc::kill(child.id() as i32, libc::SIGTERM);
         }
         // Give the process a moment to flush and exit.
-        match child.try_wait() {
-            Ok(Some(_)) => return,
-            _ => {}
+        if let Ok(Some(_)) = child.try_wait() {
+            return;
         }
         std::thread::sleep(Duration::from_millis(200));
-        match child.try_wait() {
-            Ok(Some(_)) => return,
-            _ => {}
+        if let Ok(Some(_)) = child.try_wait() {
+            return;
         }
     }
     // Fallback: SIGKILL (or platform kill on non-unix).
@@ -1220,12 +1214,14 @@ mod tests {
                     format: "json".to_string(),
                     size_bytes: 10,
                     elapsed_seconds: None,
+                    content_hash: None,
                 },
                 crate::dispatch::OutputRef {
                     path: "f--source_key_b.json".to_string(),
                     format: "json".to_string(),
                     size_bytes: 12,
                     elapsed_seconds: None,
+                    content_hash: None,
                 },
             ],
         );
@@ -1321,6 +1317,7 @@ mod tests {
                 trace_on: false,
                 progress_interval: Duration::ZERO,
                 running_hook: None,
+                repeated_warnings: Vec::new(),
             };
 
             let start = std::time::Instant::now();

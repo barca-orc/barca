@@ -261,7 +261,11 @@ async fn delete_cancels_in_flight_run() {
     config.python = wrapper;
     // Absolute tempdir paths so the run's DB and artifacts never land in the repo.
     config.resolved.db_path = dir.path().join("metadata.db").display().to_string();
+    // Both: a local artifact dir and a store root that differ would make the
+    // run sync through the transfer helper (and workers would get the local
+    // dir, not the marker below).
     config.resolved.artifact_root = dir.path().join("artifacts").display().to_string();
+    config.resolved.local_artifact_dir = config.resolved.artifact_root.clone();
     let marker = config.resolved.artifact_root.clone();
     std::fs::create_dir_all(&marker).unwrap();
     let app = app(config);
@@ -426,8 +430,9 @@ async fn state_reports_every_node_without_creating_a_db() {
     let nodes = json.as_array().expect("array of node states");
     assert_eq!(nodes.len(), 2);
     for n in nodes {
-        assert_eq!(n["cache"]["state"], "missing", "{n}");
-        assert!(n["last"].is_null());
+        assert_eq!(n["cache"]["state"], "never_run", "{n}");
+        assert!(n["last_materialization"].is_null());
+        assert!(n["durations"].is_null());
         assert!(n["next_run"].is_null(), "unscheduled: {n}");
     }
     assert!(

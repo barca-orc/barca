@@ -1,0 +1,4 @@
+# barca docs cache --json  (stdout, exit 0)
+content : string
+name : string
+summary : string

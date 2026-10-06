@@ -4,5 +4,5 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 # Run the pipeline 10 times to simulate daily backfill
 for i in $(seq 1 10); do
-  "$REPO_ROOT/.venv/bin/barca" get "$SCRIPT_DIR/assets.py" --no-cache 2>/dev/null
+  "$REPO_ROOT/.venv/bin/barca" get "$SCRIPT_DIR/assets.py" --refresh-all 2>/dev/null
 done

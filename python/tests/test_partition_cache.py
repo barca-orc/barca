@@ -80,7 +80,7 @@ def test_a_removed_key_is_not_resurrected(project):
 
 def test_no_cache_still_reruns_every_partition(project):
     get(project)
-    forced = get(project, "--no-cache")
+    forced = get(project, "--refresh-all")
     assert forced["steps_executed"] == 4
 
 

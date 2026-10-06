@@ -1,0 +1,98 @@
+Get asset value(s) — cache-aware, runs only the needed subgraph
+
+If the first positional arg ends in .py, all args are treated as files (no target — gets every asset and sensor; tasks are skipped, use `barca run` for them). Otherwise, the first arg is the target asset name (or several, comma-separated: `a,b`) and the rest are files.
+
+Each completed step writes a fully materialized artifact (never a lazy in-memory handle). If one computation should produce several cacheable outputs, define multiple assets or split the work inside a single step before returning.
+
+Usage: barca get [OPTIONS] [ARGS]...
+
+Arguments:
+  [ARGS]...
+          [TARGET[,TARGET...]] [file.py|dir/ ...] — both optional: no target gets every asset and sensor; no files reads the whole project (`barca docs discovery`)
+
+Options:
+  -o, --output <OUTPUT>
+          Output format (kept for compatibility; --json / --pretty are the canonical spelling)
+
+          Possible values:
+          - json:   One-line JSON (default when stdout is not a terminal)
+          - value:  Just the final_output value, pretty-printed
+          - pretty: Human-friendly with timing info (default when stdout is a terminal)
+
+      --json
+          Emit JSON on stdout (the default when stdout is not a terminal)
+
+      --pretty
+          Emit human-readable output (the default when stdout is a terminal)
+
+      --refresh <REFRESH>
+          Assets to force re-materialize, as ONE comma-separated list (`--refresh a,b`, not `--refresh a b`); the target itself may be named. Every asset downstream of them in the target's cone re-materializes too (see --no-cascade)
+
+      --no-cascade
+          With --refresh: re-materialize only the named assets, not what is downstream of them. Cached downstream assets then do not reflect the refresh; barca warns
+
+      --refresh-all
+          Force re-materialize EVERY asset in the target's cone (nothing comes from cache)
+
+      --dry-run
+          Show what this command would do (each step cached or will-run, and why) without running or writing anything
+
+      --agent
+          Agent-friendly output: plain structured progress lines instead of visual progress bar
+
+      --fields <FIELDS>
+          Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones
+
+          [possible values: id, kind, action, status, reason, detail, run_hash, artifact, warning, partitions, env]
+
+      --env <ENV>
+          Environment name (separates cache/state per environment)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Examples:
+  barca get total                          # find `total` anywhere in the project and get it
+  barca get total pipelines/               # only read files under pipelines/
+  barca get                                # every asset and sensor in the project, never tasks
+  barca get pipeline.py                    # every asset and sensor, never tasks; prints the last asset's value
+  barca get total pipeline.py              # one target and only its upstream cone
+  barca get total,orders pipeline.py       # several targets in one run; shared upstream runs once
+  barca get total pipeline.py other.py     # target defined across several files
+  barca get total pipeline.py --refresh-all        # recompute everything in that cone
+  barca get total pipeline.py --refresh clean      # recompute clean and everything downstream of it
+  barca get total pipeline.py --refresh clean --no-cascade   # recompute only clean
+  barca get total pipeline.py --dry-run    # what would run vs come from cache; changes nothing
+  barca get total pipeline.py --json       # JSON even in a terminal (the default when piped)
+  barca get total pipeline.py --pretty     # summary and value for humans (the default in a terminal)
+  barca get total pipeline.py -o value     # just the value, pretty-printed
+  barca get total pipeline.py --agent      # plain progress lines on stderr
+  barca get total pipeline.py --env dev    # separate cache and state per environment
+  barca list pipeline.py                   # not sure of the name? list assets and tasks first
+  BARCA_OUTPUT=json barca get total pipeline.py   # env override for CI; a flag still wins
+  barca get total pipeline.py --fields id,status   # JSON with each entry of `steps` trimmed to these keys
+
+Output format: --json / --pretty / -o, else BARCA_OUTPUT=json|pretty, else the terminal decides
+(TTY -> pretty, piped -> JSON). JSON is one line on stdout with status ("success"), run_id,
+steps_executed (0 = all cached), phases, final_output, and `steps`: what happened to each step
+(ran or cached, and why; `env` holds the values of variables the node declares with env=[...],
+secrets redacted). For parquet/pickle assets final_output is a pointer,
+{"_barca_artifact": {"path", "format", "size_bytes"}}; the Python API (barca.get)
+loads the value for you.
+Several targets (`a,b`, comma-separated, no spaces): final_output is replaced by `targets`, keyed by
+target, each {status: success, final_output} or {status: failed, failed_node, error}. Every target
+runs even if another fails; exit 1 if any failed.
+Refresh: the same vocabulary as `barca run`. --refresh takes ONE comma-separated list of assets in
+the cone (the target itself may be named) and also re-runs everything downstream of them;
+--no-cascade re-runs only the named ones. --refresh-all re-runs every asset in the cone.
+--no-cache is a deprecated spelling of --refresh-all: it still works and warns on stderr.
+Targets must be assets; use `barca run` for tasks. With no target, get materializes every asset and
+sensor and skips tasks (previously it ran tasks too); stderr names the skipped tasks and the
+`barca run` command. A file with only tasks gets nothing: exit 0, empty `steps`.
+The target comes before the files: `barca get pipeline.py total` exits 2 and prints
+`barca get total pipeline.py`.
+Errors: in JSON mode the last stderr line is one JSON object {error, code, kind, remediation},
+plus node, traceback and artifact_dir when a step failed. Exit 1 step failed, 2 usage error,
+3 barca/infra failure, 130 cancelled. A failed step still prints a stdout result line with
+status "failed" and failed_node.
+More: barca docs cache, barca docs types, barca docs agents

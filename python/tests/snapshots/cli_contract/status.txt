@@ -1,0 +1,54 @@
+# barca status pipeline.py --json --sample 1  (stdout, exit 0)
+nodes : array
+nodes[] : object
+nodes[].cache : object
+nodes[].cache.artifact : string  (optional)
+nodes[].cache.detail : string
+nodes[].cache.reason : string
+nodes[].cache.run_hash : string  (optional)
+nodes[].cache.state : string
+nodes[].env : array
+nodes[].env[] : string
+nodes[].id : string
+nodes[].inputs : array
+nodes[].inputs[] : string
+nodes[].kind : string
+nodes[].last_materialization : object
+nodes[].last_materialization.artifact : null|string
+nodes[].last_materialization.created_at : string
+nodes[].last_materialization.elapsed_seconds : null|number
+nodes[].last_materialization.error : string  (optional)
+nodes[].last_materialization.format : null|string
+nodes[].last_materialization.partition : string  (optional)
+nodes[].last_materialization.run_hash : string
+nodes[].last_materialization.size_bytes : integer|null
+nodes[].last_materialization.status : string
+nodes[].name : string
+nodes[].partitioned : boolean
+nodes[].partitions : object  (optional)
+nodes[].partitions.cached : integer
+nodes[].partitions.missing : integer
+nodes[].partitions.missing_keys : array
+nodes[].partitions.total : integer
+nodes[].shape : null|object
+nodes[].shape.columns : array  (optional)
+nodes[].shape.columns[] : object
+nodes[].shape.columns[].name : string
+nodes[].shape.columns[].type : string
+nodes[].shape.keys : array  (optional)
+nodes[].shape.keys[] : string
+nodes[].shape.rows : integer  (optional)
+nodes[].shape.sample : <user value>
+nodes[].shape.type : string
+root : string
+summary : object
+summary.always_runs : integer
+summary.cached : integer
+summary.never_run : integer
+summary.partial : integer
+summary.stale : integer
+summary.unknown : integer
+target : null
+targets : array
+total : integer
+truncated : boolean

@@ -1,0 +1,5 @@
+# barca docs --json  (stdout, exit 0)
+topics : array
+topics[] : object
+topics[].name : string
+topics[].summary : string

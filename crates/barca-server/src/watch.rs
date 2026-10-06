@@ -58,11 +58,7 @@ pub fn spawn(state: AppState) -> notify::Result<RecommendedWatcher> {
     // replace files atomically, which directory-level watching catches reliably.
     let mut watched: Vec<std::path::PathBuf> = Vec::new();
     for f in &state.config.files {
-        let dir = Path::new(f)
-            .parent()
-            .filter(|p| !p.as_os_str().is_empty())
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        let dir = barca_core::commands::source_dir(Path::new(f));
         if watched.contains(&dir) {
             continue;
         }

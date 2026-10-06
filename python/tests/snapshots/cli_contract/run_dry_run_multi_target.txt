@@ -1,0 +1,24 @@
+# barca run report,broken pipeline.py --dry-run --json  (stdout, exit 0)
+command : string
+dry_run : boolean
+steps : array
+steps[] : object
+steps[].action : string
+steps[].artifact : string  (optional)
+steps[].detail : string  (optional)
+steps[].env : object  (optional)
+steps[].env.<name> : null|string
+steps[].id : string
+steps[].kind : string
+steps[].reason : string  (optional)
+steps[].run_hash : string
+summary : object
+summary.cached : integer
+summary.unknown : integer
+summary.will_run : integer
+targets : object
+targets.<name> : object
+targets.<name>.summary : object
+targets.<name>.summary.cached : integer
+targets.<name>.summary.unknown : integer
+targets.<name>.summary.will_run : integer

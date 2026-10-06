@@ -1,0 +1,5 @@
+# barca list pipeline.py --jsn --json  (stderr, exit 2)
+code : integer
+error : string
+kind : string
+remediation : string

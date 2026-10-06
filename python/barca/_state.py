@@ -49,15 +49,6 @@ class ConflictError(Exception):
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
 
-def _local_path_of(uri: str) -> "Path | None":
-    """Path for file:// URIs and plain local paths; None for remote URIs."""
-    if uri.startswith("file://"):
-        return Path(uri[len("file://") :])
-    if "://" not in uri:
-        return Path(uri)
-    return None
-
-
 def _protocol(uri: str) -> str:
     return uri.split("://", 1)[0].lower()
 
@@ -190,11 +181,65 @@ def _file_push(target: Path, local_path: "Path | str", token: "str | None") -> s
 # download. Credentials come from google.auth defaults, same as gcsfs.
 
 
-def _gcs_blob(uri: str):
+def _gcs_options() -> dict:
+    """The options gcsfs gets for artifacts, so the state blob uses the same account: fsspec's
+    own config (``FSSPEC_GCS_*`` environment variables, fsspec config files), overlaid with
+    barca's ``[remote.storage_options.gcs]`` / ``BARCA_STORAGE_OPTIONS``."""
+    try:
+        import fsspec.config
+
+        opts = dict(fsspec.config.conf.get("gcs", {}))
+    except ImportError:
+        opts = {}
+    opts.update(_storage.storage_options("gcs"))
+    return opts
+
+
+_gcs_clients: dict[str, object] = {}
+
+
+def _gcs_client():
+    """A google-cloud-storage client built from gcsfs-style options: ``project``,
+    ``endpoint_url``, and ``token`` (``"anon"``, a credentials JSON file path, a service-account
+    info dict, or unset / ``"google_default"`` for application default credentials)."""
+    opts = _gcs_options()
+    key = json.dumps(opts, sort_keys=True, default=str)
+    if key in _gcs_clients:
+        return _gcs_clients[key]
+
     from google.cloud import storage as gcs_storage
 
+    kwargs: dict = {}
+    if opts.get("project"):
+        kwargs["project"] = opts["project"]
+    if opts.get("endpoint_url"):
+        kwargs["client_options"] = {"api_endpoint": opts["endpoint_url"]}
+    token = opts.get("token")
+    if token == "anon":
+        from google.auth.credentials import AnonymousCredentials
+
+        kwargs["credentials"] = AnonymousCredentials()
+        kwargs.setdefault("project", "<none>")
+    elif isinstance(token, dict):
+        from google.oauth2 import service_account
+
+        kwargs["credentials"] = service_account.Credentials.from_service_account_info(token)
+        kwargs.setdefault("project", token.get("project_id"))
+    elif isinstance(token, str) and token not in ("google_default", "cache", "cloud", "browser"):
+        import google.auth
+
+        creds, project = google.auth.load_credentials_from_file(token)
+        kwargs["credentials"] = creds
+        if project:
+            kwargs.setdefault("project", project)
+    client = gcs_storage.Client(**kwargs)
+    _gcs_clients[key] = client
+    return client
+
+
+def _gcs_blob(uri: str):
     bucket_name, blob_name = uri.split("://", 1)[1].split("/", 1)
-    return gcs_storage.Client().bucket(bucket_name).blob(blob_name)
+    return _gcs_client().bucket(bucket_name).blob(blob_name)
 
 
 def _gcs_token(uri: str) -> "str | None":
@@ -229,7 +274,7 @@ def pull(state_uri: str, local_path: "Path | str") -> "str | None":
     Returns the concurrency token, or None when the remote object is absent
     (local_path is then left untouched).
     """
-    local_target = _local_path_of(state_uri)
+    local_target = _storage.local_path_of(state_uri)
     if local_target is not None:
         return _file_pull(local_target, local_path)
     if _protocol(state_uri) in ("gs", "gcs"):
@@ -248,7 +293,7 @@ def push(state_uri: str, local_path: "Path | str", token: "str | None") -> str:
     token=None → create-only. Raises ConflictError when the remote no longer
     matches the token (or already exists, for create-only).
     """
-    local_target = _local_path_of(state_uri)
+    local_target = _storage.local_path_of(state_uri)
     if local_target is not None:
         return _file_push(local_target, local_path, token)
 

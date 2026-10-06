@@ -15,7 +15,57 @@ from barca._artifacts import deserialize
 
 
 class BarcaError(Exception):
-    """Raised when a barca command fails."""
+    """Raised when a barca command fails.
+
+    When the CLI reported a structured error (the JSON envelope on stderr, see
+    ``barca docs agents``), its fields are attributes: ``kind`` (``usage`` |
+    ``step_failed`` | ``infra`` | ``cancelled``), ``code`` (the exit code),
+    ``remediation``, and for ``step_failed`` also ``node``, ``traceback`` and
+    ``artifact_dir``. They are ``None`` when the CLI printed plain text.
+    """
+
+    def __init__(self, message: str, envelope: dict | None = None, stderr: str | None = None):
+        super().__init__(message)
+        env = envelope or {}
+        self.envelope = envelope
+        self.stderr = stderr
+        self.kind: str | None = env.get("kind")
+        self.code: int | None = env.get("code")
+        self.remediation: str | None = env.get("remediation")
+        self.node: str | None = env.get("node")
+        self.traceback: str | None = env.get("traceback")
+        self.artifact_dir: str | None = env.get("artifact_dir")
+
+
+def _error_envelope(stderr: str) -> dict | None:
+    """The CLI's JSON error envelope: the last stderr line that is a JSON object with a kind."""
+    for line in reversed(stderr.splitlines()):
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict) and "kind" in obj and "error" in obj:
+            return obj
+    return None
+
+
+def _failure(result: "subprocess.CompletedProcess[str]") -> BarcaError:
+    """Build the BarcaError for a failed barca invocation."""
+    stderr = result.stderr.strip()
+    envelope = _error_envelope(stderr)
+    if envelope is None:
+        # Plain-text error (human output mode): stderr is the message.
+        message = stderr[len("Error: ") :] if stderr.startswith("Error: ") else stderr
+        return BarcaError(message, stderr=stderr)
+    parts = [envelope["error"]]
+    if envelope.get("traceback"):
+        parts.append(envelope["traceback"])
+    if envelope.get("remediation"):
+        parts.append(envelope["remediation"])
+    return BarcaError("\n".join(parts), envelope=envelope, stderr=stderr)
 
 
 _cached_binary: str | None = None
@@ -65,7 +115,7 @@ def _find_binary() -> str:
     return _cached_binary
 
 
-def _exec(args: list[str]) -> dict:
+def _exec(args: list[str]) -> Any:
     """Run barca with args, return parsed JSON from the last stdout line."""
     binary = _find_binary()
     result = subprocess.run(
@@ -74,11 +124,7 @@ def _exec(args: list[str]) -> dict:
         text=True,
     )
     if result.returncode != 0:
-        stderr = result.stderr.strip()
-        # Strip any leading "Error: " prefix to avoid doubling.
-        if stderr.startswith("Error: "):
-            stderr = stderr[len("Error: ") :]
-        raise BarcaError(stderr)
+        raise _failure(result)
 
     stdout = result.stdout.strip()
     if not stdout:
@@ -104,17 +150,52 @@ def _read_output(output_ref: Any) -> Any:
     return output_ref
 
 
-def get(target_or_file: str, *extra_files: str, no_cache: bool = False) -> Any:
+def _refresh_args(refresh: list[str] | None, refresh_all: bool, cascade: bool) -> list[str]:
+    """The refresh flags shared by ``get`` and ``run``."""
+    if refresh_all:
+        return ["--refresh-all"]
+    if refresh:
+        args = ["--refresh", ",".join(refresh)]
+        if not cascade:
+            args.append("--no-cascade")
+        return args
+    return []
+
+
+def get(
+    target_or_file: str,
+    *extra_files: str,
+    refresh: list[str] | None = None,
+    refresh_all: bool = False,
+    cascade: bool = True,
+    no_cache: bool = False,
+) -> Any:
     """Get asset value(s).
 
-    If target_or_file ends in .py, gets all assets in the file.
+    If target_or_file ends in .py, gets every asset and sensor in the file and
+    returns the last asset's value. Tasks are never run (use ``run``); a file
+    with only tasks returns None.
     Otherwise, treats it as a target asset name and remaining args as files.
+
+    Assets come from cache when fresh. ``refresh=["asset", ...]`` re-materializes
+    those assets (the target may be one of them) and everything downstream of
+    them; ``cascade=False`` (``--no-cascade``) re-materializes only the named
+    ones. ``refresh_all=True`` re-materializes every asset in the cone.
+    ``no_cache=True`` is the deprecated spelling of ``refresh_all=True``.
 
     Returns the deserialized value of the target asset directly.
     """
-    args: list[str] = ["get", target_or_file, *extra_files]
     if no_cache:
-        args.append("--no-cache")
+        import warnings
+
+        warnings.warn(
+            "barca.get(no_cache=True) is deprecated; use refresh_all=True",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        refresh_all = True
+    args: list[str] = ["get", target_or_file, *extra_files, "--json"]
+    args += _refresh_args(refresh, refresh_all, cascade)
     result = _exec(args)
     output = result.get("final_output")
     if output is not None:
@@ -127,20 +208,20 @@ def run(
     *files: str,
     refresh: list[str] | None = None,
     refresh_all: bool = False,
+    cascade: bool = True,
 ) -> Any:
     """Run a task (and its cone). The task always re-runs.
 
     Upstream assets are served from cache when fresh (same as ``get``). Pass
-    ``refresh=["asset_name", ...]`` to force re-materialize only those assets,
-    or ``refresh_all=True`` to refresh every upstream asset.
+    ``refresh=["asset_name", ...]`` to force re-materialize those assets and every
+    asset downstream of them in the task's cone; add ``cascade=False``
+    (``--no-cascade``) to re-materialize only the named assets. Pass
+    ``refresh_all=True`` to refresh every upstream asset.
 
     Returns the deserialized value of the target task directly (or ``None``).
     """
-    args: list[str] = ["run", target, *files]
-    if refresh_all:
-        args.append("--refresh-all")
-    elif refresh:
-        args += ["--refresh", ",".join(refresh)]
+    args: list[str] = ["run", target, *files, "--json"]
+    args += _refresh_args(refresh, refresh_all, cascade)
     result = _exec(args)
     output = result.get("final_output")
     if output is not None:
@@ -165,7 +246,7 @@ def history(limit: int = 10) -> list[dict]:
     Returns a list of dicts, each with:
         - run_id: str
         - command: str
-        - files: str
+        - files: list[str]
         - target: str | None
         - status: str
         - steps_total: int | None
@@ -175,121 +256,19 @@ def history(limit: int = 10) -> list[dict]:
         - finished_at: str | None
         - elapsed_seconds: float | None
     """
-    binary = _find_binary()
-    result = subprocess.run(
-        [binary, "history", "--limit", str(limit)],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        stderr = result.stderr.strip()
-        if stderr.startswith("Error: "):
-            stderr = stderr[len("Error: ") :]
-        raise BarcaError(stderr)
-
-    # Parse the table output into dicts.
-    stdout = result.stdout.strip()
-    if not stdout or stdout == "No run history found.":
-        return []
-
-    lines = stdout.splitlines()
-    if len(lines) < 3:  # header + separator + at least one row
-        return []
-
-    records = []
-    for line in lines[2:]:  # skip header and separator
-        parts = line.split()
-        if len(parts) < 7:
-            continue
-        records.append(
-            {
-                "run_id": parts[0],
-                "command": parts[1],
-                "status": parts[2],
-                "steps_executed": int(parts[3]),
-                "steps_cached": int(parts[4]),
-                "elapsed_seconds": float(parts[5].rstrip("s")) if parts[5] != "-" else None,
-                "started_at": " ".join(parts[6:]),
-            }
-        )
-    return records
+    # `history --json` is an envelope {runs, total, truncated, hint?}; the API returns the runs.
+    return _exec(["history", "--limit", str(limit), "--json"])["runs"]
 
 
 def stats(target: str, file: str, *extra_files: str) -> dict:
     """Return execution statistics for an asset.
 
     Returns a dict with:
-        - node_id: str
+        - id: str
         - total_runs: int
         - avg_elapsed_seconds: float | None
         - cache_hit_rate: float
         - recent_runs: list of dicts
     """
     files = [file, *extra_files]
-    binary = _find_binary()
-    result = subprocess.run(
-        [binary, "stats", target, *files],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        stderr = result.stderr.strip()
-        if stderr.startswith("Error: "):
-            stderr = stderr[len("Error: ") :]
-        raise BarcaError(stderr)
-
-    stdout = result.stdout.strip()
-    lines = stdout.splitlines()
-
-    stats_dict: dict[str, Any] = {
-        "node_id": "",
-        "total_runs": 0,
-        "avg_elapsed_seconds": None,
-        "median_elapsed_seconds": None,
-        "max_elapsed_seconds": None,
-        "p95_elapsed_seconds": None,
-        "cache_hit_rate": 0.0,
-        "recent_runs": [],
-    }
-
-    def _parse_time(s: str) -> float | None:
-        s = s.strip().rstrip("s")
-        if s == "-":
-            return None
-        return float(s)
-
-    in_recent = False
-    for line in lines:
-        if line.startswith("Asset: "):
-            stats_dict["node_id"] = line[len("Asset: ") :]
-        elif line.startswith("Total materializations: "):
-            stats_dict["total_runs"] = int(line.split(": ")[1])
-        elif line.startswith("Timing:"):
-            # "Timing:  avg 0.105s  median 0.105s  p95 0.105s  max 0.105s"
-            parts = line.split()
-            for i, part in enumerate(parts):
-                if part == "avg" and i + 1 < len(parts):
-                    stats_dict["avg_elapsed_seconds"] = _parse_time(parts[i + 1])
-                elif part == "median" and i + 1 < len(parts):
-                    stats_dict["median_elapsed_seconds"] = _parse_time(parts[i + 1])
-                elif part == "p95" and i + 1 < len(parts):
-                    stats_dict["p95_elapsed_seconds"] = _parse_time(parts[i + 1])
-                elif part == "max" and i + 1 < len(parts):
-                    stats_dict["max_elapsed_seconds"] = _parse_time(parts[i + 1])
-        elif line.startswith("Cache hit rate: "):
-            val = line.split(": ")[1].rstrip("%")
-            stats_dict["cache_hit_rate"] = float(val) / 100.0
-        elif line.strip().startswith("ELAPSED"):
-            in_recent = True
-        elif in_recent and line.strip():
-            parts = line.split()
-            if len(parts) >= 3:
-                stats_dict["recent_runs"].append(
-                    {
-                        "elapsed_seconds": _parse_time(parts[0]),
-                        "status": parts[1],
-                        "created_at": " ".join(parts[2:]),
-                    }
-                )
-
-    return stats_dict
+    return _exec(["stats", target, *files, "--json"])

@@ -53,7 +53,7 @@ def test_concurrent_gets_in_one_project_all_succeed(project):
     with ThreadPoolExecutor(PROCESSES) as pool:
         results = list(
             pool.map(
-                lambda _: run(project, "get", "b", "pipeline.py", "--no-cache"), range(PROCESSES)
+                lambda _: run(project, "get", "b", "pipeline.py", "--refresh-all"), range(PROCESSES)
             )
         )
     assert not failures(results), (
@@ -74,7 +74,7 @@ def test_concurrent_first_runs_in_a_fresh_project_all_succeed(project):
 
 def test_readers_and_writers_can_overlap(project):
     assert run(project, "get", "b", "pipeline.py").returncode == 0
-    jobs = [("get", "b", "pipeline.py", "--no-cache"), ("history",)] * (PROCESSES // 2)
+    jobs = [("get", "b", "pipeline.py", "--refresh-all"), ("history",)] * (PROCESSES // 2)
     with ThreadPoolExecutor(PROCESSES) as pool:
         results = list(pool.map(lambda args: run(project, *args), jobs))
     assert not failures(results), (

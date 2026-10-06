@@ -1,0 +1,36 @@
+Show the built-in manual: concepts, output formats, examples, agent conventions
+
+Topics are compiled into the binary, so this works offline and always matches the installed version. With no topic it prints an index.
+
+Usage: barca docs [OPTIONS] [TOPIC]
+
+Arguments:
+  [TOPIC]
+          Topic to show (omit for the index), e.g. types, cache, examples/duckdb
+
+Options:
+      --all
+          Print every topic in one stream
+
+      --json
+          Emit JSON instead of markdown
+
+      --fields <FIELDS>
+          Output JSON with only these keys (comma-separated) on each entry of `topics`, or on the one topic. Implies --json. An unknown key is a usage error listing the valid ones
+
+          [possible values: name, summary, content]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Examples:
+  barca docs                    # topic index with one-line summaries
+  barca docs types              # one topic as markdown
+  barca docs examples/duckdb    # a runnable example pipeline
+  barca docs skill              # the agent skill (SKILL.md, with frontmatter): save it to install
+  barca docs --all              # the whole manual in one stream (paste into context)
+  barca docs --json             # topic index as JSON
+  barca docs cache --json       # one topic as JSON {name, summary, content}
+  barca docs --fields name      # JSON index with only topic names
+
+Topics are compiled into the binary: offline, and always matching this version.

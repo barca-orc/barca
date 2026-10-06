@@ -51,7 +51,7 @@ def enrich(data: dict, k: str) -> dict:
     return {**data, "k2": k}
 PYEOF
 
-OUT=$(cd "$TMPDIR" && rm -rf .barca && $BARCA get enrich "$TMPDIR/static_chain.py" --no-cache 2>/dev/null || true)
+OUT=$(cd "$TMPDIR" && rm -rf .barca && $BARCA get enrich "$TMPDIR/static_chain.py" --refresh-all 2>/dev/null || true)
 S=$(steps "$OUT" 2>/dev/null || echo "ERROR")
 [ "$S" = "6" ] && pass "static partitions + inputs: all 6 steps execute" || fail "static partitions + inputs: expected 6 steps, got $S ($OUT)"
 
@@ -91,7 +91,7 @@ PYEOF
 # to hit, but run twice as cheap insurance against unrelated flakiness.
 DYNAMIC_OK=1
 for i in 1 2; do
-    OUT=$(cd "$TMPDIR" && rm -rf .barca && BARCA_POOL_SIZE=4 $BARCA get enrich "$TMPDIR/dynamic_chain.py" --no-cache 2>/dev/null || true)
+    OUT=$(cd "$TMPDIR" && rm -rf .barca && BARCA_POOL_SIZE=4 $BARCA get enrich "$TMPDIR/dynamic_chain.py" --refresh-all 2>/dev/null || true)
     S=$(steps "$OUT" 2>/dev/null || echo "ERROR")
     # 1 universe + 3 fetch + 3 enrich = 7
     if [ "$S" != "7" ]; then
@@ -107,7 +107,7 @@ done
 # others. There's no CLI syntax to target a single dynamic-partition
 # instance (they don't exist in the static DAG at parse time), so read the
 # materialized artifacts directly.
-(cd "$TMPDIR" && rm -rf .barca && BARCA_POOL_SIZE=4 "$BARCA" get enrich "$TMPDIR/dynamic_chain.py" --no-cache >/dev/null 2>&1) || true
+(cd "$TMPDIR" && rm -rf .barca && BARCA_POOL_SIZE=4 "$BARCA" get enrich "$TMPDIR/dynamic_chain.py" --refresh-all >/dev/null 2>&1) || true
 ENRICH_ARTIFACTS=$(find "$TMPDIR/.barca/artifacts" -type f -name "*.json" -path "*enrich*" 2>/dev/null)
 ENRICH_COUNT=$(echo "$ENRICH_ARTIFACTS" | grep -c . || true)
 ALL_MATCH=1

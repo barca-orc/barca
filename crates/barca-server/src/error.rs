@@ -36,7 +36,9 @@ impl IntoResponse for ApiError {
             ApiError::Barca(err) => {
                 let status = match &err {
                     BarcaError::AssetNotFound(..) => StatusCode::NOT_FOUND,
-                    BarcaError::Parse(_) | BarcaError::Dag(_) => StatusCode::BAD_REQUEST,
+                    BarcaError::Parse(_) | BarcaError::Dag(_) | BarcaError::Usage(_) => {
+                        StatusCode::BAD_REQUEST
+                    }
                     _ => StatusCode::INTERNAL_SERVER_ERROR,
                 };
                 (status, err.to_string())

@@ -141,8 +141,8 @@ class TestStats:
         )
         # Get twice so there's stats data.
         barca.get(f)
-        barca.get(f, no_cache=True)
+        barca.get(f, refresh_all=True)
 
         result = barca.stats("a", f)
-        assert result["node_id"].endswith(":a")
+        assert result["id"].endswith(":a")
         assert result["total_runs"] >= 2

@@ -26,13 +26,20 @@ For parquet artifacts, the annotation on the *consuming* parameter selects the r
 |---|---|
 | none | pandas `DataFrame` (default) |
 | `pd.DataFrame` / `pandas.DataFrame` | pandas `DataFrame` |
-| `pl.DataFrame` / `polars.DataFrame` / `pl.LazyFrame` | polars `DataFrame` |
+| `pl.DataFrame` / `polars.DataFrame` | polars `DataFrame` |
+| `pl.LazyFrame` / `polars.LazyFrame` | polars `LazyFrame` scanning the parquet file (lazy read) |
 | `pyarrow.Table` | pyarrow `Table` |
 | `duckdb.DuckDBPyRelation` | duckdb relation over the parquet file (lazy read) |
 
 The same upstream parquet can be read differently by different consumers. Annotations are
 parsed statically, so use the conventional names above (`pd`, `pl`, `pyarrow`, `duckdb`).
 json and pickle artifacts ignore annotations.
+
+**Lazy inputs read only what the step uses.** The eager readers load the whole file. A
+`pl.LazyFrame` or duckdb relation reads nothing up front: the query the step builds decides
+which columns and row groups are read when it runs. For a large upstream that a step filters,
+projects or aggregates, annotate the input as lazy. With a remote artifact store, a lazy input
+is read in place and only the byte ranges its query touches are fetched (`barca docs remote`).
 
 ```python
 import duckdb
@@ -53,11 +60,16 @@ def total(orders: duckdb.DuckDBPyRelation) -> dict:   # read as a duckdb relatio
 @asset(inputs={"orders": orders})
 def as_polars(orders: pl.DataFrame) -> pl.DataFrame:  # same file, read with polars
     return orders.with_columns(doubled=pl.col("amount") * 2)
+
+
+@asset(inputs={"orders": orders})
+def big_ids(orders: pl.LazyFrame) -> pl.LazyFrame:    # same file, scanned lazily
+    return orders.filter(pl.col("amount") > 5).select("id")
 ```
 
 ## Reading results back
 
-`barca get` prints one JSON object on stdout. `final_output` is the value itself for json
+`barca get` prints one JSON object on stdout (whenever stdout is not a terminal, or with `--json`). `final_output` is the value itself for json
 artifacts; for parquet and pickle it is a pointer:
 
 ```json

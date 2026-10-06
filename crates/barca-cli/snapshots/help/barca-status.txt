@@ -1,0 +1,60 @@
+Show every node's cache state, last materialization and artifact shape (read-only)
+
+One aggregated view: what `barca list`, `--dry-run`, `barca history` and a look inside the artifact would each tell you. If the first positional arg ends in .py, all args are files; otherwise the first is a target (or several, comma-separated: `a,b`) and only the upstream cones of the targets are shown.
+
+Usage: barca status [OPTIONS] [ARGS]...
+
+Arguments:
+  [ARGS]...
+          [TARGET[,TARGET...]] [file.py|dir/ ...] — both optional; no files reads the whole project (`barca docs discovery`)
+
+Options:
+      --json
+          Emit JSON on stdout (the default when stdout is not a terminal)
+
+      --pretty
+          Emit human-readable output (the default when stdout is a terminal)
+
+  -l, --limit <LIMIT>
+          Maximum number of nodes to show, in topological order
+
+          [default: 100]
+
+      --all
+          Show every node (no limit)
+
+      --fields <FIELDS>
+          Output JSON with only these keys (comma-separated) on each entry of `nodes`. Implies --json. An unknown key is a usage error listing the valid ones
+
+          [possible values: id, name, kind, inputs, partitioned, cache, partitions, last_materialization, shape, env]
+
+      --sample <N>
+          Include up to N sample rows from each json/parquet artifact (off by default; pickles are never sampled)
+
+      --env <ENV>
+          Environment name (separates cache/state per environment)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Examples:
+  barca status                             # every node in the project
+  barca status pipeline.py                 # table in a terminal (JSON when piped): kind, cache state, last run, shape
+  barca status total pipeline.py           # only `total` and its upstream cone
+  barca status total,orders pipeline.py    # several targets: the union of their cones
+  barca status pipeline.py --json          # {target, targets, nodes, summary, total, truncated, root}, even in a terminal
+  barca status pipeline.py --pretty        # the table, even when piped
+  barca status pipeline.py --fields id,cache   # JSON with only these keys per node
+  barca status big.py --limit 20           # first 20 nodes (default: at most 100); the summary counts all
+  barca status total pipeline.py --json --sample 5   # add up to 5 sample rows per json/parquet artifact
+  barca status pipeline.py --env dev       # state recorded in another environment
+
+Cache state per node: cached, stale (ran before; code or inputs changed), never_run, partial
+(some partition keys cached), unknown (dynamic partitions not yet known) or always_runs (tasks,
+sensors), with a reason. JSON spells the states in snake_case, the same as the `summary` keys
+(the table prints never-run, always-runs). It is the same decision `--dry-run` makes.
+Read-only: never imports your code, never writes. Shape (rows, columns, type) is read from the
+artifact file only. With remote storage it is read from the bucket: a parquet footer by ranged
+requests, json and pickle by a download of up to 16 MB (larger ones get a `note`). A store that
+cannot be reached is a `note` on each shape, not a failed command.
+More: barca docs status, barca docs agents

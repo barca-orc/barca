@@ -1,0 +1,85 @@
+Run a task and its dependency cone — the task always re-runs
+
+The task always re-runs. Upstream assets are served from cache when fresh (same as `barca get`). Use `--refresh` to force re-materialize specific upstream assets, or `--refresh-all` to refresh the entire upstream cone.
+
+Usage: barca run [OPTIONS] <ARGS>...
+
+Arguments:
+  <ARGS>...
+          TARGET[,TARGET...] [file.py|dir/ ...] — one or more target tasks, comma-separated; no files reads the whole project (`barca docs discovery`)
+
+Options:
+      --refresh <REFRESH>
+          Upstream assets to force re-materialize, as ONE comma-separated list (`--refresh a,b`, not `--refresh a b`). Every asset downstream of them in the task's cone re-materializes too (see --no-cascade)
+
+      --no-cascade
+          With --refresh: re-materialize only the named assets, not what is downstream of them. Cached downstream assets then do not reflect the refresh; barca warns
+
+      --refresh-all
+          Force re-materialize EVERY asset in the task's cone (nothing comes from cache)
+
+      --dry-run
+          Show what this command would do (each step cached or will-run, and why) without running or writing anything
+
+  -o, --output <OUTPUT>
+          Output format (kept for compatibility; --json / --pretty are the canonical spelling)
+
+          Possible values:
+          - json:   One-line JSON (default when stdout is not a terminal)
+          - value:  Just the final_output value, pretty-printed
+          - pretty: Human-friendly with timing info (default when stdout is a terminal)
+
+      --json
+          Emit JSON on stdout (the default when stdout is not a terminal)
+
+      --pretty
+          Emit human-readable output (the default when stdout is a terminal)
+
+      --agent
+          Agent-friendly output: plain structured progress lines instead of visual progress bar
+
+      --fields <FIELDS>
+          Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones
+
+          [possible values: id, kind, action, status, reason, detail, run_hash, artifact, warning, partitions, env]
+
+      --env <ENV>
+          Environment name (separates cache/state per environment)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Examples:
+  barca run deploy                                     # find the task anywhere in the project and run it
+  barca run deploy pipelines/                          # only read files under pipelines/
+  barca run deploy pipeline.py                         # task runs; upstream assets come from cache
+  barca run deploy pipeline.py --refresh fetch,clean   # re-materialize these and everything downstream of them
+  barca run deploy pipeline.py --refresh fetch --no-cascade   # re-materialize only fetch; downstream stays cached
+  barca run deploy pipeline.py --refresh-all           # re-materialize every upstream asset
+  barca run deploy pipeline.py --dry-run --refresh fetch   # preview: which steps run, which are cached
+  barca run deploy pipeline.py --json                  # JSON even in a terminal (the default when piped)
+  barca run deploy pipeline.py --pretty                # summary for humans (the default in a terminal)
+  barca run deploy pipeline.py --fields id,status,reason   # JSON with each entry of `steps` trimmed
+  barca run check_a,check_b pipeline.py                # several tasks in one run; shared upstream runs once
+  barca run check_a,check_b pipeline.py --dry-run      # preview the union of both cones
+  barca list pipeline.py                               # not sure of the name? list assets and tasks first
+
+Several targets: comma-separated, no spaces. Every target runs even if another fails (a failure
+skips only what depends on it); exit 1 if any failed. JSON output then carries `targets`, keyed by
+target, instead of `final_output` (see barca get --help, barca docs agents).
+
+--refresh takes ONE comma-separated list (`--refresh a,b`), never `--refresh a b`. It re-runs the
+assets you name and every asset downstream of them in the task's cone (reason `refresh_cascade`),
+so fresh data reaches the task. --no-cascade re-runs only the named assets; cached assets
+downstream of them then do not reflect the refresh, and barca warns. A name that is not an
+upstream asset is an error. --no-cache is a deprecated spelling of --refresh-all: it still works
+and warns on stderr.
+The target must be a task; use `barca get` for assets. The target comes before the files:
+`barca run pipeline.py deploy` exits 2 and prints `barca run deploy pipeline.py`. Every usage
+error exits 2 and ends by pointing at `barca list` (with the files you gave, if any).
+No files: barca reads every file in the project that imports barca (barca docs discovery).
+Errors: in JSON mode the last stderr line is one JSON object {error, code, kind, remediation}
+(see barca docs agents). Exit 1 step failed, 2 usage error, 3 barca/infra failure, 130 cancelled.
+A raising task, or one that calls sys.exit(), fails the run: exit 1, and the stdout JSON line has
+status "failed" and failed_node.
+More: barca docs tasks, barca docs cache, barca docs agents

@@ -45,7 +45,7 @@ You'll see output like:
 And on stderr, a one-line progress summary:
 
 ```
-[barca] 1/1 steps done in 0.0s
+[barca] 1/1 steps | done in 0.0s
 ```
 
 **What just happened?**
@@ -217,6 +217,15 @@ def process_inbox(files: list[str]) -> dict:
 
 Sensors are never cached -- they always re-run. The worker unpacks the `(update_detected, output)` tuple automatically, so a downstream asset's kwarg receives just `output` (as in `files: list[str]` above), not the tuple.
 
+A sensor's returned value is part of the run hash of every asset that reads it: when the value
+changes, those assets (and everything downstream of them) re-run; when it is the same, they are
+served from cache. That makes a sensor the way to track external data that changes in place, for
+example a sensor that returns a blob's etag in front of the asset that reads the blob. Return only
+what identifies the data: a value that changes on every run (a timestamp) re-runs the sensor's
+consumers every time. `--dry-run` and `barca status` assume a sensor returns its last recorded
+value, and report its consumers as `unknown` before it has ever run. See `barca docs cache`,
+"External data that changes in place". Here, `process_inbox` re-runs when the list of files changes and is cached otherwise.
+
 ## 6. Tasks
 
 Tasks handle side effects -- deploying, notifying, writing to external systems. They always re-run and are never cached.
@@ -241,7 +250,7 @@ def write_to_s3(report: dict) -> None:
 
 Both tasks run in the same phase (they're independent of each other) after `daily_report` completes. Use `barca run` to execute tasks.
 
-`barca run` always re-runs the task, but serves upstream assets from cache when they are fresh (same as `barca get`) -- so `daily_report` is reused on `barca run send_slack_notification pipeline.py` if it's already materialized. Pass `--refresh report_name_a,report_name_b` to force re-materialize only specific upstream assets, or `--refresh-all` (alias `--no-cache`) to refresh the whole upstream cone.
+`barca run` always re-runs the task, but serves upstream assets from cache when they are fresh (same as `barca get`) -- so `daily_report` is reused on `barca run send_slack_notification pipeline.py` if it's already materialized. Pass `--refresh report_name_a,report_name_b` to force re-materialize specific upstream assets and everything downstream of them (add `--no-cascade` to re-materialize only the named assets), or `--refresh-all` to refresh the whole upstream cone. `barca get` takes the same `--refresh`, `--no-cascade` and `--refresh-all`.
 
 ## 7. Partitions
 
@@ -264,6 +273,12 @@ def global_summary(sales: list[dict]) -> dict:
 - `regional_sales` runs 3 times, once per region
 - `collect(regional_sales)` aggregates all partition outputs into a single list
 - `global_summary` receives all three results at once
+- An unpartitioned asset passed in `inputs=` to a partitioned asset reaches every key unchanged;
+  it runs once, before any key, and changing it (or `--refresh` on it) re-runs every key
+- `partitions_from(regional_sales)` gives another asset the same keys; each key receives that
+  key's `regional_sales` output as the parameter `regional_sales`
+- An unpartitioned asset cannot read a partitioned one without `collect()`: plain
+  `inputs={"sales": regional_sales}` is a usage error (exit 2)
 
 ## 8. Multi-file pipelines
 
@@ -281,6 +296,30 @@ barca get my_project/sources.py my_project/transforms.py my_project/tasks.py
 ```
 
 Barca merges all discovered nodes into a single DAG and plans execution across the full graph.
+With no target, `barca get` materializes the assets (and sensors) from all three files and skips
+the tasks in `tasks.py`; run a task by name with `barca run <task> <files>`.
+
+### Helper modules and the cache
+
+Plain helper modules don't need to be passed on the command line. An asset's run hash covers the
+helpers it uses from `.py` files in the pipeline file's directory and its subdirectories, so
+editing one re-runs exactly the assets that use it. Both import styles are followed, and both hash
+only the definitions the asset uses, not the whole module:
+
+```python
+import helpers                    # helpers.clean(...)
+import utils.text as t            # t.normalize(...)
+from helpers import clean         # clean(...)
+```
+
+Editing `clean` (or anything it calls) re-runs the assets that call it; editing another function
+in `helpers.py` re-runs nothing. The pipeline path can be spelled any way (`pipeline.py`,
+`./pipeline.py`, an absolute path, or `my_project/pipeline.py` from the parent directory): all
+compute the same run hash. Not followed yet: class bodies, imports inside a function body, a
+module used as a value (`getattr(helpers, name)`), and modules above the pipeline's directory.
+Standard-library and installed packages are never hashed. In those cases recompute with
+`barca get <asset> pipeline.py --refresh-all` (or `--refresh <asset>` on `get` or `run`).
+See `barca docs cache`.
 
 ## 9. Freshness markers
 
@@ -339,7 +378,7 @@ The plan shows:
 - **Phases**: groups of work that execute sequentially
 - **Streams**: parallel workers within a phase
 - **Steps**: individual asset functions within a stream
-- **Reason**: why a phase boundary exists (`Initial` for the first phase, or `FanIn` when a step needs outputs from multiple prior streams)
+- **Reason**: why a phase boundary exists: `{"type": "initial"}` for the first phase, or `{"type": "fan_in", "node_id": ...}` when a step needs outputs from multiple prior streams
 
 ## Putting it together
 
@@ -347,7 +386,7 @@ Here's a complete pipeline that uses everything:
 
 ```python
 # pipeline.py
-from barca import asset, sensor, task, partitions, collect
+from barca import asset, sensor, task, partitions, partitions_from, collect
 
 TABLES = ["users", "events", "purchases"]
 
@@ -362,11 +401,11 @@ def check_data_lake() -> tuple[bool, dict]:
 def extract(table: str) -> dict:
     return {"table": table, "rows": 1000}
 
-# Transform (runs per partition — declares the same partition values as
-# extract so each transform(table=X) pairs with extract(table=X))
-@asset(inputs={"raw": extract}, partitions={"table": partitions(TABLES)})
-def transform(raw: dict, table: str) -> dict:
-    return {"table": raw["table"], "clean_rows": raw["rows"] - 10}
+# Transform (runs per partition — partitions_from(extract) reuses extract's keys,
+# and each transform(table=X) receives extract's output for table=X as `extract`)
+@asset(partitions={"table": partitions_from(extract)})
+def transform(table: str, extract: dict) -> dict:
+    return {"table": extract["table"], "clean_rows": extract["rows"] - 10}
 
 # Aggregate all partitions
 @asset(inputs={"tables": collect(transform)})
@@ -398,6 +437,8 @@ barca get pipeline.py    # run it
 
 - **Outputs are fully materialized between steps.** Workers never pass in-memory lazy handles across process boundaries — every asset writes a complete artifact file (json, pickle, or parquet). That is intentional: materialization *is* the cache checkpoint. Downstream steps read the file back; parameter type annotations (e.g. `orders: pl.DataFrame`) only choose *how* parquet is decoded, not whether it is persisted. By default barca uses JSON for dicts, lists, strings, numbers, and booleans. Two escape hatches beyond that: `@asset(serializer="pickle")` for large or non-JSON-serializable plain-Python payloads (faster than JSON for large list-of-dict structures too — see `benchmarks/RESULTS.md`'s `etl_duckdb` notes), or return a pandas/polars DataFrame and barca automatically serializes it as parquet — no `serializer=` needed, and it's the fastest option for tabular data (vectorized columnar (de)serialization instead of row-by-row). If one efficient computation should produce several cacheable outputs, use multiple `@asset` definitions (sharing helpers) rather than trying to keep a lazy graph alive between steps.
 
+- **Barca runs the code you saved.** Your pipeline files and the modules they import from the same directory tree are checked against a hash of their source, not `__pycache__` timestamps, so a same-size edit within one second (or under a tool that pins mtimes, such as Nix, Bazel or `touch -t`) never runs stale bytecode. Installed packages import as usual.
+
 - **Use `barca plan` liberally.** It's free (no execution) and shows you exactly how barca decomposes your DAG.
 
 - **Check `.barca/metadata.db`.** It's a SQLite database. You can query it directly:
@@ -405,7 +446,7 @@ barca get pipeline.py    # run it
   sqlite3 .barca/metadata.db "SELECT node_id, status, created_at FROM materializations ORDER BY created_at DESC LIMIT 10"
   ```
 
-- **Stderr is for diagnostics.** Barca prints timing and topology info to stderr. Stdout is reserved for structured JSON output. Pipe stdout to `jq` for clean formatting:
+- **Stderr is for diagnostics.** Barca prints timing and topology info to stderr. Stdout is reserved for the result: a human summary in a terminal, structured JSON when piped (or with `--json`). Pipe stdout to `jq` for clean formatting:
   ```bash
   barca get pipeline.py 2>/dev/null | jq .
   ```

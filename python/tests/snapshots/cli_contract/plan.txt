@@ -1,0 +1,12 @@
+# barca plan pipeline.py  (stdout, exit 0)
+phases : array
+phases[] : object
+phases[].reason : object
+phases[].reason.node_id : string  (optional)
+phases[].reason.type : string
+phases[].streams : array
+phases[].streams[] : object
+phases[].streams[].steps : array
+phases[].streams[].steps[] : string
+phases[].streams[].stream_id : string
+total_steps : integer

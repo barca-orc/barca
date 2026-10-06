@@ -1,8 +1,9 @@
 //! Configuration resolution — barca.toml, environment variables, CLI flags.
 //!
-//! barca.toml is discovered in the current working directory only (no
-//! walk-up): everything barca persists is already cwd-anchored (`.barca/`),
-//! so the config governing that state is anchored the same way.
+//! The project root is the nearest directory at or above the cwd holding barca.toml
+//! (`find_root`); without one, the cwd is the root. The CLI changes into the root before
+//! anything else runs, so `.barca/`, relative paths in user code, and node ids are anchored
+//! there wherever barca is invoked from. barca.toml is then read from the (new) cwd.
 //!
 //! Precedence for every value: CLI flag > environment variable > barca.toml
 //! > built-in default.
@@ -10,7 +11,7 @@
 use crate::BarcaError;
 use serde::Deserialize;
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 pub const CONFIG_FILE: &str = "barca.toml";
 pub const DEFAULT_ENV: &str = "default";
@@ -22,6 +23,17 @@ pub const DEFAULT_ENV: &str = "default";
 pub struct BarcaToml {
     pub default_env: Option<String>,
     pub remote: Option<RemoteToml>,
+    pub discovery: Option<DiscoveryToml>,
+}
+
+/// `[discovery]`: which files a walk of the project finds (see `discover`).
+#[derive(Debug, Deserialize, Default, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct DiscoveryToml {
+    /// Root-relative globs; when set, only matching files are discovered.
+    pub include: Option<Vec<String>>,
+    /// Root-relative globs removed from what the walk finds.
+    pub exclude: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -32,6 +44,10 @@ pub struct RemoteToml {
     pub state_uri: Option<String>,
     pub state: Option<String>,
     pub push_retries: Option<u32>,
+    /// Concurrent artifact uploads/downloads by the transfer helper.
+    pub transfer_concurrency: Option<usize>,
+    /// Seconds one transfer attempt may run before it is failed as stalled.
+    pub transfer_timeout: Option<u64>,
     /// Per-fsspec-protocol option tables, e.g. `[remote.storage_options.abfs]`.
     pub storage_options: Option<toml::Table>,
 }
@@ -52,8 +68,16 @@ pub struct ResolvedConfig {
     pub env: String,
     /// Local metadata DB path for this env (state sync overwrites this file).
     pub db_path: String,
-    /// Artifact root: local directory or remote URI. Set on every worker.
+    /// Artifact store root: the local artifact dir, or a remote URI / shared
+    /// directory. Recorded in the metadata DB; see [`Self::remote_artifacts`].
     pub artifact_root: String,
+    /// Where workers write and read artifacts for this env. Always local —
+    /// with a separate store it doubles as the local cache of that store.
+    pub local_artifact_dir: String,
+    /// Concurrent transfers to/from a separate artifact store.
+    pub transfer_concurrency: usize,
+    /// Per-attempt transfer limit, from when the attempt starts.
+    pub transfer_timeout_secs: u64,
     /// Remote location of the shared metadata blob, when remote mode is on.
     pub state_uri: Option<String>,
     pub state: StateMode,
@@ -61,6 +85,68 @@ pub struct ResolvedConfig {
     /// Merged storage options (toml ⊕ env, env keys win), serialized as the
     /// JSON that `BARCA_STORAGE_OPTIONS` carries to child processes.
     pub storage_options_json: Option<String>,
+}
+
+impl ResolvedConfig {
+    /// True when the artifact store is separate from the local artifact dir,
+    /// so artifacts are transferred in the background (upload after a step
+    /// completes, download before a cached artifact is consumed).
+    pub fn remote_artifacts(&self) -> bool {
+        fn norm(p: &str) -> &str {
+            p.trim_start_matches("./").trim_end_matches('/')
+        }
+        norm(&self.artifact_root) != norm(&self.local_artifact_dir)
+    }
+}
+
+// ─── Project root ────────────────────────────────────────────────────────────
+
+/// The project root: the nearest directory at or above `start` that holds barca.toml.
+/// `None` when there is none, in which case the caller's cwd is the root.
+pub fn find_root(start: &Path) -> Option<PathBuf> {
+    start
+        .ancestors()
+        .find(|dir| dir.join(CONFIG_FILE).is_file())
+        .map(Path::to_path_buf)
+}
+
+/// Re-express a path typed in `cwd` relative to `root` (an ancestor of `cwd`, or `cwd`
+/// itself), so it still names the same file once the process changes into `root`. An absolute
+/// path inside the root becomes root-relative too, so node ids do not depend on how a file was
+/// spelled; an absolute path outside the root is unchanged.
+/// `.` and `..` are resolved lexically: `sub` + `../p.py` is `p.py`, the spelling a user in the
+/// root would type, so node ids built from it match.
+pub fn rebase_onto_root(path: &Path, cwd: &Path, root: &Path) -> PathBuf {
+    if path.is_absolute() {
+        let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        return match canon(path).strip_prefix(canon(root)) {
+            Ok(rel) if !rel.as_os_str().is_empty() => rel.to_path_buf(),
+            Ok(_) => PathBuf::from("."),
+            Err(_) => path.to_path_buf(),
+        };
+    }
+    let rel_cwd = cwd.strip_prefix(root).unwrap_or(Path::new(""));
+    normalize_lexically(&rel_cwd.join(path))
+}
+
+pub(crate) fn normalize_lexically(path: &Path) -> PathBuf {
+    let mut out: Vec<Component> = Vec::new();
+    for c in path.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => match out.last() {
+                Some(Component::Normal(_)) => {
+                    out.pop();
+                }
+                _ => out.push(c),
+            },
+            other => out.push(other),
+        }
+    }
+    if out.is_empty() {
+        return PathBuf::from(".");
+    }
+    out.iter().collect()
 }
 
 // ─── Loading ─────────────────────────────────────────────────────────────────
@@ -74,7 +160,7 @@ pub fn load_toml(cwd: &Path) -> Result<Option<BarcaToml>, BarcaError> {
     let text = std::fs::read_to_string(&path)
         .map_err(|e| BarcaError::Other(format!("failed to read {}: {e}", path.display())))?;
     let parsed: BarcaToml = toml::from_str(&text)
-        .map_err(|e| BarcaError::Other(format!("invalid {}: {e}", path.display())))?;
+        .map_err(|e| BarcaError::Usage(format!("invalid {}: {e}", path.display())))?;
     Ok(Some(parsed))
 }
 
@@ -113,7 +199,7 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
         .or(file.default_env)
         .unwrap_or_else(|| DEFAULT_ENV.to_string());
     if !valid_env_name(&env) {
-        return Err(BarcaError::Other(format!(
+        return Err(BarcaError::Usage(format!(
             "invalid environment name '{env}' — allowed characters: A-Z a-z 0-9 . _ -"
         )));
     }
@@ -129,7 +215,7 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
     let artifact_env_override = env_var("BARCA_ARTIFACT_URI");
     if artifact_env_override.is_some() && env != DEFAULT_ENV {
         eprintln!(
-            "[barca] Warning: BARCA_ARTIFACT_URI is set — it is used literally and \
+            "[barca] warning: BARCA_ARTIFACT_URI is set — it is used literally and \
              bypasses the '{env}' environment prefix for artifacts"
         );
     }
@@ -140,7 +226,7 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
                 .as_deref()
                 .map(|u| join_uri(u, &format!("{env}/artifacts")))
         })
-        .unwrap_or(local.artifact_dir);
+        .unwrap_or_else(|| local.artifact_dir.clone());
 
     // state uri: BARCA_STATE_URI > [remote].state_uri > {uri}/{env}/state/metadata.db
     let state_uri = env_var("BARCA_STATE_URI").or(remote.state_uri).or_else(|| {
@@ -155,7 +241,7 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
         Some("optimistic") => StateMode::Optimistic,
         Some("off") => StateMode::Off,
         Some(other) => {
-            return Err(BarcaError::Other(format!(
+            return Err(BarcaError::Usage(format!(
                 "invalid state mode '{other}' (expected \"optimistic\" or \"off\")"
             )));
         }
@@ -170,11 +256,45 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
 
     let push_retries = match env_var("BARCA_PUSH_RETRIES") {
         Some(v) => v.parse::<u32>().map_err(|_| {
-            BarcaError::Other(format!(
+            BarcaError::Usage(format!(
                 "invalid BARCA_PUSH_RETRIES '{v}' (expected integer)"
             ))
         })?,
         None => remote.push_retries.unwrap_or(5),
+    };
+
+    let transfer_concurrency = match env_var("BARCA_TRANSFER_CONCURRENCY") {
+        Some(v) => v.parse::<usize>().ok().filter(|&n| n > 0).ok_or_else(|| {
+            BarcaError::Other(format!(
+                "invalid BARCA_TRANSFER_CONCURRENCY '{v}' (expected a positive integer)"
+            ))
+        })?,
+        None => match remote.transfer_concurrency {
+            Some(0) => {
+                return Err(BarcaError::Other(
+                    "[remote].transfer_concurrency must be at least 1".to_string(),
+                ));
+            }
+            Some(n) => n,
+            None => 4,
+        },
+    };
+
+    let transfer_timeout_secs = match env_var("BARCA_TRANSFER_TIMEOUT") {
+        Some(v) => v.parse::<u64>().ok().filter(|&n| n > 0).ok_or_else(|| {
+            BarcaError::Other(format!(
+                "invalid BARCA_TRANSFER_TIMEOUT '{v}' (expected a positive number of seconds)"
+            ))
+        })?,
+        None => match remote.transfer_timeout {
+            Some(0) => {
+                return Err(BarcaError::Other(
+                    "[remote].transfer_timeout must be at least 1 second".to_string(),
+                ));
+            }
+            Some(n) => n,
+            None => 600,
+        },
     };
 
     let storage_options_json = merge_storage_options(remote.storage_options.as_ref())?;
@@ -183,6 +303,9 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
         env,
         db_path: local.db_path,
         artifact_root,
+        local_artifact_dir: local.artifact_dir,
+        transfer_concurrency,
+        transfer_timeout_secs,
         state_uri,
         state,
         push_retries,
@@ -199,14 +322,14 @@ fn merge_storage_options(from_toml: Option<&toml::Table>) -> Result<Option<Strin
     if let Some(table) = from_toml {
         for (protocol, opts) in table {
             let toml::Value::Table(opts) = opts else {
-                return Err(BarcaError::Other(format!(
+                return Err(BarcaError::Usage(format!(
                     "[remote.storage_options.{protocol}] must be a table of options"
                 )));
             };
             let entry = merged.entry(protocol.clone()).or_default();
             for (k, v) in opts {
                 let json = serde_json::to_value(v.clone()).map_err(|e| {
-                    BarcaError::Other(format!("storage_options.{protocol}.{k}: {e}"))
+                    BarcaError::Usage(format!("storage_options.{protocol}.{k}: {e}"))
                 })?;
                 entry.insert(k.clone(), json);
             }
@@ -215,16 +338,16 @@ fn merge_storage_options(from_toml: Option<&toml::Table>) -> Result<Option<Strin
 
     if let Some(raw) = env_var("BARCA_STORAGE_OPTIONS") {
         let parsed: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
-            BarcaError::Other(format!("BARCA_STORAGE_OPTIONS is not valid JSON: {e}"))
+            BarcaError::Usage(format!("BARCA_STORAGE_OPTIONS is not valid JSON: {e}"))
         })?;
         let serde_json::Value::Object(by_protocol) = parsed else {
-            return Err(BarcaError::Other(
+            return Err(BarcaError::Usage(
                 "BARCA_STORAGE_OPTIONS must be a JSON object keyed by protocol".to_string(),
             ));
         };
         for (protocol, opts) in by_protocol {
             let serde_json::Value::Object(opts) = opts else {
-                return Err(BarcaError::Other(format!(
+                return Err(BarcaError::Usage(format!(
                     "BARCA_STORAGE_OPTIONS[{protocol:?}] must be a JSON object"
                 )));
             };
@@ -248,6 +371,43 @@ fn merge_storage_options(from_toml: Option<&toml::Table>) -> Result<Option<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn find_root_walks_up_to_the_nearest_barca_toml() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("proj");
+        let deep = root.join("a").join("b");
+        std::fs::create_dir_all(&deep).unwrap();
+        assert_eq!(find_root(&deep), None);
+        std::fs::write(root.join(CONFIG_FILE), "").unwrap();
+        assert_eq!(find_root(&deep), Some(root.clone()));
+        assert_eq!(find_root(&root), Some(root.clone()));
+        std::fs::write(root.join("a").join(CONFIG_FILE), "").unwrap();
+        assert_eq!(find_root(&deep), Some(root.join("a")));
+    }
+
+    #[test]
+    fn find_root_ignores_a_directory_named_barca_toml() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(CONFIG_FILE)).unwrap();
+        assert_eq!(find_root(tmp.path()), None);
+    }
+
+    #[test]
+    fn paths_typed_in_a_subdirectory_are_rebased_onto_the_root() {
+        let root = Path::new("/p");
+        let rebase =
+            |path: &str, cwd: &str| rebase_onto_root(Path::new(path), Path::new(cwd), root);
+        assert_eq!(rebase("../x.py", "/p/sub"), PathBuf::from("x.py"));
+        assert_eq!(rebase("x.py", "/p/sub"), PathBuf::from("sub/x.py"));
+        assert_eq!(rebase("./x.py", "/p"), PathBuf::from("x.py"));
+        assert_eq!(rebase("../../x.py", "/p/a/b"), PathBuf::from("x.py"));
+        assert_eq!(rebase("../../x.py", "/p/a"), PathBuf::from("../x.py"));
+        assert_eq!(rebase("/abs/x.py", "/p/sub"), PathBuf::from("/abs/x.py"));
+        assert_eq!(rebase("/p/q/x.py", "/p/sub"), PathBuf::from("q/x.py"));
+        assert_eq!(rebase("/p", "/p/sub"), PathBuf::from("."));
+        assert_eq!(rebase("..", "/p/sub"), PathBuf::from("."));
+    }
     use std::sync::{Mutex, MutexGuard};
 
     /// Env-var tests mutate process state — serialize them.
@@ -266,6 +426,8 @@ mod tests {
         "BARCA_STATE",
         "BARCA_PUSH_RETRIES",
         "BARCA_STORAGE_OPTIONS",
+        "BARCA_TRANSFER_CONCURRENCY",
+        "BARCA_TRANSFER_TIMEOUT",
     ];
 
     fn clean_env() -> EnvGuard {
@@ -373,6 +535,127 @@ push_retries = 2
         assert!(cfg.artifact_root.starts_with("s3://env-bucket/proj/"));
         assert_eq!(cfg.state, StateMode::Off);
         assert_eq!(cfg.push_retries, 9);
+    }
+
+    #[test]
+    fn local_artifacts_are_not_remote_by_default() {
+        let _e = clean_env();
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = resolve_in(None, dir.path()).unwrap();
+        assert_eq!(cfg.local_artifact_dir, cfg.artifact_root);
+        assert!(!cfg.remote_artifacts());
+        assert_eq!(cfg.transfer_concurrency, 4);
+    }
+
+    #[test]
+    fn remote_uri_makes_artifacts_remote_with_env_scoped_local_dir() {
+        let _e = clean_env();
+        let dir = tempfile::tempdir().unwrap();
+        write_toml(dir.path(), "[remote]\nuri = \"s3://b/p\"\n");
+        let cfg = resolve_in(Some("dev"), dir.path()).unwrap();
+        assert!(cfg.remote_artifacts());
+        assert!(
+            cfg.local_artifact_dir
+                .ends_with(".barca/envs/dev/artifacts")
+        );
+    }
+
+    #[test]
+    fn plain_path_remote_root_is_remote() {
+        // A shared local/NFS directory is a store too — workers still write
+        // to .barca/artifacts and the transfer helper copies.
+        let _e = clean_env();
+        let dir = tempfile::tempdir().unwrap();
+        write_toml(dir.path(), "[remote]\nuri = \"/mnt/shared/proj\"\n");
+        let cfg = resolve_in(None, dir.path()).unwrap();
+        assert_eq!(cfg.artifact_root, "/mnt/shared/proj/default/artifacts");
+        assert!(cfg.remote_artifacts());
+    }
+
+    #[test]
+    fn artifact_uri_pointing_at_local_dir_is_not_remote() {
+        let _e = clean_env();
+        let dir = tempfile::tempdir().unwrap();
+        for v in [
+            ".barca/artifacts",
+            "./.barca/artifacts",
+            ".barca/artifacts/",
+        ] {
+            unsafe { std::env::set_var("BARCA_ARTIFACT_URI", v) };
+            let cfg = resolve_in(None, dir.path()).unwrap();
+            assert!(!cfg.remote_artifacts(), "{v} should be the local store");
+        }
+    }
+
+    #[test]
+    fn artifact_uri_env_makes_artifacts_remote() {
+        let _e = clean_env();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("BARCA_ARTIFACT_URI", "memory://arts") };
+        let cfg = resolve_in(None, dir.path()).unwrap();
+        assert!(cfg.remote_artifacts());
+    }
+
+    #[test]
+    fn transfer_concurrency_toml_then_env() {
+        let _e = clean_env();
+        let dir = tempfile::tempdir().unwrap();
+        write_toml(
+            dir.path(),
+            "[remote]\nuri = \"s3://b/p\"\ntransfer_concurrency = 8\n",
+        );
+        assert_eq!(
+            resolve_in(None, dir.path()).unwrap().transfer_concurrency,
+            8
+        );
+        unsafe { std::env::set_var("BARCA_TRANSFER_CONCURRENCY", "16") };
+        assert_eq!(
+            resolve_in(None, dir.path()).unwrap().transfer_concurrency,
+            16
+        );
+    }
+
+    #[test]
+    fn transfer_timeout_default_toml_and_env() {
+        let _e = clean_env();
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            resolve_in(None, dir.path()).unwrap().transfer_timeout_secs,
+            600
+        );
+        write_toml(
+            dir.path(),
+            "[remote]\nuri = \"s3://b/p\"\ntransfer_timeout = 120\n",
+        );
+        assert_eq!(
+            resolve_in(None, dir.path()).unwrap().transfer_timeout_secs,
+            120
+        );
+        unsafe { std::env::set_var("BARCA_TRANSFER_TIMEOUT", "30") };
+        assert_eq!(
+            resolve_in(None, dir.path()).unwrap().transfer_timeout_secs,
+            30
+        );
+        for bad in ["0", "soon"] {
+            unsafe { std::env::set_var("BARCA_TRANSFER_TIMEOUT", bad) };
+            assert!(
+                resolve_in(None, dir.path()).is_err(),
+                "{bad} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn transfer_concurrency_rejects_zero_and_garbage() {
+        let _e = clean_env();
+        let dir = tempfile::tempdir().unwrap();
+        for bad in ["0", "lots"] {
+            unsafe { std::env::set_var("BARCA_TRANSFER_CONCURRENCY", bad) };
+            assert!(
+                resolve_in(None, dir.path()).is_err(),
+                "{bad} should be rejected"
+            );
+        }
     }
 
     #[test]

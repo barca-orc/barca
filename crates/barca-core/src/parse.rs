@@ -27,6 +27,16 @@ pub enum ParseError {
         cron: String,
         reason: String,
     },
+
+    #[error(
+        "{file}: {function}: invalid env= — {reason}. Declare environment variables as a literal \
+         list of strings, e.g. env=[\"SOURCE_CSV\", \"API_TOKEN\"]"
+    )]
+    InvalidEnv {
+        file: String,
+        function: String,
+        reason: String,
+    },
 }
 
 /// Parse a Python source file and extract all barca-decorated nodes.
@@ -41,10 +51,11 @@ pub fn extract_nodes(source: &str, file_path: &str) -> Result<Vec<ExtractedNode>
 
     let module = parsed.into_syntax();
     let mut nodes = Vec::new();
+    let names = FileNames::collect(&module.body);
 
     for stmt in &module.body {
         if let Stmt::FunctionDef(func) = stmt
-            && let Some(extracted) = try_extract_function(func, file_path, source)?
+            && let Some(extracted) = try_extract_function(func, file_path, source, &names)?
         {
             // Cone hash computed later in build_dag with cached module definitions.
             nodes.push(extracted);
@@ -54,10 +65,103 @@ pub fn extract_nodes(source: &str, file_path: &str) -> Result<Vec<ExtractedNode>
     Ok(nodes)
 }
 
+/// What the top-level names of a file are bound to, for resolving `inputs=` references:
+/// functions defined in the file, names imported with `from M import x [as y]`, and modules
+/// imported with `import M [as m]`. Module names keep their leading dots (`.sources`).
+#[derive(Default)]
+struct FileNames {
+    local: std::collections::HashSet<String>,
+    /// local name -> (module, name in that module)
+    from_imports: HashMap<String, (String, String)>,
+    /// local dotted name -> module (`s` -> `pipelines.sources`, `a.b` -> `a.b`)
+    modules: HashMap<String, String>,
+}
+
+impl FileNames {
+    fn collect(body: &[Stmt]) -> Self {
+        let mut names = FileNames::default();
+        for stmt in body {
+            match stmt {
+                Stmt::FunctionDef(f) => {
+                    names.local.insert(f.name.to_string());
+                }
+                Stmt::ImportFrom(imp) => {
+                    let module = format!(
+                        "{}{}",
+                        ".".repeat(imp.level as usize),
+                        imp.module.as_ref().map(|m| m.as_str()).unwrap_or("")
+                    );
+                    for alias in &imp.names {
+                        let name = alias.name.to_string();
+                        let local = alias
+                            .asname
+                            .as_ref()
+                            .map(|a| a.to_string())
+                            .unwrap_or_else(|| name.clone());
+                        names.from_imports.insert(local, (module.clone(), name));
+                    }
+                }
+                Stmt::Import(imp) => {
+                    for alias in &imp.names {
+                        let module = alias.name.to_string();
+                        let local = alias
+                            .asname
+                            .as_ref()
+                            .map(|a| a.to_string())
+                            .unwrap_or_else(|| module.clone());
+                        names.modules.insert(local, module);
+                    }
+                }
+                _ => {}
+            }
+        }
+        names
+    }
+
+    /// The node an `inputs=` value (or `collect(...)` / `partitions_from(...)` argument) refers
+    /// to: a function in this file, a name imported from a module, or `module.name`.
+    fn node_ref(&self, expr: &Expr) -> Option<NodeRef> {
+        match expr {
+            Expr::Name(n) => {
+                let id = n.id.to_string();
+                if self.local.contains(&id) {
+                    return Some(NodeRef::FunctionName(id));
+                }
+                Some(match self.from_imports.get(&id) {
+                    Some((module, name)) => NodeRef::Imported {
+                        module: module.clone(),
+                        name: name.clone(),
+                    },
+                    None => NodeRef::FunctionName(id),
+                })
+            }
+            Expr::Attribute(attr) => {
+                let dotted = dotted_expr(&attr.value)?;
+                let module = self.modules.get(&dotted)?;
+                Some(NodeRef::Imported {
+                    module: module.clone(),
+                    name: attr.attr.to_string(),
+                })
+            }
+            _ => None,
+        }
+    }
+}
+
+/// `a.b.c` as a string, for a chain of names.
+fn dotted_expr(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::Name(n) => Some(n.id.to_string()),
+        Expr::Attribute(a) => Some(format!("{}.{}", dotted_expr(&a.value)?, a.attr)),
+        _ => None,
+    }
+}
+
 fn try_extract_function(
     func: &ast::StmtFunctionDef,
     file_path: &str,
     source: &str,
+    names: &FileNames,
 ) -> Result<Option<ExtractedNode>, ParseError> {
     let mut kind = None;
     let mut keywords: Vec<&Keyword> = Vec::new();
@@ -90,8 +194,8 @@ fn try_extract_function(
 
     let freshness = extract_freshness(&keywords, file_path, func.name.as_str())?
         .unwrap_or(Freshness::default_for(kind));
-    let inputs = extract_inputs(&keywords);
-    let partitions = extract_partitions(&keywords, source);
+    let inputs = extract_inputs(&keywords, names);
+    let partitions = extract_partitions(&keywords, source, names);
     let explicit_name = extract_string_kwarg(&keywords, "name");
     let description = extract_string_kwarg(&keywords, "description");
     let timeout_seconds = extract_int_kwarg(&keywords, "timeout_seconds").unwrap_or(300);
@@ -99,6 +203,7 @@ fn try_extract_function(
     let retries = extract_int_kwarg(&keywords, "retries").unwrap_or(1).max(1);
     let retry_backoff_seconds = extract_float_kwarg(&keywords, "retry_backoff").unwrap_or(0.0);
     let tags = extract_tags(&keywords);
+    let env = extract_env(&keywords, file_path, func.name.as_str())?;
     let artifact_serializer = keywords
         .iter()
         .find(|kw| kw.arg.as_ref().map(|a| a.as_str()) == Some("serializer"))
@@ -137,6 +242,7 @@ fn try_extract_function(
         param_types,
         return_type,
         parallel_calls,
+        env,
     }))
 }
 
@@ -206,7 +312,8 @@ fn parse_type_path(path: &str) -> Option<ValueType> {
 
 fn classify_type(module: &str, name: &str) -> Option<ValueType> {
     match (module, name) {
-        ("pl" | "polars", "DataFrame" | "LazyFrame") => Some(ValueType::Polars),
+        ("pl" | "polars", "DataFrame") => Some(ValueType::Polars),
+        ("pl" | "polars", "LazyFrame") => Some(ValueType::PolarsLazy),
         ("pd" | "pandas", "DataFrame") => Some(ValueType::Pandas),
         ("pyarrow", "Table") => Some(ValueType::PyArrow),
         ("duckdb", "DuckDBPyRelation") => Some(ValueType::DuckDB),
@@ -332,20 +439,23 @@ fn extract_freshness(
     Ok(None)
 }
 
-fn extract_inputs(keywords: &[&Keyword]) -> SmallVec<[DeclaredInput; 4]> {
+fn extract_inputs(keywords: &[&Keyword], names: &FileNames) -> SmallVec<[DeclaredInput; 4]> {
     for kw in keywords {
         let Some(ref ident) = kw.arg else { continue };
         if ident.as_str() != "inputs" {
             continue;
         }
         if let Expr::Dict(dict) = &kw.value {
-            return extract_inputs_from_dict(dict);
+            return extract_inputs_from_dict(dict, names);
         }
     }
     SmallVec::new()
 }
 
-fn extract_inputs_from_dict(dict: &ast::ExprDict) -> SmallVec<[DeclaredInput; 4]> {
+fn extract_inputs_from_dict(
+    dict: &ast::ExprDict,
+    names: &FileNames,
+) -> SmallVec<[DeclaredInput; 4]> {
     let mut inputs = SmallVec::new();
 
     for item in &dict.items {
@@ -358,15 +468,17 @@ fn extract_inputs_from_dict(dict: &ast::ExprDict) -> SmallVec<[DeclaredInput; 4]
         };
 
         let (upstream, collected) = match &item.value {
-            Expr::Name(n) => (NodeRef::FunctionName(n.id.to_string()), false),
+            e @ (Expr::Name(_) | Expr::Attribute(_)) => match names.node_ref(e) {
+                Some(r) => (r, false),
+                None => continue,
+            },
             Expr::Call(call) => {
                 let is_collect =
                     matches!(call.func.as_ref(), Expr::Name(n) if n.id.as_str() == "collect");
                 if is_collect {
-                    if let Some(Expr::Name(n)) = call.arguments.args.first() {
-                        (NodeRef::FunctionName(n.id.to_string()), true)
-                    } else {
-                        continue;
+                    match call.arguments.args.first().and_then(|a| names.node_ref(a)) {
+                        Some(r) => (r, true),
+                        None => continue,
                     }
                 } else if let Expr::Name(n) = call.func.as_ref() {
                     // asset_ref("...") or other call
@@ -400,7 +512,11 @@ fn extract_inputs_from_dict(dict: &ast::ExprDict) -> SmallVec<[DeclaredInput; 4]
     inputs
 }
 
-fn extract_partitions(keywords: &[&Keyword], source: &str) -> HashMap<String, PartitionSpec> {
+fn extract_partitions(
+    keywords: &[&Keyword],
+    source: &str,
+    names: &FileNames,
+) -> HashMap<String, PartitionSpec> {
     let mut result = HashMap::new();
 
     for kw in keywords {
@@ -424,13 +540,8 @@ fn extract_partitions(keywords: &[&Keyword], source: &str) -> HashMap<String, Pa
                             match n.id.as_str() {
                                 "partitions" => extract_partition_spec(call, source),
                                 "partitions_from" => {
-                                    let source_ref = call.arguments.args.first().and_then(|a| {
-                                        if let Expr::Name(n) = a {
-                                            Some(NodeRef::FunctionName(n.id.to_string()))
-                                        } else {
-                                            None
-                                        }
-                                    });
+                                    let source_ref =
+                                        call.arguments.args.first().and_then(|a| names.node_ref(a));
                                     if let Some(source_ref) = source_ref {
                                         PartitionSpec::DerivedFrom { source_ref }
                                     } else {
@@ -518,6 +629,45 @@ fn extract_tags(keywords: &[&Keyword]) -> HashMap<String, String> {
         }
     }
     tags
+}
+
+/// `env=["NAME", ...]`: a literal list of string literals, read statically. Anything else (a
+/// variable, a call, a tuple, a non-string element) is a parse error, never silently ignored —
+/// an undeclared variable would silently drop out of the run hash.
+fn extract_env(
+    keywords: &[&Keyword],
+    file_path: &str,
+    function_name: &str,
+) -> Result<Vec<String>, ParseError> {
+    let err = |reason: String| ParseError::InvalidEnv {
+        file: file_path.to_string(),
+        function: function_name.to_string(),
+        reason,
+    };
+    let Some(kw) = keywords
+        .iter()
+        .find(|kw| kw.arg.as_ref().map(|a| a.as_str()) == Some("env"))
+    else {
+        return Ok(Vec::new());
+    };
+    let Expr::List(list) = &kw.value else {
+        return Err(err("expected a list literal".to_string()));
+    };
+    let mut names = Vec::with_capacity(list.elts.len());
+    for elt in &list.elts {
+        let Some(name) = extract_string_literal(elt) else {
+            return Err(err("every element must be a string literal".to_string()));
+        };
+        if name.is_empty() || name.contains('=') || name.contains('\0') {
+            return Err(err(format!(
+                "{name:?} is not a valid environment variable name"
+            )));
+        }
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    Ok(names)
 }
 
 fn extract_string_kwarg(keywords: &[&Keyword], name: &str) -> Option<String> {
@@ -698,12 +848,11 @@ fn extract_parallel_call(call: &ast::ExprCall) -> ParallelCall {
                     Expr::Attribute(a) => a.attr.as_str() == "partial",
                     _ => false,
                 };
-                if is_partial {
-                    if let Some(first_arg) = inner_call.arguments.args.first() {
-                        if let Expr::Name(func_name) = first_arg {
-                            static_refs.push(NodeRef::FunctionName(func_name.id.to_string()));
-                        }
-                    }
+                if is_partial
+                    && let Some(first_arg) = inner_call.arguments.args.first()
+                    && let Expr::Name(func_name) = first_arg
+                {
+                    static_refs.push(NodeRef::FunctionName(func_name.id.to_string()));
                 }
             }
             // *expr — starred argument, always dynamic
@@ -728,10 +877,10 @@ fn extract_parallel_map_call(call: &ast::ExprCall) -> ParallelCall {
     let mut static_refs = Vec::new();
 
     // First arg is the function reference
-    if let Some(first_arg) = call.arguments.args.first() {
-        if let Expr::Name(func_name) = first_arg {
-            static_refs.push(NodeRef::FunctionName(func_name.id.to_string()));
-        }
+    if let Some(first_arg) = call.arguments.args.first()
+        && let Expr::Name(func_name) = first_arg
+    {
+        static_refs.push(NodeRef::FunctionName(func_name.id.to_string()));
     }
 
     // parallel_map is always dynamic (items resolved at runtime)
@@ -755,12 +904,11 @@ fn extract_refs_from_starred(expr: &Expr, refs: &mut Vec<NodeRef>) {
                     Expr::Attribute(a) => a.attr.as_str() == "partial",
                     _ => false,
                 };
-                if is_partial {
-                    if let Some(first_arg) = inner_call.arguments.args.first() {
-                        if let Expr::Name(func_name) = first_arg {
-                            refs.push(NodeRef::FunctionName(func_name.id.to_string()));
-                        }
-                    }
+                if is_partial
+                    && let Some(first_arg) = inner_call.arguments.args.first()
+                    && let Expr::Name(func_name) = first_arg
+                {
+                    refs.push(NodeRef::FunctionName(func_name.id.to_string()));
                 }
             }
         }
@@ -772,12 +920,11 @@ fn extract_refs_from_starred(expr: &Expr, refs: &mut Vec<NodeRef>) {
                     Expr::Attribute(a) => a.attr.as_str() == "partial",
                     _ => false,
                 };
-                if is_partial {
-                    if let Some(first_arg) = inner_call.arguments.args.first() {
-                        if let Expr::Name(func_name) = first_arg {
-                            refs.push(NodeRef::FunctionName(func_name.id.to_string()));
-                        }
-                    }
+                if is_partial
+                    && let Some(first_arg) = inner_call.arguments.args.first()
+                    && let Expr::Name(func_name) = first_arg
+                {
+                    refs.push(NodeRef::FunctionName(func_name.id.to_string()));
                 }
             }
         }
@@ -804,6 +951,49 @@ def single_asset() -> dict:
         assert_eq!(nodes[0].kind, NodeKind::Asset);
         assert_eq!(nodes[0].function_name, "single_asset");
         assert_eq!(nodes[0].freshness, Freshness::Always);
+    }
+
+    #[test]
+    fn env_list_is_read_statically() {
+        let src = r#"
+from barca import asset, task
+
+@asset(env=["SOURCE_CSV", "API_TOKEN", "SOURCE_CSV"])
+def raw() -> dict:
+    return {}
+
+@task(env=["DEPLOY_TARGET"])
+def deploy(raw):
+    pass
+
+@asset()
+def plain() -> int:
+    return 1
+"#;
+        let nodes = extract_nodes(src, "test.py").unwrap();
+        assert_eq!(nodes[0].env, vec!["SOURCE_CSV", "API_TOKEN"]);
+        assert_eq!(nodes[1].env, vec!["DEPLOY_TARGET"]);
+        assert!(nodes[2].env.is_empty());
+    }
+
+    #[test]
+    fn env_must_be_a_literal_list_of_strings() {
+        for decl in [
+            "env=NAMES",
+            "env=(\"A\",)",
+            "env=\"A\"",
+            "env=[\"A\", NAME]",
+            "env=[\"A\", 1]",
+            "env=[\"\"]",
+            "env=[\"A=B\"]",
+            "env=[f\"{X}\"]",
+        ] {
+            let src =
+                format!("from barca import asset\n\n@asset({decl})\ndef a():\n    return 1\n");
+            let err = extract_nodes(&src, "test.py").expect_err(decl).to_string();
+            assert!(err.contains("test.py: a: invalid env="), "{decl}: {err}");
+            assert!(err.contains("env=[\"SOURCE_CSV\""), "{decl}: {err}");
+        }
     }
 
     #[test]
@@ -893,6 +1083,43 @@ def collected(parts: list[pl.DataFrame]) -> pl.DataFrame:
 
         assert_eq!(nodes[2].return_type, Some(ValueType::Polars));
         assert_eq!(nodes[2].param_types.get("parts"), Some(&ValueType::Polars));
+    }
+
+    #[test]
+    fn lazyframe_annotation_is_its_own_value_type() {
+        use crate::model::ValueType;
+
+        let src = r#"
+from barca import asset
+
+@asset()
+def raw() -> pl.LazyFrame:
+    ...
+
+@asset(inputs={"orders": raw, "eager": raw})
+def stg(orders: pl.LazyFrame, eager: polars.DataFrame) -> dict:
+    ...
+
+@asset(inputs={"parts": raw})
+def collected(parts: list[polars.LazyFrame]) -> dict:
+    ...
+"#;
+        let nodes = extract_nodes(src, "test.py").unwrap();
+        assert_eq!(nodes[0].return_type, Some(ValueType::PolarsLazy));
+        assert_eq!(
+            nodes[1].param_types.get("orders"),
+            Some(&ValueType::PolarsLazy)
+        );
+        assert_eq!(nodes[1].param_types.get("eager"), Some(&ValueType::Polars));
+        assert_eq!(
+            nodes[2].param_types.get("parts"),
+            Some(&ValueType::PolarsLazy)
+        );
+        assert_eq!(ValueType::PolarsLazy.as_str(), "polars_lazy");
+        assert_eq!(
+            serde_json::to_value(ValueType::PolarsLazy).unwrap(),
+            "polars_lazy"
+        );
     }
 
     #[test]

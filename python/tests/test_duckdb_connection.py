@@ -209,18 +209,18 @@ def project(tmp_path) -> Path:
 def test_sql_by_name_works_in_helpers_and_uses_the_configured_connection(binary, project):
     # `doubled` calls a helper that queries `orders` by name and uses a macro defined at import:
     # needs both the bound view and the shared (configured) connection.
-    out = run_get(binary, project, "as_pandas", "--no-cache")
+    out = run_get(binary, project, "as_pandas", "--refresh-all")
     assert out == {"type": "DataFrame", "rows": [10.0, 15.0]}
 
 
 def test_views_do_not_outlive_the_step(binary, project):
     # All four steps run in one worker; `leak_check` runs after `doubled` bound `orders`.
-    assert run_get(binary, project, "leak_check", "--no-cache") == {"leaked": False}
+    assert run_get(binary, project, "leak_check", "--refresh-all") == {"leaked": False}
 
 
 def test_unannotated_consumer_still_gets_a_pandas_dataframe(binary, project):
     # The relation a step returned must never be handed to the next step in its place.
-    assert run_get(binary, project, "as_pandas", "--no-cache")["type"] == "DataFrame"
+    assert run_get(binary, project, "as_pandas", "--refresh-all")["type"] == "DataFrame"
 
 
 MIXING_PIPELINE = """
@@ -252,14 +252,15 @@ def queried_via_helper(orders: duckdb.DuckDBPyRelation) -> duckdb.DuckDBPyRelati
 
 def run_failing(binary: str, cwd: Path, target: str) -> subprocess.CompletedProcess:
     proc = subprocess.run(
-        [binary, "get", target, "pipeline.py", "--no-cache"],
+        [binary, "get", target, "pipeline.py", "--refresh-all"],
         cwd=cwd,
         env={**os.environ, "BARCA_POOL_SIZE": "1"},
         capture_output=True,
         text=True,
     )
     assert proc.returncode == 1, f"expected a failure, got exit {proc.returncode}"
-    assert proc.stdout == ""
+    # stdout carries only the failed run's result line (#149), never the error text.
+    assert json.loads(proc.stdout)["status"] == "failed"
     return proc
 
 

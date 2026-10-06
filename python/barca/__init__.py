@@ -7,7 +7,7 @@ parses these statically from source without importing.
 
 from __future__ import annotations
 
-__version__ = "0.9.0"
+__version__ = "0.15.0"
 
 __all__ = [
     "asset",
@@ -70,6 +70,7 @@ def asset(
     retry_backoff=0.0,
     description=None,
     tags=None,
+    env: list[str] | None = None,
     **kwargs,
 ):
     """Declare a cached asset node.
@@ -77,6 +78,14 @@ def asset(
     `freshness` controls when the asset is kept up to date — `Always` (default),
     `Manual`, or `Schedule("<cron>")`. The Rust binary reads it statically; a
     `Schedule` fires under `barca serve` (see the Scheduling guide).
+
+    `env` declares the environment variables the function reads, as a literal
+    list of names: `env=["SOURCE_CSV"]`. Their values at plan time are part of
+    the run hash (changing one re-materializes this asset and everything
+    downstream; unset is its own value) and are reported per step in `--agent`
+    lines and JSON results. Names ending in `_TOKEN`, `_SECRET`, `_KEY` or
+    `_PASSWORD` are hashed but shown as `<redacted>`. Variables read without
+    being declared are not tracked.
 
     `retries` is the total number of attempts on failure (1 = no retry).
     `retry_backoff` is the base delay in seconds between attempts (delay grows
@@ -103,13 +112,14 @@ def sensor(
     retry_backoff=0.0,
     description=None,
     tags=None,
+    env: list[str] | None = None,
     **kwargs,
 ):
     """Declare a sensor node (observes external state).
 
     Sensors must use `Manual` or `Schedule(...)` freshness — `Always` is not
     valid for a sensor (its polling cadence must be declared explicitly). See
-    `asset` for `retries` / `retry_backoff` semantics.
+    `asset` for `env`, `retries` and `retry_backoff` semantics.
     """
     if fn is not None:
         return fn
@@ -131,6 +141,7 @@ def task(
     retry_backoff=0.0,
     description=None,
     tags=None,
+    env: list[str] | None = None,
     **kwargs,
 ):
     """Declare a task node (always re-runs; never cached).
@@ -142,7 +153,8 @@ def task(
 
     A `@task(freshness=Schedule("<cron>"))` is the simplest way to run something
     on a timer: leave `barca serve` running and it fires on each cron tick (see
-    the Scheduling guide). See `asset` for `retries` / `retry_backoff` semantics.
+    the Scheduling guide). See `asset` for `env`, `retries` and `retry_backoff`
+    semantics; a task always runs, so `env` only records the values it used.
     """
     if fn is not None:
         return fn

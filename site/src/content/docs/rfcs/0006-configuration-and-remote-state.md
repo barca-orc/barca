@@ -10,6 +10,11 @@ description: 'barca.toml, env var/CLI precedence, --env separation, and the opti
 
 ---
 
+> **Amended (0.13, issue #202):** `barca.toml` is now discovered by walking up from the
+> cwd, and barca changes into that directory (the project root) before running, so
+> `.barca/` stays anchored to the same place as its config. The cwd-only rule below
+> described 0.5 to 0.12.
+
 ## 1. Summary
 
 Configuration resolves through three layers — **CLI flag > environment variable >

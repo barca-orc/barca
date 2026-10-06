@@ -1,0 +1,19 @@
+# barca run broken pipeline.py --json  (stdout, exit 1)
+elapsed_seconds : number
+error : string
+failed_node : string
+phases : integer
+run_id : string
+status : string
+steps : array
+steps[] : object
+steps[].artifact : string  (optional)
+steps[].detail : string  (optional)
+steps[].env : object  (optional)
+steps[].env.<name> : null|string
+steps[].id : string
+steps[].kind : string
+steps[].reason : string  (optional)
+steps[].run_hash : string
+steps[].status : string
+steps_executed : integer

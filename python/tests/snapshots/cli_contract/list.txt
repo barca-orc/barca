@@ -1,0 +1,13 @@
+# barca list pipeline.py --json  (stdout, exit 0)
+nodes : array
+nodes[] : object
+nodes[].env : array
+nodes[].env[] : string
+nodes[].freshness : string
+nodes[].id : string
+nodes[].inputs : array
+nodes[].inputs[] : string
+nodes[].kind : string
+root : string
+total : integer
+truncated : boolean

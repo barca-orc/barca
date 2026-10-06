@@ -244,7 +244,7 @@ class TestTimingPersisted:
         assert 0.0 < estimate < 5.0
 
         # Second (uncached) run folds a new observation into the same row.
-        barca.get(f, no_cache=True)
+        barca.get(f, refresh_all=True)
         rows2 = _query(
             "SELECT estimate_seconds, samples FROM cost_estimates WHERE node_id LIKE '%:steady'"
         )

@@ -3,6 +3,13 @@
 //!
 //! Pure function: (source, function_name) → cone hash string.
 //! Uses ruff's AST for name resolution within a single file.
+//!
+//! Project modules (other `.py` files next to and below the pipeline file) are followed
+//! through both import styles, at the same precision: `from helpers import compute` and
+//! `import helpers` + `helpers.compute()` (also `import pkg.mod as m` + `m.f()`,
+//! `import pkg.mod` + `pkg.mod.f()`, `from pkg import mod` + `mod.f()`) each add only
+//! `compute`'s own cone — its source and the definitions it uses, transitively — never the
+//! whole module. Modules that are not project files (stdlib, installed packages) add nothing.
 
 use ruff_python_ast::{Expr, Stmt};
 use ruff_python_parser::parse_module;
@@ -59,11 +66,20 @@ pub fn cone_hash_from_defs(
     let mut visited: HashSet<String> = HashSet::new();
     let mut queue: Vec<String> = refs
         .iter()
-        .filter(|r| defs.contains_key(r.as_str()))
+        .filter(|r| traceable(defs, r))
         .cloned()
         .collect();
 
     let mut cone_parts: Vec<(String, String)> = Vec::new();
+    trace_module_attributes(
+        refs,
+        defs,
+        other_sources,
+        packages,
+        &mut visited,
+        &mut cone_parts,
+        0,
+    );
 
     while let Some(name) = queue.pop() {
         if !visited.insert(name.clone()) {
@@ -76,25 +92,29 @@ pub fn cone_hash_from_defs(
             ModuleDef::Function {
                 source_text,
                 references,
-            } => {
-                cone_parts.push((name.clone(), source_text.clone()));
-                for r in references {
-                    if !visited.contains(r) && defs.contains_key(r.as_str()) {
-                        queue.push(r.clone());
-                    }
-                }
             }
-            ModuleDef::Assignment {
+            | ModuleDef::Assignment {
                 source_text,
                 references,
             } => {
                 cone_parts.push((name.clone(), source_text.clone()));
                 for r in references {
-                    if !visited.contains(r) && defs.contains_key(r.as_str()) {
+                    if !visited.contains(r) && traceable(defs, r) {
                         queue.push(r.clone());
                     }
                 }
+                trace_module_attributes(
+                    references,
+                    defs,
+                    other_sources,
+                    packages,
+                    &mut visited,
+                    &mut cone_parts,
+                    0,
+                );
             }
+            // Only reached through `module.attr`, handled by `trace_module_attributes`.
+            ModuleDef::ModuleImport { .. } => {}
             ModuleDef::Import { module } => {
                 // Resolve cross-file import, following re-export chains.
                 resolve_import(
@@ -137,8 +157,103 @@ pub enum ModuleDef {
         source_text: String,
         references: HashSet<String>,
     },
-    #[allow(dead_code)]
+    /// `from module import name`: the name is bound to `module`'s definition of it.
     Import { module: String },
+    /// `import module` / `import a.b as m`: the name is bound to the module itself
+    /// (`import a.b` binds `a`). Followed only through attribute access (`m.f`).
+    ModuleImport { module: String },
+}
+
+/// A name the BFS follows by itself. A bare module binding is not: what a step uses from a
+/// module is the attribute it reads (`helpers.compute`), traced by `trace_module_attributes`.
+fn traceable(defs: &HashMap<String, ModuleDef>, name: &str) -> bool {
+    matches!(defs.get(name), Some(d) if !matches!(d, ModuleDef::ModuleImport { .. }))
+}
+
+/// The project module and attribute a dotted reference (`helpers.compute`, `m.f`,
+/// `pkg.mod.f`) reads, when its first segment is bound to a project module in `defs`.
+/// `None` for anything else — attribute access on a local value, or on a module that is not a
+/// project file (`json.dumps`), which therefore leaves the hash exactly as before.
+fn module_attribute(
+    reference: &str,
+    defs: &HashMap<String, ModuleDef>,
+    other_sources: &HashMap<String, String>,
+) -> Option<(String, String)> {
+    let mut parts = reference.split('.');
+    let base = parts.next()?;
+    let rest: Vec<&str> = parts.collect();
+    if rest.is_empty() {
+        return None;
+    }
+    let module = match defs.get(base)? {
+        ModuleDef::ModuleImport { module } => module.clone(),
+        // `from pkg import mod` where `pkg.mod` is itself a project module.
+        ModuleDef::Import { module } => {
+            let full = if module.is_empty() {
+                base.to_string()
+            } else {
+                format!("{module}.{base}")
+            };
+            if !other_sources.contains_key(&full) {
+                return None;
+            }
+            full
+        }
+        _ => return None,
+    };
+    // The longest prefix of the chain that is a project module; the next segment is the
+    // attribute read from it (`pkg.mod.f` → module `pkg.mod`, attribute `f`).
+    for k in (0..rest.len()).rev() {
+        let candidate = if k == 0 {
+            module.clone()
+        } else {
+            format!("{module}.{}", rest[..k].join("."))
+        };
+        if other_sources.contains_key(&candidate) {
+            let attr = rest[k];
+            if other_sources.contains_key(&format!("{candidate}.{attr}")) {
+                // `pkg.mod` names a submodule; the longer chain (`pkg.mod.f`) says what is used.
+                return None;
+            }
+            return Some((candidate, attr.to_string()));
+        }
+    }
+    None
+}
+
+/// Add the cone of every project-module attribute in `references` (`helpers.compute`), exactly
+/// as `from helpers import compute` would.
+fn trace_module_attributes(
+    references: &HashSet<String>,
+    defs: &HashMap<String, ModuleDef>,
+    other_sources: &HashMap<String, String>,
+    packages: &HashSet<String>,
+    visited: &mut HashSet<String>,
+    cone_parts: &mut Vec<(String, String)>,
+    depth: usize,
+) {
+    let mut attrs: Vec<(String, String)> = references
+        .iter()
+        .filter(|r| r.contains('.'))
+        .filter_map(|r| module_attribute(r, defs, other_sources))
+        .collect();
+    attrs.sort();
+    attrs.dedup();
+    for (module, attr) in attrs {
+        // Same key `resolve_import` uses for a module's definitions, so a definition reached
+        // both ways is hashed once.
+        if visited.insert(format!("{module}:{attr}")) {
+            resolve_import(
+                &module,
+                &attr,
+                other_sources,
+                packages,
+                visited,
+                cone_parts,
+                depth,
+            );
+        }
+    }
 }
 
 /// Resolve a cross-file import, following re-export chains up to a depth limit.
@@ -172,7 +287,12 @@ fn resolve_import(
 
     let imported_defs =
         collect_module_definitions_with_context(module_source, own_package.as_deref());
-    let Some(imported_def) = imported_defs.get(name) else {
+    // A module binding (`import x` inside `module`) is not a definition of `name`; it hashes
+    // as the unresolved placeholder, exactly as before module bindings were recorded.
+    let Some(imported_def) = imported_defs
+        .get(name)
+        .filter(|d| !matches!(d, ModuleDef::ModuleImport { .. }))
+    else {
         cone_parts.push((name.to_string(), format!("import:{module}:{name}")));
         return;
     };
@@ -187,10 +307,19 @@ fn resolve_import(
             references,
         } => {
             cone_parts.push((format!("{module}:{name}"), source_text.clone()));
+            trace_module_attributes(
+                references,
+                &imported_defs,
+                other_sources,
+                packages,
+                visited,
+                cone_parts,
+                depth + 1,
+            );
             // Trace transitive deps within the module.
             let mut bfs_queue: Vec<String> = references
                 .iter()
-                .filter(|r| imported_defs.contains_key(r.as_str()))
+                .filter(|r| traceable(&imported_defs, r))
                 .cloned()
                 .collect();
             while let Some(dep) = bfs_queue.pop() {
@@ -212,11 +341,20 @@ fn resolve_import(
                         cone_parts.push((dep_key, source_text.clone()));
                         for r in references {
                             if !visited.contains(&format!("{module}:{r}"))
-                                && imported_defs.contains_key(r.as_str())
+                                && traceable(&imported_defs, r)
                             {
                                 bfs_queue.push(r.clone());
                             }
                         }
+                        trace_module_attributes(
+                            references,
+                            &imported_defs,
+                            other_sources,
+                            packages,
+                            visited,
+                            cone_parts,
+                            depth + 1,
+                        );
                     }
                     Some(ModuleDef::Import {
                         module: next_module,
@@ -235,10 +373,12 @@ fn resolve_import(
                             depth + 1,
                         );
                     }
-                    None => {}
+                    Some(ModuleDef::ModuleImport { .. }) | None => {}
                 }
             }
         }
+        // Filtered out above.
+        ModuleDef::ModuleImport { .. } => {}
         ModuleDef::Import {
             module: next_module,
         } => {
@@ -339,6 +479,23 @@ fn collect_module_definitions_with_context(
                             references,
                         },
                     );
+                }
+            }
+            Stmt::Import(import) => {
+                // `import a.b` binds `a`; `import a.b as m` binds `m` to `a.b`. A name that is
+                // already defined keeps its earlier definition (`or_insert`), so recording module
+                // bindings never changes what an existing name resolves to.
+                for alias in &import.names {
+                    let full = alias.name.to_string();
+                    let (bound, module) = match &alias.asname {
+                        Some(asname) => (asname.to_string(), full),
+                        None => {
+                            let top = full.split('.').next().unwrap_or_default().to_string();
+                            (top.clone(), top)
+                        }
+                    };
+                    defs.entry(bound)
+                        .or_insert(ModuleDef::ModuleImport { module });
                 }
             }
             Stmt::ImportFrom(import) => {
@@ -517,6 +674,15 @@ fn collect_stmt_names(stmt: &Stmt, names: &mut HashSet<String>) {
     }
 }
 
+/// `a.b.c` for an attribute chain rooted at a plain name; `None` otherwise (`f().x`).
+fn dotted_name(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::Name(n) => Some(n.id.to_string()),
+        Expr::Attribute(a) => Some(format!("{}.{}", dotted_name(&a.value)?, a.attr)),
+        _ => None,
+    }
+}
+
 fn collect_expr_names(expr: &Expr, names: &mut HashSet<String>) {
     match expr {
         Expr::Name(n) => {
@@ -531,7 +697,15 @@ fn collect_expr_names(expr: &Expr, names: &mut HashSet<String>) {
                 collect_expr_names(&kw.value, names);
             }
         }
-        Expr::Attribute(a) => collect_expr_names(&a.value, names),
+        Expr::Attribute(a) => {
+            // `helpers.compute` also records the dotted chain, so a call through an imported
+            // project module can be traced (`trace_module_attributes`). The base name is still
+            // recorded (via the recursion), as before.
+            if let Some(chain) = dotted_name(expr) {
+                names.insert(chain);
+            }
+            collect_expr_names(&a.value, names)
+        }
         Expr::Subscript(s) => {
             collect_expr_names(&s.value, names);
             collect_expr_names(&s.slice, names);
@@ -924,6 +1098,151 @@ def my_asset():
         assert_ne!(
             h1, h2,
             "a helper's transitive dependency that is itself a cross-file import must be tracked"
+        );
+    }
+
+    // ─── `import module` + `module.attr` (#178) ──────────────────────────────
+
+    fn sources(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    fn hash_of(entry: &str, other: &HashMap<String, String>, packages: &[&str]) -> String {
+        let packages: HashSet<String> = packages.iter().map(|p| p.to_string()).collect();
+        cone_hash_from_defs(
+            &collect_module_definitions(entry),
+            "my_asset",
+            other,
+            &packages,
+        )
+    }
+
+    const HELPERS_V1: &str = "def compute():\n    return 1\n\n\ndef unrelated():\n    return 0\n";
+    const HELPERS_V2: &str = "def compute():\n    return 22\n\n\ndef unrelated():\n    return 0\n";
+    const HELPERS_UNRELATED_EDIT: &str =
+        "def compute():\n    return 1\n\n\ndef unrelated():\n    return 999\n";
+
+    #[test]
+    fn module_attribute_call_is_tracked() {
+        let entry = "import helpers\n\ndef my_asset():\n    return helpers.compute()\n";
+        let h1 = hash_of(entry, &sources(&[("helpers", HELPERS_V1)]), &[]);
+        let h2 = hash_of(entry, &sources(&[("helpers", HELPERS_V2)]), &[]);
+        assert!(!h1.is_empty());
+        assert_ne!(h1, h2, "editing helpers.compute must change the cone hash");
+    }
+
+    #[test]
+    fn module_attribute_call_hashes_only_the_used_functions_cone_like_from_import() {
+        let attr = "import helpers\n\ndef my_asset():\n    return helpers.compute()\n";
+        let from = "from helpers import compute\n\ndef my_asset():\n    return compute()\n";
+        let v1 = sources(&[("helpers", HELPERS_V1)]);
+        let edited = sources(&[("helpers", HELPERS_UNRELATED_EDIT)]);
+        assert_eq!(
+            hash_of(attr, &v1, &[]),
+            hash_of(attr, &edited, &[]),
+            "editing a function the step never uses must not change its hash"
+        );
+        assert_eq!(
+            hash_of(attr, &v1, &[]),
+            hash_of(from, &v1, &[]),
+            "both import styles hash exactly the same cone"
+        );
+    }
+
+    #[test]
+    fn aliased_dotted_module_attribute_call_is_tracked() {
+        let entry = "import pkg.mod as m\n\ndef my_asset():\n    return m.f()\n";
+        let v1 = sources(&[("pkg", ""), ("pkg.mod", "def f():\n    return 1\n")]);
+        let v2 = sources(&[("pkg", ""), ("pkg.mod", "def f():\n    return 22\n")]);
+        let h1 = hash_of(entry, &v1, &["pkg"]);
+        assert!(!h1.is_empty());
+        assert_ne!(h1, hash_of(entry, &v2, &["pkg"]));
+        let from = "from pkg.mod import f\n\ndef my_asset():\n    return f()\n";
+        assert_eq!(h1, hash_of(from, &v1, &["pkg"]));
+    }
+
+    #[test]
+    fn full_dotted_module_attribute_call_is_tracked() {
+        // `import pkg.mod` binds `pkg`; the call goes through `pkg.mod.f`. Works whether or not
+        // `pkg` has an `__init__.py` (namespace package).
+        let entry = "import pkg.mod\n\ndef my_asset():\n    return pkg.mod.f()\n";
+        for with_init in [true, false] {
+            let mut v1 = sources(&[("pkg.mod", "def f():\n    return 1\n")]);
+            let mut v2 = sources(&[("pkg.mod", "def f():\n    return 22\n")]);
+            if with_init {
+                v1.insert("pkg".into(), String::new());
+                v2.insert("pkg".into(), String::new());
+            }
+            assert_ne!(hash_of(entry, &v1, &["pkg"]), hash_of(entry, &v2, &["pkg"]));
+        }
+    }
+
+    #[test]
+    fn from_package_import_module_then_attribute_call_is_tracked() {
+        let entry = "from pkg import mod\n\ndef my_asset():\n    return mod.f()\n";
+        let v1 = sources(&[("pkg", ""), ("pkg.mod", "def f():\n    return 1\n")]);
+        let v2 = sources(&[("pkg", ""), ("pkg.mod", "def f():\n    return 22\n")]);
+        assert_ne!(hash_of(entry, &v1, &["pkg"]), hash_of(entry, &v2, &["pkg"]));
+    }
+
+    #[test]
+    fn module_attribute_constant_and_transitive_deps_are_tracked() {
+        // A module-level constant read through the module, and the helper's own dependencies
+        // (a local helper and another project module called by attribute) are all in the cone.
+        let entry = "import helpers\n\nSCALE = helpers.BASE\n\ndef my_asset():\n    return helpers.compute() * SCALE\n";
+        let helpers = |base: &str, inner: &str| {
+            format!(
+                "import other\n\nBASE = {base}\n\n\ndef _inner():\n    return {inner}\n\n\ndef compute():\n    return _inner() + other.g()\n"
+            )
+        };
+        let other_v1 = "def g():\n    return 1\n";
+        let other_v2 = "def g():\n    return 22\n";
+        let base = hash_of(
+            entry,
+            &sources(&[("helpers", &helpers("2", "1")), ("other", other_v1)]),
+            &[],
+        );
+        for (h, o) in [
+            (helpers("3", "1"), other_v1),
+            (helpers("2", "5"), other_v1),
+            (helpers("2", "1"), other_v2),
+        ] {
+            assert_ne!(
+                base,
+                hash_of(entry, &sources(&[("helpers", &h), ("other", o)]), &[])
+            );
+        }
+    }
+
+    #[test]
+    fn non_project_module_attribute_calls_leave_the_hash_unchanged() {
+        // `json` is not a project module: the cone stays empty, exactly as before #178.
+        let entry = "import json\nimport os.path as osp\n\ndef my_asset():\n    return json.dumps(osp.join('a', 'b'))\n";
+        assert_eq!(
+            hash_of(entry, &sources(&[("helpers", HELPERS_V1)]), &[]),
+            ""
+        );
+    }
+
+    /// Cone hashes from barca 0.10.0 for import styles that already worked. #178 must not move
+    /// them, or every existing cache is invalidated.
+    #[test]
+    fn cone_hash_unchanged_for_from_imports_and_stdlib_modules() {
+        let other = sources(&[
+            (
+                "helpers",
+                "import json\n\ndef compute():\n    return json.dumps(1)\n",
+            ),
+            ("pkg", "from .core import t\n"),
+            ("pkg.core", "def t(x):\n    return x\n"),
+        ]);
+        let entry = "import json\nfrom helpers import compute\nfrom pkg import t\nfrom numpy import array\n\nRATE = 2\n\ndef my_asset():\n    return [compute(), t(RATE), array([1]), json.dumps(2)]\n";
+        assert_eq!(
+            hash_of(entry, &other, &["pkg"]),
+            "5f177ae7cd8027eb78d02d6cd8a7ec9c636aa91ae78576eabceac2386cc41382"
         );
     }
 }

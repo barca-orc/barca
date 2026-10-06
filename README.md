@@ -150,6 +150,11 @@ def inbox_files() -> tuple[bool, list[str]]:
     return bool(files), [str(f) for f in files]
 ```
 
+A sensor always runs, and its returned value is part of the run hash of every asset that reads
+it: a new value re-runs those assets and everything downstream, the same value serves them from
+cache. Use one in front of data that changes in place (return the blob's etag); see
+`barca docs cache`.
+
 ### `@task`
 
 Workflow-management step — deploys, notifications, migrations, cache warming.
@@ -164,6 +169,20 @@ def publish(report: str) -> None:
     print(f"Publishing: {report}")
 
 ```
+
+### Declared environment variables
+
+Assets that read environment variables declare them, so a changed value invalidates the cache:
+
+```python
+@asset(env=["SOURCE_CSV", "API_TOKEN"])
+def raw() -> dict:
+    return load(os.environ["SOURCE_CSV"])
+```
+
+The values are folded into the run hash at plan time (unset is its own value) and reported per
+step in `--agent` lines and the JSON result. Names ending in `_TOKEN`, `_SECRET`, `_KEY` or
+`_PASSWORD` are hashed but redacted. Undeclared variables are not tracked.
 
 ### `@sink`
 
@@ -197,30 +216,55 @@ def prices(ticker: str) -> dict:
 | Function | Purpose |
 |----------|---------|
 | `partitions(values)` | Static list of partition keys |
-| `partitions_from(source)` | Derive partitions from upstream asset |
+| `partitions_from(source)` | Same keys as `source`; each key also receives that key's output of a partitioned `source` |
 | `collect(asset_fn)` | Aggregate all partitions of an upstream |
 | `asset_ref(ref_string)` | Canonical asset reference |
 
 ## CLI
 
 ```
-barca get [target] <file.py> [file.py ...] Get asset(s) — cache-aware
-barca run <task> <file.py> ...             Run a task (always re-runs) and its cone
-barca plan <file.py> [file.py ...]         Emit execution plan as JSON
-barca list <file.py> [--json]              List all definitions with deps
-barca history [--limit N] [--json]         Show recent run history
-barca status <file.py> [--json]            Every node: fresh/stale/missing, last run, typical time
-barca stats <target> <file.py> [--json]    Show timing/cache stats for an asset
+barca get [target] [file.py|dir/ ...]      Get asset(s) — cache-aware; `a,b` gets several
+barca run <task> [file.py|dir/ ...]        Run a task (always re-runs) and its cone; `a,b` runs
+                                           several
+  get/run: --refresh a,b                   re-run a, b and their downstream (--no-cascade: only a, b)
+  get/run: --refresh-all                   re-run every asset in the cone
+barca plan [file.py ...]                   Emit execution plan as JSON (experimental)
+barca list [file.py|dir/ ...] [--json|--pretty] [--limit N]  List all definitions with deps and env
+barca status [target] [file.py ...] [--json|--pretty]  Cache state, last run, artifact rows/columns per
+                                           node; `a,b` shows several cones
+barca sql "<query>" [file.py ...] [--json] Query cached results with DuckDB (experimental)
+barca history [--limit N] [--json|--pretty] Show recent run history
+barca stats <target> [file.py ...] [--json|--pretty]  Timing/cache stats for an asset
 barca serve [file.py ...] [--port N]       Run the HTTP API server + cron scheduler
 barca docs [topic] [--all] [--json]        Built-in manual: concepts, formats, examples
 barca --help                               Show help (every command ends with examples)
 ```
 
+Files are optional everywhere: without them barca reads every `.py` file under the project root
+(the nearest `barca.toml`) that imports barca. See `barca docs discovery`.
+
 `barca docs` is the manual, compiled into the binary: topics for types and output formats,
 caching, tasks, partitions, scheduling, runnable examples, and conventions for scripts and AI
-agents (`barca docs agents`). Results are JSON on stdout, progress and errors on stderr.
+agents (`barca docs agents`). AI agents: load [`SKILL.md`](SKILL.md) (also `barca docs skill`), a
+~1500-token [Agent Skill](https://barca.sh/reference/agent-skill/) with the commands, argument
+order, exit codes and guardrails. Results go to stdout: human-readable in a terminal, JSON when piped
+or captured (`--json` / `--pretty` or `BARCA_OUTPUT=json|pretty` override); progress and errors go
+to stderr. In JSON mode an error is one JSON line on stderr (`{"error", "code", "kind",
+"remediation"}`, plus `node`, `traceback` and `artifact_dir` when a step failed). Exit codes: `0`
+ok, `1` step failed, `2` usage error, `3` barca/infra failure, `130` cancelled.
 
-Shorthand: `barca pipeline.py` works as `barca get pipeline.py` (all assets).
+List output is bounded: `list` shows 100 nodes and `history` 10 runs unless you pass `--limit N`
+or `--all`, and their JSON reports `truncated` and `total`. `--fields a,b` keeps only those keys
+on each item of any JSON output (`barca list pipeline.py --fields id,inputs`).
+
+Shorthand: `barca pipeline.py` works as `barca get pipeline.py` (all assets and sensors; tasks are skipped, use `barca run`).
+
+The CLI surface is written down as a contract: every command, flag, environment variable, exit
+code, JSON output schema and `--agent` line, each marked stable or experimental, in
+[`crates/barca-cli/docs/contract.md`](crates/barca-cli/docs/contract.md) (also `barca docs
+contract`, and [online](https://barca.sh/reference/cli-contract/)). Snapshot tests fail CI on any
+change to it that the contract does not reflect. Before 1.0 a breaking change ships in a minor
+release with a "Breaking" line in the release notes; from 1.0 changes are additive only.
 
 ## Scheduling
 
@@ -267,13 +311,12 @@ barca serve pipeline.py --port 8274      # default port 8274
 barca serve pipeline.py --watch          # dev mode: re-parse DAG on file change
 barca serve pipeline.py --no-schedule    # HTTP API only, don't fire scheduled jobs
 barca serve pipeline.py --timezone utc   # evaluate cron in UTC (default: local)
-barca serve pipeline.py --read-only      # inspect only: no runs, no scheduler, DB never written
 ```
 
 Runs are async: `POST` returns a `run_id` immediately, then you poll `/status/{run_id}`.
 
 ```bash
-curl localhost:8274/health                       # {"status":"ok","version":"0.9.0"}
+curl localhost:8274/health                       # {"status":"ok","version":"0.15.0"}
 curl localhost:8274/assets                       # list assets + deps
 curl localhost:8274/plan                          # execution plan JSON
 curl -XPOST localhost:8274/run                    # → {"run_id":"…"}; poll /status/<id>
@@ -289,7 +332,7 @@ See the [Server API reference](https://barca.sh/reference/server-api/) for the f
 ```python
 import barca
 
-# Get all assets in a file (returns the last asset's value)
+# Get all assets in a file (returns the last asset's value; tasks are not run)
 value = barca.get("pipeline.py")
 print(value)  # {"count": 3, "total": 6}
 
@@ -326,12 +369,13 @@ $ barca plan pipeline.py
 
 ### `barca get` -- execute and get results
 
-Parses source, builds DAG, spawns workers, collects outputs, persists to `.barca/metadata.db`. With a target, only the target's subgraph runs. Without a target, all assets run.
+Parses source, builds DAG, spawns workers, collects outputs, persists to `.barca/metadata.db`. With a target, only the target's subgraph runs. Without a target, every asset and sensor runs and tasks are skipped (previously tasks ran too); stderr names the skipped tasks. Run tasks with `barca run`.
 
 Output is a JSON summary:
 
 ```json
 {
+  "status": "success",
   "run_id": "...",
   "elapsed_seconds": 0.27,
   "steps_executed": 2,
@@ -340,12 +384,13 @@ Output is a JSON summary:
 }
 ```
 
-Use `--no-cache` to skip cache lookups and execute everything fresh.
+Use `--refresh-all` to skip cache lookups and execute everything fresh (`--refresh a,b` for
+chosen assets and what is downstream of them).
 
 Diagnostics go to stderr:
 
 ```
-[barca] 2/2 steps done in 0.0s
+[barca] 2/2 steps | done in 0.0s
 ```
 
 ## Benchmarks

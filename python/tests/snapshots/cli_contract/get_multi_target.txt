@@ -1,0 +1,23 @@
+# barca get total,frame pipeline.py --json  (stdout, exit 0)
+elapsed_seconds : number
+phases : integer
+run_id : string
+status : string
+steps : array
+steps[] : object
+steps[].artifact : string
+steps[].env : object  (optional)
+steps[].env.<name> : null|string
+steps[].id : string
+steps[].kind : string
+steps[].run_hash : string
+steps[].status : string
+steps_executed : integer
+targets : object
+targets.<name> : object
+targets.<name>.final_output : <user value>|object
+targets.<name>.final_output._barca_artifact : object  (optional)
+targets.<name>.final_output._barca_artifact.format : string
+targets.<name>.final_output._barca_artifact.path : string
+targets.<name>.final_output._barca_artifact.size_bytes : integer
+targets.<name>.status : string

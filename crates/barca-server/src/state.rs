@@ -96,16 +96,30 @@ pub struct DagCache {
     pub plan: Option<PlanResult>,
 }
 
-/// One row of `GET /state`: a node's [`AssetState`] plus when its cron
-/// schedule next fires (local time, unix epoch seconds), if it has one.
+/// One row of `GET /state`: the node's `barca status` entry plus what the
+/// table needs beyond it — typical durations and the next cron fire time.
 #[derive(Clone, Debug, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct NodeState {
     #[serde(flatten)]
     #[cfg_attr(feature = "ts", ts(flatten))]
-    pub state: barca_core::asset_state::AssetState,
+    pub status: barca_core::status::NodeStatus,
+    /// Typical wall time over the most recent successful materializations.
+    pub durations: Option<Durations>,
+    /// Next cron fire time (local time, unix epoch seconds), if scheduled.
     #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub next_run: Option<i64>,
+}
+
+/// Median and p95 wall time over a node's most recent successful materializations.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct Durations {
+    pub median_seconds: f64,
+    pub p95_seconds: f64,
+    /// How many materializations these are computed from (at most 20).
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub samples: usize,
 }
 
 /// Live event channel for one run: a broadcast for subscribers plus a backlog

@@ -70,7 +70,7 @@ def test_get_and_run_hit_correct_paths(monkeypatch):
         json_urlopen({"run_id": "r1"}, captured),
     )
     c = Client("http://h:1")
-    c.get()  # no target → full-DAG run
+    c.get()  # no target → POST /run: every asset and sensor, no tasks
     assert captured["url"] == "http://h:1/run"
     c.run("cleanup")
     assert captured["url"] == "http://h:1/run/cleanup"

@@ -279,6 +279,8 @@ impl fmt::Display for StepId {
 pub enum ValueType {
     Pandas,
     Polars,
+    /// `pl.LazyFrame`: the worker hands the step a scan, so only what its query uses is read.
+    PolarsLazy,
     PyArrow,
     DuckDB,
 }
@@ -288,9 +290,15 @@ impl ValueType {
         match self {
             ValueType::Pandas => "pandas",
             ValueType::Polars => "polars",
+            ValueType::PolarsLazy => "polars_lazy",
             ValueType::PyArrow => "pyarrow",
             ValueType::DuckDB => "duckdb",
         }
+    }
+
+    /// True for types whose reader fetches only what the step's query uses.
+    pub fn is_lazy(self) -> bool {
+        matches!(self, ValueType::PolarsLazy | ValueType::DuckDB)
     }
 }
 
@@ -315,6 +323,10 @@ pub enum NodeRef {
     FunctionName(String),
     /// Canonical asset reference: `asset_ref("module/file.py:function_name")`.
     Canonical(String),
+    /// A name bound by an import in the referencing file: `from <module> import <name>`, or
+    /// `<module>.<name>` after `import <module>`. `module` keeps leading dots for relative
+    /// imports. Resolved against the importing file's location during DAG build.
+    Imported { module: String, name: String },
 }
 
 impl NodeRef {
@@ -323,6 +335,7 @@ impl NodeRef {
         match self {
             NodeRef::FunctionName(name) => name,
             NodeRef::Canonical(path) => path.rsplit(':').next().unwrap_or(path),
+            NodeRef::Imported { name, .. } => name,
         }
     }
 }
@@ -413,6 +426,10 @@ pub struct ExtractedNode {
     /// Parallel calls found in this task's function body.
     /// Only populated for `@task` nodes. Empty for assets/sensors.
     pub parallel_calls: Vec<ParallelCall>,
+    /// Declared environment variables (`@asset(env=["NAME", ...])`), in declaration order.
+    /// Their values are read at plan time and folded into the run hash; see [`crate::envdeps`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env: Vec<String>,
 }
 
 impl ExtractedNode {

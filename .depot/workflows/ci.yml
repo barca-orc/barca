@@ -12,6 +12,7 @@ jobs:
       # filesystem that persists between runs (no upload/download step, and
       # incremental compiles survive Cargo.lock changes). Each job uses its own
       # subdirectory so the two jobs never write the same files concurrently.
+      # Wheels are NOT built on the shared disk — see the build step.
       CARGO_TARGET_DIR: /mnt/cache/test/target
       PIP_CACHE_DIR: /mnt/cache/test/pip
     steps:
@@ -27,9 +28,27 @@ jobs:
         run: |
           mkdir -p "$CARGO_TARGET_DIR" "$PIP_CACHE_DIR" 2>/dev/null \
             || { sudo mkdir -p "$CARGO_TARGET_DIR" "$PIP_CACHE_DIR" && sudo chown -R "$(id -u):$(id -g)" /mnt/cache/test; }
+          # Left behind by a reverted experiment that moved CARGO_HOME onto this disk.
+          rm -rf /mnt/cache/test/cargo-home
+          # The cache disk persists and nothing garbage-collects target/. A full disk
+          # truncates object files mid-build ("failed to map object file: memory map
+          # must have a non-zero length"), so report usage and, when space runs low,
+          # start this job's target dir over.
+          df -h /mnt/cache
+          du -sh /mnt/cache/* 2>/dev/null || true
+          avail_kb=$(df -Pk /mnt/cache | awk 'NR==2 {print $4}')
+          if [ "$avail_kb" -lt $((5 * 1024 * 1024)) ]; then
+            echo "::warning::cache disk has less than 5 GiB free; clearing $CARGO_TARGET_DIR"
+            rm -rf "$CARGO_TARGET_DIR" && mkdir -p "$CARGO_TARGET_DIR"
+          fi
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Clippy (warnings are errors)
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Run unit tests
         run: cargo test
@@ -42,9 +61,12 @@ jobs:
       - name: Install maturin and build
         run: |
           pip install maturin
-          rm -rf "$CARGO_TARGET_DIR/wheels"
-          maturin build --release
-          pip install "$CARGO_TARGET_DIR"/wheels/*.whl
+          # Wheel goes to a per-run dir, not $CARGO_TARGET_DIR/wheels on the
+          # shared cache disk, where overlapping runs could delete or install
+          # each other's wheel.
+          WHEELS=$(mktemp -d)
+          maturin build --release --out "$WHEELS"
+          pip install "$WHEELS"/*.whl
 
       - name: Run integration tests
         run: |
@@ -55,6 +77,7 @@ jobs:
           bash tests/integration/test_env.sh
           bash tests/integration/test_remote_state.sh
           bash tests/integration/test_partitions.sh
+          bash tests/integration/test_run_refresh.sh
 
       - name: Run benchmark examples as integration smoke tests
         run: |
@@ -88,11 +111,13 @@ jobs:
           docker run -d --name minio -p 9100:9000 \
             -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
             bitnamilegacy/minio:2025.5.24
+          # Emulators are pinned: an unpinned :latest can change behavior with no
+          # commit here. Bump deliberately.
           docker run -d --name fake-gcs -p 9200:4443 \
-            fsouza/fake-gcs-server -scheme http -port 4443 \
+            fsouza/fake-gcs-server:1.56.1 -scheme http -port 4443 \
             -public-host localhost:9200 -external-url http://localhost:9200
           docker run -d --name azurite -p 9210:10000 \
-            mcr.microsoft.com/azure-storage/azurite \
+            mcr.microsoft.com/azure-storage/azurite:3.37.0 \
             azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck
 
       - name: Mount cache disk
@@ -105,6 +130,19 @@ jobs:
         run: |
           mkdir -p "$CARGO_TARGET_DIR" "$PIP_CACHE_DIR" 2>/dev/null \
             || { sudo mkdir -p "$CARGO_TARGET_DIR" "$PIP_CACHE_DIR" && sudo chown -R "$(id -u):$(id -g)" /mnt/cache/backends; }
+          # Left behind by a reverted experiment that moved CARGO_HOME onto this disk.
+          rm -rf /mnt/cache/backends/cargo-home
+          # The cache disk persists and nothing garbage-collects target/. A full disk
+          # truncates object files mid-build ("failed to map object file: memory map
+          # must have a non-zero length"), so report usage and, when space runs low,
+          # start this job's target dir over.
+          df -h /mnt/cache
+          du -sh /mnt/cache/* 2>/dev/null || true
+          avail_kb=$(df -Pk /mnt/cache | awk 'NR==2 {print $4}')
+          if [ "$avail_kb" -lt $((5 * 1024 * 1024)) ]; then
+            echo "::warning::cache disk has less than 5 GiB free; clearing $CARGO_TARGET_DIR"
+            rm -rf "$CARGO_TARGET_DIR" && mkdir -p "$CARGO_TARGET_DIR"
+          fi
 
       - name: Install Python
         uses: actions/setup-python@v5
@@ -117,9 +155,10 @@ jobs:
       - name: Build barca and install test extras
         run: |
           pip install maturin
-          rm -rf "$CARGO_TARGET_DIR/wheels"
-          maturin build --release
-          WHEEL=$(ls "$CARGO_TARGET_DIR"/wheels/*.whl)
+          # Per-run wheel dir: see the test job.
+          WHEELS=$(mktemp -d)
+          maturin build --release --out "$WHEELS"
+          WHEEL=$(ls "$WHEELS"/*.whl)
           pip install "${WHEEL}[test]"
 
       - name: Wait for emulators
@@ -128,7 +167,7 @@ jobs:
           for i in $(seq 1 60); do curl -sf http://localhost:9200/storage/v1/b >/dev/null && break; sleep 1; done
           for i in $(seq 1 60); do curl -s http://localhost:9210/devstoreaccount1 >/dev/null && break; sleep 1; done
 
-      - name: Run full Python suite (incl. backend conformance)
+      - name: Run full Python suite (incl. backend conformance and transfer fault tests)
         env:
           BARCA_TEST_S3_ENDPOINT: http://localhost:9100
           BARCA_TEST_GCS_ENDPOINT: http://localhost:9200

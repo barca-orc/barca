@@ -156,6 +156,12 @@ pub struct Coordinator {
     next_group_id: u64,
 }
 
+impl Default for Coordinator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Coordinator {
     // ─── Construction ──────────────────────────────────────────────────────
 
@@ -588,10 +594,20 @@ impl Coordinator {
                             continue;
                         }
                         let aligned_id = pk.display_id(upstream_id);
-                        if let Some(pi) = provided
-                            .get(&aligned_id)
-                            .or_else(|| provided.get(upstream_id))
-                        {
+                        // The upstream's own id is the fallback for an unpartitioned upstream
+                        // only. When this phase produces the aligned key, `provided` may still
+                        // hold the upstream's base id as a list of its *cached* keys (the
+                        // collect() fallback in `build_provided_inputs`); taking it would hand
+                        // this key a list instead of its own key's output (#189: a new upstream
+                        // key, run in the same phase as its consumer key).
+                        let in_phase = node_to_item.contains_key(&aligned_id);
+                        if let Some(pi) = provided.get(&aligned_id).or_else(|| {
+                            if in_phase {
+                                None
+                            } else {
+                                provided.get(upstream_id)
+                            }
+                        }) {
                             match pi {
                                 crate::dispatch::ProvidedInput::Single(oref) => {
                                     spec.dag_inputs
@@ -603,9 +619,19 @@ impl Coordinator {
                                 }
                             }
                         }
-                        // Update upstream_inputs to point to partition-aligned IDs
-                        // for in-phase resolution at dispatch time.
-                        spec.upstream_inputs.insert(param_name.clone(), aligned_id);
+                        // Point upstream_inputs at the id this phase (or a prior one)
+                        // actually produces, for in-phase resolution at dispatch time: the
+                        // partition-aligned id for a partitioned upstream, the upstream's own
+                        // id for an unpartitioned one (#170: always using the aligned id left
+                        // an unpartitioned input unresolved, so the call lacked it).
+                        let produced =
+                            |id: &str| node_to_item.contains_key(id) || provided.contains_key(id);
+                        let resolved = if !produced(&aligned_id) && produced(upstream_id) {
+                            upstream_id.clone()
+                        } else {
+                            aligned_id
+                        };
+                        spec.upstream_inputs.insert(param_name.clone(), resolved);
                     }
 
                     self.finalize_item(item_id, partition_step_id, spec, deps);
@@ -1364,6 +1390,83 @@ mod tests {
         }
     }
 
+    /// Regression test for #170: a partitioned step whose upstream is UNpartitioned and loaded
+    /// in the same phase must resolve that input to the upstream's own id. `load_phase` used to
+    /// point every partitioned step's `upstream_inputs` at the partition-aligned id
+    /// (`f:multiplier[k=a]`), which no item ever produces, so the worker was called without the
+    /// argument (`TypeError: leaf() missing 1 required positional argument: 'm'`).
+    #[test]
+    fn load_phase_resolves_unpartitioned_upstream_of_partitioned_step() {
+        use crate::planner::{Phase, PhaseReason, StreamStep, WorkerStream};
+        use crate::{PartitionKey, StepId};
+
+        let pk = |k: &str| PartitionKey::from(HashMap::from([("k".to_string(), k.to_string())]));
+        let mk = |name: &str, inputs: HashMap<String, String>, pks: Vec<PartitionKey>| StreamStep {
+            step_id: StepId::unpartitioned(name),
+            kind: crate::NodeKind::Asset,
+            function_name: std::sync::Arc::from(name.rsplit(':').next().unwrap()),
+            source_file: std::sync::Arc::from("f"),
+            inputs,
+            pending_partitions: HashMap::new(),
+            serializer: None,
+            sinks: vec![],
+            run_hashes: HashMap::new(),
+            timeout_seconds: 300,
+            retries: 1,
+            retry_backoff_seconds: 0.0,
+            partition_keys: pks,
+            param_types: HashMap::new(),
+            return_type: None,
+        };
+
+        // Unpartitioned producer + partitioned producer + partitioned consumer of both.
+        let consumer_inputs = HashMap::from([
+            ("m".to_string(), "f:multiplier".to_string()),
+            ("f".to_string(), "f:fetch".to_string()),
+        ]);
+        let phase = Phase {
+            reason: PhaseReason::Initial,
+            streams: vec![WorkerStream {
+                stream_id: "w0".to_string(),
+                steps: vec![
+                    mk("f:multiplier", HashMap::new(), vec![]),
+                    mk("f:fetch", HashMap::new(), vec![pk("a"), pk("b")]),
+                    mk("f:leaf", consumer_inputs, vec![pk("a"), pk("b")]),
+                ],
+            }],
+        };
+
+        let mut c = Coordinator::new();
+        assert_eq!(c.load_phase(&phase, &HashMap::new()), 5);
+
+        let id_of = |c: &Coordinator, display: &str| {
+            c.items
+                .values()
+                .find(|it| it.step_id.display() == display)
+                .unwrap_or_else(|| panic!("{display} not loaded"))
+                .id
+        };
+        let multiplier = id_of(&c, "f:multiplier");
+        for k in ["a", "b"] {
+            let leaf = c.item(id_of(&c, &format!("f:leaf[k={k}]")));
+            assert_eq!(
+                leaf.spec.upstream_inputs.get("m").map(String::as_str),
+                Some("f:multiplier"),
+                "leaf[k={k}] must read the unpartitioned multiplier's own artifact"
+            );
+            assert_eq!(
+                leaf.spec.upstream_inputs.get("f").cloned(),
+                Some(format!("f:fetch[k={k}]")),
+                "leaf[k={k}] must read its own partition of fetch"
+            );
+            assert!(
+                leaf.deps
+                    .iter()
+                    .any(|d| d.upstream == multiplier && d.kind == DepKind::Data)
+            );
+        }
+    }
+
     /// Regression test for #93: a `collect()` consumer's cross-phase fan-in
     /// input must resolve to *every* partition artifact, not just the first
     /// (`ProvidedInput::Collected(orefs).first()` silently truncated the list
@@ -1410,12 +1513,14 @@ mod tests {
             format: "json".to_string(),
             size_bytes: 10,
             elapsed_seconds: None,
+            content_hash: None,
         };
         let oref_b = OutputRef {
             path: "f--source_key_b.json".to_string(),
             format: "json".to_string(),
             size_bytes: 12,
             elapsed_seconds: None,
+            content_hash: None,
         };
         let provided = HashMap::from([(
             "f:source".to_string(),

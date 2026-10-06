@@ -1,0 +1,8 @@
+# barca run broken pipeline.py --json  (stderr, exit 1)
+artifact_dir : string
+code : integer
+error : string
+kind : string
+node : string
+remediation : string
+traceback : string

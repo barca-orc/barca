@@ -1,0 +1,23 @@
+Show execution statistics for an asset
+
+Usage: barca stats [OPTIONS] <TARGET> [FILES]...
+
+Arguments:
+  <TARGET>    Target asset function name
+  [FILES]...  Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`)
+
+Options:
+      --json             Emit JSON on stdout (the default when stdout is not a terminal)
+      --pretty           Emit human-readable output (the default when stdout is a terminal)
+      --fields <FIELDS>  Output JSON with only these keys (comma-separated) on each entry of `recent_runs`. Implies --json. An unknown key is a usage error listing the valid ones [possible values: elapsed_seconds, status, created_at, error_message, attempts]
+      --env <ENV>        Environment name (separates cache/state per environment)
+  -h, --help             Print help
+
+Examples:
+  barca stats total                         # find `total` anywhere in the project
+  barca stats total pipeline.py             # timing percentiles and cache hit rate
+  barca stats total pipeline.py --json      # {id, total_runs, cache_hit_rate, ..., recent_runs}, even in a terminal
+  barca stats total pipeline.py --pretty    # the text report, even when piped
+  barca stats total pipeline.py --fields status,error_message   # JSON; trims recent_runs entries
+
+More: barca docs cache

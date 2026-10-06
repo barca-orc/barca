@@ -39,10 +39,10 @@ measure_benchmark() {
 
     # Run with /usr/bin/time to capture resource usage
     local time_output
-    time_output=$($TIME_CMD "$BARCA" get "$asset_file" --no-cache 2>&1 >/dev/null)
+    time_output=$($TIME_CMD "$BARCA" get "$asset_file" --refresh-all 2>&1 >/dev/null)
 
     local wall_time
-    wall_time=$($BARCA get "$asset_file" --no-cache 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin)['elapsed_seconds'])" 2>/dev/null || echo "0")
+    wall_time=$($BARCA get "$asset_file" --refresh-all 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin)['elapsed_seconds'])" 2>/dev/null || echo "0")
 
     local peak_rss
     peak_rss=$(echo "$time_output" | parse_rss || echo "0")

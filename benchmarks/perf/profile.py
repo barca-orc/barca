@@ -41,7 +41,7 @@ def run_get(asset_file):
     """Measure full execution time."""
     shutil.rmtree(Path(REPO) / ".barca", ignore_errors=True)
     t0 = time.perf_counter()
-    r = subprocess.run([BARCA, "get", asset_file, "--no-cache"], capture_output=True, text=True)
+    r = subprocess.run([BARCA, "get", asset_file, "--refresh-all"], capture_output=True, text=True)
     wall_ms = (time.perf_counter() - t0) * 1000
     try:
         last_json = [line for line in r.stdout.strip().splitlines() if line.startswith("{")][-1]

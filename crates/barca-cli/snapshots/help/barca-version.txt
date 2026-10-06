@@ -1,0 +1,6 @@
+Print version information
+
+Usage: barca version
+
+Options:
+  -h, --help  Print help

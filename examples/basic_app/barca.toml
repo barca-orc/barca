@@ -1,2 +1,4 @@
-[project]
-modules = ["example_project.assets"]
+# barca.toml is optional. Settings live here; see `barca docs cache` and
+# https://barca.sh/reference/config/ for the full list.
+#
+# default_env = "dev"

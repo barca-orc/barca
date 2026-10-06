@@ -1,0 +1,18 @@
+# barca get total pipeline.py --dry-run --json  (stdout, exit 0)
+command : string
+dry_run : boolean
+steps : array
+steps[] : object
+steps[].action : string
+steps[].detail : string
+steps[].env : object  (optional)
+steps[].env.<name> : null|string
+steps[].id : string
+steps[].kind : string
+steps[].reason : string
+steps[].run_hash : string
+summary : object
+summary.cached : integer
+summary.unknown : integer
+summary.will_run : integer
+target : string

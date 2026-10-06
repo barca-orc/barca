@@ -37,15 +37,20 @@ barca run deploy pipeline.py
 
 ### Selective re-runs with `--refresh`
 
-By default, `barca run` uses cached upstream assets when they are fresh. Use `--refresh` to force re-materialize specific assets (or `--refresh-all` for all of them):
+By default, `barca run` uses cached upstream assets when they are fresh. Use `--refresh` to force re-materialize specific assets and everything downstream of them (or `--refresh-all` for all of them):
 
 ```bash
-# Re-train the model, use cached data for everything else.
-barca run deploy --refresh trained_model pipeline.py
+# Re-train the model and rebuild what depends on it; use cached data for everything else.
+barca run deploy pipeline.py --refresh trained_model
 
-# Force-rerun multiple assets.
-barca run deploy --refresh raw_data,trained_model pipeline.py
+# Force-rerun multiple assets (and their downstream).
+barca run deploy pipeline.py --refresh raw_data,trained_model
+
+# Re-run only raw_data; assets built from it stay cached (barca warns).
+barca run deploy pipeline.py --refresh raw_data --no-cascade
 ```
+
+`--refresh` previously did not cascade; `--no-cascade` keeps that behavior.
 
 ## Declaring tasks
 

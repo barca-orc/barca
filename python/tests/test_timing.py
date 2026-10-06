@@ -68,8 +68,8 @@ class TestTimingRecorded:
         """,
         )
         barca.get(f)
-        barca.get(f, no_cache=True)
-        barca.get(f, no_cache=True)
+        barca.get(f, refresh_all=True)
+        barca.get(f, refresh_all=True)
         stats = barca.stats("fast", f)
         assert stats["total_runs"] >= 3
 
@@ -80,7 +80,7 @@ class TestStatsAccuracy:
     def _run_n_times(self, f, target, n):
         """Run the asset n times with no_cache to get n materialization records."""
         for _ in range(n):
-            barca.get(target, f, no_cache=True)
+            barca.get(target, f, refresh_all=True)
 
     def test_fixed_time_stats(self, tmp_path):
         """Multiple runs of a fixed-time asset: mean ≈ median ≈ max."""
@@ -199,7 +199,7 @@ class TestStatsPerformance:
         import time
 
         for _ in range(20):
-            barca.get(f, no_cache=True)
+            barca.get(f, refresh_all=True)
 
         t0 = time.perf_counter()
         stats = barca.stats("perf", f)

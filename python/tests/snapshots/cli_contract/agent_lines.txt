@@ -1,0 +1,10 @@
+# barca --agent stderr lines, normalized (<secs>, <n>/<total>), sorted
+[barca] <n>/<total> steps | done in <secs>s
+[barca] <n>/<total> steps | failed in <secs>s
+[barca] run failed: step 'pipeline.py:broken' failed (exit 1)
+[barca] step:pipeline.py:broken failed: ValueError: contract fixture failure
+[barca] step:pipeline.py:keys completed <secs>s (<n>/<total>)
+[barca] step:pipeline.py:numbers cached
+[barca] step:pipeline.py:per_key[k=a] completed <secs>s (<n>/<total>)
+[barca] step:pipeline.py:per_key[k=b] completed <secs>s (<n>/<total>)
+[barca] step:pipeline.py:total cached env CONTRACT_API_TOKEN=<unset> CONTRACT_REGION=eu

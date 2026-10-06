@@ -36,11 +36,26 @@ Run it:
 uv run barca get pipeline.py
 ```
 
-You'll see a one-line progress summary on stderr, followed by structured JSON on stdout:
+In a terminal you'll see a progress line on stderr, then a short summary and the value:
 
 ```
-[barca] 1/1 steps done in 0.0s
-{"elapsed_seconds":0.296,"final_output":{"message":"Hello from barca!"},"phases":1,"run_id":"b1b72bc4c9e3","steps_executed":1}
+[barca] 1/1 steps | done in 0.0s
+Run b47d261f7ec0 | all assets in 0.206s (1 step, 1 phase)
+
+Value:
+{
+  "message": "Hello from barca!"
+}
+```
+
+Piped or captured by a program (or with `--json`), stdout is one line of structured JSON instead:
+
+```bash
+uv run barca get pipeline.py | cat
+```
+
+```
+{"elapsed_seconds":0.296,"final_output":{"message":"Hello from barca!"},"phases":1,"run_id":"b1b72bc4c9e3","steps":[...],"steps_executed":1}
 ```
 
 The `@asset()` decorator itself does nothing at runtime -- it's an identity function. Your code runs exactly the same with or without barca installed.

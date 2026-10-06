@@ -21,6 +21,7 @@ python/barca/
   __init__.py           ← No-op decorator stubs (identity functions)
   _worker.py            ← Batch worker (invoked by Rust via `python -m barca._worker`)
   _artifacts.py         ← Serialization: json, pickle, parquet format detection + I/O
+  _transfer.py          ← Artifact transfer helper (local dir ↔ remote store, background)
   __main__.py           ← Entry point for `python -m barca` (delegates to `_worker.main()`)
   py.typed              ← PEP 561 marker
 pyproject.toml          ← Maturin build config (binary + Python stubs in one wheel)
@@ -44,6 +45,9 @@ pyproject.toml          ← Maturin build config (binary + Python stubs in one w
    - For `parallel()`: coordinator freezes the caller (SIGSTOP), spawns a temp replacement,
      adds children to the ready queue; on completion kills the temp, resumes the caller (SIGCONT)
    - No DB access — Rust owns all persistence
+   - Artifacts are always local; with a remote store, `python -m barca._transfer` (one per run,
+     driven by `transfer.rs` over its own UDS) uploads them in the background and fetches
+     other machines' cache hits before they are read
 
 3. **Python stubs** (`from barca import asset, ...`):
    - Pure no-ops — decorators return the function unchanged
@@ -95,13 +99,29 @@ command, flag, decorator, output format, or caching behavior ships with all of:
    `crates/barca-cli/src/docs.rs`. New topics go in `TOPICS` and must be linked from
    `overview.md` (or `examples.md`). The files live inside the crate so they ship in the sdist.
 3. **Machine-readable output** — results as JSON on stdout (inspection commands take `--json`),
-   progress and errors on stderr, exit codes 0 ok / 1 runtime failure / 2 usage error.
+   progress and errors on stderr, exit codes 0 ok / 1 a step failed / 2 usage error / 3 barca infra failure / 130 cancelled
+   (see `barca docs contract`).
 4. **Site docs** (`site/src/content/docs/`) and the README CLI table.
+5. **The CLI contract** — `crates/barca-cli/docs/contract.md` (`barca docs contract`) and its
+   snapshots. A change to the surface (a command, flag, environment variable, exit code, JSON
+   output key or type, the stderr error envelope, an `--agent` line) updates, in the same PR, the
+   snapshots (`scripts/update-cli-snapshots.sh`: `--help` in `crates/barca-cli/snapshots/help/`,
+   JSON schemas in `python/tests/snapshots/cli_contract/`, and the generated tables in
+   `contract.md`) and the hand-written parts of `contract.md` (stable vs experimental; a new
+   experimental flag or command also goes in `EXPERIMENTAL` in `crates/barca-cli/src/contract.rs`).
+   Review the snapshot diff: it is the contract change.
+   - **Pre-1.0**: breaking changes are allowed, with a minor bump and a "Breaking" line in the
+     release notes naming the change and its replacement.
+   - **From 1.0**: changes are additive only (new commands, flags, keys, enum values). A
+     deprecated flag keeps working for at least one minor release and prints a warning on stderr
+     naming its replacement.
 
 CI guards these: `cargo test -p barca` parses every `barca ...` line in `--help` examples and
 manual topics against the real CLI, and requires help text on every flag and examples on every
 documented command; `python/tests/test_docs_examples.py` executes the manual's example pipelines
-and asserts what the text claims. Document behavior you have run, and state known limitations
+and asserts what the text claims. `cargo test -p barca` (`crates/barca-cli/src/contract.rs`) and
+`python/tests/test_cli_contract.py` fail on any surface change that the snapshots and
+`contract.md` do not reflect. Document behavior you have run, and state known limitations
 plainly (e.g. partitioned steps are not cache-checked yet) rather than describing intended
 behavior.
 
@@ -113,9 +133,11 @@ released. Merging to main never publishes anything; only pushing a `v*` tag does
 - **Always use worktrees** for local development work
 - **Topic branches**: one per issue, branched off main, PRed straight into main
 - **Release**: when ready to ship, cut a short-lived release branch
-  `v<major>.<minor>.<patch>` off main (no descriptive suffix) containing only the
-  version bump; PR it into main, then tag the merge commit — the tag triggers the
-  release workflow (wheels, GitHub Release, PyPI)
+  `release/v<major>.<minor>.<patch>` off main containing only the version bump; PR it
+  into main and merge with `--delete-branch`, then tag the merge commit
+  `v<major>.<minor>.<patch>` — the tag triggers the release workflow (wheels, GitHub
+  Release, PyPI). The `release/` prefix keeps branch and tag names from colliding, so
+  `git push origin v<x.y.z>` and `git log v<x.y.z>..` are unambiguous
 
 ## Commit messages
 

@@ -59,4 +59,4 @@ barca get deploy pipeline.py
 # Error: 'deploy' is a task -- use `barca run` instead
 ```
 
-`barca get` targets assets; naming a task explicitly is rejected with a clear error pointing you to `barca run`. Note that running `barca get pipeline.py` on a whole file (no target) still executes every node in the file, tasks included -- it does not silently skip them. Scope to `barca get <asset> pipeline.py` if you want to materialize just the asset without side effects firing.
+`barca get` targets assets; naming a task explicitly is rejected with a clear error pointing you to `barca run`. Running `barca get pipeline.py` on a whole file (no target) materializes every asset and sensor and skips tasks, so no side effect fires; stderr names the skipped tasks and the `barca run` command. (Previously a bare `barca get` ran tasks too.) A task runs only when you name it with `barca run`.

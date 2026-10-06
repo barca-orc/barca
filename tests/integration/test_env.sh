@@ -33,8 +33,8 @@ $BARCA get pipeline.py --env dev --agent > out-dev2.json 2> /dev/null
 grep -q '"steps_executed":0' out-dev2.json || { echo "FAIL: dev cache miss"; exit 1; }
 
 echo "── history is scoped per env"
-DEV_RUNS=$($BARCA history --env dev | grep -c "get" || true)
-DEFAULT_RUNS=$($BARCA history | grep -c "get" || true)
+DEV_RUNS=$($BARCA history --env dev --pretty | grep -c "get" || true)
+DEFAULT_RUNS=$($BARCA history --pretty | grep -c "get" || true)
 [ "$DEV_RUNS" = "2" ] || { echo "FAIL: dev history should have 2 runs, got $DEV_RUNS"; exit 1; }
 [ "$DEFAULT_RUNS" = "1" ] || { echo "FAIL: default history should have 1 run, got $DEFAULT_RUNS"; exit 1; }
 

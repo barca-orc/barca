@@ -12,7 +12,7 @@ Showcases:
 - ``@task(inputs=...)`` for a task that consumes an upstream asset
 - ``@task(inputs={"_dep": dep})`` for ordering-only task chains (no data passed)
 - ``@asset(partitions=...)`` with static partitions
-- Partition inheritance — downstream assets auto-inherit upstream partitions
+- ``partitions_from(upstream)`` — a downstream asset reuses an upstream's partition keys
 - ``collect(asset)`` for aggregating all partitions of an upstream
 """
 
@@ -25,6 +25,7 @@ from barca import (
     asset,
     collect,
     partitions,
+    partitions_from,
     sensor,
     sink,
     task,
@@ -53,7 +54,8 @@ def greeting() -> str:
 
 @asset(freshness=Manual())
 def manual_only() -> dict:
-    """Manual assets never auto-materialise — only via `barca assets refresh`."""
+    """Never fired by the scheduler. Recompute it with
+    `barca get manual_only example_project/assets.py --refresh manual_only`."""
     return {"manual": True, "ran_at": time.time()}
 
 
@@ -85,14 +87,14 @@ def uppercased(fruit: str) -> str:
 
 @asset()
 @sink("tmp/greeting.json", serializer="json")
-@sink("tmp/greeting.txt", serializer="text")
+@sink("tmp/greeting.pkl", serializer="pickle")
 def greeting_for_world() -> dict:
     """Every materialisation writes to both sinks via fsspec."""
     return {"hi": "world", "lang": "en"}
 
 
 # ---------------------------------------------------------------------------
-# Workflow 4: Partitioned assets + inheritance
+# Workflow 4: Partitioned assets, partitions_from and collect
 # ---------------------------------------------------------------------------
 
 
@@ -101,18 +103,19 @@ def fetch_prices(ticker: str) -> dict:
     return {"ticker": ticker, "price": len(ticker) * 100}
 
 
-# This downstream auto-inherits fetch_prices' 3 partitions — runs 1:1.
-@asset(inputs={"price": fetch_prices})
-def normalised_price(price: dict) -> dict:
-    return {"ticker": price["ticker"], "normalized": price["price"] / 100.0}
+# This downstream reuses fetch_prices' 3 partition keys — runs 1:1, and each key
+# receives that key's fetch_prices output as the parameter named after it.
+@asset(partitions={"ticker": partitions_from(fetch_prices)})
+def normalised_price(ticker: str, fetch_prices: dict) -> dict:
+    return {"ticker": ticker, "normalized": fetch_prices["price"] / 100.0}
 
 
 # This downstream uses collect() to consume ALL partitions at once.
 @asset(inputs={"prices": collect(fetch_prices)})
-def price_summary(prices: dict) -> dict:
-    """``prices`` is ``dict[tuple, T]`` — each partition's output keyed by tuple."""
-    total = sum(v["price"] for v in prices.values())
-    return {"tickers": sorted(k[0] for k in prices.keys()), "total": total}
+def price_summary(prices: list[dict]) -> dict:
+    """``prices`` is a list with one entry per partition of ``fetch_prices``."""
+    total = sum(p["price"] for p in prices)
+    return {"tickers": sorted(p["ticker"] for p in prices), "total": total}
 
 
 # ---------------------------------------------------------------------------
@@ -138,9 +141,11 @@ def heartbeat_sensor():
 
 @asset(inputs={"tick": heartbeat_sensor}, freshness=Always())
 def last_heartbeat_seen(tick):
-    """Sensor inputs are the full ``(update_detected, output)`` tuple."""
-    update_detected, payload = tick
-    return {"saw_update": update_detected, "last_ts": payload.get("ts")}
+    """A consumer receives the sensor's output (the second element of its tuple).
+
+    The output is part of this asset's cache key, so a new ``ts`` re-runs it.
+    """
+    return {"healthy": tick["healthy"], "last_ts": tick["ts"]}
 
 
 # A task that consumes an upstream *asset*. Tasks always re-run and are never

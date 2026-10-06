@@ -5,7 +5,7 @@
 //! workers are terminated and the run is marked cancelled/failed.
 
 use crate::error::ApiError;
-use crate::state::{AppState, NodeState, RunChannel, RunState, RunStatus, now_ts};
+use crate::state::{AppState, Durations, NodeState, RunChannel, RunState, RunStatus, now_ts};
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::response::Sse;
@@ -84,29 +84,139 @@ pub async fn state(State(state): State<AppState>) -> Result<Json<Vec<NodeState>>
     ))
 }
 
-/// Every node's [`NodeState`], in topological order: the asset state from the
-/// read-only dry run, plus the next fire time of its cron schedule (local
-/// time). Shared by `GET /state` and `barca status` so the two can't diverge.
+/// Every node's [`NodeState`], in topological order: its `barca status` entry
+/// (the same cache decision `--dry-run` makes), typical durations, and the next
+/// fire time of its cron schedule (local time).
+///
+/// Read-only by construction: status and history are read from a private
+/// snapshot of the metadata DB, so this never opens, locks for longer than the
+/// copy, creates or writes the real one. Artifact shapes are skipped (they spawn
+/// a reader process per call, too slow for a polled endpoint).
 pub async fn node_states(
     cfg: &barca_core::config::ResolvedConfig,
     files: &[String],
-    python: &std::path::PathBuf,
+    python: &std::path::Path,
 ) -> Result<Vec<NodeState>, BarcaError> {
-    let (states, schedule) = tokio::join!(
-        barca_core::asset_state::asset_states(cfg, files, python),
-        crate::scheduler::describe_schedule(files, python),
+    let snapshot = db::DbSnapshot::take(&cfg.db_path).await?;
+    let scratch = tempfile::tempdir()
+        .map_err(|e| BarcaError::Db(format!("failed to create scratch dir: {e}")))?;
+    let mut snap_cfg = cfg.clone();
+    // No DB yet: point at a path that doesn't exist — "nothing cached", and
+    // nothing is created.
+    snap_cfg.db_path = match &snapshot {
+        Some(s) => s.path().to_string(),
+        None => scratch.path().join("metadata.db").display().to_string(),
+    };
+
+    let python_buf = python.to_path_buf();
+    let (status, schedule) = tokio::join!(
+        barca_core::status::status(&snap_cfg, &[], files, python, 0, false),
+        crate::scheduler::describe_schedule(files, &python_buf),
     );
+    let history = match &snapshot {
+        Some(s) => db::materialization_history(s.path()).await?,
+        None => Vec::new(),
+    };
+    let durations = durations_by_node(&history);
     let next_run: std::collections::HashMap<String, i64> = schedule
         .into_iter()
         .filter_map(|s| s.next_fire.map(|t| (s.id, t)))
         .collect();
-    Ok(states?
+
+    Ok(status?
+        .nodes
         .into_iter()
-        .map(|s| NodeState {
-            next_run: next_run.get(&s.id).copied(),
-            state: s,
+        .map(|n| NodeState {
+            durations: durations.get(&n.id).cloned(),
+            next_run: next_run.get(&n.id).copied(),
+            status: n,
         })
         .collect())
+}
+
+/// Successful materializations considered for typical durations.
+const DURATION_WINDOW: usize = 20;
+
+/// Median and p95 over each node's last [`DURATION_WINDOW`] successful runs.
+/// Partition rows fold into their base node.
+fn durations_by_node(
+    rows: &[db::MaterializationRow],
+) -> std::collections::HashMap<String, Durations> {
+    let mut elapsed: std::collections::HashMap<String, Vec<f64>> = Default::default();
+    for r in rows {
+        if r.status != "success" {
+            continue;
+        }
+        if let Some(e) = r.elapsed_seconds {
+            let base = barca_core::StepId::parse(&r.node_id).base_id().to_string();
+            elapsed.entry(base).or_default().push(e);
+        }
+    }
+    elapsed
+        .into_iter()
+        .filter_map(|(id, all)| {
+            let mut recent = all[all.len().saturating_sub(DURATION_WINDOW)..].to_vec();
+            if recent.is_empty() {
+                return None;
+            }
+            recent.sort_by(f64::total_cmp);
+            Some((
+                id,
+                Durations {
+                    median_seconds: percentile(&recent, 0.5),
+                    p95_seconds: percentile(&recent, 0.95),
+                    samples: recent.len(),
+                },
+            ))
+        })
+        .collect()
+}
+
+/// Nearest-rank percentile over sorted values.
+fn percentile(sorted: &[f64], q: f64) -> f64 {
+    let rank = (q * sorted.len() as f64).ceil() as usize;
+    sorted[rank.clamp(1, sorted.len()) - 1]
+}
+
+#[cfg(test)]
+mod duration_tests {
+    use super::*;
+
+    fn row(node_id: &str, status: &str, e: f64) -> db::MaterializationRow {
+        db::MaterializationRow {
+            node_id: node_id.into(),
+            status: status.into(),
+            created_at: String::new(),
+            elapsed_seconds: Some(e),
+            error_message: None,
+        }
+    }
+
+    #[test]
+    fn percentiles_use_nearest_rank() {
+        let v = [1.0, 2.0, 3.0, 4.0, 100.0];
+        assert_eq!(percentile(&v, 0.5), 3.0);
+        assert_eq!(percentile(&v, 0.95), 100.0);
+        assert_eq!(percentile(&[7.0], 0.95), 7.0);
+    }
+
+    #[test]
+    fn durations_use_recent_successes_and_fold_partitions() {
+        let mut rows: Vec<_> = (0..5).map(|_| row("p.py:a", "success", 1.0)).collect();
+        rows.extend((0..20).map(|_| row("p.py:a", "success", 10.0)));
+        rows.push(row("p.py:a", "failed", 999.0));
+        rows.push(row("p.py:f[k=x]", "success", 2.0));
+        rows.push(row("p.py:f[k=y]", "success", 4.0));
+        let d = durations_by_node(&rows);
+        let a = &d["p.py:a"];
+        assert_eq!(
+            (a.samples, a.median_seconds),
+            (20, 10.0),
+            "window + failures ignored"
+        );
+        assert_eq!(d["p.py:f"].samples, 2, "partitions fold into the base node");
+        assert!(!d.contains_key("p.py:missing"));
+    }
 }
 
 /// `GET /plan` — execution plan for the server's files (cache-aware).
@@ -182,7 +292,8 @@ pub async fn asset_detail(
     })))
 }
 
-/// `POST /run` — trigger a full run; returns a polling handle immediately.
+/// `POST /run` — get every asset and sensor (`barca get <files>` with no target; tasks are
+/// skipped); returns a polling handle immediately.
 pub async fn run(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
     refuse_if_read_only(&state)?;
     let handle = start_run(state, None);
@@ -343,8 +454,8 @@ pub async fn logs(
 enum RunKind {
     /// `commands::get` with an optional target (assets).
     Get(Option<String>),
-    /// `commands::run` for a task target.
-    Task(String),
+    /// `commands::run` for a task target, with how its upstream assets are treated.
+    Task(String, commands::CachePolicy),
 }
 
 /// Insert a `Pending` run, spawn the background execution task, and return the
@@ -356,7 +467,20 @@ pub(crate) fn start_run(state: AppState, target: Option<String>) -> String {
 /// Insert a `Pending` run for a task, spawn the background execution via
 /// `commands::run`, and return the server-side handle.
 pub(crate) fn start_run_task(state: AppState, target: String) -> String {
-    spawn_run(state, RunKind::Task(target))
+    spawn_run(
+        state,
+        RunKind::Task(target, commands::CachePolicy::RefreshAll),
+    )
+}
+
+/// A cron tick for a scheduled task: the task runs, as a task always does, and each upstream
+/// asset is recomputed only if something on its input side changed (what `barca run <task>`
+/// does). A scheduled asset already goes through the cache-aware [`start_run`].
+pub(crate) fn start_scheduled_task(state: AppState, target: String) -> String {
+    spawn_run(
+        state,
+        RunKind::Task(target, commands::CachePolicy::CacheAware),
+    )
 }
 
 fn spawn_run(state: AppState, kind: RunKind) -> String {
@@ -430,20 +554,20 @@ fn spawn_run(state: AppState, kind: RunKind) -> String {
                             target.as_deref(),
                             &files,
                             &python,
-                            false,
+                            commands::CachePolicy::CacheAware,
                             true,
                             cancel.clone(),
                             Some(event_tx),
                         )
                         .await
                     }
-                    RunKind::Task(target) => {
+                    RunKind::Task(target, policy) => {
                         commands::run_streaming(
                             &cfg,
                             target,
                             &files,
                             &python,
-                            commands::CachePolicy::RefreshAll,
+                            policy.clone(),
                             true,
                             cancel.clone(),
                             Some(event_tx),
@@ -516,7 +640,7 @@ pub async fn evict_finished_runs(state: AppState, interval: Duration, max_age: D
             let keep = match run.status {
                 RunStatus::Complete | RunStatus::Failed | RunStatus::Cancelled => {
                     // Keep if it finished recently (or hasn't finished yet somehow).
-                    run.finished_at.map_or(true, |t| t > cutoff)
+                    run.finished_at.is_none_or(|t| t > cutoff)
                 }
                 _ => true,
             };

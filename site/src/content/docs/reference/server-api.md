@@ -19,7 +19,6 @@ barca serve pipeline.py --port 8400       # custom port
 barca serve pipeline.py --watch           # dev mode: re-parse DAG on file change
 barca serve pipeline.py --no-schedule     # disable the cron scheduler
 barca serve pipeline.py --timezone utc    # evaluate cron in UTC (default: local)
-barca serve pipeline.py --read-only       # inspect only: no runs, no scheduler, DB never written
 barca serve a.py b.py                      # multiple source files
 ```
 
@@ -36,19 +35,16 @@ All responses are JSON.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET`  | `/health` | Liveness, version, and whether the server is read-only. |
-| `GET`  | `/state` | Every node: cache state, latest attempt, typical durations, next run. |
+| `GET`  | `/health` | Liveness + version. |
 | `GET`  | `/assets` | List every node with kind, freshness, and upstream inputs. |
 | `GET`  | `/assets/{name}` | One asset's summary joined with timing/cache stats. |
 | `GET`  | `/plan` | Execution plan (phases and streams) as JSON. |
-| `POST` | `/run` | Trigger a full run. Returns a `run_id` immediately. |
+| `POST` | `/run` | Get every asset and sensor, like `barca get <files>` with no target; tasks are skipped (use `/run/{target}`). Returns a `run_id` immediately. |
 | `POST` | `/run/{target}` | Trigger a task run. Returns a `run_id`. |
 | `POST` | `/get/{target}` | Trigger a run scoped to one target asset. Returns a `run_id`. |
 | `DELETE` | `/run/{run_id}` | Cancel an in-flight run (workers terminated, status → `cancelled`). |
 | `GET`  | `/status/{run_id}` | Poll the status and result of a run. |
 | `GET`  | `/schedule` | List scheduled jobs with next fire time and last run status. |
-| `GET`  | `/events/{run_id}` | Server-Sent Events: a run's live log lines and step/run lifecycle. |
-| `GET`  | `/logs/{run_id}` | A run's captured stdout lines, persisted after it finishes. |
 
 ### Async runs
 
@@ -109,49 +105,8 @@ GET /health
 ```
 
 ```json
-{ "status": "ok", "version": "0.9.0", "read_only": false }
+{ "status": "ok", "version": "0.15.0" }
 ```
-
-### State
-
-```
-GET /state             → [NodeState, ...]   (topological order)
-```
-
-Each `NodeState` is `{ id, kind, freshness, cache, last, durations, next_run }`, the same objects
-`barca status --json` prints. `cache.state` is one of:
-
-- `fresh`: the cached result matches the current code and inputs; `get` reuses it.
-- `stale` with `cause: code`: it materialized before, every upstream is fresh, so its own code
-  (or code it calls) changed. `cause: upstream`: something upstream recomputes first.
-- `missing`: never materialized successfully.
-- `partial`: some partition keys are cached (`cached` of `total`).
-- `always_runs`: tasks and sensors are never cached.
-- `unknown`: a dynamic partition (`partitions_from`) whose source has not run, so its keys, and
-  everything downstream of it, cannot be known yet.
-
-`last` is the latest attempt (`{ status, created_at, elapsed_seconds, error_message }`) or `null`;
-`durations` is `{ median_seconds, p95_seconds, samples }` over the last 20 successful runs, or
-`null`; `next_run` is the next cron fire time (unix seconds) for scheduled nodes. The cache check
-reads a private copy of the metadata DB, so this endpoint never writes it.
-
-### Live events and logs
-
-```
-GET /events/{run_id}   → text/event-stream of RunEvent JSON
-GET /logs/{run_id}     → { "logs": [{ node_id, seq, line }, ...] }
-```
-
-Events are `run_started`, `log` (`{ node_id, line }`, one per line a step prints), `step_finished`
-(`{ node_id, ok, elapsed_seconds?, error? }`) and `run_finished` (`{ run_id, ok }`). A client that
-connects after the run started first receives the events it missed. `/logs` accepts either the
-`run_id` returned by `POST /run` or the run id stored in run history.
-
-### Read-only mode
-
-With `--read-only`, `POST /run`, `POST /run/{target}`, `POST /get/{target}` and
-`DELETE /run/{run_id}` return `403`, the scheduler does not start, and `/state`, `/assets/{name}`
-and `/logs` read a private copy of the metadata DB.
 
 ### Assets
 
@@ -167,7 +122,7 @@ and cache hit rate.
 ### Plan
 
 ```
-GET /plan              → { total_steps, phases: [{ reason, streams: [{ stream_id, steps }] }] }
+GET /plan              → { total_steps, phases: [{ reason: {type, node_id?}, streams: [{ stream_id, steps }] }] }
 ```
 
 ## Scheduling
@@ -180,14 +135,15 @@ At startup the server enumerates every node whose freshness is `Schedule(cron)`,
 each cron expression (standard 5-field, or 6-field with a leading seconds field for
 sub-minute schedules), and logs the schedule (invalid or empty cron strings are logged and
 skipped, not fatal). A background task then wakes at each second boundary and, for every
-job whose cron matches the current second, triggers a run through the same path as
+job whose cron matches the current second, triggers a run through the same run pool as
 `POST /run` / `POST /run/{target}`:
 
-- **Assets and sensors** are materialized via the `get` path.
-- **Tasks** are executed via the `run` path.
+- **Assets and sensors** are materialized via the `get` path, cache-aware.
+- **Tasks** are executed via the `run` path. A tick reuses cached upstream assets, as
+  `barca run <task>` does; `POST /run/{task}` recomputes every upstream asset.
 
 Each scheduled run gets a normal `run_id`, is visible via `GET /status/{run_id}`, and is
-persisted to `.barca/metadata.db` (`barca history`) — identical to a manually triggered run.
+persisted to `.barca/metadata.db` (`barca history`), like a manually triggered run.
 Inspect the live schedule with `GET /schedule` or, statically, with `barca list <files>`
 (scheduled definitions show their next fire time).
 
@@ -249,7 +205,7 @@ for job in c.schedules():         # GET /schedule
 `Client` methods map to the endpoints above: `health()`, `assets()`, `asset(name)`,
 `plan()`, `schedules()`, `status(run_id)`, `cancel(run_id)` (also available as
 `Run.cancel()`), plus the two trigger verbs that mirror the CLI —
-`get(target=None)` (`barca get [TARGET]`; omit the target for a full-DAG run) and
+`get(target=None)` (`barca get [TARGET]`; omit the target to get every asset and sensor, never tasks) and
 `run(target)` (`barca run TARGET`). The trigger methods return a `Run` whose `.wait()` blocks
 until the run reaches a terminal state. This complements `barca.api` (`barca.get`/`run`/…),
 which shells out to the binary for one-shot commands rather than talking to a server.
@@ -257,13 +213,13 @@ which shells out to the binary for one-shot commands rather than talking to a se
 ## Errors
 
 Errors return a JSON body `{ "error": "..." }` with an appropriate status code: `404` for an
-unknown asset or run, `400` for parse/DAG errors, `403` for a run or cancel requested of a
-`--read-only` server, `409` for conflicts (an ambiguous `{name}` match
+unknown asset or run, `400` for parse/DAG errors, `409` for conflicts (an ambiguous `{name}` match
 in `GET /assets/{name}`, or cancelling a run that already finished), and `500` for execution or
 database failures.
 
 ## Not in v1
 
-No authentication, no distributed execution, and no persistence of the in-memory run queue
-across restarts. The web UI (in development, `ui/` in the repository) is a separate package that
-consumes this API.
+No authentication, no WebSocket/SSE streaming (poll `/status`), no web UI, no distributed
+execution, and no persistence of the in-memory run queue across restarts. A future UI is a
+separate package that consumes this API; it could later be served from the same server via a
+static-file route.

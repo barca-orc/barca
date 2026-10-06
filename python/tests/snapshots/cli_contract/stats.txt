@@ -1,0 +1,15 @@
+# barca stats total pipeline.py --json  (stdout, exit 0)
+avg_elapsed_seconds : number
+cache_hit_rate : number
+id : string
+max_elapsed_seconds : number
+median_elapsed_seconds : number
+p95_elapsed_seconds : number
+recent_runs : array
+recent_runs[] : object
+recent_runs[].attempts : integer
+recent_runs[].created_at : string
+recent_runs[].elapsed_seconds : number
+recent_runs[].error_message : null
+recent_runs[].status : string
+total_runs : integer

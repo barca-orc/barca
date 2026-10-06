@@ -74,7 +74,7 @@ def run_barca():
     os.environ.pop("BARCA_HOME", None)
 
     r = subprocess.run(
-        ["barca", "get", "step_9", f, "--no-cache", "-o", "json"],
+        ["barca", "get", "step_9", f, "--refresh-all", "-o", "json"],
         capture_output=True,
         text=True,
         cwd="/tmp",

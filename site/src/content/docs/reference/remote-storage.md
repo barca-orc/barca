@@ -1,51 +1,159 @@
 ---
 title: Remote Storage
-description: Store artifacts and shared state in S3, GCS, Azure ADLS Gen2, or Cloudflare R2.
+description: Share one cache across machines with S3, GCS, Azure or Cloudflare R2, configured with environment variables.
 ---
 
-Barca can store artifacts — the serialized outputs of every asset — in a
-remote object store instead of the local `.barca/artifacts/` directory, and
-`@sink` destinations can point at remote URIs directly. Amazon S3, Google
-Cloud Storage, and Azure ADLS Gen2 are all first-class; Cloudflare R2 rides
-on the S3 backend (it speaks the S3 API).
-
-## Install the backend
-
-Remote backends are optional extras — the core install stays dependency-free:
-
-| Extra | Backend | URI schemes |
-|---|---|---|
-| `barca[s3]` | Amazon S3 (s3fs) | `s3://`, `s3a://` |
-| `barca[r2]` | Cloudflare R2 (s3fs) — S3-compatible | `s3://` + R2 endpoint |
-| `barca[gcs]` | Google Cloud Storage (gcsfs + google-cloud-storage) | `gs://`, `gcs://` |
-| `barca[azure]` | Azure ADLS Gen2 / Blob (adlfs) | `abfs://`, `abfss://` |
-| `barca[remote]` | all of the above | |
+Point barca at a bucket and every machine that uses the same location shares results and run
+history: a result computed on one machine is a cache hit on the others. Configuration is one
+variable plus the credentials your cloud's tools already use. No `barca.toml` is needed.
 
 ```bash
-uv add 'barca[s3]'
+pip install "barca[s3]"                      # or barca[gcs], barca[azure], barca[remote] (all)
+export BARCA_REMOTE_URI=s3://my-bucket/barca/my-project
+barca get total                              # results go to the bucket; history is shared
 ```
 
-Every backend is held to the **same shared-state contract** — conditional
-create, cross-machine cache hit, concurrent-writer conflict → replay — by a
-backend conformance suite that runs on every PR against local emulators
-(MinIO for S3/R2, fake-gcs-server for GCS, Azurite for Azure). See
-[Releases](/contributing/releases/) for the guarantees each backend makes.
+## Each cloud
 
-## Remote mode: shared state + artifacts
+Amazon S3, and S3-compatible stores (Cloudflare R2, MinIO):
 
-Point `[remote].uri` in `barca.toml` (or `BARCA_REMOTE_URI`) at an object
-store prefix and barca shares **both** artifacts and materialization state
-across machines:
+```bash
+export BARCA_REMOTE_URI=s3://my-bucket/barca/my-project
+export AWS_ACCESS_KEY_ID=...                 # or AWS_PROFILE, or the machine's instance role
+export AWS_SECRET_ACCESS_KEY=...
+export FSSPEC_S3_ENDPOINT_URL=https://<account-id>.r2.cloudflarestorage.com   # R2/MinIO only
+```
+
+Google Cloud Storage:
+
+```bash
+export BARCA_REMOTE_URI=gs://my-bucket/barca/my-project
+export GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json   # or: gcloud auth application-default login
+```
+
+To give barca its own key instead of the machine's default credentials, use
+`FSSPEC_GCS_TOKEN=/path/to/key.json` (and `FSSPEC_GCS_PROJECT=my-project` if the key does not
+name one). Results and shared history always use the same credentials.
+
+Azure Blob Storage / ADLS Gen2:
+
+```bash
+export BARCA_REMOTE_URI=abfs://my-container/barca/my-project
+export AZURE_STORAGE_CONNECTION_STRING="DefaultEndpointsProtocol=https;AccountName=myaccount;AccountKey=...;EndpointSuffix=core.windows.net"
+```
+
+Instead of a connection string: `AZURE_STORAGE_ACCOUNT_NAME` with `AZURE_STORAGE_ACCOUNT_KEY` or
+`AZURE_STORAGE_SAS_TOKEN`; or `AZURE_STORAGE_ACCOUNT_NAME` alone, which signs in with
+`DefaultAzureCredential` (`az login`, a managed identity, or `AZURE_CLIENT_ID` /
+`AZURE_CLIENT_SECRET` / `AZURE_TENANT_ID`). `abfss://my-container@myaccount.dfs.core.windows.net/...`
+names the account in the URI instead.
+
+## Any other storage option
+
+Every option of the underlying filesystem (s3fs, gcsfs, adlfs) can be set as an environment
+variable, `FSSPEC_<PROTOCOL>_<OPTION>=<value>`, with protocol `S3`, `GCS` or `ABFS`:
+`FSSPEC_S3_ENDPOINT_URL`, `FSSPEC_GCS_PROJECT`, `FSSPEC_ABFS_ACCOUNT_NAME`. This is fsspec's own
+convention, so other fsspec tools on the machine read the same settings.
+
+## Check that it works
+
+1. `barca get <asset>`, then `barca status <asset> --json`: each `cache.artifact` starts with
+   your URI.
+2. On a second machine, or a fresh clone with no `.barca/`, run the same `barca get`: it reports
+   `steps_executed: 0`, served from the bucket.
+
+A failure to reach the bucket stops the run before any step: exit 3, naming the location, with
+the cloud's own error (expired login, access denied). A missing extra says which one to install.
+
+A warning that a storage library repeats on every operation (aiohttp's `Could not parse .netrc
+file` under adlfs, when `~/.netrc` is malformed) is printed once per run, then counted:
+`[barca] 79 more: Could not parse .netrc file`. This applies while logging is unconfigured; if
+the project configures logging, every record is printed. See `barca docs agents`, "Repeated
+warnings".
+
+## In barca.toml instead
+
+The same settings can live in the project, so everyone who clones it gets them:
 
 ```toml
-# barca.toml
 [remote]
-uri = "abfss://pipelines@myaccount.dfs.core.windows.net/barca/my-project"
+uri = "s3://my-bucket/barca/my-project"
+
+[remote.storage_options.s3]       # any s3fs option; [...gcs] for gcsfs, [...abfs] for adlfs
+endpoint_url = "https://<account-id>.r2.cloudflarestorage.com"
 ```
 
-- Artifacts are written **content-addressed** to
-  `{uri}/{env}/artifacts/{node}/{run_hash}{ext}` — immutable objects, so a
-  cache hit on one machine is valid on every machine.
+Keep secrets out of it: credentials still come from the environment. Precedence, highest first:
+`BARCA_REMOTE_URI` over `[remote].uri`; `BARCA_STORAGE_OPTIONS` (JSON keyed by protocol) over
+`[remote.storage_options.*]` over `FSSPEC_*` variables. Every key is in the
+[configuration reference](/reference/config/).
+
+## What barca keeps in the bucket
+
+```
+<uri>/<env>/artifacts/<node>/<run_hash>.<ext>   one file per result
+<uri>/<env>/state/metadata.db                   run history, pulled at the start of a run
+```
+
+`<env>` is `default` unless you pass `--env` (`barca docs cache`). Barca reads and writes objects
+and reads their metadata; it never deletes or lists. In practice that is `s3:GetObject`,
+`s3:PutObject` and `s3:ListBucket` on S3, the Storage Object User role on GCS (replacing the
+history object needs delete permission there), and Storage Blob Data Contributor on Azure.
+
+Two machines finishing runs at the same time do not lose history: the second detects the
+conflict, re-reads and merges. Set `BARCA_STATE=off` to keep history on each machine and share
+only results.
+
+`barca get --json` reports a result as it does without a store: json values inline, parquet and
+pickle as a pointer (`{"_barca_artifact": {"path", ...}}`) to the copy in `.barca/artifacts/`.
+A final output another machine produced is downloaded first.
+
+## How steps read inputs from the store
+
+A result produced on this machine is already on disk, and steps read that file. For a cache hit
+recorded by another machine, the input's annotation decides how many bytes move
+(`barca docs types`):
+
+- A parquet input annotated `duckdb.DuckDBPyRelation` or `pl.LazyFrame` is read in place:
+  only the byte ranges the step's query touches are fetched, and nothing is downloaded. A query
+  over one column of eight fetches about that column's share of the object; a selective filter
+  skips row groups. This applies when every step in the phase that reads the result is lazy.
+- Every other input (no annotation, `pd.DataFrame`, `pl.DataFrame`, `pyarrow.Table`, json,
+  pickle) is downloaded once into `.barca/artifacts/` and read from there by this run and
+  later ones.
+
+For a large upstream that a step filters, projects or aggregates, annotate the input as lazy.
+DuckDB reads barca's artifacts through a `barca<protocol>://` filesystem registered on its
+connection, so `s3://`, `abfss://` and `gs://` URLs in your own SQL keep using DuckDB's own
+extensions and credentials.
+
+## Looking at results in the bucket
+
+Nothing has to be downloaded by hand or re-run to inspect a remote result:
+
+```bash
+barca status total --json --sample 2     # rows, columns and sample rows, read from the bucket
+barca sql "select * from total"          # downloads `total` into .barca/sql-cache/ and queries it
+```
+
+`barca status` reads a parquet footer by ranged requests and downloads json or pickle results of
+up to 16 MB; a store it cannot read is a `note` on each shape, not a failed command
+(`barca docs status`). `barca sql` downloads the artifacts of the views a query names and reuses
+the copies while the objects are unchanged (`barca docs sql`).
+
+## Limitations
+
+- `barca serve` does not share history yet; set `BARCA_STATE=off` for it.
+- `barca status` does not describe a remote json or pickle result larger than 16 MB, and
+  `barca sql` downloads a whole artifact before querying it.
+- The local artifact directory has no size cap (see "Local-first artifacts" below).
+
+## How shared history works
+
+- Artifacts are written to `{uri}/{env}/artifacts/{node}/{run_hash}{ext}`,
+  addressed by the hash of the step's code and inputs, so a cache hit on one
+  machine is valid on every machine. A `--refresh`, or two machines computing
+  the same step at once, overwrites the object.
 - The metadata DB (the turso/SQLite file that records materializations and
   run history) lives as a single blob at `{uri}/{env}/state/metadata.db`.
   Each run **pulls** it first — so cache checks see every machine's
@@ -60,23 +168,103 @@ uri = "abfss://pipelines@myaccount.dfs.core.windows.net/barca/my-project"
   local rows are discarded by the next pull and those steps recompute.
 
 The result: a run on VM-B hits artifacts materialized by VM-A with zero
-re-execution. See [Configuration](/reference/config/) for the full schema,
-environment separation (`--env`), and env-var overrides.
+re-execution.
 
-`barca serve` does not support shared state yet — set `state = "off"` for
-served projects.
+Every backend is held to the **same shared-state contract** — conditional
+create, cross-machine cache hit, concurrent-writer conflict → replay — by a
+backend conformance suite that runs on every PR against local emulators
+(MinIO for S3/R2, fake-gcs-server for GCS, Azurite for Azure), and the
+environment-variable setup above runs end to end against the same emulators
+(a second machine must get a cache hit). See
+[Releases](/contributing/releases/) for the guarantees each backend makes.
 
-### Artifacts-only mode (0.4.0 behavior)
+### Local-first artifacts, background transfer
 
-Set `BARCA_ARTIFACT_URI` to a URI prefix and every materialized asset is
-written there instead of `.barca/artifacts/`, while metadata stays local:
+Workers never write to the object store. They write every artifact to the
+local artifact directory (`.barca/artifacts/`, or `.barca/envs/<env>/artifacts/`)
+and read their inputs from there (lazy parquet inputs excepted, below), so a
+step's critical path is local disk. A single helper process per run (`python -m barca._transfer`) moves
+bytes between that directory and the store in the background, using the
+same fsspec backends and credentials as everything else:
 
-```bash
-export BARCA_ARTIFACT_URI=abfss://artifacts@myaccount.dfs.core.windows.net/prod
-barca get pipeline.py
+- **Upload** — the moment a step finishes, its artifact is queued for
+  upload while downstream steps keep running against the local copy.
+  Up to `transfer_concurrency` transfers run at once (default 4).
+- **Fetch** — a cache hit recorded by another machine is downloaded to its
+  local path just before the first step that reads it eagerly runs. Cached
+  intermediates that nothing in the run reads are never downloaded — a fully
+  cached `barca get` fetches only the final output. A parquet result that
+  every reader in a phase takes as `duckdb.DuckDBPyRelation` or `pl.LazyFrame`
+  is not downloaded either: those steps read it in place (see "How steps read
+  inputs from the store" above).
+- **Drain** — before the run is recorded and the state blob pushed, barca
+  waits for every upload. A step whose upload fails gets no success row (it
+  recomputes next run) and the run exits with an error naming it, so the
+  shared metadata never points at an artifact missing from the store.
+
+**Retries and timeouts.** Each transfer is retried up to 3 times with
+exponential backoff (0.5s, 1s, 2s) when the error looks transient — dropped
+connections, timeouts, 5xx, 408 and 429 responses. Errors no retry can fix fail
+on the first attempt: missing objects, permission and authentication errors, and
+any other 4xx response (SDK errors are judged by the HTTP status they carry).
+The cloud SDKs also retry internally — Azure's backs off for up to ~15s on
+dropped connections — so the end-of-run wait can exceed barca's own backoff. An attempt
+that runs longer than `transfer_timeout` seconds (default 600, counted from
+when the attempt starts, not while it waits its turn) is failed as stalled and
+not retried — raise the limit if single artifacts take longer than that to
+move over your link.
+
+A failed upload is recorded as a `failed` row for that step with
+`error_type = 'UploadError'`, no artifact path, the number of attempts made,
+and the store error as `error_message` (`upload to <location> failed: …`);
+the run's status is `failed`. `barca stats <asset>` shows it like any other
+failure.
+
+The local artifact directory doubles as a cache of the store: a second run on
+the same machine reads from it without downloading anything. Nothing is
+evicted automatically — delete `.barca/artifacts/` to reclaim space; anything
+needed later is fetched again.
+
+Remote I/O is reported on stderr, so its cost is visible:
+
+```
+[barca] pulled state (48.0 KB) in 0.03s
+[barca] fetched 1 cached artifact (672.8 KB) in 0.1s
+[barca] 2/2 steps done in 0.2s
+[barca] uploaded 2 artifacts (672.8 KB); waited 0.0s at end of run
+[barca] pushed state (48.0 KB) in 0.03s
 ```
 
-Downstream steps download their inputs to a local staging file on demand.
+The "waited" figure is the only upload time the run paid for — the rest
+overlapped with execution. `BARCA_TRACE_TIMING=1` adds per-transfer timings.
+
+Using a GCS emulator such as fake-gcs-server with gcsfs 2026.10 or later? Set
+`GCSFS_EXPERIMENTAL_ZB_HNS_SUPPORT=false`: gcsfs's experimental mode makes a
+gRPC call the emulator doesn't serve, and transfers stall until
+`transfer_timeout`. Real GCS is unaffected.
+
+`[remote].uri` may also be a plain directory (a shared or network mount)
+instead of a URI; transfers are then local file copies.
+
+## Checking a local copy against the store
+
+When an artifact is uploaded, the SHA-256 of the local file is recorded with it in the shared
+history. A machine uses that hash to decide whether its own copy is current:
+
+- A copy already in `.barca/artifacts/` is hashed the first time a run reads it. If it does not
+  match (edited by hand, or left from before another machine refreshed the result), it is
+  replaced by the store's copy and reported as a fetch.
+- A downloaded artifact is hashed too. If the store's copy does not match the recorded hash,
+  the run still uses it and prints a warning naming the step. This is not an error: an
+  artifact's path is `<node>/<run_hash>`, which identifies the computation and not the bytes,
+  so a `--refresh`, or two machines computing the same step at once, overwrites the object.
+  The warning names the step; `--refresh <file.py:name>` recomputes it, which clears the
+  warning for every machine that shares this history. Until then, machines can hold
+  different copies of that one result: a machine whose copy matches the recorded hash keeps
+  it, and the others use the store's.
+
+Only artifacts a run reads are hashed, once per run. Not checked: a parquet input that is read
+in place (only byte ranges are fetched), and results recorded before barca stored a hash.
 
 ## Remote sinks
 
@@ -101,82 +289,41 @@ recorded in the run's metadata.
 Serialized payloads are never buffered fully in memory — important when
 assets are multi-hundred-MB DataFrames or pickled models:
 
-1. The serializer (json/pickle/parquet) streams to a temp file — in the
-   destination directory for local writes, in `.barca/staging/` for remote
-   ones (deliberately on project disk, not `/tmp`, which is often RAM-backed
+1. The serializer (json/pickle/parquet) streams to a temp file in the
+   destination directory (or `.barca/staging/` for a remote `@sink` —
+   deliberately on project disk, not `/tmp`, which is often RAM-backed
    tmpfs).
 2. Local: the temp file is atomically renamed into place (`os.replace`).
    Remote: the temp file is uploaded with a chunked `put_file`; object
    stores commit the object only when the upload completes.
 3. On any failure the temp file is removed — the destination never holds a
-   partial artifact. Stale temp files from crashed workers are swept at
-   worker startup.
+   partial artifact. The staging directories of workers that are no longer
+   running are swept at worker startup; a live worker's files are never touched.
 
-Remote reads are symmetric: inputs are downloaded to `.barca/staging/`,
-deserialized, and the temp file removed.
+The transfer helper follows the same rules: uploads stream from disk in
+chunks, and fetches download to a temp file that is renamed into place only
+when complete.
 
-## Credentials
+## Artifacts only, history local (0.4.0 behavior)
 
-Barca passes no credentials — each backend uses its native default chain:
-
-- **S3 (s3fs)**: the standard boto chain — `AWS_ACCESS_KEY_ID`, profiles,
-  instance metadata.
-- **GCS**: `google.auth` application default credentials. Artifact I/O uses
-  gcsfs; the shared-state path uses the `google-cloud-storage` SDK directly
-  (gcsfs cannot express a generation precondition on overwrite) — both read
-  the same ADC chain.
-- **Azure (adlfs)**: `DefaultAzureCredential` — env vars
-  (`AZURE_CLIENT_ID`/`AZURE_CLIENT_SECRET`/`AZURE_TENANT_ID`), managed
-  identity, Azure CLI login, etc. `AZURE_STORAGE_ACCOUNT_NAME` /
-  `AZURE_STORAGE_ACCOUNT_KEY` and connection strings also work.
-
-For anything the default chains can't express, `BARCA_STORAGE_OPTIONS`
-takes a JSON object keyed by fsspec protocol, splatted into the filesystem
-constructor (equivalently, `[remote.storage_options.<protocol>]` in
-`barca.toml`):
+Set `BARCA_ARTIFACT_URI` to a URI prefix to keep artifacts in a store while
+metadata stays local:
 
 ```bash
-export BARCA_STORAGE_OPTIONS='{"abfs": {"account_name": "myaccount", "anon": false}}'
+export BARCA_ARTIFACT_URI=abfss://artifacts@myaccount.dfs.core.windows.net/prod
+barca get pipeline.py
 ```
 
-### Cloudflare R2
+Artifacts are written locally and transferred exactly as in remote mode; only
+the metadata DB is not shared.
 
-R2 is S3-compatible, so it uses the `s3://` schemes with the S3 backend
-(`barca[r2]` or `barca[s3]`) pointed at your account's R2 endpoint. Set the
-endpoint in `storage_options` under the `s3` protocol; credentials are your
-R2 access key / secret via the usual boto env vars:
+Prefer `BARCA_REMOTE_URI` with `BARCA_STATE=off`, which also keeps `--env` separation.
 
-```toml
-# barca.toml
-[remote]
-uri = "s3://my-bucket/barca/my-project"
+## Changing stores
 
-[remote.storage_options.s3]
-client_kwargs = { endpoint_url = "https://<account-id>.r2.cloudflarestorage.com" }
-```
-
-```bash
-export AWS_ACCESS_KEY_ID=<r2-access-key-id>
-export AWS_SECRET_ACCESS_KEY=<r2-secret-access-key>
-```
-
-R2 supports the same `If-Match` conditional writes barca's shared state relies
-on. As with S3, the state blob must stay under the 48 MiB single-request limit
-(the coordinator errors clearly if it grows past that).
-
-## v1 limitations
-
-Two coordinator features read artifact files directly from local disk and
-require a local artifact store (they are unaffected by remote *sinks*):
-
-- **Dynamic partitions** (`partitions_from=...`) — the partition source
-  artifact is read by the Rust coordinator. With a remote store the run
-  fails with an explicit error.
-- **`parallel()` return values** — child results are read back from JSON
-  artifacts to resume the parent. With a remote store the parent receives
-  `null` results and a warning is printed.
-
-Both are candidates for a later release. Also note: artifacts are keyed by
-node id, not content, so re-runs overwrite the same remote names; switching
-`BARCA_ARTIFACT_URI` between runs does not invalidate cache rows that point
-at the previous store.
+Cache rows record each artifact's location in the store. If you point a
+project at a different store, rows recorded against the old one are used
+only when the artifact is still on local disk; otherwise those steps simply
+recompute. A cache row whose object has been deleted from the current store
+fails the run with the missing object named — re-run with `--refresh-all` to
+recompute it.

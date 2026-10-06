@@ -149,6 +149,17 @@ pub fn decompose(dag: &Dag) -> Topology {
     }
 }
 
+/// True if the node declares partitions, static or dynamic (`partitions_from`).
+fn is_partitioned(dag: &Dag, id: &str) -> bool {
+    dag.get_node(id)
+        .is_some_and(|n| !n.extracted.partitions.is_empty())
+}
+
+fn is_sensor(dag: &Dag, id: &str) -> bool {
+    dag.get_node(id)
+        .is_some_and(|n| n.kind() == crate::model::NodeKind::Sensor)
+}
+
 /// Detect all maximal chains. Every node belongs to exactly one chain.
 fn detect_chains(dag: &Dag) -> Vec<Chain> {
     let mut visited: HashSet<String> = HashSet::new();
@@ -176,6 +187,20 @@ fn detect_chains(dag: &Dag) -> Vec<Chain> {
                 break;
             }
             if visited.contains(next) {
+                break;
+            }
+            // Never fuse across a partitioned/unpartitioned boundary (#170). `build_phases`
+            // splits a partitioned step into per-chunk work units, so an unpartitioned
+            // neighbour fused into the same chain either lands in a sibling work unit of the
+            // same phase (decided, hashed and dispatched with no ordering against the keys
+            // that read it) or is copied into every chunk (run once per chunk). As its own
+            // chain it gets a phase of its own, before its consumers.
+            if is_partitioned(dag, &current) != is_partitioned(dag, next) {
+                break;
+            }
+            // A sensor ends its chain (#183): its consumers' run hashes include the sensor's
+            // output, so they are decided in a later phase, after the sensor has run.
+            if is_sensor(dag, &current) {
                 break;
             }
             nodes.push(next.to_string());
@@ -231,6 +256,26 @@ fn phase_has_pending(phase: &Phase) -> bool {
         .any(|s| s.steps.iter().any(|st| !st.pending_partitions.is_empty()))
 }
 
+/// True if a step in `phase` reads a sensor that runs in `prev`. Such a step's run hash includes
+/// the sensor's output (#183), so it must stay in a later phase: cache decisions for a phase are
+/// made before any of its steps execute.
+fn reads_sensor_of(phase: &Phase, prev: &Phase) -> bool {
+    let sensors: HashSet<&str> = prev
+        .streams
+        .iter()
+        .flat_map(|s| &s.steps)
+        .filter(|st| st.kind == crate::model::NodeKind::Sensor)
+        .map(|st| st.step_id.base_id())
+        .collect();
+    !sensors.is_empty()
+        && phase
+            .streams
+            .iter()
+            .flat_map(|s| &s.steps)
+            .flat_map(|st| st.inputs.values())
+            .any(|up| sensors.contains(up.split('[').next().unwrap_or(up)))
+}
+
 fn merge_single_stream_phases(phases: Vec<Phase>) -> Vec<Phase> {
     let mut merged: Vec<Phase> = Vec::new();
 
@@ -243,9 +288,11 @@ fn merge_single_stream_phases(phases: Vec<Phase>) -> Vec<Phase> {
         let has_pending = phase_has_pending(&phase);
         let can_merge = !has_pending
             && phase.streams.len() == 1
-            && merged
-                .last()
-                .is_some_and(|prev: &Phase| prev.streams.len() == 1 && !phase_has_pending(prev));
+            && merged.last().is_some_and(|prev: &Phase| {
+                prev.streams.len() == 1
+                    && !phase_has_pending(prev)
+                    && !reads_sensor_of(&phase, prev)
+            });
 
         if can_merge {
             // Append this phase's single stream's steps to the previous phase's single stream.
@@ -667,6 +714,11 @@ mod tests {
     use smallvec::SmallVec;
 
     fn build_test_dag(specs: &[(&str, &[&str])]) -> Dag {
+        build_dag_with_sensors(specs, &[])
+    }
+
+    /// Like `build_test_dag`, with the nodes named in `sensors` declared as `@sensor`.
+    fn build_dag_with_sensors(specs: &[(&str, &[&str])], sensors: &[&str]) -> Dag {
         let extracted: Vec<ExtractedNode> = specs
             .iter()
             .map(|(name, deps)| {
@@ -678,11 +730,20 @@ mod tests {
                         collected: false,
                     })
                     .collect();
+                let sensor = sensors.contains(name);
                 ExtractedNode {
-                    kind: NodeKind::Asset,
+                    kind: if sensor {
+                        NodeKind::Sensor
+                    } else {
+                        NodeKind::Asset
+                    },
                     function_name: name.to_string(),
                     explicit_name: None,
-                    freshness: Freshness::Always,
+                    freshness: if sensor {
+                        Freshness::Manual
+                    } else {
+                        Freshness::Always
+                    },
                     inputs,
                     partitions: HashMap::new(),
                     sinks: SmallVec::new(),
@@ -700,6 +761,7 @@ mod tests {
                     param_types: HashMap::new(),
                     return_type: None,
                     parallel_calls: Vec::new(),
+                    env: Vec::new(),
                 }
             })
             .collect();
@@ -754,6 +816,7 @@ mod tests {
             param_types: HashMap::new(),
             return_type: None,
             parallel_calls: Vec::new(),
+            env: Vec::new(),
         };
         extracted.sinks.push(SinkDecl {
             path: "exports/out.parquet".to_string(),
@@ -1180,6 +1243,7 @@ mod tests {
                 param_types: HashMap::new(),
                 return_type: None,
                 parallel_calls: Vec::new(),
+                env: Vec::new(),
             })
             .collect();
         let dag = Dag::build(&extracted).unwrap();
@@ -1321,6 +1385,7 @@ mod tests {
                     param_types: HashMap::new(),
                     return_type: None,
                     parallel_calls: Vec::new(),
+                    env: Vec::new(),
                 }
             })
             .collect();
@@ -1403,6 +1468,137 @@ mod tests {
         assert_eq!(p.total_steps, 4);
     }
 
+    /// (phase index, stream index, step index) of every step with this base id.
+    fn positions(p: &ExecutionPlan, base: &str) -> Vec<(usize, usize, usize)> {
+        let mut out = Vec::new();
+        for (pi, phase) in p.phases.iter().enumerate() {
+            for (si, stream) in phase.streams.iter().enumerate() {
+                for (ti, step) in stream.steps.iter().enumerate() {
+                    if step.step_id.base_id() == base {
+                        out.push((pi, si, ti));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn unpartitioned_producer_runs_before_its_partitioned_consumer() {
+        // #170: multiplier → leaf(k) is a single-succ/single-pred edge, so it used to be fused
+        // into one chain; build_phases then split the partitioned step into per-chunk work units
+        // and pushed `multiplier` into a separate work unit of the SAME phase. Run-hash decisions
+        // walk streams in order, so leaf's keys were hashed before multiplier's hash existed.
+        // The producer must come first: an earlier phase, or earlier in the same stream.
+        for pool in [1, 2, 10] {
+            let dag = build_partitioned_dag(&[
+                ("multiplier", &[], &[]),
+                ("leaf", &["multiplier"], &[("k", &["a", "b", "c"])]),
+            ]);
+            let p = plan_from_dag(&dag, &cfg(pool));
+            assert_eq!(p.total_steps, 4, "pool={pool}");
+            let producer = positions(&p, "test.py:multiplier");
+            assert_eq!(producer.len(), 1, "pool={pool}: multiplier runs once");
+            let (mp, ms, mt) = producer[0];
+            for (lp, ls, lt) in positions(&p, "test.py:leaf") {
+                assert!(
+                    mp < lp || (mp == lp && ms == ls && mt < lt),
+                    "pool={pool}: multiplier at {:?} does not precede leaf at {:?}",
+                    (mp, ms, mt),
+                    (lp, ls, lt)
+                );
+            }
+        }
+    }
+
+    /// #183: a consumer's run hash includes the output of the sensors it reads, and cache
+    /// decisions are made per phase before the phase executes. A sensor must therefore finish in
+    /// an EARLIER phase than its consumers; the same stream is not enough. Single-stream phases
+    /// are normally merged, which must not pull a sensor's consumer into the sensor's phase.
+    #[test]
+    fn a_sensor_runs_in_an_earlier_phase_than_its_consumers() {
+        let shapes: Vec<Vec<(&str, &[&str])>> = vec![
+            vec![
+                ("etag", &[]),
+                ("bronze", &["etag"]),
+                ("silver", &["bronze"]),
+            ],
+            vec![
+                ("etag", &[]),
+                ("bronze", &["etag"]),
+                ("other", &["etag"]),
+                ("plain", &[]),
+                ("joined", &["bronze", "plain"]),
+            ],
+            vec![("plain", &[]), ("etag", &[]), ("mix", &["plain", "etag"])],
+        ];
+        for specs in &shapes {
+            for pool in [1, 2, 10] {
+                let dag = build_dag_with_sensors(specs, &["etag"]);
+                let p = plan_from_dag(&dag, &cfg(pool));
+                let sensor_phase = positions(&p, "test.py:etag")[0].0;
+                for consumer in dag.downstream("test.py:etag") {
+                    for (phase, _, _) in positions(&p, consumer) {
+                        assert!(
+                            sensor_phase < phase,
+                            "pool={pool}: sensor in phase {sensor_phase}, consumer {consumer} \
+                             in phase {phase}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_sensor_runs_before_its_partitioned_consumer() {
+        let mut dag_specs = build_partitioned_dag(&[
+            ("etag", &[], &[]),
+            ("leaf", &["etag"], &[("k", &["a", "b", "c"])]),
+        ]);
+        // build_partitioned_dag makes assets; rebuild with `etag` as a sensor.
+        let mut extracted: Vec<ExtractedNode> = dag_specs
+            .topo_order()
+            .iter()
+            .map(|id| dag_specs.get_node(id).unwrap().extracted.clone())
+            .collect();
+        for n in &mut extracted {
+            if n.function_name == "etag" {
+                n.kind = NodeKind::Sensor;
+                n.freshness = Freshness::Manual;
+            }
+        }
+        dag_specs = Dag::build(&extracted).unwrap();
+        for pool in [1, 2, 10] {
+            let p = plan_from_dag(&dag_specs, &cfg(pool));
+            let sensor_phase = positions(&p, "test.py:etag")[0].0;
+            for (phase, _, _) in positions(&p, "test.py:leaf") {
+                assert!(sensor_phase < phase, "pool={pool}");
+            }
+        }
+    }
+
+    #[test]
+    fn unpartitioned_producer_of_partitioned_chain_runs_once() {
+        // a → p1(k) → p2(k): the unpartitioned head used to be copied into every chunk of the
+        // partitioned chain (so it ran once per chunk). It must run exactly once, first.
+        let dag = build_partitioned_dag(&[
+            ("a", &[], &[]),
+            ("p1", &["a"], &[("k", &["x", "y", "z", "w"])]),
+            ("p2", &["p1"], &[("k", &["x", "y", "z", "w"])]),
+        ]);
+        let p = plan_from_dag(&dag, &cfg(4));
+        assert_eq!(p.total_steps, 9);
+        let producer = positions(&p, "test.py:a");
+        assert_eq!(producer.len(), 1, "a must be planned once: {producer:?}");
+        let first_partitioned_phase = positions(&p, "test.py:p1")
+            .into_iter()
+            .map(|(phase, _, _)| phase)
+            .min()
+            .unwrap();
+        assert!(producer[0].0 < first_partitioned_phase);
+    }
+
     #[test]
     fn plan_non_partitioned_remains_single_step() {
         // Regular asset without partitions → 1 step, no partition_keys
@@ -1456,6 +1652,7 @@ mod tests {
             param_types: HashMap::new(),
             return_type: None,
             parallel_calls: Vec::new(),
+            env: Vec::new(),
         };
         let collector = ExtractedNode {
             kind: NodeKind::Asset,
@@ -1483,6 +1680,7 @@ mod tests {
             param_types: HashMap::new(),
             return_type: None,
             parallel_calls: Vec::new(),
+            env: Vec::new(),
         };
         Dag::build(&[producer, collector]).unwrap()
     }
@@ -1561,6 +1759,7 @@ mod tests {
             param_types: HashMap::new(),
             return_type: None,
             parallel_calls: Vec::new(),
+            env: Vec::new(),
         };
         let fetch_prices = ExtractedNode {
             kind: NodeKind::Asset,
@@ -1589,6 +1788,7 @@ mod tests {
             param_types: HashMap::new(),
             return_type: None,
             parallel_calls: Vec::new(),
+            env: Vec::new(),
         };
         let aggregate = ExtractedNode {
             kind: NodeKind::Asset,
@@ -1616,6 +1816,7 @@ mod tests {
             param_types: HashMap::new(),
             return_type: None,
             parallel_calls: Vec::new(),
+            env: Vec::new(),
         };
         let dag = Dag::build(&[tickers, fetch_prices, aggregate]).unwrap();
         let p = plan_from_dag(&dag, &cfg(10));

@@ -36,11 +36,16 @@ pub fn definition_hash(function_source: &str, cone_source: &str, metadata_json: 
 /// - partition key (if any)
 /// - upstream materialization IDs (sorted for determinism)
 /// - ad-hoc params (if any)
+/// - declared env values (if any; see [`crate::envdeps::hash_input`])
+///
+/// `None` sections contribute nothing, so a node without params or declared env hashes exactly
+/// as it did before those sections existed.
 pub fn run_hash(
     definition_hash: &str,
     partition_key: Option<&str>,
     upstream_ids: &[&str],
     params: Option<&str>,
+    env: Option<&str>,
 ) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"run:");
@@ -67,6 +72,12 @@ pub fn run_hash(
     if let Some(p) = params {
         hasher.update(b"params:");
         hasher.update(p.as_bytes());
+        hasher.update(b"\n");
+    }
+
+    if let Some(e) = env {
+        hasher.update(b"env:");
+        hasher.update(e.as_bytes());
         hasher.update(b"\n");
     }
 
@@ -107,16 +118,16 @@ mod tests {
     #[test]
     fn test_run_hash_with_partition() {
         let def_h = definition_hash("def foo(): pass", "", "{}");
-        let h1 = run_hash(&def_h, Some("AAPL"), &[], None);
-        let h2 = run_hash(&def_h, Some("MSFT"), &[], None);
+        let h1 = run_hash(&def_h, Some("AAPL"), &[], None, None);
+        let h2 = run_hash(&def_h, Some("MSFT"), &[], None, None);
         assert_ne!(h1, h2);
     }
 
     #[test]
     fn test_run_hash_upstream_order_independent() {
         let def_h = definition_hash("def foo(): pass", "", "{}");
-        let h1 = run_hash(&def_h, None, &["a", "b", "c"], None);
-        let h2 = run_hash(&def_h, None, &["c", "a", "b"], None);
+        let h1 = run_hash(&def_h, None, &["a", "b", "c"], None, None);
+        let h2 = run_hash(&def_h, None, &["c", "a", "b"], None, None);
         assert_eq!(h1, h2); // sorted internally
     }
 }

@@ -1,0 +1,26 @@
+Show recent run history
+
+Usage: barca history [OPTIONS]
+
+Options:
+  -l, --limit <LIMIT>    Number of recent runs to show [default: 10]
+      --all              Show every recorded run (no limit)
+      --json             Emit JSON on stdout (the default when stdout is not a terminal)
+      --pretty           Emit human-readable output (the default when stdout is a terminal)
+      --fields <FIELDS>  Output JSON with only these keys (comma-separated) on each entry of `runs`. Implies --json. An unknown key is a usage error listing the valid ones [possible values: run_id, command, files, target, status, steps_total, steps_executed, steps_cached, started_at, finished_at, elapsed_seconds]
+      --env <ENV>        Environment name (separates cache/state per environment)
+  -h, --help             Print help
+
+Examples:
+  barca history                # last 10 runs: a table in a terminal, JSON when piped
+  barca history -l 25          # last 25
+  barca history --all          # every recorded run
+  barca history --json         # {runs: [...], total, truncated, hint?}, even in a terminal
+  barca history --pretty       # the table, even when piped
+  barca history --fields run_id,status,elapsed_seconds   # JSON with only these keys per run
+  barca history --env dev      # runs recorded in another environment
+
+Newest first. When more runs exist than are shown, JSON says `"truncated": true` with the
+`total`, and the table prints a one-line note on stderr. In JSON, `files` is an array: the .py
+files the run was given.
+More: barca docs agents, barca docs cache
