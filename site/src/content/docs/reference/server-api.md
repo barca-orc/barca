@@ -37,7 +37,7 @@ All API responses are JSON, except the event stream and the UI.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET`  | `/health` | Liveness, version, and whether the server is read-only. |
+| `GET`  | `/health` | Liveness, version, whether the server is read-only, and whether it runs the scheduler. |
 | `GET`  | `/state` | Every node: its `barca status` entry plus typical durations and next run. |
 | `GET`  | `/assets` | List every node with kind, freshness, and upstream inputs. |
 | `GET`  | `/assets/{name}` | One asset's summary joined with timing/cache stats. |
@@ -112,8 +112,11 @@ GET /health
 ```
 
 ```json
-{ "status": "ok", "version": "0.16.0", "read_only": false }
+{ "status": "ok", "version": "0.16.0", "read_only": false, "scheduler": true }
 ```
+
+`scheduler` is `true` when this server fires `Schedule(...)` nodes: on by default, `false` with
+`--no-schedule` or `--read-only`.
 
 ### State
 
