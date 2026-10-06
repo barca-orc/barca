@@ -112,7 +112,7 @@ GET /health
 ```
 
 ```json
-{ "status": "ok", "version": "0.15.0", "read_only": false }
+{ "status": "ok", "version": "0.16.0", "read_only": false }
 ```
 
 ### State
