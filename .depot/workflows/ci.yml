@@ -4,6 +4,14 @@ on:
   pull_request:
     branches: [main]
 
+# One run per PR at a time. The cache disk is shared by every run, so the target
+# dirs below are keyed by PR number: two overlapping cargo builds in one target
+# dir delete and rewrite each other's artifacts ("found invalid metadata files",
+# "failed to link or copy", SIGBUS in the linker).
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: depot-ubuntu-latest
@@ -11,9 +19,10 @@ jobs:
       # Build artifacts and pip downloads live on a Depot cache disk: a real
       # filesystem that persists between runs (no upload/download step, and
       # incremental compiles survive Cargo.lock changes). Each job uses its own
-      # subdirectory so the two jobs never write the same files concurrently.
+      # subdirectory, keyed by PR number, so neither two jobs nor two PRs ever
+      # write the same files concurrently.
       # Wheels are NOT built on the shared disk — see the build step.
-      CARGO_TARGET_DIR: /mnt/cache/test/target
+      CARGO_TARGET_DIR: /mnt/cache/test/target-pr${{ github.event.pull_request.number }}
       PIP_CACHE_DIR: /mnt/cache/test/pip
     steps:
       - uses: actions/checkout@v4
@@ -30,6 +39,10 @@ jobs:
             || { sudo mkdir -p "$CARGO_TARGET_DIR" "$PIP_CACHE_DIR" && sudo chown -R "$(id -u):$(id -g)" /mnt/cache/test; }
           # Left behind by a reverted experiment that moved CARGO_HOME onto this disk.
           rm -rf /mnt/cache/test/cargo-home
+          # The old shared target dir (corrupted by overlapping runs), and the dirs
+          # of PRs that have gone quiet: nothing else garbage-collects them.
+          rm -rf /mnt/cache/test/target 2>/dev/null || true
+          find /mnt/cache/test -maxdepth 1 -name 'target-pr*' -mtime +3 -exec rm -rf {} + 2>/dev/null || true
           # The cache disk persists and nothing garbage-collects target/. A full disk
           # truncates object files mid-build ("failed to map object file: memory map
           # must have a non-zero length"), so report usage and, when space runs low,
@@ -98,7 +111,7 @@ jobs:
     # covers GCS generation-match, Azurite covers Azure ETag If-Match.
     runs-on: depot-ubuntu-latest
     env:
-      CARGO_TARGET_DIR: /mnt/cache/backends/target
+      CARGO_TARGET_DIR: /mnt/cache/backends/target-pr${{ github.event.pull_request.number }}
       PIP_CACHE_DIR: /mnt/cache/backends/pip
     steps:
       - uses: actions/checkout@v4
@@ -132,6 +145,10 @@ jobs:
             || { sudo mkdir -p "$CARGO_TARGET_DIR" "$PIP_CACHE_DIR" && sudo chown -R "$(id -u):$(id -g)" /mnt/cache/backends; }
           # Left behind by a reverted experiment that moved CARGO_HOME onto this disk.
           rm -rf /mnt/cache/backends/cargo-home
+          # The old shared target dir (corrupted by overlapping runs), and the dirs
+          # of PRs that have gone quiet: nothing else garbage-collects them.
+          rm -rf /mnt/cache/backends/target 2>/dev/null || true
+          find /mnt/cache/backends -maxdepth 1 -name 'target-pr*' -mtime +3 -exec rm -rf {} + 2>/dev/null || true
           # The cache disk persists and nothing garbage-collects target/. A full disk
           # truncates object files mid-build ("failed to map object file: memory map
           # must have a non-zero length"), so report usage and, when space runs low,
