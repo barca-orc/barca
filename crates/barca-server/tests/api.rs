@@ -460,6 +460,8 @@ async fn read_only_rejects_everything_that_runs() {
     }
     let (_, health) = send(&app, "GET", "/health").await;
     assert_eq!(health["read_only"], true);
+    // A read-only server never schedules, whatever --no-schedule says.
+    assert_eq!(health["scheduler"], false);
 }
 
 #[tokio::test]
@@ -485,6 +487,18 @@ async fn health_reports_writable_by_default() {
     let app = app(isolated_config(dir.path(), false));
     let (_, health) = send(&app, "GET", "/health").await;
     assert_eq!(health["read_only"], false);
+    // fixture_config sets `schedule: false` (as `--no-schedule` would).
+    assert_eq!(health["scheduler"], false);
+}
+
+#[tokio::test]
+async fn health_reports_the_scheduler_when_it_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = isolated_config(dir.path(), false);
+    config.schedule = true;
+    let app = app(config);
+    let (_, health) = send(&app, "GET", "/health").await;
+    assert_eq!(health["scheduler"], true);
 }
 
 #[tokio::test]
