@@ -279,7 +279,7 @@ follow the same rule: in JSON mode they are the envelope on stderr (see Errors).
 | `BARCA_TELEMETRY` | comma-separated telemetry integrations to send finished runs to; `datadog` is the only one (`barca docs telemetry`) | experimental |
 
 barca sets `BARCA_SOCKET`, `BARCA_WORKER`, `BARCA_WORKER_ID` (and passes `BARCA_ARTIFACT_URI`,
-`BARCA_STORAGE_OPTIONS`) for its own worker processes; these are internal, not part of the
+`BARCA_STORAGE_OPTIONS`, `BARCA_CONTENT_ADDRESS`) for its own worker processes; these are internal, not part of the
 contract. Variables your nodes declare with `@asset(env=[...])` are yours (`barca docs assets`).
 
 ## Exit codes

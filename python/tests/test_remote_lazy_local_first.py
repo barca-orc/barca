@@ -65,7 +65,7 @@ def machine(tmp_path):
 
 
 def _local_copies(root: Path) -> list[Path]:
-    return [p for p in (root / ".barca" / "artifacts").glob("*big*/*") if p.is_file()]
+    return [p for p in (root / ".barca" / "artifacts").glob("*big*/**/*") if p.is_file()]
 
 
 def test_a_lazy_reader_does_not_download_the_input(machine):
