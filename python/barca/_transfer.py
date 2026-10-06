@@ -31,6 +31,7 @@ behave exactly as they do for workers and the state helper.
 
 import hashlib
 import os
+import shutil
 import socket
 import sys
 import tempfile
@@ -134,6 +135,10 @@ def _staged_get(remote: str, local: str, expected: str | None) -> dict:
         mismatch = expected is not None and digest != expected
         fetched = not (mismatch and _local_sha256(dest) == digest)
         if fetched:
+            if dest.is_dir() and not dest.is_symlink():
+                # Something other than a file sits where the artifact belongs; it is not
+                # the store's fault, and nothing else uses that path.
+                shutil.rmtree(dest)
             os.replace(tmp, dest)
         return {"sha256": digest, "fetched": fetched, "mismatch": mismatch}
     finally:
@@ -330,12 +335,17 @@ def main() -> int:
         return 1
     sock = _runtime.connect()
     assert sock is not None
-    serve(
-        sock,
-        concurrency=_env_int("BARCA_TRANSFER_CONCURRENCY", _DEFAULT_CONCURRENCY),
-        retries=_env_int("BARCA_TRANSFER_RETRIES", _DEFAULT_RETRIES),
-        timeout=_env_float("BARCA_TRANSFER_TIMEOUT", _DEFAULT_TIMEOUT),
-    )
+    try:
+        serve(
+            sock,
+            concurrency=_env_int("BARCA_TRANSFER_CONCURRENCY", _DEFAULT_CONCURRENCY),
+            retries=_env_int("BARCA_TRANSFER_RETRIES", _DEFAULT_RETRIES),
+            timeout=_env_float("BARCA_TRANSFER_TIMEOUT", _DEFAULT_TIMEOUT),
+        )
+    except KeyboardInterrupt:
+        # Ctrl-C reaches the whole process group; the coordinator reports the
+        # cancellation, so exit quietly instead of printing a traceback.
+        os._exit(130)
     _runtime.disconnect()
     # Exit without joining pool threads: a timed-out attempt may be stuck in
     # a network call that would otherwise keep the process alive.

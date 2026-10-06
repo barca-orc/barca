@@ -7,8 +7,13 @@ pinned by crates/barca-core/src/protocol.rs (TransferRequest/TransferReply).
 
 import hashlib
 import json
+import multiprocessing
+import os
+import signal
 import socket
 import struct
+import subprocess
+import sys
 import threading
 import time
 
@@ -206,6 +211,83 @@ class TestChecksums:
         reply = self._get(helper, self._store(b'{"x": 2}'), local, sha256=None)
         assert (reply["type"], reply["fetched"]) == ("done", True)
         assert reply["sha256"] == hashlib.sha256(b'{"x": 2}').hexdigest()
+
+    def test_a_directory_where_the_artifact_belongs_is_replaced(self, helper, tmp_path):
+        # A local problem, not the store's: it must not fail the fetch (os.replace would
+        # raise IsADirectoryError) nor be reported as a store error.
+        local = tmp_path / "h.json"
+        (local / "inner").mkdir(parents=True)
+        (local / "inner" / "x").write_text("junk")
+        reply = self._get(helper, self._store(), local)
+        assert (reply["type"], reply["fetched"], reply["mismatch"]) == ("done", True, False)
+        assert local.is_file() and local.read_bytes() == self.BODY
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["h.json"]
+
+    def test_a_directory_is_replaced_without_a_recorded_hash_too(self, helper, tmp_path):
+        local = tmp_path / "h.json"
+        local.mkdir()
+        reply = self._get(helper, self._store(), local, sha256=None)
+        assert reply["type"] == "done"
+        assert local.read_bytes() == self.BODY
+
+
+def _fetch_in_process(remote: str, local: str, sha: str, barrier) -> None:
+    barrier.wait()
+    for _ in range(20):
+        out = _transfer._transfer({"type": "get", "remote": remote, "local": local, "sha256": sha})
+        assert out["sha256"] == sha
+
+
+class TestCrossProcess:
+    def test_two_processes_fetching_the_same_local_path_both_succeed(self, tmp_path):
+        """Both rename a staged temp file into place, so neither sees a partial file."""
+        body = b"x" * 200_000
+        sha = hashlib.sha256(body).hexdigest()
+        store = tmp_path / "store"
+        store.mkdir()
+        (store / "h.json").write_bytes(body)
+        local = tmp_path / "local" / "h.json"
+        ctx = multiprocessing.get_context("fork")
+        barrier = ctx.Barrier(2)
+        procs = [
+            ctx.Process(
+                target=_fetch_in_process, args=(str(store / "h.json"), str(local), sha, barrier)
+            )
+            for _ in range(2)
+        ]
+        for p in procs:
+            p.start()
+        for p in procs:
+            p.join(timeout=60)
+        assert [p.exitcode for p in procs] == [0, 0]
+        assert local.read_bytes() == body
+        assert sorted(p.name for p in local.parent.iterdir()) == ["h.json"]
+
+
+class TestInterrupt:
+    def test_ctrl_c_exits_quietly_without_a_traceback(self, tmp_path):
+        path = str(tmp_path / "s.sock")
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        server.bind(path)
+        server.listen(1)
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "barca._transfer"],
+            env={**os.environ, "BARCA_SOCKET": path},
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            server.settimeout(30)
+            conn, _ = server.accept()
+            time.sleep(0.5)  # let it block in recv
+            proc.send_signal(signal.SIGINT)
+            _, err = proc.communicate(timeout=30)
+        finally:
+            proc.kill()
+            server.close()
+        assert "Traceback" not in err and "KeyboardInterrupt" not in err
+        assert proc.returncode == 130
+        conn.close()
 
 
 class TestConcurrency:
