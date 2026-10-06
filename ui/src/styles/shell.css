@@ -429,3 +429,11 @@
 .barca-table th[aria-sort="ascending"] .barca-sort,
 .barca-table th[aria-sort="descending"] .barca-sort { color: var(--text-strong); }
 .barca-table th.num .barca-sort { flex-direction: row-reverse; }
+
+/* pipeline list: node count per file */
+.barca-pipe-count {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--text-muted);
+}

@@ -4,6 +4,7 @@ import { ArrowDown, ArrowUp, Search } from 'lucide-react'
 import { StatusBadge, StatusDot, Tag } from '@/components'
 import { useAssetStates } from '@/hooks/useAssetStates'
 import { useHealth } from '@/hooks/useHealth'
+import { inPipeline, pipelineName } from '@/lib/pipeline'
 import {
   DEFAULT_SORT,
   SEVERITIES,
@@ -78,15 +79,28 @@ export function AssetsPage() {
   // a reload and can be shared.
   const [params, setParams] = useSearchParams()
   const sort = parseSort(params.get('sort'), params.get('dir'))
+  // The pipeline picked in the sidebar (?pipeline=<file>); null = all.
+  const pipeline = params.get('pipeline')
   const onSort = (key: SortKey) => {
     const next = nextSort(sort, key)
     const isDefault = next.key === DEFAULT_SORT.key && next.dir === DEFAULT_SORT.dir
-    setParams(isDefault ? {} : { sort: next.key, dir: next.dir }, { replace: true })
+    const p = new URLSearchParams(params)
+    if (isDefault) {
+      p.delete('sort')
+      p.delete('dir')
+    } else {
+      p.set('sort', next.key)
+      p.set('dir', next.dir)
+    }
+    setParams(p, { replace: true })
   }
 
   // "x ago" is relative to when the data was fetched, so it stays pure and
   // refreshes with every poll.
-  const rows = useMemo(() => buildRows(data ?? [], dataUpdatedAt), [data, dataUpdatedAt])
+  const rows = useMemo(
+    () => buildRows((data ?? []).filter((n) => inPipeline(n.id, pipeline)), dataUpdatedAt),
+    [data, dataUpdatedAt, pipeline],
+  )
   const counts = useMemo(() => summarize(rows), [rows])
   const visible = useMemo(() => {
     const searched = filterRows(rows, query)
@@ -103,8 +117,12 @@ export function AssetsPage() {
       <div className="barca-view-head">
         <div className="barca-view-bar">
           <div className="barca-view-title">
-            <h1>Assets</h1>
-            {data && <span className="barca-count">{rows.length} nodes</span>}
+            <h1>{pipeline ? pipelineName(pipeline) : 'Assets'}</h1>
+            {data && (
+              <span className="barca-count" title={pipeline ?? undefined}>
+                {pipeline ? `${rows.length} of ${data.length} nodes · ${pipeline}` : `${rows.length} nodes`}
+              </span>
+            )}
           </div>
           <div className="barca-view-actions">
             {health?.read_only && <Tag tone="bare">read-only</Tag>}
