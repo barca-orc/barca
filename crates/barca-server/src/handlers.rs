@@ -184,8 +184,8 @@ pub async fn status(
 enum RunKind {
     /// `commands::get` with an optional target (assets).
     Get(Option<String>),
-    /// `commands::run` for a task target.
-    Task(String),
+    /// `commands::run` for a task target, with how its upstream assets are treated.
+    Task(String, commands::CachePolicy),
 }
 
 /// Insert a `Pending` run, spawn the background execution task, and return the
@@ -197,7 +197,20 @@ pub(crate) fn start_run(state: AppState, target: Option<String>) -> String {
 /// Insert a `Pending` run for a task, spawn the background execution via
 /// `commands::run`, and return the server-side handle.
 pub(crate) fn start_run_task(state: AppState, target: String) -> String {
-    spawn_run(state, RunKind::Task(target))
+    spawn_run(
+        state,
+        RunKind::Task(target, commands::CachePolicy::RefreshAll),
+    )
+}
+
+/// A cron tick for a scheduled task: the task runs, as a task always does, and each upstream
+/// asset is recomputed only if something on its input side changed (what `barca run <task>`
+/// does). A scheduled asset already goes through the cache-aware [`start_run`].
+pub(crate) fn start_scheduled_task(state: AppState, target: String) -> String {
+    spawn_run(
+        state,
+        RunKind::Task(target, commands::CachePolicy::CacheAware),
+    )
 }
 
 fn spawn_run(state: AppState, kind: RunKind) -> String {
@@ -257,13 +270,13 @@ fn spawn_run(state: AppState, kind: RunKind) -> String {
                     )
                     .await
                 }
-                RunKind::Task(target) => {
+                RunKind::Task(target, policy) => {
                     commands::run(
                         &cfg,
                         target,
                         &files,
                         &python,
-                        commands::CachePolicy::RefreshAll,
+                        policy.clone(),
                         true,
                         cancel.clone(),
                     )

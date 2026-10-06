@@ -96,7 +96,7 @@ Three freshness kinds exist:
 
 - `Always` (default for `@asset` and `@task`)
 - `Manual`: intended to mean Barca never auto-updates this node, even when stale
-- `Schedule("cron_expr")`: refreshes this node when a cron tick has elapsed since last run
+- `Schedule("cron_expr")`: brings this node up to date on each cron tick (recomputed only if its inputs changed; a task always runs)
 
 Today, `freshness` is parsed, stored, and echoed back in the plan JSON, but only the `Schedule`
 kind has runtime teeth: `barca serve`'s cron scheduler (`crates/barca-server/src/scheduler.rs`)
