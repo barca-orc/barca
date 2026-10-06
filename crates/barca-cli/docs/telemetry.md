@@ -53,7 +53,7 @@ What the spans carry:
 | step | `barca.node`, `barca.kind` | node id; `asset`, `task` or `sensor` |
 | step | `barca.outcome` | `ran`, `cached` or `failed` |
 | step | `barca.run_hash` | the step's run hash |
-| step | `barca.attempts`, `barca.bytes` | attempts made (unpartitioned steps); size of the result |
+| step | `barca.attempts`, `barca.bytes` | attempts made (see Limits for partitions); size of the result |
 | step | `barca.cpu_seconds`, `barca.max_rss_bytes` | when the worker measured them |
 | step | `error.type`, `error.message`, `error.stack` | on a failed step: the exception and its traceback |
 
@@ -74,7 +74,8 @@ share of `barca.outcome:cached` per run.
 
 ## What is sent
 
-Exception messages and tracebacks are sent as they are (cut at 2,000 and 4,000 characters), so
+Exception messages and tracebacks are sent as they are (the message cut to its first 2,000
+characters and the traceback to its last 4,000, each marked `[cut]`), so
 a secret that appears in an error message, and the absolute paths and source lines in a
 traceback, reach Datadog. So do node ids, the target as given, run hashes, and store locations
 that appear in an upload error. Values of variables declared with `env=[...]` and the contents
@@ -88,8 +89,11 @@ of results are not sent.
 - A run that is killed sends nothing. A cancelled run is sent, without a span for the step that
   was in flight.
 - A step that did not run because an upstream failed has no span.
-- `barca.attempts` is absent on a partition of a partitioned step: attempts are counted per
-  step, not per key.
+- `barca.attempts` is absent on a cached step, and on a partition that ran: attempts are
+  counted per step, not per key. A partition that failed does carry its own count.
+- Calls made through `parallel()` inside a step have no spans of their own, and are not in
+  `barca.steps.total`.
+- The traceback of a chained exception (`raise ... from e`) does not include its cause.
 - A failed upload to a remote store shows the step as failed (`error.type` `UploadError`),
   although its function ran.
 - The run is reported before the shared history is pushed. A push that then fails is not
@@ -101,7 +105,7 @@ of results are not sent.
   alive a little longer than the 3 seconds.
 - The run's resource is the target as it was given: `run publish` from the CLI,
   `run pipeline.py:publish` for a scheduled run of the same task.
-- `https://` Agent URLs are not supported. An IPv6 address goes in brackets:
-  `http://[::1]:8126`.
+- `https://` Agent URLs and URLs with credentials are not supported. An IPv6 address goes in
+  brackets: `http://[::1]:8126`.
 
 See also: `barca docs scheduling`, `barca docs contract`.

@@ -2862,9 +2862,23 @@ struct RunLedger<'a> {
 /// Python exception as the generic `WorkerError` whose text is `Type: message` followed by the
 /// traceback frames; the type is what groups errors in a telemetry backend.
 fn exception_of(error: &dispatch::StepError) -> (String, String, Option<String>) {
-    let (text, frames) = match error.message.split_once("\n  File ") {
-        Some((text, frames)) => (text, Some(format!("  File {frames}"))),
-        None => (error.message.as_str(), None),
+    // The frames are the trailing run of `  File "..."` lines and their indented source lines.
+    // Taking only that run keeps a message that itself quotes a traceback in one piece.
+    let lines: Vec<&str> = error.message.split('\n').collect();
+    let mut first_frame = lines.len();
+    for (i, line) in lines.iter().enumerate().rev() {
+        if line.starts_with("  File \"") {
+            first_frame = i;
+        } else if !line.starts_with("    ") {
+            break;
+        }
+    }
+    let joined;
+    let (text, frames) = if first_frame > 0 && first_frame < lines.len() {
+        joined = lines[..first_frame].join("\n");
+        (joined.as_str(), Some(lines[first_frame..].join("\n")))
+    } else {
+        (error.message.as_str(), None)
     };
     let stack = Some(error.traceback.clone())
         .filter(|t| !t.is_empty())
@@ -3552,6 +3566,65 @@ mod refresh_name_tests {
         assert!(!refresh_name_matches("pipeline.py:src", "rc"));
         assert!(!refresh_name_matches("pipeline.py:source", "src"));
         assert!(!refresh_name_matches("pipeline.py:src", "nope"));
+    }
+}
+
+#[cfg(test)]
+mod telemetry_report_tests {
+    use super::*;
+
+    fn worker_error(message: &str) -> dispatch::StepError {
+        dispatch::StepError {
+            error_type: "WorkerError".to_string(),
+            message: message.to_string(),
+            traceback: String::new(),
+            attempts: 1,
+        }
+    }
+
+    #[test]
+    fn the_exception_type_message_and_frames_are_separated() {
+        let (ty, msg, stack) = exception_of(&worker_error(
+            "ValueError: cannot publish\n  File \"p.py\", line 3, in publish\n    raise ValueError(\"cannot publish\")",
+        ));
+        assert_eq!(
+            (ty.as_str(), msg.as_str()),
+            ("ValueError", "cannot publish")
+        );
+        assert_eq!(
+            stack.as_deref(),
+            Some("  File \"p.py\", line 3, in publish\n    raise ValueError(\"cannot publish\")")
+        );
+    }
+
+    #[test]
+    fn a_message_that_quotes_a_traceback_stays_whole() {
+        let (ty, msg, stack) = exception_of(&worker_error(
+            "RuntimeError: bad config:\n  File \"/etc/x.conf\" is missing\nplease fix\n  File \"p.py\", line 9, in load\n    raise RuntimeError(m)",
+        ));
+        assert_eq!(ty, "RuntimeError");
+        assert_eq!(
+            msg,
+            "bad config:\n  File \"/etc/x.conf\" is missing\nplease fix"
+        );
+        assert_eq!(
+            stack.as_deref(),
+            Some("  File \"p.py\", line 9, in load\n    raise RuntimeError(m)")
+        );
+    }
+
+    #[test]
+    fn an_error_without_frames_or_a_python_type_is_passed_through() {
+        let mut upload = worker_error("upload to s3://b/x failed: ConnectionError: reset");
+        upload.error_type = "UploadError".to_string();
+        let (ty, msg, stack) = exception_of(&upload);
+        assert_eq!(ty, "UploadError");
+        assert_eq!(msg, "upload to s3://b/x failed: ConnectionError: reset");
+        assert_eq!(stack, None);
+        assert_eq!(
+            exception_of(&worker_error("worker disconnected")).0,
+            "WorkerError"
+        );
     }
 }
 

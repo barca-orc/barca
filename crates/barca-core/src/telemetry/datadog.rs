@@ -24,11 +24,25 @@ const INTAKE_PATH: &str = "/v0.3/traces";
 const MAX_MESSAGE_CHARS: usize = 2000;
 const MAX_STACK_CHARS: usize = 4000;
 
+/// The first `max_chars` characters of `text`, marked when something was dropped.
 fn cut(text: &str, max_chars: usize) -> String {
     match text.char_indices().nth(max_chars) {
         Some((end, _)) => format!("{}… [cut]", &text[..end]),
         None => text.to_string(),
     }
+}
+
+/// The last `max_chars` characters of `text`: a traceback ends with the frame that raised.
+fn cut_keeping_the_end(text: &str, max_chars: usize) -> String {
+    let total = text.chars().count();
+    if total <= max_chars {
+        return text.to_string();
+    }
+    let start = text
+        .char_indices()
+        .nth(total - max_chars)
+        .map_or(0, |(i, _)| i);
+    format!("[cut] …{}", &text[start..])
 }
 
 /// Where the Agent's trace intake listens.
@@ -77,7 +91,11 @@ fn agent_from(url: Option<&str>, host: Option<&str>, port: Option<&str>) -> Resu
                 "DD_TRACE_AGENT_URL={url} is not supported: use http://host:port or unix:///path"
             ));
         }
-        let authority = url[7..].split(['/', '?']).next().unwrap_or("");
+        let authority = url[7..].split(['/', '?', '#']).next().unwrap_or("");
+        if authority.contains('@') {
+            // Not echoed: it may hold a password.
+            return Err("DD_TRACE_AGENT_URL must not contain credentials (user@host)".to_string());
+        }
         // An IPv6 literal is written in brackets: http://[::1]:8126.
         let (host, port) = if let Some(rest) = authority.strip_prefix('[') {
             let Some((host, after)) = rest.split_once(']') else {
@@ -85,7 +103,12 @@ fn agent_from(url: Option<&str>, host: Option<&str>, port: Option<&str>) -> Resu
             };
             match after.strip_prefix(':') {
                 Some(p) => (host, parse_port(p)?),
-                None => (host, 8126),
+                None if after.is_empty() => (host, 8126),
+                None => {
+                    return Err(format!(
+                        "DD_TRACE_AGENT_URL={url}: unexpected '{after}' after ']'"
+                    ));
+                }
             }
         } else {
             match authority.rsplit_once(':') {
@@ -218,7 +241,7 @@ impl Datadog {
             if let Some(stack) = &step.error_traceback {
                 meta.insert(
                     "error.stack".to_string(),
-                    json!(cut(stack, MAX_STACK_CHARS)),
+                    json!(cut_keeping_the_end(stack, MAX_STACK_CHARS)),
                 );
             }
             let mut metrics = Map::new();
@@ -410,6 +433,13 @@ mod tests {
             Ok(tcp("::1", 8126))
         );
         assert!(agent_from(Some("http://[::1"), None, None).is_err());
+        assert!(agent_from(Some("http://[::1]junk:8127"), None, None).is_err());
+        assert_eq!(
+            agent_from(Some("http://agent:8127#frag"), None, None),
+            Ok(tcp("agent", 8127))
+        );
+        let with_password = agent_from(Some("http://user:secret@agent:8127"), None, None);
+        assert!(!with_password.unwrap_err().contains("secret"));
         assert!(agent_from(Some("https://agent:8126"), None, None).is_err());
         assert!(agent_from(None, None, Some("many")).is_err());
     }
@@ -432,7 +462,7 @@ mod tests {
         failed.kind = "task";
         failed.error_type = Some("ValueError".to_string());
         failed.error_message = Some("x".repeat(MAX_MESSAGE_CHARS + 500));
-        failed.error_traceback = Some("  File \"p.py\", line 3".to_string());
+        failed.error_traceback = Some(format!("{}  File \"p.py\", line 3", "y".repeat(5000)));
         failed.attempts = None;
         let payload = datadog().trace(&run(
             "failed",
@@ -471,7 +501,9 @@ mod tests {
         assert_eq!(spans[2]["meta"]["error.type"], "ValueError");
         let message = spans[2]["meta"]["error.message"].as_str().unwrap();
         assert!(message.chars().count() < MAX_MESSAGE_CHARS + 20 && message.ends_with("[cut]"));
-        assert_eq!(spans[2]["meta"]["error.stack"], "  File \"p.py\", line 3");
+        let stack = spans[2]["meta"]["error.stack"].as_str().unwrap();
+        assert!(stack.starts_with("[cut]") && stack.ends_with("  File \"p.py\", line 3"));
+        assert!(stack.chars().count() < MAX_STACK_CHARS + 20);
         assert!(spans[2]["metrics"].get("barca.attempts").is_none());
         assert_eq!(spans[1]["metrics"]["barca.attempts"], 1);
         assert_eq!(spans[1]["metrics"]["_dd.measured"], 1);
