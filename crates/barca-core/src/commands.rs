@@ -3307,6 +3307,29 @@ pub(crate) fn build_dag_blocking(
                 }
             }
         }
+        // Modules above the pipeline file's directory: the worker's cwd is the project root, so
+        // it is importable too (`from shared.utils import f` for `shared/utils.py` beside
+        // `pipelines/`). The directory's own modules shadow the root's, as on `sys.path`.
+        if let Ok(root) = std::env::current_dir().and_then(|r| r.canonicalize())
+            && let Ok(canon_dir) = dir.canonicalize()
+            && canon_dir != root
+            && canon_dir.starts_with(&root)
+        {
+            scan_subdirectories(&root, &root, &mut file_sources, &mut packages);
+            if let Ok(entries) = std::fs::read_dir(&root) {
+                for entry in entries.flatten() {
+                    let ep = entry.path();
+                    if ep.extension().map(|e| e == "py").unwrap_or(false)
+                        && let Some(stem) = ep.file_stem().map(|s| s.to_string_lossy().to_string())
+                        && let std::collections::hash_map::Entry::Vacant(e) =
+                            file_sources.entry(stem)
+                        && let Ok(content) = fs::read_to_string(&ep)
+                    {
+                        e.insert(content);
+                    }
+                }
+            }
+        }
         for (other_dir, others) in &by_dir {
             if other_dir != dir {
                 for f in others {

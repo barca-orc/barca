@@ -10,6 +10,10 @@
 //! `import pkg.mod` + `pkg.mod.f()`, `from pkg import mod` + `mod.f()`) each add only
 //! `compute`'s own cone — its source and the definitions it uses, transitively — never the
 //! whole module. Modules that are not project files (stdlib, installed packages) add nothing.
+//!
+//! Classes are hashed whole (methods and class-level code), imports inside function and class
+//! bodies are followed like module-level ones, and a module used as a value (`getattr(m, n)`)
+//! contributes its entire source, since the attribute read cannot be known statically.
 
 use ruff_python_ast::{Expr, Stmt};
 use ruff_python_parser::parse_module;
@@ -80,6 +84,15 @@ pub fn cone_hash_from_defs(
         &mut cone_parts,
         0,
     );
+    trace_local_imports(
+        local_imports_of(target),
+        refs,
+        other_sources,
+        packages,
+        &mut visited,
+        &mut cone_parts,
+        0,
+    );
 
     while let Some(name) = queue.pop() {
         if !visited.insert(name.clone()) {
@@ -92,6 +105,7 @@ pub fn cone_hash_from_defs(
             ModuleDef::Function {
                 source_text,
                 references,
+                ..
             }
             | ModuleDef::Assignment {
                 source_text,
@@ -112,6 +126,15 @@ pub fn cone_hash_from_defs(
                     &mut cone_parts,
                     0,
                 );
+                trace_local_imports(
+        local_imports_of(def),
+        references,
+        other_sources,
+        packages,
+        &mut visited,
+        &mut cone_parts,
+        0,
+    );
             }
             // Only reached through `module.attr`, handled by `trace_module_attributes`.
             ModuleDef::ModuleImport { .. } => {}
@@ -146,12 +169,19 @@ pub fn cone_hash_from_defs(
     format!("{:x}", hasher.finalize())
 }
 
+/// Prefix of a reference entry meaning "this name was used on its own", not as `name.attr`.
+const VALUE_USE: &str = "\u{0}value:";
+
 // ─── Internal types ──────────────────────────────────────────────────────────
 
+#[derive(Clone)]
 pub enum ModuleDef {
+    /// A `def` or a `class` (its whole body: methods and class-level code).
     Function {
         source_text: String,
         references: HashSet<String>,
+        /// Imports made inside the body (`def f(): from helpers import g`), at any depth.
+        local_imports: Vec<(String, ModuleDef)>,
     },
     Assignment {
         source_text: String,
@@ -162,6 +192,13 @@ pub enum ModuleDef {
     /// `import module` / `import a.b as m`: the name is bound to the module itself
     /// (`import a.b` binds `a`). Followed only through attribute access (`m.f`).
     ModuleImport { module: String },
+}
+
+fn local_imports_of(def: &ModuleDef) -> &[(String, ModuleDef)] {
+    match def {
+        ModuleDef::Function { local_imports, .. } => local_imports,
+        _ => &[],
+    }
 }
 
 /// A name the BFS follows by itself. A bare module binding is not: what a step uses from a
@@ -232,9 +269,26 @@ fn trace_module_attributes(
     cone_parts: &mut Vec<(String, String)>,
     depth: usize,
 ) {
+    for r in references {
+        let Some(base) = r.strip_prefix(VALUE_USE) else {
+            continue;
+        };
+        let module = match defs.get(base) {
+            Some(ModuleDef::ModuleImport { module }) => module.clone(),
+            Some(ModuleDef::Import { module }) => {
+                if module.is_empty() {
+                    base.to_string()
+                } else {
+                    format!("{module}.{base}")
+                }
+            }
+            _ => continue,
+        };
+        trace_whole_module(&module, other_sources, packages, visited, cone_parts, depth);
+    }
     let mut attrs: Vec<(String, String)> = references
         .iter()
-        .filter(|r| r.contains('.'))
+        .filter(|r| r.contains('.') && !r.starts_with(VALUE_USE))
         .filter_map(|r| module_attribute(r, defs, other_sources))
         .collect();
     attrs.sort();
@@ -252,6 +306,77 @@ fn trace_module_attributes(
                 cone_parts,
                 depth,
             );
+        }
+    }
+}
+
+/// A module used as a value (`getattr(helpers, name)`, `helpers` passed around): which
+/// attribute is read cannot be known statically, so the whole module counts, plus the cone of
+/// every definition in it. Not a project module: nothing.
+fn trace_whole_module(
+    module: &str,
+    other_sources: &HashMap<String, String>,
+    packages: &HashSet<String>,
+    visited: &mut HashSet<String>,
+    cone_parts: &mut Vec<(String, String)>,
+    depth: usize,
+) {
+    let Some(source) = other_sources.get(module) else {
+        return;
+    };
+    if depth > 5 || !visited.insert(format!("{module}:*")) {
+        return;
+    }
+    cone_parts.push((format!("{module}:*"), source.clone()));
+    let own_package = if packages.contains(module) {
+        Some(module.to_string())
+    } else {
+        module.rsplit_once('.').map(|(pkg, _)| pkg.to_string())
+    };
+    let defs = collect_module_definitions_with_context(source, own_package.as_deref());
+    let mut names: Vec<&String> = defs.keys().collect();
+    names.sort();
+    for name in names {
+        if visited.insert(format!("{module}:{name}")) {
+            resolve_import(module, name, other_sources, packages, visited, cone_parts, depth + 1);
+        }
+    }
+}
+
+/// Imports made inside a function or class body (`def step(): from helpers import f`), resolved
+/// like module-level ones. Only project modules count; they add nothing else to the hash.
+fn trace_local_imports(
+    local_imports: &[(String, ModuleDef)],
+    references: &HashSet<String>,
+    other_sources: &HashMap<String, String>,
+    packages: &HashSet<String>,
+    visited: &mut HashSet<String>,
+    cone_parts: &mut Vec<(String, String)>,
+    depth: usize,
+) {
+    if local_imports.is_empty() {
+        return;
+    }
+    let mut scope: HashMap<String, ModuleDef> = HashMap::new();
+    for (name, def) in local_imports {
+        scope.insert(name.clone(), def.clone());
+    }
+    trace_module_attributes(
+        references,
+        &scope,
+        other_sources,
+        packages,
+        visited,
+        cone_parts,
+        depth,
+    );
+    for (name, def) in local_imports {
+        if let ModuleDef::Import { module } = def
+            && other_sources.contains_key(module)
+            && references.contains(name)
+            && visited.insert(format!("{module}:{name}"))
+        {
+            resolve_import(module, name, other_sources, packages, visited, cone_parts, depth);
         }
     }
 }
@@ -301,6 +426,7 @@ fn resolve_import(
         ModuleDef::Function {
             source_text,
             references,
+            ..
         }
         | ModuleDef::Assignment {
             source_text,
@@ -316,6 +442,15 @@ fn resolve_import(
                 cone_parts,
                 depth + 1,
             );
+            trace_local_imports(
+        local_imports_of(imported_def),
+        references,
+        other_sources,
+        packages,
+        visited,
+        cone_parts,
+        depth + 1,
+    );
             // Trace transitive deps within the module.
             let mut bfs_queue: Vec<String> = references
                 .iter()
@@ -332,6 +467,7 @@ fn resolve_import(
                         ModuleDef::Function {
                             source_text,
                             references,
+                            ..
                         }
                         | ModuleDef::Assignment {
                             source_text,
@@ -355,6 +491,15 @@ fn resolve_import(
                             cone_parts,
                             depth + 1,
                         );
+                        trace_local_imports(
+        imported_defs.get(&dep).map_or(&[][..], local_imports_of),
+        references,
+        other_sources,
+        packages,
+        visited,
+        cone_parts,
+        depth + 1,
+    );
                     }
                     Some(ModuleDef::Import {
                         module: next_module,
@@ -435,11 +580,33 @@ fn collect_module_definitions_with_context(
                 let end = func.range().end().to_usize();
                 let source_text = source[start..end].to_string();
                 let references = collect_names_from_stmts(&func.body);
+                let mut local_imports = Vec::new();
+                collect_local_imports(&func.body, own_package, &mut local_imports);
                 defs.insert(
                     name,
                     ModuleDef::Function {
                         source_text,
                         references,
+                        local_imports,
+                    },
+                );
+            }
+            Stmt::ClassDef(class) => {
+                // A class is hashed whole: bases, methods and class-level code.
+                let name = class.name.to_string();
+                let start = class.range().start().to_usize();
+                let end = class.range().end().to_usize();
+                let source_text = source[start..end].to_string();
+                let mut references = HashSet::new();
+                collect_stmt_names(stmt, &mut references);
+                let mut local_imports = Vec::new();
+                collect_local_imports(&class.body, own_package, &mut local_imports);
+                defs.insert(
+                    name,
+                    ModuleDef::Function {
+                        source_text,
+                        references,
+                        local_imports,
                     },
                 );
             }
@@ -481,55 +648,16 @@ fn collect_module_definitions_with_context(
                     );
                 }
             }
-            Stmt::Import(import) => {
-                // `import a.b` binds `a`; `import a.b as m` binds `m` to `a.b`. A name that is
-                // already defined keeps its earlier definition (`or_insert`), so recording module
-                // bindings never changes what an existing name resolves to.
-                for alias in &import.names {
-                    let full = alias.name.to_string();
-                    let (bound, module) = match &alias.asname {
-                        Some(asname) => (asname.to_string(), full),
-                        None => {
-                            let top = full.split('.').next().unwrap_or_default().to_string();
-                            (top.clone(), top)
-                        }
-                    };
-                    defs.entry(bound)
-                        .or_insert(ModuleDef::ModuleImport { module });
+            Stmt::Import(_) => {
+                // A name that is already defined keeps its earlier definition (`or_insert`), so
+                // recording module bindings never changes what an existing name resolves to.
+                for (bound, def) in import_bindings(stmt, own_package) {
+                    defs.entry(bound).or_insert(def);
                 }
             }
-            Stmt::ImportFrom(import) => {
-                let raw_module = import
-                    .module
-                    .as_ref()
-                    .map(|m| m.to_string())
-                    .unwrap_or_default();
-                // Resolve relative imports: `from .core import x` (level=1)
-                // resolves against `own_package`; each extra leading dot
-                // (level=2, 3, ...) walks one more package level up.
-                let module_name = if import.level > 0 {
-                    match own_package.and_then(|pkg| {
-                        package_ancestor(pkg, (import.level as usize).saturating_sub(1))
-                    }) {
-                        Some(base) if raw_module.is_empty() => base,
-                        Some(base) => format!("{base}.{raw_module}"),
-                        None => raw_module,
-                    }
-                } else {
-                    raw_module
-                };
-                for alias in &import.names {
-                    let imported_name = alias
-                        .asname
-                        .as_ref()
-                        .map(|a| a.to_string())
-                        .unwrap_or_else(|| alias.name.to_string());
-                    defs.insert(
-                        imported_name,
-                        ModuleDef::Import {
-                            module: module_name.clone(),
-                        },
-                    );
+            Stmt::ImportFrom(_) => {
+                for (bound, def) in import_bindings(stmt, own_package) {
+                    defs.insert(bound, def);
                 }
             }
             _ => {}
@@ -537,6 +665,112 @@ fn collect_module_definitions_with_context(
     }
 
     defs
+}
+
+/// The names an `import` / `from ... import` statement binds, and what each is bound to.
+/// `import a.b` binds `a`; `import a.b as m` binds `m` to `a.b`. Relative imports resolve
+/// against `own_package` (see `resolve_import`).
+fn import_bindings(stmt: &Stmt, own_package: Option<&str>) -> Vec<(String, ModuleDef)> {
+    match stmt {
+        Stmt::Import(import) => import
+            .names
+            .iter()
+            .map(|alias| {
+                let full = alias.name.to_string();
+                match &alias.asname {
+                    Some(asname) => (asname.to_string(), ModuleDef::ModuleImport { module: full }),
+                    None => {
+                        let top = full.split('.').next().unwrap_or_default().to_string();
+                        (top.clone(), ModuleDef::ModuleImport { module: top })
+                    }
+                }
+            })
+            .collect(),
+        Stmt::ImportFrom(import) => {
+            let raw_module = import
+                .module
+                .as_ref()
+                .map(|m| m.to_string())
+                .unwrap_or_default();
+            // `from .core import x` (level=1) resolves against `own_package`; each extra
+            // leading dot (level=2, 3, ...) walks one more package level up.
+            let module_name = if import.level > 0 {
+                match own_package.and_then(|pkg| {
+                    package_ancestor(pkg, (import.level as usize).saturating_sub(1))
+                }) {
+                    Some(base) if raw_module.is_empty() => base,
+                    Some(base) => format!("{base}.{raw_module}"),
+                    None => raw_module,
+                }
+            } else {
+                raw_module
+            };
+            import
+                .names
+                .iter()
+                .map(|alias| {
+                    let imported_name = alias
+                        .asname
+                        .as_ref()
+                        .map(|a| a.to_string())
+                        .unwrap_or_else(|| alias.name.to_string());
+                    (
+                        imported_name,
+                        ModuleDef::Import {
+                            module: module_name.clone(),
+                        },
+                    )
+                })
+                .collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Imports made anywhere inside `stmts` (function bodies, nested blocks, methods).
+fn collect_local_imports(
+    stmts: &[Stmt],
+    own_package: Option<&str>,
+    out: &mut Vec<(String, ModuleDef)>,
+) {
+    for stmt in stmts {
+        match stmt {
+            Stmt::Import(_) | Stmt::ImportFrom(_) => out.extend(import_bindings(stmt, own_package)),
+            Stmt::FunctionDef(s) => collect_local_imports(&s.body, own_package, out),
+            Stmt::ClassDef(s) => collect_local_imports(&s.body, own_package, out),
+            Stmt::If(s) => {
+                collect_local_imports(&s.body, own_package, out);
+                for c in &s.elif_else_clauses {
+                    collect_local_imports(&c.body, own_package, out);
+                }
+            }
+            Stmt::For(s) => {
+                collect_local_imports(&s.body, own_package, out);
+                collect_local_imports(&s.orelse, own_package, out);
+            }
+            Stmt::While(s) => {
+                collect_local_imports(&s.body, own_package, out);
+                collect_local_imports(&s.orelse, own_package, out);
+            }
+            Stmt::With(s) => collect_local_imports(&s.body, own_package, out),
+            Stmt::Try(s) => {
+                collect_local_imports(&s.body, own_package, out);
+                for h in &s.handlers {
+                    if let Some(h) = h.as_except_handler() {
+                        collect_local_imports(&h.body, own_package, out);
+                    }
+                }
+                collect_local_imports(&s.orelse, own_package, out);
+                collect_local_imports(&s.finalbody, own_package, out);
+            }
+            Stmt::Match(s) => {
+                for case in &s.cases {
+                    collect_local_imports(&case.body, own_package, out);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 // ─── Name collection from AST ────────────────────────────────────────────────
@@ -687,6 +921,9 @@ fn collect_expr_names(expr: &Expr, names: &mut HashSet<String>) {
     match expr {
         Expr::Name(n) => {
             names.insert(n.id.to_string());
+            // A bare use of a name (not the base of `name.attr`): a module used this way is a
+            // value, which static analysis cannot follow (see `trace_module_attributes`).
+            names.insert(format!("{VALUE_USE}{}", n.id));
         }
         Expr::Call(c) => {
             collect_expr_names(&c.func, names);
@@ -701,10 +938,25 @@ fn collect_expr_names(expr: &Expr, names: &mut HashSet<String>) {
             // `helpers.compute` also records the dotted chain, so a call through an imported
             // project module can be traced (`trace_module_attributes`). The base name is still
             // recorded (via the recursion), as before.
-            if let Some(chain) = dotted_name(expr) {
-                names.insert(chain);
+            if dotted_name(expr).is_some() {
+                // Every prefix of the chain and the root name, but not the root as a value.
+                let mut cur = expr;
+                loop {
+                    match cur {
+                        Expr::Attribute(next) => {
+                            names.insert(dotted_name(cur).unwrap_or_default());
+                            cur = &next.value;
+                        }
+                        Expr::Name(n) => {
+                            names.insert(n.id.to_string());
+                            break;
+                        }
+                        _ => break,
+                    }
+                }
+            } else {
+                collect_expr_names(&a.value, names)
             }
-            collect_expr_names(&a.value, names)
         }
         Expr::Subscript(s) => {
             collect_expr_names(&s.value, names);
@@ -1244,5 +1496,100 @@ def my_asset():
             hash_of(entry, &other, &["pkg"]),
             "5f177ae7cd8027eb78d02d6cd8a7ec9c636aa91ae78576eabceac2386cc41382"
         );
+    }
+
+    // ─── Classes, in-function imports, modules used as values (#194) ────────────────
+
+    const MODEL_V1: &str = "class Model:\n    def predict(self):\n        return 1\n\n\nclass Other:\n    def predict(self):\n        return 0\n";
+    const MODEL_V2: &str = "class Model:\n    def predict(self):\n        return 2\n\n\nclass Other:\n    def predict(self):\n        return 0\n";
+    const MODEL_UNRELATED: &str = "class Model:\n    def predict(self):\n        return 1\n\n\nclass Other:\n    def predict(self):\n        return 5\n";
+
+    fn one(name: &str, src: &str) -> HashMap<String, String> {
+        HashMap::from([(name.to_string(), src.to_string())])
+    }
+
+    #[test]
+    fn test_class_body_edit_in_helper_module_changes_hash() {
+        let entry = "from helpers import Model\n\ndef my_asset():\n    return Model().predict()\n";
+        let h1 = hash_of(entry, &one("helpers", MODEL_V1), &[]);
+        assert!(!h1.is_empty());
+        assert_ne!(h1, hash_of(entry, &one("helpers", MODEL_V2), &[]));
+        assert_eq!(h1, hash_of(entry, &one("helpers", MODEL_UNRELATED), &[]));
+    }
+
+    #[test]
+    fn test_class_defined_in_the_same_file_is_tracked() {
+        let a = "class M:\n    def f(self):\n        return 1\n\ndef my_asset():\n    return M().f()\n";
+        let b = a.replace("return 1", "return 2");
+        assert_ne!(
+            hash_of(a, &HashMap::new(), &[]),
+            hash_of(&b, &HashMap::new(), &[])
+        );
+    }
+
+    #[test]
+    fn test_class_method_calling_another_helper_is_followed() {
+        let entry = "from helpers import Model\n\ndef my_asset():\n    return Model().predict()\n";
+        let m = "def base():\n    return 1\n\n\nclass Model:\n    def predict(self):\n        return base()\n";
+        let h1 = hash_of(entry, &one("helpers", m), &[]);
+        let h2 = hash_of(entry, &one("helpers", &m.replace("return 1", "return 2")), &[]);
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn test_import_inside_function_body_is_tracked() {
+        let entry = "def my_asset():\n    from helpers import compute\n    return compute()\n";
+        let h1 = hash_of(entry, &one("helpers", HELPERS_V1), &[]);
+        assert!(!h1.is_empty());
+        assert_ne!(h1, hash_of(entry, &one("helpers", HELPERS_V2), &[]));
+        assert_eq!(h1, hash_of(entry, &one("helpers", HELPERS_UNRELATED_EDIT), &[]));
+    }
+
+    #[test]
+    fn test_module_import_inside_function_body_is_tracked() {
+        let entry = "def my_asset():\n    import helpers\n    return helpers.compute()\n";
+        let h1 = hash_of(entry, &one("helpers", HELPERS_V1), &[]);
+        assert_ne!(h1, hash_of(entry, &one("helpers", HELPERS_V2), &[]));
+        assert_eq!(h1, hash_of(entry, &one("helpers", HELPERS_UNRELATED_EDIT), &[]));
+    }
+
+    #[test]
+    fn test_import_inside_nested_block_and_method_is_tracked() {
+        let entry = "class K:\n    def run(self):\n        if True:\n            from helpers import compute\n        return compute()\n\ndef my_asset():\n    return K().run()\n";
+        let h1 = hash_of(entry, &one("helpers", HELPERS_V1), &[]);
+        assert_ne!(h1, hash_of(entry, &one("helpers", HELPERS_V2), &[]));
+    }
+
+    #[test]
+    fn test_stdlib_import_inside_function_adds_nothing() {
+        let entry = "def my_asset():\n    import json\n    return json.dumps(1)\n";
+        assert!(hash_of(entry, &HashMap::new(), &[]).is_empty());
+    }
+
+    #[test]
+    fn test_module_used_as_a_value_hashes_the_whole_module() {
+        let entry = "import helpers\n\ndef my_asset(name):\n    return getattr(helpers, name)()\n";
+        let h1 = hash_of(entry, &one("helpers", HELPERS_V1), &[]);
+        assert!(!h1.is_empty());
+        assert_ne!(h1, hash_of(entry, &one("helpers", HELPERS_V2), &[]));
+        // Conservative: an edit to any definition in the module counts.
+        assert_ne!(h1, hash_of(entry, &one("helpers", HELPERS_UNRELATED_EDIT), &[]));
+    }
+
+    #[test]
+    fn test_module_used_as_value_does_not_touch_other_modules() {
+        let entry = "import helpers\n\ndef my_asset(name):\n    return getattr(helpers, name)()\n";
+        let mut other = one("helpers", HELPERS_V1);
+        other.insert("elsewhere".to_string(), "def x():\n    return 1\n".to_string());
+        let h1 = hash_of(entry, &other, &[]);
+        other.insert("elsewhere".to_string(), "def x():\n    return 2\n".to_string());
+        assert_eq!(h1, hash_of(entry, &other, &[]));
+    }
+
+    #[test]
+    fn test_attribute_use_of_a_module_stays_precise() {
+        let entry = "import helpers\n\ndef my_asset():\n    return helpers.compute()\n";
+        let h1 = hash_of(entry, &one("helpers", HELPERS_V1), &[]);
+        assert_eq!(h1, hash_of(entry, &one("helpers", HELPERS_UNRELATED_EDIT), &[]));
     }
 }

@@ -315,9 +315,10 @@ from helpers import clean         # clean(...)
 Editing `clean` (or anything it calls) re-runs the assets that call it; editing another function
 in `helpers.py` re-runs nothing. The pipeline path can be spelled any way (`pipeline.py`,
 `./pipeline.py`, an absolute path, or `my_project/pipeline.py` from the parent directory): all
-compute the same run hash. Not followed yet: class bodies, imports inside a function body, a
-module used as a value (`getattr(helpers, name)`), and modules above the pipeline's directory.
-Standard-library and installed packages are never hashed. In those cases recompute with
+compute the same run hash. Class bodies, imports inside a function body, and modules under the project root above the
+pipeline's directory are followed too. A module used as a value (`getattr(helpers, name)`) is
+hashed whole, so any edit to it re-runs. Standard-library and installed packages are never
+hashed, nor are modules outside the project root or built at run time. In those cases recompute with
 `barca get <asset> pipeline.py --refresh-all` (or `--refresh <asset>` on `get` or `run`).
 See `barca docs cache`.
 

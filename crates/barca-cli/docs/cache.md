@@ -50,13 +50,28 @@ The pipeline file can be named any way on the command line: `barca get rows pipe
 directory all compute the same run hash and the same node id, relative to the project root
 (`pipeline.py:rows`, or `project/pipeline.py:rows` when the root is the parent directory).
 
-Not followed yet (an edit there does not change the hash; recompute with `--refresh-all` or
-`--refresh`):
+Also followed:
 
-- classes (`from helpers import Model`): the import is recorded, but not the class body;
-- imports inside the function body (`def rows(): from helpers import clean`);
-- a module used as a value rather than through an attribute (`getattr(helpers, name)`);
-- modules above the pipeline file's directory.
+- **Classes** (`from helpers import Model`): the whole class is hashed, methods and
+  class-level code, and what they use. Editing `Model.predict` re-runs; editing another class in
+  the module does not. Classes defined in the pipeline file itself count the same way.
+- **Imports inside the function body** (`def rows(): from helpers import clean`), including in
+  nested blocks and methods: followed like a module-level import, at the same precision.
+- **A module used as a value** (`getattr(helpers, name)()`, or passing `helpers` around): which
+  attribute is read cannot be known statically, so the **whole module** is hashed, and so is
+  everything it uses. This is deliberately conservative: any edit to that module re-runs the
+  step.
+- **Modules above the pipeline file's directory**, up to the **project root** (the directory
+  barca runs in, see "Where things live"): a pipeline in `pipelines/p.py` using
+  `from shared.utils import f` follows `shared/utils.py` at the root, because the root is on the
+  worker's import path. A module in the pipeline file's own directory wins over a same-named one
+  at the root, as it does when Python imports it. The boundary is the root and what is below it:
+  `../shared/` outside the root, or a directory you add to `sys.path` yourself, is not followed.
+
+Not followed (an edit there does not change the hash; recompute with `--refresh-all` or
+`--refresh`): modules outside the project root, imports built at run time
+(`importlib.import_module(name)`), and `import x` of a module that only a custom `sys.path`
+entry makes importable.
 
 Barca runs exactly the source it hashed. It never runs stale bytecode for your pipeline files or
 the modules they import from the same directory tree: their `__pycache__` .pyc files are checked against a
