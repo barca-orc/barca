@@ -4,6 +4,7 @@ description: 'barca.toml, env var/CLI precedence, --env separation, and the opti
 ---
 
 - **Status:** Accepted (retroactive baseline — documents behavior as of v0.6.1)
+- **Current behavior:** this page is a historical baseline and some details have changed since v0.6.1. For what barca does now, read [Configuration](/reference/config/) and [Remote Storage](/reference/remote-storage/).
 - **Date:** 2026-07-16
 - **Touches:** barca-core | barca-cli
 - **Supersedes / Related:** [RFC-0005](/rfcs/0005-artifact-serialization-and-storage/) (content-addressed artifacts this config points at), [RFC-0004](/rfcs/0004-http-server-api/) (`serve`'s shared-state restriction)

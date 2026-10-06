@@ -3,7 +3,7 @@ title: Releases
 description: What shipped in each barca release, and what's scoped for the future.
 ---
 
-This file scopes barca by release so the scope does not quietly expand.
+This page scoped barca by release through 0.6 so the scope did not quietly expand. It is not kept up to date: for what shipped in every release since, see the [Changelog](/contributing/changelog/). The "Planned" and "Future" lists below are the old plans, not a current roadmap; open issues are.
 
 ## 0.1.x (shipped)
 
@@ -110,7 +110,7 @@ Planned (carried forward):
 - **Alerting hooks** — Slack webhooks, email notifications
   ([#52](https://github.com/ExSidius/barca/issues/52))
 
-## 0.6.0 (current)
+## 0.6.0 (shipped)
 
 Goal: object storage on equal footing across clouds, held to one contract.
 

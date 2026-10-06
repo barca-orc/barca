@@ -4,6 +4,7 @@ description: The asset/sensor/task vocabulary and the Always/Manual/Schedule fre
 ---
 
 - **Status:** Accepted (retroactive baseline — documents behavior as of v0.6.1)
+- **Current behavior:** this page is a historical baseline and some details have changed since v0.6.1. For what barca does now, read the [Decorators API](/reference/api/decorators/) and the [CLI contract](/reference/cli-contract/).
 - **Date:** 2026-07-16
 - **Touches:** barca-core | python/barca | HTTP server (scheduler)
 - **Supersedes / Related:** [RFC-0003](/rfcs/0003-decorator-and-python-api/) (decorator surface), [RFC-0004](/rfcs/0004-http-server-api/) (`barca serve` scheduler)

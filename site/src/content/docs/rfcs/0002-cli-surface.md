@@ -4,6 +4,7 @@ description: The barca binary — commands, flags, exit codes, and the stdout/st
 ---
 
 - **Status:** Accepted (retroactive baseline — documents behavior as of v0.6.1)
+- **Current behavior:** this page is a historical baseline and some details have changed since v0.6.1. For what barca does now, read the [CLI reference](/reference/cli/) and the [CLI contract](/reference/cli-contract/). Since then files became optional, `--no-cache` was replaced by `--refresh-all` (and `--refresh` became cache-aware), and `list`, `status`, `sql`, `docs` and `version` were added.
 - **Date:** 2026-07-16
 - **Touches:** barca-cli | barca-core
 - **Supersedes / Related:** [RFC-0006](/rfcs/0006-configuration-and-remote-state/) (`--env`, config precedence)

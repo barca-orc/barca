@@ -107,7 +107,7 @@ barca plan pipeline.py
   "total_steps": 2,
   "phases": [
     {
-      "reason": "Initial",
+      "reason": {"type": "initial"},
       "streams": [
         {"stream_id": "p0-w0", "steps": ["pipeline.py:raw_data", "pipeline.py:summary"]}
       ]
@@ -364,7 +364,7 @@ fresh), see the dedicated [Scheduling](/scheduling/) guide — it covers the min
 
 ## 10. Inspecting plans
 
-`barca plan` is your debugging tool. It shows you exactly what barca will do without executing anything.
+`barca plan` shows the execution plan without executing anything (its JSON is experimental: it follows the planner). To see what a run would do about the cache, use `barca get <target> --dry-run`; `barca status` shows each node's cache state.
 
 ```bash
 # See the plan as formatted JSON
@@ -439,7 +439,7 @@ barca get pipeline.py    # run it
 
 - **Barca runs the code you saved.** Your pipeline files and the modules they import from the same directory tree are checked against a hash of their source, not `__pycache__` timestamps, so a same-size edit within one second (or under a tool that pins mtimes, such as Nix, Bazel or `touch -t`) never runs stale bytecode. Installed packages import as usual.
 
-- **Use `barca plan` liberally.** It's free (no execution) and shows you exactly how barca decomposes your DAG.
+- **Look before you run.** `barca plan` (the DAG as phases and streams), `barca get <target> --dry-run` (what is cached and what would run) and `barca status` (cache state per node) all run nothing.
 
 - **Check `.barca/metadata.db`.** It's a SQLite database. You can query it directly:
   ```bash

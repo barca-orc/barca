@@ -442,7 +442,7 @@ This is consistent with the broader Barca rule that historical definitions and m
 
 For `partitions_from(...)`, the partition set is resolved lazily at refresh/run time, not at index time. The partition-defining asset must be materialised before the partitioned asset can determine its partitions. Until then:
 
-- `barca plan` shows "partitions: pending" for the partitioned asset
+- `barca status` and `barca get --dry-run` report the partitioned asset as `unknown` (its partition keys are not known yet)
 - the partitioned asset cannot be materialised until the partition-defining asset has a successful materialization
 
 ## collect(asset)

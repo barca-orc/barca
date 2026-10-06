@@ -61,6 +61,7 @@ export default defineConfig({
             { label: 'Remote Storage', slug: 'reference/remote-storage' },
             { label: 'Server API', slug: 'reference/server-api' },
             { label: 'Decorators API', slug: 'reference/api/decorators' },
+            { label: 'Python API', slug: 'reference/api/python' },
           ],
         },
         {

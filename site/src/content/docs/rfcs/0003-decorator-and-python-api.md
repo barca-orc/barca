@@ -4,6 +4,7 @@ description: '@asset/@sensor/@task/@sink, partitions, parallel(), and the barca.
 ---
 
 - **Status:** Accepted (retroactive baseline — documents behavior as of v0.6.1)
+- **Current behavior:** this page is a historical baseline and some details have changed since v0.6.1. For what barca does now, read the [Decorators API](/reference/api/decorators/) and the [Python API](/reference/api/python/).
 - **Date:** 2026-07-16
 - **Touches:** python/barca | barca-core
 - **Supersedes / Related:** [RFC-0001](/rfcs/0001-node-kinds-and-freshness/) (node kind/freshness kwargs), [RFC-0005](/rfcs/0005-artifact-serialization-and-storage/) (serializer selection)

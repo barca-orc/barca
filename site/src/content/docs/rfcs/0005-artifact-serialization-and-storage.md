@@ -4,6 +4,7 @@ description: 'json/pickle/parquet artifact formats, local and remote storage, st
 ---
 
 - **Status:** Accepted (retroactive baseline — documents behavior as of v0.6.1)
+- **Current behavior:** this page is a historical baseline and some details have changed since v0.6.1. For what barca does now, read [Remote Storage](/reference/remote-storage/) (artifacts are written locally and transferred in the background) and the manual (`barca docs cache`, `barca docs types`).
 - **Date:** 2026-07-16
 - **Touches:** barca-core | python/barca
 - **Supersedes / Related:** [RFC-0006](/rfcs/0006-configuration-and-remote-state/) (remote URIs, shared metadata DB)

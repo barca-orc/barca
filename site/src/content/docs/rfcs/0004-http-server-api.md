@@ -4,6 +4,7 @@ description: 'barca serve — endpoints, the async run/poll contract, cron sched
 ---
 
 - **Status:** Accepted (retroactive baseline — documents behavior as of v0.6.1)
+- **Current behavior:** this page is a historical baseline and some details have changed since v0.6.1. For what barca does now, read the [Server API reference](/reference/server-api/).
 - **Date:** 2026-07-16
 - **Touches:** HTTP server | dev server/UI | barca-cli | python/barca
 - **Supersedes / Related:** [RFC-0001](/rfcs/0001-node-kinds-and-freshness/) (Schedule freshness), [RFC-0002](/rfcs/0002-cli-surface/) (`serve` flags, shared result shape)

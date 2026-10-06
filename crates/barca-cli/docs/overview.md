@@ -46,13 +46,13 @@ barca get total pipeline.py      # second time: everything is a cache hit
 | `barca list [files...]` | List nodes with kind, freshness and dependencies (`--json`, `--limit`/`--all`, `--fields`; `barca docs agents`). |
 | `barca status [target] [files...]` | Per node: cache state and why, last run, artifact rows/columns (`--json`, `--limit`/`--all`, `--fields`). |
 | `barca sql "<query>" [files...]` | Query cached results with DuckDB; each asset is a view (`barca docs sql`). Experimental. |
-| `barca plan [files...]` | Emit the tiered execution plan as JSON. |
+| `barca plan [files...]` | Emit the tiered execution plan as JSON. Experimental. |
 | `barca history` / `barca stats` | Past runs; timing and cache statistics (`--json`, `--fields`; history takes `--limit`/`--all`). |
-| `barca serve [files...]` | HTTP API and cron scheduler. |
+| `barca serve [files...]` | HTTP API and cron scheduler. Experimental. |
+| `barca docs [topic]` | This manual. |
 
 `files...` are optional everywhere: without them barca reads every file in the project that
 imports barca; with them (files or directories) it reads only those (`barca docs discovery`).
-| `barca docs [topic]` | This manual. |
 
 In a terminal, `get`/`run`/`list`/`history`/`stats` print human-readable output; piped or run
 from a program they print JSON. `--json` and `--pretty` (or `BARCA_OUTPUT=json|pretty`) override

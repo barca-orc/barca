@@ -95,7 +95,7 @@ uv run barca plan pipeline.py
   "total_steps": 2,
   "phases": [
     {
-      "reason": "Initial",
+      "reason": {"type": "initial"},
       "streams": [
         {
           "stream_id": "p0-w0",
