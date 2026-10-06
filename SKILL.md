@@ -80,7 +80,8 @@ barca get total pipeline.py --refresh-all         # recompute an asset's whole c
 | 3    | `infra`       | barca or its environment (DB, workers, I/O)     | retry                |
 | 130  | `cancelled`   | interrupted                                     | re-run               |
 
-Steps that finished before a failure or cancel stay cached: re-running resumes.
+Steps that finished before a failure, a cancel or a kill stay cached: re-running resumes.
+While a run is going, `barca status` from another process shows the steps it has finished.
 
 ## Agent flags and jq
 
