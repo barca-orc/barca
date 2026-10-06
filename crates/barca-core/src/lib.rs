@@ -9,6 +9,7 @@ pub mod db;
 pub mod discover;
 pub mod dispatch;
 pub mod envdeps;
+pub mod events;
 pub mod hash;
 pub mod io_loop;
 pub mod model;
@@ -18,9 +19,11 @@ pub mod protocol;
 pub mod sql;
 pub mod state_sync;
 pub mod status;
+pub mod telemetry;
 pub mod transfer;
 
 pub use dag::Dag;
+pub use events::RunEvent;
 pub use model::*;
 pub use planner::{ExecutionPlan, ResourceConfig, expand_partition_combos};
 /// Re-exported so callers (CLI, server) share one token type without depending

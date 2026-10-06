@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "barca"
-version = "0.15.0"
+version = "0.16.0"
 description = "Invisible asset orchestrator"
 requires-python = ">=3.12"
 license = "MIT"
@@ -59,7 +59,9 @@ bindings = "bin"
 python-source = "python"
 module-name = "barca"
 manifest-path = "crates/barca-cli/Cargo.toml"
-include = ["LICENSE"]
+# ui/dist is the prebuilt web UI (the release workflow builds it first); the sdist
+# carries it so a source build embeds the UI without Node.
+include = ["LICENSE", { path = "ui/dist/**/*", format = "sdist" }]
 
 [tool.ruff]
 line-length = 100

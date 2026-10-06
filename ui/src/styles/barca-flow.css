@@ -1,0 +1,90 @@
+/* ============================================================
+   barca · React Flow theming
+   Maps React Flow's fixed class names onto barca design tokens.
+   Lifted from the design system's graph-explorer demo.
+   ============================================================ */
+
+.react-flow {
+  background: var(--bg-canvas);
+}
+
+/* DagNode draws its own edge dots, so hide React Flow's handles. */
+.react-flow__handle {
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  min-width: 0;
+  min-height: 0;
+  border: none;
+}
+
+/* Edges */
+.react-flow__edge-path {
+  stroke: var(--border-strong);
+  stroke-width: 1.5;
+}
+.react-flow__edge.hot .react-flow__edge-path {
+  stroke: var(--c-green-line);
+  stroke-width: 1.8;
+}
+.react-flow__edge.live .react-flow__edge-path {
+  stroke: var(--status-running-line);
+  stroke-dasharray: 5 4;
+  animation: barca-flow 0.7s linear infinite;
+}
+@keyframes barca-flow {
+  to {
+    stroke-dashoffset: -18;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .react-flow__edge.live .react-flow__edge-path {
+    animation: none;
+  }
+}
+
+/* Selection box + node focus ring (DagNode owns its own selected look) */
+.react-flow__node:focus,
+.react-flow__node:focus-visible {
+  outline: none;
+}
+.react-flow__node.selected {
+  outline: none;
+}
+
+/* Controls */
+.react-flow__controls {
+  box-shadow: var(--shadow-md);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.react-flow__controls-button {
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  width: 26px;
+  height: 26px;
+}
+.react-flow__controls-button:hover {
+  background: var(--bg-raised);
+  color: var(--text-strong);
+}
+.react-flow__controls-button svg {
+  fill: currentColor;
+}
+
+/* MiniMap */
+.react-flow__minimap {
+  background: var(--bg-inset);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+}
+.react-flow__minimap-mask {
+  fill: rgba(8, 11, 10, 0.72);
+}
+
+/* Attribution is hidden via proOptions, but belt-and-suspenders */
+.react-flow__attribution {
+  display: none;
+}

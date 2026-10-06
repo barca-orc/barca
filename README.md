@@ -117,7 +117,7 @@ or directories to narrow it (`barca get total pipeline.py`). `barca pipeline.py`
 | `barca plan [file.py ...]` | Print the execution plan as JSON (experimental). |
 | `barca history` | Recent runs. `--limit N`, `--all`, `--json`, `--pretty`, `--env`. |
 | `barca stats <target> [file.py ...]` | Timing and cache statistics for one asset. `--json`, `--pretty`, `--env`. |
-| `barca serve [file.py\|dir/ ...]` | HTTP API plus the cron scheduler (experimental). `--port N`, `--watch`, `--no-schedule`, `--timezone TZ`, `--env`. |
+| `barca serve [file.py\|dir/ ...]` | HTTP API, the cron scheduler and the web UI at `/ui/` (experimental). `--port N`, `--watch`, `--no-schedule`, `--read-only`, `--timezone TZ`, `--env`. |
 | `barca docs [topic]` | The manual, compiled into the binary. `--all`, `--json`. |
 | `barca version` | Print the version. |
 
@@ -158,7 +158,8 @@ Other pieces: `@sink` (also write an output to another path), `partitions`, `par
 fully materialized to an artifact file (json, pickle or parquet) under `.barca/artifacts/`; that
 file is the cache checkpoint. Decorators are identity functions, so your code also runs without
 barca. Details: the [decorators reference](https://barca.sh/reference/api/decorators/), the
-[scheduling guide](https://barca.sh/scheduling/) and the
+[scheduling guide](https://barca.sh/scheduling/), `barca docs telemetry` (report runs and steps to
+Datadog with `BARCA_TELEMETRY=datadog`) and the
 [server API](https://barca.sh/reference/server-api/).
 
 ## Python API

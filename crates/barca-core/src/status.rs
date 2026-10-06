@@ -28,12 +28,14 @@ pub struct StatusResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct NodeStatus {
     /// Node id, e.g. `pipeline.py:clean`.
     pub id: String,
     /// The function name (what `get`, `run` and `--refresh` accept).
     pub name: String,
     /// `asset`, `task` or `sensor`.
+    #[cfg_attr(feature = "ts", ts(type = "\"asset\" | \"task\" | \"sensor\""))]
     pub kind: String,
     /// Upstream node ids (direct inputs and `collect(...)` inputs), sorted.
     pub inputs: Vec<String>,
@@ -46,6 +48,7 @@ pub struct NodeStatus {
     /// are not executions and do not appear here.
     pub last_materialization: Option<LastMaterialization>,
     /// Shape of `last_materialization`'s artifact (`null` when there is none).
+    #[cfg_attr(feature = "ts", ts(type = "unknown"))]
     pub shape: Option<serde_json::Value>,
     /// Environment variables the node declares with `env=[...]` (empty when none); their values
     /// are part of its run hash.
@@ -54,12 +57,25 @@ pub struct NodeStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct CacheStatus {
     /// `cached`, `stale`, `never_run`, `partial`, `unknown` or `always_runs`.
+    #[cfg_attr(
+        feature = "ts",
+        ts(
+            type = "\"cached\" | \"stale\" | \"never_run\" | \"partial\" | \"unknown\" | \"always_runs\""
+        )
+    )]
     pub state: String,
     /// Machine-readable reason: `materialized`, `changed`, `upstream_stale`, `failed`,
     /// `no_record`, `partitions_missing`, `partitions_unknown`, `sensor_output_unknown`, `task`
     /// or `sensor`.
+    #[cfg_attr(
+        feature = "ts",
+        ts(
+            type = "\"materialized\" | \"changed\" | \"upstream_stale\" | \"failed\" | \"no_record\" | \"partitions_missing\" | \"partitions_unknown\" | \"sensor_output_unknown\" | \"task\" | \"sensor\""
+        )
+    )]
     pub reason: String,
     /// The reason in words.
     pub detail: String,
@@ -72,6 +88,7 @@ pub struct CacheStatus {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct PartitionState {
     pub total: usize,
     pub cached: usize,
@@ -81,6 +98,7 @@ pub struct PartitionState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct LastMaterialization {
     /// `success` or `failed`.
     pub status: String,
@@ -91,6 +109,7 @@ pub struct LastMaterialization {
     pub artifact: Option<String>,
     /// `json`, `pickle` or `parquet`.
     pub format: Option<String>,
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub size_bytes: Option<i64>,
     /// For a partitioned node: which key this was (e.g. `k=a`).
     #[serde(default, skip_serializing_if = "Option::is_none")]

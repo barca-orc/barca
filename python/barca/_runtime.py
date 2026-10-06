@@ -150,6 +150,11 @@ def emit_heartbeat() -> None:
     send_message({"type": "heartbeat"})
 
 
+def emit_log(node_id: str, line: str) -> None:
+    """Stream a line of user stdout captured during a step."""
+    send_message({"type": "log", "node_id": node_id, "line": line})
+
+
 def submit_and_wait(work_items: list[dict]) -> list[dict]:
     """Submit work items to the executor and block until all complete.
 
