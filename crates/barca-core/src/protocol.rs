@@ -12,6 +12,14 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
 
+/// Version of the coordinator <-> Python process protocol (worker and transfer helper).
+/// Bump it on any incompatible change to a message; `python/barca/_runtime.py`
+/// (`PROTOCOL_VERSION`) must carry the same number (a test checks). See `specs/protocol.md`.
+pub const PROTOCOL_VERSION: u32 = 1;
+
+/// Version of the `barca plan` JSON. Bump on an incompatible change to its shape.
+pub const PLAN_VERSION: u32 = 1;
+
 // ─── Worker → Coordinator ────────────────────────────────────────────────────
 
 /// Messages sent from a Python worker to the Rust coordinator.
@@ -263,6 +271,44 @@ where
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
+// ─── Version handshake ───────────────────────────────────────────────────────
+
+/// Read the first frame a Python peer sends after connecting and check that it is a
+/// `{"type": "hello", "protocol_version": N}` carrying this binary's [`PROTOCOL_VERSION`].
+/// `peer` names the process in the error ("worker", "transfer helper").
+pub async fn expect_hello<R>(reader: &mut R, peer: &str) -> Result<(), String>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let first: Option<serde_json::Value> = read_frame(reader)
+        .await
+        .map_err(|e| format!("{peer} handshake failed: {e}"))?;
+    let Some(msg) = first else {
+        return Err(format!("{peer} disconnected before the version handshake"));
+    };
+    check_hello(&msg, peer)
+}
+
+/// Validate a decoded first frame (see [`expect_hello`]).
+pub fn check_hello(msg: &serde_json::Value, peer: &str) -> Result<(), String> {
+    let version = (msg.get("type").and_then(|t| t.as_str()) == Some("hello"))
+        .then(|| msg.get("protocol_version").and_then(|v| v.as_u64()))
+        .flatten();
+    match version {
+        Some(v) if v == PROTOCOL_VERSION as u64 => Ok(()),
+        Some(v) => Err(format!(
+            "{peer} protocol v{v}, coordinator expects v{PROTOCOL_VERSION} - the installed \
+             Python `barca` package does not match the barca binary; reinstall barca \
+             (e.g. `uv sync --reinstall-package barca` or `maturin develop --release`)"
+        )),
+        None => Err(format!(
+            "{peer} did not announce a protocol version (expected v{PROTOCOL_VERSION}) - the \
+             installed Python `barca` package is older than the barca binary; reinstall barca \
+             (e.g. `uv sync --reinstall-package barca` or `maturin develop --release`)"
+        )),
+    }
+}
+
 // ─── Socket path helper ──────────────────────────────────────────────────────
 
 /// Generate a unique socket path for a worker.
@@ -278,6 +324,53 @@ pub fn socket_path(run_id: &str, worker_id: &str) -> std::path::PathBuf {
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn hello_with_matching_version_is_accepted() {
+        let m = serde_json::json!({"type": "hello", "protocol_version": PROTOCOL_VERSION});
+        assert!(check_hello(&m, "worker").is_ok());
+    }
+
+    #[test]
+    fn hello_with_other_version_names_both_versions() {
+        let m = serde_json::json!({"type": "hello", "protocol_version": 99});
+        let e = check_hello(&m, "worker").unwrap_err();
+        assert!(e.contains("worker protocol v99"), "{e}");
+        assert!(e.contains(&format!("expects v{PROTOCOL_VERSION}")), "{e}");
+        assert!(e.contains("reinstall"), "{e}");
+    }
+
+    #[test]
+    fn missing_hello_is_a_version_error_not_a_parse_error() {
+        let m = serde_json::json!({"type": "heartbeat"});
+        let e = check_hello(&m, "transfer helper").unwrap_err();
+        assert!(e.contains("did not announce a protocol version"), "{e}");
+    }
+
+    #[tokio::test]
+    async fn expect_hello_reads_the_first_frame() {
+        let frame = encode_message(&serde_json::json!({
+            "type": "hello", "protocol_version": PROTOCOL_VERSION
+        }))
+        .unwrap();
+        let mut ok = std::io::Cursor::new(frame);
+        assert!(expect_hello(&mut ok, "worker").await.is_ok());
+        let mut eof = std::io::Cursor::new(Vec::<u8>::new());
+        let e = expect_hello(&mut eof, "worker").await.unwrap_err();
+        assert!(e.contains("before the version handshake"), "{e}");
+    }
+
+    /// The Python side hard-codes the same number; they must move together.
+    #[test]
+    fn python_runtime_declares_the_same_protocol_version() {
+        let src = include_str!("../../../python/barca/_runtime.py");
+        let line = src
+            .lines()
+            .find(|l| l.starts_with("PROTOCOL_VERSION"))
+            .expect("PROTOCOL_VERSION in _runtime.py");
+        let n: u32 = line.split('=').nth(1).unwrap().trim().parse().unwrap();
+        assert_eq!(n, PROTOCOL_VERSION);
+    }
 
     #[test]
     fn test_encode_decode_worker_message() {

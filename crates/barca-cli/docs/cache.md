@@ -180,6 +180,21 @@ Put an empty `barca.toml` at the top of a project to anchor it.
 Never delete files under `.barca/` to force a recompute: use `--refresh <asset>` (below), which
 also keeps the metadata DB consistent. To look at a cached result, use `barca sql` (`barca docs sql`).
 
+### Versions: metadata DB and worker protocol
+
+The metadata DB records a `schema_version`. A DB from before versioning is adopted as is. A DB
+written by a **newer** barca is refused (exit 3): `metadata database has schema v2, this barca
+expects v1 ... upgrade barca` — upgrade barca, or delete `.barca/metadata.db` (it is only a
+cache; artifacts are content-addressed and kept, so the next run rebuilds history). A DB from an
+**older** schema is wiped and rebuilt automatically. This matters for shared state
+(`barca docs remote`): machines on different barca versions can pull each other's blob.
+
+Barca and its Python workers (and the artifact transfer helper) exchange a `protocol_version`
+in the first message of every connection. A mismatch (a stale `barca` package in the venv after
+`maturin develop`, say) fails the run with `worker protocol v1, coordinator expects v2 ...
+reinstall barca` (exit 3) instead of a confusing protocol error. `barca plan` JSON carries a
+`plan_version` for anything that stores plans.
+
 ## Controlling the cache
 
 | Goal | Command |

@@ -1314,6 +1314,8 @@ pub struct ExplainSummary {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct PlanResult {
+    /// Version of this JSON shape (`specs/protocol.md`); bumped on an incompatible change.
+    pub plan_version: u32,
     pub total_steps: usize,
     pub phases: Vec<PlanPhase>,
 }
@@ -3070,6 +3072,7 @@ pub async fn plan(
     let plan = planner::plan_from_dag(&dag, &config);
 
     Ok(PlanResult {
+        plan_version: crate::protocol::PLAN_VERSION,
         total_steps: plan.total_steps,
         phases: plan
             .phases

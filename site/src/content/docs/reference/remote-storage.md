@@ -164,6 +164,10 @@ the copies while the objects are unchanged (`barca docs sql`).
 - Before upload the WAL is checkpointed into the main file, so the blob is
   always a complete standalone SQLite database — you can download it and
   open it with stock `sqlite3`.
+- The DB records a schema version. A blob written by a newer barca than the
+  one pulling it is refused with an "upgrade barca" error (exit 3) rather than
+  overwritten; a blob from an older schema is rebuilt. Keep machines that
+  share state on the same barca version.
 - A run that pulls successfully but crashes mid-way uploads nothing; its
   local rows are discarded by the next pull and those steps recompute.
 

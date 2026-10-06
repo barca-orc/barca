@@ -262,9 +262,79 @@ pub(crate) async fn open_conn(db_path: &str) -> Result<(DbHandle, turso::Connect
     ))
 }
 
+/// Version of the metadata DB schema. Bump it when a change cannot be applied by the additive,
+/// idempotent migrations in [`init_db`]. Policy (pre-1.0, see `specs/protocol.md`): the DB is a
+/// cache, so a DB older than this is wiped and rebuilt; a DB newer than this fails with an
+/// error rather than being clobbered (it may be a shared state blob another machine wrote).
+pub const SCHEMA_VERSION: i64 = 1;
+
+/// Tables [`ensure_schema_version`] drops when it rebuilds an older DB.
+const CACHE_TABLES: [&str; 5] = [
+    "materializations",
+    "cost_estimates",
+    "runs",
+    "schedule_state",
+    "logs",
+];
+
+/// Compare the DB's recorded schema version with `current`: stamp a new (or pre-versioning)
+/// DB, wipe an older one, refuse a newer one. A DB with no `schema_version` table predates
+/// versioning; every change so far was additive, so it is v1.
+async fn ensure_schema_version(conn: &turso::Connection, current: i64) -> Result<(), BarcaError> {
+    let err = |what: &str, e: turso::Error| BarcaError::Db(format!("schema version: {what}: {e}"));
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)",
+        (),
+    )
+    .await
+    .map_err(|e| err("create table", e))?;
+    let mut rows = conn
+        .query("SELECT version FROM schema_version", ())
+        .await
+        .map_err(|e| err("read", e))?;
+    let found = match rows.next().await.map_err(|e| err("read", e))? {
+        Some(row) => Some(row.get::<i64>(0).map_err(|e| err("read", e))?),
+        None => None,
+    };
+    drop(rows);
+    match found {
+        Some(v) if v == current => return Ok(()),
+        Some(v) if v > current => {
+            return Err(BarcaError::Db(format!(
+                "metadata database has schema v{v}, this barca expects v{current}. It was \
+                 written by a newer barca - upgrade barca, or delete the database (it is a \
+                 cache; artifacts are kept) to rebuild it."
+            )));
+        }
+        Some(_) => {
+            for t in CACHE_TABLES {
+                conn.execute(&format!("DROP TABLE IF EXISTS {t}"), ())
+                    .await
+                    .map_err(|e| err("wipe", e))?;
+            }
+            conn.execute("DELETE FROM schema_version", ())
+                .await
+                .map_err(|e| err("wipe", e))?;
+        }
+        None => {}
+    }
+    conn.execute(
+        "INSERT INTO schema_version (version) VALUES (?1)",
+        turso::params![current],
+    )
+    .await
+    .map_err(|e| err("stamp", e))?;
+    Ok(())
+}
+
 pub async fn init_db(db_path: &str) -> Result<(), BarcaError> {
+    init_db_at(db_path, SCHEMA_VERSION).await
+}
+
+async fn init_db_at(db_path: &str, schema_version: i64) -> Result<(), BarcaError> {
     let _g = db_guard().await;
     let (_db, conn) = open_conn(db_path).await?;
+    ensure_schema_version(&conn, schema_version).await?;
     conn.execute(
         "CREATE TABLE IF NOT EXISTS materializations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1166,6 +1236,67 @@ pub async fn get_avg_elapsed_for_partitioned(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn recorded_version(db_path: &str) -> i64 {
+        let _g = db_guard().await;
+        let (_h, conn) = open_conn(db_path).await.unwrap();
+        let mut rows = conn
+            .query("SELECT version FROM schema_version", ())
+            .await
+            .unwrap();
+        rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap()
+    }
+
+    #[tokio::test]
+    async fn init_stamps_the_schema_version_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db").to_string_lossy().to_string();
+        init_db(&db_path).await.unwrap();
+        init_db(&db_path).await.unwrap();
+        assert_eq!(recorded_version(&db_path).await, SCHEMA_VERSION);
+    }
+
+    #[tokio::test]
+    async fn a_pre_versioning_db_is_adopted_with_its_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db").to_string_lossy().to_string();
+        init_db(&db_path).await.unwrap();
+        insert_logs(&db_path, "r", &[("n".to_string(), "kept".to_string())])
+            .await
+            .unwrap();
+        {
+            let _g = db_guard().await;
+            let (_h, conn) = open_conn(&db_path).await.unwrap();
+            conn.execute("DROP TABLE schema_version", ()).await.unwrap();
+        }
+        init_db(&db_path).await.unwrap();
+        assert_eq!(recorded_version(&db_path).await, SCHEMA_VERSION);
+        assert_eq!(get_logs(&db_path, "r").await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_newer_schema_is_refused_with_a_clear_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db").to_string_lossy().to_string();
+        init_db_at(&db_path, SCHEMA_VERSION + 1).await.unwrap();
+        let e = init_db(&db_path).await.unwrap_err().to_string();
+        assert!(e.contains(&format!("schema v{}", SCHEMA_VERSION + 1)), "{e}");
+        assert!(e.contains(&format!("expects v{SCHEMA_VERSION}")), "{e}");
+        assert!(e.contains("upgrade barca"), "{e}");
+    }
+
+    #[tokio::test]
+    async fn an_older_schema_is_wiped_and_rebuilt() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db").to_string_lossy().to_string();
+        init_db_at(&db_path, SCHEMA_VERSION).await.unwrap();
+        insert_logs(&db_path, "r", &[("n".to_string(), "old".to_string())])
+            .await
+            .unwrap();
+        init_db_at(&db_path, SCHEMA_VERSION + 1).await.unwrap();
+        assert_eq!(recorded_version(&db_path).await, SCHEMA_VERSION + 1);
+        assert!(get_logs(&db_path, "r").await.unwrap().is_empty());
+    }
 
     #[tokio::test]
     async fn logs_round_trip_in_order() {

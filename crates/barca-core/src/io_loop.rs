@@ -941,11 +941,20 @@ async fn spawn_worker(
     }
 
     let t_accept = std::time::Instant::now();
-    let stream = tokio::time::timeout(Duration::from_secs(10), listener.accept())
+    let mut stream = tokio::time::timeout(Duration::from_secs(10), listener.accept())
         .await
         .map_err(|_| format!("timeout waiting for worker {worker_id} to connect"))?
         .map_err(|e| format!("accept: {e}"))?
         .0;
+    // Version handshake: a worker from a mismatched `barca` package fails here, clearly.
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        crate::protocol::expect_hello(&mut stream, "worker"),
+    )
+    .await
+    .map_err(|_| {
+        format!("timeout waiting for worker {worker_id} to announce its protocol version")
+    })??;
     if trace_on {
         eprintln!(
             "[trace]  worker {worker_id} connected (accept) in {:.1}ms",

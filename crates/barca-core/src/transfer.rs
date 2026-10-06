@@ -217,6 +217,19 @@ impl TransferClient {
             }
         };
 
+        let mut stream = stream;
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            crate::protocol::expect_hello(&mut stream, "transfer helper"),
+        )
+        .await
+        .map_err(|_| {
+            BarcaError::Other(
+                "timeout waiting for transfer helper to announce its protocol version".into(),
+            )
+        })?
+        .map_err(BarcaError::Other)?;
+
         let (req_tx, req_rx) = mpsc::unbounded_channel();
         let io_task = tokio::spawn(io_task(stream, req_rx));
         Ok(Self {
@@ -541,6 +554,7 @@ def recv():
 def send(m):
     b = json.dumps(m).encode()
     with lock: s.sendall(struct.pack(">I", len(b)) + b)
+send({"type": "hello", "protocol_version": 1})
 def handle(m):
     src, dst = (m["local"], m["remote"]) if m["type"] == "put" else (m["remote"], m["local"])
     if "slow" in m["remote"]: time.sleep(0.3)

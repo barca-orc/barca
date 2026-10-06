@@ -18,6 +18,10 @@ except ImportError:
     orjson = None  # ty: ignore[invalid-assignment]
 
 
+# Version of the coordinator <-> Python process protocol. Must equal PROTOCOL_VERSION in
+# crates/barca-core/src/protocol.rs (a Rust test checks); see specs/protocol.md.
+PROTOCOL_VERSION = 1
+
 # ─── Socket connection ────────────────────────────────────────────────────────
 
 _socket: socket.socket | None = None
@@ -43,6 +47,9 @@ def connect() -> socket.socket | None:
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     sock.connect(path)
     _socket = sock
+    # Handshake: the first frame announces our protocol version; the coordinator
+    # rejects a mismatch with an actionable error.
+    send_message({"type": "hello", "protocol_version": PROTOCOL_VERSION})
     return _socket
 
 

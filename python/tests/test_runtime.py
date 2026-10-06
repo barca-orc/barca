@@ -298,6 +298,34 @@ class TestConnect:
         finally:
             _runtime._socket = original_socket
 
+    def test_connect_announces_protocol_version_first(self):
+        """The first frame after connecting is the version hello (see specs/protocol.md)."""
+        from barca import _runtime
+
+        original_socket = _runtime._socket
+        _runtime._socket = None
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                sock_path = os.path.join(tmpdir, "test.sock")
+                server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                server.bind(sock_path)
+                server.listen(1)
+                with patch.dict(os.environ, {"BARCA_SOCKET": sock_path}):
+                    conn = _runtime.connect()
+                    peer, _ = server.accept()
+                    header = peer.recv(4)
+                    payload = peer.recv(struct.unpack(">I", header)[0])
+                    assert json.loads(payload) == {
+                        "type": "hello",
+                        "protocol_version": _runtime.PROTOCOL_VERSION,
+                    }
+                    peer.close()
+                    conn.close()
+                    _runtime._socket = None
+                server.close()
+        finally:
+            _runtime._socket = original_socket
+
     def test_connect_returns_cached_socket(self):
         """connect() returns the cached socket on subsequent calls."""
         from barca import _runtime

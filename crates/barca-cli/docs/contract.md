@@ -43,7 +43,7 @@ outside the `GENERATED` blocks is written by hand.
 
 | Item | Why |
 |---|---|
-| `barca plan` and its JSON | prints the planner's internal phase/stream layout, which changes with scheduling work (`reason` is an object, `{"type": "initial"}` or `{"type": "fan_in", "node_id": ...}`) |
+| `barca plan` and its JSON | prints the planner's internal phase/stream layout, which changes with scheduling work (`reason` is an object, `{"type": "initial"}` or `{"type": "fan_in", "node_id": ...}`); its `plan_version` (integer, currently 1) changes on an incompatible change to the plan JSON |
 | `barca serve` and all its flags | the HTTP API and scheduler are young: no auth, no shared remote state, routes may change. Its JSON is the engine's own serialization (for example `GET /assets` has `freshness: {"type": "Always"}` and `stats.node_id`), not the CLI's |
 | `get -o/--output`, `run -o/--output` | kept for compatibility; `--json` / `--pretty` are the canonical spelling |
 | `get --no-cache`, `run --no-cache` | deprecated (hidden): the old spelling of `--refresh-all`. Still works, prints `[barca] warning: --no-cache is deprecated ...` on stderr, and will be removed in a future minor release |
@@ -788,6 +788,7 @@ state and takes no `--env`.
 | `phases[].streams[].steps` | array | always |
 | `phases[].streams[].steps[]` | string | always |
 | `phases[].streams[].stream_id` | string | always |
+| `plan_version` | integer | always |
 | `total_steps` | integer | always |
 <!-- END GENERATED schema plan -->
 

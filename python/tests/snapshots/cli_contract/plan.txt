@@ -9,4 +9,5 @@ phases[].streams[] : object
 phases[].streams[].steps : array
 phases[].streams[].steps[] : string
 phases[].streams[].stream_id : string
+plan_version : integer
 total_steps : integer
