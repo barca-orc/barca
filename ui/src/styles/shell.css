@@ -386,16 +386,16 @@
   flex: 1; border: 0; outline: 0; background: transparent;
   color: var(--text-default); font-family: var(--font-mono); font-size: var(--text-sm);
 }
-.barca-severity-filter { display: flex; gap: 6px; flex-wrap: wrap; }
-.barca-severity-filter button {
+.barca-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.barca-chips button {
   display: inline-flex; align-items: center; gap: 6px;
   height: 26px; padding: 0 9px;
   border: 1px solid var(--border-default); border-radius: var(--radius-pill);
   background: transparent; color: var(--text-muted);
   font-family: var(--font-mono); font-size: var(--text-xs); cursor: pointer;
 }
-.barca-severity-filter button:hover { background: var(--bg-hover); }
-.barca-severity-filter button.is-on { border-color: var(--signal); color: var(--text-strong); }
+.barca-chips button:hover { background: var(--bg-hover); }
+.barca-chips button.is-on { border-color: var(--signal); color: var(--text-strong); }
 .barca-table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
 .barca-table th {
   position: sticky; top: 0; z-index: 1;
@@ -437,3 +437,22 @@
   font-size: var(--text-2xs);
   color: var(--text-muted);
 }
+
+/* filter bar */
+.barca-select {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-muted);
+}
+.barca-select select {
+  height: 26px; padding: 0 6px;
+  border: 1px solid var(--border-default); border-radius: var(--radius-sm);
+  background: var(--bg-inset); color: var(--text-default);
+  font: inherit;
+}
+.barca-clear {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 26px; padding: 0 8px; border: 0; background: transparent; cursor: pointer;
+  font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-muted);
+}
+.barca-clear:hover { color: var(--text-strong); }
+.barca-shown { margin-left: auto; }

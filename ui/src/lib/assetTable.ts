@@ -38,6 +38,7 @@ export interface AssetRow {
   /** Source file — everything before the last `:` of the id. */
   file: string
   kind: NodeState['kind']
+  partitioned: boolean
   severity: Severity
   /** Short label for the state column, e.g. `stale · code changed`. */
   stateLabel: string
@@ -131,6 +132,7 @@ export function buildRows(nodes: NodeState[], nowMs: number): AssetRow[] {
         name: n.name,
         file: fileOf(n.id),
         kind: n.kind,
+        partitioned: n.partitioned,
         severity,
         stateLabel: severity === 'failed' ? `failed · ${label}` : label,
         stateHint:
