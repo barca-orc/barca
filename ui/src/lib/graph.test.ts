@@ -3,9 +3,9 @@ import { buildGraph, edgeClassName, overlayRunStatus, shortName } from './graph'
 import type { AssetSummary, StatusKind } from './types'
 
 const ASSETS: AssetSummary[] = [
-  { id: 'p.py:a', kind: 'asset', freshness: { type: 'Always' }, inputs: [] },
-  { id: 'p.py:b', kind: 'asset', freshness: { type: 'Always' }, inputs: ['p.py:a'] },
-  { id: 'p.py:c', kind: 'task', freshness: { type: 'Manual' }, inputs: ['p.py:b'] },
+  { id: 'p.py:a', kind: 'asset', freshness: { type: 'Always' }, env: [], inputs: [] },
+  { id: 'p.py:b', kind: 'asset', freshness: { type: 'Always' }, env: [], inputs: ['p.py:a'] },
+  { id: 'p.py:c', kind: 'task', freshness: { type: 'Manual' }, env: [], inputs: ['p.py:b'] },
 ]
 
 describe('shortName', () => {
@@ -31,7 +31,7 @@ describe('buildGraph', () => {
 
   it('drops edges whose input is not in the asset set', () => {
     const orphan: AssetSummary[] = [
-      { id: 'p.py:x', kind: 'asset', freshness: { type: 'Always' }, inputs: ['p.py:missing'] },
+      { id: 'p.py:x', kind: 'asset', freshness: { type: 'Always' }, env: [], inputs: ['p.py:missing'] },
     ]
     expect(buildGraph(orphan, 'LR').edges).toEqual([])
   })

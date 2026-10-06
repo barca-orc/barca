@@ -16,6 +16,7 @@ mod handlers;
 mod routes;
 mod scheduler;
 mod state;
+mod ui;
 mod watch;
 
 pub use handlers::node_states;

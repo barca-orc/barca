@@ -486,3 +486,72 @@ async fn health_reports_writable_by_default() {
     let (_, health) = send(&app, "GET", "/health").await;
     assert_eq!(health["read_only"], false);
 }
+
+#[tokio::test]
+async fn the_root_and_ui_redirect_relatively_to_the_ui() {
+    // Relative `Location`s keep a reverse-proxy prefix: from /barca/ the
+    // browser resolves `ui/` to /barca/ui/.
+    let dir = tempfile::tempdir().unwrap();
+    let app = app(isolated_config(dir.path(), false));
+    for uri in ["/", "/ui"] {
+        let resp = app
+            .clone()
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert!(
+            resp.status().is_redirection(),
+            "GET {uri}: {}",
+            resp.status()
+        );
+        assert_eq!(resp.headers()["location"], "ui/", "GET {uri}");
+    }
+}
+
+#[tokio::test]
+async fn ui_page_is_served_or_explains_it_was_not_built() {
+    // Whether `ui/dist` was built before this test binary decides which; both
+    // are valid, a bare 404 or an API error is not.
+    let dir = tempfile::tempdir().unwrap();
+    let app = app(isolated_config(dir.path(), false));
+    let resp = app
+        .oneshot(Request::builder().uri("/ui/").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let status = resp.status();
+    let ctype = resp.headers().get("content-type").cloned();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body = String::from_utf8_lossy(&body);
+    if status == StatusCode::OK {
+        assert_eq!(ctype.unwrap(), "text/html; charset=utf-8");
+        assert!(body.contains("<div id=\"root\">"), "{body}");
+    } else {
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert!(body.contains("built without its web UI"), "{body}");
+    }
+}
+
+#[tokio::test]
+async fn run_events_are_not_buffered_by_proxies() {
+    // Start a run (it fails fast: the target doesn't exist) so a live event
+    // channel exists, then check the SSE response's headers.
+    let dir = tempfile::tempdir().unwrap();
+    let app = app(isolated_config(dir.path(), false));
+    let (status, body) = send(&app, "POST", "/get/does_not_exist").await;
+    assert_eq!(status, StatusCode::OK);
+    let handle = body["run_id"].as_str().unwrap().to_string();
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/events/{handle}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.headers()["x-accel-buffering"], "no");
+    assert_eq!(resp.headers()["content-type"], "text/event-stream");
+}

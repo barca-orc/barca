@@ -17,23 +17,21 @@ import {
 const SEVERITY_LABEL: Record<Severity, string> = {
   failed: 'failed',
   stale: 'stale',
-  missing: 'missing',
+  never_run: 'never run',
   partial: 'partial',
   unknown: 'unknown',
   always_runs: 'always runs',
-  fresh: 'fresh',
+  cached: 'cached',
 }
 
-function formatNextRun(ms: number | null, schedule: string | null): string {
-  if (ms !== null) {
-    return new Date(ms).toLocaleString(undefined, {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    })
-  }
-  return schedule ? '?' : 'manual'
+function formatNextRun(ms: number | null): string {
+  if (ms === null) return 'manual'
+  return new Date(ms).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
 }
 
 export function AssetsPage() {
@@ -154,10 +152,7 @@ export function AssetsPage() {
                   <td className="num" title={r.p95 ? `p95 ${r.p95}` : undefined}>
                     {r.typical ?? '–'}
                   </td>
-                  <td>
-                    <div>{formatNextRun(r.nextRunMs, r.schedule)}</div>
-                    {r.schedule && <div className="barca-cell-sub">{r.schedule}</div>}
-                  </td>
+                  <td>{formatNextRun(r.nextRunMs)}</td>
                 </tr>
               ))}
             </tbody>

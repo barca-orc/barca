@@ -48,7 +48,7 @@ barca get total pipeline.py      # second time: everything is a cache hit
 | `barca sql "<query>" [files...]` | Query cached results with DuckDB; each asset is a view (`barca docs sql`). Experimental. |
 | `barca plan [files...]` | Emit the tiered execution plan as JSON. |
 | `barca history` / `barca stats` | Past runs; timing and cache statistics (`--json`, `--fields`; history takes `--limit`/`--all`). |
-| `barca serve [files...]` | HTTP API and cron scheduler. |
+| `barca serve [files...]` | HTTP API, cron scheduler and the web UI (`/ui/`). |
 
 `files...` are optional everywhere: without them barca reads every file in the project that
 imports barca; with them (files or directories) it reads only those (`barca docs discovery`).

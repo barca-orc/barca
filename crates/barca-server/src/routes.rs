@@ -1,8 +1,10 @@
 //! Router wiring. The router is the single API boundary — middleware (CORS,
-//! auth) and a static-file fallback for a future UI would layer in here.
+//! auth) would layer in here. The web UI is served under `/ui/`, beside the API
+//! routes rather than in front of them, so API paths stay what the contract says.
 
 use crate::handlers;
 use crate::state::AppState;
+use crate::ui;
 use axum::Router;
 use axum::routing::{get, post};
 
@@ -25,5 +27,11 @@ pub fn router(state: AppState) -> Router {
         .route("/events/{run_id}", get(handlers::events))
         .route("/logs/{run_id}", get(handlers::logs))
         .route("/schedule", get(handlers::schedule))
+        // The web UI: `/` and `/ui` redirect to `ui/` (relative, so a reverse
+        // proxy prefix is kept); the app and its assets live under `/ui/`.
+        .route("/", get(ui::redirect_to_ui))
+        .route("/ui", get(ui::redirect_to_ui))
+        .route("/ui/", get(ui::index))
+        .route("/ui/{*path}", get(ui::asset))
         .with_state(state)
 }

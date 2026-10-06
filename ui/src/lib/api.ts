@@ -1,9 +1,11 @@
 /* ============================================================
    barca · API client
-   Thin fetch wrappers over barca-server. In dev these go through
-   the Vite proxy (/api → 127.0.0.1:8274); in production they are
-   same-origin since the Rust server serves the built UI.
+   Thin fetch wrappers over barca-server. Same-origin: barca serve
+   serves this UI at <prefix>/ui/ and the API at <prefix>/ (see
+   apiBase.ts); in dev, Vite proxies non-/ui paths to barca serve.
    ============================================================ */
+
+import { API_BASE, apiUrl } from './apiBase'
 
 import type {
   AssetSummary,
@@ -15,7 +17,6 @@ import type {
   Health,
 } from './types'
 
-const BASE = '/api'
 
 class ApiError extends Error {
   status: number
@@ -28,7 +29,7 @@ class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
+  const res = await fetch(apiUrl(API_BASE, path), {
     headers: { 'content-type': 'application/json' },
     ...init,
   })

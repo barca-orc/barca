@@ -14,12 +14,12 @@ kind: string,
  */
 action?: string | null,
 /**
- * Real run only: `ran`, `cached` or `partial`.
+ * Real run only: `ran`, `cached`, `partial`, or `failed` (in a failed run's result).
  */
 status?: string | null,
 /**
- * Why the step runs: `task`, `sensor`, `no_cache`, `refresh`, `refresh_all`,
- * `not_materialized`, or `partitions_unknown`.
+ * Why the step runs: `task`, `sensor`, `refresh`, `refresh_cascade`, `refresh_all`,
+ * `not_materialized`, `partitions_unknown` or `sensor_output_unknown`.
  */
 reason?: string | null,
 /**
@@ -33,4 +33,9 @@ artifact?: string | null,
 /**
  * Set when a cached step depends on an asset refreshed in the same run.
  */
-warning?: string | null, partitions?: PartitionSummary | null, };
+warning?: string | null, partitions?: PartitionSummary | null,
+/**
+ * Declared env values the step used (`@asset(env=[...])`): name -> value, `null` when unset,
+ * `"<redacted>"` for secret-looking names. Absent when the node declares no env.
+ */
+env?: { [key in string]: string | null } | null, };

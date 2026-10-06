@@ -1,7 +1,7 @@
 import { Fragment } from 'react'
 import { Search, Sun, Moon, Bell, Settings, Activity, Slash, Play } from 'lucide-react'
 import { Button, IconButton } from '@/components'
-import { useTheme } from '@/context/ThemeContext'
+import { useTheme } from '@/context/theme'
 
 interface TopbarProps {
   crumbs: string[]

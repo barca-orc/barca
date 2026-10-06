@@ -53,7 +53,7 @@ scheduled nodes that share an upstream run separately, and both may compute it.
 
 ```bash
 barca list pipeline.py                         # shows each schedule and its next fire time
-barca serve pipeline.py                        # HTTP API on 127.0.0.1:8274 + scheduler
+barca serve pipeline.py                        # HTTP API + scheduler + web UI on 127.0.0.1:8274
 barca serve pipeline.py --timezone utc         # evaluate cron in UTC (default: local)
 barca serve pipeline.py --no-schedule          # API only, no scheduler
 barca serve pipeline.py --watch                # dev: re-parse the DAG when files change
@@ -64,6 +64,8 @@ barca serve pipeline.py --read-only            # inspect only: no runs, no sched
 return `403`, the scheduler never starts, and every read of the metadata DB goes through a
 private copy, so it is safe to point at a project another process is running.
 
-`serve` binds to `127.0.0.1` with no authentication. Endpoints are documented at
-https://barca.sh/reference/server-api/ and `GET /schedule` reports live schedule status.
+`serve` binds to `127.0.0.1` with no authentication. Open `http://127.0.0.1:8274/` for the web
+UI. Endpoints are documented at https://barca.sh/reference/server-api/ and `GET /schedule`
+reports live schedule status. Behind nginx (any path prefix, live logs included):
+https://barca.sh/deploying/.
 Full model: https://barca.sh/scheduling/.

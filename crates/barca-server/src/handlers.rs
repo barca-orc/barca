@@ -178,47 +178,6 @@ fn percentile(sorted: &[f64], q: f64) -> f64 {
     sorted[rank.clamp(1, sorted.len()) - 1]
 }
 
-#[cfg(test)]
-mod duration_tests {
-    use super::*;
-
-    fn row(node_id: &str, status: &str, e: f64) -> db::MaterializationRow {
-        db::MaterializationRow {
-            node_id: node_id.into(),
-            status: status.into(),
-            created_at: String::new(),
-            elapsed_seconds: Some(e),
-            error_message: None,
-        }
-    }
-
-    #[test]
-    fn percentiles_use_nearest_rank() {
-        let v = [1.0, 2.0, 3.0, 4.0, 100.0];
-        assert_eq!(percentile(&v, 0.5), 3.0);
-        assert_eq!(percentile(&v, 0.95), 100.0);
-        assert_eq!(percentile(&[7.0], 0.95), 7.0);
-    }
-
-    #[test]
-    fn durations_use_recent_successes_and_fold_partitions() {
-        let mut rows: Vec<_> = (0..5).map(|_| row("p.py:a", "success", 1.0)).collect();
-        rows.extend((0..20).map(|_| row("p.py:a", "success", 10.0)));
-        rows.push(row("p.py:a", "failed", 999.0));
-        rows.push(row("p.py:f[k=x]", "success", 2.0));
-        rows.push(row("p.py:f[k=y]", "success", 4.0));
-        let d = durations_by_node(&rows);
-        let a = &d["p.py:a"];
-        assert_eq!(
-            (a.samples, a.median_seconds),
-            (20, 10.0),
-            "window + failures ignored"
-        );
-        assert_eq!(d["p.py:f"].samples, 2, "partitions fold into the base node");
-        assert!(!d.contains_key("p.py:missing"));
-    }
-}
-
 /// `GET /plan` — execution plan for the server's files (cache-aware).
 pub async fn plan(State(state): State<AppState>) -> Result<Json<commands::PlanResult>, ApiError> {
     if let Some(cached) = state.cache.read().unwrap().plan.clone() {
@@ -394,10 +353,21 @@ pub async fn status(
 /// (run lifecycle, logs, step completion). Replays the backlog first so a client
 /// that connects a beat after the run starts still sees everything, then streams
 /// live. Each SSE message is a JSON-encoded [`RunEvent`].
+///
+/// Sends `X-Accel-Buffering: no` so nginx (and proxies that honor it) pass
+/// events through as they happen instead of buffering the response; idle
+/// streams carry a keep-alive comment every 15s, inside nginx's default 60s
+/// read timeout.
 pub async fn events(
     State(state): State<AppState>,
     Path(run_id): Path<String>,
-) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+) -> Result<
+    (
+        [(axum::http::HeaderName, &'static str); 1],
+        Sse<impl Stream<Item = Result<Event, Infallible>>>,
+    ),
+    ApiError,
+> {
     let channel: RunChannel = state
         .events
         .get(&run_id)
@@ -415,7 +385,13 @@ pub async fn events(
             .unwrap_or_else(|_| Event::default()))
     });
 
-    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+    Ok((
+        [(
+            axum::http::HeaderName::from_static("x-accel-buffering"),
+            "no",
+        )],
+        Sse::new(stream).keep_alive(KeepAlive::default()),
+    ))
 }
 
 /// `GET /logs/{run_id}` — persisted stdout lines for a run (durable history).
@@ -650,5 +626,46 @@ pub async fn evict_finished_runs(state: AppState, interval: Duration, max_age: D
             }
             keep
         });
+    }
+}
+
+#[cfg(test)]
+mod duration_tests {
+    use super::*;
+
+    fn row(node_id: &str, status: &str, e: f64) -> db::MaterializationRow {
+        db::MaterializationRow {
+            node_id: node_id.into(),
+            status: status.into(),
+            created_at: String::new(),
+            elapsed_seconds: Some(e),
+            error_message: None,
+        }
+    }
+
+    #[test]
+    fn percentiles_use_nearest_rank() {
+        let v = [1.0, 2.0, 3.0, 4.0, 100.0];
+        assert_eq!(percentile(&v, 0.5), 3.0);
+        assert_eq!(percentile(&v, 0.95), 100.0);
+        assert_eq!(percentile(&[7.0], 0.95), 7.0);
+    }
+
+    #[test]
+    fn durations_use_recent_successes_and_fold_partitions() {
+        let mut rows: Vec<_> = (0..5).map(|_| row("p.py:a", "success", 1.0)).collect();
+        rows.extend((0..20).map(|_| row("p.py:a", "success", 10.0)));
+        rows.push(row("p.py:a", "failed", 999.0));
+        rows.push(row("p.py:f[k=x]", "success", 2.0));
+        rows.push(row("p.py:f[k=y]", "success", 4.0));
+        let d = durations_by_node(&rows);
+        let a = &d["p.py:a"];
+        assert_eq!(
+            (a.samples, a.median_seconds),
+            (20, 10.0),
+            "window + failures ignored"
+        );
+        assert_eq!(d["p.py:f"].samples, 2, "partitions fold into the base node");
+        assert!(!d.contains_key("p.py:missing"));
     }
 }

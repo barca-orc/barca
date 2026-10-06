@@ -21,4 +21,8 @@ freshness: Freshness,
 /**
  * Upstream node ids this node depends on (direct + collected), sorted.
  */
-inputs: Array<string>, };
+inputs: Array<string>,
+/**
+ * Declared environment variable names (`@asset(env=[...])`), in declaration order.
+ */
+env: Array<string>, };

@@ -3,4 +3,9 @@
 /**
  * Reference to a materialized artifact on disk.
  */
-export type OutputRef = { path: string, format: string, size_bytes: number, elapsed_seconds?: number, };
+export type OutputRef = { path: string, format: string, size_bytes: number, elapsed_seconds?: number,
+/**
+ * SHA-256 of the artifact's bytes, when one was recorded. Never sent to
+ * workers or printed: it is what a local copy is checked against.
+ */
+content_hash?: string | null, };
