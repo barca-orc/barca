@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router'
 import { ArrowDown, ArrowUp, Search, X } from 'lucide-react'
 import { StatusBadge, StatusDot, Tag } from '@/components'
 import { useAssetStates } from '@/hooks/useAssetStates'
+import { NodePanel } from '@/components/assets/NodePanel'
 import { useHealth } from '@/hooks/useHealth'
 import { inPipeline, pipelineName } from '@/lib/pipeline'
 import {
@@ -133,7 +134,17 @@ export function AssetsPage() {
   const counts = facetCounts(rows, filters, now)
   const visible = sortRows(applyFilters(rows, filters, now), sort)
 
-  const open = (row: AssetRow) => navigate(`/graph?focus=${encodeURIComponent(row.id)}`)
+  // The node shown in the side panel (?node=<id>).
+  const selectedId = params.get('node')
+  const selectedNode = data?.find((n) => n.id === selectedId) ?? null
+  const setSelected = (id: string | null) => {
+    const p = new URLSearchParams(params)
+    if (id === null) p.delete('node')
+    else p.set('node', id)
+    setParams(p, { replace: true })
+  }
+  const open = (row: AssetRow) => setSelected(row.id === selectedId ? null : row.id)
+  const openGraph = (id: string) => navigate(`/graph?focus=${encodeURIComponent(id)}`)
 
   return (
     <div className="barca-view">
@@ -248,6 +259,7 @@ export function AssetsPage() {
         </div>
       </div>
 
+      <div className="barca-assets-split">
       <div className="barca-view-body">
         {isError ? (
           <p className="barca-table-empty">
@@ -273,6 +285,7 @@ export function AssetsPage() {
                 <tr
                   key={r.id}
                   tabIndex={0}
+                  aria-selected={r.id === selectedId}
                   onClick={() => open(r)}
                   onKeyDown={(e) => e.key === 'Enter' && open(r)}
                 >
@@ -311,6 +324,17 @@ export function AssetsPage() {
             </tbody>
           </table>
         )}
+      </div>
+      {selectedNode && (
+        <NodePanel
+          node={selectedNode}
+          nodes={data ?? []}
+          nowMs={dataUpdatedAt}
+          onSelect={setSelected}
+          onOpenGraph={openGraph}
+          onClose={() => setSelected(null)}
+        />
+      )}
       </div>
     </div>
   )
