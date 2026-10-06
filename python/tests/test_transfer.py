@@ -134,6 +134,63 @@ class TestPutGet:
         assert back.read_bytes() == b"abc"
 
 
+class TestContentAddressedPaths:
+    """`{node}/{run_hash}/{sha256}{ext}` names its own bytes: they are verified, never warned about."""
+
+    BODY = b'{"x": 1}'
+    SHA = hashlib.sha256(BODY).hexdigest()
+    RUN = "ab" * 32
+
+    def _store(self, body: bytes, sha: str | None = None) -> str:
+        remote = f"memory://store/node/{self.RUN}/{sha or self.SHA}.json"
+        with _storage.get_fs(remote).open(remote, "wb") as f:
+            f.write(body)
+        return remote
+
+    def _get(self, helper, remote, local, **extra) -> dict:
+        helper.request({"type": "get", "id": 1, "remote": remote, "local": str(local), **extra})
+        return helper.reply()
+
+    def test_intact_object_is_fetched(self, helper, tmp_path):
+        local = tmp_path / "h.json"
+        reply = self._get(helper, self._store(self.BODY), local)
+        assert (reply["type"], reply["fetched"], reply["mismatch"]) == ("done", True, False)
+        assert local.read_bytes() == self.BODY
+
+    def test_tampered_object_fails_naming_it_and_installs_nothing(self, helper, tmp_path):
+        local = tmp_path / "h.json"
+        remote = self._store(b'{"x": 2}')
+        reply = self._get(helper, remote, local)
+        assert reply["type"] == "error"
+        assert remote in reply["message"] and "corrupt" in reply["message"]
+        assert reply["attempts"] == 1  # permanent: not retried
+        assert not local.exists()
+        assert sorted(p.name for p in tmp_path.iterdir()) == []
+
+    def test_truncated_object_fails(self, helper, tmp_path):
+        reply = self._get(helper, self._store(self.BODY[:3]), tmp_path / "h.json")
+        assert reply["type"] == "error"
+
+    def test_a_local_copy_with_the_named_hash_is_not_downloaded_again(
+        self, helper, tmp_path, monkeypatch
+    ):
+        local = tmp_path / "h.json"
+        local.write_bytes(self.BODY)
+        monkeypatch.setattr(_storage, "get_file", lambda *a: pytest.fail("downloaded"))
+        reply = self._get(helper, self._store(self.BODY), local)
+        assert (reply["type"], reply["fetched"]) == ("done", False)
+
+    def test_the_name_wins_over_a_recorded_hash(self, helper, tmp_path):
+        reply = self._get(helper, self._store(self.BODY), tmp_path / "h.json", sha256="0" * 64)
+        assert (reply["type"], reply["mismatch"]) == ("done", False)
+
+    def test_older_layout_is_not_treated_as_content_addressed(self):
+        from barca._transfer import _path_hash
+
+        assert _path_hash(f"s3://b/default/artifacts/n/{self.RUN}.json") is None
+        assert _path_hash(f"s3://b/a/n/{self.RUN}/{self.SHA}.parquet") == self.SHA
+
+
 class TestChecksums:
     """A recorded SHA-256 decides whether a local copy is kept, replaced or refused."""
 

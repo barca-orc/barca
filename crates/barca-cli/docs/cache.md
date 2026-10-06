@@ -157,6 +157,7 @@ output, so the next `--dry-run` or `barca status` shows its consumers as stale.
 ```
 .barca/metadata.db                          run history and materialization records (local DB)
 .barca/artifacts/<node>/<run_hash>.<ext>    one immutable file per materialization
+                                            (<node>/<run_hash>/<sha256>.<ext> with a remote store)
 ```
 
 `<ext>` is `.json`, `.pkl` or `.parquet` (see `barca docs types`). Artifacts are

@@ -18,8 +18,9 @@ reply carries the request id.
   ← {"type": "done", "id", "size_bytes", "sha256", "fetched", "mismatch"}
        "sha256" is the local file's; "fetched" is false when a get left the local file as it
        was; "mismatch" is true when the store's copy does not have the recorded hash. That
-       is not an error: an artifact path is `{node}/{run_hash}`, so a refresh or a second
-       machine computing the same step overwrites it, and the store's copy is still used.
+       is not an error for objects in the older `{node}/{run_hash}{ext}` layout, which a refresh or
+       a second machine overwrites; the store's copy is still used. A `{node}/{run_hash}/{sha256}{ext}`
+       object is never overwritten: bytes that do not hash to their path are an error.
   ← {"type": "error", "id", "message", "attempts"}
                                                 final — transient errors are retried here;
                                                 a stalled attempt fails after
@@ -31,6 +32,7 @@ behave exactly as they do for workers and the state helper.
 
 import hashlib
 import os
+import re
 import socket
 import sys
 import tempfile
@@ -117,6 +119,29 @@ def _local_sha256(path: "str | Path") -> str | None:
         return None
 
 
+class CorruptObjectError(ValueError):
+    """A fetched object's bytes do not match the hash in its own path. Permanent: no retry."""
+
+
+_HEX64 = re.compile(r"[0-9a-f]{64}")
+
+
+def _path_hash(remote: str) -> str | None:
+    """The SHA-256 a content-addressed object's path names, or None for the older layout.
+
+    A content-addressed object is `{node}/{run_hash}/{sha256}{ext}`: the file's stem and its
+    directory are both 64 hex digits. Objects from 0.15.0 and earlier are `{node}/{run_hash}{ext}`
+    and carry no hash in the path.
+    """
+    parts = remote.rstrip("/").split("/")
+    if len(parts) < 2:
+        return None
+    stem = parts[-1].split(".", 1)[0]
+    if _HEX64.fullmatch(stem) and _HEX64.fullmatch(parts[-2]):
+        return stem
+    return None
+
+
 def _staged_get(remote: str, local: str, expected: str | None) -> dict:
     """Make `local` the store's copy of `remote`, through a temp file renamed into place.
 
@@ -131,6 +156,13 @@ def _staged_get(remote: str, local: str, expected: str | None) -> dict:
     try:
         _storage.get_file(remote, tmp)
         digest = _sha256(tmp)
+        named = _path_hash(remote)
+        if named is not None and digest != named:
+            raise CorruptObjectError(
+                f"{remote} is corrupt: its bytes hash to {digest}, but its path names {named}. "
+                "The object was truncated or altered after it was written; refresh the step "
+                "(barca get --refresh) to write a new one."
+            )
         mismatch = expected is not None and digest != expected
         fetched = not (mismatch and _local_sha256(dest) == digest)
         if fetched:
@@ -147,7 +179,8 @@ def _transfer(msg: dict) -> dict:
         _storage.put_file(local, msg["remote"])
         result = {"sha256": _sha256(local), "fetched": True, "mismatch": False}
     else:
-        expected = msg.get("sha256")
+        # A content-addressed path names the bytes; that beats a recorded hash.
+        expected = _path_hash(msg["remote"]) or msg.get("sha256")
         if expected is not None and _local_sha256(local) == expected:
             result = {"sha256": expected, "fetched": False, "mismatch": False}
         else:

@@ -48,6 +48,9 @@ pub struct IoConfig {
     /// Set explicitly on every worker so env-separated layouts work
     /// regardless of the coordinator's own environment.
     pub artifact_root: String,
+    /// Write artifacts as `{node}/{run_hash}/{sha256}{ext}` (set when a separate artifact
+    /// store is in use), so a stored object is never overwritten.
+    pub content_address: bool,
     /// Merged fsspec storage options (JSON), forwarded to workers (for remote
     /// `@sink` destinations).
     pub storage_options_json: Option<String>,
@@ -930,6 +933,11 @@ async fn spawn_worker(
     if let Some(ref opts) = config.storage_options_json {
         cmd.env("BARCA_STORAGE_OPTIONS", opts);
     }
+    if config.content_address {
+        cmd.env("BARCA_CONTENT_ADDRESS", "1");
+    } else {
+        cmd.env_remove("BARCA_CONTENT_ADDRESS");
+    }
     let trace_on = std::env::var("BARCA_TRACE_TIMING").is_ok();
     let t_spawn = std::time::Instant::now();
     let child = cmd.spawn().map_err(|e| format!("spawn: {e}"))?;
@@ -1304,6 +1312,7 @@ mod tests {
                     pool_size: n,
                     run_id: "test-shutdown".to_string(),
                     artifact_root: ".".to_string(),
+                    content_address: false,
                     storage_options_json: None,
                 },
                 socket_path: socket_path.clone(),

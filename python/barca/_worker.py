@@ -505,15 +505,31 @@ def _materialize(result, node_id, art_dir, step, elapsed, elapsed_in_artifact=Fa
     # path gets a per-item hash from Rust and batch mode is test-only).
     run_hash = step.get("run_hash") if node_id == step.get("node_id") else None
     path = artifact_path(art_dir, node_id, fmt, run_hash)
+    # With a separate artifact store the object is also keyed by its bytes
+    # (`{node}/{run_hash}/{sha256}{ext}`), so a stored result is written once and never
+    # overwritten (#246). The bytes are hashed while they are written to a private name and
+    # moved to the final path afterwards.
+    by_content = bool(run_hash) and os.environ.get("BARCA_CONTENT_ADDRESS") == "1"
+    if by_content:
+        final_dir = Path(art_dir) / safe_node_id(node_id) / run_hash
+        ext = Path(str(path)).suffix
+        path = Path(art_dir) / safe_node_id(node_id) / f".{run_hash}.{os.getpid()}{ext}"
     _ser_wall0 = time.perf_counter()
     _ser_cpu0 = time.process_time()
     # A sensor's output is hashed: the coordinator folds the hash into the run hash of every
     # asset that reads the sensor, so a changed output re-runs them.
     content_hash = None
-    if step.get("kind") == "sensor":
+    if step.get("kind") == "sensor" or by_content:
         size, content_hash = serialize_hashed(result, path, fmt)
     else:
         size = serialize(result, path, fmt)
+    if by_content:
+        final = final_dir / f"{content_hash}{ext}"
+        final_dir.mkdir(parents=True, exist_ok=True)
+        os.replace(path, final)
+        path = final
+        if step.get("kind") != "sensor":
+            content_hash = None
     elapsed += time.perf_counter() - _ser_wall0
     if timing and timing.get("cpu_seconds") is not None:
         timing = {

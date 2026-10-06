@@ -61,14 +61,66 @@ def _sha256(path: "Path | str") -> str:
     return h.hexdigest()
 
 
-def _staged_download(fetch, local_path: "Path | str") -> None:
-    """Download via `fetch(tmp_path)` then atomically replace local_path."""
+class StateCorruptError(Exception):
+    """The downloaded state blob is not a usable SQLite database."""
+
+
+_SQLITE_MAGIC = b"SQLite format 3\x00"
+
+
+def _validate_database(path: "Path | str", uri: str) -> None:
+    """Raise StateCorruptError unless `path` is a SQLite database that opens and passes
+    `PRAGMA quick_check`. Runs on the downloaded temp file, before it can replace anything."""
+    import sqlite3
+
+    def corrupt(reason: str) -> StateCorruptError:
+        return StateCorruptError(
+            f"the shared state object {uri} is not a valid database ({reason}). The local "
+            "database was left as it is. Restore the object from a backup or a bucket "
+            "object version (barca docs remote), or set BARCA_STATE=off to run with local "
+            "history only."
+        )
+
+    size = os.stat(path).st_size
+    with open(path, "rb") as f:
+        head = f.read(len(_SQLITE_MAGIC))
+    if head != _SQLITE_MAGIC:
+        raise corrupt(f"{size} bytes, not a SQLite file")
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro&immutable=1", uri=True)
+        try:
+            rows = conn.execute("PRAGMA quick_check").fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        raise corrupt(f"{type(exc).__name__}: {exc}") from exc
+    if rows != [("ok",)]:
+        raise corrupt("integrity check failed: " + "; ".join(str(r[0]) for r in rows[:3]))
+
+
+def _keep_previous(local_path: Path) -> None:
+    """Keep the database a pull is about to replace as `<name>.prev`, so one bad pull can be
+    undone on this machine."""
+    if local_path.is_file():
+        import shutil
+
+        shutil.copyfile(local_path, local_path.with_name(local_path.name + ".prev"))
+
+
+def _staged_download(fetch, local_path: "Path | str", uri: "str | None" = None) -> None:
+    """Download via `fetch(tmp_path)`, validate it, then atomically replace local_path.
+
+    The previous local database is kept as `<local_path>.prev`. An invalid download never
+    replaces it.
+    """
     local_path = Path(local_path)
     local_path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=local_path.parent, prefix=".state.", suffix=".tmp")
     os.close(fd)
     try:
         fetch(tmp)
+        _validate_database(tmp, uri or str(local_path))
+        _keep_previous(local_path)
         os.replace(tmp, local_path)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
@@ -150,7 +202,7 @@ def _file_pull(target: Path, local_path: "Path | str") -> "str | None":
 
             shutil.copyfile(target, tmp)
 
-        _staged_download(fetch, local_path)
+        _staged_download(fetch, local_path, str(target))
         return token
 
 
@@ -254,7 +306,7 @@ def _gcs_pull(uri: str, local_path: "Path | str") -> "str | None":
     fetched = blob.bucket.get_blob(blob.name)  # token read before download
     if fetched is None:
         return None
-    _staged_download(fetched.download_to_filename, local_path)
+    _staged_download(fetched.download_to_filename, local_path, uri)
     return str(fetched.generation)
 
 
@@ -283,7 +335,7 @@ def pull(state_uri: str, local_path: "Path | str") -> "str | None":
     token = _remote_token(state_uri)
     if token is None:
         return None
-    _staged_download(lambda tmp: _storage.get_file(state_uri, tmp), local_path)
+    _staged_download(lambda tmp: _storage.get_file(state_uri, tmp), local_path, state_uri)
     return token
 
 

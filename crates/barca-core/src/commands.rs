@@ -2151,6 +2151,7 @@ async fn execute(
         pool_size,
         run_id: run_id.clone(),
         artifact_root: worker_artifact_root,
+        content_address: store.is_some(),
         storage_options_json: cfg.storage_options_json.clone(),
     };
     let mut pool = crate::io_loop::WorkerPool::start(io_config).map_err(BarcaError::Other)?;

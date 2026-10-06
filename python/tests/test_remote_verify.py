@@ -69,7 +69,7 @@ def test_the_uploaded_hash_is_recorded_with_the_row(shared, tmp_path):
     import hashlib
     import sqlite3
 
-    artifact = _one(store, "default/artifacts/*numbers*/*.json")
+    artifact = _one(store, "default/artifacts/*numbers*/*/*.json")
     db = sqlite3.connect(tmp_path / "producer" / ".barca" / "metadata.db")
     (recorded,) = db.execute(
         "select output_hash from materializations where node_id like '%:numbers'"
@@ -83,7 +83,7 @@ def test_a_changed_local_copy_is_replaced_before_a_step_reads_it(shared):
     assert cli(root, store, "get", "total", "--json").returncode == 0
     # A new step makes this machine read `numbers`, whose copy it now holds is wrong.
     assert cli(root, store, "get", "numbers", "--json").returncode == 0
-    _one(root, ".barca/artifacts/*numbers*/*.json").write_text("[9, 9, 9]")
+    _one(root, ".barca/artifacts/*numbers*/*/*.json").write_text("[9, 9, 9]")
     (root / "pipeline.py").write_text(
         PIPELINE + '\n\n@asset(inputs={"numbers": numbers})\ndef doubled(numbers: list) -> list:\n'
         "    return [n * 2 for n in numbers]\n"
@@ -93,7 +93,7 @@ def test_a_changed_local_copy_is_replaced_before_a_step_reads_it(shared):
     assert proc.returncode == 0, proc.stderr
     assert json.loads(proc.stdout)["final_output"] == [2, 4, 6]
     assert "fetched 1 cached artifact" in proc.stderr, proc.stderr
-    assert _one(root, ".barca/artifacts/*numbers*/*.json").read_text() == "[1, 2, 3]"
+    assert _one(root, ".barca/artifacts/*numbers*/*/*.json").read_text() == "[1, 2, 3]"
 
 
 def test_an_intact_local_copy_is_not_fetched_again(shared):
@@ -105,20 +105,27 @@ def test_an_intact_local_copy_is_not_fetched_again(shared):
     assert "fetched" not in again.stderr, again.stderr
 
 
-def test_a_store_copy_that_differs_from_the_recorded_hash_is_used_with_a_warning(shared):
-    # An artifact path is {node}/{run_hash}, so the object can be overwritten legitimately.
+def test_a_tampered_store_object_fails_the_fetch_and_names_it(shared):
+    # An object's name contains its hash, so bytes that do not match are corruption (#246).
     store, make = shared
-    _one(store, "default/artifacts/*total*/*.json").write_text('{"sum": 7}')
+    obj = _one(store, "default/artifacts/*total*/*/*.json")
+    obj.write_text('{"sum": 7}')
     root = make("reader")
     proc = cli(root, store, "get", "total", "--json")
-    assert proc.returncode == 0, proc.stderr
-    assert json.loads(proc.stdout)["final_output"] == {"sum": 7}
-    assert "warning" in proc.stderr and "total" in proc.stderr, proc.stderr
-    assert "--refresh pipeline.py:total" in proc.stderr, proc.stderr
+    assert proc.returncode == 3, proc.stderr
+    assert obj.name in proc.stderr and "corrupt" in proc.stderr, proc.stderr
+    assert not list(root.glob(".barca/artifacts/*total*/*/*.json"))
 
-    again = cli(root, store, "get", "total", "--json")
-    assert again.returncode == 0, again.stderr
-    assert "fetched" not in again.stderr, again.stderr
+
+def test_a_refresh_writes_a_new_object_and_leaves_the_old_one(tmp_path):
+    store = tmp_path / "store"
+    root = _machine(tmp_path, "r")
+    assert cli(root, store, "get", "up", "--json").returncode == 0
+    (first,) = store.glob("default/artifacts/*up*/*/*.json")
+    before = first.read_bytes()
+    assert cli(root, store, "get", "up", "--refresh", "up", "--json").returncode == 0
+    assert len(list(store.glob("default/artifacts/*up*/*/*.json"))) == 2
+    assert first.read_bytes() == before
 
 
 NONDETERMINISTIC = """
@@ -185,6 +192,7 @@ def test_overlapping_runs_of_the_same_step_leave_other_machines_working(tmp_path
         proc = cli(root, store, "get", "up", "--json")
         assert proc.returncode == 0, f"{root.name}: {proc.stderr}"
         assert "id" in json.loads(proc.stdout)["final_output"]
+        assert "warning" not in proc.stderr, proc.stderr
 
 
 def test_a_refresh_killed_after_its_upload_does_not_lock_the_step(tmp_path):
@@ -199,6 +207,7 @@ def test_a_refresh_killed_after_its_upload_does_not_lock_the_step(tmp_path):
     proc = cli(root, store, "get", "up", "--json")
     assert proc.returncode == 0, proc.stderr
     assert "id" in json.loads(proc.stdout)["final_output"]
+    assert "warning" not in proc.stderr, proc.stderr
 
 
 def test_independent_histories_sharing_a_store_survive_a_deleted_local_copy(tmp_path):
@@ -214,3 +223,25 @@ def test_independent_histories_sharing_a_store_survive_a_deleted_local_copy(tmp_
     for target in ("up", "quick"):
         proc = get(b, target)
         assert proc.returncode == 0, f"{target}: {proc.stderr}"
+        assert "warning" not in proc.stderr, proc.stderr
+
+
+def test_a_corrupt_state_blob_never_replaces_the_local_database(shared):
+    store, make = shared
+    root = make("reader")
+    assert cli(root, store, "get", "total", "--json").returncode == 0
+    local = root / ".barca" / "metadata.db"
+    good = local.read_bytes()
+
+    blob = store / "default" / "state" / "metadata.db"
+    blob.write_bytes(b"garbage")
+    proc = cli(root, store, "get", "total", "--json")
+    assert proc.returncode == 3, proc.stderr
+    assert str(blob) in proc.stderr and "not a valid database" in proc.stderr, proc.stderr
+    assert local.read_bytes() == good
+
+    # Restoring the object is enough: the next run works and keeps the database it replaced.
+    blob.write_bytes(good)
+    again = cli(root, store, "get", "total", "--json")
+    assert again.returncode == 0, again.stderr
+    assert (root / ".barca" / "metadata.db.prev").exists()

@@ -88,14 +88,33 @@ reference: https://barca.sh/reference/config/
 ## What barca keeps in the bucket
 
 ```
-<uri>/<env>/artifacts/<node>/<run_hash>.<ext>   one file per result
-<uri>/<env>/state/metadata.db                   run history, pulled at the start of a run
+<uri>/<env>/artifacts/<node>/<run_hash>/<sha256>.<ext>   one file per result, written once
+<uri>/<env>/state/metadata.db                            run history, pulled at the start of a run
 ```
+
+An object's name contains the SHA-256 of its bytes, so a stored result is never overwritten: a
+`--refresh`, or two machines computing the same step at once, write two objects, and each
+history row points at the one its own run produced. A fetch whose bytes do not hash to the name
+fails and names the object (corruption, not an overwrite). Results written by 0.15.0 and
+earlier live at `<node>/<run_hash>.<ext>`; they keep working, with the old warning when the
+store's copy differs from the recorded hash. Only unpartitioned steps are content-addressed so
+far; partitioned steps keep the old layout. Old objects are not removed (barca never deletes);
+a refresh leaves the previous object in the bucket.
 
 `<env>` is `default` unless you pass `--env` (`barca docs cache`). Barca reads and writes objects
 and reads their metadata; it never deletes or lists. In practice that is `s3:GetObject`,
 `s3:PutObject` and `s3:ListBucket` on S3, the Storage Object User role on GCS (replacing the
 history object needs delete permission there), and Storage Blob Data Contributor on Azure.
+
+The history is one object with no versions or snapshots, so keep a backup: turn on object
+versioning on the bucket (S3, GCS and Azure all support it). A pull validates what it downloads
+before it replaces anything: if the object is not an intact SQLite database (truncated, empty,
+overwritten), the run stops with exit 3 naming the object, the local `.barca/metadata.db` is
+left as it is, and the next run tries again. Each pull keeps the database it replaced as
+`.barca/metadata.db.prev`. If the object was deleted, the next run starts a new history, and a
+machine that still has its local database keeps it only if it runs and uploads first; restore
+the object from a backup (or a bucket version) instead. `barca state restore` and
+`barca state rebuild` do not exist yet.
 
 Two machines finishing runs at the same time do not lose history: the second detects the
 conflict, re-reads and merges. Set `BARCA_STATE=off` to keep history on each machine and share

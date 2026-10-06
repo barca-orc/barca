@@ -91,8 +91,8 @@ Keep secrets out of it: credentials still come from the environment. Precedence,
 ## What barca keeps in the bucket
 
 ```
-<uri>/<env>/artifacts/<node>/<run_hash>.<ext>   one file per result
-<uri>/<env>/state/metadata.db                   run history, pulled at the start of a run
+<uri>/<env>/artifacts/<node>/<run_hash>/<sha256>.<ext>   one file per result, written once
+<uri>/<env>/state/metadata.db                            run history, pulled at the start of a run
 ```
 
 `<env>` is `default` unless you pass `--env` (`barca docs cache`). Barca reads and writes objects
@@ -150,10 +150,14 @@ the copies while the objects are unchanged (`barca docs sql`).
 
 ## How shared history works
 
-- Artifacts are written to `{uri}/{env}/artifacts/{node}/{run_hash}{ext}`,
-  addressed by the hash of the step's code and inputs, so a cache hit on one
-  machine is valid on every machine. A `--refresh`, or two machines computing
-  the same step at once, overwrites the object.
+- Artifacts are written to `{uri}/{env}/artifacts/{node}/{run_hash}/{sha256}{ext}`:
+  `run_hash` (the hash of the step's code and inputs) is the lookup key in the
+  metadata, and the SHA-256 of the bytes makes the object immutable. A
+  `--refresh`, or two machines computing the same step at once, write two
+  objects and each history row points at its own; nothing is overwritten. A
+  fetch whose bytes do not hash to the name fails, naming the object. Results
+  written by 0.15.0 and earlier (`{node}/{run_hash}{ext}`) keep working with the
+  old warn-only check. Partitioned steps still use the old layout.
 - The metadata DB (the turso/SQLite file that records materializations and
   run history) lives as a single blob at `{uri}/{env}/state/metadata.db`.
   Each run **pulls** it first — so cache checks see every machine's
@@ -161,6 +165,11 @@ the copies while the objects are unchanged (`barca docs sql`).
   etag/generation-conditional upload. If another machine pushed first, barca
   re-pulls and replays this run's rows, so nothing is lost (bounded by
   `push_retries`).
+- A pull validates the downloaded blob (it must be a SQLite database that opens
+  and passes `PRAGMA quick_check`) before it replaces the local one. A bad blob
+  exits 3 naming the object and leaves the local database alone; the replaced
+  database is kept as `.barca/metadata.db.prev`. The blob has no snapshots or
+  versions: enable object versioning on the bucket as its backup.
 - Before upload the WAL is checkpointed into the main file, so the blob is
   always a complete standalone SQLite database — you can download it and
   open it with stock `sqlite3`.
