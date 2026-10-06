@@ -135,14 +135,15 @@ At startup the server enumerates every node whose freshness is `Schedule(cron)`,
 each cron expression (standard 5-field, or 6-field with a leading seconds field for
 sub-minute schedules), and logs the schedule (invalid or empty cron strings are logged and
 skipped, not fatal). A background task then wakes at each second boundary and, for every
-job whose cron matches the current second, triggers a run through the same path as
+job whose cron matches the current second, triggers a run through the same run pool as
 `POST /run` / `POST /run/{target}`:
 
-- **Assets and sensors** are materialized via the `get` path.
-- **Tasks** are executed via the `run` path.
+- **Assets and sensors** are materialized via the `get` path, cache-aware.
+- **Tasks** are executed via the `run` path. A tick reuses cached upstream assets, as
+  `barca run <task>` does; `POST /run/{task}` recomputes every upstream asset.
 
 Each scheduled run gets a normal `run_id`, is visible via `GET /status/{run_id}`, and is
-persisted to `.barca/metadata.db` (`barca history`) — identical to a manually triggered run.
+persisted to `.barca/metadata.db` (`barca history`), like a manually triggered run.
 Inspect the live schedule with `GET /schedule` or, statically, with `barca list <files>`
 (scheduled definitions show their next fire time).
 

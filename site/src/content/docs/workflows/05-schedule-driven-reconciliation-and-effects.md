@@ -51,7 +51,7 @@ Barca never auto-updates this asset, even when stale. Only refreshed via explici
 
 ### `Schedule("cron_expr")`
 
-Barca refreshes this asset when a cron tick has elapsed since its last run. Acceptable staleness between ticks.
+Barca brings this asset up to date on each cron tick: it runs only if there is no cached result for its current code and inputs (sensors upstream are polled first). Acceptable staleness between ticks.
 
 ```python
 from barca import asset, Schedule
@@ -128,7 +128,7 @@ This timeout applies per attempt. If an attempt exceeds the timeout, Barca termi
 
 `barca get`/`barca run` are one-shot commands: each invocation parses the DAG, plans the subgraph for the target, and executes it once before exiting. Continuous freshness enforcement is `barca serve`'s job.
 
-`barca serve` runs a long-running process that serves the DAG over HTTP (`GET /assets`, `GET /plan`, `POST /run`, ...) and drives a background cron scheduler. At startup the scheduler enumerates every node whose `freshness` is `Schedule(cron)`. On each live cron match (evaluated in the configured `--timezone`, local by default) it triggers that node through the same `get`/`run` path the HTTP API uses:
+`barca serve` runs a long-running process that serves the DAG over HTTP (`GET /assets`, `GET /plan`, `POST /run`, ...) and drives a background cron scheduler. At startup the scheduler enumerates every node whose `freshness` is `Schedule(cron)`. On each live cron match (evaluated in the configured `--timezone`, local by default) it triggers that node through the `get` path (assets and sensors) or the `run` path (tasks), reusing cached upstream assets:
 
 - scheduled assets/sensors go through the `get` path — cache-aware, so unrelated upstreams are reused
 - scheduled tasks go through the `run` path — always re-run

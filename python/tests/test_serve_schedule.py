@@ -13,7 +13,10 @@ import subprocess
 import time
 from pathlib import Path
 
-from .test_remote_inspect import SCRUB, _find_binary
+from barca.api import _find_binary
+
+# Settings from the developer's shell that would point the service at a real store.
+SCRUB = ("BARCA_", "FSSPEC_", "AWS_", "AZURE_", "GOOGLE_", "GCSFS_", "STORAGE_EMULATOR_HOST")
 
 PIPELINE = """
 import time
@@ -59,22 +62,44 @@ def _free_port() -> int:
 
 
 def _rows(root: Path) -> dict[str, int]:
-    db = sqlite3.connect(root / ".barca" / "metadata.db")
+    """Successful materializations per node; empty while the database is not there yet."""
     try:
-        return {
-            node.rsplit(":", 1)[1]: count
-            for node, count in db.execute(
-                "select node_id, count(*) from materializations"
-                " where status = 'success' group by node_id"
-            )
-        }
-    finally:
-        db.close()
+        db = sqlite3.connect(root / ".barca" / "metadata.db")
+        try:
+            return {
+                node.rsplit(":", 1)[1]: count
+                for node, count in db.execute(
+                    "select node_id, count(*) from materializations"
+                    " where status = 'success' group by node_id"
+                )
+            }
+        finally:
+            db.close()
+    except sqlite3.Error:
+        return {}
+
+
+def _wait_for(root: Path, done, what: str, timeout: float = 60) -> dict[str, int]:
+    deadline = time.monotonic() + timeout
+    while True:
+        rows = _rows(root)
+        if done(rows):
+            return rows
+        if time.monotonic() > deadline:
+            raise AssertionError(f"timed out waiting for {what}: {rows}")
+        time.sleep(0.25)
+
+
+def _set_version(root: Path, value: str) -> None:
+    """Replace the file in one step, so a sensor poll never reads it half-written."""
+    tmp = root / "version.txt.tmp"
+    tmp.write_text(value)
+    os.replace(tmp, root / "version.txt")
 
 
 def test_a_tick_recomputes_only_what_changed_on_the_input_side(tmp_path):
     (tmp_path / "pipeline.py").write_text(PIPELINE)
-    (tmp_path / "version.txt").write_text("v1")
+    _set_version(tmp_path, "v1")
     env = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
     serve = subprocess.Popen(
         [_find_binary(), "serve", "pipeline.py", "--port", str(_free_port())],
@@ -85,9 +110,22 @@ def test_a_tick_recomputes_only_what_changed_on_the_input_side(tmp_path):
         text=True,
     )
     try:
-        time.sleep(5)
-        (tmp_path / "version.txt").write_text("v2")
-        time.sleep(5)
+        # Several ticks on the first value, then several on the second.
+        first = _wait_for(
+            tmp_path,
+            lambda r: r.get("publish", 0) >= 3 and r.get("tracked", 0) >= 1,
+            "ticks on v1",
+        )
+        _set_version(tmp_path, "v2")
+        _wait_for(
+            tmp_path,
+            lambda r: (
+                r.get("publish", 0) >= first["publish"] + 3
+                and r.get("tracked", 0) >= 2
+                and r.get("feed", 0) >= 2
+            ),
+            "ticks on v2",
+        )
     finally:
         serve.send_signal(signal.SIGTERM)
         try:
@@ -99,7 +137,7 @@ def test_a_tick_recomputes_only_what_changed_on_the_input_side(tmp_path):
     rows = _rows(tmp_path)
     context = f"{rows}\n{err}"
     # The task runs on every tick; its upstream assets only when their inputs changed.
-    assert rows.get("publish", 0) >= 5, f"scheduled task did not run per tick: {context}"
+    assert rows.get("publish", 0) >= 6, f"scheduled task did not run per tick: {context}"
     assert rows.get("model") == 1, f"an unchanged upstream of a task was recomputed: {context}"
     assert rows.get("feed") == 2, f"feed should run once per sensor value: {context}"
     assert "publish v1" in err and "publish v2" in err, f"task did not see the new value: {err}"

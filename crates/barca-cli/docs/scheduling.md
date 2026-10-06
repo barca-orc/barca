@@ -28,19 +28,28 @@ def heartbeat() -> None:
 
 A tick brings the node up to date. It does not force it to recompute:
 
-- A scheduled **asset** is checked on every tick. Sensors upstream of it are polled, anything
-  whose inputs changed is recomputed, and if nothing on its input side changed the asset is
-  served from cache and its function does not run.
-- A scheduled **task** runs on every tick. Its upstream assets are checked the same way: each
-  is recomputed only if its inputs changed, as with `barca run <task>`.
+- A scheduled **asset** is checked on every tick. Sensors upstream of it are polled, and each
+  asset in its cone runs only if there is no cached result for its current code and inputs
+  (`barca docs cache`). If there is one, the asset is served from cache and its function does
+  not run.
+- A scheduled **task** runs on every tick. Its upstream assets are checked the same way, as
+  with `barca run <task>`.
 - A scheduled **sensor** is polled on every tick.
 
 So outside data has to come in through a sensor (`barca docs cache`, "External data that changes
 in place"). A scheduled asset that fetches data in its own body, with no sensor upstream, has
 nothing on its input side that can change: it is computed once and then served from cache on
-every tick. The same goes for a plain asset that a scheduled task reads.
+every tick, until its code or a declared `env=` variable changes or it is named in `--refresh`.
+The same goes for a plain asset that a scheduled task reads.
 
-A tick is skipped while the previous run of the same node is still going.
+The cache is keyed by the sensor's value, not by time. A sensor that returns to a value it had
+before (a row count, a status flag) brings back the result computed for that value. Return
+something that identifies the version of the data, such as an etag or a last-modified time.
+
+`POST /run/<task>` is different from a tick: it recomputes every upstream asset.
+
+A tick is skipped while the previous run of the same scheduled node is still going. Two
+scheduled nodes that share an upstream run separately, and both may compute it.
 
 ```bash
 barca list pipeline.py                         # shows each schedule and its next fire time

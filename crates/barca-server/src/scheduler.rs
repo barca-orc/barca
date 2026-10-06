@@ -3,10 +3,10 @@
 //! `barca serve` parses `@asset(freshness=Schedule("0 5 * * *"))` into
 //! `Freshness::Schedule(CronExpr)`, but nothing in the executor ever acts on it.
 //! This module closes that gap: at startup it enumerates every scheduled node, and
-//! then on each live cron match it triggers a run through the exact same
-//! [`crate::handlers::start_run`] path the HTTP `/run` endpoint uses — so scheduled
-//! runs go through the same bounded run pool and land in the `runs`
-//! history table for free.
+//! then on each live cron match it triggers a run through the same
+//! [`crate::handlers`] run pool the HTTP `/run` endpoints use — so scheduled
+//! runs are bounded the same way and land in the `runs` history table for free.
+//! A scheduled task reuses cached upstream assets; `POST /run/{task}` does not.
 //!
 //! Semantics: cron is evaluated in the configured timezone (`--timezone`, local
 //! by default). On startup a job fires once if a tick elapsed while the daemon
