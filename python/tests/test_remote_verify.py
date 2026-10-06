@@ -242,3 +242,47 @@ def test_independent_histories_sharing_a_store_survive_a_deleted_local_copy(tmp_
     for target in ("up", "quick"):
         proc = get(b, target)
         assert proc.returncode == 0, f"{target}: {proc.stderr}"
+
+
+def test_fetch_and_warning_lines_reach_a_terminal_through_the_progress_bar(shared):
+    """The TTY path prints them with ProgressBar::println; the piped path is covered above."""
+    import pty
+    import re
+    import select
+
+    store, make = shared
+    _one(store, "default/artifacts/*numbers*/*.json").write_text("[5, 5]")
+    root = make("reader")
+    master, slave = pty.openpty()
+    env = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
+    proc = subprocess.Popen(
+        [_find_binary(), "get", "total", "--refresh", "total", "--json"],
+        cwd=root,
+        env={**env, "BARCA_REMOTE_URI": str(store), "TERM": "xterm"},
+        stdout=subprocess.PIPE,
+        stderr=slave,
+        text=True,
+    )
+    os.close(slave)
+    chunks = []
+    deadline = time.monotonic() + 120
+    while time.monotonic() < deadline:
+        ready, _, _ = select.select([master], [], [], 0.2)
+        if ready:
+            try:
+                data = os.read(master, 65536)
+            except OSError:
+                break
+            if not data:
+                break
+            chunks.append(data)
+        elif proc.poll() is not None:
+            break
+    out, _ = proc.communicate(timeout=60)
+    os.close(master)
+    text = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", b"".join(chunks).decode(errors="replace"))
+    assert proc.returncode == 0, text
+    assert json.loads(out)["final_output"] == {"sum": 10}
+    assert "fetched 1 cached artifact" in text, text
+    assert "warning: pipeline.py:numbers" in text, text
+    assert "--refresh pipeline.py:numbers" in text, text
