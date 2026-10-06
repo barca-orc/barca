@@ -63,6 +63,7 @@ that; see `barca docs agents`.
 - `barca docs discovery` — which files make up a project: the root, walks, `[discovery]`, node ids
 - `barca docs assets` — decorators, inputs, freshness, retries
 - `barca docs types` — how outputs are stored and read (json, pickle, parquet; pandas, polars, pyarrow, duckdb)
+- `barca docs big-inputs` — large inputs: lazy types load only the columns and rows a step needs
 - `barca docs tasks` — tasks and `barca run`
 - `barca docs cache` — what is cached, artifacts, `--refresh` / `--refresh-all`, environments
 - `barca docs remote` — share one cache across machines (S3, GCS, Azure) with a few environment variables

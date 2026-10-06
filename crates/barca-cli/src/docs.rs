@@ -50,6 +50,11 @@ pub const TOPICS: &[Topic] = &[
         "Output formats, and how annotations pick readers (pandas, polars, pyarrow, duckdb)",
         "types.md"
     ),
+    topic!(
+        "big-inputs",
+        "Large inputs: lazy types (duckdb, polars LazyFrame) load only the subset a step needs",
+        "big-inputs.md"
+    ),
     topic!("tasks", "@task, ordering-only deps, barca run", "tasks.md"),
     topic!(
         "cache",

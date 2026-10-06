@@ -573,3 +573,32 @@ def test_json_inspection_commands(binary, tmp_path):
     stats = result(barca(binary, tmp_path, "stats", "total", "pipeline.py", "--json"))
     assert stats["id"] == "pipeline.py:total"
     assert barca(binary, tmp_path, "get", "total", "pipeline.py").stdout.count("\n") == 1
+
+
+def test_big_inputs_topic_example(binary, topics, tmp_path, monkeypatch):
+    pytest.importorskip("duckdb")
+    pytest.importorskip("polars")
+    pytest.importorskip("pandas")
+    pytest.importorskip("pyarrow")
+    write_example(topics, "big-inputs", tmp_path)
+
+    # Aggregate over a lazy relation: written as parquet, a pointer on stdout.
+    per_bucket = result(barca(binary, tmp_path, "get", "per_bucket", "pipeline.py"))
+    assert per_bucket["final_output"]["_barca_artifact"]["format"] == "parquet"
+    bucket_3 = result(barca(binary, tmp_path, "get", "bucket_3", "pipeline.py"))
+    assert bucket_3["final_output"]["_barca_artifact"]["format"] == "parquet"
+
+    import barca as barca_api
+
+    monkeypatch.chdir(tmp_path)
+    assert barca_api.get("per_bucket", "pipeline.py")["n"].tolist() == [10000] * 10
+    assert barca_api.get("bucket_3", "pipeline.py")["id"].min() == 3
+
+    # The pandas path: narrow first, convert the small result.
+    first = result(barca(binary, tmp_path, "get", "first_ids", "pipeline.py"))
+    assert first["final_output"] == {"ids": [3, 13, 23, 33, 43]}
+
+    # An ordering-only input runs after its upstream and warns about nothing.
+    proc = barca(binary, tmp_path, "get", "after_events", "pipeline.py")
+    assert result(proc)["final_output"] == {"ran": True}
+    assert "warning" not in proc.stderr
