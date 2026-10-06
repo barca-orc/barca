@@ -35,7 +35,18 @@ fn fixture_config(dir: &std::path::Path) -> ServeConfig {
         timezone: "local".to_string(),
         python: barca_core::commands::find_python(),
         resolved: barca_core::config::resolve_in(None, dir).unwrap(),
+        read_only: false,
     }
+}
+
+/// Like [`fixture_config`], with the DB pointed into the temp dir so tests can
+/// assert whether it was created.
+fn isolated_config(dir: &std::path::Path, read_only: bool) -> ServeConfig {
+    let mut config = fixture_config(dir);
+    config.resolved.db_path = dir.join("metadata.db").display().to_string();
+    config.resolved.artifact_root = dir.join("artifacts").display().to_string();
+    config.read_only = read_only;
+    config
 }
 
 async fn body_json(resp: axum::response::Response) -> serde_json::Value {
@@ -372,4 +383,175 @@ async fn status_for_unknown_run_returns_404() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn events_for_unknown_run_returns_404() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app(fixture_config(dir.path()));
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/events/deadbeef")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn logs_for_unknown_run_returns_empty() {
+    // Unknown run id → empty list, not an error: logs are durable history and
+    // "no rows" is a valid answer.
+    let dir = tempfile::tempdir().unwrap();
+    let app = app(fixture_config(dir.path()));
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/logs/deadbeef")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    assert_eq!(json["logs"], serde_json::json!([]));
+}
+
+#[tokio::test]
+async fn state_reports_every_node_without_creating_a_db() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app(isolated_config(dir.path(), false));
+    let (status, json) = send(&app, "GET", "/state").await;
+    assert_eq!(status, StatusCode::OK);
+    let nodes = json.as_array().expect("array of node states");
+    assert_eq!(nodes.len(), 2);
+    for n in nodes {
+        assert_eq!(n["cache"]["state"], "never_run", "{n}");
+        assert!(n["last_materialization"].is_null());
+        assert!(n["durations"].is_null());
+        assert!(n["next_run"].is_null(), "unscheduled: {n}");
+    }
+    assert!(
+        !dir.path().join("metadata.db").exists(),
+        "GET /state created the DB"
+    );
+}
+
+#[tokio::test]
+async fn read_only_rejects_everything_that_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app(isolated_config(dir.path(), true));
+    for (method, uri) in [
+        ("POST", "/run"),
+        ("POST", "/run/second"),
+        ("POST", "/get/second"),
+        ("DELETE", "/run/deadbeef"),
+    ] {
+        let (status, json) = send(&app, method, uri).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{method} {uri}");
+        assert!(
+            json["error"].as_str().unwrap_or("").contains("read-only"),
+            "{method} {uri}: {json}"
+        );
+    }
+    let (_, health) = send(&app, "GET", "/health").await;
+    assert_eq!(health["read_only"], true);
+}
+
+#[tokio::test]
+async fn read_only_reads_never_create_or_touch_the_db() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app(isolated_config(dir.path(), true));
+    for uri in ["/state", "/assets/first", "/logs/deadbeef"] {
+        let (status, _) = send(&app, "GET", uri).await;
+        assert_eq!(status, StatusCode::OK, "GET {uri}");
+    }
+    let entries: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| n.starts_with("metadata.db"))
+        .collect();
+    assert!(entries.is_empty(), "read-only reads created {entries:?}");
+}
+
+#[tokio::test]
+async fn health_reports_writable_by_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app(isolated_config(dir.path(), false));
+    let (_, health) = send(&app, "GET", "/health").await;
+    assert_eq!(health["read_only"], false);
+}
+
+#[tokio::test]
+async fn the_root_and_ui_redirect_relatively_to_the_ui() {
+    // Relative `Location`s keep a reverse-proxy prefix: from /barca/ the
+    // browser resolves `ui/` to /barca/ui/.
+    let dir = tempfile::tempdir().unwrap();
+    let app = app(isolated_config(dir.path(), false));
+    for uri in ["/", "/ui"] {
+        let resp = app
+            .clone()
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert!(
+            resp.status().is_redirection(),
+            "GET {uri}: {}",
+            resp.status()
+        );
+        assert_eq!(resp.headers()["location"], "ui/", "GET {uri}");
+    }
+}
+
+#[tokio::test]
+async fn ui_page_is_served_or_explains_it_was_not_built() {
+    // Whether `ui/dist` was built before this test binary decides which; both
+    // are valid, a bare 404 or an API error is not.
+    let dir = tempfile::tempdir().unwrap();
+    let app = app(isolated_config(dir.path(), false));
+    let resp = app
+        .oneshot(Request::builder().uri("/ui/").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let status = resp.status();
+    let ctype = resp.headers().get("content-type").cloned();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body = String::from_utf8_lossy(&body);
+    if status == StatusCode::OK {
+        assert_eq!(ctype.unwrap(), "text/html; charset=utf-8");
+        assert!(body.contains("<div id=\"root\">"), "{body}");
+    } else {
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert!(body.contains("built without its web UI"), "{body}");
+    }
+}
+
+#[tokio::test]
+async fn run_events_are_not_buffered_by_proxies() {
+    // Start a run (it fails fast: the target doesn't exist) so a live event
+    // channel exists, then check the SSE response's headers.
+    let dir = tempfile::tempdir().unwrap();
+    let app = app(isolated_config(dir.path(), false));
+    let (status, body) = send(&app, "POST", "/get/does_not_exist").await;
+    assert_eq!(status, StatusCode::OK);
+    let handle = body["run_id"].as_str().unwrap().to_string();
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/events/{handle}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.headers()["x-accel-buffering"], "no");
+    assert_eq!(resp.headers()["content-type"], "text/event-stream");
 }

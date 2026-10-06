@@ -1,0 +1,107 @@
+/* ============================================================
+   barca · light theme  (secondary)
+   Applied via [data-theme="light"] on <html> or any container.
+
+   Key idea: on a light surface the signal can't be the bright
+   mint that pops on near-black — it goes pale and flat. So on
+   light we drop the signal to a DEEPER, more saturated emerald
+   with white text, giving the green real weight against white.
+   Surfaces keep the faint green cast so the brand stays coherent.
+   ============================================================ */
+
+[data-theme="light"] {
+  /* ---- Light emerald signal: deeper + saturated so it carries ---- */
+  --c-green-l-100: #E2F6EC;
+  --c-green-l-200: #BEEBD2;
+  --c-green-l-300: #7FD6A7;
+  --c-green-l-500: #12A65C;  /* THE signal on light */
+  --c-green-l-600: #0E9150;  /* hover (darker) */
+  --c-green-l-700: #0B7942;  /* pressed */
+  --c-green-l-800: #075C32;
+
+  --c-green-wash:  rgba(18, 166, 92, 0.10);
+  --c-green-line:  rgba(18, 166, 92, 0.30);
+  --c-green-glow:  rgba(18, 166, 92, 0.34);
+
+  /* Cyan reads better a touch deeper on white */
+  --c-cyan-l-500:  #0E96A0;
+  --c-cyan-wash:   rgba(14, 150, 160, 0.10);
+  --c-cyan-line:   rgba(14, 150, 160, 0.30);
+
+  /* ---- Surfaces: warm-neutral off-whites, faint green cast ---- */
+  --bg-canvas:   #F3F6F3;
+  --bg-surface:  #FFFFFF;
+  --bg-raised:   #FFFFFF;
+  --bg-overlay:  #FFFFFF;
+  --bg-inset:    #ECF1EC;
+  --bg-hover:    rgba(8, 24, 16, 0.04);
+  --bg-active:   rgba(8, 24, 16, 0.07);
+  --bg-selected: var(--c-green-wash);
+
+  /* ---- Borders ---- */
+  --border-subtle:  #EAEFEA;
+  --border-default: #DCE3DD;
+  --border-strong:  #C5CEC7;
+  --border-accent:  var(--c-green-line);
+
+  /* ---- Text ---- */
+  --text-strong:    #0B1410;
+  --text-default:   #243029;
+  --text-muted:     #586860;
+  --text-faint:     #8A968E;
+  --text-disabled:  #AEB8B1;
+  --text-on-signal: #FFFFFF;        /* white text on the deep emerald */
+  --text-link:      var(--c-cyan-l-500);
+
+  /* ---- Brand signal ---- */
+  --signal:        var(--c-green-l-500);
+  --signal-hover:  var(--c-green-l-600);
+  --signal-press:  var(--c-green-l-700);
+  --signal-dim:    var(--c-green-l-300);
+
+  /* ---- Focus ---- */
+  --focus-ring:    var(--c-green-l-500);
+  --focus-glow:    0 0 0 1px #FFFFFF, 0 0 0 3px var(--c-green-line);
+
+  /* ---- Elevation: lift comes from soft gray shadow, not a white edge ---- */
+  --edge-top:   inset 0 1px 0 rgba(255, 255, 255, 0.6);  /* @kind shadow */
+  --edge-inset: inset 0 0 0 1px rgba(8, 24, 16, 0.015);
+  --shadow-xs:  0 1px 2px rgba(16, 32, 24, 0.06);
+  --shadow-sm:  0 1px 2px rgba(16, 32, 24, 0.06), 0 2px 8px rgba(16, 32, 24, 0.06);
+  --shadow-md:  0 6px 20px rgba(16, 32, 24, 0.10);
+  --shadow-lg:  0 16px 44px rgba(16, 32, 24, 0.14);
+  --shadow-pop: 0 12px 32px rgba(16, 32, 24, 0.16);
+
+  /* Signal glows — subtler on light, still mean "alive" */
+  --glow-signal-sm: 0 0 0 1px var(--c-green-line), 0 0 8px -3px var(--c-green-glow);
+  --glow-signal-md: 0 0 0 1px var(--c-green-line), 0 0 16px -4px var(--c-green-glow);
+
+  /* ---- Status: deepen fills so they read on white ---- */
+  --status-success:      var(--c-green-l-500);
+  --status-success-bg:   var(--c-green-wash);
+  --status-success-line: var(--c-green-line);
+
+  --status-running:      var(--c-cyan-l-500);
+  --status-running-bg:   var(--c-cyan-wash);
+  --status-running-line: var(--c-cyan-line);
+
+  --status-failed:       #CE3535;
+  --status-failed-bg:    rgba(206, 53, 53, 0.10);
+  --status-failed-line:  rgba(206, 53, 53, 0.30);
+
+  --status-warning:      #B5790C;
+  --status-warning-bg:   rgba(181, 121, 12, 0.10);
+  --status-warning-line: rgba(181, 121, 12, 0.30);
+
+  --status-queued:       #6B7771;
+  --status-queued-bg:    rgba(107, 119, 113, 0.10);
+  --status-queued-line:  rgba(107, 119, 113, 0.26);
+
+  --status-skipped:      #9AA69E;
+  --status-skipped-bg:   rgba(154, 166, 158, 0.16);
+}
+
+[data-theme="light"] ::selection {
+  background: var(--c-green-line);
+  color: var(--text-strong);
+}

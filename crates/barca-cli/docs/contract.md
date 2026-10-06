@@ -180,6 +180,7 @@ default, and any aliases.
 | `--watch` | - | default `false` | experimental (with the command) | Dev mode: re-parse the DAG when source files change |
 | `--no-schedule` | - | default `false` | experimental (with the command) | Disable the cron scheduler (Schedule(...) assets will not auto-fire) |
 | `--timezone` | `TIMEZONE` | default `local` | experimental (with the command) | Timezone for cron evaluation: local (default), utc, or an IANA name |
+| `--read-only` | - | default `false` | experimental (with the command) | Inspect only: refuse runs, never schedule, read the metadata DB from snapshots |
 | `--env` | `ENV` | - | experimental (with the command) | Environment name (separates cache/state per environment) |
 
 #### barca list

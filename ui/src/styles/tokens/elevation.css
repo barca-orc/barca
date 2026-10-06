@@ -1,0 +1,31 @@
+/* ============================================================
+   barca · elevation
+   Dark UI: shadows are subtle; depth comes from hairline borders
+   and faint inner highlights. The "glow" is reserved for the
+   signal green (focus / active node / live state).
+   ============================================================ */
+
+:root {
+  /* Drop shadows — restrained, cast deeper into near-black */
+  --shadow-none: none;
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.45);
+  --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 16px 44px rgba(0, 0, 0, 0.6);
+  --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.66);
+
+  /* Top inner highlight — the faint "lit edge" on raised surfaces */
+  --edge-top: inset 0 1px 0 rgba(255, 255, 255, 0.04);  /* @kind shadow */
+  --edge-inset: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+
+  /* Signal glows — used sparingly: live nodes, focus, hover on signal */
+  --glow-signal-sm: 0 0 0 1px var(--c-green-line), 0 0 10px -2px var(--c-green-glow);
+  --glow-signal-md: 0 0 0 1px var(--c-green-line), 0 0 20px -4px var(--c-green-glow);
+  --glow-running:   0 0 0 1px var(--c-cyan-line), 0 0 16px -4px rgba(54, 203, 211, 0.5);
+  --glow-failed:    0 0 0 1px var(--c-red-line),  0 0 16px -4px rgba(255, 90, 90, 0.5);
+
+  /* Composed elevations */
+  --elev-card:    var(--shadow-sm), var(--edge-top);
+  --elev-popover: var(--shadow-md), var(--edge-top);
+  --elev-modal:   var(--shadow-lg), var(--edge-top);
+}

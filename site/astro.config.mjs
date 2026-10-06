@@ -38,6 +38,7 @@ export default defineConfig({
             { label: 'Getting Started', slug: 'getting-started' },
             { label: 'Guide', slug: 'guide' },
             { label: 'Scheduling', slug: 'scheduling' },
+            { label: 'Deploying', slug: 'deploying' },
           ],
         },
         {
