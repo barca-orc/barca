@@ -60,6 +60,7 @@ export default defineConfig({
             { label: 'CLI Contract', slug: 'reference/cli-contract' },
             { label: 'Configuration', slug: 'reference/config' },
             { label: 'Remote Storage', slug: 'reference/remote-storage' },
+            { label: 'Telemetry', slug: 'reference/telemetry' },
             { label: 'Server API', slug: 'reference/server-api' },
             { label: 'Decorators API', slug: 'reference/api/decorators' },
           ],
