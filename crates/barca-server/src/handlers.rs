@@ -183,42 +183,15 @@ pub async fn status(
 /// Which core command a background run executes.
 enum RunKind {
     /// `commands::get` with an optional target (assets).
-    Get(Option<String>, commands::CachePolicy),
-    /// `commands::run` for a task target.
+    Get(Option<String>),
+    /// `commands::run` for a task target, with how its upstream assets are treated.
     Task(String, commands::CachePolicy),
-    /// `commands::get_many`: the first target is the one the run is for.
-    GetMany(Vec<String>, commands::CachePolicy),
-}
-
-/// A multi-target run as the single result a run handle reports: the first target's output,
-/// or the first failure among the targets.
-fn first_target_result(multi: commands::MultiResult) -> Result<GetResult, BarcaError> {
-    if let Some((name, failed)) = multi.targets.iter().find(|(_, t)| t.status != "success") {
-        let step = failed.failed_node.as_deref().unwrap_or(name);
-        let error = failed.error.as_deref().unwrap_or("failed");
-        return Err(BarcaError::Other(format!("{step}: {error}")));
-    }
-    Ok(GetResult {
-        run_id: multi.run_id,
-        elapsed_seconds: multi.elapsed_seconds,
-        steps_executed: multi.steps_executed,
-        phases: multi.phases,
-        final_output: multi
-            .targets
-            .into_iter()
-            .next()
-            .and_then(|(_, t)| t.final_output),
-        steps: multi.steps,
-    })
 }
 
 /// Insert a `Pending` run, spawn the background execution task, and return the
 /// server-side handle. The real DB run id is surfaced in the completed payload.
 pub(crate) fn start_run(state: AppState, target: Option<String>) -> String {
-    spawn_run(
-        state,
-        RunKind::Get(target, commands::CachePolicy::CacheAware),
-    )
+    spawn_run(state, RunKind::Get(target))
 }
 
 /// Insert a `Pending` run for a task, spawn the background execution via
@@ -230,31 +203,13 @@ pub(crate) fn start_run_task(state: AppState, target: String) -> String {
     )
 }
 
-/// A cron tick for a scheduled asset: recompute that asset, whatever the cache holds for it,
-/// reuse cached upstreams, and recompute `followers` (the `Always` assets downstream of it)
-/// in the same run. Without the refresh the tick would find the asset's last result and serve
-/// it; without the followers they would keep results computed from the old one, because a
-/// later run sees their inputs' code unchanged and serves them from cache.
-pub(crate) fn start_scheduled_asset(
-    state: AppState,
-    node_id: String,
-    followers: Vec<String>,
-) -> String {
-    let policy = commands::CachePolicy::RefreshSelective {
-        names: vec![node_id.clone()],
-        cascade: true,
-    };
-    let mut targets = vec![node_id];
-    targets.extend(followers);
-    spawn_run(state, RunKind::GetMany(targets, policy))
-}
-
-/// A cron tick for a scheduled task: the task runs, as a task always does, and its upstream
-/// assets come from cache when they are fresh (what `barca run <task>` does).
-pub(crate) fn start_scheduled_task(state: AppState, node_id: String) -> String {
+/// A cron tick for a scheduled task: the task runs, as a task always does, and each upstream
+/// asset is recomputed only if something on its input side changed (what `barca run <task>`
+/// does). A scheduled asset already goes through the cache-aware [`start_run`].
+pub(crate) fn start_scheduled_task(state: AppState, target: String) -> String {
     spawn_run(
         state,
-        RunKind::Task(node_id, commands::CachePolicy::CacheAware),
+        RunKind::Task(target, commands::CachePolicy::CacheAware),
     )
 }
 
@@ -303,29 +258,18 @@ fn spawn_run(state: AppState, kind: RunKind) -> String {
 
         let fut = async {
             match &kind {
-                RunKind::Get(target, policy) => {
+                RunKind::Get(target) => {
                     commands::get(
                         &cfg,
                         target.as_deref(),
                         &files,
                         &python,
-                        policy.clone(),
+                        commands::CachePolicy::CacheAware,
                         true,
                         cancel.clone(),
                     )
                     .await
                 }
-                RunKind::GetMany(targets, policy) => commands::get_many(
-                    &cfg,
-                    targets,
-                    &files,
-                    &python,
-                    policy.clone(),
-                    true,
-                    cancel.clone(),
-                )
-                .await
-                .and_then(first_target_result),
                 RunKind::Task(target, policy) => {
                     commands::run(
                         &cfg,

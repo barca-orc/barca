@@ -26,16 +26,19 @@ def heartbeat() -> None:
   field. The scheduler evaluates at 1-second resolution. There is no year field.
 - Schedules only fire while `barca serve` is running; `barca get` never fires them.
 
-What a tick does to the node it fires:
+A tick brings the node up to date. It does not force it to recompute:
 
-- A scheduled **asset** is recomputed, whatever is cached for it. Its upstream assets come from
-  cache when they are fresh. Assets downstream of it with `Always` freshness are recomputed in
-  the same run, so they never hold a result built from the previous one. A `Manual` or scheduled
-  asset, a task or a sensor downstream is left alone, and so is everything behind it.
-- A scheduled **task** runs. Its upstream assets come from cache when they are fresh, as with
-  `barca run <task>`.
-- A scheduled **sensor** is polled. Assets that read it recompute the next time a run reaches
-  them, if its output changed (`barca docs cache`).
+- A scheduled **asset** is checked on every tick. Sensors upstream of it are polled, anything
+  whose inputs changed is recomputed, and if nothing on its input side changed the asset is
+  served from cache and its function does not run.
+- A scheduled **task** runs on every tick. Its upstream assets are checked the same way: each
+  is recomputed only if its inputs changed, as with `barca run <task>`.
+- A scheduled **sensor** is polled on every tick.
+
+So outside data has to come in through a sensor (`barca docs cache`, "External data that changes
+in place"). A scheduled asset that fetches data in its own body, with no sensor upstream, has
+nothing on its input side that can change: it is computed once and then served from cache on
+every tick. The same goes for a plain asset that a scheduled task reads.
 
 A tick is skipped while the previous run of the same node is still going.
 
