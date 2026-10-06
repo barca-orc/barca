@@ -185,6 +185,7 @@ Examples:
   barca serve pipeline.py --watch            # dev: re-parse the DAG when files change
   barca serve pipeline.py --no-schedule      # API only; Schedule(...) nodes do not fire
   barca serve pipeline.py --timezone utc     # evaluate cron in UTC (default: local)
+  barca serve pipeline.py --read-only        # inspect only: no runs, no scheduler, DB never written
 
 Binds to localhost with no authentication.
 More: barca docs scheduling";
@@ -448,6 +449,9 @@ enum Cli {
         /// Timezone for cron evaluation: local (default), utc, or an IANA name
         #[arg(long, default_value = "local")]
         timezone: String,
+        /// Inspect only: refuse runs, never schedule, read the metadata DB from snapshots
+        #[arg(long)]
+        read_only: bool,
         /// Environment name (separates cache/state per environment)
         #[arg(long)]
         env: Option<String>,
@@ -1271,6 +1275,7 @@ async fn run_cli(cli: Cli, ctx: &Context) -> Result<(), CliError> {
             watch,
             no_schedule,
             timezone,
+            read_only,
             env,
         } => serve_cmd(
             env.as_deref(),
@@ -1279,6 +1284,7 @@ async fn run_cli(cli: Cli, ctx: &Context) -> Result<(), CliError> {
             watch,
             !no_schedule,
             timezone,
+            read_only,
             &python,
         )
         .await
@@ -2269,6 +2275,7 @@ async fn serve_cmd(
     watch: bool,
     schedule: bool,
     timezone: String,
+    read_only: bool,
     python: &std::path::Path,
 ) -> Result<(), barca_core::BarcaError> {
     let resolved = barca_core::config::resolve(env)?;
@@ -2288,6 +2295,7 @@ async fn serve_cmd(
         timezone,
         python: python.to_path_buf(),
         resolved,
+        read_only,
     };
     barca_server::serve(config)
         .await

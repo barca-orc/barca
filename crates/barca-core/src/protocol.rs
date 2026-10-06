@@ -33,6 +33,8 @@ pub enum WorkerMessage {
     },
     /// A step was blocked because an upstream failed.
     Blocked { node_id: String, reason: String },
+    /// A line of user stdout captured while a step was executing.
+    Log { node_id: String, line: String },
     /// Worker is requesting parallel dispatch of sub-tasks.
     /// Worker blocks on socket read until it receives ParallelResponse.
     Submit { items: Vec<SubmitItem> },
@@ -580,6 +582,35 @@ mod tests {
         // Read fourth: EOF
         let msg4: Option<WorkerMessage> = read_message(&mut cursor).unwrap();
         assert!(msg4.is_none());
+    }
+
+    #[test]
+    fn test_log_message_roundtrip() {
+        // The wire shape the Python worker sends: {"type":"log","node_id":..,"line":..}
+        // Include a non-ASCII char (UTF-8) to confirm framing handles it.
+        let raw = r#"{"type":"log","node_id":"a.py:load","line":"loading…"}"#.as_bytes();
+        let mut framed = Vec::new();
+        framed.extend_from_slice(&(raw.len() as u32).to_be_bytes());
+        framed.extend_from_slice(raw);
+
+        let mut cursor = Cursor::new(framed);
+        let decoded: WorkerMessage = read_message(&mut cursor).unwrap().unwrap();
+        match decoded {
+            WorkerMessage::Log { node_id, line } => {
+                assert_eq!(node_id, "a.py:load");
+                assert_eq!(line, "loading…");
+            }
+            _ => panic!("expected Log"),
+        }
+
+        // And it re-encodes to the same tagged shape.
+        let msg = WorkerMessage::Log {
+            node_id: "a.py:load".to_string(),
+            line: "loading…".to_string(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains(r#""type":"log""#));
+        assert!(json.contains(r#""line":"loading…""#));
     }
 
     #[test]

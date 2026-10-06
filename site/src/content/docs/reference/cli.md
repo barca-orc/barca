@@ -18,7 +18,7 @@ barca run <task[,task...]> [file.py|dir/ ...] [--refresh a,b [--no-cascade] | --
 barca plan [file.py|dir/ ...]                Emit the execution plan as JSON (experimental)
 barca history [-l N | --all] [--json|--pretty]  Show recent run history
 barca stats <target> [file.py|dir/ ...]       Show timing/cache stats for an asset
-barca serve [file.py|dir/ ...] [--port N] [--watch] [--no-schedule] [--timezone TZ]
+barca serve [file.py|dir/ ...] [--port N] [--watch] [--no-schedule] [--timezone TZ] [--read-only]
                                                Run the HTTP API server
 barca list [file.py|dir/ ...] [-l N | --all] [--json]  List discovered definitions and their deps
 barca status [target[,target...]] [file.py|dir/ ...] [--json] [--sample N]
@@ -234,9 +234,9 @@ barca stats summary pipeline.py --fields status,error_message   # JSON; trims re
 
 ## serve
 
-Start a long-running HTTP server that exposes the orchestrator as a JSON API. Binds to
-`127.0.0.1` (local only, no auth). See [Server API](/reference/server-api/) for the full endpoint
-reference.
+Start a long-running HTTP server that exposes the orchestrator as a JSON API and serves the web UI
+at `/ui/`. Binds to `127.0.0.1` (local only, no auth). See [Server API](/reference/server-api/) for
+the full endpoint reference and [Deploying](/deploying/) for running it behind nginx.
 
 ```bash
 barca serve pipeline.py                 # default port 8274
@@ -244,7 +244,13 @@ barca serve pipeline.py --port 8400     # custom port
 barca serve pipeline.py --watch         # dev mode: re-parse the DAG on file change
 barca serve pipeline.py --no-schedule   # disable the cron scheduler
 barca serve pipeline.py --timezone utc  # evaluate cron in UTC (default: local)
+barca serve pipeline.py --read-only     # inspect only: no runs, no scheduler, DB never written
 ```
+
+`--read-only` serves the API and UI without the ability to change anything: run and cancel
+endpoints return `403`, the scheduler never starts, and every read of the metadata DB goes through
+a private copy. Use it to share a view of a project, including one another barca process is
+running.
 
 `--watch` is a local-development convenience and is off by default; a production deployment serves
 a fixed set of files and does not need it.

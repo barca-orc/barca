@@ -1,0 +1,420 @@
+/* ============================================================
+   barca · app shell chrome
+   Sidebar + topbar + content frame. Ported from the console UI kit.
+   ============================================================ */
+
+.barca-app {
+  display: flex;
+  height: 100vh;
+  background: var(--bg-canvas);
+  color: var(--text-default);
+  font-family: var(--font-sans);
+}
+.barca-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.barca-content { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+.barca-content > * { flex: 1; min-height: 0; }
+
+/* ---------- Sidebar ---------- */
+.barca-sidebar {
+  width: 248px;
+  flex: none;
+  background: var(--bg-inset);
+  border-right: 1px solid var(--border-default);
+  display: flex;
+  flex-direction: column;
+}
+.barca-brand { display: flex; align-items: center; gap: 9px; padding: 13px 16px 12px; }
+.barca-wordmark {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 16px;
+  color: var(--text-strong);
+  letter-spacing: -0.01em;
+}
+.barca-env {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--signal);
+  background: var(--c-green-wash);
+  border: 1px solid var(--c-green-line);
+  padding: 2px 6px;
+  border-radius: var(--radius-pill);
+}
+.barca-navlist { padding: 6px 8px; display: flex; flex-direction: column; gap: 1px; }
+.barca-nav {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 9px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-align: left;
+  transition: var(--t-all);
+}
+.barca-nav { text-decoration: none; }
+.barca-nav:hover { background: var(--bg-hover); color: var(--text-strong); }
+.barca-nav[aria-current='page'] { background: var(--bg-active); color: var(--text-strong); }
+.barca-nav[aria-current='page'] svg { color: var(--signal); }
+.barca-sect {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 12px 6px 14px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-faint);
+}
+.barca-pipes { padding: 0 8px; display: flex; flex-direction: column; gap: 1px; overflow: auto; }
+.barca-pipe {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 9px;
+  border: none;
+  background: transparent;
+  color: var(--text-default);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-align: left;
+  transition: var(--t-all);
+}
+.barca-pipe:hover { background: var(--bg-hover); }
+.barca-pipe[data-active] { background: var(--bg-active); color: var(--text-strong); }
+.barca-pipe-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.barca-pipe-empty { padding: 6px 9px; font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); }
+.barca-side-foot { margin-top: auto; border-top: 1px solid var(--border-subtle); padding: 10px 14px; }
+.barca-user { display: flex; align-items: center; gap: 9px; }
+.barca-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-sm);
+  background: var(--c-green-wash);
+  border: 1px solid var(--c-green-line);
+  color: var(--signal);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+}
+.barca-user-name { font-size: 12px; color: var(--text-strong); font-weight: 500; }
+.barca-user-meta { font-family: var(--font-mono); font-size: 10px; color: var(--text-faint); }
+
+/* ---------- Topbar ---------- */
+.barca-topbar {
+  height: 48px;
+  flex: none;
+  border-bottom: 1px solid var(--border-default);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 14px;
+}
+.barca-crumbs { display: flex; align-items: center; gap: 7px; font-family: var(--font-mono); font-size: 12px; }
+.barca-crumb { color: var(--text-muted); }
+.barca-crumb.is-last { color: var(--text-strong); }
+.barca-crumb-sep { color: var(--text-faint); }
+.barca-search {
+  margin-left: 6px;
+  flex: 1;
+  max-width: 300px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 10px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--text-faint);
+  font-size: 12px;
+  cursor: text;
+}
+.barca-search kbd {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-faint);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-default);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+.barca-top-actions { margin-left: auto; display: flex; align-items: center; gap: 3px; }
+.barca-divider-v { width: 1px; height: 22px; background: var(--border-default); margin: 0 6px; }
+
+/* ---------- View head ---------- */
+.barca-view { display: flex; flex-direction: column; height: 100%; }
+.barca-view-head { padding: 16px 24px 0; flex: none; }
+.barca-view-bar { display: flex; align-items: center; gap: 16px; margin-bottom: 14px; }
+.barca-view-title { display: flex; align-items: center; gap: 12px; }
+.barca-view-title h1 {
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--text-strong);
+  margin: 0;
+  letter-spacing: -0.015em;
+}
+.barca-view-actions { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.barca-view-body { flex: 1; min-height: 0; overflow: auto; padding: 18px 24px; }
+
+/* connection chip */
+.barca-conn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* asset list (foundation placeholder for the graph) */
+.barca-asset-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 14px;
+  align-items: center;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.barca-asset-row:last-child { border-bottom: none; }
+.barca-asset-id {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--text-strong);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.barca-asset-deps { font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); }
+
+/* ---------- Graph canvas + inspector ---------- */
+.barca-graph-wrap { flex: 1; min-height: 0; display: flex; position: relative; }
+.barca-graph-canvas { flex: 1; min-width: 0; position: relative; }
+.barca-legend {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  display: flex;
+  gap: 14px;
+  padding: 7px 12px;
+  background: var(--bg-overlay);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-pill);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  box-shadow: var(--shadow-sm);
+  z-index: 5;
+}
+.barca-legend span { display: inline-flex; align-items: center; gap: 5px; text-transform: capitalize; }
+
+.barca-inspector {
+  width: 316px;
+  flex: none;
+  border-left: 1px solid var(--border-default);
+  background: var(--bg-surface);
+  display: flex;
+  flex-direction: column;
+}
+.barca-insp-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 11px 12px 11px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.barca-insp-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text-strong);
+  font-weight: 500;
+  min-width: 0;
+}
+.barca-insp-title span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.barca-insp-body { padding: 14px; display: flex; flex-direction: column; gap: 14px; overflow: auto; }
+.barca-tagrow { display: flex; gap: 6px; flex-wrap: wrap; }
+.barca-insp-kv { display: flex; flex-direction: column; gap: 8px; }
+.barca-insp-kv-row { display: flex; gap: 10px; font-size: 12.5px; }
+.barca-insp-kv-row > span:first-child {
+  width: 96px;
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.barca-insp-kv-row > span:last-child {
+  font-family: var(--font-mono);
+  color: var(--text-default);
+  min-width: 0;
+  word-break: break-word;
+}
+.barca-insp-deps { display: flex; flex-direction: column; gap: 4px; }
+.barca-insp-dep {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 4px 8px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+.barca-insp-actions { display: flex; gap: 8px; margin-top: 2px; }
+.barca-insp-logs { display: flex; flex-direction: column; gap: 6px; }
+.barca-insp-logs-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-faint);
+}
+.barca-insp-logs-live {
+  margin-left: auto;
+  color: var(--status-running);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.barca-insp-logs-live::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--status-running);
+  box-shadow: 0 0 6px -1px var(--status-running);
+  animation: barca-pulse var(--dur-pulse) var(--ease-in-out) infinite;
+}
+.barca-insp-note {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.barca-insp-error {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: var(--status-failed-bg);
+  border: 1px solid var(--status-failed-line);
+  border-radius: var(--radius-md);
+}
+.barca-insp-error-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--status-failed);
+}
+.barca-insp-error-msg {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-default);
+  word-break: break-word;
+}
+
+/* ---------- Empty / placeholder ---------- */
+.barca-empty {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  color: var(--text-faint);
+}
+.barca-empty-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+.barca-empty h2 {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-default);
+  margin: 0;
+}
+.barca-empty p { font-family: var(--font-mono); font-size: 12px; margin: 0; }
+
+/* ── assets table ─────────────────────────────────────────── */
+.barca-count {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+.barca-table-tools { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding-bottom: 12px; }
+.barca-search {
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 30px; padding: 0 10px; min-width: 260px;
+  border: 1px solid var(--border-default); border-radius: var(--radius-sm);
+  background: var(--bg-inset); color: var(--text-muted);
+}
+.barca-search:focus-within { border-color: var(--signal); }
+.barca-search input {
+  flex: 1; border: 0; outline: 0; background: transparent;
+  color: var(--text-default); font-family: var(--font-mono); font-size: var(--text-sm);
+}
+.barca-severity-filter { display: flex; gap: 6px; flex-wrap: wrap; }
+.barca-severity-filter button {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 26px; padding: 0 9px;
+  border: 1px solid var(--border-default); border-radius: var(--radius-pill);
+  background: transparent; color: var(--text-muted);
+  font-family: var(--font-mono); font-size: var(--text-xs); cursor: pointer;
+}
+.barca-severity-filter button:hover { background: var(--bg-hover); }
+.barca-severity-filter button.is-on { border-color: var(--signal); color: var(--text-strong); }
+.barca-table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
+.barca-table th {
+  position: sticky; top: 0; z-index: 1;
+  text-align: left; font-weight: 500; font-size: var(--text-xs);
+  color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em;
+  padding: 8px 12px; background: var(--bg-base, var(--bg-inset));
+  border-bottom: 1px solid var(--border-default);
+}
+.barca-table td { padding: 9px 12px; border-bottom: 1px solid var(--border-subtle); vertical-align: top; }
+.barca-table tbody tr { cursor: pointer; }
+.barca-table tbody tr:hover, .barca-table tbody tr:focus-visible { background: var(--bg-hover); outline: none; }
+.barca-table .num { text-align: right; font-family: var(--font-mono); white-space: nowrap; }
+.barca-cell-name { display: flex; align-items: center; gap: 8px; }
+.barca-cell-name .name { font-family: var(--font-mono); color: var(--text-strong); }
+.barca-cell-sub { font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--text-muted); margin-top: 2px; }
+.barca-cell-failed { color: var(--status-failed); }
+.barca-cell-error {
+  max-width: 420px; margin-top: 2px;
+  font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--status-failed);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.barca-table-empty { color: var(--text-muted); font-family: var(--font-mono); font-size: var(--text-sm); }
