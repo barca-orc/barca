@@ -68,11 +68,11 @@ print(conn.execute(\"SELECT COUNT(*) FROM materializations WHERE status='success
 [ "$ROWS" = "2" ] || { echo "FAIL: expected 2 materialization rows in blob, got $ROWS"; exit 1; }
 
 echo "── artifacts are content-addressed under the shared root"
-ls "$SHARED"/default/artifacts/*numbers*/*.json > /dev/null 2>&1 \
+ls "$SHARED"/default/artifacts/*numbers*/*/*.json > /dev/null 2>&1 \
     || { echo "FAIL: no content-addressed artifact for numbers"; ls -R "$SHARED"; exit 1; }
 
 echo "── workers wrote locally; the store copy was uploaded and recorded"
-ls "$TMP"/machine-a/.barca/artifacts/*numbers*/*.json > /dev/null 2>&1 \
+ls "$TMP"/machine-a/.barca/artifacts/*numbers*/*/*.json > /dev/null 2>&1 \
     || { echo "FAIL: no local artifact on machine A"; ls -R "$TMP/machine-a/.barca"; exit 1; }
 grep -q "uploaded 2 artifacts" "$TMP/machine-a/stderr-a.log" \
     || { echo "FAIL: no upload summary on A"; cat "$TMP/machine-a/stderr-a.log"; exit 1; }
@@ -104,7 +104,7 @@ grep -q "pulled state" "$TMP/machine-b/stderr-b.log" \
     || { echo "FAIL: state pull not reported on B"; cat "$TMP/machine-b/stderr-b.log"; exit 1; }
 
 echo "── machine B fetched only what it read (the final output), uploaded nothing"
-ls "$TMP"/machine-b/.barca/artifacts/*total*/*.json > /dev/null 2>&1 \
+ls "$TMP"/machine-b/.barca/artifacts/*total*/*/*.json > /dev/null 2>&1 \
     || { echo "FAIL: final output not fetched to B"; ls -R "$TMP/machine-b/.barca"; exit 1; }
 if ls "$TMP"/machine-b/.barca/artifacts/*numbers* > /dev/null 2>&1; then
     echo "FAIL: B fetched an intermediate it never read"; exit 1
@@ -173,7 +173,7 @@ grep -q '"steps_executed":4' "$TMP/machine-e/shard-e.json" \
     || { cat "$TMP/machine-f/shard-f.log"; exit 1; }
 grep -q '"steps_executed":0' "$TMP/machine-f/shard-f.json" \
     || { echo "FAIL: F should be a full cache hit"; cat "$TMP/machine-f/shard-f.json" "$TMP/machine-f/shard-f.log"; exit 1; }
-ls "$TMP"/machine-f/.barca/artifacts/*universe*/*.json > /dev/null 2>&1 \
+ls "$TMP"/machine-f/.barca/artifacts/*universe*/*/*.json > /dev/null 2>&1 \
     || { echo "FAIL: partition source not fetched to F"; ls -R "$TMP/machine-f/.barca"; exit 1; }
 (cd "$TMP/machine-e" && $BARCA run fan fanout.py --agent > fan-e.json 2> fan-e.log) \
     || { cat "$TMP/machine-e/fan-e.log"; exit 1; }
@@ -235,7 +235,7 @@ PYEOF
     echo "── once the store is writable again, the step recomputes and is recorded"
     (cd "$TMP/machine-g" && $BARCA get unshippable pipeline.py --agent > rerun-g.json 2> rerun-g.log) \
         || { echo "FAIL: rerun after fixing the store failed"; cat "$TMP/machine-g/rerun-g.log"; exit 1; }
-    ls "$SHARED"/default/artifacts/*unshippable*/*.json > /dev/null 2>&1 \
+    ls "$SHARED"/default/artifacts/*unshippable*/*/*.json > /dev/null 2>&1 \
         || { echo "FAIL: rerun did not upload the artifact"; exit 1; }
     OK=$(python3 -c "
 import sqlite3
