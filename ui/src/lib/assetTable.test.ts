@@ -1,12 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import type { CacheStatus, NodeState } from './types'
 import {
+  DEFAULT_SORT,
   buildRows,
   filterRows,
   formatAgo,
   formatSeconds,
+  nextSort,
+  parseSort,
   severityOf,
+  sortRows,
   summarize,
+  type Sort,
 } from './assetTable'
 
 const NOW = Date.parse('2026-10-02T12:00:00Z')
@@ -228,5 +233,67 @@ describe('formatting', () => {
     expect(formatAgo('2026-10-02 11:59:30', NOW)).toBe('just now')
     expect(formatAgo('2026-10-02 10:00:00', NOW)).toBe('2h ago')
     expect(formatAgo('2026-09-29 12:00:00', NOW)).toBe('3d ago')
+  })
+})
+
+describe('sorting', () => {
+  const rows = buildRows(
+    [
+      node({
+        id: 'p.py:slow',
+        durations: { median_seconds: 9, p95_seconds: 12, samples: 3 },
+        last_materialization: { ...failedAttempt, status: 'success', error: null, created_at: '2026-10-02 09:00:00' },
+      }),
+      node({
+        id: 'p.py:fast',
+        durations: { median_seconds: 0.5, p95_seconds: 1, samples: 3 },
+        last_materialization: { ...failedAttempt, status: 'success', error: null, created_at: '2026-10-02 11:00:00' },
+        next_run: Date.parse('2026-10-03T06:00:00Z') / 1000,
+      }),
+      node({ id: 'p.py:never', cache: cache('never_run', 'no_record') }),
+      node({
+        id: 'p.py:edited',
+        cache: cache('stale', 'changed'),
+        durations: { median_seconds: 3, p95_seconds: 4, samples: 2 },
+        next_run: Date.parse('2026-10-02T13:00:00Z') / 1000,
+      }),
+    ],
+    NOW,
+  )
+  const names = (sort: Sort) => sortRows(rows, sort).map((r) => r.name)
+
+  it('defaults to severity, most urgent first', () => {
+    expect(DEFAULT_SORT).toEqual({ key: 'state', dir: 'asc' })
+    expect(names(DEFAULT_SORT)).toEqual(['edited', 'never', 'fast', 'slow'])
+  })
+
+  it('sorts by name either way', () => {
+    expect(names({ key: 'name', dir: 'asc' })).toEqual(['edited', 'fast', 'never', 'slow'])
+    expect(names({ key: 'name', dir: 'desc' })).toEqual(['slow', 'never', 'fast', 'edited'])
+  })
+
+  it('rows without a value go last in both directions', () => {
+    // `never` has no typical time and `edited` no last run: they never jump to the top.
+    expect(names({ key: 'typical', dir: 'desc' })).toEqual(['slow', 'edited', 'fast', 'never'])
+    expect(names({ key: 'typical', dir: 'asc' })).toEqual(['fast', 'edited', 'slow', 'never'])
+    expect(names({ key: 'last', dir: 'desc' }).slice(0, 2)).toEqual(['fast', 'slow'])
+    expect(names({ key: 'last', dir: 'asc' }).slice(0, 2)).toEqual(['slow', 'fast'])
+    expect(names({ key: 'next', dir: 'asc' }).slice(0, 2)).toEqual(['edited', 'fast'])
+  })
+
+  it('a first click picks the useful direction; a second reverses it', () => {
+    expect(nextSort(DEFAULT_SORT, 'typical')).toEqual({ key: 'typical', dir: 'desc' })
+    expect(nextSort(DEFAULT_SORT, 'last')).toEqual({ key: 'last', dir: 'desc' })
+    expect(nextSort(DEFAULT_SORT, 'next')).toEqual({ key: 'next', dir: 'asc' })
+    expect(nextSort(DEFAULT_SORT, 'name')).toEqual({ key: 'name', dir: 'asc' })
+    expect(nextSort({ key: 'typical', dir: 'desc' }, 'typical')).toEqual({ key: 'typical', dir: 'asc' })
+    expect(nextSort(DEFAULT_SORT, 'state')).toEqual({ key: 'state', dir: 'desc' })
+  })
+
+  it('reads the sort from the URL, falling back to the default', () => {
+    expect(parseSort('typical', 'desc')).toEqual({ key: 'typical', dir: 'desc' })
+    expect(parseSort('typical', null)).toEqual({ key: 'typical', dir: 'desc' })
+    expect(parseSort('bogus', 'asc')).toEqual(DEFAULT_SORT)
+    expect(parseSort(null, null)).toEqual(DEFAULT_SORT)
   })
 })

@@ -19,6 +19,7 @@ pub mod protocol;
 pub mod sql;
 pub mod state_sync;
 pub mod status;
+pub mod telemetry;
 pub mod transfer;
 
 pub use dag::Dag;

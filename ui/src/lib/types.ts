@@ -40,6 +40,8 @@ export interface Health {
   version: string
   /** `barca serve --read-only`: run and cancel endpoints are refused. */
   read_only: boolean
+  /** Whether this server fires `Schedule(...)` nodes. */
+  scheduler: boolean
 }
 
 /** POST /run, /run/{target}, /get/{target} — ad-hoc `{ run_id }`. */

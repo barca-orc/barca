@@ -7,26 +7,36 @@ import { NodeInspector } from '@/components/graph/NodeInspector'
 import { useAssets } from '@/hooks/useAssets'
 import { useHealth } from '@/hooks/useHealth'
 import { useRunStream } from '@/hooks/useRunStream'
-import { sourceFile, pipelineName } from '@/lib/pipeline'
+import { inPipeline, sourceFile, pipelineName } from '@/lib/pipeline'
 import { overlayRunStatus, type LayoutDir } from '@/lib/graph'
 import type { StatusKind } from '@/lib/types'
 
 const LEGEND: StatusKind[] = ['success', 'running', 'queued', 'failed']
 
 export function GraphPage() {
-  const { data: assets = [], isError } = useAssets()
+  const { data: allAssets = [], isError } = useAssets()
   const { data: health } = useHealth()
   const [dir, setDir] = useState<LayoutDir>('LR')
   // `?focus=<node id>` (from the Assets table) opens with that node selected.
   const [searchParams] = useSearchParams()
   const [selected, setSelected] = useState<string | null>(searchParams.get('focus'))
+  // The pipeline picked in the sidebar (?pipeline=<file>): show only its nodes.
+  const pipeline = searchParams.get('pipeline')
+  const assets = useMemo(
+    () => allAssets.filter((a) => inPipeline(a.id, pipeline)),
+    [allAssets, pipeline],
+  )
   const [run, setRun] = useState<{ handle: string; nodeId: string } | null>(null)
   const canvasRef = useRef<GraphCanvasHandle>(null)
 
   const stream = useRunStream(run?.handle ?? null)
 
   const connected = !!health && !isError
-  const title = assets[0] ? pipelineName(sourceFile(assets[0].id)) : 'graph'
+  const title = pipeline
+    ? pipelineName(pipeline)
+    : assets[0] && assets.every((a) => sourceFile(a.id) === sourceFile(assets[0]!.id))
+      ? pipelineName(sourceFile(assets[0].id))
+      : 'All pipelines'
 
   const selectedAsset = useMemo(
     () => assets.find((a) => a.id === selected) ?? null,
