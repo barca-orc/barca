@@ -35,8 +35,10 @@ minutes for as long as the server is up:
 
 `@task` is the right decorator when the point is the side effect — a task always
 re-runs when its tick fires. Use `@asset(freshness=Schedule(...))` instead when
-the function *produces data* you want kept fresh; scheduled assets fire the same
-way but are cache-aware.
+the function *produces data* you want kept fresh. A scheduled asset is
+recomputed on every tick, with its upstream assets served from cache when they
+are fresh; the `Always` assets downstream of it are recomputed in the same run.
+A scheduled task also reuses cached upstream assets.
 
 ## Cron reference
 

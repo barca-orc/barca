@@ -68,6 +68,32 @@ struct ScheduledJob {
     /// Parsed cron (5-field minute-granular, or 6-field seconds-granular),
     /// evaluated in the scheduler's configured timezone.
     cron: Cron,
+    /// For a scheduled asset: the `Always` assets downstream of it, which a tick
+    /// refreshes with it (see [`always_downstream`]). Empty for tasks and sensors.
+    followers: Vec<String>,
+}
+
+/// The assets that follow `id` when it is refreshed: every asset with `Always`
+/// freshness reachable downstream of it through other such assets. A `Manual`
+/// or scheduled asset, a task or a sensor is not followed, and nothing behind
+/// it is either: those run on their own terms. Sorted.
+fn always_downstream(summaries: &[AssetSummary], id: &str) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    let mut frontier = vec![id.to_string()];
+    while let Some(parent) = frontier.pop() {
+        for s in summaries {
+            if s.kind == NodeKind::Asset
+                && matches!(s.freshness, Freshness::Always)
+                && s.inputs.contains(&parent)
+                && !found.contains(&s.id)
+            {
+                found.push(s.id.clone());
+                frontier.push(s.id.clone());
+            }
+        }
+    }
+    found.sort();
+    found
 }
 
 /// Enumerate every node whose freshness is `Schedule(cron)` and parse each cron.
@@ -87,16 +113,20 @@ async fn collect_jobs(files: &[String], python: &std::path::Path) -> Vec<Schedul
 /// without a Python interpreter). Drops entries whose cron fails to parse.
 fn jobs_from_summaries(summaries: Vec<AssetSummary>) -> Vec<ScheduledJob> {
     let mut jobs = Vec::new();
-    for s in summaries {
+    for s in &summaries {
         let Freshness::Schedule(expr) = &s.freshness else {
             continue;
         };
         match CronExpr::parse(&expr.0) {
             Ok(cron) => jobs.push(ScheduledJob {
-                id: s.id,
+                id: s.id.clone(),
                 kind: s.kind,
                 cron_str: expr.0.clone(),
                 cron,
+                followers: match s.kind {
+                    NodeKind::Asset => always_downstream(&summaries, &s.id),
+                    NodeKind::Task | NodeKind::Sensor => Vec::new(),
+                },
             }),
             Err(e) => eprintln!(
                 "[barca] skipping '{}': invalid cron {:?}: {e}",
@@ -229,14 +259,17 @@ fn is_in_flight(state: &AppState, handle: &str) -> bool {
         .is_some_and(|r| matches!(r.status, RunStatus::Pending | RunStatus::Running))
 }
 
-/// Trigger a run for a due job, routed by node kind: assets and sensors go
-/// through the `get` path, tasks through the `run` path. Returns the handle.
+/// Trigger a run for a due job, routed by node kind. A tick recomputes the
+/// scheduled node and reuses cached upstreams: an asset is refreshed together
+/// with the `Always` assets downstream of it, a task runs, and a sensor is
+/// polled through the `get` path. Returns the handle.
 fn trigger(state: &AppState, job: &ScheduledJob) -> String {
     match job.kind {
-        NodeKind::Task => handlers::start_run_task(state.clone(), job.id.clone()),
-        NodeKind::Asset | NodeKind::Sensor => {
-            handlers::start_run(state.clone(), Some(job.id.clone()))
+        NodeKind::Task => handlers::start_scheduled_task(state.clone(), job.id.clone()),
+        NodeKind::Asset => {
+            handlers::start_scheduled_asset(state.clone(), job.id.clone(), job.followers.clone())
         }
+        NodeKind::Sensor => handlers::start_run(state.clone(), Some(job.id.clone())),
     }
 }
 
@@ -430,6 +463,55 @@ mod tests {
             inputs: vec![],
             env: vec![],
         }
+    }
+
+    fn node(id: &str, kind: NodeKind, freshness: Freshness, inputs: &[&str]) -> AssetSummary {
+        AssetSummary {
+            id: id.to_string(),
+            kind,
+            freshness,
+            inputs: inputs.iter().map(|i| i.to_string()).collect(),
+            env: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_scheduled_asset_is_followed_by_always_assets_only() {
+        let hourly = || Freshness::Schedule(barca_core::CronExpr("0 * * * *".to_string()));
+        let graph = vec![
+            node("f:raw", NodeKind::Asset, hourly(), &[]),
+            node("f:clean", NodeKind::Asset, Freshness::Always, &["f:raw"]),
+            node("f:report", NodeKind::Asset, Freshness::Always, &["f:clean"]),
+            node("f:frozen", NodeKind::Asset, Freshness::Manual, &["f:raw"]),
+            node(
+                "f:behind_frozen",
+                NodeKind::Asset,
+                Freshness::Always,
+                &["f:frozen"],
+            ),
+            node("f:weekly", NodeKind::Asset, hourly(), &["f:clean"]),
+            node(
+                "f:publish",
+                NodeKind::Task,
+                Freshness::Always,
+                &["f:report"],
+            ),
+            node("f:unrelated", NodeKind::Asset, Freshness::Always, &[]),
+        ];
+        assert_eq!(
+            always_downstream(&graph, "f:raw"),
+            vec!["f:clean".to_string(), "f:report".to_string()]
+        );
+        let jobs = jobs_from_summaries(graph);
+        let raw = jobs.iter().find(|j| j.id == "f:raw").unwrap();
+        assert_eq!(raw.followers, vec!["f:clean", "f:report"]);
+        assert!(
+            jobs.iter()
+                .find(|j| j.id == "f:weekly")
+                .unwrap()
+                .followers
+                .is_empty()
+        );
     }
 
     /// Build a single `ScheduledJob` through the real parse path.
