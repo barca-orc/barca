@@ -123,7 +123,7 @@ default, and any aliases.
 | `--no-cache` | - | default `false`; hidden from `--help` | experimental: deprecated: the old spelling of --refresh-all; warns on stderr and will be removed | Deprecated spelling of --refresh-all (prints a warning; removed in a future minor) |
 | `--dry-run` | - | default `false` | stable | Show what this command would do (each step cached or will-run, and why) without running or writing anything |
 | `--agent` | - | default `false` | stable | Agent-friendly output: plain structured progress lines instead of visual progress bar |
-| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `run_hash`, `artifact`, `warning`, `partitions`, `env` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones |
+| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `partitions`, `env` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
 
 #### barca run
@@ -140,7 +140,7 @@ default, and any aliases.
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `--agent` | - | default `false` | stable | Agent-friendly output: plain structured progress lines instead of visual progress bar |
-| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `run_hash`, `artifact`, `warning`, `partitions`, `env` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones |
+| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `partitions`, `env` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
 
 #### barca plan
@@ -342,7 +342,9 @@ Every schema below is stable unless its section says otherwise.
 - `get` and `run` share one refresh vocabulary: `--refresh a,b` (cascading downstream),
   `--no-cascade`, `--refresh-all`. `artifact` appears on cached steps, `run_hash`
   on unpartitioned steps, `warning` on a cached step whose upstream was refreshed without
-  cascading, `env` on nodes that declare `env=[...]` (`null` for an unset variable,
+  cascading, `artifact_mismatch: true` (with the reason in `warning`) on a step whose artifact
+  the store holds with other bytes than were recorded for it, and on the steps that ran against
+  it (`barca docs remote`), `env` on nodes that declare `env=[...]` (`null` for an unset variable,
   `"<redacted>"` for secret-looking names).
 
 For a parquet or pickle artifact, `final_output` is a pointer instead of the value:

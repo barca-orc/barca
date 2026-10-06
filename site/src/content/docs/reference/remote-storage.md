@@ -258,7 +258,10 @@ history. A machine uses that hash to decide whether its own copy is current:
   the run still uses it and prints a warning naming the step. This is not an error: an
   artifact's path is `<node>/<run_hash>`, which identifies the computation and not the bytes,
   so a `--refresh`, or two machines computing the same step at once, overwrites the object.
-  The warning names the step; `--refresh <file.py:name>` recomputes it, which clears the
+  The warning names the step. With `--json`, the same finding is on the step entries:
+  `steps[].artifact_mismatch` is `true` (and `steps[].warning` has the text) on the step the
+  artifact belongs to and on each step that ran against it in this run, so a caller need not
+  parse stderr. `--refresh <file.py:name>` recomputes it, which clears the
   warning for every machine that shares this history. Until then, machines can hold
   different copies of that one result: a machine whose copy matches the recorded hash keeps
   it, and the others use the store's.

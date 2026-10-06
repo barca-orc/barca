@@ -115,10 +115,38 @@ def test_a_store_copy_that_differs_from_the_recorded_hash_is_used_with_a_warning
     assert json.loads(proc.stdout)["final_output"] == {"sum": 7}
     assert "warning" in proc.stderr and "total" in proc.stderr, proc.stderr
     assert "--refresh pipeline.py:total" in proc.stderr, proc.stderr
+    # The same finding is in stdout, under a stable marker, for callers that parse it.
+    steps = {st["id"]: st for st in json.loads(proc.stdout)["steps"]}
+    assert steps["pipeline.py:total"]["artifact_mismatch"] is True
+    assert "--refresh pipeline.py:total" in steps["pipeline.py:total"]["warning"]
+    assert "artifact_mismatch" not in steps.get("pipeline.py:numbers", {})
 
     again = cli(root, store, "get", "total", "--json")
     assert again.returncode == 0, again.stderr
     assert "fetched" not in again.stderr, again.stderr
+
+
+def test_a_step_that_read_a_differing_input_reports_it_too(shared):
+    store, make = shared
+    _one(store, "default/artifacts/*numbers*/*.json").write_text("[5, 5]")
+    root = make("reader")
+    # `total` is recomputed, so it reads the store's (differing) copy of `numbers`.
+    proc = cli(root, store, "get", "total", "--refresh", "total", "--json")
+    assert proc.returncode == 0, proc.stderr
+    out = json.loads(proc.stdout)
+    assert out["final_output"] == {"sum": 10}
+    steps = {st["id"]: st for st in out["steps"]}
+    assert steps["pipeline.py:numbers"]["artifact_mismatch"] is True
+    assert steps["pipeline.py:total"]["status"] == "ran"
+    assert steps["pipeline.py:total"]["artifact_mismatch"] is True
+    assert "input numbers" in steps["pipeline.py:total"]["warning"]
+
+
+def test_an_untouched_store_copy_carries_no_marker(shared):
+    store, make = shared
+    proc = cli(make("reader"), store, "get", "total", "--json")
+    assert proc.returncode == 0, proc.stderr
+    assert all("artifact_mismatch" not in st for st in json.loads(proc.stdout)["steps"])
 
 
 NONDETERMINISTIC = """
