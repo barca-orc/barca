@@ -262,12 +262,15 @@ def test_types_topic_example_reads_one_parquet_two_ways(binary, topics, tmp_path
     assert total["final_output"] == {"total": 9.5}
     pointer = result(barca(binary, tmp_path, "get", "as_polars", "pipeline.py"))
     assert pointer["final_output"]["_barca_artifact"]["format"] == "parquet"
+    lazy = result(barca(binary, tmp_path, "get", "big_ids", "pipeline.py"))
+    assert lazy["final_output"]["_barca_artifact"]["format"] == "parquet"
 
     import barca as barca_api
 
     monkeypatch.chdir(tmp_path)
     df = barca_api.get("as_polars", "pipeline.py")  # the Python API loads parquet for you
     assert df["doubled"].tolist() == [19.0]
+    assert barca_api.get("big_ids", "pipeline.py")["id"].tolist() == [1]
 
 
 def test_assets_topic_env_example(binary, topics, tmp_path):

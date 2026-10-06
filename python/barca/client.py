@@ -146,6 +146,7 @@ class Client:
         return Run(self, payload["run_id"])
 
     def run(self, target: str) -> Run:
-        """Run a task (``barca run TARGET`` → ``POST /run/{target}``)."""
+        """Run a task (``POST /run/{target}``). Unlike ``barca run TARGET``, the server
+        recomputes every upstream asset of the task."""
         payload = self._request("POST", f"/run/{target}")
         return Run(self, payload["run_id"])

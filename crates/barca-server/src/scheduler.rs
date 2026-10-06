@@ -3,10 +3,10 @@
 //! `barca serve` parses `@asset(freshness=Schedule("0 5 * * *"))` into
 //! `Freshness::Schedule(CronExpr)`, but nothing in the executor ever acts on it.
 //! This module closes that gap: at startup it enumerates every scheduled node, and
-//! then on each live cron match it triggers a run through the exact same
-//! [`crate::handlers::start_run`] path the HTTP `/run` endpoint uses — so scheduled
-//! runs go through the same bounded run pool and land in the `runs`
-//! history table for free.
+//! then on each live cron match it triggers a run through the same
+//! [`crate::handlers`] run pool the HTTP `/run` endpoints use — so scheduled
+//! runs are bounded the same way and land in the `runs` history table for free.
+//! A scheduled task reuses cached upstream assets; `POST /run/{task}` does not.
 //!
 //! Semantics: cron is evaluated in the configured timezone (`--timezone`, local
 //! by default). On startup a job fires once if a tick elapsed while the daemon
@@ -231,9 +231,13 @@ fn is_in_flight(state: &AppState, handle: &str) -> bool {
 
 /// Trigger a run for a due job, routed by node kind: assets and sensors go
 /// through the `get` path, tasks through the `run` path. Returns the handle.
+///
+/// A tick brings the node up to date, it does not force it: sensors upstream
+/// are polled, anything whose inputs changed is recomputed, and an asset whose
+/// inputs did not change is served from cache. A task itself always runs.
 fn trigger(state: &AppState, job: &ScheduledJob) -> String {
     match job.kind {
-        NodeKind::Task => handlers::start_run_task(state.clone(), job.id.clone()),
+        NodeKind::Task => handlers::start_scheduled_task(state.clone(), job.id.clone()),
         NodeKind::Asset | NodeKind::Sensor => {
             handlers::start_run(state.clone(), Some(job.id.clone()))
         }
@@ -466,6 +470,7 @@ mod tests {
             python: std::path::PathBuf::from("python3"),
             resolved: barca_core::config::resolve_in(None, std::path::Path::new("/nonexistent"))
                 .unwrap(),
+            read_only: false,
         })
     }
 

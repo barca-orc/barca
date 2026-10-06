@@ -1,0 +1,37 @@
+/* ============================================================
+   barca · global stylesheet
+   Single entry point. Imported once from main.tsx.
+   Tailwind first, then the design-system tokens (the source of
+   truth for color/type/spacing), then base element styles.
+   ============================================================ */
+
+@import 'tailwindcss';
+
+/* Self-hosted fonts (replaces the design system's Google Fonts @import) */
+@import '@fontsource/space-grotesk/400.css';
+@import '@fontsource/space-grotesk/500.css';
+@import '@fontsource/space-grotesk/600.css';
+@import '@fontsource/space-grotesk/700.css';
+@import '@fontsource/jetbrains-mono/400.css';
+@import '@fontsource/jetbrains-mono/500.css';
+@import '@fontsource/jetbrains-mono/600.css';
+@import '@fontsource/jetbrains-mono/700.css';
+
+/* Design-system tokens — never invent new colors; use these vars */
+@import './tokens/colors.css';
+@import './tokens/typography.css';
+@import './tokens/spacing.css';
+@import './tokens/radius.css';
+@import './tokens/elevation.css';
+@import './tokens/motion.css';
+@import './tokens/theme-light.css';
+
+/* Base element defaults (reset, body, scrollbars, focus rings) */
+@import './base.css';
+
+/* App chrome (sidebar + topbar + content frame) */
+@import './shell.css';
+
+/* React Flow base styles, then barca token overrides (order matters) */
+@import '@xyflow/react/dist/style.css';
+@import './barca-flow.css';

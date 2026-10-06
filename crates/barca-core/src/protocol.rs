@@ -33,6 +33,8 @@ pub enum WorkerMessage {
     },
     /// A step was blocked because an upstream failed.
     Blocked { node_id: String, reason: String },
+    /// A line of user stdout captured while a step was executing.
+    Log { node_id: String, line: String },
     /// Worker is requesting parallel dispatch of sub-tasks.
     /// Worker blocks on socket read until it receives ParallelResponse.
     Submit { items: Vec<SubmitItem> },
@@ -76,6 +78,11 @@ pub struct ArtifactRef {
     /// into their consumers' run hashes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_hash: Option<String>,
+    /// When the step finished (Unix seconds, worker clock) and how long it took, for telemetry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wall_seconds: Option<f64>,
 }
 
 /// Outcome of a single `@sink` write. Sink failures never fail the parent
@@ -109,6 +116,68 @@ pub enum CoordinatorMessage {
 pub enum ParallelResult {
     Ok { result: serde_json::Value },
     Error { error: String },
+}
+
+// ─── Coordinator ↔ transfer helper ───────────────────────────────────────────
+
+/// Requests to the artifact transfer helper (`python -m barca._transfer`).
+/// Many may be in flight at once; replies are matched by `id`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum TransferRequest {
+    /// Upload a local artifact file to the artifact store.
+    Put {
+        id: u64,
+        local: String,
+        remote: String,
+    },
+    /// Download an artifact from the store to a local path (atomic).
+    Get {
+        id: u64,
+        remote: String,
+        local: String,
+        /// The hash recorded for the artifact. A local copy with this hash is
+        /// kept; any other is replaced by the store's copy.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        sha256: Option<String>,
+    },
+    /// Finish in-flight transfers, then exit.
+    Shutdown,
+}
+
+/// Replies from the transfer helper. `Error` is final — the helper has
+/// already retried transient failures.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum TransferReply {
+    Done {
+        id: u64,
+        size_bytes: u64,
+        /// SHA-256 of the local file.
+        #[serde(default)]
+        sha256: Option<String>,
+        /// False when a `Get` left the local file as it was.
+        #[serde(default = "yes")]
+        fetched: bool,
+        /// True when the store's copy does not have the hash a `Get` carried.
+        #[serde(default)]
+        mismatch: bool,
+    },
+    Error {
+        id: u64,
+        message: String,
+        /// Attempts the helper made (retries plus the first try).
+        #[serde(default = "one")]
+        attempts: u32,
+    },
+}
+
+fn one() -> u32 {
+    1
+}
+
+fn yes() -> bool {
+    true
 }
 
 // ─── Framing functions ───────────────────────────────────────────────────────
@@ -159,6 +228,46 @@ pub fn read_message<R: Read, T: for<'de> Deserialize<'de>>(
     Ok(Some(msg))
 }
 
+/// Async [`write_message`]: write one length-prefixed JSON frame.
+pub async fn write_frame<W, T>(writer: &mut W, msg: &T) -> io::Result<()>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+    T: Serialize,
+{
+    use tokio::io::AsyncWriteExt;
+    let frame = encode_message(msg)?;
+    writer.write_all(&frame).await?;
+    writer.flush().await
+}
+
+/// Async [`read_message`]: read one length-prefixed JSON frame.
+/// Returns `None` on a clean EOF at a frame boundary.
+pub async fn read_frame<R, T>(reader: &mut R) -> io::Result<Option<T>>
+where
+    R: tokio::io::AsyncRead + Unpin,
+    T: for<'de> Deserialize<'de>,
+{
+    use tokio::io::AsyncReadExt;
+    let mut len_buf = [0u8; 4];
+    match reader.read_exact(&mut len_buf).await {
+        Ok(_) => {}
+        Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
+        Err(e) => return Err(e),
+    }
+    let len = u32::from_be_bytes(len_buf) as usize;
+    if len > 256 * 1024 * 1024 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("message too large: {len} bytes"),
+        ));
+    }
+    let mut payload = vec![0u8; len];
+    reader.read_exact(&mut payload).await?;
+    serde_json::from_slice(&payload)
+        .map(Some)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
 // ─── Socket path helper ──────────────────────────────────────────────────────
 
 /// Generate a unique socket path for a worker.
@@ -187,6 +296,8 @@ mod tests {
                 cpu_seconds: None,
                 max_rss_bytes: None,
                 content_hash: None,
+                finished_at: None,
+                wall_seconds: None,
                 sinks: Vec::new(),
             },
         };
@@ -258,6 +369,8 @@ mod tests {
                 cpu_seconds: None,
                 max_rss_bytes: None,
                 content_hash: None,
+                finished_at: None,
+                wall_seconds: None,
                 sinks: vec![
                     SinkOutcome {
                         path: "exports/out.parquet".to_string(),
@@ -427,6 +540,8 @@ mod tests {
                     cpu_seconds: None,
                     max_rss_bytes: None,
                     content_hash: None,
+                    finished_at: None,
+                    wall_seconds: None,
                     sinks: Vec::new(),
                 },
             },
@@ -467,6 +582,35 @@ mod tests {
         // Read fourth: EOF
         let msg4: Option<WorkerMessage> = read_message(&mut cursor).unwrap();
         assert!(msg4.is_none());
+    }
+
+    #[test]
+    fn test_log_message_roundtrip() {
+        // The wire shape the Python worker sends: {"type":"log","node_id":..,"line":..}
+        // Include a non-ASCII char (UTF-8) to confirm framing handles it.
+        let raw = r#"{"type":"log","node_id":"a.py:load","line":"loading…"}"#.as_bytes();
+        let mut framed = Vec::new();
+        framed.extend_from_slice(&(raw.len() as u32).to_be_bytes());
+        framed.extend_from_slice(raw);
+
+        let mut cursor = Cursor::new(framed);
+        let decoded: WorkerMessage = read_message(&mut cursor).unwrap().unwrap();
+        match decoded {
+            WorkerMessage::Log { node_id, line } => {
+                assert_eq!(node_id, "a.py:load");
+                assert_eq!(line, "loading…");
+            }
+            _ => panic!("expected Log"),
+        }
+
+        // And it re-encodes to the same tagged shape.
+        let msg = WorkerMessage::Log {
+            node_id: "a.py:load".to_string(),
+            line: "loading…".to_string(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains(r#""type":"log""#));
+        assert!(json.contains(r#""line":"loading…""#));
     }
 
     #[test]
@@ -535,5 +679,133 @@ mod tests {
             }
             _ => panic!("expected ParallelResponse"),
         }
+    }
+
+    // ─── Transfer helper wire format ────────────────────────────────────────
+    // python/barca/_transfer.py parses these exact shapes; pin them.
+
+    #[test]
+    fn transfer_request_wire_shapes() {
+        let put = TransferRequest::Put {
+            id: 7,
+            local: "/w/.barca/artifacts/a/h.json".into(),
+            remote: "s3://b/p/default/artifacts/a/h.json".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(&put).unwrap(),
+            serde_json::json!({"type": "put", "id": 7,
+                "local": "/w/.barca/artifacts/a/h.json",
+                "remote": "s3://b/p/default/artifacts/a/h.json"})
+        );
+        let get = TransferRequest::Get {
+            id: 8,
+            remote: "s3://b/x".into(),
+            local: "/w/x".into(),
+            sha256: None,
+        };
+        assert_eq!(
+            serde_json::to_value(&get).unwrap(),
+            serde_json::json!({"type": "get", "id": 8, "remote": "s3://b/x", "local": "/w/x"})
+        );
+        let checked = TransferRequest::Get {
+            id: 9,
+            remote: "s3://b/x".into(),
+            local: "/w/x".into(),
+            sha256: Some("ab12".into()),
+        };
+        assert_eq!(
+            serde_json::to_value(&checked).unwrap()["sha256"],
+            serde_json::json!("ab12")
+        );
+        assert_eq!(
+            serde_json::to_value(&TransferRequest::Shutdown).unwrap(),
+            serde_json::json!({"type": "shutdown"})
+        );
+    }
+
+    #[test]
+    fn transfer_reply_parses_done_and_error() {
+        let timed: WorkerMessage = serde_json::from_str(
+            r#"{"type":"step_completed","node_id":"f:a","artifact":{"path":"p","format":"json","size_bytes":1,"finished_at":1700000000.25,"wall_seconds":0.5}}"#,
+        )
+        .unwrap();
+        // The coordinator re-serialises the artifact; the worker's clock has to survive that.
+        let WorkerMessage::StepCompleted { artifact, .. } = timed else {
+            panic!("expected a result message");
+        };
+        let round_trip = serde_json::to_value(&artifact).unwrap();
+        assert_eq!(round_trip["finished_at"], 1700000000.25);
+        assert_eq!(round_trip["wall_seconds"], 0.5);
+
+        let done: TransferReply =
+            serde_json::from_str(r#"{"type":"done","id":3,"size_bytes":42}"#).unwrap();
+        assert!(matches!(
+            done,
+            TransferReply::Done {
+                id: 3,
+                size_bytes: 42,
+                sha256: None,
+                fetched: true,
+                mismatch: false,
+            }
+        ));
+        let hashed: TransferReply = serde_json::from_str(
+            r#"{"type":"done","id":5,"size_bytes":1,"sha256":"ab12","fetched":false,"mismatch":true}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            hashed,
+            TransferReply::Done { sha256: Some(h), fetched: false, mismatch: true, .. } if h == "ab12"
+        ));
+        let err: TransferReply = serde_json::from_str(
+            r#"{"type":"error","id":4,"message":"PermissionError: no","attempts":3}"#,
+        )
+        .unwrap();
+        match err {
+            TransferReply::Error {
+                id,
+                message,
+                attempts,
+            } => {
+                assert_eq!(id, 4);
+                assert_eq!(message, "PermissionError: no");
+                assert_eq!(attempts, 3);
+            }
+            _ => panic!("expected Error"),
+        }
+        // A reply without attempts (older helper) counts as one attempt.
+        let bare: TransferReply =
+            serde_json::from_str(r#"{"type":"error","id":5,"message":"x"}"#).unwrap();
+        assert!(matches!(bare, TransferReply::Error { attempts: 1, .. }));
+    }
+
+    #[tokio::test]
+    async fn async_frames_round_trip_and_eof_is_none() {
+        let (mut a, mut b) = tokio::io::duplex(1024);
+        let msg = TransferRequest::Get {
+            id: 1,
+            remote: "r".into(),
+            local: "l".into(),
+            sha256: None,
+        };
+        write_frame(&mut a, &msg).await.unwrap();
+        drop(a);
+        let got: serde_json::Value = read_frame(&mut b).await.unwrap().unwrap();
+        assert_eq!(got["type"], "get");
+        let eof: Option<serde_json::Value> = read_frame(&mut b).await.unwrap();
+        assert!(eof.is_none());
+    }
+
+    #[tokio::test]
+    async fn async_frame_interops_with_sync_encoding() {
+        // A frame produced by the sync encoder (what the Python side mirrors)
+        // must decode with the async reader.
+        let frame = encode_message(&TransferRequest::Shutdown).unwrap();
+        let (mut a, mut b) = tokio::io::duplex(64);
+        tokio::io::AsyncWriteExt::write_all(&mut a, &frame)
+            .await
+            .unwrap();
+        let got: serde_json::Value = read_frame(&mut b).await.unwrap().unwrap();
+        assert_eq!(got, serde_json::json!({"type": "shutdown"}));
     }
 }

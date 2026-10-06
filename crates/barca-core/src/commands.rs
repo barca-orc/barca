@@ -14,13 +14,15 @@ use crate::dispatch::OutputRef;
 use crate::parse::extract_nodes;
 use crate::planner::{self, ExecutionPlan, Phase, ResourceConfig};
 use crate::state_sync;
+use crate::transfer::{ArtifactLayout, TransferClient};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::Instant;
+use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
 
 /// Format seconds as a fixed-width time string for progress display.
@@ -820,22 +822,286 @@ async fn lookup_cached(
     node_id: &str,
     run_hash: &str,
 ) -> Option<dispatch::OutputRef> {
-    let mut rows = cache
-        .conn()
-        .query(
-            "SELECT artifact_path, artifact_format, artifact_size_bytes FROM materializations WHERE node_id = ?1 AND run_hash = ?2 AND status = 'success' ORDER BY id DESC LIMIT 1",
+    const COLUMNS: &str = "artifact_path, artifact_format, artifact_size_bytes";
+    let query = |columns: String| {
+        cache.conn().query(
+            format!(
+                "SELECT {columns} FROM materializations WHERE node_id = ?1 AND run_hash = ?2 \
+                 AND status = 'success' ORDER BY id DESC LIMIT 1"
+            ),
             [node_id.to_string(), run_hash.to_string()],
         )
-        .await
-        .unwrap();
+    };
+    // A database from before barca recorded output hashes has no such column.
+    let mut rows = match query(format!("{COLUMNS}, output_hash")).await {
+        Ok(rows) => rows,
+        Err(_) => query(COLUMNS.to_string()).await.unwrap(),
+    };
     rows.next().await.unwrap().and_then(|row| {
         Some(dispatch::OutputRef {
             path: row.get::<String>(0).ok()?,
             format: row.get::<String>(1).ok()?,
             size_bytes: row.get::<i64>(2).ok()? as u64,
             elapsed_seconds: None,
+            content_hash: row.get::<String>(3).ok().filter(|h| !h.is_empty()),
         })
     })
+}
+
+/// A spawned task that is aborted if dropped before it is joined, so an early
+/// return never leaves background work running (e.g. a state pull that
+/// would overwrite the local DB after the run gave up).
+struct Background<T>(Option<tokio::task::JoinHandle<T>>);
+
+impl<T: Send + 'static> Background<T> {
+    fn spawn(fut: impl std::future::Future<Output = T> + Send + 'static) -> Self {
+        Self(Some(tokio::spawn(fut)))
+    }
+
+    async fn join(mut self) -> Result<T, BarcaError> {
+        let handle = self.0.take().expect("joined once");
+        handle
+            .await
+            .map_err(|e| BarcaError::Other(format!("background task failed: {e}")))
+    }
+}
+
+impl<T> Drop for Background<T> {
+    fn drop(&mut self) {
+        if let Some(h) = &self.0 {
+            h.abort();
+        }
+    }
+}
+
+/// How a cache row's artifact is reached on this machine.
+enum CacheHit {
+    /// Use the output as recorded.
+    Local(dispatch::OutputRef),
+    /// The row records a location in the artifact store; `local` points at
+    /// its local mirror, which is fetched before anything reads it.
+    Store {
+        local: dispatch::OutputRef,
+        store: String,
+    },
+    /// Not reachable here (recorded against a different store, or a local
+    /// path that is not on this disk) — treat as a miss and recompute.
+    Miss,
+}
+
+/// Resolve a cache row against this run's artifact store (`layout` is Some
+/// when the store is separate from the local artifact dir).
+fn resolve_cache_hit(oref: dispatch::OutputRef, layout: Option<&ArtifactLayout>) -> CacheHit {
+    let Some(layout) = layout else {
+        return CacheHit::Local(oref);
+    };
+    if let Some(local) = layout.local_for(&oref.path) {
+        let store = oref.path.clone();
+        return CacheHit::Store {
+            local: dispatch::OutputRef {
+                path: local.to_string_lossy().into_owned(),
+                ..oref
+            },
+            store,
+        };
+    }
+    if std::path::Path::new(&oref.path).exists() {
+        CacheHit::Local(oref)
+    } else {
+        CacheHit::Miss
+    }
+}
+
+/// Apply this run's artifact store to a cache row: the output to use, or None
+/// to treat the row as a miss.
+fn accept_cache_hit(
+    store: &mut Option<StoreSync>,
+    node_id: &str,
+    oref: dispatch::OutputRef,
+) -> Option<dispatch::OutputRef> {
+    match resolve_cache_hit(oref, store.as_ref().map(|s| &s.layout)) {
+        CacheHit::Local(o) => Some(o),
+        CacheHit::Store { local, store: at } => {
+            if let Some(s) = store.as_mut() {
+                s.fetchable.insert(
+                    local.path.clone(),
+                    (node_id.to_string(), at, local.content_hash.clone()),
+                );
+            }
+            Some(local)
+        }
+        CacheHit::Miss => None,
+    }
+}
+
+/// Apply this run's artifact store to a cache decision: cached outputs point
+/// at their local mirror, and rows not reachable here become runs.
+fn localize_decision(
+    decision: Decision,
+    step: &crate::planner::StreamStep,
+    store: &mut Option<StoreSync>,
+) -> Decision {
+    match decision {
+        Decision::Cached { oref, stale_root } => {
+            let id = step.step_id.display();
+            match accept_cache_hit(store, &id, oref) {
+                Some(oref) => Decision::Cached { oref, stale_root },
+                None => Decision::Run(RunReason::NotMaterialized),
+            }
+        }
+        Decision::Partitioned {
+            cached,
+            mut missing,
+        } => {
+            let mut kept = Vec::with_capacity(cached.len());
+            for (pdisplay, oref) in cached {
+                match accept_cache_hit(store, &pdisplay, oref) {
+                    Some(oref) => kept.push((pdisplay, oref)),
+                    None => missing.extend(
+                        step.partition_keys
+                            .iter()
+                            .find(|pk| pk.display_id(&step.step_id.base) == pdisplay)
+                            .cloned(),
+                    ),
+                }
+            }
+            Decision::Partitioned {
+                cached: kept,
+                missing,
+            }
+        }
+        run => run,
+    }
+}
+
+/// This run's link to a separate artifact store: the transfer helper plus
+/// the cache hits whose artifacts still live only in the store.
+struct StoreSync {
+    client: TransferClient,
+    layout: ArtifactLayout,
+    /// Local mirror path → (node id, store location, recorded SHA-256), for
+    /// store-backed cache hits. Fetched on first use, so fully-cached
+    /// intermediates a run never reads are never downloaded. With a recorded
+    /// hash, a copy already on disk is checked against it on first use too.
+    fetchable: HashMap<String, (String, String, Option<String>)>,
+}
+
+impl StoreSync {
+    /// Point lazily read parquet inputs that are not on this disk at the store,
+    /// so the step's reader fetches only the byte ranges its query uses. They
+    /// stay fetchable: a later eager reader still downloads the whole artifact.
+    fn read_in_place(
+        &self,
+        provided: &mut HashMap<String, dispatch::ProvidedInput>,
+        lazy: &HashSet<String>,
+    ) {
+        for (key, input) in provided.iter_mut() {
+            let base = key.split_once('[').map_or(key.as_str(), |(b, _)| b);
+            if !lazy.contains(key) && !lazy.contains(base) {
+                continue;
+            }
+            let dispatch::ProvidedInput::Single(oref) = input else {
+                continue;
+            };
+            if oref.format != "parquet" || std::path::Path::new(&oref.path).exists() {
+                continue;
+            }
+            if let Some((_, at, _)) = self.fetchable.get(&oref.path) {
+                oref.path = at.clone();
+            }
+        }
+    }
+
+    /// Make the store-backed artifacts among `paths` local, reporting any
+    /// fetch on stderr (through the progress bar when one is live). Errors
+    /// name what could not be fetched.
+    async fn ensure_local<'a>(
+        &mut self,
+        paths: impl IntoIterator<Item = &'a str>,
+        pb: Option<&indicatif::ProgressBar>,
+    ) -> Result<(), String> {
+        let mut locals = Vec::new();
+        for path in paths {
+            if let Some((node, store, sha256)) = self.fetchable.remove(path)
+                && let Some(local) = self.client.fetch(&node, &store, sha256.as_deref())
+            {
+                locals.push(local);
+            }
+        }
+        if locals.is_empty() {
+            return Ok(());
+        }
+        let started = Instant::now();
+        let report = self.client.await_fetches(&locals).await;
+        if report.transferred > 0 {
+            let msg = format!(
+                "[barca] fetched {} cached artifact{} ({}) in {:.1}s",
+                report.transferred,
+                if report.transferred == 1 { "" } else { "s" },
+                fmt_bytes(report.bytes),
+                started.elapsed().as_secs_f64()
+            );
+            match pb {
+                Some(bar) if !bar.is_hidden() => bar.println(&msg),
+                _ => eprintln!("{msg}"),
+            }
+        }
+        // An artifact path is `{node}/{run_hash}`, so a refresh or another machine computing
+        // the same step overwrites it; the store's copy is as valid a result as the recorded
+        // one. Say so rather than fail.
+        let mut differing: Vec<(String, &str, usize)> = Vec::new();
+        for (node, at) in &report.mismatched {
+            let base = crate::StepId::parse(node).base_id().to_string();
+            match differing.iter_mut().find(|(b, _, _)| *b == base) {
+                Some((_, _, count)) => *count += 1,
+                None => differing.push((base, at, 1)),
+            }
+        }
+        for (base, at, count) in differing {
+            let others = match count - 1 {
+                0 => String::new(),
+                n => format!(" (and {n} more of its partitions)"),
+            };
+            let msg = format!(
+                "[barca] warning: {base}: the copy at {at}{others} is not the one this result \
+                 was recorded with (another run overwrote it, or it was changed). Using it. \
+                 Recompute with --refresh {base}."
+            );
+            match pb {
+                Some(bar) if !bar.is_hidden() => bar.println(&msg),
+                _ => eprintln!("{msg}"),
+            }
+        }
+        if report.failures.is_empty() {
+            return Ok(());
+        }
+        let detail: Vec<String> = report
+            .failures
+            .iter()
+            .map(|f| format!("  {} ({}): {}", f.key, f.store, f.message))
+            .collect();
+        Err(format!(
+            "could not fetch {} cached artifact(s) from the artifact store:\n{}\n\
+             Re-run with --refresh-all to recompute them.",
+            report.failures.len(),
+            detail.join("\n")
+        ))
+    }
+}
+
+fn fmt_bytes(n: u64) -> String {
+    const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
+    let mut v = n as f64;
+    let mut unit = 0;
+    while v >= 1024.0 && unit < UNITS.len() - 1 {
+        v /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{n} B")
+    } else {
+        format!("{v:.1} {}", UNITS[unit])
+    }
 }
 
 /// Total schedulable steps in a phase: 1 per unpartitioned step, `partition_keys.len()`
@@ -860,6 +1126,7 @@ fn phase_step_count(phase: &Phase) -> usize {
 // ─── Result types ────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct GetResult {
     pub run_id: String,
     pub elapsed_seconds: f64,
@@ -919,6 +1186,7 @@ pub struct TargetOutcome {
 
 /// How a step was (or, in a dry run, will be) treated.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct StepReport {
     pub id: String,
     /// `asset`, `task` or `sensor`.
@@ -953,6 +1221,7 @@ pub struct StepReport {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct PartitionSummary {
     pub total: usize,
     pub cached: usize,
@@ -1043,12 +1312,14 @@ pub struct ExplainSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct PlanResult {
     pub total_steps: usize,
     pub phases: Vec<PlanPhase>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct PlanPhase {
     /// Why this phase starts: `{"type": "initial"}`, or `{"type": "fan_in", "node_id": ...}`
     /// when it waits for a node that gathers several upstream results.
@@ -1059,6 +1330,7 @@ pub struct PlanPhase {
 /// [`crate::planner::PhaseReason`] as `barca plan` prints it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub enum PlanPhaseReason {
     Initial,
     FanIn { node_id: String },
@@ -1076,6 +1348,7 @@ impl From<&crate::planner::PhaseReason> for PlanPhaseReason {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct PlanStream {
     pub stream_id: String,
     pub steps: Vec<String>,
@@ -1083,6 +1356,7 @@ pub struct PlanStream {
 
 /// Lightweight summary of a single DAG node, for the server's `/assets` listing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct AssetSummary {
     /// Stable node id (continuity key), e.g. `pipeline.py:fetch`.
     pub id: String,
@@ -1164,7 +1438,7 @@ pub async fn get(
 ) -> Result<GetResult, BarcaError> {
     let names: Vec<String> = target_name.map(str::to_string).into_iter().collect();
     execute(
-        cfg, &names, file_args, python, false, agent_mode, policy, "get", cancel,
+        cfg, &names, file_args, python, false, agent_mode, policy, "get", cancel, None,
     )
     .await?
     .into_single()
@@ -1191,6 +1465,56 @@ pub async fn run(
         policy,
         "run",
         cancel,
+        None,
+    )
+    .await?
+    .into_single()
+}
+
+/// Like [`get`] but streams live [`crate::RunEvent`]s to `event_tx` as the run
+/// progresses (logs, step completion). Logs are persisted to the DB regardless.
+#[allow(clippy::too_many_arguments)]
+pub async fn get_streaming(
+    cfg: &crate::config::ResolvedConfig,
+    target_name: Option<&str>,
+    file_args: &[String],
+    python: &std::path::Path,
+    policy: CachePolicy,
+    agent_mode: bool,
+    cancel: CancellationToken,
+    event_tx: Option<UnboundedSender<crate::RunEvent>>,
+) -> Result<GetResult, BarcaError> {
+    let names: Vec<String> = target_name.map(str::to_string).into_iter().collect();
+    execute(
+        cfg, &names, file_args, python, false, agent_mode, policy, "get", cancel, event_tx,
+    )
+    .await?
+    .into_single()
+}
+
+/// Like [`run`] but streams live [`crate::RunEvent`]s to `event_tx`.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_streaming(
+    cfg: &crate::config::ResolvedConfig,
+    target_name: &str,
+    file_args: &[String],
+    python: &std::path::Path,
+    policy: CachePolicy,
+    agent_mode: bool,
+    cancel: CancellationToken,
+    event_tx: Option<UnboundedSender<crate::RunEvent>>,
+) -> Result<GetResult, BarcaError> {
+    execute(
+        cfg,
+        &[target_name.to_string()],
+        file_args,
+        python,
+        false,
+        agent_mode,
+        policy,
+        "run",
+        cancel,
+        event_tx,
     )
     .await?
     .into_single()
@@ -1218,6 +1542,7 @@ pub async fn get_many(
         policy,
         "get",
         cancel,
+        None,
     )
     .await
     .map(Executed::into_multi)
@@ -1244,6 +1569,7 @@ pub async fn run_many(
         policy,
         "run",
         cancel,
+        None,
     )
     .await
     .map(Executed::into_multi)
@@ -1586,6 +1912,7 @@ async fn execute(
     policy: CachePolicy,
     command_label: &str,
     cancel: CancellationToken,
+    event_tx: Option<UnboundedSender<crate::RunEvent>>,
 ) -> Result<Executed, BarcaError> {
     let t0 = Instant::now();
     // BARCA_TRACE_TIMING=1: emit a millisecond-resolution waterfall of every
@@ -1606,6 +1933,31 @@ async fn execute(
         };
     }
     let run_id = db::generate_run_id();
+    let run_started = std::time::SystemTime::now();
+    let telemetry = crate::telemetry::configured();
+
+    // Start remote I/O first so it overlaps parsing and planning: the shared
+    // state pull (joined just before the metadata DB is opened) and the
+    // artifact transfer helper's startup (joined before workers start).
+    let state_sync_on =
+        cfg.state == crate::config::StateMode::Optimistic && cfg.state_uri.is_some();
+    // From here until this function returns, a run is live on this database: `--dry-run` and
+    // `barca status` in other processes read the local copy instead of pulling over it. Marked
+    // before the pull starts so a prober never pulls over the file this run is about to replace.
+    db::ensure_env_dirs(&cfg.env)?;
+    let _run_live = db::mark_run_live(&cfg.db_path).await;
+    let pull = state_sync_on.then(|| {
+        let (python, cfg) = (python.to_path_buf(), cfg.clone());
+        Background::spawn(async move {
+            let started = Instant::now();
+            let token = state_sync::pull_state(&python, &cfg).await?;
+            Ok::<_, BarcaError>((token, started.elapsed()))
+        })
+    });
+    let transfer_start = cfg.remote_artifacts().then(|| {
+        let (python, cfg, run_id) = (python.to_path_buf(), cfg.clone(), run_id.clone());
+        Background::spawn(async move { TransferClient::start(&python, &cfg, &run_id).await })
+    });
 
     let dag = build_dag(file_args, python).await?;
     trace_point!("dag_built");
@@ -1646,21 +1998,25 @@ async fn execute(
     db::ensure_env_dirs(&cfg.env)?;
     let db_path = cfg.db_path.clone();
 
-    // From here until this function returns, a run is live on this database: `--dry-run` and
-    // `barca status` in other processes read the local copy instead of pulling over it.
-    let _run_live = db::mark_run_live(&db_path).await;
-
-    // Shared remote state: pull the metadata DB before opening it, so cache
-    // checks below see every machine's materializations. Pull failure is a
-    // hard error — silently diverging local runs are worse than stopping.
-    let state_sync_on =
-        cfg.state == crate::config::StateMode::Optimistic && cfg.state_uri.is_some();
-    let mut state_token = if state_sync_on {
-        Some(state_sync::pull_state(python, cfg).await?)
-    } else {
-        None
+    // Shared remote state: the pull must land before the DB is opened, so
+    // cache checks below see every machine's materializations. Pull failure
+    // is a hard error — silently diverging local runs are worse than stopping.
+    let mut state_token = match pull {
+        Some(pull) => {
+            let (token, took) = pull.join().await??;
+            match token.0 {
+                Some(_) => eprintln!(
+                    "[barca] pulled state ({}) in {:.2}s",
+                    fmt_bytes(std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0)),
+                    took.as_secs_f64()
+                ),
+                None => eprintln!("[barca] no shared state yet — this run will create it"),
+            }
+            Some(token)
+        }
+        None => None,
     };
-    trace_point!("state_sync_pull (enabled={state_sync_on})");
+    trace_point!("state_sync_pull_joined (enabled={state_sync_on})");
 
     db::init_db(&db_path).await?;
     trace_point!("db_init");
@@ -1698,10 +2054,14 @@ async fn execute(
     let mut failed_bases: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut skipped_bases: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut all_outputs: HashMap<String, dispatch::OutputRef> = HashMap::new();
+    // Captured user output (node_id, line), persisted to the DB after the run.
+    let mut logs_buffer: Vec<(String, String)> = Vec::new();
     // Sink outcomes (JSON) per node, accumulated across phases for the DB.
     let mut all_sinks: HashMap<String, String> = HashMap::new();
     // Per-node self-timing (cpu_seconds, max_rss_bytes) reported by workers.
     let mut all_timings: HashMap<String, (Option<f64>, Option<u64>)> = HashMap::new();
+    // Per-node wall clock from the worker: (finished_at as Unix seconds, wall seconds).
+    let mut step_clocks: HashMap<String, (f64, f64)> = HashMap::new();
     // Permanently-failed steps + attempt counts, accumulated across phases for the DB.
     let mut all_failures: Vec<dispatch::StepFailure> = Vec::new();
     let mut all_attempts: HashMap<String, u32> = HashMap::new();
@@ -1779,6 +2139,30 @@ async fn execute(
         None
     };
 
+    // Separate artifact store: workers still read and write only the local
+    // artifact dir; the transfer helper uploads finished artifacts in the
+    // background and fetches cache hits recorded by other machines.
+    let mut store: Option<StoreSync> = if let Some(start) = transfer_start {
+        let client = start.join().await??;
+        let layout = client.layout().clone();
+        Some(StoreSync {
+            client,
+            layout,
+            fetchable: HashMap::new(),
+        })
+    } else {
+        None
+    };
+    trace_point!("store_sync_started (enabled={})", store.is_some());
+    // Store location of every output uploaded this run, by node id.
+    let mut store_paths: HashMap<String, String> = HashMap::new();
+    // Set when an artifact cannot be fetched or uploaded: the run fails.
+    let mut transfer_error: Option<String> = None;
+    let worker_artifact_root = match &store {
+        Some(s) => s.layout.local_root().to_string_lossy().into_owned(),
+        None => cfg.artifact_root.clone(),
+    };
+
     // Persistent worker pool: one pool for the whole run, shared across
     // phases so workers keep their interpreter (and imported user modules)
     // warm between phases.
@@ -1786,7 +2170,7 @@ async fn execute(
         python: python.to_path_buf(),
         pool_size,
         run_id: run_id.clone(),
-        artifact_root: cfg.artifact_root.clone(),
+        artifact_root: worker_artifact_root,
         storage_options_json: cfg.storage_options_json.clone(),
     };
     let mut pool = crate::io_loop::WorkerPool::start(io_config).map_err(BarcaError::Other)?;
@@ -1849,6 +2233,21 @@ async fn execute(
             phase
         };
 
+        // `partitions_from` sources are read from disk during expansion.
+        if let Some(s) = store.as_mut() {
+            let sources: Vec<String> = dispatch::partition_sources(phase, &all_outputs)
+                .into_iter()
+                .map(|o| o.path.clone())
+                .collect();
+            if let Err(e) = s
+                .ensure_local(sources.iter().map(String::as_str), pb.as_ref())
+                .await
+            {
+                transfer_error = Some(e);
+                break;
+            }
+        }
+
         let expanded_phase = dispatch::expand_pending_partitions(phase, &all_outputs, pool_size);
         let phase_ref = expanded_phase.as_ref().unwrap_or(phase);
 
@@ -1886,6 +2285,7 @@ async fn execute(
                     step,
                 )
                 .await;
+                let decision = localize_decision(decision, &step, &mut store);
                 step_reports.push(report_for(&dag, &step, &decision, false));
                 let display_id = step.step_id.display();
                 match decision {
@@ -1956,7 +2356,30 @@ async fn execute(
             })
             .sum::<usize>();
 
-        let provided = dispatch::build_provided_inputs(&filtered_phase, &all_outputs);
+        let mut provided = dispatch::build_provided_inputs(&filtered_phase, &all_outputs);
+
+        // Cache hits recorded by other machines are fetched before the steps
+        // that read them run — exactly the inputs this phase was provided,
+        // less the parquet inputs every reader in the phase scans lazily.
+        if let Some(s) = store.as_mut() {
+            s.read_in_place(
+                &mut provided,
+                &dispatch::lazily_read_inputs(&filtered_phase),
+            );
+            let paths = provided.values().flat_map(|p| match p {
+                dispatch::ProvidedInput::Single(o) => std::slice::from_ref(o),
+                dispatch::ProvidedInput::Collected(v) => v.as_slice(),
+            });
+            if let Err(e) = s
+                .ensure_local(paths.map(|o| o.path.as_str()), pb.as_ref())
+                .await
+            {
+                transfer_error = Some(e);
+                break;
+            }
+            trace_point!("phase{phase_idx}_inputs_local");
+        }
+
         let mut coord = crate::coordinator::Coordinator::new();
         let loaded = coord.load_phase(&filtered_phase, &provided);
         let expected: usize = filtered_phase
@@ -1994,6 +2417,16 @@ async fn execute(
                             note(&pb, &msg);
                         }
                     }
+                }
+                // Upload plan-step artifacts in the background while the run
+                // continues. parallel() children (no run hash) are never
+                // recorded, so they stay local.
+                if let Some(s) = store.as_mut()
+                    && decide_state.run_hashes.contains_key(node_id)
+                    && let Some(path) = artifact.get("path").and_then(|v| v.as_str())
+                    && let Some(at) = s.client.upload(node_id, path)
+                {
+                    store_paths.insert(node_id.to_string(), at);
                 }
                 let elapsed_s = artifact.get("elapsed_seconds").and_then(|v| v.as_f64());
                 if let Some(e) = elapsed_s {
@@ -2038,10 +2471,34 @@ async fn execute(
                 }
             });
 
+        // Event sink — buffer log lines for DB persistence, and forward every
+        // event live to the caller's channel (the HTTP server) if present.
+        let event_tx_phase = event_tx.clone();
+        let logs_sink = &mut logs_buffer;
+        let on_event_cb: crate::io_loop::EventCallback<'_> =
+            Box::new(move |ev: crate::RunEvent| {
+                if let crate::RunEvent::Log {
+                    ref node_id,
+                    ref line,
+                } = ev
+                {
+                    logs_sink.push((node_id.clone(), line.clone()));
+                }
+                if let Some(ref tx) = event_tx_phase {
+                    let _ = tx.send(ev);
+                }
+            });
+
         // Drive this phase against the persistent pool. The cost model both
         // sizes the batch pulls and absorbs the timings coming back.
         let phase_err = pool
-            .run_phase(&mut coord, &mut cost_model, Some(on_step_cb), &cancel)
+            .run_phase(
+                &mut coord,
+                &mut cost_model,
+                Some(on_step_cb),
+                Some(on_event_cb),
+                &cancel,
+            )
             .await;
         trace_point!("phase{phase_idx}_run_phase_done");
         if let Err(e) = phase_err
@@ -2077,6 +2534,10 @@ async fn execute(
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0),
                 elapsed_seconds: artifact_val.get("elapsed_seconds").and_then(|v| v.as_f64()),
+                content_hash: artifact_val
+                    .get("content_hash")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
             };
             if let Some(sinks) = artifact_val.get("sinks").and_then(|v| v.as_array())
                 && !sinks.is_empty()
@@ -2090,6 +2551,12 @@ async fn execute(
             let rss = artifact_val.get("max_rss_bytes").and_then(|v| v.as_u64());
             if cpu.is_some() || rss.is_some() {
                 all_timings.insert(node_id.clone(), (cpu, rss));
+            }
+            if let (Some(finished), Some(wall)) = (
+                artifact_val.get("finished_at").and_then(|v| v.as_f64()),
+                artifact_val.get("wall_seconds").and_then(|v| v.as_f64()),
+            ) {
+                step_clocks.insert(node_id.clone(), (finished, wall));
             }
             // A sensor's output hash: its consumers, decided in a later phase, fold it into
             // their run hashes (#183).
@@ -2207,13 +2674,73 @@ async fn execute(
         );
     }
 
+    let was_cancelled = cancel.is_cancelled();
+
+    // Artifact store, before anything is recorded: wait for every upload. Rows are recorded
+    // only for artifacts confirmed in the store, so the metadata never points at a missing
+    // object. The transfer client stays up to fetch the final outputs below.
+    if was_cancelled {
+        if let Some(s) = store.take() {
+            let (unconfirmed, hashes) = s.client.abort().await;
+            for node in unconfirmed {
+                all_outputs.remove(&node);
+                store_paths.remove(&node);
+            }
+            for (node, sha256) in hashes {
+                if let Some(oref) = all_outputs.get_mut(&node) {
+                    oref.content_hash.get_or_insert(sha256);
+                }
+            }
+        }
+    } else if let Some(s) = store.as_mut() {
+        let queued = s.client.pending_uploads();
+        let t_drain = Instant::now();
+        let report = s.client.drain().await;
+        trace_point!("store_sync_drained ({queued} uploads)");
+        // The hash of the bytes that reached the store is recorded with the row, so any
+        // machine can check its copy of the artifact against it.
+        for (node, sha256) in &report.hashes {
+            if let Some(oref) = all_outputs.get_mut(node) {
+                oref.content_hash.get_or_insert_with(|| sha256.clone());
+            }
+        }
+        if report.transferred > 0 {
+            eprintln!(
+                "[barca] uploaded {} artifact{} ({}); waited {:.1}s at end of run",
+                report.transferred,
+                if report.transferred == 1 { "" } else { "s" },
+                fmt_bytes(report.bytes),
+                t_drain.elapsed().as_secs_f64()
+            );
+        }
+        if !report.failures.is_empty() {
+            let mut detail = Vec::new();
+            for f in &report.failures {
+                all_outputs.remove(&f.key);
+                store_paths.remove(&f.key);
+                failed_bases.insert(crate::StepId::parse(&f.key).base_id().to_string());
+                all_failures.push(dispatch::StepFailure {
+                    node_id: f.key.clone(),
+                    error: dispatch::StepError {
+                        error_type: "UploadError".to_string(),
+                        message: format!("upload to {} failed: {}", f.store, f.message),
+                        traceback: String::new(),
+                        attempts: f.attempts,
+                    },
+                });
+                detail.push(format!("  {} ({}): {}", f.key, f.store, f.message));
+            }
+            transfer_error.get_or_insert(format!(
+                "{} artifact upload(s) failed — those steps were not recorded and \
+                 will recompute next run:\n{}",
+                report.failures.len(),
+                detail.join("\n")
+            ));
+        }
+    }
+
     let steps_cached = cached_node_ids.len();
     let elapsed = t0.elapsed().as_secs_f64();
-
-    // Drop the run-long cache connection before persistence: the state push
-    // checkpoints the WAL, which requires no other open handles on the file.
-
-    let was_cancelled = cancel.is_cancelled();
 
     // Persist all executed outputs (including partial results on failure) —
     // held in a ledger so a state-push conflict can replay this run's rows
@@ -2226,7 +2753,7 @@ async fn execute(
         run_id: &run_id,
         status: if was_cancelled {
             "cancelled"
-        } else if phase_error.is_some() || step_failure.is_some() {
+        } else if phase_error.is_some() || step_failure.is_some() || transfer_error.is_some() {
             "failed"
         } else {
             "success"
@@ -2246,30 +2773,56 @@ async fn execute(
         cached_node_ids: &cached_node_ids,
         run_hashes: &decide_state.run_hashes,
         output_hashes: &decide_state.sensor_outputs,
+        store_paths: &store_paths,
         cost_snapshot: &cost_snapshot,
     };
     persist_run(&db_path, &ledger).await?;
+    // Persist captured output. Rust owns persistence — logs land in the DB
+    // regardless of how the run was triggered (CLI or server).
+    db::insert_logs(&db_path, &run_id, &logs_buffer).await?;
     trace_point!("persist_run_done");
+
+    if !telemetry.is_empty() {
+        let report = telemetry_report(&ledger, &dag, run_started, &step_clocks);
+        crate::telemetry::export(&telemetry, &report).await;
+        trace_point!("telemetry_exported");
+    }
 
     // Shared remote state: fold the WAL into the main file and conditionally
     // upload it. On conflict (another machine pushed first): pull the fresh
     // database, replay this run's ledger onto it, retry.
     if state_sync_on {
         let mut attempt = 0u32;
+        let t_push = Instant::now();
         loop {
             state_sync::checkpoint_truncate(&db_path).await?;
             match state_sync::push_state(python, cfg, state_token.as_ref().unwrap()).await? {
-                state_sync::PushOutcome::Pushed(_) => break,
+                state_sync::PushOutcome::Pushed(_) => {
+                    eprintln!(
+                        "[barca] pushed state ({}) in {:.2}s{}",
+                        fmt_bytes(std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0)),
+                        t_push.elapsed().as_secs_f64(),
+                        match attempt {
+                            0 => String::new(),
+                            1 => " after 1 conflict retry".to_string(),
+                            n => format!(" after {n} conflict retries"),
+                        }
+                    );
+                    trace_point!("state_sync_pushed (attempts={})", attempt + 1);
+                    break;
+                }
                 state_sync::PushOutcome::Conflict => {
                     if attempt >= cfg.push_retries {
                         return Err(BarcaError::Other(format!(
-                            "shared state push conflicted {attempt} times — results were                              computed but the shared state was not updated; re-run to retry"
+                            "shared state push conflicted {attempt} times — results were \
+                             computed but the shared state was not updated; re-run to retry"
                         )));
                     }
                     attempt += 1;
                     state_token = Some(state_sync::pull_state(python, cfg).await?);
                     db::init_db(&db_path).await?;
                     persist_run(&db_path, &ledger).await?;
+                    db::insert_logs(&db_path, &run_id, &logs_buffer).await?;
                 }
             }
         }
@@ -2283,6 +2836,9 @@ async fn execute(
         // Only the pool itself (e.g. no worker could be spawned) sets `phase_error`; user step
         // failures are in `step_failure`. Infra, not user code: exit 3.
         return Err(BarcaError::Other(format!("Worker failed: {error}")));
+    }
+    if let Some(error) = transfer_error.take() {
+        return Err(BarcaError::Other(error));
     }
 
     // Steps reported as `ran` before dispatch that failed, or were skipped because something
@@ -2340,6 +2896,21 @@ async fn execute(
         })
     };
 
+    // Make the outputs this command returns readable here: a cache hit recorded by another
+    // machine is still only in the store. Then stop the transfer helper.
+    if let Some(mut s) = store.take() {
+        let paths: Vec<String> = final_output
+            .iter()
+            .chain(outcomes.iter().filter_map(|(_, o)| o.final_output.as_ref()))
+            .map(|o| o.path.clone())
+            .collect();
+        let fetched = s.ensure_local(paths.iter().map(String::as_str), None).await;
+        s.client.shutdown().await;
+        if let Err(e) = fetched {
+            return Err(BarcaError::Other(e));
+        }
+    }
+
     Ok(Executed {
         result: GetResult {
             run_id,
@@ -2385,10 +2956,148 @@ struct RunLedger<'a> {
     all_timings: &'a HashMap<String, (Option<f64>, Option<u64>)>,
     cached_node_ids: &'a std::collections::HashSet<String>,
     run_hashes: &'a HashMap<String, String>,
-    /// Sensor step -> content hash of the output it returned in this run.
+    /// Sensor step -> content hash of the output it returned in this run. Other steps
+    /// record the hash on their `OutputRef`, when the artifact went through a store.
     output_hashes: &'a HashMap<String, String>,
+    /// Artifact-store location of each uploaded output, recorded instead of
+    /// its local path so cache hits resolve on every machine.
+    store_paths: &'a HashMap<String, String>,
     /// Run-end snapshot of the measured-cost EWMA, seeding the next run.
     cost_snapshot: &'a [(String, crate::cost::NodeEstimate)],
+}
+
+/// The exception a step failure carries, as (type, message, traceback). A worker reports a
+/// Python exception as the generic `WorkerError` whose text is `Type: message` followed by the
+/// traceback frames; the type is what groups errors in a telemetry backend.
+fn exception_of(error: &dispatch::StepError) -> (String, String, Option<String>) {
+    // The frames are the trailing run of `  File "..."` lines and their indented source lines.
+    // Taking only that run keeps a message that itself quotes a traceback in one piece.
+    let lines: Vec<&str> = error.message.split('\n').collect();
+    let mut first_frame = lines.len();
+    for (i, line) in lines.iter().enumerate().rev() {
+        if line.starts_with("  File \"") {
+            first_frame = i;
+        } else if !line.starts_with("    ") {
+            break;
+        }
+    }
+    let joined;
+    let (text, frames) = if first_frame > 0 && first_frame < lines.len() {
+        joined = lines[..first_frame].join("\n");
+        (joined.as_str(), Some(lines[first_frame..].join("\n")))
+    } else {
+        (error.message.as_str(), None)
+    };
+    let stack = Some(error.traceback.clone())
+        .filter(|t| !t.is_empty())
+        .or(frames);
+    if error.error_type == "WorkerError"
+        && let Some((head, rest)) = text.split_once(": ")
+        && !head.is_empty()
+        && head
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+    {
+        return (head.to_string(), rest.to_string(), stack);
+    }
+    (error.error_type.clone(), text.to_string(), stack)
+}
+
+/// The run as telemetry integrations see it: every step that ran, was served from cache, or
+/// failed. A step that ran is placed by the worker's own clock; a cached step is a zero-length
+/// mark at the start of the run and a failed one at its end, since neither reports a time.
+fn telemetry_report(
+    l: &RunLedger<'_>,
+    dag: &Dag,
+    started: std::time::SystemTime,
+    clocks: &HashMap<String, (f64, f64)>,
+) -> crate::telemetry::RunReport {
+    use crate::telemetry::{RunReport, StepOutcome, StepReport};
+
+    let ns = |seconds: f64| (seconds.max(0.0) * 1e9) as u64;
+    let start_unix_ns = started
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let duration_ns = ns(l.elapsed);
+    let kind = |node_id: &str| match dag
+        .get_node(crate::StepId::parse(node_id).base_id())
+        .map(|n| n.kind())
+    {
+        Some(crate::NodeKind::Task) => "task",
+        Some(crate::NodeKind::Sensor) => "sensor",
+        Some(crate::NodeKind::Asset) | None => "asset",
+    };
+    // Attempts are counted per step, not per partition key, so they are only attributed to
+    // an unpartitioned step.
+    let attempts = |node_id: &str| {
+        let id = crate::StepId::parse(node_id);
+        (id.display() == id.base_id())
+            .then(|| l.all_attempts.get(id.base_id()).copied().unwrap_or(1))
+    };
+
+    let mut steps: Vec<StepReport> = Vec::new();
+    for (node_id, oref) in l.all_outputs {
+        let cached = l.cached_node_ids.contains(node_id);
+        let (step_start, step_duration) = match clocks.get(node_id) {
+            _ if cached => (start_unix_ns, 0),
+            Some((finished, wall)) => (ns(finished - wall), ns(*wall)),
+            None => (start_unix_ns, ns(oref.elapsed_seconds.unwrap_or(0.0))),
+        };
+        let (cpu_seconds, max_rss_bytes) =
+            l.all_timings.get(node_id).copied().unwrap_or((None, None));
+        steps.push(StepReport {
+            node_id: node_id.clone(),
+            kind: kind(node_id),
+            outcome: if cached {
+                StepOutcome::Cached
+            } else {
+                StepOutcome::Ran
+            },
+            start_unix_ns: step_start,
+            duration_ns: step_duration,
+            attempts: if cached { None } else { attempts(node_id) },
+            run_hash: l.run_hashes.get(node_id).cloned(),
+            size_bytes: Some(oref.size_bytes),
+            cpu_seconds,
+            max_rss_bytes,
+            error_type: None,
+            error_message: None,
+            error_traceback: None,
+        });
+    }
+    for failure in l.all_failures {
+        let (error_type, error_message, error_traceback) = exception_of(&failure.error);
+        steps.push(StepReport {
+            node_id: failure.node_id.clone(),
+            kind: kind(&failure.node_id),
+            outcome: StepOutcome::Failed,
+            start_unix_ns: start_unix_ns + duration_ns,
+            duration_ns: 0,
+            attempts: Some(failure.error.attempts),
+            run_hash: l.run_hashes.get(&failure.node_id).cloned(),
+            size_bytes: None,
+            cpu_seconds: None,
+            max_rss_bytes: None,
+            error_type: Some(error_type),
+            error_message: Some(error_message),
+            error_traceback,
+        });
+    }
+    steps.sort_by(|a, b| (a.start_unix_ns, &a.node_id).cmp(&(b.start_unix_ns, &b.node_id)));
+
+    RunReport {
+        run_id: l.run_id.to_string(),
+        command: l.command.to_string(),
+        target: l.target.map(str::to_string),
+        status: l.status.to_string(),
+        start_unix_ns,
+        duration_ns,
+        steps_total: l.steps_total,
+        steps_executed: l.steps_executed,
+        steps_cached: l.steps_cached,
+        steps,
+    }
 }
 
 /// Write a run's ledger with a short-lived connection. Idempotent for the run
@@ -2443,7 +3152,10 @@ async fn persist_run(db_path: &str, l: &RunLedger<'_>) -> Result<(), BarcaError>
                 [
                     node_id.clone(),
                     run_h.clone(),
-                    oref.path.clone(),
+                    l.store_paths
+                        .get(node_id)
+                        .unwrap_or(&oref.path)
+                        .clone(),
                     oref.format.clone(),
                     oref.size_bytes.to_string(),
                     elapsed_str,
@@ -2451,7 +3163,11 @@ async fn persist_run(db_path: &str, l: &RunLedger<'_>) -> Result<(), BarcaError>
                     l.all_sinks.get(node_id).cloned().unwrap_or_default(),
                     cpu.map(|c| c.to_string()).unwrap_or_default(),
                     rss.map(|r| r.to_string()).unwrap_or_default(),
-                    l.output_hashes.get(node_id).cloned().unwrap_or_default(),
+                    l.output_hashes
+                        .get(node_id)
+                        .or(oref.content_hash.as_ref())
+                        .cloned()
+                        .unwrap_or_default(),
                 ],
             )
             .await
@@ -2486,21 +3202,18 @@ async fn persist_run(db_path: &str, l: &RunLedger<'_>) -> Result<(), BarcaError>
     // columns NULL). Failed rows are never served as cache hits.
     for failure in l.all_failures {
         let node_id = &failure.node_id;
-        let base = crate::StepId::parse(node_id).base_id().to_string();
         let run_h = l.run_hashes.get(node_id).cloned().unwrap_or_default();
-        let attempts = l
-            .all_attempts
-            .get(&base)
-            .copied()
-            .unwrap_or(failure.error.attempts);
+        // Each failure carries its own attempt count: dispatches for a worker
+        // failure, transfer attempts for an upload failure.
         conn.execute(
-                "INSERT INTO materializations (node_id, run_hash, status, error_message, error_traceback, attempts) VALUES (?1, ?2, 'failed', ?3, ?4, ?5)",
+                "INSERT INTO materializations (node_id, run_hash, status, error_type, error_message, error_traceback, attempts) VALUES (?1, ?2, 'failed', ?3, ?4, ?5, ?6)",
                 [
                     node_id.clone(),
                     run_h,
+                    failure.error.error_type.clone(),
                     failure.error.message.clone(),
                     failure.error.traceback.clone(),
-                    attempts.to_string(),
+                    failure.error.attempts.to_string(),
                 ],
             )
             .await
@@ -2965,6 +3678,65 @@ mod refresh_name_tests {
 }
 
 #[cfg(test)]
+mod telemetry_report_tests {
+    use super::*;
+
+    fn worker_error(message: &str) -> dispatch::StepError {
+        dispatch::StepError {
+            error_type: "WorkerError".to_string(),
+            message: message.to_string(),
+            traceback: String::new(),
+            attempts: 1,
+        }
+    }
+
+    #[test]
+    fn the_exception_type_message_and_frames_are_separated() {
+        let (ty, msg, stack) = exception_of(&worker_error(
+            "ValueError: cannot publish\n  File \"p.py\", line 3, in publish\n    raise ValueError(\"cannot publish\")",
+        ));
+        assert_eq!(
+            (ty.as_str(), msg.as_str()),
+            ("ValueError", "cannot publish")
+        );
+        assert_eq!(
+            stack.as_deref(),
+            Some("  File \"p.py\", line 3, in publish\n    raise ValueError(\"cannot publish\")")
+        );
+    }
+
+    #[test]
+    fn a_message_that_quotes_a_traceback_stays_whole() {
+        let (ty, msg, stack) = exception_of(&worker_error(
+            "RuntimeError: bad config:\n  File \"/etc/x.conf\" is missing\nplease fix\n  File \"p.py\", line 9, in load\n    raise RuntimeError(m)",
+        ));
+        assert_eq!(ty, "RuntimeError");
+        assert_eq!(
+            msg,
+            "bad config:\n  File \"/etc/x.conf\" is missing\nplease fix"
+        );
+        assert_eq!(
+            stack.as_deref(),
+            Some("  File \"p.py\", line 9, in load\n    raise RuntimeError(m)")
+        );
+    }
+
+    #[test]
+    fn an_error_without_frames_or_a_python_type_is_passed_through() {
+        let mut upload = worker_error("upload to s3://b/x failed: ConnectionError: reset");
+        upload.error_type = "UploadError".to_string();
+        let (ty, msg, stack) = exception_of(&upload);
+        assert_eq!(ty, "UploadError");
+        assert_eq!(msg, "upload to s3://b/x failed: ConnectionError: reset");
+        assert_eq!(stack, None);
+        assert_eq!(
+            exception_of(&worker_error("worker disconnected")).0,
+            "WorkerError"
+        );
+    }
+}
+
+#[cfg(test)]
 mod multi_target_tests {
     use super::*;
 
@@ -3029,6 +3801,7 @@ def lone() -> int:
             format: "json".to_string(),
             size_bytes: 1,
             elapsed_seconds: None,
+            content_hash: None,
         }
     }
 
@@ -3344,5 +4117,203 @@ mod target_name_tests {
         assert!(!target_name_matches("p.py:dyn_margin_all", "margin_all"));
         assert!(!target_name_matches("subp.py:deploy", "p.py:deploy"));
         assert!(!target_name_matches("sub/p.py:deploy", "/p.py:deploy_x"));
+    }
+}
+
+#[cfg(test)]
+mod store_tests {
+    use super::*;
+    use crate::transfer::ArtifactLayout;
+
+    fn oref(path: &str) -> dispatch::OutputRef {
+        dispatch::OutputRef {
+            path: path.to_string(),
+            format: "json".to_string(),
+            size_bytes: 3,
+            elapsed_seconds: None,
+            content_hash: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn background_task_is_aborted_when_dropped_unjoined() {
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let task = Background::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            let _ = tx.send(());
+        });
+        drop(task);
+        // Aborting drops the future, and with it the sender.
+        let r = tokio::time::timeout(std::time::Duration::from_secs(2), rx).await;
+        assert!(matches!(r, Ok(Err(_))), "task kept running after drop");
+    }
+
+    #[tokio::test]
+    async fn background_task_join_returns_its_output() {
+        let task = Background::spawn(async { 7 });
+        assert_eq!(task.join().await.unwrap(), 7);
+    }
+
+    #[test]
+    fn cache_hit_without_store_is_used_as_recorded() {
+        match resolve_cache_hit(oref("/w/.barca/artifacts/n/h.json"), None) {
+            CacheHit::Local(o) => assert_eq!(o.path, "/w/.barca/artifacts/n/h.json"),
+            _ => panic!("expected Local"),
+        }
+    }
+
+    #[test]
+    fn cache_hit_in_store_points_at_local_mirror() {
+        let layout = ArtifactLayout::new("/w/a", "s3://b/p/default/artifacts");
+        match resolve_cache_hit(oref("s3://b/p/default/artifacts/n/h.json"), Some(&layout)) {
+            CacheHit::Store { local, store } => {
+                assert_eq!(local.path, "/w/a/n/h.json");
+                assert_eq!(local.format, "json");
+                assert_eq!(store, "s3://b/p/default/artifacts/n/h.json");
+            }
+            _ => panic!("expected Store"),
+        }
+    }
+
+    #[test]
+    fn legacy_local_row_is_used_when_the_file_is_here() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("h.json");
+        std::fs::write(&f, "[1]").unwrap();
+        let layout = ArtifactLayout::new("/w/a", "s3://b/p");
+        match resolve_cache_hit(oref(f.to_str().unwrap()), Some(&layout)) {
+            CacheHit::Local(o) => assert_eq!(o.path, f.to_str().unwrap()),
+            _ => panic!("expected Local"),
+        }
+    }
+
+    #[test]
+    fn row_outside_the_store_and_not_on_disk_is_a_miss() {
+        let layout = ArtifactLayout::new("/w/a", "s3://b/p");
+        // e.g. recorded against a different store, or another machine's local path
+        assert!(matches!(
+            resolve_cache_hit(oref("s3://other/p/n/h.json"), Some(&layout)),
+            CacheHit::Miss
+        ));
+        assert!(matches!(
+            resolve_cache_hit(oref("/elsewhere/n/h.json"), Some(&layout)),
+            CacheHit::Miss
+        ));
+    }
+
+    #[tokio::test]
+    async fn persist_run_records_failure_type_and_its_own_attempts() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("m.db").to_string_lossy().into_owned();
+        db::init_db(&db_path).await.unwrap();
+        let failures = vec![dispatch::StepFailure {
+            node_id: "f:a".to_string(),
+            error: dispatch::StepError {
+                error_type: "UploadError".to_string(),
+                message: "upload to s3://b/f__a/h1.json failed: ConnectionError: reset".to_string(),
+                traceback: String::new(),
+                attempts: 4,
+            },
+        }];
+        let run_hashes = HashMap::from([("f:a".to_string(), "h1".to_string())]);
+        // The step itself ran once; the upload made 4 attempts.
+        let all_attempts = HashMap::from([("f:a".to_string(), 1u32)]);
+        let ledger = RunLedger {
+            run_id: "r1",
+            status: "failed",
+            command: "get",
+            files: "f.py".to_string(),
+            target: None,
+            steps_total: 1,
+            steps_executed: 1,
+            steps_cached: 0,
+            elapsed: 0.1,
+            all_outputs: &HashMap::new(),
+            all_failures: &failures,
+            all_sinks: &HashMap::new(),
+            all_attempts: &all_attempts,
+            all_timings: &HashMap::new(),
+            cached_node_ids: &std::collections::HashSet::new(),
+            run_hashes: &run_hashes,
+            output_hashes: &HashMap::new(),
+            store_paths: &HashMap::new(),
+            cost_snapshot: &[],
+        };
+        persist_run(&db_path, &ledger).await.unwrap();
+
+        let (_db, conn) = db::open_conn(&db_path).await.unwrap();
+        let mut rows = conn
+            .query(
+                "SELECT status, error_type, attempts, artifact_path IS NULL, run_hash FROM materializations",
+                (),
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        assert_eq!(row.get::<String>(0).unwrap(), "failed");
+        assert_eq!(row.get::<String>(1).unwrap(), "UploadError");
+        assert_eq!(row.get::<i64>(2).unwrap(), 4);
+        assert_eq!(row.get::<i64>(3).unwrap(), 1);
+        assert_eq!(row.get::<String>(4).unwrap(), "h1");
+    }
+
+    #[tokio::test]
+    async fn persist_run_records_store_locations() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("m.db").to_string_lossy().into_owned();
+        db::init_db(&db_path).await.unwrap();
+
+        let all_outputs = HashMap::from([
+            ("f:a".to_string(), oref("/w/a/f__a/h1.json")),
+            ("f:b".to_string(), oref("/w/a/f__b/h2.json")),
+        ]);
+        let run_hashes = HashMap::from([
+            ("f:a".to_string(), "h1".to_string()),
+            ("f:b".to_string(), "h2".to_string()),
+        ]);
+        // Only a was uploaded through a store; b keeps its recorded path.
+        let store_paths = HashMap::from([("f:a".to_string(), "s3://b/p/f__a/h1.json".to_string())]);
+        let ledger = RunLedger {
+            run_id: "r1",
+            status: "success",
+            command: "get",
+            files: "f.py".to_string(),
+            target: None,
+            steps_total: 2,
+            steps_executed: 2,
+            steps_cached: 0,
+            elapsed: 0.1,
+            all_outputs: &all_outputs,
+            all_failures: &[],
+            all_sinks: &HashMap::new(),
+            all_attempts: &HashMap::new(),
+            all_timings: &HashMap::new(),
+            cached_node_ids: &std::collections::HashSet::new(),
+            run_hashes: &run_hashes,
+            output_hashes: &HashMap::new(),
+            store_paths: &store_paths,
+            cost_snapshot: &[],
+        };
+        persist_run(&db_path, &ledger).await.unwrap();
+
+        let (_db, conn) = db::open_conn(&db_path).await.unwrap();
+        let mut rows = conn
+            .query(
+                "SELECT node_id, artifact_path FROM materializations ORDER BY node_id",
+                (),
+            )
+            .await
+            .unwrap();
+        let mut got = Vec::new();
+        while let Some(row) = rows.next().await.unwrap() {
+            got.push((row.get::<String>(0).unwrap(), row.get::<String>(1).unwrap()));
+        }
+        assert_eq!(
+            got,
+            vec![
+                ("f:a".to_string(), "s3://b/p/f__a/h1.json".to_string()),
+                ("f:b".to_string(), "/w/a/f__b/h2.json".to_string()),
+            ]
+        );
     }
 }

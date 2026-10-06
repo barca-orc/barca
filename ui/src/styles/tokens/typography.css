@@ -1,0 +1,52 @@
+/* ============================================================
+   barca · typography
+   ============================================================ */
+
+:root {
+  /* Families */
+  --font-display: "Space Grotesk", "Inter", system-ui, sans-serif;
+  --font-sans:    "Space Grotesk", system-ui, -apple-system, sans-serif;
+  --font-mono:    "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* Type scale — compact, technical. 1.0rem = 16px base. */
+  --text-2xs:  10px;
+  --text-xs:   11px;
+  --text-sm:   12px;
+  --text-base: 13px;   /* default UI body */
+  --text-md:   14px;
+  --text-lg:   16px;
+  --text-xl:   19px;
+  --text-2xl:  24px;
+  --text-3xl:  31px;
+  --text-4xl:  40px;
+  --text-5xl:  54px;
+  --text-6xl:  72px;
+
+  /* Weights */
+  --weight-regular: 400;
+  --weight-medium:  500;
+  --weight-semibold:600;
+  --weight-bold:    700;
+
+  /* Line heights */
+  --leading-none:    1;
+  --leading-tight:   1.15;
+  --leading-snug:    1.35;
+  --leading-normal:  1.55;
+  --leading-relaxed: 1.7;
+
+  /* Letter spacing — mono labels get tracked out; display gets tightened */
+  --tracking-tighter: -0.02em;
+  --tracking-tight:   -0.01em;
+  --tracking-normal:  0;
+  --tracking-wide:    0.02em;
+  --tracking-wider:   0.06em;
+  --tracking-caps:    0.12em;   /* mono eyebrow / overline labels */
+
+  /* Semantic roles */
+  --font-eyebrow:  var(--font-mono);
+  --font-metric:   var(--font-mono);
+  --font-code:     var(--font-mono);
+  --font-heading:  var(--font-display);
+  --font-body:     var(--font-sans);
+}

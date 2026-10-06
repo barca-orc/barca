@@ -312,7 +312,8 @@ fn parse_type_path(path: &str) -> Option<ValueType> {
 
 fn classify_type(module: &str, name: &str) -> Option<ValueType> {
     match (module, name) {
-        ("pl" | "polars", "DataFrame" | "LazyFrame") => Some(ValueType::Polars),
+        ("pl" | "polars", "DataFrame") => Some(ValueType::Polars),
+        ("pl" | "polars", "LazyFrame") => Some(ValueType::PolarsLazy),
         ("pd" | "pandas", "DataFrame") => Some(ValueType::Pandas),
         ("pyarrow", "Table") => Some(ValueType::PyArrow),
         ("duckdb", "DuckDBPyRelation") => Some(ValueType::DuckDB),
@@ -1082,6 +1083,43 @@ def collected(parts: list[pl.DataFrame]) -> pl.DataFrame:
 
         assert_eq!(nodes[2].return_type, Some(ValueType::Polars));
         assert_eq!(nodes[2].param_types.get("parts"), Some(&ValueType::Polars));
+    }
+
+    #[test]
+    fn lazyframe_annotation_is_its_own_value_type() {
+        use crate::model::ValueType;
+
+        let src = r#"
+from barca import asset
+
+@asset()
+def raw() -> pl.LazyFrame:
+    ...
+
+@asset(inputs={"orders": raw, "eager": raw})
+def stg(orders: pl.LazyFrame, eager: polars.DataFrame) -> dict:
+    ...
+
+@asset(inputs={"parts": raw})
+def collected(parts: list[polars.LazyFrame]) -> dict:
+    ...
+"#;
+        let nodes = extract_nodes(src, "test.py").unwrap();
+        assert_eq!(nodes[0].return_type, Some(ValueType::PolarsLazy));
+        assert_eq!(
+            nodes[1].param_types.get("orders"),
+            Some(&ValueType::PolarsLazy)
+        );
+        assert_eq!(nodes[1].param_types.get("eager"), Some(&ValueType::Polars));
+        assert_eq!(
+            nodes[2].param_types.get("parts"),
+            Some(&ValueType::PolarsLazy)
+        );
+        assert_eq!(ValueType::PolarsLazy.as_str(), "polars_lazy");
+        assert_eq!(
+            serde_json::to_value(ValueType::PolarsLazy).unwrap(),
+            "polars_lazy"
+        );
     }
 
     #[test]

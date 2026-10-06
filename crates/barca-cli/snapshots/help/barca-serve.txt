@@ -25,6 +25,9 @@ Options:
 
           [default: local]
 
+      --read-only
+          Inspect only: refuse runs, never schedule, read the metadata DB from snapshots
+
       --env <ENV>
           Environment name (separates cache/state per environment)
 
@@ -38,6 +41,7 @@ Examples:
   barca serve pipeline.py --watch            # dev: re-parse the DAG when files change
   barca serve pipeline.py --no-schedule      # API only; Schedule(...) nodes do not fire
   barca serve pipeline.py --timezone utc     # evaluate cron in UTC (default: local)
+  barca serve pipeline.py --read-only        # inspect only: no runs, no scheduler, DB never written
 
 Binds to localhost with no authentication.
 More: barca docs scheduling

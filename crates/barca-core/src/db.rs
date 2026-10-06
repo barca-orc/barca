@@ -76,8 +76,10 @@ pub struct RunRecord {
 
 /// Aggregated statistics for a single asset node.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct AssetStats {
     pub node_id: String,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub total_runs: i64,
     pub avg_elapsed_seconds: Option<f64>,
     pub median_elapsed_seconds: Option<f64>,
@@ -89,6 +91,7 @@ pub struct AssetStats {
 
 /// One materialization entry for asset stats.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct AssetRunEntry {
     pub elapsed_seconds: Option<f64>,
     pub status: String,
@@ -96,6 +99,7 @@ pub struct AssetRunEntry {
     /// Error message for `status='failed'` rows (None for successes).
     pub error_message: Option<String>,
     /// Number of attempts made.
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub attempts: i64,
 }
 
@@ -396,6 +400,7 @@ pub async fn init_db(db_path: &str) -> Result<(), BarcaError> {
         // Content hash of a sensor's output (#183): folded into its consumers' run hashes, and
         // what `--dry-run` / `barca status` assume the sensor returns next.
         "ALTER TABLE materializations ADD COLUMN output_hash TEXT",
+        "ALTER TABLE materializations ADD COLUMN error_type TEXT",
     ] {
         conn.execute(col, ()).await.ok();
     }
@@ -452,7 +457,184 @@ pub async fn init_db(db_path: &str) -> Result<(), BarcaError> {
     )
     .await
     .map_err(|e| BarcaError::Db(format!("failed to create schedule_state table: {e}")))?;
+
+    // Captured user stdout, one row per line. Rust owns persistence; workers
+    // stream lines over the socket and the coordinator writes them here.
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT NOT NULL,
+            node_id TEXT NOT NULL,
+            seq INTEGER NOT NULL,
+            line TEXT NOT NULL,
+            created_at TEXT DEFAULT (datetime('now'))
+        )",
+        (),
+    )
+    .await
+    .map_err(|e| BarcaError::Db(format!("failed to create logs table: {e}")))?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_logs_run ON logs(run_id, seq)",
+        (),
+    )
+    .await
+    .map_err(|e| BarcaError::Db(format!("failed to create logs index: {e}")))?;
     Ok(())
+}
+
+/// A private, point-in-time copy of a metadata DB (main file + WAL) in a temp
+/// dir, deleted on drop. Read-only consumers query the copy, so the original —
+/// possibly being written by another barca process — is never opened, locked
+/// for longer than the copy takes, created, migrated, or checkpointed.
+pub struct DbSnapshot {
+    _dir: tempfile::TempDir,
+    path: String,
+}
+
+impl DbSnapshot {
+    /// Copy `db_path` (and its `-wal`) into a fresh temp dir. `None` when there
+    /// is no DB yet — the absence is preserved, not filled in.
+    ///
+    /// If barca's cross-process lock file exists, the copy is taken under that
+    /// lock so it can't interleave with another process's write. The lock file
+    /// is opened, never created: an older barca that doesn't lock leaves no
+    /// file, and the copy proceeds unlocked (WAL recovery then stops at the
+    /// last complete commit).
+    pub async fn take(db_path: &str) -> Result<Option<Self>, BarcaError> {
+        if !Path::new(db_path).exists() {
+            return Ok(None);
+        }
+        let lock_path = format!("{db_path}.lock");
+        let _lock = if Path::new(&lock_path).exists() {
+            Some(acquire_file_lock(db_path, DB_FILE_LOCK_WAIT).await?)
+        } else {
+            None
+        };
+
+        let dir = tempfile::tempdir()
+            .map_err(|e| BarcaError::Db(format!("failed to create snapshot dir: {e}")))?;
+        let copy = dir.path().join("metadata.db");
+        fs::copy(db_path, &copy)
+            .map_err(|e| BarcaError::Db(format!("failed to snapshot DB: {e}")))?;
+        let wal = format!("{db_path}-wal");
+        if Path::new(&wal).exists() {
+            fs::copy(&wal, dir.path().join("metadata.db-wal"))
+                .map_err(|e| BarcaError::Db(format!("failed to snapshot DB WAL: {e}")))?;
+        }
+        Ok(Some(Self {
+            path: copy.display().to_string(),
+            _dir: dir,
+        }))
+    }
+
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+}
+
+/// One row of materialization history, as needed for asset state.
+#[derive(Debug, Clone)]
+pub struct MaterializationRow {
+    pub node_id: String,
+    pub status: String,
+    pub created_at: String,
+    pub elapsed_seconds: Option<f64>,
+    pub error_message: Option<String>,
+}
+
+/// Every materialization attempt, oldest first. An older DB without the table
+/// yields no rows rather than an error.
+pub async fn materialization_history(db_path: &str) -> Result<Vec<MaterializationRow>, BarcaError> {
+    let _g = db_guard().await;
+    let (_h, conn) = open_conn(db_path).await?;
+    let Ok(mut rows) = conn
+        .query(
+            "SELECT node_id, status, created_at, elapsed_seconds, error_message \
+             FROM materializations ORDER BY id ASC",
+            (),
+        )
+        .await
+    else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to read materialization: {e}")))?
+    {
+        out.push(MaterializationRow {
+            node_id: row.get::<String>(0).unwrap_or_default(),
+            status: row.get::<String>(1).unwrap_or_default(),
+            created_at: row.get::<String>(2).unwrap_or_default(),
+            elapsed_seconds: row.get::<f64>(3).ok(),
+            error_message: row.get::<String>(4).ok(),
+        });
+    }
+    Ok(out)
+}
+
+/// One captured stdout line for a run.
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct LogEntry {
+    pub node_id: String,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub seq: i64,
+    pub line: String,
+}
+
+/// Persist captured stdout lines for a run, in order. `lines` is (node_id, line).
+pub async fn insert_logs(
+    db_path: &str,
+    run_id: &str,
+    lines: &[(String, String)],
+) -> Result<(), BarcaError> {
+    if lines.is_empty() {
+        return Ok(());
+    }
+    let _g = db_guard().await;
+    let (_db, conn) = open_conn(db_path).await?;
+    for (seq, (node_id, line)) in lines.iter().enumerate() {
+        conn.execute(
+            "INSERT INTO logs (run_id, node_id, seq, line) VALUES (?1, ?2, ?3, ?4)",
+            (
+                run_id.to_string(),
+                node_id.clone(),
+                seq as i64,
+                line.clone(),
+            ),
+        )
+        .await
+        .ok();
+    }
+    Ok(())
+}
+
+/// Fetch all persisted log lines for a run, in order.
+pub async fn get_logs(db_path: &str, run_id: &str) -> Result<Vec<LogEntry>, BarcaError> {
+    let _g = db_guard().await;
+    let (_db, conn) = open_conn(db_path).await?;
+    let mut rows = conn
+        .query(
+            "SELECT node_id, seq, line FROM logs WHERE run_id = ?1 ORDER BY seq ASC",
+            [run_id.to_string()],
+        )
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to query logs: {e}")))?;
+    let mut out = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to read log row: {e}")))?
+    {
+        out.push(LogEntry {
+            node_id: row.get::<String>(0).unwrap_or_default(),
+            seq: row.get::<i64>(1).unwrap_or_default(),
+            line: row.get::<String>(2).unwrap_or_default(),
+        });
+    }
+    Ok(out)
 }
 
 /// Load the last-fired time (unix epoch seconds) for every scheduled node.
@@ -514,8 +696,12 @@ pub async fn last_output_hashes(
         else {
             return Ok(HashMap::new());
         };
+        // LIKE treats `_` in a node id as a wildcard, and assets record output hashes too.
+        let partition_prefix = format!("{base}[");
         while let Ok(Some(row)) = rows.next().await {
-            if let (Ok(id), Ok(h)) = (row.get::<String>(0), row.get::<String>(1)) {
+            if let (Ok(id), Ok(h)) = (row.get::<String>(0), row.get::<String>(1))
+                && (id == *base || id.starts_with(&partition_prefix))
+            {
                 out.insert(id, h);
             }
         }
@@ -1073,6 +1259,61 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn logs_round_trip_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db").to_string_lossy().to_string();
+        init_db(&db_path).await.unwrap();
+
+        let lines = vec![
+            ("a.py:load".to_string(), "loading…".to_string()),
+            ("a.py:load".to_string(), "read 30/150".to_string()),
+            ("a.py:load".to_string(), "done".to_string()),
+        ];
+        insert_logs(&db_path, "run123", &lines).await.unwrap();
+
+        let got = get_logs(&db_path, "run123").await.unwrap();
+        assert_eq!(got.len(), 3);
+        // Order preserved via the seq column.
+        assert_eq!(got[0].seq, 0);
+        assert_eq!(got[0].line, "loading…");
+        assert_eq!(got[1].line, "read 30/150");
+        assert_eq!(got[2].line, "done");
+        assert_eq!(got[0].node_id, "a.py:load");
+    }
+
+    #[tokio::test]
+    async fn logs_are_scoped_by_run_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db").to_string_lossy().to_string();
+        init_db(&db_path).await.unwrap();
+
+        insert_logs(&db_path, "runA", &[("n".to_string(), "a-line".to_string())])
+            .await
+            .unwrap();
+        insert_logs(&db_path, "runB", &[("n".to_string(), "b-line".to_string())])
+            .await
+            .unwrap();
+
+        let a = get_logs(&db_path, "runA").await.unwrap();
+        let b = get_logs(&db_path, "runB").await.unwrap();
+        assert_eq!(a.len(), 1);
+        assert_eq!(a[0].line, "a-line");
+        assert_eq!(b.len(), 1);
+        assert_eq!(b[0].line, "b-line");
+        // Unknown run yields no rows, not an error.
+        assert!(get_logs(&db_path, "nope").await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn insert_empty_logs_is_noop() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db").to_string_lossy().to_string();
+        init_db(&db_path).await.unwrap();
+        insert_logs(&db_path, "run", &[]).await.unwrap();
+        assert!(get_logs(&db_path, "run").await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn round_trip_persist_and_query() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test.db").to_string_lossy().to_string();
@@ -1087,6 +1328,7 @@ mod tests {
                 format: "json".to_string(),
                 size_bytes: 15,
                 elapsed_seconds: None,
+                content_hash: None,
             },
         );
         persist_outputs(&db_path, &outputs, &HashMap::new())
@@ -1320,6 +1562,7 @@ mod tests {
                 format: "json".to_string(),
                 size_bytes: 42,
                 elapsed_seconds: None,
+                content_hash: None,
             },
         );
 
@@ -1363,6 +1606,7 @@ mod tests {
                 format: "json".to_string(),
                 size_bytes: 100,
                 elapsed_seconds: None,
+                content_hash: None,
             },
         );
         outputs.insert(
@@ -1372,6 +1616,7 @@ mod tests {
                 format: "parquet".to_string(),
                 size_bytes: 8192,
                 elapsed_seconds: None,
+                content_hash: None,
             },
         );
         outputs.insert(
@@ -1381,6 +1626,7 @@ mod tests {
                 format: "pickle".to_string(),
                 size_bytes: 512,
                 elapsed_seconds: None,
+                content_hash: None,
             },
         );
 
@@ -1514,6 +1760,7 @@ mod tests {
             format: row.get::<String>(1).unwrap(),
             size_bytes: row.get::<i64>(2).unwrap() as u64,
             elapsed_seconds: None,
+            content_hash: None,
         });
 
         let output_ref = result.unwrap();

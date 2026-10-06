@@ -1,0 +1,15 @@
+/* ============================================================
+   barca · radius
+   Small, sharp, technical. Console software, not a consumer app.
+   ============================================================ */
+
+:root {
+  --radius-none: 0;
+  --radius-xs:   2px;
+  --radius-sm:   3px;   /* default control radius */
+  --radius-md:   5px;
+  --radius-lg:   8px;   /* panels / cards */
+  --radius-xl:   12px;
+  --radius-pill: 999px;
+  --radius-circle: 50%;
+}
