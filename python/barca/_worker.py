@@ -479,13 +479,16 @@ def _materialize(result, node_id, art_dir, step, elapsed, elapsed_in_artifact=Fa
             **timing,
             "cpu_seconds": timing["cpu_seconds"] + (time.process_time() - _ser_cpu0),
         }
-    artifact = {"path": str(path), "format": fmt, "size_bytes": size}
+    artifact: dict = {"path": str(path), "format": fmt, "size_bytes": size}
     if content_hash is not None:
         artifact["content_hash"] = content_hash
     if elapsed_in_artifact:
         artifact["elapsed_seconds"] = elapsed
     if timing:
         artifact.update(timing)
+    # When the step finished and how long it took, for telemetry: a span needs wall-clock times.
+    artifact["finished_at"] = time.time()
+    artifact["wall_seconds"] = elapsed
     sink_outcomes = _write_sinks(result, step, node_id, fmt)
     if sink_outcomes:
         artifact["sinks"] = sink_outcomes
