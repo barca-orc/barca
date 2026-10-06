@@ -2,7 +2,8 @@ import { createHashRouter, Navigate } from 'react-router'
 import { AppShell } from '@/layouts/AppShell'
 import { GraphPage } from '@/pages/GraphPage'
 import { AssetsPage } from '@/pages/AssetsPage'
-import { RunsPage, SchedulesPage, DocsPage } from '@/pages/placeholders'
+import { SchedulesPage } from '@/pages/SchedulesPage'
+import { RunsPage, DocsPage } from '@/pages/placeholders'
 
 // Hash routing: the page itself is always `<prefix>/ui/`, so relative asset URLs
 // and the API base (see lib/apiBase.ts) work under any reverse-proxy prefix,

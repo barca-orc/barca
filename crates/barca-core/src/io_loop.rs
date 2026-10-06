@@ -100,7 +100,7 @@ struct FrozenWorker {
 enum IoEvent {
     Message {
         worker_id: usize,
-        msg: WorkerMessage,
+        msg: Box<WorkerMessage>,
     },
     Disconnected {
         worker_id: usize,
@@ -134,7 +134,7 @@ async fn worker_io_task(
             result = read_frame::<_, WorkerMessage>(&mut stream) => {
                 match result {
                     Ok(Some(msg)) => {
-                        if event_tx.send(IoEvent::Message { worker_id, msg }).await.is_err() {
+                        if event_tx.send(IoEvent::Message { worker_id, msg: Box::new(msg) }).await.is_err() {
                             break;
                         }
                     }
@@ -323,7 +323,7 @@ impl WorkerPool {
             };
 
             match event {
-                IoEvent::Message { worker_id, msg } => match msg {
+                IoEvent::Message { worker_id, msg } => match *msg {
                     WorkerMessage::StepCompleted {
                         ref node_id,
                         ref artifact,
