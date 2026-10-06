@@ -29,15 +29,15 @@ commit_preprocessors = [
 ]
 commit_parsers = [
     { message = "^[Mm]erge", skip = true },
-    { type = "feat", group = "Features" },
-    { type = "fix", group = "Bug Fixes" },
-    { type = "refactor", group = "Refactor" },
-    { type = "polish", group = "Polish" },
-    { type = "doc", group = "Documentation" },
-    { type = "test", group = "Testing" },
-    { type = "perf", group = "Performance" },
-    { type = "remove", group = "Removed" },
-    { type = "release", group = "Release" },
+    { message = "^feat", group = "Features" },
+    { message = "^fix", group = "Bug Fixes" },
+    { message = "^refactor", group = "Refactor" },
+    { message = "^polish", group = "Polish" },
+    { message = "^doc", group = "Documentation" },
+    { message = "^test", group = "Testing" },
+    { message = "^perf", group = "Performance" },
+    { message = "^remove", group = "Removed" },
+    { message = "^release", group = "Release" },
     { message = ".*", group = "Changes" },
 ]
 filter_commits = false
