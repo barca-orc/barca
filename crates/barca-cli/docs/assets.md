@@ -116,6 +116,29 @@ literally enough for barca to read them from the source. Dynamic decorator const
 (building `inputs` in a loop, calling a decorator through a variable) is not visible to the
 planner. Mark code barca cannot reason about with `@unsafe` (silences purity warnings only).
 
+## Unused inputs
+
+Every declared data input is loaded in full before the step runs, whether or not the function
+uses it. At plan time barca reads the function body and warns when a data input (a parameter
+wired by `inputs=` whose name does not start with `_`) is never referenced, or appears only in
+a `del` statement:
+
+```
+[barca] warning: step `report` declares input `raw` but never uses it; it is still loaded in full before every run. Remove the dependency, or rename the parameter `_raw` if only ordering is needed (ordering-only inputs are not loaded)
+```
+
+The warning is printed once per command on stderr (`plan`, `get`, `run`, `get --dry-run`) and
+is also a `warnings` entry in the JSON of `barca plan` and `barca get|run --json`:
+`{"kind": "unused_input", "node": "report", "param": "raw", "message": "..."}`. The key is
+absent when there is nothing to warn about. The fix is to remove the input, or to rename the
+parameter `_raw` (and the key in `inputs=`) when you only need the upstream to run first:
+ordering-only inputs are not loaded.
+
+The check is conservative, because barca cannot see through a call. Any other mention of the
+name counts as a use: passing it to a helper, a nested function, a comprehension, an f-string.
+A body that calls `locals()`, `vars()`, `eval()` or `exec()`, and a function with `**kwargs`,
+are never flagged. A warning does not change the exit code or the cache.
+
 ## Sensors
 
 `@sensor` observes external state and returns `(update_detected: bool, value)`. Sensors have no

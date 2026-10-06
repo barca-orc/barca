@@ -83,7 +83,7 @@ Output format: --json / --pretty / -o, else BARCA_OUTPUT=json|pretty, else the t
 (TTY -> pretty, piped -> JSON). JSON is one line on stdout with status (\"success\"), run_id,
 steps_executed (0 = all cached), phases, final_output, and `steps`: what happened to each step
 (ran or cached, and why; `env` holds the values of variables the node declares with env=[...],
-secrets redacted). For parquet/pickle assets final_output is a pointer,
+secrets redacted). `warnings` appears only when there are plan-time warnings, e.g. an input a step never uses. For parquet/pickle assets final_output is a pointer,
 {\"_barca_artifact\": {\"path\", \"format\", \"size_bytes\"}}; the Python API (barca.get)
 loads the value for you.
 Several targets (`a,b`, comma-separated, no spaces): final_output is replaced by `targets`, keyed by
@@ -147,6 +147,7 @@ Examples:
   barca plan pipeline.py other.py     # several files form one DAG
 
 Output: always pretty-printed JSON {total_steps, phases: [{reason, streams: [{stream_id, steps}]}]}.
+`warnings` (only when present) lists plan-time warnings such as an input a step never uses (barca docs assets).
 `reason` is an object: {\"type\": \"initial\"} or {\"type\": \"fan_in\", \"node_id\": ...}.
 Planning is static analysis: it never imports your code or reads state, so it takes no --env.
 Experimental: the layout may change between releases (barca docs contract).
@@ -1359,6 +1360,9 @@ async fn get_cmd(
                 "steps": &result.steps,
             });
             bounded::project_key(&mut out, "steps", fields);
+            if !result.warnings.is_empty() {
+                out["warnings"] = serde_json::json!(&result.warnings);
+            }
             println!("{out}");
         }
         OutputMode::Value => {
@@ -1448,6 +1452,9 @@ async fn run_cmd(
                 "steps": &result.steps,
             });
             bounded::project_key(&mut out, "steps", fields);
+            if !result.warnings.is_empty() {
+                out["warnings"] = serde_json::json!(&result.warnings);
+            }
             println!("{out}");
         }
         OutputMode::Value => {
@@ -1599,6 +1606,9 @@ fn print_multi(
                 "steps": &result.steps,
             });
             bounded::project_key(&mut run, "steps", fields);
+            if !result.warnings.is_empty() {
+                run["warnings"] = serde_json::json!(&result.warnings);
+            }
             let run = run.to_string();
             println!(
                 "{},\"targets\":{}}}",

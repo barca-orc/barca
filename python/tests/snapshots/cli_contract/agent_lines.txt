@@ -8,3 +8,4 @@
 [barca] step:pipeline.py:per_key[k=a] completed <secs>s (<n>/<total>)
 [barca] step:pipeline.py:per_key[k=b] completed <secs>s (<n>/<total>)
 [barca] step:pipeline.py:total cached env CONTRACT_API_TOKEN=<unset> CONTRACT_REGION=eu
+[barca] warning: step `broken` declares input `t` but never uses it; it is still loaded in full before every run. Remove the dependency, or rename the parameter `_t` if only ordering is needed (ordering-only inputs are not loaded)

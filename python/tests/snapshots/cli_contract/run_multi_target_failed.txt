@@ -21,3 +21,9 @@ targets.<name>.error : string  (optional)
 targets.<name>.failed_node : string  (optional)
 targets.<name>.final_output : <user value>  (optional)
 targets.<name>.status : string
+warnings : array
+warnings[] : object
+warnings[].kind : string
+warnings[].message : string
+warnings[].node : string
+warnings[].param : string

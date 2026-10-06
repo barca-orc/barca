@@ -15,3 +15,9 @@ steps[].reason : string
 steps[].run_hash : string
 steps[].status : string
 steps_executed : integer
+warnings : array
+warnings[] : object
+warnings[].kind : string
+warnings[].message : string
+warnings[].node : string
+warnings[].param : string

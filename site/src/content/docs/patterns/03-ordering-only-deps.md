@@ -27,6 +27,14 @@ The `_migrate` parameter name starts with `_`, which tells barca to establish th
 - **Value is not passed.** The function receives `None` for `_`-prefixed parameters, making it clear the dependency is structural. The upstream artifact is still materialized and cached as normal -- the `_` prefix only affects what the downstream function sees.
 - **DAG is still correct.** The edge is still present in the execution plan. Barca will still schedule `seed_data` in a later tier than `migrate_db`.
 
+## Unused data inputs are flagged
+
+A data input (no `_` prefix) is loaded in full before the step runs. If the function never
+references it, or only `del`s it, `barca plan`, `barca get` and `barca run` print a warning on
+stderr and add a `warnings` entry to the JSON output. The fix is to remove the input, or to
+rename it `_<name>` when you only need the ordering. Passing the parameter to a helper counts as
+using it. See `barca docs assets`.
+
 ## Common mistakes
 
 ### Using a normal parameter name and ignoring it

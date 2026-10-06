@@ -1136,6 +1136,9 @@ pub struct GetResult {
     /// What happened to each planned step in this run (ran / cached / partial, and why).
     #[serde(default)]
     pub steps: Vec<StepReport>,
+    /// Plan-time warnings (e.g. an input the step never uses); omitted when there are none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<crate::dag::PlanWarning>,
 }
 
 /// The result of `barca get|run a,b` (several targets): one run over the union of the targets'
@@ -1148,6 +1151,9 @@ pub struct MultiResult {
     pub phases: usize,
     /// What happened to each planned step (shared upstream steps appear once).
     pub steps: Vec<StepReport>,
+    /// Plan-time warnings (e.g. an input the step never uses); omitted when there are none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<crate::dag::PlanWarning>,
     /// Each target by the name it was given, in the order given (serialized as a map).
     #[serde(serialize_with = "serialize_targets")]
     pub targets: Vec<(String, TargetOutcome)>,
@@ -1316,6 +1322,9 @@ pub struct ExplainSummary {
 pub struct PlanResult {
     pub total_steps: usize,
     pub phases: Vec<PlanPhase>,
+    /// Plan-time warnings (e.g. an input the step never uses); omitted when there are none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<crate::dag::PlanWarning>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1611,6 +1620,7 @@ impl Executed {
             steps_executed: r.steps_executed,
             phases: r.phases,
             steps: r.steps,
+            warnings: r.warnings,
             targets: self.targets,
         }
     }
@@ -1635,6 +1645,7 @@ pub async fn explain(
     command_label: &str,
 ) -> Result<ExplainResult, BarcaError> {
     let dag = build_dag(file_args, python).await?;
+    print_warnings(&dag.warnings);
     if command_label == "get"
         && target_names.is_empty()
         && let Some(note) = skipped_tasks_note(&dag, file_args)
@@ -1944,6 +1955,7 @@ async fn execute(
     let dag = build_dag(file_args, python).await?;
     trace_point!("dag_built");
 
+    print_warnings(&dag.warnings);
     let targets = resolve_targets(&dag, target_names, command_label)?;
     let target_ids: Vec<&str> = targets.iter().map(|(_, id)| id.as_str()).collect();
     if command_label == "get"
@@ -2887,6 +2899,7 @@ async fn execute(
             phases: exec_plan.phases.len(),
             final_output,
             steps: step_reports,
+            warnings: dag.warnings.clone(),
         },
         targets: outcomes,
         step_failure: step_failure.map(|(node, message)| crate::FailedStep {
@@ -3069,7 +3082,9 @@ pub async fn plan(
     };
     let plan = planner::plan_from_dag(&dag, &config);
 
+    print_warnings(&dag.warnings);
     Ok(PlanResult {
+        warnings: dag.warnings.clone(),
         total_steps: plan.total_steps,
         phases: plan
             .phases
@@ -3337,7 +3352,37 @@ pub(crate) fn build_dag_blocking(
 
     resolve_dynamic_partitions(&mut all_nodes, python);
 
-    Ok(Dag::build(&all_nodes)?)
+    let mut dag = Dag::build(&all_nodes)?;
+    dag.warnings = input_warnings(&all_nodes);
+    Ok(dag)
+}
+
+/// One `unused_input` warning per declared data input a step never uses (#231).
+fn input_warnings(nodes: &[crate::model::ExtractedNode]) -> Vec<crate::dag::PlanWarning> {
+    let mut out = Vec::new();
+    for node in nodes {
+        for param in crate::parse::unused_data_inputs(&node.source_text, &node.inputs) {
+            out.push(crate::dag::PlanWarning {
+                kind: "unused_input".into(),
+                node: node.function_name.clone(),
+                message: format!(
+                    "step `{}` declares input `{param}` but never uses it; it is still loaded \
+                     in full before every run. Remove the dependency, or rename the parameter \
+                     `_{param}` if only ordering is needed (ordering-only inputs are not loaded)",
+                    node.function_name
+                ),
+                param,
+            });
+        }
+    }
+    out
+}
+
+/// Print each plan-time warning on stderr, once.
+fn print_warnings(warnings: &[crate::dag::PlanWarning]) {
+    for w in warnings {
+        eprintln!("[barca] warning: {}", w.message);
+    }
 }
 
 /// Recursively scan subdirectories for Python modules.
@@ -3840,6 +3885,7 @@ def lone() -> int:
             steps_executed: 0,
             phases: 0,
             steps: Vec::new(),
+            warnings: Vec::new(),
             targets: vec![
                 ("zeta".to_string(), outcome("success")),
                 ("alpha".to_string(), outcome("failed")),

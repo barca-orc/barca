@@ -330,6 +330,12 @@ Every schema below is stable unless its section says otherwise.
 | `steps[].run_hash` | string | always |
 | `steps[].status` | string | always |
 | `steps_executed` | integer | always |
+| `warnings` | array | always |
+| `warnings[]` | object | always |
+| `warnings[].kind` | string | always |
+| `warnings[].message` | string | always |
+| `warnings[].node` | string | always |
+| `warnings[].param` | string | always |
 <!-- END GENERATED schema get -->
 
 - `status` is `success` (see the failed result line below for `failed`).
@@ -369,6 +375,12 @@ For a parquet or pickle artifact, `final_output` is a pointer instead of the val
 | `steps[].run_hash` | string | always |
 | `steps[].status` | string | always |
 | `steps_executed` | integer | always |
+| `warnings` | array | always |
+| `warnings[]` | object | always |
+| `warnings[].kind` | string | always |
+| `warnings[].message` | string | always |
+| `warnings[].node` | string | always |
+| `warnings[].param` | string | always |
 <!-- END GENERATED schema get_artifact_pointer -->
 
 A partitioned step carries `partitions` (counted in keys; `will_run_keys` is capped at 20):
@@ -396,6 +408,12 @@ A partitioned step carries `partitions` (counted in keys; `will_run_keys` is cap
 | `steps[].run_hash` | string | sometimes |
 | `steps[].status` | string | always |
 | `steps_executed` | integer | always |
+| `warnings` | array | always |
+| `warnings[]` | object | always |
+| `warnings[].kind` | string | always |
+| `warnings[].message` | string | always |
+| `warnings[].node` | string | always |
+| `warnings[].param` | string | always |
 <!-- END GENERATED schema get_partitioned -->
 
 `run` prints the same shape:
@@ -420,6 +438,12 @@ A partitioned step carries `partitions` (counted in keys; `will_run_keys` is cap
 | `steps[].run_hash` | string | always |
 | `steps[].status` | string | always |
 | `steps_executed` | integer | always |
+| `warnings` | array | always |
+| `warnings[]` | object | always |
+| `warnings[].kind` | string | always |
+| `warnings[].message` | string | always |
+| `warnings[].node` | string | always |
+| `warnings[].param` | string | always |
 <!-- END GENERATED schema run -->
 
 ### get and run: a failed step
@@ -483,6 +507,12 @@ failed, and the exit code is then 1. Steps skipped because an upstream failed ha
 | `targets.<name>.final_output._barca_artifact.path` | string | always |
 | `targets.<name>.final_output._barca_artifact.size_bytes` | integer | always |
 | `targets.<name>.status` | string | always |
+| `warnings` | array | always |
+| `warnings[]` | object | always |
+| `warnings[].kind` | string | always |
+| `warnings[].message` | string | always |
+| `warnings[].node` | string | always |
+| `warnings[].param` | string | always |
 <!-- END GENERATED schema get_multi_target -->
 
 <!-- BEGIN GENERATED schema run_multi_target_failed -->
@@ -510,6 +540,12 @@ failed, and the exit code is then 1. Steps skipped because an upstream failed ha
 | `targets.<name>.failed_node` | string | sometimes |
 | `targets.<name>.final_output` | `<user value>` | sometimes |
 | `targets.<name>.status` | string | always |
+| `warnings` | array | always |
+| `warnings[]` | object | always |
+| `warnings[].kind` | string | always |
+| `warnings[].message` | string | always |
+| `warnings[].node` | string | always |
+| `warnings[].param` | string | always |
 <!-- END GENERATED schema run_multi_target_failed -->
 
 ### Dry run
@@ -775,6 +811,11 @@ are `null` when the asset never ran; `recent_runs[].error_message` is a string f
 "<id>"}` for a phase that waits on a node gathering several upstream results. `plan` reads no
 state and takes no `--env`.
 
+`warnings` is an optional array, absent when empty: one `{kind, node, param, message}` object per
+declared data input a step never uses (`kind` is `unused_input`). `get` and `run` results carry
+the same key, and the same message is printed once on stderr as `[barca] warning: ...`. A warning
+never changes the exit code. See `barca docs assets`.
+
 <!-- BEGIN GENERATED schema plan -->
 | Key | Type | Present |
 |---|---|---|
@@ -789,6 +830,12 @@ state and takes no `--env`.
 | `phases[].streams[].steps[]` | string | always |
 | `phases[].streams[].stream_id` | string | always |
 | `total_steps` | integer | always |
+| `warnings` | array | always |
+| `warnings[]` | object | always |
+| `warnings[].kind` | string | always |
+| `warnings[].message` | string | always |
+| `warnings[].node` | string | always |
+| `warnings[].param` | string | always |
 <!-- END GENERATED schema plan -->
 
 ### docs
@@ -889,6 +936,7 @@ placeholders:
 [barca] step:pipeline.py:per_key[k=a] completed <secs>s (<n>/<total>)
 [barca] step:pipeline.py:per_key[k=b] completed <secs>s (<n>/<total>)
 [barca] step:pipeline.py:total cached env CONTRACT_API_TOKEN=<unset> CONTRACT_REGION=eu
+[barca] warning: step `broken` declares input `t` but never uses it; it is still loaded in full before every run. Remove the dependency, or rename the parameter `_t` if only ordering is needed (ordering-only inputs are not loaded)
 ```
 <!-- END GENERATED agent-lines -->
 
