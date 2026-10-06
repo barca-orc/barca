@@ -62,6 +62,11 @@ pub const TOPICS: &[Topic] = &[
         "remote.md"
     ),
     topic!(
+        "telemetry",
+        "Report runs and steps to Datadog: one trace per run, a span per step",
+        "telemetry.md"
+    ),
+    topic!(
         "partitions",
         "Fan-out over keys and fan-in with collect",
         "partitions.md"
