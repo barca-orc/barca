@@ -844,7 +844,16 @@ async fn lookup_cached(
             elapsed_seconds: None,
             content_hash: row.get::<String>(3).ok().filter(|h| !h.is_empty()),
         })
+        // A row whose file is gone is not a cached result: recompute, rather than hand a
+        // consumer a path that does not exist.
+        .filter(|oref| artifact_reachable(&oref.path))
     })
+}
+
+/// False only when `path` is a file on this machine that is not there. A store URI is not
+/// checked here: it is fetched before anything reads it, and that reports a missing object.
+fn artifact_reachable(path: &str) -> bool {
+    path.contains("://") || std::path::Path::new(path).exists()
 }
 
 /// A spawned task that is aborted if dropped before it is joined, so an early
