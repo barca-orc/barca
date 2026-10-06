@@ -48,8 +48,11 @@ something that identifies the version of the data, such as an etag or a last-mod
 
 `POST /run/<task>` is different from a tick: it recomputes every upstream asset.
 
-A tick is skipped while the previous run of the same scheduled node is still going. Two
-scheduled nodes that share an upstream run separately, and both may compute it.
+A tick is skipped while the previous run of the same scheduled node is still going. Nodes due
+at the same tick run together as one run over the union of their cones, so an upstream they
+share is computed once. A failure in one of them stops only the nodes downstream of it, and
+`GET /schedule` reports each node's own `last_status`. (Catch-up runs at startup are still one
+run per node.)
 
 ```bash
 barca list pipeline.py                         # shows each schedule and its next fire time

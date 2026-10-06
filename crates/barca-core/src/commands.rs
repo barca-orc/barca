@@ -1575,6 +1575,39 @@ pub async fn run_many(
     .map(Executed::into_multi)
 }
 
+/// Several targets of any kind (assets, sensors and tasks) in one streamed run: the union of
+/// their cones is planned once, so an upstream shared by a task and an asset materializes once.
+/// This is what `barca serve` runs for the nodes due at one cron tick. Like [`get_many`], every
+/// target is attempted and a failure is reported in that target's outcome, not as an `Err`.
+/// A task always runs; assets follow `policy`.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_mixed_streaming(
+    cfg: &crate::config::ResolvedConfig,
+    target_names: &[String],
+    file_args: &[String],
+    python: &std::path::Path,
+    policy: CachePolicy,
+    agent_mode: bool,
+    cancel: CancellationToken,
+    event_tx: Option<UnboundedSender<crate::RunEvent>>,
+) -> Result<MultiResult, BarcaError> {
+    // Any label other than "get"/"run" accepts both kinds of target.
+    execute(
+        cfg,
+        target_names,
+        file_args,
+        python,
+        false,
+        agent_mode,
+        policy,
+        "serve",
+        cancel,
+        event_tx,
+    )
+    .await
+    .map(Executed::into_multi)
+}
+
 /// What `execute` produced: the run, each target's outcome, and the first step failure.
 /// Single-target runs turn that failure into an `Err`; multi-target runs report it per target.
 struct Executed {

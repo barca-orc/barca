@@ -86,6 +86,10 @@ pub struct RunState {
     /// cancelled. Not part of the JSON status payload.
     #[serde(skip)]
     pub cancel: CancellationToken,
+    /// For a run shared by several scheduled nodes (all due at one tick): how each node ended
+    /// (`success` or `failed`). Empty for an ordinary run. Read by `GET /schedule`.
+    #[serde(skip)]
+    pub node_status: std::collections::HashMap<String, String>,
 }
 
 /// Cached static-analysis results, invalidated by the file watcher in `--watch`

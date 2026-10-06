@@ -244,6 +244,18 @@ fn trigger(state: &AppState, job: &ScheduledJob) -> String {
     }
 }
 
+/// Trigger one run for every job due at the same tick. A single job takes its own path
+/// ([`trigger`]); several share one run over the union of their cones.
+fn trigger_tick(state: &AppState, due: &[&ScheduledJob]) -> String {
+    match due {
+        [one] => trigger(state, one),
+        many => handlers::start_scheduled_batch(
+            state.clone(),
+            many.iter().map(|j| j.id.clone()).collect(),
+        ),
+    }
+}
+
 /// Whether a scheduled tick elapsed between `last_fired` and `now` — i.e. the
 /// next cron occurrence strictly after `last_fired` is already in the past. This
 /// drives the single catch-up run after the daemon was down. Pure and generic
@@ -395,23 +407,29 @@ pub async fn run_scheduler(state: AppState) {
         // NOTE: benchmarks/scheduler_overhead/barca/run.sh's CI smoke greps stderr for
         // "scheduled run.*:probe" to count ticks independent of worker execution — keep
         // that substring ("scheduled run", plus the job id) if this wording changes.
+        let mut due: Vec<&ScheduledJob> = Vec::new();
         for action in plan_tick(&now, &jobs, &last_handle, |h| is_in_flight(&state, h)) {
             match action {
                 TickAction::Skip { job, handle } => eprintln!(
                     "[barca] scheduled run {} skipped — previous run {handle} still in flight",
                     job.id
                 ),
-                TickAction::Fire(job) => {
-                    let handle = trigger(&state, job);
-                    eprintln!("[barca] scheduled run {} → {handle}", job.id);
-                    last_handle.insert(job.id.clone(), handle);
-                    last_fired.insert(job.id.clone(), now.timestamp());
-                    if let Some(dbp) = &db_path {
-                        persist_fired(dbp, &job.id, now.timestamp()).await;
-                    }
-                    fired_any = true;
+                TickAction::Fire(job) => due.push(job),
+            }
+        }
+        // Everything due at this tick is one run, so an upstream shared by two of them is
+        // computed once.
+        if !due.is_empty() {
+            let handle = trigger_tick(&state, &due);
+            for job in due {
+                eprintln!("[barca] scheduled run {} → {handle}", job.id);
+                last_handle.insert(job.id.clone(), handle.clone());
+                last_fired.insert(job.id.clone(), now.timestamp());
+                if let Some(dbp) = &db_path {
+                    persist_fired(dbp, &job.id, now.timestamp()).await;
                 }
             }
+            fired_any = true;
         }
         if fired_any {
             publish_registry(&state, &jobs, &last_handle, &last_fired);
@@ -485,6 +503,7 @@ mod tests {
                 started_at: 0.0,
                 finished_at: None,
                 cancel: barca_core::CancellationToken::new(),
+                node_status: HashMap::new(),
             },
         );
     }

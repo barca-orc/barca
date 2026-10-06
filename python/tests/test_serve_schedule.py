@@ -5,12 +5,14 @@ polled, an asset is recomputed when something on its input side changed and serv
 cache when nothing did, and a task itself always runs (#244, #245).
 """
 
+import json
 import os
 import signal
 import socket
 import sqlite3
 import subprocess
 import time
+import urllib.request
 from pathlib import Path
 
 from barca.api import _find_binary
@@ -144,3 +146,83 @@ def test_a_tick_recomputes_only_what_changed_on_the_input_side(tmp_path):
     # A scheduled asset is recomputed when its sensor changed, and skipped when nothing did.
     assert rows.get("tracked") == 2, f"tracked should run once per sensor value: {context}"
     assert rows.get("no_inputs") == 1, f"an asset with nothing changed was recomputed: {context}"
+
+
+SHARED = """
+import time
+from pathlib import Path
+
+from barca import asset, sensor, task, Schedule
+
+@sensor()
+def version() -> tuple[bool, str]:
+    return True, Path("version.txt").read_text()
+
+
+@asset(freshness=Schedule("* * * * * *"), inputs={"version": version})
+def tracked(version: str) -> dict:
+    return {"version": version, "t": time.time()}
+
+
+@task(freshness=Schedule("* * * * * *"), inputs={"tracked": tracked})
+def report(tracked: dict) -> None:
+    print("report", tracked["version"])
+
+
+@asset(freshness=Schedule("* * * * * *"))
+def broken() -> dict:
+    raise RuntimeError("boom")
+"""
+
+
+def _get_json(port: int, path: str):
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=5) as r:
+        return json.load(r)
+
+
+def test_nodes_due_at_one_tick_share_one_run(tmp_path):
+    """#253: a scheduled asset that is also upstream of a scheduled task on the same cron is
+    computed once per sensor value, not once by each node's own run; a failing node does not
+    stop the others, and `GET /schedule` reports each node's own status."""
+    (tmp_path / "pipeline.py").write_text(SHARED)
+    _set_version(tmp_path, "v1")
+    env = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
+    port = _free_port()
+    serve = subprocess.Popen(
+        [_find_binary(), "serve", "pipeline.py", "--port", str(port)],
+        cwd=tmp_path,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    schedule = {}
+    try:
+        _wait_for(tmp_path, lambda r: r.get("report", 0) >= 3, "ticks on v1")
+        _set_version(tmp_path, "v2")
+        _wait_for(
+            tmp_path,
+            lambda r: r.get("tracked", 0) >= 2 and r.get("report", 0) >= 6,
+            "ticks on v2",
+        )
+        schedule = {j["id"].rsplit(":", 1)[1]: j for j in _get_json(port, "/schedule")}
+    finally:
+        serve.send_signal(signal.SIGTERM)
+        try:
+            _, err = serve.communicate(timeout=30)
+        except subprocess.TimeoutExpired:
+            serve.kill()
+            _, err = serve.communicate()
+
+    rows = _rows(tmp_path)
+    context = f"{rows}\n{err}"
+    assert rows.get("tracked") == 2, f"shared upstream computed more than once per value: {context}"
+    assert rows.get("report", 0) >= 6, f"the task did not keep running: {context}"
+    # `broken` fails every tick without stopping the others.
+    assert "broken" not in rows
+    assert set(schedule) == {"tracked", "report", "broken"}, schedule
+    for name, job in schedule.items():
+        assert job["last_run"] and job["last_fired"], (name, job)
+    assert schedule["broken"]["last_status"] == "failed", schedule
+    assert schedule["report"]["last_status"] in ("complete", "running", "pending"), schedule
+    assert schedule["tracked"]["last_status"] in ("complete", "running", "pending"), schedule

@@ -319,10 +319,13 @@ pub async fn schedule(State(state): State<AppState>) -> Json<Value> {
                 .ok()
                 .and_then(|c| c.find_next_occurrence(&now, false).ok())
                 .map(|t| t.timestamp());
-            let last_status = j
-                .last_handle
-                .as_ref()
-                .and_then(|h| state.runs.get(h).map(|r| r.status));
+            // A run shared by nodes due at the same tick reports each node's own outcome.
+            let last_status = j.last_handle.as_ref().and_then(|h| {
+                state.runs.get(h).map(|r| match r.node_status.get(&j.id) {
+                    Some(s) if s != "success" => RunStatus::Failed,
+                    _ => r.status,
+                })
+            });
             json!({
                 "id": j.id,
                 "cron": j.cron,
@@ -432,6 +435,8 @@ enum RunKind {
     Get(Option<String>),
     /// `commands::run` for a task target, with how its upstream assets are treated.
     Task(String, commands::CachePolicy),
+    /// `commands::run_mixed_streaming`: the nodes due at one cron tick, as one run.
+    Batch(Vec<String>),
 }
 
 /// Insert a `Pending` run, spawn the background execution task, and return the
@@ -447,6 +452,14 @@ pub(crate) fn start_run_task(state: AppState, target: String) -> String {
         state,
         RunKind::Task(target, commands::CachePolicy::RefreshAll),
     )
+}
+
+/// The nodes due at one cron tick (assets, sensors and tasks) as a single run over the union of
+/// their cones, so an upstream they share is computed once. Cache-aware, like each node's own
+/// tick. A failure in one node stops only the nodes downstream of it; `GET /schedule` reports
+/// each node's own outcome.
+pub(crate) fn start_scheduled_batch(state: AppState, targets: Vec<String>) -> String {
+    spawn_run(state, RunKind::Batch(targets))
 }
 
 /// A cron tick for a scheduled task: the task runs, as a task always does, and each upstream
@@ -474,6 +487,7 @@ fn spawn_run(state: AppState, kind: RunKind) -> String {
             started_at: now_ts(),
             finished_at: None,
             cancel: cancel.clone(),
+            node_status: std::collections::HashMap::new(),
         },
     );
     let channel = RunChannel::new();
@@ -521,6 +535,7 @@ fn spawn_run(state: AppState, kind: RunKind) -> String {
         let cfg = st.config.resolved.clone();
 
         let mut timed_out = false;
+        let mut node_status = std::collections::HashMap::new();
         let outcome: Result<GetResult, BarcaError> = {
             let fut = async {
                 match &kind {
@@ -537,6 +552,32 @@ fn spawn_run(state: AppState, kind: RunKind) -> String {
                         )
                         .await
                     }
+                    RunKind::Batch(targets) => commands::run_mixed_streaming(
+                        &cfg,
+                        targets,
+                        &files,
+                        &python,
+                        commands::CachePolicy::CacheAware,
+                        true,
+                        cancel.clone(),
+                        Some(event_tx),
+                    )
+                    .await
+                    .map(|m| {
+                        node_status = m
+                            .targets
+                            .iter()
+                            .map(|(name, t)| (name.clone(), t.status.clone()))
+                            .collect();
+                        GetResult {
+                            run_id: m.run_id,
+                            elapsed_seconds: m.elapsed_seconds,
+                            steps_executed: m.steps_executed,
+                            phases: m.phases,
+                            final_output: None,
+                            steps: m.steps,
+                        }
+                    }),
                     RunKind::Task(target, policy) => {
                         commands::run_streaming(
                             &cfg,
@@ -577,6 +618,7 @@ fn spawn_run(state: AppState, kind: RunKind) -> String {
 
         if let Some(mut r) = st.runs.get_mut(&h) {
             r.finished_at = Some(now_ts());
+            r.node_status = node_status;
             match outcome {
                 Ok(result) => {
                     r.status = RunStatus::Complete;

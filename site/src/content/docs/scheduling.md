@@ -118,6 +118,11 @@ last run id, last status) for each job. See the
   **once** on restart to catch up. Ticks missed during a long outage are not
   replayed one-for-one, and brand-new jobs are anchored to "now" (no
   first-launch stampede).
+- **Same tick, one run** — the nodes due at the same tick run together as one run
+  over the union of their cones, so an upstream they share (a scheduled asset that a
+  scheduled task reads, say) is computed once. A failure in one node stops only the
+  nodes downstream of it, and `GET /schedule` reports each node's own status. Catch-up
+  runs at startup are still one run per node.
 - **No self-overlap** — if a job's previous run is still going when the next
   tick arrives, that tick is skipped.
 - **Disable it** — `barca serve --no-schedule job.py` serves the HTTP API

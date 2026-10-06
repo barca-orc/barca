@@ -227,7 +227,10 @@ Each `ScheduleEntry` is:
 
 `next_fire`/`last_fired` are unix epoch seconds (`last_fired` is `null` until the first
 fire); `last_run` is the most recent scheduled `run_id` and `last_status` its state
-(`pending`/`running`/`complete`/`failed`/`cancelled`, or `null` if none yet).
+(`pending`/`running`/`complete`/`failed`/`cancelled`, or `null` if none yet). Nodes due at
+the same tick share one run, so they share a `last_run`; `last_status` is still per node
+(`failed` for a node that failed or sat downstream of a failure, even though the run itself
+completed).
 
 ## Python client
 
