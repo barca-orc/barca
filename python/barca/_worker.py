@@ -98,9 +98,10 @@ def _peak_rss_bytes() -> int:
         return 0
 
 
-# Local artifacts above this size skip the tier-1 cache: the deepcopy that
-# guards against mutation would cost more than the disk read it saves.
-# Remote artifacts always cache — skipping a network fetch beats any copy.
+# Artifacts above this size skip the tier-1 cache, local or remote: the deepcopy that
+# guards against mutation would cost more than the disk read it saves, and a cached
+# copy of a large frame is a second copy of it in memory. A remote artifact's size is
+# unknown at read time (workers read the fetched local copy), so it is not cached.
 _LRU_MAX_ARTIFACT_BYTES = 8 * 1024 * 1024
 
 
@@ -129,9 +130,6 @@ def _result_frame_type(value) -> "str | None | bool":
 
 
 def _lru_cacheable(path: str, size_bytes=None) -> bool:
-    # Remote first: skipping a network fetch beats any copy, whatever the size.
-    if _storage.is_remote(path):
-        return True
     if size_bytes is not None:
         return size_bytes <= _LRU_MAX_ARTIFACT_BYTES
     try:
@@ -148,7 +146,7 @@ class _ArtifactLRU:
     invalidation is automatic (changed input → changed hash → new path → miss).
     Frame type is part of the key so a polars consumer never hits a cached pandas
     materialization of the same path.
-    Values are returned as deep copies so a task mutating its input can never
+    Values are returned as deep copies (immutable Arrow/polars frames are shared, not copied) so a task mutating its input can never
     poison a later task's view; if a value can't be deep-copied, the entry is
     dropped and the caller falls through to the store (tier 2). Pure
     luck-optimization: always safe to miss, never persisted, never gates
@@ -174,7 +172,8 @@ class _ArtifactLRU:
 
         self._entries.move_to_end(key)
         try:
-            return copy.deepcopy(self._entries[key])
+            value = self._entries[key]
+            return value if _share_by_reference(value) else copy.deepcopy(value)
         except Exception:
             del self._entries[key]
             return None
@@ -184,12 +183,19 @@ class _ArtifactLRU:
 
         key = self._key(path, frame_type)
         try:
-            self._entries[key] = copy.deepcopy(value)
+            self._entries[key] = value if _share_by_reference(value) else copy.deepcopy(value)
         except Exception:
             return
         self._entries.move_to_end(key)
         while len(self._entries) > self._max:
             self._entries.popitem(last=False)
+
+
+def _share_by_reference(value) -> bool:
+    """Immutable frames (Arrow tables, polars DataFrames) need no defensive copy."""
+    return _frame_kind(value) in ("pyarrow", "polars") and (
+        type(value).__name__ != "LazyFrame"
+    )
 
 
 def _default_artifact_dir() -> str:
