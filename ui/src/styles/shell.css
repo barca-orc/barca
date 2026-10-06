@@ -418,3 +418,14 @@
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .barca-table-empty { color: var(--text-muted); font-family: var(--font-mono); font-size: var(--text-sm); }
+
+/* sortable headers */
+.barca-sort {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 0; border: 0; background: transparent; cursor: pointer;
+  font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit;
+}
+.barca-sort:hover, .barca-sort:focus-visible { color: var(--text-strong); outline: none; }
+.barca-table th[aria-sort="ascending"] .barca-sort,
+.barca-table th[aria-sort="descending"] .barca-sort { color: var(--text-strong); }
+.barca-table th.num .barca-sort { flex-direction: row-reverse; }

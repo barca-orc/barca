@@ -44,8 +44,11 @@ export interface AssetRow {
   /** Why, in words — the server's own explanation (tooltip). */
   stateHint: string
   last: { status: string; ago: string; error: string | null } | null
+  /** When the latest attempt was recorded (ms since epoch). */
+  lastAtMs: number | null
   /** Median of recent successful runs, formatted; null if it never succeeded. */
   typical: string | null
+  typicalSeconds: number | null
   p95: string | null
   /** Next cron fire time (ms since epoch), if scheduled. */
   nextRunMs: number | null
@@ -135,12 +138,78 @@ export function buildRows(nodes: NodeState[], nowMs: number): AssetRow[] {
         last: last
           ? { status: last.status, ago: formatAgo(last.created_at, nowMs), error: last.error ?? null }
           : null,
+        lastAtMs: last ? parseUtc(last.created_at) : null,
         typical: n.durations ? formatSeconds(n.durations.median_seconds) : null,
+        typicalSeconds: n.durations?.median_seconds ?? null,
         p95: n.durations ? formatSeconds(n.durations.p95_seconds) : null,
         nextRunMs: n.next_run === null ? null : n.next_run * 1000,
       }
     })
     .sort((a, b) => RANK[a.severity] - RANK[b.severity] || a.name.localeCompare(b.name))
+}
+
+// ── Sorting ───────────────────────────────────────────────────────────────────
+
+export type SortKey = 'name' | 'state' | 'last' | 'typical' | 'next'
+export type SortDir = 'asc' | 'desc'
+export interface Sort {
+  key: SortKey
+  dir: SortDir
+}
+
+export const SORT_KEYS: readonly SortKey[] = ['name', 'state', 'last', 'typical', 'next']
+
+/** What needs attention first. */
+export const DEFAULT_SORT: Sort = { key: 'state', dir: 'asc' }
+
+/** The direction a column sorts in on its first click: the useful end first. */
+function firstDir(key: SortKey): SortDir {
+  return match(key)
+    .with('name', 'state', 'next', (): SortDir => 'asc') // A→Z, most urgent, soonest
+    .with('last', 'typical', (): SortDir => 'desc') // most recent, slowest
+    .exhaustive()
+}
+
+/** A header click: a new column starts at its useful end; the same one reverses. */
+export function nextSort(current: Sort, key: SortKey): Sort {
+  if (current.key !== key) return { key, dir: firstDir(key) }
+  return { key, dir: current.dir === 'asc' ? 'desc' : 'asc' }
+}
+
+/** The sort from URL params; anything unrecognised falls back to the default. */
+export function parseSort(key: string | null, dir: string | null): Sort {
+  const k = SORT_KEYS.find((s) => s === key)
+  if (!k) return DEFAULT_SORT
+  return { key: k, dir: dir === 'asc' || dir === 'desc' ? dir : firstDir(k) }
+}
+
+function sortValue(row: AssetRow, key: SortKey): string | number | null {
+  return match(key)
+    .with('name', () => row.name)
+    .with('state', () => RANK[row.severity])
+    .with('last', () => row.lastAtMs)
+    .with('typical', () => row.typicalSeconds)
+    .with('next', () => row.nextRunMs)
+    .exhaustive()
+}
+
+/**
+ * Sort by one column. Rows without a value (never ran, never scheduled) go last
+ * in both directions; ties fall back to severity, then name.
+ */
+export function sortRows(rows: AssetRow[], sort: Sort): AssetRow[] {
+  const sign = sort.dir === 'asc' ? 1 : -1
+  return [...rows].sort((a, b) => {
+    const va = sortValue(a, sort.key)
+    const vb = sortValue(b, sort.key)
+    if (va === null || vb === null) {
+      if (va !== vb) return va === null ? 1 : -1
+    } else if (va !== vb) {
+      const cmp = typeof va === 'string' ? va.localeCompare(vb as string) : va - (vb as number)
+      return sign * cmp
+    }
+    return RANK[a.severity] - RANK[b.severity] || a.name.localeCompare(b.name)
+  })
 }
 
 /** Case-insensitive substring match on name or full id; blank keeps all. */
@@ -164,9 +233,14 @@ export function formatSeconds(s: number): string {
 }
 
 /** `created_at` is UTC `YYYY-MM-DD HH:MM:SS` (SQLite `datetime('now')`). */
-export function formatAgo(createdAt: string, nowMs: number): string {
+function parseUtc(createdAt: string): number | null {
   const t = Date.parse(`${createdAt.replace(' ', 'T')}Z`)
-  if (Number.isNaN(t)) return createdAt
+  return Number.isNaN(t) ? null : t
+}
+
+export function formatAgo(createdAt: string, nowMs: number): string {
+  const t = parseUtc(createdAt)
+  if (t === null) return createdAt
   const s = Math.max(0, (nowMs - t) / 1000)
   if (s < 60) return 'just now'
   if (s < 3600) return `${Math.floor(s / 60)}m ago`

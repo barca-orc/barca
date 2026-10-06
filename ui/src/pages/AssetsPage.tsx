@@ -1,17 +1,23 @@
 import { useMemo, useState } from 'react'
-import { useNavigate } from 'react-router'
-import { Search } from 'lucide-react'
+import { useNavigate, useSearchParams } from 'react-router'
+import { ArrowDown, ArrowUp, Search } from 'lucide-react'
 import { StatusBadge, StatusDot, Tag } from '@/components'
 import { useAssetStates } from '@/hooks/useAssetStates'
 import { useHealth } from '@/hooks/useHealth'
 import {
+  DEFAULT_SORT,
   SEVERITIES,
   buildRows,
   filterRows,
+  nextSort,
+  parseSort,
   severityStatus,
+  sortRows,
   summarize,
   type AssetRow,
   type Severity,
+  type Sort,
+  type SortKey,
 } from '@/lib/assetTable'
 
 const SEVERITY_LABEL: Record<Severity, string> = {
@@ -34,12 +40,49 @@ function formatNextRun(ms: number | null): string {
   })
 }
 
+/** A column header that sorts the table; the active one shows its direction. */
+function SortHeader({
+  label,
+  column,
+  sort,
+  onSort,
+  numeric = false,
+}: {
+  label: string
+  column: SortKey
+  sort: Sort
+  onSort: (key: SortKey) => void
+  numeric?: boolean
+}) {
+  const active = sort.key === column
+  return (
+    <th
+      className={numeric ? 'num' : undefined}
+      aria-sort={active ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+    >
+      <button type="button" className="barca-sort" onClick={() => onSort(column)}>
+        {label}
+        {active && (sort.dir === 'asc' ? <ArrowUp size={11} /> : <ArrowDown size={11} />)}
+      </button>
+    </th>
+  )
+}
+
 export function AssetsPage() {
   const { data, isError, error, dataUpdatedAt } = useAssetStates()
   const { data: health } = useHealth()
   const navigate = useNavigate()
   const [query, setQuery] = useState('')
   const [only, setOnly] = useState<Severity | null>(null)
+  // The sort lives in the URL (#/assets?sort=typical&dir=desc), so it survives
+  // a reload and can be shared.
+  const [params, setParams] = useSearchParams()
+  const sort = parseSort(params.get('sort'), params.get('dir'))
+  const onSort = (key: SortKey) => {
+    const next = nextSort(sort, key)
+    const isDefault = next.key === DEFAULT_SORT.key && next.dir === DEFAULT_SORT.dir
+    setParams(isDefault ? {} : { sort: next.key, dir: next.dir }, { replace: true })
+  }
 
   // "x ago" is relative to when the data was fetched, so it stays pure and
   // refreshes with every poll.
@@ -47,8 +90,11 @@ export function AssetsPage() {
   const counts = useMemo(() => summarize(rows), [rows])
   const visible = useMemo(() => {
     const searched = filterRows(rows, query)
-    return only ? searched.filter((r) => r.severity === only) : searched
-  }, [rows, query, only])
+    const shown = only ? searched.filter((r) => r.severity === only) : searched
+    return sortRows(shown, sort)
+    // `sort` is rebuilt from the URL each render; its fields are the real deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, query, only, sort.key, sort.dir])
 
   const open = (row: AssetRow) => navigate(`/graph?focus=${encodeURIComponent(row.id)}`)
 
@@ -108,11 +154,11 @@ export function AssetsPage() {
           <table className="barca-table">
             <thead>
               <tr>
-                <th>Name</th>
-                <th>State</th>
-                <th>Last run</th>
-                <th className="num">Typical</th>
-                <th>Next run</th>
+                <SortHeader label="Name" column="name" sort={sort} onSort={onSort} />
+                <SortHeader label="State" column="state" sort={sort} onSort={onSort} />
+                <SortHeader label="Last run" column="last" sort={sort} onSort={onSort} />
+                <SortHeader label="Typical" column="typical" sort={sort} onSort={onSort} numeric />
+                <SortHeader label="Next run" column="next" sort={sort} onSort={onSort} />
               </tr>
             </thead>
             <tbody>
