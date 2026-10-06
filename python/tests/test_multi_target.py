@@ -52,6 +52,7 @@ def check_b(s: dict) -> dict:
 
 @task(inputs={"s": src})
 def boom(s: dict) -> None:
+    _ = s
     raise ValueError("check failed on purpose")
 
 
@@ -62,7 +63,7 @@ def broken() -> dict:
 
 @task(inputs={"b": broken})
 def needs_broken(b: dict) -> None:
-    pass
+    _ = b
 
 
 @task(inputs={"d": deeper})

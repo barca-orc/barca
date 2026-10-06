@@ -63,7 +63,7 @@ def noisy() -> dict:
 
 @asset(inputs={"x": noisy})
 def broken(x: dict) -> dict:
-    for _ in range(4):
+    for _ in range(4 if x is not None else 0):
         log.warning("Could not parse .netrc file")
     raise ValueError("Could not parse .netrc file")
 """
