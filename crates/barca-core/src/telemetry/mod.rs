@@ -47,7 +47,9 @@ pub struct StepReport {
     pub outcome: StepOutcome,
     pub start_unix_ns: u64,
     pub duration_ns: u64,
-    pub attempts: u32,
+    /// Attempts made, when known for this step alone. Not known for one partition of a
+    /// partitioned step: attempts are counted per step, not per key.
+    pub attempts: Option<u32>,
     pub run_hash: Option<String>,
     pub size_bytes: Option<u64>,
     pub cpu_seconds: Option<f64>,
@@ -124,15 +126,29 @@ pub fn configured() -> Vec<(String, Box<dyn Integration>)> {
     for name in parse_names(&raw) {
         match build(&name) {
             Some(Ok(integration)) => out.push((name, integration)),
-            Some(Err(e)) => eprintln!("[barca] warning: telemetry '{name}' is off: {e}"),
-            None => eprintln!(
-                "[barca] warning: unknown telemetry integration '{name}' in BARCA_TELEMETRY \
-                 (known: {})",
+            Some(Err(e)) => warn_once(format!("telemetry '{name}' is off: {e}")),
+            None => warn_once(format!(
+                "unknown telemetry integration '{name}' in BARCA_TELEMETRY (known: {})",
                 KNOWN.join(", ")
-            ),
+            )),
         }
     }
     out
+}
+
+/// A configuration warning, printed once per process: `barca serve` configures telemetry
+/// for every run it starts, and a bad setting should not be repeated on every tick.
+fn warn_once(message: String) {
+    static SEEN: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    let seen = SEEN.get_or_init(Default::default);
+    if seen
+        .lock()
+        .map(|mut s| s.insert(message.clone()))
+        .unwrap_or(true)
+    {
+        eprintln!("[barca] warning: {message}");
+    }
 }
 
 /// Send `run` to every integration, each bounded by [`EXPORT_TIMEOUT`].

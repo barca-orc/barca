@@ -76,6 +76,11 @@ pub struct ArtifactRef {
     /// into their consumers' run hashes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_hash: Option<String>,
+    /// When the step finished (Unix seconds, worker clock) and how long it took, for telemetry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wall_seconds: Option<f64>,
 }
 
 /// Outcome of a single `@sink` write. Sink failures never fail the parent
@@ -289,6 +294,8 @@ mod tests {
                 cpu_seconds: None,
                 max_rss_bytes: None,
                 content_hash: None,
+                finished_at: None,
+                wall_seconds: None,
                 sinks: Vec::new(),
             },
         };
@@ -360,6 +367,8 @@ mod tests {
                 cpu_seconds: None,
                 max_rss_bytes: None,
                 content_hash: None,
+                finished_at: None,
+                wall_seconds: None,
                 sinks: vec![
                     SinkOutcome {
                         path: "exports/out.parquet".to_string(),
@@ -529,6 +538,8 @@ mod tests {
                     cpu_seconds: None,
                     max_rss_bytes: None,
                     content_hash: None,
+                    finished_at: None,
+                    wall_seconds: None,
                     sinks: Vec::new(),
                 },
             },
@@ -683,6 +694,18 @@ mod tests {
 
     #[test]
     fn transfer_reply_parses_done_and_error() {
+        let timed: WorkerMessage = serde_json::from_str(
+            r#"{"type":"step_completed","node_id":"f:a","artifact":{"path":"p","format":"json","size_bytes":1,"finished_at":1700000000.25,"wall_seconds":0.5}}"#,
+        )
+        .unwrap();
+        // The coordinator re-serialises the artifact; the worker's clock has to survive that.
+        let WorkerMessage::StepCompleted { artifact, .. } = timed else {
+            panic!("expected a result message");
+        };
+        let round_trip = serde_json::to_value(&artifact).unwrap();
+        assert_eq!(round_trip["finished_at"], 1700000000.25);
+        assert_eq!(round_trip["wall_seconds"], 0.5);
+
         let done: TransferReply =
             serde_json::from_str(r#"{"type":"done","id":3,"size_bytes":42}"#).unwrap();
         assert!(matches!(

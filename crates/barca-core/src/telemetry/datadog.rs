@@ -19,8 +19,17 @@ use sha2::{Digest, Sha256};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 const INTAKE_PATH: &str = "/v0.3/traces";
-/// A traceback longer than this is cut: the Agent drops oversized tag values.
+/// Error text longer than this is cut. An exception message can be arbitrarily large, and an
+/// oversized payload makes the Agent refuse the whole trace, which loses the failed run.
+const MAX_MESSAGE_CHARS: usize = 2000;
 const MAX_STACK_CHARS: usize = 4000;
+
+fn cut(text: &str, max_chars: usize) -> String {
+    match text.char_indices().nth(max_chars) {
+        Some((end, _)) => format!("{}… [cut]", &text[..end]),
+        None => text.to_string(),
+    }
+}
 
 /// Where the Agent's trace intake listens.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,15 +69,29 @@ fn agent_from(url: Option<&str>, host: Option<&str>, port: Option<&str>) -> Resu
                 path: path.to_string(),
             });
         }
-        let Some(rest) = url.strip_prefix("http://") else {
+        if !url
+            .get(..7)
+            .is_some_and(|p| p.eq_ignore_ascii_case("http://"))
+        {
             return Err(format!(
                 "DD_TRACE_AGENT_URL={url} is not supported: use http://host:port or unix:///path"
             ));
-        };
-        let authority = rest.split('/').next().unwrap_or("");
-        let (host, port) = match authority.rsplit_once(':') {
-            Some((h, p)) => (h, parse_port(p)?),
-            None => (authority, 8126),
+        }
+        let authority = url[7..].split(['/', '?']).next().unwrap_or("");
+        // An IPv6 literal is written in brackets: http://[::1]:8126.
+        let (host, port) = if let Some(rest) = authority.strip_prefix('[') {
+            let Some((host, after)) = rest.split_once(']') else {
+                return Err(format!("DD_TRACE_AGENT_URL={url} has an unclosed '['"));
+            };
+            match after.strip_prefix(':') {
+                Some(p) => (host, parse_port(p)?),
+                None => (host, 8126),
+            }
+        } else {
+            match authority.rsplit_once(':') {
+                Some((h, p)) => (h, parse_port(p)?),
+                None => (authority, 8126),
+            }
         };
         if host.is_empty() {
             return Err(format!("DD_TRACE_AGENT_URL={url} names no host"));
@@ -187,14 +210,24 @@ impl Datadog {
                 meta.insert("error.type".to_string(), json!(t));
             }
             if let Some(m) = &step.error_message {
-                meta.insert("error.message".to_string(), json!(m));
+                meta.insert(
+                    "error.message".to_string(),
+                    json!(cut(m, MAX_MESSAGE_CHARS)),
+                );
             }
             if let Some(stack) = &step.error_traceback {
-                let cut: String = stack.chars().take(MAX_STACK_CHARS).collect();
-                meta.insert("error.stack".to_string(), json!(cut));
+                meta.insert(
+                    "error.stack".to_string(),
+                    json!(cut(stack, MAX_STACK_CHARS)),
+                );
             }
             let mut metrics = Map::new();
-            metrics.insert("barca.attempts".to_string(), json!(step.attempts));
+            // Ask Datadog to compute trace metrics (hits, errors, duration) for step spans
+            // too; by default only a service's entry span gets them.
+            metrics.insert("_dd.measured".to_string(), json!(1));
+            if let Some(attempts) = step.attempts {
+                metrics.insert("barca.attempts".to_string(), json!(attempts));
+            }
             if let Some(bytes) = step.size_bytes {
                 metrics.insert("barca.bytes".to_string(), json!(bytes));
             }
@@ -270,7 +303,12 @@ impl Integration for Datadog {
                         .map_err(|e| {
                             format!("cannot reach the Datadog Agent at {host}:{port}: {e}")
                         })?;
-                    put(stream, &format!("{host}:{port}"), &body).await
+                    let authority = if host.contains(':') {
+                        format!("[{host}]:{port}")
+                    } else {
+                        format!("{host}:{port}")
+                    };
+                    put(stream, &authority, &body).await
                 }
                 Agent::Unix { path } => {
                     let stream = tokio::net::UnixStream::connect(path)
@@ -308,7 +346,7 @@ mod tests {
             outcome,
             start_unix_ns: 1_000,
             duration_ns: 500,
-            attempts: 1,
+            attempts: Some(1),
             run_hash: Some("abc".to_string()),
             size_bytes: Some(42),
             cpu_seconds: None,
@@ -359,6 +397,19 @@ mod tests {
                 path: "/var/run/datadog/apm.socket".to_string()
             })
         );
+        assert_eq!(
+            agent_from(Some("HTTP://agent:8127"), None, None),
+            Ok(tcp("agent", 8127))
+        );
+        assert_eq!(
+            agent_from(Some("http://[::1]:8127/x"), None, None),
+            Ok(tcp("::1", 8127))
+        );
+        assert_eq!(
+            agent_from(Some("http://[::1]"), None, None),
+            Ok(tcp("::1", 8126))
+        );
+        assert!(agent_from(Some("http://[::1"), None, None).is_err());
         assert!(agent_from(Some("https://agent:8126"), None, None).is_err());
         assert!(agent_from(None, None, Some("many")).is_err());
     }
@@ -380,7 +431,9 @@ mod tests {
         let mut failed = step("p.py:publish", StepOutcome::Failed);
         failed.kind = "task";
         failed.error_type = Some("ValueError".to_string());
-        failed.error_message = Some("bad".to_string());
+        failed.error_message = Some("x".repeat(MAX_MESSAGE_CHARS + 500));
+        failed.error_traceback = Some("  File \"p.py\", line 3".to_string());
+        failed.attempts = None;
         let payload = datadog().trace(&run(
             "failed",
             vec![step("p.py:orders", StepOutcome::Cached), failed],
@@ -416,6 +469,12 @@ mod tests {
         assert_eq!(spans[2]["meta"]["barca.kind"], "task");
         assert_eq!(spans[2]["error"], 1);
         assert_eq!(spans[2]["meta"]["error.type"], "ValueError");
+        let message = spans[2]["meta"]["error.message"].as_str().unwrap();
+        assert!(message.chars().count() < MAX_MESSAGE_CHARS + 20 && message.ends_with("[cut]"));
+        assert_eq!(spans[2]["meta"]["error.stack"], "  File \"p.py\", line 3");
+        assert!(spans[2]["metrics"].get("barca.attempts").is_none());
+        assert_eq!(spans[1]["metrics"]["barca.attempts"], 1);
+        assert_eq!(spans[1]["metrics"]["_dd.measured"], 1);
         assert_ne!(spans[1]["span_id"], spans[2]["span_id"]);
     }
 

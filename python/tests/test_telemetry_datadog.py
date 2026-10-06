@@ -155,7 +155,18 @@ def test_a_run_is_one_trace_with_a_span_per_step(project, agent):
     assert steps["orders"]["duration"] >= 200_000_000
     assert steps["orders"]["meta"]["barca.kind"] == "asset"
     assert steps["publish"]["meta"]["barca.kind"] == "task"
-    assert steps["orders"]["start"] <= steps["report"]["start"] <= steps["publish"]["start"]
+    # Steps sit at their real times: each starts after the one it depends on has finished.
+    orders_end = steps["orders"]["start"] + steps["orders"]["duration"]
+    assert steps["orders"]["start"] >= root["start"]
+    assert steps["report"]["start"] >= orders_end - 5_000_000, (orders_end, steps["report"])
+    assert (
+        steps["publish"]["start"]
+        >= steps["report"]["start"] + steps["report"]["duration"] - 5_000_000
+    )
+    assert steps["publish"]["start"] > steps["orders"]["start"] + 150_000_000
+    for span in steps.values():
+        assert span["start"] + span["duration"] <= root["start"] + root["duration"] + 50_000_000
+        assert span["metrics"]["barca.attempts"] == 1
     assert len({s["span_id"] for s in spans}) == len(spans)
 
 
@@ -185,7 +196,8 @@ def test_a_failed_step_marks_its_span_and_the_run_as_errors(project, agent):
     assert broken["error"] == 1
     assert broken["meta"]["barca.outcome"] == "failed"
     assert broken["meta"]["error.type"] == "ValueError"
-    assert "cannot publish" in broken["meta"]["error.message"]
+    assert broken["meta"]["error.message"] == "cannot publish"
+    assert 'raise ValueError("cannot publish")' in broken["meta"]["error.stack"]
     assert by_node(spans)["report"]["error"] == 0
 
 

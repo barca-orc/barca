@@ -2858,20 +2858,27 @@ struct RunLedger<'a> {
     cost_snapshot: &'a [(String, crate::cost::NodeEstimate)],
 }
 
-/// The exception a step failure carries, as (type, message). A worker reports a Python
-/// exception as the generic `WorkerError` with `Type: message` as its text; the type is what
-/// groups errors in a telemetry backend.
-fn exception_of(error: &dispatch::StepError) -> (String, String) {
+/// The exception a step failure carries, as (type, message, traceback). A worker reports a
+/// Python exception as the generic `WorkerError` whose text is `Type: message` followed by the
+/// traceback frames; the type is what groups errors in a telemetry backend.
+fn exception_of(error: &dispatch::StepError) -> (String, String, Option<String>) {
+    let (text, frames) = match error.message.split_once("\n  File ") {
+        Some((text, frames)) => (text, Some(format!("  File {frames}"))),
+        None => (error.message.as_str(), None),
+    };
+    let stack = Some(error.traceback.clone())
+        .filter(|t| !t.is_empty())
+        .or(frames);
     if error.error_type == "WorkerError"
-        && let Some((head, rest)) = error.message.split_once(": ")
+        && let Some((head, rest)) = text.split_once(": ")
         && !head.is_empty()
         && head
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
     {
-        return (head.to_string(), rest.to_string());
+        return (head.to_string(), rest.to_string(), stack);
     }
-    (error.error_type.clone(), error.message.clone())
+    (error.error_type.clone(), text.to_string(), stack)
 }
 
 /// The run as telemetry integrations see it: every step that ran, was served from cache, or
@@ -2899,11 +2906,12 @@ fn telemetry_report(
         Some(crate::NodeKind::Sensor) => "sensor",
         Some(crate::NodeKind::Asset) | None => "asset",
     };
+    // Attempts are counted per step, not per partition key, so they are only attributed to
+    // an unpartitioned step.
     let attempts = |node_id: &str| {
-        l.all_attempts
-            .get(crate::StepId::parse(node_id).base_id())
-            .copied()
-            .unwrap_or(1)
+        let id = crate::StepId::parse(node_id);
+        (id.display() == id.base_id())
+            .then(|| l.all_attempts.get(id.base_id()).copied().unwrap_or(1))
     };
 
     let mut steps: Vec<StepReport> = Vec::new();
@@ -2926,7 +2934,7 @@ fn telemetry_report(
             },
             start_unix_ns: step_start,
             duration_ns: step_duration,
-            attempts: if cached { 0 } else { attempts(node_id) },
+            attempts: if cached { None } else { attempts(node_id) },
             run_hash: l.run_hashes.get(node_id).cloned(),
             size_bytes: Some(oref.size_bytes),
             cpu_seconds,
@@ -2937,21 +2945,21 @@ fn telemetry_report(
         });
     }
     for failure in l.all_failures {
-        let (error_type, error_message) = exception_of(&failure.error);
+        let (error_type, error_message, error_traceback) = exception_of(&failure.error);
         steps.push(StepReport {
             node_id: failure.node_id.clone(),
             kind: kind(&failure.node_id),
             outcome: StepOutcome::Failed,
             start_unix_ns: start_unix_ns + duration_ns,
             duration_ns: 0,
-            attempts: failure.error.attempts,
+            attempts: Some(failure.error.attempts),
             run_hash: l.run_hashes.get(&failure.node_id).cloned(),
             size_bytes: None,
             cpu_seconds: None,
             max_rss_bytes: None,
             error_type: Some(error_type),
             error_message: Some(error_message),
-            error_traceback: Some(failure.error.traceback.clone()).filter(|t| !t.is_empty()),
+            error_traceback,
         });
     }
     steps.sort_by(|a, b| (a.start_unix_ns, &a.node_id).cmp(&(b.start_unix_ns, &b.node_id)));
