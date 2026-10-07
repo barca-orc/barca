@@ -492,7 +492,9 @@ def test_a_damaged_shared_state_does_not_replace_the_local_history(machines, sta
     for args in (("get", "a_one.py", "--json"), ("status", "a_one.py", "--json")):
         out = a.barca(*args)
         assert out.returncode == 3, (args, out.stderr)
-        assert "cannot be opened as a database" in out.stderr, out.stderr
+        # Reworded with #243 (test_state_validation.py covers every kind of invalid object).
+        assert "is not a database barca can use" in out.stderr, out.stderr
+        assert str(state_uri) in out.stderr, out.stderr
         assert "left as it was" in out.stderr, out.stderr
         assert a.local_runs() == {a_first}
         no_pull_leftovers(a)

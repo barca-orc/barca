@@ -312,3 +312,110 @@ def test_a_pull_keeps_local_runs_that_were_never_pushed(backend, tmp_path):
     assert history("a") == sorted([a_first, a_local, b_first, a_next])
     b_next = get("b", "five")
     assert history("b") == sorted([a_first, a_local, b_first, a_next, b_next])
+
+
+# A shared history that is not a database barca can use never replaces the local one (#243).
+# The same on every backend: the object is downloaded next to the local database and checked
+# there, so nothing depends on what the store says about it.
+
+
+def _read_object(uri: str, tmp_path) -> bytes:
+    if uri.startswith("file://"):
+        with open(uri[len("file://") :], "rb") as f:
+            return f.read()
+    dest = tmp_path / f"read-{uuid.uuid4().hex}"
+    _storage.get_file(uri, dest)
+    return dest.read_bytes()
+
+
+def _write_object(uri: str, data: bytes, tmp_path) -> None:
+    if uri.startswith("file://"):
+        with open(uri[len("file://") :], "wb") as f:
+            f.write(data)
+        return
+    src = tmp_path / f"write-{uuid.uuid4().hex}"
+    src.write_bytes(data)
+    _storage.put_file(src, uri)
+
+
+@pytest.mark.parametrize("damage", ["garbage", "empty", "cut short between pages"])
+def test_an_invalid_shared_history_never_replaces_the_local_one(backend, tmp_path, damage):
+    import json
+    import subprocess
+
+    from barca.api import _find_binary
+
+    uri = backend.make_uri(tmp_path)
+    root = tmp_path / "a"
+    root.mkdir()
+    env = {
+        **{k: v for k, v in os.environ.items() if not k.startswith("BARCA_")},
+        **backend.env(),
+        "BARCA_STATE_URI": uri,
+        "BARCA_POOL_SIZE": "2",
+    }
+
+    def barca(*args: str, **extra: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [_find_binary(), *args],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            env={**env, **extra},
+        )
+
+    def get(name: str, **extra: str) -> str:
+        source = (
+            f"from barca import asset\n\n\n@asset()\ndef {name}() -> str:\n    return {name!r}\n"
+        )
+        (root / f"{name}.py").write_text(source)
+        out = barca("get", f"{name}.py", "--json", **extra)
+        assert out.returncode == 0, out.stderr
+        return json.loads(out.stdout)["run_id"]
+
+    def history() -> list[str]:
+        out = barca("history", "--all", "--json")
+        assert out.returncode == 0, out.stderr
+        return sorted(r["run_id"] for r in json.loads(out.stdout)["runs"])
+
+    def local_files() -> dict[str, bytes]:
+        return {
+            p.name: p.read_bytes()
+            for p in sorted((root / ".barca").iterdir())
+            if p.name.startswith("metadata.db") and not p.name.endswith(".lock")
+        }
+
+    pushed = get("one")  # creates the shared history
+    unpushed = get("two", BARCA_STATE="off")  # recorded here only
+    good = _read_object(uri, tmp_path)
+    assert good[:16] == b"SQLite format 3\x00" and len(good) % 4096 == 0
+    bad = {
+        "garbage": b"<html>503 Service Unavailable</html>",
+        "empty": b"",
+        "cut short between pages": good[: len(good) // 2 // 4096 * 4096],
+    }[damage]
+    _write_object(uri, bad, tmp_path)
+    before = local_files()
+
+    for args in (("get", "one.py", "--json"), ("status", "one.py", "--json")):
+        out = barca(*args)
+        assert out.returncode == 3, (args, out.returncode, out.stderr)
+        assert uri in out.stderr, out.stderr
+        assert "is not a database barca can use" in out.stderr, out.stderr
+        assert "was left as it was, and nothing was uploaded" in out.stderr, out.stderr
+        assert local_files() == before, args
+        assert _read_object(uri, tmp_path) == bad, "the command wrote to the shared history"
+    assert history() == sorted([pushed, unpushed])
+
+    # With a good object back, the machine carries on and uploads what it held back.
+    _write_object(uri, good, tmp_path)
+    after = get("three")
+    assert history() == sorted([pushed, unpushed, after])
+    final = tmp_path / "final.db"
+    assert pull(uri, final) is not None
+    import sqlite3
+
+    with sqlite3.connect(final) as conn:
+        assert conn.execute("PRAGMA integrity_check").fetchall() == [("ok",)]
+        assert sorted(r for (r,) in conn.execute("SELECT run_id FROM runs")) == history()
+    conn.close()
