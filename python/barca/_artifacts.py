@@ -400,10 +400,11 @@ def artifact_path(
 ) -> "Path | str":
     """Compute the deterministic artifact path for a node + format.
 
-    With a run_hash the artifact is content-addressed —
-    ``{dir}/{safe_node_id}/{run_hash}{ext}`` — so objects are immutable and
-    cache hits transfer across machines. Without one (older coordinators,
-    parallel() children, batch mode) the legacy node-id-keyed layout is used.
+    With a run_hash the path is ``{dir}/{safe_node_id}/{run_hash}{ext}``: it names the
+    computation (code and inputs), so it is the same on every machine and cache hits
+    transfer across machines. It does not name the bytes: computing the result again
+    (a refresh, a missing artifact) overwrites the file. Without a run_hash (older
+    coordinators, parallel() children, batch mode) the legacy node-id-keyed layout is used.
 
     Returns a Path for a local artifact_dir, or a URI string when
     artifact_dir is a remote prefix (e.g. BARCA_ARTIFACT_URI).

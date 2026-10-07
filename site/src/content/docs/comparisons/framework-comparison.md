@@ -3,7 +3,7 @@ title: "Framework Comparison: Code, Features and Overhead"
 description: The same small pipelines written for barca, Dagster, Prefect and Airflow, a feature list, and run times measured on 2026-06-05 with barca 0.1.5.
 ---
 
-Last measured: 2026-06-05, with barca 0.1.5 and Dagster (version not recorded), Prefect (version not recorded) and Airflow 3.2.2, on an Apple Silicon (M-series) Mac. Not re-run since; the current barca release is 0.18.0. Re-run tracked in [#277](https://github.com/barca-orc/barca/issues/277).
+Last measured: 2026-06-05, with barca 0.1.5 and Dagster (version not recorded), Prefect (version not recorded) and Airflow 3.2.2, on an Apple Silicon (M-series) Mac. Not re-run since. Re-run tracked in [#277](https://github.com/barca-orc/barca/issues/277).
 
 The Dagster and Prefect versions were whatever PyPI served as latest on that date, under Python
 3.12; barca ran under Python 3.14. The code samples for the other tools are the benchmark sources

@@ -321,11 +321,10 @@ async fn run_helper(
     if let Some(ref opts) = cfg.storage_options_json {
         cmd.env("BARCA_STORAGE_OPTIONS", opts);
     }
-    let mut child = cmd
-        .stdin(std::process::Stdio::piped())
+    cmd.stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
+        .stderr(std::process::Stdio::piped());
+    let mut child = crate::helper_proc::spawn(&mut cmd)
         .map_err(|e| BarcaError::Other(format!("cannot run {}: {e}", python.display())))?;
     let mut stdin = child
         .stdin

@@ -457,12 +457,11 @@ async fn run_inspector(
     if let Some(ref opts) = cfg.storage_options_json {
         cmd.env("BARCA_STORAGE_OPTIONS", opts);
     }
-    let mut child = cmd
-        .stdin(std::process::Stdio::piped())
+    cmd.stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("{}: {e}", python.display()))?;
+        .stderr(std::process::Stdio::piped());
+    let mut child =
+        crate::helper_proc::spawn(&mut cmd).map_err(|e| format!("{}: {e}", python.display()))?;
     let mut stdin = child.stdin.take().ok_or("no stdin")?;
     stdin
         .write_all(request.to_string().as_bytes())

@@ -108,7 +108,10 @@ in `error`:
   "started_at": 1791397140.41, "finished_at": 1791397140.41 }
 ```
 
-`result.steps` says what happened to each planned step, as in the CLI's JSON. `result.warnings`
+`result.steps` says what happened to each planned step, as in the CLI's JSON, including
+`artifact_mismatch: true` on a step whose artifact the store holds with other bytes than were
+recorded for it and on the steps that read it ([CLI contract](/reference/cli-contract/), "A
+store copy that differs from its recorded hash"). `result.warnings`
 is always an array: the plan-time warnings for the steps the run planned (`[]` when there are
 none), each `{ kind, node, param, message }`. The one kind so far is `unused_input`, a step that
 declares an input its function never uses; the server also prints each warning once on its
@@ -143,7 +146,7 @@ GET /health
 ```
 
 ```json
-{ "status": "ok", "version": "0.18.0", "read_only": false, "scheduler": true }
+{ "status": "ok", "version": "0.18.1", "read_only": false, "scheduler": true }
 ```
 
 `scheduler` is `true` when this server fires `Schedule(...)` nodes: on by default, `false` with

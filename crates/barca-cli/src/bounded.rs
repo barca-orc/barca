@@ -51,6 +51,7 @@ pub const STEP_FIELDS: &[&str] = &[
     "run_hash",
     "artifact",
     "warning",
+    "artifact_mismatch",
     "partitions",
     "env",
 ];
@@ -244,6 +245,7 @@ mod tests {
             detail: s(),
             run_hash: s(),
             artifact: s(),
+            artifact_mismatch: Some(true),
             warning: s(),
             partitions: Some(Default::default()),
             env: Some(Default::default()),

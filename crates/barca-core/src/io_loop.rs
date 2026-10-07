@@ -932,7 +932,7 @@ async fn spawn_worker(
     }
     let trace_on = std::env::var("BARCA_TRACE_TIMING").is_ok();
     let t_spawn = std::time::Instant::now();
-    let child = cmd.spawn().map_err(|e| format!("spawn: {e}"))?;
+    let child = crate::helper_proc::spawn_std(&mut cmd).map_err(|e| format!("spawn: {e}"))?;
     if trace_on {
         eprintln!(
             "[trace]  worker {worker_id} process spawned in {:.1}ms",

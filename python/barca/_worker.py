@@ -217,7 +217,7 @@ def _isolated_copy(value):
 class _ArtifactLRU:
     """Tier-1 read-through cache: deserialized artifacts hot in this process.
 
-    Keyed by (path, frame_type) — paths are content-addressed
+    Keyed by (path, frame_type) — paths are named by run hash
     ({node}/{run_hash}{ext}), so a path uniquely identifies content and
     invalidation is automatic (changed input → changed hash → new path → miss).
     Frame type is part of the key so a polars consumer never hits a cached pandas
@@ -574,6 +574,21 @@ def _sink_dest(path: str, node_id: str) -> str:
     return path + part
 
 
+def _through_symlink(dest: str) -> str:
+    """Where a sink is really written when its path is a symlink.
+
+    A sink path is the user's: barca writes the file there and changes nothing else.
+    `serialize` installs a file by renaming a temp file over its path, which would replace a
+    symlink by a regular file. So the link is followed first: the file it points to is
+    written (as `open(path, "w")` would do) and the link stays. A link to a directory then
+    fails the sink like a directory does.
+    """
+    local = _storage.local_path_of(dest)
+    if local is not None and os.path.islink(local):
+        return os.path.realpath(local)
+    return dest
+
+
 def _write_sinks(result, step, node_id, primary_fmt):
     """Write each @sink declared on the step. Error-isolated: a sink failure
     never fails the parent asset — it is logged and reported in the outcome."""
@@ -595,7 +610,7 @@ def _write_sinks(result, step, node_id, primary_fmt):
                     "Arrow table or DuckDB relation, or sink it as json or pickle"
                 )
             dest = _sink_dest(dest, node_id)
-            size = serialize(result, dest, fmt)
+            size = serialize(result, _through_symlink(dest), fmt)
             outcomes.append({"path": str(dest), "status": "ok", "size_bytes": size})
         except Exception as exc:
             print(
@@ -627,12 +642,18 @@ def _materialize(result, node_id, art_dir, step, elapsed, elapsed_in_artifact=Fa
     """
     explicit_fmt = step.get("serializer")
     fmt = resolve_format(result, detect_format(result, explicit=explicit_fmt))
-    # Content-addressed layout when the coordinator supplies a run hash.
+    # Run-hash layout when the coordinator supplies a run hash.
     # Batch mode's legacy partitioned loop reuses the step-level hash only for
     # unpartitioned steps (a per-step hash is wrong per-partition; the daemon
     # path gets a per-item hash from Rust and batch mode is test-only).
     run_hash = step.get("run_hash") if node_id == step.get("node_id") else None
     path = artifact_path(art_dir, node_id, fmt, run_hash)
+    # A directory where the artifact file belongs is not an artifact: it is moved out of the
+    # way (never deleted) so the step's result can be written. Sinks are the user's paths and
+    # never get this treatment.
+    local = _storage.local_path_of(path)
+    if local is not None:
+        _storage.make_way(local)
     _ser_wall0 = time.perf_counter()
     _ser_cpu0 = time.process_time()
     # A sensor's output is hashed: the coordinator folds the hash into the run hash of every
@@ -818,6 +839,15 @@ def run_batch(batch):
             _materialize(result, node_id, art_dir, step, elapsed)
 
 
+def _ignore_further_interrupts() -> None:
+    import signal
+
+    try:
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+    except ValueError:
+        pass  # not the main thread: nothing to change
+
+
 def _run_daemon_step(step, modules, art_dir, lru):
     """Execute one step in daemon mode and emit its result or error.
 
@@ -939,6 +969,12 @@ def _run_daemon_step(step, modules, art_dir, lru):
         # errors are OSError subclasses, so a socket-error catch here would
         # swallow them; genuine socket death surfaces when the emit below
         # fails, and that propagates to the caller.)
+        if isinstance(exc, KeyboardInterrupt):
+            # Ctrl-C reached this worker and interrupted the step. A second Ctrl-C (people
+            # press it twice) must not interrupt the report of the first: it would leave
+            # this function as an uncaught KeyboardInterrupt and print a traceback. The
+            # coordinator has the same signal and stops this worker.
+            _ignore_further_interrupts()
         wall = time.perf_counter() - t0
         message = str(exc)
         if isinstance(exc, SystemExit):
