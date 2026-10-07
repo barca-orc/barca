@@ -25,7 +25,7 @@ FILES = {
         import pkg.core
         import pkg.sub.deep as deep_mod
         from barca import asset
-        from helpers import compute
+        from helpers import compute, fact
         from numpy import array as arr
         from pkg import core, transform
         from pkg.sub.deep import deep
@@ -78,6 +78,12 @@ FILES = {
             return arr(json.dumps(osp.join("a", "b")))
 
 
+        @asset()
+        def recursive_helper() -> int:
+            # `fact` calls itself: it is in the cone twice, as 0.17.0 hashed it.
+            return fact(5)
+
+
         @asset(inputs={"rows": from_import})
         def downstream(rows: list, RATE=None) -> dict:
             out = [local_helper(len(r)) for r in rows]
@@ -99,6 +105,10 @@ FILES = {
 
         def compute(x):
             return json.dumps(_inner(x)) + shared() + osp.sep
+
+
+        def fact(n):
+            return 1 if n < 2 else n * fact(n - 1)
 
 
         def unused():
@@ -165,6 +175,7 @@ RUN_HASHES_0_17_0 = {
     "pipeline.py:module_attr": "553577bf11607c545f127d09b0fcca2b19bec8c2790f676598b570ca35e29f33",
     "pipeline.py:no_deps": "aded58bb5cd144572b0a1c9c4058a89dc7ef543afe5267467f5062214bb1fd23",
     "pipeline.py:package_reexport": "4acda3d4a0afe22a0b322e83651b1ed3db122749e83b428cf82f821dc7a92767",
+    "pipeline.py:recursive_helper": "5f6fac423a49e526665f44a55aca401089ede0f22455f825a410b245070b2451",
     "pipeline.py:third_party": "e3892716fb7c5a003ea61f8abc2dc1efbf4b4cb509172309891af93e5a5bad8e",
 }
 

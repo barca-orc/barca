@@ -36,9 +36,11 @@ use std::cell::OnceCell;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
 
-/// How many project modules deep an import chain is followed (`a` imports from `b` imports
-/// from `c` ...). It bounds re-export cycles; past it a name contributes only its marker.
-const MAX_IMPORT_DEPTH: usize = 5;
+/// How many project modules along an import chain are followed: a step that imports from `m1`,
+/// which imports from `m2`, ... reaches `m6` and no further (`barca docs cache`: "more than six
+/// project modules away"). It bounds re-export cycles; past it a name contributes only its
+/// marker. Depths count from 0 (the module the pipeline file imports), so the limit is exclusive.
+const MAX_MODULES_DEEP: usize = 6;
 
 // ─── Modules ─────────────────────────────────────────────────────────────────
 
@@ -346,8 +348,13 @@ impl Cone<'_> {
 
     /// Rule 3: `module`'s definition of `name` and what it uses, following re-exports.
     /// `bound` is the name the importing code bound it to.
+    ///
+    /// Deliberately not deduplicated through `visited`: a definition imported here and also
+    /// reached from inside its module (a recursive helper, say) is added twice. Every release
+    /// since 0.10 has hashed it that way; adding it once would change those hashes and
+    /// recompute their caches (`recursive_helper_hash_from_0_17_0_is_unchanged`).
     fn import(&mut self, module: &str, name: &str, bound: &str, depth: usize) {
-        let found = (depth <= MAX_IMPORT_DEPTH)
+        let found = (depth < MAX_MODULES_DEEP)
             .then(|| self.modules.module(module))
             .flatten();
         let def = found.as_ref().and_then(|m| m.definitions().get(name));
@@ -390,7 +397,7 @@ impl Cone<'_> {
         let Some(module) = self.modules.module(name) else {
             return;
         };
-        if depth > MAX_IMPORT_DEPTH || !self.visited.insert(format!("{name}:*")) {
+        if depth >= MAX_MODULES_DEEP || !self.visited.insert(format!("{name}:*")) {
             return;
         }
         self.parts
@@ -470,7 +477,10 @@ fn collect_definitions(source: &str, package: Option<&str>) -> HashMap<String, M
                     defs.insert(n.id.to_string(), ModuleDef::Assignment(code(assign, uses)));
                 }
             }
-            // A name that is already defined keeps its earlier definition.
+            // In Python the later binding of a name wins. Here `import name` does not replace
+            // an earlier definition of `name` (a `from` import does): that is what 0.17 hashed,
+            // and making it Python's would change the hash of a file that defines a name and
+            // later imports a module of the same name (`import_does_not_replace_...` pins it).
             Stmt::Import(_) => {
                 for (bound, def) in import_bindings(stmt, package) {
                     defs.entry(bound).or_insert(def);
@@ -1882,6 +1892,96 @@ def my_asset():
             hash_of(entry, &nested(2), &[])
         );
     }
+
+    #[test]
+    fn module_level_tuple_and_augmented_assignments_are_not_tracked() {
+        // Documented under "Not followed". Tracking either would add the constant to the cone
+        // of every step that already uses one, changing hashes 0.17 computed.
+        let tuple = |b: u32| format!("A, B = 1, {b}\n\ndef my_asset():\n    return B\n");
+        assert_eq!(
+            cone_hash(&tuple(2), "my_asset"),
+            cone_hash(&tuple(3), "my_asset")
+        );
+        let augmented = |n: u32| format!("A = 1\nA += {n}\n\ndef my_asset():\n    return A\n");
+        assert_eq!(
+            cone_hash(&augmented(2), "my_asset"),
+            cone_hash(&augmented(3), "my_asset")
+        );
+    }
+
+    // ─── Hashing quirks kept on purpose ──────────────────────────────────────────
+
+    /// A helper that calls itself is in the cone twice: once as the imported name, once as a
+    /// name its own body uses. Odd, but it is what 0.17.0 hashed (the same value is pinned end
+    /// to end in `python/tests/test_run_hash_golden.py`), so it stays.
+    #[test]
+    fn recursive_helper_hash_from_0_17_0_is_unchanged() {
+        let helper = "def fact(n):\n    return 1 if n < 2 else n * fact(n - 1)";
+        let entry = "from helpers import fact\n\ndef my_asset():\n    return fact(5)\n";
+        let mut twice = Sha256::new();
+        for _ in 0..2 {
+            twice.update(format!("helpers:fact:{helper}\n").as_bytes());
+        }
+        assert_eq!(
+            hash_of(entry, &one("helpers", &format!("{helper}\n")), &[]),
+            format!("{:x}", twice.finalize())
+        );
+    }
+
+    /// `import name` after a definition of `name` keeps the definition (Python would rebind
+    /// the name to the module); a `from` import replaces it. Kept as 0.17 hashed it.
+    #[test]
+    fn import_does_not_replace_an_earlier_definition_of_the_same_name() {
+        let entry = |n: u32| {
+            format!(
+                "def helpers():\n    return {n}\n\nimport helpers\n\ndef my_asset():\n    return helpers()\n"
+            )
+        };
+        let project = one("helpers", HELPERS_V1);
+        assert_ne!(
+            hash_of(&entry(1), &project, &[]),
+            hash_of(&entry(2), &project, &[])
+        );
+        // A `from` import does replace it: the function above it is no longer what is used.
+        let from = |n: u32| {
+            format!(
+                "def compute():\n    return {n}\n\nfrom helpers import compute\n\ndef my_asset():\n    return compute()\n"
+            )
+        };
+        assert_eq!(
+            hash_of(&from(1), &project, &[]),
+            hash_of(&from(2), &project, &[])
+        );
+        assert_ne!(
+            hash_of(&from(1), &project, &[]),
+            hash_of(&from(1), &one("helpers", HELPERS_V2), &[])
+        );
+    }
+
+    /// Two helpers import the same name from different modules outside the project: both add
+    /// a marker labelled with that name. 0.17.0 ordered those two by a per-process random hash
+    /// seed, so the step had two possible hashes and missed its cache at random. The parts are
+    /// now sorted by label and text.
+    #[test]
+    fn same_name_imported_from_two_non_project_modules_hashes_stably() {
+        let entry = "from first import load\nfrom second import save\n\ndef my_asset():\n    return save(load())\n";
+        let project = sources(&[
+            (
+                "first",
+                "from numpy import array\n\ndef load():\n    return array([1])\n",
+            ),
+            (
+                "second",
+                "from jax.numpy import array\n\ndef save(x):\n    return array(x)\n",
+            ),
+        ]);
+        for _ in 0..50 {
+            assert_eq!(hash_of(entry, &project, &[]), STABLE_TWO_MARKERS);
+        }
+    }
+
+    const STABLE_TWO_MARKERS: &str =
+        "a1755524889bd9195e25225e96c217f3fede7587f0b64dc6be0d5c17b08e638a";
 
     #[test]
     fn import_chains_are_followed_six_modules_deep() {
