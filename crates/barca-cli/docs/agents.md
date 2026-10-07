@@ -103,7 +103,9 @@ read the outcome without parsing stderr: `{"status": "failed", "failed_node": ..
 `get`/`run` JSON fields: `status` (`success`, or `failed` as above), `run_id`, `elapsed_seconds`,
 `steps_executed` (0 means everything was a cache hit), `phases`, `steps` (what happened to each
 step: `status` ran/cached/partial and why, plus `env`, the declared environment variable values
-used, for nodes with `env=[...]`),
+used, for nodes with `env=[...]`, and `artifact_mismatch: true` when the artifact store's copy
+of the step's result, or of an input it read, is not the one that was recorded: `barca docs
+remote`),
 `final_output`. `final_output` is the value for json artifacts and
 `{"_barca_artifact": {"path", "format", "size_bytes"}}` for parquet and pickle
 (`barca docs types`).
@@ -219,6 +221,10 @@ it is there for ordering only. Any of the three makes the warning go away; there
 configuration key that turns it off. A name that appears inside a string in the body (SQL, a
 pandas `query` expression) counts as used. The list is the same on every run of the same command, cached or not, and never
 changes the exit code (`barca docs assets`, "Unused inputs"; `barca docs contract`).
+
+The array holds plan warnings only. What a run finds out while it runs is on the step it
+concerns: `steps[].warning`, and for a store copy that differs from its recorded hash the marker
+`steps[].artifact_mismatch` (`barca docs remote`, "Checking a local copy against the store").
 
 ## Environment variables
 
