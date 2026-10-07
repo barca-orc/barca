@@ -10,3 +10,9 @@ phases[].streams[].steps : array
 phases[].streams[].steps[] : string
 phases[].streams[].stream_id : string
 total_steps : integer
+warnings : array
+warnings[] : object
+warnings[].kind : string
+warnings[].message : string
+warnings[].node : string
+warnings[].param : string

@@ -215,6 +215,14 @@ fn try_extract_function(
         Vec::new()
     };
     let (param_types, return_type) = extract_type_annotations(func);
+    let unused_inputs =
+        crate::unused_inputs::unused_inputs(func, &inputs, &param_types, &|local| {
+            use crate::unused_inputs::Imported;
+            if let Some((module, name)) = names.from_imports.get(local) {
+                return Some(Imported::Name { module, name });
+            }
+            names.modules.get(local).map(|m| Imported::Module(m))
+        });
 
     let start = func.range().start().to_usize();
     let end = func.range().end().to_usize();
@@ -243,6 +251,7 @@ fn try_extract_function(
         return_type,
         parallel_calls,
         env,
+        unused_inputs,
     }))
 }
 

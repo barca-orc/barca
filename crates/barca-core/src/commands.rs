@@ -15,6 +15,7 @@ use crate::parse::extract_nodes;
 use crate::planner::{self, ExecutionPlan, Phase, ResourceConfig};
 use crate::state_sync;
 use crate::transfer::{ArtifactLayout, TransferClient};
+use crate::warnings::PlanWarning;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::env;
@@ -140,7 +141,7 @@ fn resolve_targets(
 /// shared by several targets appears (and runs) once. No targets means everything the command
 /// covers: for `get`, every asset and sensor (tasks are skipped: get is for assets, run is for
 /// tasks); for anything else (`status`), the whole DAG.
-fn plan_for_targets(
+pub(crate) fn plan_for_targets(
     dag: &Dag,
     target_ids: &[&str],
     config: &ResourceConfig,
@@ -1136,6 +1137,9 @@ pub struct GetResult {
     /// What happened to each planned step in this run (ran / cached / partial, and why).
     #[serde(default)]
     pub steps: Vec<StepReport>,
+    /// Plan-time warnings for the steps this run planned (`[]` when there are none).
+    #[serde(default)]
+    pub warnings: Vec<PlanWarning>,
 }
 
 /// The result of `barca get|run a,b` (several targets): one run over the union of the targets'
@@ -1148,6 +1152,8 @@ pub struct MultiResult {
     pub phases: usize,
     /// What happened to each planned step (shared upstream steps appear once).
     pub steps: Vec<StepReport>,
+    /// Plan-time warnings for the steps this run planned (`[]` when there are none).
+    pub warnings: Vec<PlanWarning>,
     /// Each target by the name it was given, in the order given (serialized as a map).
     #[serde(serialize_with = "serialize_targets")]
     pub targets: Vec<(String, TargetOutcome)>,
@@ -1244,6 +1250,8 @@ pub struct ExplainResult {
     pub targets: Vec<(String, TargetPrediction)>,
     pub steps: Vec<StepReport>,
     pub summary: ExplainSummary,
+    /// Plan-time warnings for the steps the command would plan: the list the real run reports.
+    pub warnings: Vec<PlanWarning>,
 }
 
 /// One target of a multi-target dry run.
@@ -1274,7 +1282,7 @@ impl Serialize for ExplainResult {
                 s.collect_map(self.0.iter().map(|(k, v)| (k, v)))
             }
         }
-        let mut s = serializer.serialize_struct("ExplainResult", 5)?;
+        let mut s = serializer.serialize_struct("ExplainResult", 6)?;
         s.serialize_field("dry_run", &self.dry_run)?;
         s.serialize_field("command", &self.command)?;
         if self.targets.len() > 1 {
@@ -1284,6 +1292,7 @@ impl Serialize for ExplainResult {
         }
         s.serialize_field("steps", &self.steps)?;
         s.serialize_field("summary", &self.summary)?;
+        s.serialize_field("warnings", &self.warnings)?;
         s.end()
     }
 }
@@ -1316,6 +1325,9 @@ pub struct ExplainSummary {
 pub struct PlanResult {
     pub total_steps: usize,
     pub phases: Vec<PlanPhase>,
+    /// Plan-time warnings for the planned steps (`[]` when there are none).
+    #[serde(default)]
+    pub warnings: Vec<PlanWarning>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1596,6 +1608,7 @@ impl Executed {
                     steps_executed: r.steps_executed,
                     phases: r.phases,
                     steps: r.steps,
+                    warnings: r.warnings,
                 }));
                 Err(BarcaError::WorkerFailed(Box::new(failed)))
             }
@@ -1611,6 +1624,7 @@ impl Executed {
             steps_executed: r.steps_executed,
             phases: r.phases,
             steps: r.steps,
+            warnings: r.warnings,
             targets: self.targets,
         }
     }
@@ -1641,7 +1655,7 @@ pub async fn explain(
     {
         eprintln!("{note}");
     }
-    explain_dag(
+    let result = explain_dag(
         &dag,
         cfg,
         target_names,
@@ -1650,7 +1664,9 @@ pub async fn explain(
         no_cache,
         command_label,
     )
-    .await
+    .await?;
+    crate::warnings::print(&result.warnings);
+    Ok(result)
 }
 
 /// [`explain`] on an already-built DAG (`barca status` reuses its DAG for the node listing).
@@ -1674,6 +1690,7 @@ pub(crate) async fn explain_dag(
     if let CachePolicy::RefreshSelective { names, .. } = &policy {
         validate_refresh_names(dag, &target_ids, names, command_label == "get")?;
     }
+    let warnings = crate::warnings::for_plan(dag, &exec_plan);
 
     // Shared remote state: pull it like a real run, so the cache check sees every machine's
     // materializations. A pull keeps the local rows that were never pushed, so this is safe
@@ -1892,6 +1909,7 @@ pub(crate) async fn explain_dag(
         targets: per_target,
         steps,
         summary,
+        warnings,
     })
 }
 
@@ -1983,6 +2001,9 @@ async fn execute(
     if let CachePolicy::RefreshSelective { names, .. } = &policy {
         validate_refresh_names(&dag, &target_ids, names, command_label == "get")?;
     }
+    // Plan-time warnings for the steps this command planned, before anything runs.
+    let plan_warnings = crate::warnings::for_plan(&dag, &exec_plan);
+    crate::warnings::print(&plan_warnings);
 
     db::ensure_env_dirs(&cfg.env)?;
     let db_path = cfg.db_path.clone();
@@ -2947,6 +2968,7 @@ async fn execute(
             phases: exec_plan.phases.len(),
             final_output,
             steps: step_reports,
+            warnings: plan_warnings,
         },
         targets: outcomes,
         step_failure: step_failure.map(|(node, message)| crate::FailedStep {
@@ -3783,7 +3805,10 @@ pub async fn plan(
     };
     let plan = planner::plan_from_dag(&dag, &config);
 
+    let warnings = crate::warnings::for_plan(&dag, &plan);
+    crate::warnings::print(&warnings);
     Ok(PlanResult {
+        warnings,
         total_steps: plan.total_steps,
         phases: plan
             .phases
@@ -4444,6 +4469,7 @@ def lone() -> int:
             targets: Vec::new(),
             steps: Vec::new(),
             summary: ExplainSummary::default(),
+            warnings: Vec::new(),
         };
         let one = serde_json::to_value(&r).unwrap();
         assert_eq!(one["target"], "a");
@@ -4483,6 +4509,7 @@ def lone() -> int:
             steps_executed: 0,
             phases: 0,
             steps: Vec::new(),
+            warnings: Vec::new(),
             targets: vec![
                 ("zeta".to_string(), outcome("success")),
                 ("alpha".to_string(), outcome("failed")),

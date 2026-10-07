@@ -135,6 +135,8 @@ async fn plan_returns_phases() {
     assert_eq!(resp.status(), StatusCode::OK);
     let json = body_json(resp).await;
     assert_eq!(json["total_steps"], 2);
+    // Plan warnings (`barca docs contract`): always an array, empty for this pipeline.
+    assert_eq!(json["warnings"], serde_json::json!([]));
     assert!(json["phases"].is_array());
 }
 

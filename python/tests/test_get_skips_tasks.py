@@ -61,8 +61,8 @@ def report(m: dict) -> dict:
     return {"reported": m["n"]}
 
 
-@task(inputs={"r": report})
-def notify(r: dict) -> None:
+@task(inputs={"_r": report})
+def notify(_r) -> None:
     mark("notify")
 """
 

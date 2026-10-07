@@ -74,6 +74,7 @@ export default defineConfig({
             { label: 'Parallel Tasks', slug: 'patterns/04-parallel-tasks' },
             { label: 'Conditional Execution', slug: 'patterns/05-conditional-execution' },
             { label: 'Error Handling', slug: 'patterns/06-error-handling' },
+            { label: 'Large Inputs', slug: 'patterns/08-large-inputs' },
             { label: 'Anti-Patterns', slug: 'patterns/07-anti-patterns' },
           ],
         },

@@ -201,6 +201,25 @@ Could not parse .netrc file
 Fix the cause when you can (here: repair or remove `~/.netrc`); the summary line tells you how
 much of it there was.
 
+## Plan warnings
+
+`plan`, `get`, `run` and `--dry-run` check the steps they plan before anything runs and report
+what they find twice: one `[barca] warning: <message>` line per finding on stderr (every mode,
+before the first step line), and the `warnings` array in the JSON on stdout, always present and
+`[]` when there is nothing:
+
+```json
+{"kind": "unused_input", "node": "pipeline.py:report", "param": "raw", "message": "..."}
+```
+
+Read the array, not stderr. `unused_input` is the only kind so far: the step declares an input its
+function never uses, which is still loaded and still part of its cache key. The fix is in the
+message: use the input, remove it from `inputs=`, or rename the parameter with a leading `_` when
+it is there for ordering only. Any of the three makes the warning go away; there is no flag or
+configuration key that turns it off. A name that appears inside a string in the body (SQL, a
+pandas `query` expression) counts as used. The list is the same on every run of the same command, cached or not, and never
+changes the exit code (`barca docs assets`, "Unused inputs"; `barca docs contract`).
+
 ## Environment variables
 
 A node that declares `env=["SOURCE_CSV"]` has those values in its cache key, and each `--agent`
