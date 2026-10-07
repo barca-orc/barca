@@ -144,6 +144,16 @@ A run present on both sides is compared step by step only when the blob holds it
 `running` or `interrupted` and its `(status, steps_executed)` differs from the local row
 (a run's `steps_executed` moves with every step it records).
 
+*Finding the unpushed rows does not read the history.* History is append-only: a run's
+row keeps its row id, a pull appends the rows it carries after the last row of the
+download, and a push uploads the whole file, so every blob is its predecessor plus
+appended rows and a local database is a blob plus appended rows. Local runs are therefore
+read from the newest backwards, each looked up in the blob by `run_id` (a unique index),
+until one is found there in the same row: from that row back, both hold the same runs.
+Unfinished runs are found through an index on `runs.status`. A blob that shares no
+history with the local database (the shared state was reset) never matches, and every
+local run is carried.
+
 Not carried, by decision: a step row with no `run_id` (written before 0.17, which did not
 record it, so it cannot be told from a pushed row); a successful step of a run made on
 this host whose artifact is not reachable from this machine (a local path that does not
@@ -151,75 +161,53 @@ exist; a store URI is not checked), because it would be a cache hit with nothing
 it (steps of other hosts' runs are never filtered: they came from the shared state); cost
 estimates and scheduler state, which are not history.
 
-**The base record.** `<db>.base` is a local file, never uploaded, written only under the
-database's cross-process lock: by a pull when it swaps (first with an empty token, "swap
-in progress", then with the pulled blob's token once the file is in place) and by a push
-after its upload. Every write increments a sequence number. Beside the token it holds the
-*identity of the main database file at that instant*: device, inode, size, modification
-time, status-change time and a hash of the 100-byte SQLite header (which contains the
-file change counter and the schema cookie); whether the pull carried rows; and whether the
-record is *settled*, meaning a file created at that moment in the same directory already
-had later timestamps than the database (so that any later write to the database must
-change them, however coarse the filesystem's clock; barca waits up to 15 ms for this and
-otherwise writes the record unsettled).
+**The base record.** A download takes time and holds no lock, so by the time a pull swaps
+it in, another process may have pulled a newer blob or pushed. `<db>.base` is a local
+file, never uploaded, written only under the database's cross-process lock: before every
+swap, after every swap and after every push. It holds a sequence number, incremented on
+every write (started from the clock when there is no readable predecessor), and a digest
+of what the last pull carried, used only to print the `kept` line once per set of rows.
 
-*Trust rule.* The record is trusted only when all of these hold: its token is not empty,
-no rows were carried, it is settled, the write-ahead log is absent or empty, and the main
-file's identity read now equals the recorded one. Then the local database is provably the
-very file the record was written for with nothing written since, hence exactly a blob
-that was in the shared state. In every other situation (a database created fresh,
-replaced, restored from a copy, written to by a run that did not push or by another
-program, a record that is missing, unreadable, copied from another directory or
-environment, unsettled, or left by a swap that was cut short) nothing is concluded from
-it and the pull takes the full path: download, carry, swap. Opening a database that does
-not exist deletes the record first, as a second line of defence; the rule does not depend
-on it.
-
-A trusted record allows two shortcuts and nothing else:
-
-- *Unchanged.* If the shared state's token equals the recorded one, nothing is downloaded
-  and the local database is not touched.
-- *Untouched.* A download takes the local database's place without either file being
-  opened, since there is nothing to carry.
-
-Independently of trust, the record guards the swap:
-
-- *Superseded.* A pull reads the record's bytes before downloading and again under the
-  lock before swapping. If they changed, another process replaced or pushed the local
-  database meanwhile and the download may be older: it is discarded. If the record is now
-  trusted, the command continues on the local database with the recorded token (a later
-  push is conditional on it, so a push by another machine is still detected); otherwise
-  it pulls again, and the third attempt holds the lock from before the record is read
-  until the swap is done, so it cannot be overtaken.
+A pull reads the file's bytes before downloading and again under the lock before
+swapping. If they differ, the download is discarded and the pull starts again; the third
+attempt holds the lock from before the first read until the swap is done, so it cannot be
+overtaken. Nothing else is ever concluded from the file, in particular nothing about what
+the local database contains: every pull downloads, carries and swaps. A missing,
+unreadable or foreign file therefore cannot cause a loss (the two reads are equal, or
+they differ and the pull downloads again), and a file left by a process that died
+mid-swap is just another state.
 
 **Push.** Under the lock the write-ahead log is folded in and the main file is copied to
 `<db>.push-<host>-<pid>-<n>`; the lock is released and the copy is uploaded
 conditionally. The upload therefore sends one consistent database and keeps no other
-command waiting. After a successful upload the lock is taken again and the record is
-written with the new token only if the record's bytes, the main file's identity and the
-empty log are all as they were when the copy was taken; otherwise the record is left as
-it is, which the trust rule then rejects.
+command waiting. Afterwards the lock is taken again and the base record is advanced. If
+the record had changed (a pull replaced the database) or the write-ahead log is no
+longer empty (something was written; every write goes there first), the push is treated
+like a conflict: pull, replay this run's rows, push again, bounded by `push_retries`;
+when those are used up the upload that succeeded stands and the later rows stay local
+until the next push.
 
 **Reset and rollback.** Because unpushed means "absent from the pulled blob", removing
 history takes more than changing the blob. If the blob is deleted, the next run on any
 machine creates it again from its whole local database (the bootstrap rule). If it is
-replaced by an older one, a machine with a trusted record follows it, and a machine with
-anything unpushed brings back every run it holds. Resetting on purpose means deleting the
-blob and, on each machine, `metadata.db`, `metadata.db-wal` and `metadata.db.base`.
+replaced by an older one, every machine brings back the runs it holds that the older one
+lacks. Resetting on purpose means deleting the blob and, on each machine, `metadata.db`,
+`metadata.db-wal` and `metadata.db.base`.
 
-The sequence, when the shared state changed; all of it under the database's
-cross-process lock except the download:
+The sequence of every pull; all of it under the database's cross-process lock except the
+download:
 
 1. Read the base record, then download the blob to `<db>.pull-<host>-<pid>-<n>` next to
    the database.
-2. Still current: re-read the base record; if it changed, stop (superseded).
-3. Carry (skipped when untouched): copy the unpushed rows from the local database onto
-   the downloaded file, in one transaction. The local database is only read.
+2. Still current: re-read the base record; if it changed, discard the download and start
+   again.
+3. Carry: copy the unpushed rows from the local database onto the downloaded file, in one
+   transaction.
 4. Fold: checkpoint both write-ahead logs into their main files and verify they are
    empty. Each database is now one self-contained file.
-5. Swap: write the base record with an empty token, remove the local sidecar files
-   (empty by now), fsync the downloaded file when it carries rows that exist nowhere
-   else, rename it over the local database, and write the base record with its token.
+5. Swap: advance the base record, remove the local sidecar files (empty by now), fsync
+   the downloaded file when it carries rows that exist nowhere else, rename it over the
+   local database, and advance the base record again.
 
 A process killed before the rename leaves the old local database whole, unpushed rows
 included; one killed after it leaves the new one whole. The next pull starts again from

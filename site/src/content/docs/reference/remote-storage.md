@@ -136,35 +136,31 @@ After a pull the local copy is the shared history plus what was recorded only on
   this machine it is left out (stderr: `left out 1 step whose result file is no longer here`)
   and runs again; the run it belonged to is kept.
 
-A pull does only what is needed, and takes a shortcut only when it can prove the local copy is
-the very file the last pull or upload left, with nothing written to it since. Barca records that
-file's identity (device and inode, size, modification and status-change times, SQLite header)
-in `.barca/metadata.db.base` and checks it again before trusting the record. When it matches:
-
-- nobody uploaded since: nothing is downloaded (`[barca] shared state unchanged`);
-- somebody did: the download simply takes the local copy's place.
-
-In every other case the two are compared, which reads the list of runs on each side and keeps
-what only the local copy has: after a run that did not upload (killed, failed upload,
-`BARCA_STATE=off`), after anything else wrote to the file, when the file was deleted and created
-again (`barca history`, `barca stats`, `barca get` and `barca run` create it), restored from a
-copy, or when the record is missing, belongs to another directory, or cannot be checked (for
-example on a filesystem whose timestamps do not move within 15 ms).
+Every pull works the same way, whatever state the local copy is in: download the shared
+history, add to the download what only the local copy has, and put the result in the local
+copy's place. Nothing is assumed about the local copy, so it does not matter whether it was
+written by a run that did not upload, deleted and created again (`barca history`, `barca stats`,
+`barca get` and `barca run` create it), restored from a backup, or changed by another program.
+Finding what only the local copy has reads the end of its history and its indexes, not the whole
+of it, so a long history does not make a pull slower.
 
 A pull is safe while a run is going in the same project. `--dry-run`, `barca status` and a second
 `barca get` or `barca run` pull as usual; the running run's row and the steps it has finished stay
 in the local copy, so `barca status` shows its progress next to what other machines uploaded.
 Every run finishes and uploads; one that finds the shared history changed merges as described
 above. An upload sends a copy of the history taken at that moment, so other barca commands in
-the project do not wait for it, however slow it is.
+the project do not wait for it, however slow it is; if one of them writes to the local copy
+meanwhile, the run uploads once more when the first upload is done (it reports this as a
+conflict retry).
 
 Files next to the database, all local: a download goes to
 `.barca/metadata.db.pull-<host>-<pid>-<n>` and is moved into place once complete, an upload is
-sent from `.barca/metadata.db.push-<host>-<pid>-<n>`, and `.barca/metadata.db.base` is the record
-described above. Leftovers of a killed command are removed by a later pull. You can delete any of
-them when no barca command is running: without the record the next pull compares instead of
-taking a shortcut. If barca is killed during a pull, the local copy is either the old one, whole,
-or the new one, whole.
+sent from `.barca/metadata.db.push-<host>-<pid>-<n>`, and `.barca/metadata.db.base` is a counter
+that changes every time the local copy is replaced or uploaded, which is how a pull notices
+that its download was overtaken. Leftovers of a killed command are removed by a later pull. You
+can delete any of them when no barca command is running; nothing is concluded from the counter
+about what the local copy holds. If barca is killed during a pull, the local copy is either the
+old one, whole, or the new one, whole.
 
 When something is wrong, the local copy is replaced only if it certainly holds no history:
 
@@ -178,14 +174,13 @@ When something is wrong, the local copy is replaced only if it certainly holds n
   that says why: it is not a database (no SQLite header, cut short, or reported corrupt when
   read), it is empty, it is a database without barca's tables, or only a `-wal` file was left.
 
-**Resetting or rolling back the shared history.** A machine keeps whatever the shared history
-lacks, so removing history takes more than changing the shared file:
+**Resetting or rolling back the shared history.** Every machine keeps whatever the shared
+history lacks, so removing history takes more than changing the shared file:
 
 - If `state/metadata.db` is deleted, the next `barca get` or `barca run` on any machine creates
   it again from that machine's whole local copy.
-- If it is replaced by an older copy, a machine whose local copy is in sync follows it at its
-  next pull, and a machine that has anything not yet uploaded keeps every run the older copy
-  lacks and uploads them with its next run.
+- If it is replaced by an older copy, each machine keeps every run the older copy lacks at its
+  next pull, and uploads them with its next run.
 - To reset on purpose: with no barca command running anywhere, delete the shared file and, on
   each machine, `rm -f .barca/metadata.db .barca/metadata.db-wal .barca/metadata.db.base` (for
   a named environment the same three files under `.barca/envs/<env>/`). Result files are not
