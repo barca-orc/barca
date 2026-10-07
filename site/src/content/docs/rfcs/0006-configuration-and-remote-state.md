@@ -154,38 +154,58 @@ estimates and scheduler state, which are not history.
 **The base record.** `<db>.base` is a local file, never uploaded, written only under the
 database's cross-process lock: by a pull when it swaps (first with an empty token, "swap
 in progress", then with the pulled blob's token once the file is in place) and by a push
-after its upload. Every write increments a sequence number. Invariant: when its token is
-not empty, the local database holds every row of the blob with that token. It also holds
-the main file's size and modification time and whether the last pull carried rows. It is
-a guard and an optimisation, never the definition of unpushed; without it every pull
-downloads and compares. It gives three rules:
+after its upload. Every write increments a sequence number. Beside the token it holds the
+*identity of the main database file at that instant*: device, inode, size, modification
+time, status-change time and a hash of the 100-byte SQLite header (which contains the
+file change counter and the schema cookie); whether the pull carried rows; and whether the
+record is *settled*, meaning a file created at that moment in the same directory already
+had later timestamps than the database (so that any later write to the database must
+change them, however coarse the filesystem's clock; barca waits up to 15 ms for this and
+otherwise writes the record unsettled).
+
+*Trust rule.* The record is trusted only when all of these hold: its token is not empty,
+no rows were carried, it is settled, the write-ahead log is absent or empty, and the main
+file's identity read now equals the recorded one. Then the local database is provably the
+very file the record was written for with nothing written since, hence exactly a blob
+that was in the shared state. In every other situation (a database created fresh,
+replaced, restored from a copy, written to by a run that did not push or by another
+program, a record that is missing, unreadable, copied from another directory or
+environment, unsettled, or left by a swap that was cut short) nothing is concluded from
+it and the pull takes the full path: download, carry, swap. Opening a database that does
+not exist deletes the record first, as a second line of defence; the rule does not depend
+on it.
+
+A trusted record allows two shortcuts and nothing else:
 
 - *Unchanged.* If the shared state's token equals the recorded one, nothing is downloaded
   and the local database is not touched.
-- *Superseded.* A pull reads the record before downloading and again under the lock
-  before swapping. If it changed, another process replaced or pushed the local database
-  meanwhile and the download may be older: it is discarded. The command continues on the
-  local database with the recorded token (a later push is conditional on it, so a push by
-  another machine is still detected); if the token is empty (a swap was cut short) it
-  pulls again.
-- *Untouched.* If the record says no rows were carried, the write-ahead log is empty and
-  the main file's size and time are as recorded, nothing was written locally since: the
-  local database is exactly a shared blob, there is nothing to carry, and the download
-  takes its place without either file being opened.
+- *Untouched.* A download takes the local database's place without either file being
+  opened, since there is nothing to carry.
 
-A push holds the same lock from its checkpoint to the write of the record, so the file it
-uploads is consistent and no pull can swap under it.
+Independently of trust, the record guards the swap:
 
-**Reset and rollback.** Because unpushed means "absent from the pulled blob", a machine
-that has anything unpushed when the shared blob is deleted or replaced by an older one
-brings back every run it holds; an untouched machine follows the shared blob. Resetting on
-purpose means also deleting `metadata.db`, `metadata.db-wal` and `metadata.db.base` on
-each machine.
+- *Superseded.* A pull reads the record's bytes before downloading and again under the
+  lock before swapping. If they changed, another process replaced or pushed the local
+  database meanwhile and the download may be older: it is discarded. If the record is now
+  trusted, the command continues on the local database with the recorded token (a later
+  push is conditional on it, so a push by another machine is still detected); otherwise
+  it pulls again, and the third attempt holds the lock from before the record is read
+  until the swap is done, so it cannot be overtaken.
 
-Carried rows are local until the next push from that machine (the end of its next
-`get`/`run`); read-only commands carry them and push nothing. A killed run therefore
-resumes on its own machine at once and reaches other machines, as `interrupted`, with
-that next push.
+**Push.** Under the lock the write-ahead log is folded in and the main file is copied to
+`<db>.push-<host>-<pid>-<n>`; the lock is released and the copy is uploaded
+conditionally. The upload therefore sends one consistent database and keeps no other
+command waiting. After a successful upload the lock is taken again and the record is
+written with the new token only if the record's bytes, the main file's identity and the
+empty log are all as they were when the copy was taken; otherwise the record is left as
+it is, which the trust rule then rejects.
+
+**Reset and rollback.** Because unpushed means "absent from the pulled blob", removing
+history takes more than changing the blob. If the blob is deleted, the next run on any
+machine creates it again from its whole local database (the bootstrap rule). If it is
+replaced by an older one, a machine with a trusted record follows it, and a machine with
+anything unpushed brings back every run it holds. Resetting on purpose means deleting the
+blob and, on each machine, `metadata.db`, `metadata.db-wal` and `metadata.db.base`.
 
 The sequence, when the shared state changed; all of it under the database's
 cross-process lock except the download:
@@ -209,10 +229,12 @@ twice.
 Failures never replace a local database that might hold rows. A downloaded file that is
 not a database fails the command (exit 3) and leaves the local database untouched. A
 local database that is held open by another program (after a wait of 5 seconds), cannot
-be read, or fails with any error not recognised as corruption also fails the command
-(exit 3) untouched. Only a local file that is positively not a database (no SQLite
-header, a length that is not a whole number of pages, or the engine's not-a-database or
-corrupt error) is replaced, with a warning: nothing could have been carried from it.
+be read, has an empty main file beside a non-empty log, or fails with any error not
+recognised as corruption also fails the command (exit 3) untouched. Only a local file
+that certainly holds no barca history is replaced, with a warning naming the reason: no
+SQLite header, a length that is not a whole number of pages, the engine's not-a-database
+or corrupt error, an empty file with no log, a database without barca's tables, or a log
+whose main file is missing.
 
 Because a pull keeps unpushed rows, it needs no knowledge of whether a run is live in the
 project: a second `get`/`run`, `--dry-run` and `barca status` pull while a run is going,

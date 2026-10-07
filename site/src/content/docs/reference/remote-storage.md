@@ -136,43 +136,60 @@ After a pull the local copy is the shared history plus what was recorded only on
   this machine it is left out (stderr: `left out 1 step whose result file is no longer here`)
   and runs again; the run it belonged to is kept.
 
-A pull does only what is needed. If nobody uploaded since this machine last pulled or uploaded,
-nothing is downloaded (`[barca] shared state unchanged`). If somebody did and nothing was written
-locally since, the download simply takes the local copy's place. Only when both changed are the
-two compared, which reads the list of runs on each side.
+A pull does only what is needed, and takes a shortcut only when it can prove the local copy is
+the very file the last pull or upload left, with nothing written to it since. Barca records that
+file's identity (device and inode, size, modification and status-change times, SQLite header)
+in `.barca/metadata.db.base` and checks it again before trusting the record. When it matches:
+
+- nobody uploaded since: nothing is downloaded (`[barca] shared state unchanged`);
+- somebody did: the download simply takes the local copy's place.
+
+In every other case the two are compared, which reads the list of runs on each side and keeps
+what only the local copy has: after a run that did not upload (killed, failed upload,
+`BARCA_STATE=off`), after anything else wrote to the file, when the file was deleted and created
+again (`barca history`, `barca stats`, `barca get` and `barca run` create it), restored from a
+copy, or when the record is missing, belongs to another directory, or cannot be checked (for
+example on a filesystem whose timestamps do not move within 15 ms).
 
 A pull is safe while a run is going in the same project. `--dry-run`, `barca status` and a second
 `barca get` or `barca run` pull as usual; the running run's row and the steps it has finished stay
 in the local copy, so `barca status` shows its progress next to what other machines uploaded.
 Every run finishes and uploads; one that finds the shared history changed merges as described
-above. While a run uploads the history (normally well under a second) other barca commands in
-the project wait for it.
+above. An upload sends a copy of the history taken at that moment, so other barca commands in
+the project do not wait for it, however slow it is.
 
-Files next to the database: a download goes to `.barca/metadata.db.pull-<host>-<pid>-<n>` and is
-moved into place once complete (a leftover from a killed pull is removed by a later one), and
-`.barca/metadata.db.base` records which upload the local copy is based on. Both are local; delete
-them freely when no barca command is running. If barca is killed during a pull, the local copy
-is either the old one, whole, or the new one, whole.
+Files next to the database, all local: a download goes to
+`.barca/metadata.db.pull-<host>-<pid>-<n>` and is moved into place once complete, an upload is
+sent from `.barca/metadata.db.push-<host>-<pid>-<n>`, and `.barca/metadata.db.base` is the record
+described above. Leftovers of a killed command are removed by a later pull. You can delete any of
+them when no barca command is running: without the record the next pull compares instead of
+taking a shortcut. If barca is killed during a pull, the local copy is either the old one, whole,
+or the new one, whole.
 
-When something is wrong, the local copy is not replaced unless it is certainly not a database:
+When something is wrong, the local copy is replaced only if it certainly holds no history:
 
 - A downloaded history that is not a database does not replace an existing local copy: the
   command fails (exit 3).
 - A local copy that another program holds open (a DB browser, a script using `sqlite3`), that
-  cannot be read (permissions, I/O), or that fails for any reason barca does not recognise is
-  left exactly as it was: barca waits up to 5 seconds for a lock, then the command fails (exit
-  3) and says what to close or check.
-- A local file that is certainly not a database (it does not start with a SQLite header, was
-  cut short, or is reported corrupt when read) has nothing that can be kept: it is replaced,
-  with a warning on stderr.
+  cannot be read (permissions, I/O), whose main file is empty while its `-wal` file is not, or
+  that fails for any reason barca does not recognise is left exactly as it was: barca waits up
+  to 5 seconds for a lock, then the command fails (exit 3) and says what to close or check.
+- A local file that certainly holds no barca history is replaced, with a warning on stderr
+  that says why: it is not a database (no SQLite header, cut short, or reported corrupt when
+  read), it is empty, it is a database without barca's tables, or only a `-wal` file was left.
 
-**Resetting or rolling back the shared history.** If `state/metadata.db` is deleted or replaced
-by an older copy, a machine whose local copy was fully uploaded follows the shared history at
-its next pull. A machine that has anything unuploaded compares the two and keeps every run the
-shared history lacks, so those runs come back with its next upload. To reset on purpose, also
-delete the local copies on each machine while no barca command is running:
-`rm .barca/metadata.db .barca/metadata.db-wal .barca/metadata.db.base` (for a named environment
-the same three files under `.barca/envs/<env>/`). Result files are not affected.
+**Resetting or rolling back the shared history.** A machine keeps whatever the shared history
+lacks, so removing history takes more than changing the shared file:
+
+- If `state/metadata.db` is deleted, the next `barca get` or `barca run` on any machine creates
+  it again from that machine's whole local copy.
+- If it is replaced by an older copy, a machine whose local copy is in sync follows it at its
+  next pull, and a machine that has anything not yet uploaded keeps every run the older copy
+  lacks and uploads them with its next run.
+- To reset on purpose: with no barca command running anywhere, delete the shared file and, on
+  each machine, `rm -f .barca/metadata.db .barca/metadata.db-wal .barca/metadata.db.base` (for
+  a named environment the same three files under `.barca/envs/<env>/`). Result files are not
+  affected.
 
 `barca get --json` reports a result as it does without a store: json values inline, parquet and
 pickle as a pointer (`{"_barca_artifact": {"path", ...}}`) to the copy in `.barca/artifacts/`.
