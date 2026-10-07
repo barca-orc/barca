@@ -30,8 +30,11 @@ description: 'json/pickle/parquet artifact formats, local and remote storage, st
 > still has the old hash (one that keeps its history local, or a refresh that was killed
 > before it recorded) uses the store's bytes and is told: a `[barca] warning:` line on
 > stderr, and `steps[].artifact_mismatch: true` in the JSON result
-> ([CLI contract](/reference/cli-contract/)). "Content-addressed" in this RFC's title and
-> text therefore means addressed by run hash, as §8 says.
+> ([CLI contract](/reference/cli-contract/)).
+>
+> The body below is left as written. Read its words this way: "content-addressed" (the
+> title, §1, §4.1, §5) means "addressed by run hash", as §8 says, and "immutable" means
+> "not rewritten except by `--refresh` of a non-deterministic asset".
 
 ## 1. Summary
 
