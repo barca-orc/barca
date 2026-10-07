@@ -261,11 +261,15 @@ output, so the next `--dry-run` or `barca status` shows its consumers as stale.
 
 `<ext>` is `.json`, `.pkl` or `.parquet` (see `barca docs types`). An artifact's path names the
 computation, not the bytes: the run hash covers the step's code and inputs, so the same step
-with the same inputs always writes the same path. The file is not immutable. Computing the
-result again (`--refresh`, `--refresh-all`, or a missing artifact that something needs)
-overwrites it, and a function that is not deterministic then leaves different bytes at the same
-path. Because the path is the same on every machine, artifacts can be shared: set
-`BARCA_REMOTE_URI` and your cloud's credentials (`barca docs remote`).
+with the same inputs always writes the same path. A step is meant to be a pure function of its
+code and inputs (what changes outside comes in through a sensor, whose output is part of the
+run hash), so computing it again writes the same bytes and the file is immutable in practice.
+Barca does not enforce that. Computing the result again (`--refresh`, `--refresh-all`, or a
+missing artifact that something needs) overwrites the file, and a function that is not
+deterministic then leaves different bytes at the same path; with an artifact store, a machine
+whose history still has the earlier hash is warned (`barca docs remote`, "Checking a local copy
+against the store"). Because the path is the same on every machine, artifacts can be shared:
+set `BARCA_REMOTE_URI` and your cloud's credentials (`barca docs remote`).
 
 `.barca/` lives in the **project root**: the nearest directory at or above the one you run barca
 from that holds a `barca.toml`. Without a `barca.toml` above you, the current directory is the

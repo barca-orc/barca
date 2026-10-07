@@ -10,6 +10,29 @@ description: 'json/pickle/parquet artifact formats, local and remote storage, st
 
 ---
 
+> **Amended (after 0.18.0, issue #246, decided):** artifact objects stay at
+> `{node}/{run_hash}{ext}`. Addressing them by a hash of their bytes was proposed (#246)
+> and will not be done.
+>
+> Immutability follows from purity. An asset is a pure function of its code and its inputs,
+> so its run hash identifies its bytes, and the object at `{node}/{run_hash}{ext}` is
+> immutable in practice. State from outside enters through sensors: a sensor always runs,
+> and the hash of what it returned is folded into the run hash of every asset that reads it
+> (`cache::compute_run_hash`), so a changed observation lands at a new path instead of
+> changing an old one.
+>
+> The one case where bytes change under the same run hash is a recompute of an asset that
+> is not deterministic (`--refresh`, or two machines computing the same step at once). The
+> object is then overwritten in place: same path, other bytes. Checked on 0.18.0 plus #263
+> with an asset that returns a random id: after `--refresh` on one machine the store holds
+> one object for the node, with new bytes. A machine that shares the history pulls the new
+> recorded hash, replaces its stale local copy and says nothing. A machine whose history
+> still has the old hash (one that keeps its history local, or a refresh that was killed
+> before it recorded) uses the store's bytes and is told: a `[barca] warning:` line on
+> stderr, and `steps[].artifact_mismatch: true` in the JSON result
+> ([CLI contract](/reference/cli-contract/)). "Content-addressed" in this RFC's title and
+> text therefore means addressed by run hash, as §8 says.
+
 ## 1. Summary
 
 Data never passes between worker processes in-memory — every asset/task output is
@@ -194,3 +217,8 @@ A content-hash (rather than node-id-keyed) path for local-mode artifacts would r
 the local/remote asymmetry noted in §4.1, at the cost of local disk usage no longer
 mapping 1:1 to "current" outputs (ties into the `barca prune` command described as
 future work in [RFC-0002](/rfcs/0002-cli-surface/) §11).
+
+The same idea was considered for remote objects (a path that includes a hash of the bytes,
+#246) and declined: for pure assets the run hash already identifies the bytes, and the one
+exception, a recompute of an asset that is not deterministic, is reported as a hash mismatch
+rather than prevented (see the amendment at the top).
