@@ -50,22 +50,22 @@
 .barca-sidepanel {
   flex: none; overflow: auto; scrollbar-gutter: stable;
   border-left: 1px solid var(--border-default); background: var(--bg-raised);
-  padding: 16px 18px 28px;
+  padding: 24px 24px 32px;
 }
 .barca-sidepanel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-.barca-sidepanel-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.barca-sidepanel-title { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
 .barca-sidepanel-title h2 {
-  margin: 0; font-family: var(--font-mono); font-size: 15px; font-weight: 500;
+  margin: 0; font-family: var(--font-mono); font-size: var(--text-xl); font-weight: var(--weight-semibold);
   color: var(--text-strong); word-break: break-all;
 }
 .barca-sidepanel-actions { display: flex; gap: 4px; flex: none; }
 .barca-sidepanel code { font-family: var(--font-mono); font-size: var(--text-xs); }
-.barca-section { margin-top: 18px; }
+.barca-section { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border-strong); }
 .barca-section h3 {
-  margin: 0 0 8px; font-size: var(--text-2xs); font-weight: 500; letter-spacing: 0.06em;
-  text-transform: uppercase; color: var(--text-muted);
+  margin: 0 0 14px; font-size: var(--text-md); font-weight: var(--weight-semibold);
+  color: var(--text-strong);
 }
-.barca-kv { display: grid; grid-template-columns: 110px 1fr; gap: 8px; padding: 3px 0; font-size: var(--text-sm); min-width: 0; }
+.barca-kv { display: grid; grid-template-columns: 110px 1fr; gap: 8px; padding: 5px 0; font-size: var(--text-sm); min-width: 0; }
 .barca-kv > span:first-child { color: var(--text-muted); font-family: var(--font-mono); font-size: var(--text-xs); }
 .barca-kv > span:last-child { min-width: 0; }
 .barca-note { margin: 6px 0; font-size: var(--text-sm); color: var(--text-default); }

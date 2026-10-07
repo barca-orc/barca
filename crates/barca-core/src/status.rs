@@ -389,6 +389,26 @@ async fn read_shapes(
     nodes: &mut [NodeStatus],
     sample: usize,
 ) {
+    read_shapes_inner(python, cfg, nodes, sample, false).await;
+}
+
+/// Inspect artifact schemas, including JSON object field and list element types.
+/// This richer on-demand view leaves the CLI's existing shape contract unchanged.
+pub async fn read_schemas(
+    python: &Path,
+    cfg: &crate::config::ResolvedConfig,
+    nodes: &mut [NodeStatus],
+) {
+    read_shapes_inner(python, cfg, nodes, 0, true).await;
+}
+
+async fn read_shapes_inner(
+    python: &Path,
+    cfg: &crate::config::ResolvedConfig,
+    nodes: &mut [NodeStatus],
+    sample: usize,
+    fields: bool,
+) {
     let wanted: Vec<(usize, String, String)> = nodes
         .iter()
         .enumerate()
@@ -405,6 +425,7 @@ async fn read_shapes(
     }
     let request = serde_json::json!({
         "sample": sample,
+        "fields": fields,
         "artifacts": wanted
             .iter()
             .map(|(_, path, format)| serde_json::json!({"path": path, "format": format}))

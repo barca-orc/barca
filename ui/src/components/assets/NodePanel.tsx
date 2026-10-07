@@ -1,6 +1,8 @@
 import { useEffect } from 'react'
 import { GitBranch, X } from 'lucide-react'
-import { IconButton, KeyValue, Section, SidePanel, Skeleton, StatusBadge, Tag } from '@/components'
+import { Button, IconButton, KeyValue, Section, SidePanel, Skeleton, StatusBadge, Tag } from '@/components'
+import { ArtifactSchema } from './ArtifactSchema'
+import { useAssetSchema } from '@/hooks/useAssetSchema'
 import { useAssetDetail } from '@/hooks/useAssetDetail'
 import { buildRows, formatAgo, formatSeconds, severityStatus } from '@/lib/assetTable'
 import { freshnessLabel } from '@/lib/status'
@@ -33,6 +35,8 @@ export function NodePanel({ node, nodes, nowMs, onSelect, onOpenGraph, onClose }
     .map((id) => nodes.find((n) => n.id === id))
     .filter((n): n is NodeState => n !== undefined)
   const downstream = downstreamOf(node.id, nodes)
+  const schema = useAssetSchema(node, upstream)
+  const output = schema.data?.find(n => n.id === node.id)
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
@@ -57,21 +61,9 @@ export function NodePanel({ node, nodes, nowMs, onSelect, onOpenGraph, onClose }
         </>
       }
     >
-      <Section title="State">
+      <div className="barca-node-summary">
         {row && <StatusBadge status={severityStatus(row.severity)} label={row.stateLabel} />}
         <p className="barca-note">{node.cache.detail}</p>
-        {node.cache.run_hash && (
-          <KeyValue label="cache key">
-            <code title={node.cache.run_hash}>{shortHash(node.cache.run_hash)}</code>
-          </KeyValue>
-        )}
-        {node.cache.artifact && (
-          <KeyValue label="cached result">
-            <code className="barca-wrap" title={node.cache.artifact}>
-              {node.cache.artifact}
-            </code>
-          </KeyValue>
-        )}
         {node.partitions && (
           <>
             <KeyValue label="partitions">
@@ -84,20 +76,59 @@ export function NodePanel({ node, nodes, nowMs, onSelect, onOpenGraph, onClose }
             )}
           </>
         )}
+      </div>
+
+      <Section title="Inputs & output">
+        <p className="barca-schema-context">Latest materialized data. Input schemas describe their own latest outputs.</p>
+        <Button variant="ghost" size="sm" disabled={schema.isFetching} onClick={() => void schema.refetch()}>
+          {schema.isFetching ? 'Inspecting…' : 'Refresh schema'}
+        </Button>
+        <div className="barca-schema-content">
+          {schema.isLoading ? <Skeleton height={360} /> : schema.isError ? (
+            <div className="barca-schema-empty">
+              <p>Couldn't load schemas: {schema.error.message}</p>
+              <Button size="sm" variant="ghost" onClick={() => void schema.refetch()}>Retry</Button>
+            </div>
+          ) : (
+            <>
+              <h4 className="barca-schema-label">Output <span>{node.name}</span></h4>
+              <div className="barca-schema-output">
+                {output ? <ArtifactSchema node={output} /> : <p className="barca-schema-empty">Output schema unavailable.</p>}
+              </div>
+              <h4 className="barca-schema-label">Inputs <span>{node.inputs.length}</span></h4>
+              {node.inputs.length === 0 && <p className="barca-schema-empty">No upstream assets. This is a source node.</p>}
+              {node.inputs.map(id => {
+                const input = schema.data?.find(n => n.id === id)
+                const name = input?.name ?? id.split(':').pop() ?? id
+                return (
+                  <details className="barca-schema-input" key={id}>
+                    <summary>{name}</summary>
+                    <div className="barca-schema-input-body">
+                      <button type="button" className="barca-link" onClick={() => onSelect(id)}>Open {name} →</button>
+                      {input ? <ArtifactSchema node={input} /> : <p className="barca-schema-empty">Input schema unavailable.</p>}
+                    </div>
+                  </details>
+                )
+              })}
+            </>
+          )}
+        </div>
       </Section>
 
       <Section title="Last attempt">
         {last ? (
           <>
-            <KeyValue label="status">
-              <span className={last.status === 'failed' ? 'barca-cell-failed' : undefined}>
-                {last.status}
-              </span>
-            </KeyValue>
-            <KeyValue label="when">
-              {formatAgo(last.created_at, nowMs)} · {last.created_at} UTC
-            </KeyValue>
-            {last.elapsed_seconds !== null && <KeyValue label="took">{formatSeconds(last.elapsed_seconds)}</KeyValue>}
+            <div className="barca-attempt-summary">
+              <div>
+                <span className="barca-metric-label">Outcome</span>
+                <strong className={last.status === 'failed' ? 'barca-cell-failed' : undefined}>{last.status}</strong>
+              </div>
+              <div>
+                <span className="barca-metric-label">Duration</span>
+                <strong>{last.elapsed_seconds !== null ? formatSeconds(last.elapsed_seconds) : '–'}</strong>
+              </div>
+            </div>
+            <p className="barca-attempt-time" title={`${last.created_at} UTC`}>{formatAgo(last.created_at, nowMs)} · {last.created_at} UTC</p>
             {last.elapsed_seconds !== null && (
               <div
                 className="barca-hist"
@@ -218,16 +249,7 @@ export function NodePanel({ node, nodes, nowMs, onSelect, onOpenGraph, onClose }
         )}
       </Section>
 
-      <Section title="Lineage">
-        <KeyValue label="upstream">
-          {upstream.length === 0
-            ? '–'
-            : upstream.map((n) => (
-                <button key={n.id} type="button" className="barca-link" onClick={() => onSelect(n.id)}>
-                  {n.name}
-                </button>
-              ))}
-        </KeyValue>
+      <Section title="Consumers">
         <KeyValue label="downstream">
           {downstream.length === 0
             ? '–'
@@ -239,7 +261,18 @@ export function NodePanel({ node, nodes, nowMs, onSelect, onOpenGraph, onClose }
         </KeyValue>
       </Section>
 
-      <Section title="Metadata">
+      <details className="barca-node-technical" key={node.id}>
+        <summary>Technical details</summary>
+        {node.cache.run_hash && (
+          <KeyValue label="cache key">
+            <code title={node.cache.run_hash}>{shortHash(node.cache.run_hash)}</code>
+          </KeyValue>
+        )}
+        {node.cache.artifact && (
+          <KeyValue label="cached result">
+            <code className="barca-wrap">{node.cache.artifact}</code>
+          </KeyValue>
+        )}
         <KeyValue label="runs when">
           {detail ? freshnessLabel(detail.asset.freshness) : <Skeleton width={72} height={12} />}
         </KeyValue>
@@ -251,7 +284,7 @@ export function NodePanel({ node, nodes, nowMs, onSelect, onOpenGraph, onClose }
         <KeyValue label="id">
           <code className="barca-wrap">{node.id}</code>
         </KeyValue>
-      </Section>
+      </details>
     </SidePanel>
   )
 }
