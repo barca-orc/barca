@@ -321,8 +321,10 @@ versions kept running on it (with errors such as `short read on page 33` now and
 (the second lists `row 29 missing from index idx_mat_run` among its problems).
 
 One machine may not get the message: the one that uploaded last holds the same bytes as the
-shared history, so its pull changes nothing and is let through. Its copy is damaged all the
-same, and step 1 finds it. In what we reproduced with 0.17.1 the local copies were damaged in
+shared history, so its pull changes nothing and is let through. That stays so for its later
+commands too, for as long as nobody else uploads: `barca status` and `--dry-run` change
+neither copy, and each `barca get` or `barca run` ends by uploading the local copy, after which
+the two hold the same bytes again. Its copy is damaged all the same, and step 1 finds it. In what we reproduced with 0.17.1 the local copies were damaged in
 the same way as the shared history, so rebuilding the shared history from a local copy as
 described above uploads the damage again. Either salvage the copies or start the history again.
 Both keep every result file. Do this with no barca command running on any machine.
@@ -343,20 +345,20 @@ with `.recover` (the one shipped with macOS and with current Linux distributions
 
    ```
    sqlite3 .barca/metadata.db ".recover" | sqlite3 .barca/metadata.recovered.db
-   sqlite3 .barca/metadata.recovered.db <<'SQL'
-   DROP TABLE IF EXISTS lost_and_found;
+   sqlite3 .barca/metadata.recovered.db 'DROP TABLE IF EXISTS lost_and_found;
    INSERT OR IGNORE INTO "__turso_internal_seq___turso_internal_autoincrement_runs" VALUES (1,0,1,1,1,9223372036854775807,0);
    INSERT OR IGNORE INTO "__turso_internal_seq___turso_internal_autoincrement_materializations" VALUES (1,0,1,1,1,9223372036854775807,0);
    INSERT OR IGNORE INTO "__turso_internal_seq___turso_internal_autoincrement_logs" VALUES (1,0,1,1,1,9223372036854775807,0);
-   PRAGMA integrity_check;
-   SQL
+   PRAGMA integrity_check;'
    mv .barca/metadata.db .barca/metadata.db.damaged
    rm -f .barca/metadata.db-wal .barca/metadata.db-shm .barca/metadata.db.base
    mv .barca/metadata.recovered.db .barca/metadata.db
    BARCA_STATE=off barca history --all
    ```
 
-   The second command must end with `ok`, and the last must list the machine's runs. (The three
+   These lines work as they are in bash, zsh and fish (the second command is one command:
+   its quoted argument spans five lines). The second command must end with `ok`, and the last
+   must list the machine's runs. (The three
    `INSERT` lines put back a bookkeeping row the database engine needs, in case it was on a
    page that could not be read; they do nothing when it is there.) If either fails, this copy
    cannot be salvaged: remove it with the command under "Start the history again" and go on;

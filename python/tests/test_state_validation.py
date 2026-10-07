@@ -527,13 +527,11 @@ DAMAGE = {"pages nothing refers to": with_orphan_pages, "pages past the end": wi
 # earlier": the commands of step 2, run in the project directory.
 SALVAGE = [
     'sqlite3 .barca/metadata.db ".recover" | sqlite3 .barca/metadata.recovered.db',
-    """sqlite3 .barca/metadata.recovered.db <<'SQL'
-DROP TABLE IF EXISTS lost_and_found;
+    """sqlite3 .barca/metadata.recovered.db 'DROP TABLE IF EXISTS lost_and_found;
 INSERT OR IGNORE INTO "__turso_internal_seq___turso_internal_autoincrement_runs" VALUES (1,0,1,1,1,9223372036854775807,0);
 INSERT OR IGNORE INTO "__turso_internal_seq___turso_internal_autoincrement_materializations" VALUES (1,0,1,1,1,9223372036854775807,0);
 INSERT OR IGNORE INTO "__turso_internal_seq___turso_internal_autoincrement_logs" VALUES (1,0,1,1,1,9223372036854775807,0);
-PRAGMA integrity_check;
-SQL""",
+PRAGMA integrity_check;'""",
     "mv .barca/metadata.db .barca/metadata.db.damaged",
     "rm -f .barca/metadata.db-wal .barca/metadata.db-shm .barca/metadata.db.base",
     "mv .barca/metadata.recovered.db .barca/metadata.db",
@@ -543,6 +541,23 @@ SQL""",
 START_AGAIN = (
     "rm -f .barca/metadata.db .barca/metadata.db-wal .barca/metadata.db-shm .barca/metadata.db.base"
 )
+
+
+def test_the_salvage_commands_are_the_ones_in_the_manual():
+    """SALVAGE is what the tests run; the manual must say exactly that (apart from `--json`,
+    which the tests add to read the last command's output)."""
+    manual_text = (
+        Path(__file__).resolve().parents[2] / "crates" / "barca-cli" / "docs" / "remote.md"
+    ).read_text()
+    block = "\n".join(
+        line[3:] if line.startswith("   ") else line for line in manual_text.splitlines()
+    )
+    for command in SALVAGE:
+        assert command.removesuffix(" --json") in block, command
+    # Nothing a shell other than bash or zsh would choke on: no here-document.
+    assert (
+        "<<" not in block.split("Salvage what can be read")[1].split("Start the history again")[0]
+    )
 
 
 def sqlite3_can_recover() -> bool:
