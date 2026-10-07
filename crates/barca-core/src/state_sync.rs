@@ -15,7 +15,9 @@
 
 use crate::BarcaError;
 use crate::config::ResolvedConfig;
-use std::path::Path;
+use crate::state_carry::Carried;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::process::Command;
 
 /// Opaque concurrency token for the remote state blob (etag / generation /
@@ -42,26 +44,75 @@ fn state_cmd(python: &Path, cfg: &ResolvedConfig) -> Command {
     cmd
 }
 
-/// Replace the local database at `cfg.db_path` with the shared state blob. Returns its token,
-/// or `StateToken(None)` when the remote object doesn't exist yet (the local database is left
-/// untouched for bootstrap).
+/// What a pull did: the token of the shared state it read, and what it kept of the local
+/// database it replaced.
+#[derive(Debug)]
+pub struct Pulled {
+    /// `StateToken(None)` when the remote object does not exist yet.
+    pub token: StateToken,
+    pub carried: Carried,
+}
+
+/// The name of the file a pull downloads into, next to the database (so the swap is a rename
+/// on one filesystem): `<db>.pull-<pid>-<n>`.
+fn staged_path(db_path: &str) -> PathBuf {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    PathBuf::from(format!(
+        "{db_path}.pull-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ))
+}
+
+/// Remove what pulls that died part-way left next to the database: `<db>.pull-<pid>-<n>` files
+/// (and their sidecars) whose process is gone. They are abandoned downloads; the local
+/// database never depended on them.
+fn remove_abandoned_pulls(db_path: &str) {
+    let db = Path::new(db_path);
+    let (Some(dir), Some(name)) = (db.parent(), db.file_name().and_then(|n| n.to_str())) else {
+        return;
+    };
+    let dir = if dir.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        dir
+    };
+    let prefix = format!("{name}.pull-");
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let Some(rest) = file_name.to_str().and_then(|n| n.strip_prefix(&prefix)) else {
+            continue;
+        };
+        let pid = rest.split('-').next().and_then(|p| p.parse::<i64>().ok());
+        if pid.is_some_and(|pid| !crate::db::pid_alive(pid)) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// Bring the local database at `cfg.db_path` up to the shared state blob. When the remote
+/// object does not exist yet the token is `StateToken(None)` and the local database is left
+/// untouched (the first push creates the shared state from it).
 ///
-/// Afterwards the local database is exactly the pulled blob: the blob is downloaded next to
-/// the database and swapped in by [`crate::db::replace_db`], which also removes the old
-/// database's write-ahead log so it is never applied to the new file (#221). Local rows that
-/// were never pushed are discarded. The download itself holds no lock, so other barca
-/// processes are not kept waiting on the network.
-pub async fn pull_state(python: &Path, cfg: &ResolvedConfig) -> Result<StateToken, BarcaError> {
+/// Afterwards the local database is the pulled blob plus the local rows that were never
+/// pushed, and nothing else: the blob is downloaded next to the database and swapped in by
+/// [`crate::db::replace_db`], which carries those rows over and never lets the old database's
+/// write-ahead log be applied to the new file (#221). The download itself holds no lock, so
+/// other barca processes are not kept waiting on the network.
+pub async fn pull_state(python: &Path, cfg: &ResolvedConfig) -> Result<Pulled, BarcaError> {
     let uri = cfg
         .state_uri
         .as_deref()
         .ok_or_else(|| BarcaError::Other("pull_state called without a state uri".into()))?;
-    // Same directory as the database, so the swap is a rename on one filesystem.
-    let staged = std::path::PathBuf::from(format!("{}.pull-{}", cfg.db_path, std::process::id()));
-    let _ = std::fs::remove_file(&staged);
+    remove_abandoned_pulls(&cfg.db_path);
+    let staged = staged_path(&cfg.db_path);
     let result = pull_into(python, cfg, uri, &staged).await;
     // Gone already when it was swapped in; left behind only when the pull failed part-way.
     let _ = std::fs::remove_file(&staged);
+    let _ = crate::db::remove_sidecars(&staged.to_string_lossy());
     result
 }
 
@@ -70,7 +121,7 @@ async fn pull_into(
     cfg: &ResolvedConfig,
     uri: &str,
     staged: &Path,
-) -> Result<StateToken, BarcaError> {
+) -> Result<Pulled, BarcaError> {
     let out = state_cmd(python, cfg)
         .arg("pull")
         .arg(uri)
@@ -93,15 +144,19 @@ async fn pull_into(
         .and_then(|t| t.as_str())
         .map(str::to_string);
     // The helper writes the file exactly when the remote object exists (it then has a token).
-    if token.is_some() {
-        if !staged.exists() {
+    let carried = match token {
+        Some(_) if !staged.exists() => {
             return Err(BarcaError::Other(format!(
                 "shared state pull from {uri}: the helper reported a state object but wrote no file"
             )));
         }
-        crate::db::replace_db(&cfg.db_path, staged).await?;
-    }
-    Ok(StateToken(token))
+        Some(_) => crate::db::replace_db(&cfg.db_path, staged).await?,
+        None => Carried::default(),
+    };
+    Ok(Pulled {
+        token: StateToken(token),
+        carried,
+    })
 }
 
 /// The reason a state helper failed: its last `error: ...` line (what `python -m barca._state`
@@ -171,40 +226,22 @@ pub async fn checkpoint_truncate(db_path: &str) -> Result<(), BarcaError> {
     {
         let _g = crate::db::db_guard().await;
         let (_db, conn) = crate::db::open_conn(db_path).await?;
-        // The pragma returns a (busy, log_pages, checkpointed_pages) row — use
-        // query and drain it.
-        let mut rows = conn
-            .query("PRAGMA wal_checkpoint(TRUNCATE)", ())
-            .await
-            .map_err(|e| BarcaError::Db(format!("wal_checkpoint(TRUNCATE) failed: {e}")))?;
-        while let Some(_row) = rows
-            .next()
-            .await
-            .map_err(|e| BarcaError::Db(format!("wal_checkpoint(TRUNCATE) failed: {e}")))?
-        {}
+        crate::db::checkpoint(&conn).await?;
     }
 
     // Backstop: an upload of the main file is only valid if the WAL is gone.
-    let wal = format!("{db_path}-wal");
-    if let Ok(meta) = std::fs::metadata(&wal)
-        && meta.len() > 0
-    {
+    if !wal_is_clean(db_path) {
+        let wal = format!("{db_path}-wal");
         return Err(BarcaError::Db(format!(
             "WAL not empty after checkpoint ({} bytes remain in {wal}) — \
                  refusing to upload a torn database",
-            meta.len()
+            std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0)
         )));
     }
     Ok(())
 }
 
-/// True when the sidecar WAL file is absent or empty.
-pub fn wal_is_clean(db_path: &str) -> bool {
-    match std::fs::metadata(format!("{db_path}-wal")) {
-        Err(_) => true,
-        Ok(m) => m.len() == 0,
-    }
-}
+pub use crate::db::wal_is_clean;
 
 #[allow(dead_code)]
 fn _path_exists(p: &str) -> bool {
