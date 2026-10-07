@@ -15,11 +15,23 @@
 //!   end-of-run ledger uses to add only what is missing;
 //! - a run's **log lines** are unpushed when the pulled database has none for that run.
 //!
-//! Only runs that can differ are compared step by step: those the pulled database lacks, and
-//! those it holds as unfinished (see [`SETTLED`]) in a different state than the local one (a
-//! run's `steps_executed` moves with every step it records). So this costs one scan of `runs`
-//! on each side plus work for those runs. It is not run at all when the base record shows
-//! that nothing was written locally since the last pull or push ([`crate::state_base`]).
+//! Finding them does not read the history, only its end and its indexes, because history is
+//! append-only: a run's row keeps the row id it was given, a pull puts the rows it carries
+//! after the last row of the download, and a push uploads the whole file. So every blob is
+//! its predecessor plus rows appended, and a local database is a blob plus rows appended.
+//!
+//! - **Runs the pulled database lacks.** Local runs are read from the newest backwards, each
+//!   looked up in the pulled database by `run_id` (unique index). The first one found there
+//!   *in the same row* marks where the two histories are one: everything older is in both.
+//!   With nothing unpushed that is the first row read. A pulled database that shares no
+//!   history with the local one (the shared state was reset) is never matched, and every
+//!   local run is carried.
+//! - **Runs both have, in different states.** A run the pulled database holds as unfinished
+//!   (see [`SETTLED`]; found through the index on `runs.status`) can be further along
+//!   locally. Its steps are compared when its `(status, steps_executed)` differs between the
+//!   two (a run's `steps_executed` moves with every step it records). Runs settled in the
+//!   pulled database are not looked at again: a run writes nothing after the push that
+//!   carries its outcome.
 //!
 //! Copying is idempotent: carrying the same local database onto the same pulled one twice
 //! adds nothing the second time. That is what makes an interrupted pull safe to repeat.
@@ -39,6 +51,10 @@ use turso::{Connection, Value};
 /// (pushed mid-run by another process on the same machine) and `interrupted` (marked later, by
 /// whoever noticed the process was gone) can be behind what this machine recorded.
 const SETTLED: [&str; 3] = ["success", "failed", "cancelled"];
+
+/// The other two: what a run is before it records its outcome, and what it is called once
+/// someone notices its process is gone.
+const UNFINISHED: [&str; 2] = ["running", "interrupted"];
 
 /// Every column of `runs` except its row id, which the receiving database assigns.
 pub(crate) const RUN_COLUMNS: &[&str] = &[
@@ -253,58 +269,99 @@ pub(crate) async fn carry_unpushed(
     pulled: &Connection,
 ) -> Result<Carried, BarcaError> {
     let mut carried = Carried::default();
-
-    // (status, steps_executed) of every run the pulled database holds.
-    let pulled_runs: HashMap<String, (String, i64)> = rows_of(
-        pulled,
-        "SELECT run_id, status, COALESCE(steps_executed, 0) FROM runs",
-        vec![],
-        "reading the pulled runs",
-    )
-    .await?
-    .iter()
-    .filter_map(|r| {
-        Some((
-            text(&r[0])?.to_string(),
-            (text(&r[1])?.to_string(), int(&r[2])),
-        ))
-    })
-    .collect();
-
-    // Local runs that can hold something the pulled database lacks, oldest first.
     let this_host = crate::db::local_host();
-    let open: Vec<OpenRun> = rows_of(
-        local,
-        "SELECT run_id, status, COALESCE(steps_executed, 0), COALESCE(host, '') FROM runs \
-         ORDER BY id",
-        vec![],
-        "reading the local runs",
-    )
-    .await?
-    .iter()
-    .filter_map(|r| {
-        Some(OpenRun {
-            run_id: text(&r[0])?.to_string(),
-            status: text(&r[1])?.to_string(),
-            steps_executed: int(&r[2]),
-            ours: !this_host.is_empty() && text(&r[3]) == Some(this_host.as_str()),
-        })
-    })
-    .filter(|run| match pulled_runs.get(&run.run_id) {
-        None => true,
-        Some((status, _)) if SETTLED.contains(&status.as_str()) => false,
-        Some((status, steps)) => {
-            (status.as_str(), *steps) != (run.status.as_str(), run.steps_executed)
+    let ours = |host: &str| !this_host.is_empty() && host == this_host;
+
+    // Local runs the pulled database lacks: newest first, until the two histories meet.
+    let mut open: Vec<OpenRun> = Vec::new();
+    let mut below = i64::MAX;
+    'tail: loop {
+        let batch = rows_of(
+            local,
+            "SELECT id, run_id, status, COALESCE(steps_executed, 0), COALESCE(host, '') \
+             FROM runs WHERE id < ?1 ORDER BY id DESC LIMIT 16",
+            vec![Value::Integer(below)],
+            "reading the local runs",
+        )
+        .await?;
+        if batch.is_empty() {
+            break;
         }
-    })
-    .collect();
+        for r in &batch {
+            below = int(&r[0]);
+            let Some(run_id) = text(&r[1]) else { continue };
+            let there = rows_of(
+                pulled,
+                "SELECT id FROM runs WHERE run_id = ?1",
+                vec![Value::Text(run_id.to_string())],
+                "looking a run up in the pulled database",
+            )
+            .await?;
+            match there.first().map(|row| int(&row[0])) {
+                None => open.push(OpenRun {
+                    run_id: run_id.to_string(),
+                    status: text(&r[2]).unwrap_or("").to_string(),
+                    ours: ours(text(&r[4]).unwrap_or("")),
+                    in_pulled: false,
+                }),
+                // The same run in the same row: from here back the histories are one.
+                Some(id) if id == below => break 'tail,
+                // There under another row: both have it; see the unfinished runs below.
+                Some(_) => {}
+            }
+        }
+    }
+    open.reverse();
+
+    // Runs the pulled database holds as unfinished and the local one holds in another state.
+    let unfinished_sql = "SELECT run_id, status, COALESCE(steps_executed, 0), \
+                          COALESCE(host, '') FROM runs WHERE status = ?1";
+    let mut local_unfinished: HashMap<String, (String, i64, String)> = HashMap::new();
+    let mut pulled_unfinished: Vec<(String, String, i64)> = Vec::new();
+    for status in UNFINISHED {
+        let of = |conn, what| rows_of(conn, unfinished_sql, vec![Value::Text(status.into())], what);
+        for r in of(local, "reading the local unfinished runs").await? {
+            if let (Some(id), Some(st), Some(host)) = (text(&r[0]), text(&r[1]), text(&r[3])) {
+                local_unfinished.insert(id.into(), (st.into(), int(&r[2]), host.into()));
+            }
+        }
+        for r in of(pulled, "reading the pulled unfinished runs").await? {
+            if let (Some(id), Some(st)) = (text(&r[0]), text(&r[1])) {
+                pulled_unfinished.push((id.into(), st.into(), int(&r[2])));
+            }
+        }
+    }
+    for (run_id, status, steps) in pulled_unfinished {
+        let local_state = match local_unfinished.get(&run_id) {
+            // The same state on both sides.
+            Some((st, n, _)) if (st.as_str(), *n) == (status.as_str(), steps) => continue,
+            Some((st, _, host)) => Some((st.clone(), host.clone())),
+            // Not unfinished here: finished here, or not here at all.
+            None => rows_of(
+                local,
+                "SELECT status, COALESCE(host, '') FROM runs WHERE run_id = ?1",
+                vec![Value::Text(run_id.clone())],
+                "looking a run up in the local database",
+            )
+            .await?
+            .first()
+            .and_then(|r| Some((text(&r[0])?.to_string(), text(&r[1])?.to_string()))),
+        };
+        if let Some((local_status, host)) = local_state {
+            open.push(OpenRun {
+                run_id,
+                status: local_status,
+                ours: ours(&host),
+                in_pulled: true,
+            });
+        }
+    }
     if open.is_empty() {
         return Ok(carried);
     }
 
     pulled.execute("BEGIN", ()).await.map_err(db_err("begin"))?;
-    let known: HashSet<&str> = pulled_runs.keys().map(String::as_str).collect();
-    let copied = copy_runs(local, pulled, &open, &known, &mut carried).await;
+    let copied = copy_runs(local, pulled, &open, &mut carried).await;
     if let Err(e) = copied {
         pulled.execute("ROLLBACK", ()).await.ok();
         return Err(e);
@@ -319,17 +376,18 @@ pub(crate) async fn carry_unpushed(
 /// A local run that is compared with the pulled database.
 struct OpenRun {
     run_id: String,
+    /// Its status in the local database.
     status: String,
-    steps_executed: i64,
     /// Made on this host: its artifacts are expected here.
     ours: bool,
+    /// The pulled database has a row for it (as unfinished).
+    in_pulled: bool,
 }
 
 async fn copy_runs(
     local: &Connection,
     pulled: &Connection,
     open: &[OpenRun],
-    known: &HashSet<&str>,
     carried: &mut Carried,
 ) -> Result<(), BarcaError> {
     let run_select = format!(
@@ -362,7 +420,7 @@ async fn copy_runs(
 
         // The run row. The pulled database may hold it as `running` or `interrupted` while
         // this machine saw it end: then the outcome it recorded for itself stands.
-        match known.contains(run_id.as_str()) {
+        match run.in_pulled {
             false => {
                 for row in rows_of(local, &run_select, id(), "reading a local run").await? {
                     pulled
@@ -727,6 +785,71 @@ mod tests {
             (carried.runs, carried.steps, carried.steps_without_artifact),
             (1, 1, 0)
         );
+    }
+
+    /// A database holding `history` (run ids, in row order), each with one step.
+    async fn history_db(dir: &tempfile::TempDir, name: &str, history: &[&str]) -> String {
+        let file = artifact(dir, "h.json");
+        let db_path = fresh_db(dir, name).await;
+        for run in history {
+            add_step(&db_path, run, "f.py:a", &file).await;
+            add_run_from(&db_path, run, "success", "another-machine").await;
+        }
+        db_path
+    }
+
+    #[tokio::test]
+    async fn only_the_end_of_the_local_history_is_read_when_the_two_share_their_past() {
+        let dir = tempfile::tempdir().unwrap();
+        // Both grew from the blob [a, b]: here two runs were recorded, there three were pushed.
+        let local = history_db(&dir, "local.db", &["a", "b", "mine-1", "mine-2"]).await;
+        let pulled = history_db(&dir, "pulled.db", &["a", "b", "x", "y", "z"]).await;
+        let carried = carry(&local, &pulled).await;
+        assert_eq!(carried.kept_runs, ["mine-1", "mine-2"]);
+        assert_eq!(
+            runs(&pulled).await.len(),
+            7,
+            "the shared past is there once"
+        );
+
+        // The reading stops where the histories meet (`b`, the same run in the same row).
+        // Not a state barca produces: a run below that point that the other side lacks. It
+        // is here to show that the past is not read.
+        let local = history_db(&dir, "local-2.db", &["only-here", "b", "mine"]).await;
+        let pulled = history_db(&dir, "pulled-2.db", &["a", "b", "x"]).await;
+        assert_eq!(carry(&local, &pulled).await.kept_runs, ["mine"]);
+    }
+
+    #[tokio::test]
+    async fn a_run_both_have_in_different_rows_is_not_copied_again() {
+        // `mine` was carried by an earlier pull on this machine (after `x`), pushed, and is
+        // in the pulled database in the row it got then. The local database is what that
+        // pull left, so the histories meet at the last row.
+        let dir = tempfile::tempdir().unwrap();
+        let local = history_db(&dir, "local.db", &["a", "x", "mine"]).await;
+        let pulled = history_db(&dir, "pulled.db", &["a", "x", "mine", "y"]).await;
+        assert_eq!(carry(&local, &pulled).await, Carried::default());
+        // And when the rows do not line up at all (`mine` recorded before `x` was pulled).
+        let local = history_db(&dir, "local-2.db", &["a", "mine", "later"]).await;
+        let pulled = history_db(&dir, "pulled-2.db", &["a", "x", "mine"]).await;
+        assert_eq!(carry(&local, &pulled).await.kept_runs, ["later"]);
+        assert_eq!(runs(&pulled).await.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn a_pulled_database_with_another_past_gets_every_local_run() {
+        // The shared state was deleted and created again by another machine: nothing lines
+        // up, so nothing is assumed to be there.
+        let dir = tempfile::tempdir().unwrap();
+        let mut local_history: Vec<String> = (0..40).map(|i| format!("ours-{i:02}")).collect();
+        local_history.sort();
+        let names: Vec<&str> = local_history.iter().map(String::as_str).collect();
+        let local = history_db(&dir, "local.db", &names).await;
+        let pulled = history_db(&dir, "pulled.db", &["theirs-1", "theirs-2"]).await;
+        let carried = carry(&local, &pulled).await;
+        assert_eq!((carried.runs, carried.steps), (40, 40));
+        assert_eq!(carried.kept_runs, names, "in the order they were recorded");
+        assert_eq!(runs(&pulled).await.len(), 42);
     }
 
     #[tokio::test]

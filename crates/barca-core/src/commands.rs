@@ -1992,21 +1992,11 @@ async fn execute(
     // is a hard error — silently diverging local runs are worse than stopping.
     let mut state_token = match pull {
         Some(pull) => {
-            let (pulled, took) = pull.join().await??;
-            let state_sync::Pulled {
-                token,
-                carried,
-                kind,
-            } = pulled;
-            trace_point!("state_sync_pull ({kind:?})");
+            let (state_sync::Pulled { token, carried }, took) = pull.join().await??;
             if let Some(note) = carried.note() {
                 eprintln!("{note}");
             }
             match token.0 {
-                Some(_) if kind == state_sync::PullKind::Unchanged => eprintln!(
-                    "[barca] shared state unchanged ({:.2}s)",
-                    took.as_secs_f64()
-                ),
                 Some(_) => eprintln!(
                     "[barca] pulled state ({}) in {:.2}s",
                     fmt_bytes(std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0)),
@@ -2819,21 +2809,18 @@ async fn execute(
         let mut attempt = 0u32;
         let t_push = Instant::now();
         loop {
-            match state_sync::push_state(python, cfg, state_token.as_ref().unwrap()).await? {
-                state_sync::PushOutcome::Pushed(_) => {
-                    eprintln!(
-                        "[barca] pushed state ({}) in {:.2}s{}",
-                        fmt_bytes(std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0)),
-                        t_push.elapsed().as_secs_f64(),
-                        match attempt {
-                            0 => String::new(),
-                            1 => " after 1 conflict retry".to_string(),
-                            n => format!(" after {n} conflict retries"),
-                        }
-                    );
-                    trace_point!("state_sync_pushed (attempts={})", attempt + 1);
-                    break;
-                }
+            let outcome =
+                state_sync::push_state(python, cfg, state_token.as_ref().unwrap()).await?;
+            let again = match outcome {
+                state_sync::PushOutcome::Pushed {
+                    local_unchanged: true,
+                    ..
+                } => false,
+                // Uploaded, but another process wrote to the local database (or replaced
+                // it) while the upload was on its way. Treated like a conflict: pull what was
+                // just uploaded, which keeps those rows, and push again. When the retries are
+                // used up the upload still stands, and the rows go with a later push.
+                state_sync::PushOutcome::Pushed { .. } => attempt < cfg.push_retries,
                 state_sync::PushOutcome::Conflict => {
                     if attempt >= cfg.push_retries {
                         return Err(BarcaError::Other(format!(
@@ -2841,16 +2828,31 @@ async fn execute(
                              computed but the shared state was not updated; re-run to retry"
                         )));
                     }
-                    attempt += 1;
-                    // The pull carries this run's rows over with the rest of the local
-                    // database; the ledger then adds whatever is still missing (both are
-                    // idempotent), so the run is whole however much of it made the trip.
-                    state_token = Some(state_sync::pull_state(python, cfg).await?.token);
-                    db::init_db(&db_path).await?;
-                    persist_run(&db_path, &ledger).await?;
-                    db::insert_logs(&db_path, &run_id, &logs_buffer).await?;
+                    true
                 }
+            };
+            if !again {
+                eprintln!(
+                    "[barca] pushed state ({}) in {:.2}s{}",
+                    fmt_bytes(std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0)),
+                    t_push.elapsed().as_secs_f64(),
+                    match attempt {
+                        0 => String::new(),
+                        1 => " after 1 conflict retry".to_string(),
+                        n => format!(" after {n} conflict retries"),
+                    }
+                );
+                trace_point!("state_sync_pushed (attempts={})", attempt + 1);
+                break;
             }
+            attempt += 1;
+            // The pull carries this run's rows over with the rest of the local database; the
+            // ledger then adds whatever is still missing (both are idempotent), so the run
+            // is whole however much of it made the trip.
+            state_token = Some(state_sync::pull_state(python, cfg).await?.token);
+            db::init_db(&db_path).await?;
+            persist_run(&db_path, &ledger).await?;
+            db::insert_logs(&db_path, &run_id, &logs_buffer).await?;
         }
     }
 
@@ -3646,7 +3648,7 @@ mod persist_tests {
         state_sync::checkpoint_truncate(shared).await.unwrap();
         let staged = dir.path().join("staged.db");
         std::fs::copy(shared, &staged).unwrap();
-        db::pull_for_tests(local, &staged, "token").await;
+        db::pull_for_tests(local, &staged).await;
     }
 
     #[tokio::test]

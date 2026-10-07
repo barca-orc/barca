@@ -28,7 +28,13 @@ pub struct StateToken(pub Option<String>);
 #[derive(Debug)]
 pub enum PushOutcome {
     /// Uploaded; carries the new token.
-    Pushed(String),
+    Pushed {
+        token: String,
+        /// False when something was written to the local database while the upload was on
+        /// its way (or a pull replaced it): what was uploaded is complete as of the copy, and
+        /// the later rows are local only until the next push.
+        local_unchanged: bool,
+    },
     /// The remote changed since our token was read — re-pull and replay.
     Conflict,
 }
@@ -44,30 +50,13 @@ fn state_cmd(python: &Path, cfg: &ResolvedConfig) -> Command {
     cmd
 }
 
-/// How a pull left the local database.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PullKind {
-    /// There is no shared state yet; the local database is untouched.
-    Absent,
-    /// The shared state is still the blob the local database is based on: nothing downloaded.
-    Unchanged,
-    /// The download took the local database's place; nothing had been written locally.
-    Replaced,
-    /// The download took its place after the local database was compared with it.
-    Merged,
-    /// Another process brought the local database up to date while this download was on its
-    /// way; the download was discarded.
-    Superseded,
-}
-
-/// What a pull did: the token of the shared state the local database is now based on, and
-/// what it kept of the local database it replaced.
+/// What a pull did: the token of the shared state blob it downloaded, and what it kept of
+/// the local database it replaced.
 #[derive(Debug)]
 pub struct Pulled {
     /// `StateToken(None)` when the remote object does not exist yet.
     pub token: StateToken,
     pub carried: Carried,
-    pub kind: PullKind,
 }
 
 /// The name of the file a pull downloads into, next to the database (so the swap is a rename
@@ -155,18 +144,13 @@ const UNLOCKED_ATTEMPTS: u32 = 2;
 /// object does not exist yet the token is `StateToken(None)` and the local database is left
 /// untouched (the first push creates the shared state from it).
 ///
-/// Afterwards the local database holds every row of the blob the returned token names, plus
-/// the local rows that were never pushed, and nothing else. The full path: the blob is
-/// downloaded next to the database, with no lock held, and swapped in by
-/// [`crate::db::replace_db`], which carries the unpushed rows over, never lets the old
-/// write-ahead log be applied to the new file (#221), and refuses a download that another
-/// process's pull or push has overtaken (the pull then starts again, the last time holding
-/// the lock throughout).
-///
-/// Two shortcuts, both only when the base record is trusted, that is when the local database
-/// is provably the file a pull or push left and nothing wrote to it since
-/// ([`crate::state_base::Base::trusted`]): a shared state that is still that blob is not
-/// downloaded, and a download takes the local database's place without the two being compared.
+/// There is one path, whatever the local database is: the blob is downloaded next to the
+/// database, with no lock held, and swapped in by [`crate::db::replace_db`], which carries
+/// over the local rows the download lacks, never lets the old write-ahead log be applied to
+/// the new file (#221), and refuses a download that another process's pull or push has
+/// overtaken. The pull then starts again, the last time holding the lock throughout so that
+/// nothing can overtake it. Afterwards the local database holds every row of the blob the
+/// returned token names, plus the local rows that were never pushed.
 pub async fn pull_state(python: &Path, cfg: &ResolvedConfig) -> Result<Pulled, BarcaError> {
     let uri = cfg
         .state_uri
@@ -174,8 +158,6 @@ pub async fn pull_state(python: &Path, cfg: &ResolvedConfig) -> Result<Pulled, B
         .ok_or_else(|| BarcaError::Other("pull_state called without a state uri".into()))?;
     remove_abandoned_pulls(&cfg.db_path);
     for attempt in 0..=UNLOCKED_ATTEMPTS {
-        // The last time, nothing can get in between: the lock is taken before the record is
-        // read and held until the swap is done.
         let lock = if attempt == UNLOCKED_ATTEMPTS {
             Some(crate::db::lock_db(&cfg.db_path).await?)
         } else {
@@ -205,22 +187,13 @@ async fn pull_into(
     staged: &Path,
     held: Option<&crate::db::DbLock>,
 ) -> Result<Option<Pulled>, BarcaError> {
-    use crate::state_base;
     // Read before the download begins: a change by the time of the swap means the download
     // may be older than the local database.
-    let base_raw = state_base::read_raw(&cfg.db_path);
-    // The blob the local database provably is, if any: when the shared state is still that
-    // blob there is nothing to pull.
-    let is_exactly = state_base::parse(base_raw.as_deref())
-        .filter(|b| b.trusted(&cfg.db_path))
-        .map(|b| b.token);
-
-    let mut cmd = state_cmd(python, cfg);
-    cmd.arg("pull").arg(uri).arg(staged);
-    if let Some(token) = &is_exactly {
-        cmd.arg("--unless-token").arg(token);
-    }
-    let out = cmd
+    let base_raw = crate::state_base::read_raw(&cfg.db_path);
+    let out = state_cmd(python, cfg)
+        .arg("pull")
+        .arg(uri)
+        .arg(staged)
         .output()
         .await
         .map_err(|e| BarcaError::Other(format!("failed to spawn state helper: {e}")))?;
@@ -238,20 +211,9 @@ async fn pull_into(
         return Ok(Some(Pulled {
             token: StateToken(None),
             carried: Carried::default(),
-            kind: PullKind::Absent,
         }));
     };
-    let done = |token: &str, carried, kind| {
-        Ok(Some(Pulled {
-            token: StateToken(Some(token.to_string())),
-            carried,
-            kind,
-        }))
-    };
-    if parsed.get("unchanged").and_then(|u| u.as_bool()) == Some(true) {
-        return done(token, Carried::default(), PullKind::Unchanged);
-    }
-    // The helper writes the file exactly when it reports a changed object.
+    // The helper writes the file exactly when the remote object exists (it then has a token).
     if !staged.exists() {
         return Err(BarcaError::Other(format!(
             "shared state pull from {uri}: the helper reported a state object but wrote no file"
@@ -259,30 +221,19 @@ async fn pull_into(
     }
     let incoming = crate::db::Incoming {
         staged,
-        token,
         base_at_start: base_raw.as_deref(),
     };
     let replaced = match held {
         Some(lock) => crate::db::replace_db_holding(lock, &cfg.db_path, incoming).await?,
         None => crate::db::replace_db(&cfg.db_path, incoming).await?,
     };
-    match replaced {
-        crate::db::Replaced::Swapped(carried) => {
-            let kind = if carried.compared {
-                PullKind::Merged
-            } else {
-                PullKind::Replaced
-            };
-            done(token, carried, kind)
-        }
-        // Another process just brought the local database up to date. If its record is
-        // trusted the local database is exactly the blob it names, and that is the token a
-        // later push must be conditional on. Otherwise: pull again.
-        crate::db::Replaced::Superseded(Some(base)) if base.trusted(&cfg.db_path) => {
-            done(&base.token, Carried::default(), PullKind::Superseded)
-        }
-        crate::db::Replaced::Superseded(_) => Ok(None),
-    }
+    Ok(match replaced {
+        crate::db::Replaced::Swapped(carried) => Some(Pulled {
+            token: StateToken(Some(token.to_string())),
+            carried,
+        }),
+        crate::db::Replaced::Superseded => None,
+    })
 }
 
 /// The reason a state helper failed: its last `error: ...` line (what `python -m barca._state`
@@ -308,8 +259,8 @@ fn helper_cause(stderr: &[u8]) -> String {
 ///
 /// What is uploaded is a copy taken under the database's lock, right after its write-ahead
 /// log was folded in ([`crate::db::copy_for_push`]). The upload itself holds no lock, so a
-/// slow one keeps no other barca command waiting. Afterwards the base record is updated only
-/// if the local database is still the file that was copied.
+/// slow one keeps no other barca command waiting. [`PushOutcome::Pushed`] says whether the
+/// local database is still what was uploaded.
 pub async fn push_state(
     python: &Path,
     cfg: &ResolvedConfig,
@@ -320,21 +271,25 @@ pub async fn push_state(
         .as_deref()
         .ok_or_else(|| BarcaError::Other("push_state called without a state uri".into()))?;
     let copy = crate::db::copy_for_push(&cfg.db_path, staged_path(&cfg.db_path, "push")).await?;
-    let outcome = upload(python, cfg, uri, &copy.path, token).await;
+    let uploaded = upload(python, cfg, uri, &copy.path, token).await;
     let _ = std::fs::remove_file(&copy.path);
-    if let Ok(PushOutcome::Pushed(new_token)) = &outcome {
-        crate::db::record_pushed(&cfg.db_path, &copy, new_token).await;
-    }
-    outcome
+    Ok(match uploaded? {
+        Some(token) => PushOutcome::Pushed {
+            local_unchanged: crate::db::record_pushed(&cfg.db_path, &copy).await,
+            token,
+        },
+        None => PushOutcome::Conflict,
+    })
 }
 
+/// The new token, or None when the remote no longer matches `token` (a conflict).
 async fn upload(
     python: &Path,
     cfg: &ResolvedConfig,
     uri: &str,
     file: &Path,
     token: &StateToken,
-) -> Result<PushOutcome, BarcaError> {
+) -> Result<Option<String>, BarcaError> {
     let mut cmd = state_cmd(python, cfg);
     cmd.arg("push").arg(uri).arg(file);
     if let Some(ref t) = token.0 {
@@ -345,7 +300,7 @@ async fn upload(
         .await
         .map_err(|e| BarcaError::Other(format!("failed to spawn state helper: {e}")))?;
     if out.status.code() == Some(EXIT_CONFLICT) {
-        return Ok(PushOutcome::Conflict);
+        return Ok(None);
     }
     if !out.status.success() {
         return Err(BarcaError::Other(format!(
@@ -361,7 +316,7 @@ async fn upload(
         .get("token")
         .and_then(|t| t.as_str())
         .ok_or_else(|| BarcaError::Other("state push: helper returned no token".into()))?;
-    Ok(PushOutcome::Pushed(new_token.to_string()))
+    Ok(Some(new_token.to_string()))
 }
 
 /// Checkpoint the WAL into the main database file and verify nothing is
