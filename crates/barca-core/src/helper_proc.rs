@@ -37,6 +37,14 @@ pub(crate) fn terminate(pid: u32) {
     }
 }
 
+/// Kill the process `pid` (SIGKILL). The caller keeps waiting on it.
+pub(crate) fn kill(pid: u32) {
+    // SAFETY: plain syscall; a pid that is gone is an error we ignore.
+    unsafe {
+        libc::kill(pid as i32, libc::SIGKILL);
+    }
+}
+
 /// Stop a helper: SIGTERM, up to [`STOP_GRACE`] for it to clean up and exit, then SIGKILL.
 pub(crate) async fn stop(child: &mut Child) {
     if let Some(pid) = child.id() {

@@ -255,6 +255,7 @@ output, so the next `--dry-run` or `barca status` shows its consumers as stale.
 ```
 .barca/metadata.db                          run history and materialization records (local DB)
 .barca/metadata.db.base                     with shared history: a counter of pulls and uploads (`barca docs remote`)
+.barca/metadata.db.prev                     with shared history: the local DB as it was before the last pull that changed it
 .barca/artifacts/<node>/<run_hash>.<ext>    one file per result
 ```
 

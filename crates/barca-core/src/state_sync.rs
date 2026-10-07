@@ -17,7 +17,6 @@ use crate::BarcaError;
 use crate::config::ResolvedConfig;
 use crate::state_carry::Carried;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
@@ -49,52 +48,7 @@ fn state_cmd(python: &Path, cfg: &ResolvedConfig) -> Command {
     if let Some(ref opts) = cfg.storage_options_json {
         cmd.env("BARCA_STORAGE_OPTIONS", opts);
     }
-    cmd.stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
     cmd
-}
-
-/// Run the state helper to completion and return its output.
-///
-/// With `cancel`, Ctrl-C is the caller's to act on (see [`crate::helper_proc`]): the helper is
-/// started deaf to it, and when `cancel` fires it is asked to stop (it removes the temp file
-/// it was writing), waited for briefly, and the result is [`BarcaError::Cancelled`]. Without
-/// `cancel` nobody would stop a shielded helper, so it is left to die with the terminal's
-/// Ctrl-C like the command that started it.
-async fn run_helper(
-    mut cmd: Command,
-    cancel: Option<&CancellationToken>,
-) -> Result<std::process::Output, BarcaError> {
-    if cancel.is_some() {
-        crate::helper_proc::shield_from_ctrl_c(&mut cmd);
-    }
-    let child = cmd
-        .spawn()
-        .map_err(|e| BarcaError::Other(format!("failed to spawn state helper: {e}")))?;
-    let pid = child.id();
-    let output = child.wait_with_output();
-    tokio::pin!(output);
-    let cancelled = async {
-        match cancel {
-            Some(c) => c.cancelled().await,
-            None => std::future::pending().await,
-        }
-    };
-    tokio::select! {
-        out = &mut output => {
-            out.map_err(|e| BarcaError::Other(format!("state helper failed: {e}")))
-        }
-        _ = cancelled => {
-            if let Some(pid) = pid {
-                crate::helper_proc::terminate(pid);
-            }
-            // Dropping `output` after the grace kills a helper that is still there.
-            let _ = tokio::time::timeout(crate::helper_proc::STOP_GRACE, &mut output).await;
-            Err(BarcaError::Cancelled)
-        }
-    }
 }
 
 /// What a pull did: the token of the shared state blob it downloaded, and what it kept of
@@ -182,6 +136,12 @@ fn remove_abandoned_pulls(db_path: &str) {
     }
 }
 
+/// How long the download of a pull's last attempt may take. That attempt holds the database's
+/// lock, so every other barca command in the project waits for it; they give up after 60
+/// seconds ([`crate::db`]'s lock wait). Shorter than that, so that a stalled store fails this
+/// one pull and lets the others go on, instead of failing all of them.
+const LOCKED_DOWNLOAD_LIMIT: std::time::Duration = std::time::Duration::from_secs(45);
+
 /// How many downloads a pull makes without holding the database's lock before it takes the
 /// lock for the whole of one. A download is discarded when another barca process replaced or
 /// pushed the local database while it was on its way.
@@ -219,7 +179,8 @@ pub async fn pull_state(
             None
         };
         let staged = staged_path(&cfg.db_path, "pull");
-        let result = pull_into(python, cfg, uri, &staged, lock.as_ref(), cancel).await;
+        let limit = lock.is_some().then_some(LOCKED_DOWNLOAD_LIMIT);
+        let result = pull_into(python, cfg, uri, &staged, lock.as_ref(), limit, cancel).await;
         // Gone already when it was swapped in; left behind when the pull failed part-way or
         // the download was discarded.
         let _ = std::fs::remove_file(&staged);
@@ -241,14 +202,31 @@ async fn pull_into(
     uri: &str,
     staged: &Path,
     held: Option<&crate::db::DbLock>,
+    limit: Option<std::time::Duration>,
     cancel: Option<&CancellationToken>,
 ) -> Result<Option<Pulled>, BarcaError> {
     // Read before the download begins: a change by the time of the swap means the download
     // may be older than the local database.
     let base_raw = crate::state_base::read_raw(&cfg.db_path);
-    let mut cmd = state_cmd(python, cfg);
-    cmd.arg("pull").arg(uri).arg(staged);
-    let out = run_helper(cmd, cancel).await?;
+    let mut download = state_cmd(python, cfg);
+    download.arg("pull").arg(uri).arg(staged);
+    let out = run_helper(download, cancel, limit)
+        .await
+        .map_err(|e| match e {
+            HelperFailed::Cancelled => BarcaError::Cancelled,
+            HelperFailed::Spawn(e) => {
+                BarcaError::Other(format!("failed to spawn state helper: {e}"))
+            }
+            HelperFailed::TimedOut(limit) => BarcaError::Other(format!(
+                "shared state pull from {uri}: the download did not finish within {}s and was \
+             stopped. Other barca commands in this project were changing the local history at \
+             the same time, so this download was made while holding its lock, which cannot be \
+             held for longer.\nThe local history {} was left as it was. Run the command again; \
+             if the store is slow or unreachable, BARCA_STATE=off runs with local history only.",
+                limit.as_secs(),
+                cfg.db_path
+            )),
+        })?;
     if !out.status.success() {
         return Err(BarcaError::Other(format!(
             "shared state pull from {uri} failed: {}\n\
@@ -274,6 +252,7 @@ async fn pull_into(
     let incoming = crate::db::Incoming {
         staged,
         base_at_start: base_raw.as_deref(),
+        version: Some(token),
     };
     let replaced = match held {
         Some(lock) => crate::db::replace_db_holding(lock, &cfg.db_path, incoming).await?,
@@ -285,7 +264,115 @@ async fn pull_into(
             carried,
         }),
         crate::db::Replaced::Superseded => None,
+        crate::db::Replaced::Invalid(why) => {
+            return Err(invalid_shared_state(uri, &cfg.db_path, &why));
+        }
     })
+}
+
+/// How many of the integrity check's problems the error lists after the instructions.
+const LISTED_PROBLEMS: usize = 20;
+
+/// The error for a shared state object that is not a database this version of barca can use
+/// ([`crate::state_validate`]). It is not a connection or credentials problem and retrying
+/// does not help. The first line says what the object is and what is wrong with it, in one
+/// line; then that nothing was changed and where the repair is described; the full list of
+/// what an integrity check found comes last, so that it never pushes the instructions away.
+fn invalid_shared_state(
+    uri: &str,
+    db_path: &str,
+    invalid: &crate::state_validate::Invalid,
+) -> BarcaError {
+    let mut message = format!(
+        "the shared history {uri} is not a database barca can use: {}.\n\
+         The local history {db_path} was left as it was, and nothing was uploaded.\n\
+         To repair it, follow `barca docs remote`, section \"If the shared history is damaged\": \
+         put back an earlier copy of that object (a bucket version or a backup), or remove the \
+         object and run `barca get` on the machine whose local history is the most complete and \
+         intact. If this project shared its history with barca 0.17.1 or earlier, the local \
+         copies are probably damaged too: follow the section \"Upgrading a project whose shared \
+         history was damaged by 0.17.1 or earlier\" instead. Until then, BARCA_STATE=off runs \
+         with local history only.",
+        invalid.why
+    );
+    if invalid.details.len() > 1 {
+        message.push_str("\nWhat the integrity check found:");
+        for problem in invalid.details.iter().take(LISTED_PROBLEMS) {
+            message.push_str("\n  ");
+            message.push_str(problem);
+        }
+        if invalid.details.len() > LISTED_PROBLEMS {
+            message.push_str(&format!(
+                "\n  (and {} more)",
+                invalid.details.len() - LISTED_PROBLEMS
+            ));
+        }
+    }
+    BarcaError::Other(message)
+}
+
+enum HelperFailed {
+    Spawn(std::io::Error),
+    TimedOut(std::time::Duration),
+    Cancelled,
+}
+
+/// Run a state helper to its end and collect its output. This is the only way a state helper
+/// is started.
+///
+/// The helper is stopped, and the call fails, when `cancel` fires or when it is still running
+/// after `limit`. Stopped means asked to stop (SIGTERM, on which it removes the temp file it
+/// was writing), waited for, and killed if it is still there after
+/// [`crate::helper_proc::STOP_GRACE`]: the call does not return while the helper is alive.
+/// Dropping the call kills the helper.
+///
+/// With `cancel`, Ctrl-C is the caller's to act on (see [`crate::helper_proc`]): the helper is
+/// started deaf to it. Without `cancel` nobody would stop a shielded helper, so it is left to
+/// die with the terminal's Ctrl-C like the command that started it.
+async fn run_helper(
+    mut cmd: Command,
+    cancel: Option<&CancellationToken>,
+    limit: Option<std::time::Duration>,
+) -> Result<std::process::Output, HelperFailed> {
+    if cancel.is_some() {
+        crate::helper_proc::shield_from_ctrl_c(&mut cmd);
+    }
+    cmd.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    let child = cmd.spawn().map_err(HelperFailed::Spawn)?;
+    let pid = child.id();
+    let output = child.wait_with_output();
+    tokio::pin!(output);
+    let cancelled = async {
+        match cancel {
+            Some(c) => c.cancelled().await,
+            None => std::future::pending().await,
+        }
+    };
+    let timed_out = async {
+        match limit {
+            Some(limit) => tokio::time::sleep(limit).await,
+            None => std::future::pending().await,
+        }
+    };
+    let why = tokio::select! {
+        out = &mut output => return out.map_err(HelperFailed::Spawn),
+        _ = cancelled => HelperFailed::Cancelled,
+        _ = timed_out => HelperFailed::TimedOut(limit.expect("a limit that passed")),
+    };
+    if let Some(pid) = pid {
+        crate::helper_proc::terminate(pid);
+        if tokio::time::timeout(crate::helper_proc::STOP_GRACE, &mut output)
+            .await
+            .is_err()
+        {
+            crate::helper_proc::kill(pid);
+            let _ = (&mut output).await;
+        }
+    }
+    Err(why)
 }
 
 /// The reason a state helper failed: its last `error: ...` line (what `python -m barca._state`
@@ -353,7 +440,11 @@ async fn upload(
     if let Some(ref t) = token.0 {
         cmd.arg("--token").arg(t);
     }
-    let out = run_helper(cmd, cancel).await?;
+    let out = run_helper(cmd, cancel, None).await.map_err(|e| match e {
+        HelperFailed::Cancelled => BarcaError::Cancelled,
+        HelperFailed::Spawn(e) => BarcaError::Other(format!("failed to spawn state helper: {e}")),
+        HelperFailed::TimedOut(_) => unreachable!("no limit was given"),
+    })?;
     if out.status.code() == Some(EXIT_CONFLICT) {
         return Ok(None);
     }
@@ -408,6 +499,43 @@ error: RefreshError: Reauthentication is needed.\n";
 
     use super::*;
     use turso::Builder;
+
+    /// The last attempt of a pull downloads while holding the database's lock. A helper that
+    /// stalls is stopped at the limit, so the lock is given back; one that finishes in time
+    /// is not disturbed.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_helper_that_outlives_its_limit_is_killed_and_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("pid");
+        let script = format!("echo $$ > {}; exec sleep 30", pid_file.display());
+        let mut stalled = Command::new("sh");
+        stalled.arg("-c").arg(&script);
+        let started = std::time::Instant::now();
+        let limit = std::time::Duration::from_millis(500);
+        let failed = run_helper(stalled, None, Some(limit)).await;
+        assert!(matches!(failed, Err(HelperFailed::TimedOut(l)) if l == limit));
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
+        // The process is gone, not left downloading.
+        let pid: i64 = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while crate::db::pid_alive(pid) && std::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(
+            !crate::db::pid_alive(pid),
+            "the stalled helper is still running"
+        );
+
+        let mut quick = Command::new("sh");
+        quick.arg("-c").arg("echo done");
+        let out = run_helper(quick, None, Some(std::time::Duration::from_secs(30))).await;
+        assert_eq!(out.ok().map(|o| o.stdout), Some(b"done\n".to_vec()));
+    }
 
     async fn open_and_count(db_path: &str, table: &str) -> u64 {
         let db = Builder::new_local(db_path).build().await.unwrap();
