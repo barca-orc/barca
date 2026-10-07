@@ -335,11 +335,12 @@ pub fn build_provided_inputs(
 /// Upstream ids that every consumer in this phase reads through a lazy type
 /// (`duckdb.DuckDBPyRelation`, `pl.LazyFrame`). One eager consumer needs the
 /// whole artifact, so its upstream is left out.
+///
+/// The ids are node ids, as in [`StreamStep::inputs`]: a reader names a partitioned upstream
+/// by its base id (`f:up`), never by one partition (`f:up[k=a]`), whether it reads one
+/// partition per key or all of them through `collect()`. So readers of the same upstream
+/// always name it the same way, and comparing ids is enough.
 pub fn lazily_read_inputs(phase: &Phase) -> HashSet<String> {
-    let base = |id: &str| {
-        id.split_once('[')
-            .map_or(id.to_string(), |(b, _)| b.to_string())
-    };
     let mut lazy = HashSet::new();
     let mut eager = HashSet::new();
     for step in phase.streams.iter().flat_map(|s| &s.steps) {
@@ -347,15 +348,11 @@ pub fn lazily_read_inputs(phase: &Phase) -> HashSet<String> {
             if step.param_types.get(param).is_some_and(|t| t.is_lazy()) {
                 lazy.insert(upstream_id.clone());
             } else {
-                // An eager reader of one partition (`up[a]`) also needs a local `up[a]` when
-                // another reader names the base id, and the other way round: the two ids
-                // are the same artifact, so either one disqualifies both.
                 eager.insert(upstream_id.clone());
-                eager.insert(base(upstream_id));
             }
         }
     }
-    lazy.retain(|id| !eager.contains(id) && !eager.contains(&base(id)));
+    lazy.retain(|id| !eager.contains(id));
     lazy
 }
 
@@ -421,7 +418,17 @@ mod tests {
     }
 
     #[test]
-    fn a_pinned_partition_reader_and_a_base_reader_of_one_upstream_are_not_lazy_together() {
+    fn readers_of_a_partitioned_upstream_name_it_by_base_id_so_one_eager_reader_wins() {
+        // What the planner emits for a partitioned `f:up` read per key by a lazy step and an
+        // eager step (or by an eager `collect()`): every reader's input is the base id.
+        let per_key = |id: &str, ty: ValueType| {
+            let mut step = reader_step(id, "x", "f:up", Some(ty));
+            step.partition_keys = ["a", "b"]
+                .iter()
+                .map(|k| PartitionKey([("k".to_string(), k.to_string())].into_iter().collect()))
+                .collect();
+            step
+        };
         let phase = |steps: Vec<StreamStep>| Phase {
             reason: PhaseReason::Initial,
             streams: vec![WorkerStream {
@@ -429,28 +436,21 @@ mod tests {
                 steps,
             }],
         };
-        // Eager reader of one partition, lazy reader of the whole: eager wins.
-        let eager_pinned = phase(vec![
-            reader_step("f:p", "x", "f:up[a]", Some(ValueType::Pandas)),
-            reader_step("f:q", "x", "f:up", Some(ValueType::DuckDB)),
-        ]);
-        assert!(lazily_read_inputs(&eager_pinned).is_empty());
-        // Lazy reader of one partition, eager reader of the whole: eager wins.
-        let eager_base = phase(vec![
-            reader_step("f:p", "x", "f:up[a]", Some(ValueType::DuckDB)),
-            reader_step("f:q", "x", "f:up", Some(ValueType::Pandas)),
-        ]);
-        assert!(lazily_read_inputs(&eager_base).is_empty());
-        // All lazy: still lazy, and an unrelated eager reader does not disturb it.
-        let all_lazy = phase(vec![
-            reader_step("f:p", "x", "f:up[a]", Some(ValueType::DuckDB)),
-            reader_step("f:q", "x", "f:up", Some(ValueType::PolarsLazy)),
-            reader_step("f:r", "x", "f:other", Some(ValueType::Pandas)),
-        ]);
+        let lazy_only = phase(vec![per_key("f:lazy", ValueType::DuckDB)]);
         assert_eq!(
-            lazily_read_inputs(&all_lazy),
-            HashSet::from(["f:up[a]".to_string(), "f:up".to_string()])
+            lazily_read_inputs(&lazy_only),
+            HashSet::from(["f:up".to_string()])
         );
+        let mixed = phase(vec![
+            per_key("f:lazy", ValueType::DuckDB),
+            per_key("f:eager", ValueType::Pandas),
+        ]);
+        assert!(lazily_read_inputs(&mixed).is_empty());
+        let eager_fan_in = phase(vec![
+            per_key("f:lazy", ValueType::PolarsLazy),
+            reader_step("f:all", "xs", "f:up", Some(ValueType::Pandas)),
+        ]);
+        assert!(lazily_read_inputs(&eager_fan_in).is_empty());
     }
 
     #[test]
