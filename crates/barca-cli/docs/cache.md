@@ -254,12 +254,16 @@ output, so the next `--dry-run` or `barca status` shows its consumers as stale.
 
 ```
 .barca/metadata.db                          run history and materialization records (local DB)
-.barca/artifacts/<node>/<run_hash>.<ext>    one file per materialization (a refresh overwrites it)
+.barca/artifacts/<node>/<run_hash>.<ext>    one file per result
 ```
 
-`<ext>` is `.json`, `.pkl` or `.parquet` (see `barca docs types`). The path is derived from the
-run hash, so artifacts can be shared between machines: set `BARCA_REMOTE_URI` and your
-cloud's credentials (`barca docs remote`).
+`<ext>` is `.json`, `.pkl` or `.parquet` (see `barca docs types`). An artifact's path names the
+computation, not the bytes: the run hash covers the step's code and inputs, so the same step
+with the same inputs always writes the same path. The file is not immutable. Computing the
+result again (`--refresh`, `--refresh-all`, or a missing artifact that something needs)
+overwrites it, and a function that is not deterministic then leaves different bytes at the same
+path. Because the path is the same on every machine, artifacts can be shared: set
+`BARCA_REMOTE_URI` and your cloud's credentials (`barca docs remote`).
 
 `.barca/` lives in the **project root**: the nearest directory at or above the one you run barca
 from that holds a `barca.toml`. Without a `barca.toml` above you, the current directory is the

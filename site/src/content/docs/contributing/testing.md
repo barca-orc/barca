@@ -84,7 +84,8 @@ on `status = 'success'`; failed rows are never served from cache). Server-mode r
 
 ### Artifact path
 
-Artifacts are content-addressed when a `run_hash` is available:
+An artifact's path is derived from the step's `run_hash` when one is available. It names the
+computation, not the bytes: a refresh, or a recompute of a missing artifact, overwrites the file.
 
 ```
 {artifact_dir}/{safe_node_id}/{run_hash}{ext}
