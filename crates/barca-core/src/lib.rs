@@ -16,6 +16,7 @@ pub mod model;
 pub mod parse;
 pub mod planner;
 pub mod protocol;
+mod recover;
 pub mod sql;
 pub mod state_sync;
 pub mod status;

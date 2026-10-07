@@ -410,7 +410,8 @@ def test_stalled_store_times_out_instead_of_hanging(tmp_path, backend, container
     assert all("TimeoutError" in r["error_message"] for r in rows)
 
 
-def test_cache_hit_with_missing_object_fails_fast_with_hint(tmp_path, backend, container, proxy):
+def test_cache_hit_with_missing_object_is_recomputed_fast(tmp_path, backend, container, proxy):
+    """A result whose object is gone from the store is computed again, not a failed run (#252)."""
     state = tmp_path / "state.db"
     a = Project(tmp_path / "a", backend, container, proxy.endpoint, state)
     proc, _ = a.get()
@@ -420,8 +421,14 @@ def test_cache_hit_with_missing_object_fails_fast_with_hint(tmp_path, backend, c
         if "total" in path:
             fs.rm(path)
 
+    # Another machine: nothing on its disk, and `total` is in neither place.
     b = Project(tmp_path / "b", backend, container, proxy.endpoint, state)
     proc, took = b.get()
-    assert proc.returncode != 0, _explain(proc)
-    assert "could not fetch" in proc.stderr and "--refresh-all" in proc.stderr, _explain(proc)
+    assert proc.returncode == 0, _explain(proc)
+    assert "could not fetch" not in proc.stderr, _explain(proc)
+    assert "pipeline.py:total: the artifact of its cached result is missing" in proc.stderr
+    # Only `total` runs; `numbers`, which it reads, is fetched.
+    assert "step:pipeline.py:total completed" in proc.stderr, _explain(proc)
+    assert "step:pipeline.py:numbers completed" not in proc.stderr, _explain(proc)
     assert took < 30, f"missing object took {took:.1f}s — retried a permanent error?"
+    assert any("total" in path for path in _stored(backend, container)), "not uploaded again"
