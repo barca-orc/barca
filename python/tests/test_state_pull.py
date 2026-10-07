@@ -1,9 +1,15 @@
-"""A pull of the shared state leaves the local database exactly equal to what was pulled (#221).
+"""What a pull of the shared state does to the local database (#221, RFC-0006 section 4.1).
 
-The metadata DB is a main file plus a write-ahead log. A pull used to replace only the main
-file, so whatever the old local database still had in its log (a killed run's rows, a database
-just created by `barca history`) was applied on top of the pulled one, and the next push then
-dropped history other machines had added.
+Two things must hold at once:
+
+- A pull never lets stale local state overwrite or drop history other machines pushed. The
+  metadata DB is a main file plus a write-ahead log; a pull used to replace only the main file,
+  so whatever the old local database still had in its log (a killed run's rows, a database just
+  created by `barca history`) was applied on top of the pulled one, and the next push then
+  dropped other machines' runs.
+- Local rows that were never pushed are not lost by a pull: a killed run's row and the steps it
+  had recorded are on top of the pulled database afterwards, so the next run reuses them, and
+  they reach the shared copy with the next push.
 
 "Machines" here are project directories that share one state location on the local filesystem.
 """
@@ -11,6 +17,7 @@ dropped history other machines had added.
 import json
 import os
 import signal
+import sqlite3
 import subprocess
 import time
 from pathlib import Path
@@ -29,6 +36,7 @@ from barca import asset
 
 @asset()
 def first() -> int:
+    Path("first.ran").open("a").write("x")
     return 1
 
 
@@ -42,10 +50,21 @@ def slow(x: int) -> int:
 """
 
 WAIT = 30.0
+KEPT_THE_KILLED_RUN = "kept 1 run and 1 finished step recorded only on this machine"
 
 
 def quick(name: str) -> str:
     return f"from barca import asset\n\n\n@asset()\ndef {name}() -> str:\n    return {name!r}\n"
+
+
+def wait_for(predicate, what: str):
+    deadline = time.time() + WAIT
+    while time.time() < deadline:
+        value = predicate()
+        if value:
+            return value
+        time.sleep(0.1)
+    pytest.fail(f"timed out after {WAIT:.0f}s waiting for {what}")
 
 
 class Machine:
@@ -60,19 +79,25 @@ class Machine:
             "BARCA_POOL_SIZE": "2",
         }
 
-    def barca(self, *args: str) -> subprocess.CompletedProcess:
+    def barca(self, *args: str, **env: str) -> subprocess.CompletedProcess:
         return subprocess.run(
-            [_find_binary(), *args], cwd=self.root, capture_output=True, text=True, env=self.env
+            [_find_binary(), *args],
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+            env={**self.env, **env},
         )
 
-    def get(self, name: str) -> str:
-        """Run a one-asset pipeline to completion (it pushes); return its run id."""
+    def get(self, name: str, **env: str) -> str:
+        """Run a one-asset pipeline to completion; return its run id."""
         (self.root / f"{name}.py").write_text(quick(name))
-        out = self.barca("get", f"{name}.py", "--json")
+        out = self.barca("get", f"{name}.py", "--json", **env)
         assert out.returncode == 0, out.stderr
         return json.loads(out.stdout)["run_id"]
 
     def start_slow(self) -> subprocess.Popen:
+        """Start the two-step pipeline and return once its first step is recorded in the local
+        database and its second is running."""
         (self.root / "slow.py").write_text(SLOW)
         proc = subprocess.Popen(
             [_find_binary(), "get", "slow.py", "--json"],
@@ -82,12 +107,29 @@ class Machine:
             text=True,
             env=self.env,
         )
-        deadline = time.time() + WAIT
-        while not (self.root / "slow.started").exists():
+
+        def recorded():
             assert proc.poll() is None, proc.stderr.read()
-            assert time.time() < deadline, "the slow step never started"
-            time.sleep(0.05)
+            # `history` reads the local database as it is; it does not pull.
+            runs = self.history()
+            return (
+                (self.root / "slow.started").exists()
+                and runs
+                and runs[0]["status"] == "running"
+                and runs[0]["steps_executed"] == 1
+            )
+
+        wait_for(recorded, "the run to record its first step")
         return proc
+
+    def kill(self, proc: subprocess.Popen) -> str:
+        """SIGKILL a run started by `start_slow`; return its run id."""
+        run_id = self.history()[0]["run_id"]
+        os.kill(proc.pid, signal.SIGKILL)
+        assert proc.wait(timeout=WAIT) == -signal.SIGKILL
+        for pipe in (proc.stdout, proc.stderr):
+            pipe.close()
+        return run_id
 
     def finish_slow(self, proc: subprocess.Popen) -> str:
         (self.root / "release").write_text("")
@@ -95,10 +137,28 @@ class Machine:
         assert proc.returncode == 0, stderr
         return json.loads(stdout)["run_id"]
 
-    def local_runs(self) -> set[str]:
+    def resume_slow(self) -> subprocess.CompletedProcess:
+        """Run the two-step pipeline again, letting the slow step through."""
+        (self.root / "release").write_text("")
+        out = self.barca("get", "slow.py", "--json")
+        assert out.returncode == 0, out.stderr
+        return out
+
+    def history(self) -> list[dict]:
+        """The local database's runs, newest first."""
         out = self.barca("history", "--all", "--json")
         assert out.returncode == 0, out.stderr
-        return {r["run_id"] for r in json.loads(out.stdout)["runs"]}
+        return json.loads(out.stdout)["runs"]
+
+    def local_runs(self) -> set[str]:
+        runs = [r["run_id"] for r in self.history()]
+        assert len(runs) == len(set(runs)), f"a run is recorded twice: {runs}"
+        return set(runs)
+
+    def states(self, file: str = "slow.py") -> dict[str, str]:
+        out = self.barca("status", file, "--json")
+        assert out.returncode == 0, out.stderr
+        return {n["name"]: n["cache"]["state"] for n in json.loads(out.stdout)["nodes"]}
 
     @property
     def db(self) -> Path:
@@ -106,8 +166,12 @@ class Machine:
 
 
 @pytest.fixture()
-def machines(tmp_path):
-    state_uri = tmp_path / "shared" / "metadata.db"
+def state_uri(tmp_path) -> Path:
+    return tmp_path / "shared" / "metadata.db"
+
+
+@pytest.fixture()
+def machines(tmp_path, state_uri):
     made: dict[str, Machine] = {}
 
     def machine(name: str) -> Machine:
@@ -118,48 +182,110 @@ def machines(tmp_path):
     return machine
 
 
-def shared_runs(machines) -> set[str]:
-    """The run ids in the shared state, read by a machine that has never run anything: a dry
-    run pulls the shared DB and records nothing, and `history` then reads the pulled copy."""
-    observer = machines("observer")
-    (observer.root / "look.py").write_text(quick("look"))
-    out = observer.barca("get", "look.py", "--dry-run", "--json")
-    assert out.returncode == 0, out.stderr
-    return observer.local_runs()
+def shared(state_uri: Path, sql: str) -> list[tuple]:
+    """Query the shared state itself: the blob is a complete SQLite file."""
+    with sqlite3.connect(f"file:{state_uri}?mode=ro", uri=True) as conn:
+        assert conn.execute("PRAGMA integrity_check").fetchall() == [("ok",)]
+        return conn.execute(sql).fetchall()
 
 
-def test_a_run_after_a_killed_run_does_not_drop_other_machines_history(machines):
+def shared_runs(state_uri: Path) -> dict[str, str]:
+    """run id -> status in the shared state; fails if a run or a step is there twice."""
+    rows = shared(state_uri, "SELECT run_id, status FROM runs")
+    assert len(rows) == len({r for r, _ in rows}), f"a run is in the shared state twice: {rows}"
+    steps = shared(
+        state_uri,
+        "SELECT run_id, node_id, COUNT(*) FROM materializations "
+        "WHERE run_id IS NOT NULL GROUP BY run_id, node_id HAVING COUNT(*) > 1",
+    )
+    assert steps == [], f"a step is in the shared state twice: {steps}"
+    return dict(rows)
+
+
+def no_pull_leftovers(machine: Machine) -> None:
+    names = sorted(p.name for p in machine.db.parent.iterdir())
+    assert [n for n in names if ".pull-" in n or n.endswith(".tmp")] == [], names
+
+
+def test_a_killed_run_is_resumed_and_other_machines_history_is_kept(machines, state_uri):
     a, b = machines("a"), machines("b")
     a_first = a.get("a_one")
 
-    # A is killed mid-run: its database is left with rows that were never pushed.
-    proc = a.start_slow()
-    os.kill(proc.pid, signal.SIGKILL)
-    assert proc.wait(timeout=WAIT) == -signal.SIGKILL
-    for pipe in (proc.stdout, proc.stderr):
-        pipe.close()
-    (killed,) = a.local_runs() - {a_first}
+    # A is killed mid-run. Its run row and its finished step are in A's local database only.
+    killed = a.kill(a.start_slow())
+    assert killed not in shared_runs(state_uri)
 
     # Meanwhile B runs and pushes.
     b_runs = {b.get(f"b_{i}") for i in range(4)}
-    assert shared_runs(machines) == {a_first} | b_runs
+    assert set(shared_runs(state_uri)) == {a_first} | b_runs
 
-    # A runs again: it pulls B's history, runs, and pushes.
-    (a.root / "release").write_text("")
-    a_last = a.get("a_two")
+    # A runs again. It pulls B's history, keeps what the killed run recorded, so the finished
+    # step is served from cache and only the unfinished one runs.
+    out = a.resume_slow()
+    assert KEPT_THE_KILLED_RUN in out.stderr, out.stderr
+    result = json.loads(out.stdout)
+    assert result["steps_executed"] == 1, result
+    assert {s["id"].split(":")[-1]: s["status"] for s in result["steps"]} == {
+        "first": "cached",
+        "slow": "ran",
+    }
+    assert (a.root / "first.ran").read_text() == "x", "the finished step must not run again"
 
-    assert shared_runs(machines) == {a_first, a_last} | b_runs
-    # A's local database is the pulled one plus its new run. The killed run was never pushed,
-    # so the pull discarded it.
-    assert a.local_runs() == {a_first, a_last} | b_runs
-    assert killed not in a.local_runs()
-    # So the step the killed run had finished runs again.
-    out = a.barca("get", "slow.py", "--json")
-    assert out.returncode == 0, out.stderr
+    # Nothing of B's is lost, and the killed run is now in the shared history, as interrupted.
+    everything = {a_first, killed, result["run_id"]} | b_runs
+    in_shared = shared_runs(state_uri)
+    assert set(in_shared) == everything
+    assert in_shared[killed] == "interrupted"
+    assert a.local_runs() == everything
+    no_pull_leftovers(a)
+
+    # Another machine sees all of it after its next pull, and a later pull on A adds nothing.
+    b_last = b.get("b_last")
+    assert b.local_runs() == everything | {b_last}
+    a_last = a.get("a_last")
+    assert set(shared_runs(state_uri)) == everything | {b_last, a_last}
+
+
+def test_the_scenario_of_issue_221_ends_with_every_run_in_the_shared_state(machines, state_uri):
+    # A runs and pushes; A is killed mid-run; B does six runs, each pushed; A runs again; one
+    # more run on B. On 0.17.0 the shared state ends with 4 runs: B's six are gone.
+    a, b = machines("a"), machines("b")
+    a.get("other1")
+    killed = a.kill(a.start_slow())
+    for i in range(1, 7):
+        b.get(f"other{i}")
+    a.resume_slow()
+    b.get("other1")
+
+    runs = shared_runs(state_uri)
+    assert len(runs) == 10, runs
+    assert runs[killed] == "interrupted"
+    assert sorted(runs.values()) == ["interrupted"] + ["success"] * 9
+    assert a.local_runs() <= set(runs)
+    assert b.local_runs() == set(runs)
+
+
+def test_a_killed_runs_step_whose_artifact_is_gone_is_not_a_cache_hit(machines, state_uri):
+    a, b = machines("a"), machines("b")
+    killed = a.kill(a.start_slow())
+    artifacts = [p for p in (a.root / ".barca" / "artifacts").rglob("*") if p.is_file()]
+    assert len(artifacts) == 1, artifacts
+    artifacts[0].unlink()
+    b.get("b_one")
+
+    # The run is kept; its step is not, because there is no result behind it any more.
+    out = a.resume_slow()
+    assert "kept 1 run recorded only on this machine" in out.stderr, out.stderr
+    assert "left out 1 step whose result file is no longer here" in out.stderr, out.stderr
     assert json.loads(out.stdout)["steps_executed"] == 2
+    assert (a.root / "first.ran").read_text() == "xx"
+    assert killed in shared_runs(state_uri)
+    assert shared(
+        state_uri, f"SELECT COUNT(*) FROM materializations WHERE run_id = '{killed}'"
+    ) == [(0,)]
 
 
-def test_failed_and_cancelled_runs_are_uploaded(machines):
+def test_failed_and_cancelled_runs_are_uploaded(machines, state_uri):
     a = machines("a")
     (a.root / "bad.py").write_text(
         "from barca import asset\n\n\n@asset()\ndef bad() -> int:\n    raise ValueError('no')\n"
@@ -169,33 +295,46 @@ def test_failed_and_cancelled_runs_are_uploaded(machines):
     failed = json.loads(out.stdout)["run_id"]
 
     proc = a.start_slow()
+    cancelled = a.history()[0]["run_id"]
     proc.send_signal(signal.SIGINT)
     proc.communicate(timeout=WAIT)
     assert proc.returncode == 130
-    (cancelled,) = a.local_runs() - {failed}
 
-    assert shared_runs(machines) == {failed, cancelled}
+    assert shared_runs(state_uri) == {failed: "failed", cancelled: "cancelled"}
 
 
-def test_a_second_run_started_during_a_run_pulls_and_both_keep_their_history(machines):
+def test_a_second_run_started_during_a_run_pulls_and_both_keep_their_history(machines, state_uri):
     a, b = machines("a"), machines("b")
     a_first = a.get("a_one")
 
     proc = a.start_slow()
     try:
+        live = a.history()[0]["run_id"]
         b_run = b.get("b_one")
         # A second run in A's project, while the first is live: it pulls B's push, runs, pushes.
         a_second = a.get("a_two")
-        assert b_run in a.local_runs()
+        # The pull brought B's run in and left the live run's row and finished step in place.
+        assert a.local_runs() == {a_first, a_second, live, b_run}
+        assert {r["run_id"]: r["status"] for r in a.history()}[live] == "running"
+        assert proc.poll() is None, "the first run must still be going"
     finally:
         a_slow = a.finish_slow(proc)
+    assert a_slow == live
 
     everything = {a_first, a_second, a_slow, b_run}
-    assert shared_runs(machines) == everything
+    in_shared = shared_runs(state_uri)
+    assert set(in_shared) == everything
+    assert in_shared[a_slow] == "success"
     assert a.local_runs() == everything
+    # The first run's steps are recorded once each, although the second run pushed the one it
+    # had finished by then.
+    assert shared(
+        state_uri,
+        f"SELECT node_id FROM materializations WHERE run_id = '{a_slow}' ORDER BY node_id",
+    ) == [("slow.py:first",), ("slow.py:slow",)]
 
 
-def test_a_db_created_by_a_read_command_does_not_shadow_the_pulled_one(machines):
+def test_a_db_created_by_a_read_command_does_not_shadow_the_pulled_one(machines, state_uri):
     b, c = machines("b"), machines("c")
     b_runs = {b.get(f"b_{i}") for i in range(4)}
 
@@ -207,39 +346,169 @@ def test_a_db_created_by_a_read_command_does_not_shadow_the_pulled_one(machines)
     c_run = c.get("c_one")
 
     assert c.local_runs() == b_runs | {c_run}
-    assert shared_runs(machines) == b_runs | {c_run}
+    assert set(shared_runs(state_uri)) == b_runs | {c_run}
 
 
-def test_read_only_commands_do_not_pull_over_a_live_run(machines):
+def test_status_and_dry_run_during_a_run_pull_and_keep_the_runs_progress(machines, state_uri):
     a, b = machines("a"), machines("b")
     a_first = a.get("a_one")
-    note = "a run is in progress in this project: not pulling the shared state"
 
     proc = a.start_slow()
     try:
-        # Another machine pushes while A's run is going, so a pull would change A's database.
+        live = a.history()[0]["run_id"]
+        # Another machine pushes while A's run is going.
         b_run = b.get("b_one")
-        before = a.db.stat().st_ino
+        assert b_run not in a.local_runs()
 
         for args in (("status", "slow.py", "--json"), ("get", "slow.py", "--dry-run", "--json")):
             out = a.barca(*args)
             assert out.returncode == 0, out.stderr
-            assert note in out.stderr, args
-            assert out.stderr.count("\n") == 1, out.stderr
             json.loads(out.stdout)
-            # The file the run is using is still the same file, and still lacks B's run.
-            assert a.db.stat().st_ino == before, args
-            assert b_run not in a.local_runs()
+            # They pulled: B's run is in A's local history now. And the live run's row and
+            # the step it has finished are still there.
+            assert a.local_runs() == {a_first, live, b_run}, args
+            assert a.states() == {"first": "cached", "slow": "never_run"}, args
         assert proc.poll() is None, "the run must still be going"
+        assert a.history()[0]["status"] == "running"
     finally:
         a_slow = a.finish_slow(proc)
 
-    # The run was not disturbed: it finished, merged with B's push, and nothing was lost.
-    assert shared_runs(machines) == {a_first, a_slow, b_run}
+    # The run was not disturbed: it finished, merged with B's push, and nothing is there twice.
+    assert a_slow == live
+    assert shared_runs(state_uri) == {a_first: "success", a_slow: "success", b_run: "success"}
+    assert (a.root / "first.ran").read_text() == "x"
+    no_pull_leftovers(a)
 
-    # With no run live, the same commands pull again, silently.
-    c_run = machines("c").get("c_one")
-    out = a.barca("status", "slow.py", "--json")
+
+def test_with_state_off_nothing_is_pulled_or_pushed_and_the_rows_are_carried_later(
+    machines, state_uri
+):
+    a, b = machines("a"), machines("b")
+    off = {"BARCA_STATE": "off"}
+
+    # state = "off": local history only, exactly as without a shared state.
+    a_off_1 = a.get("a_one", **off)
+    assert not state_uri.exists()
+    b_run = b.get("b_one")
+    a_off_2 = a.get("a_two", **off)
+    assert a.local_runs() == {a_off_1, a_off_2}
+    assert set(shared_runs(state_uri)) == {b_run}
+    no_pull_leftovers(a)
+    # A killed run resumes from the local database, which nothing replaced.
+    env, a.env = a.env, {**a.env, **off}
+    try:
+        killed = a.kill(a.start_slow())
+        out = a.resume_slow()
+    finally:
+        a.env = env
+    assert json.loads(out.stdout)["steps_executed"] == 1
+    assert "kept" not in out.stderr and "pulled state" not in out.stderr
+    local_only = {a_off_1, a_off_2, killed, json.loads(out.stdout)["run_id"]}
+    assert a.local_runs() == local_only
+    assert set(shared_runs(state_uri)) == {b_run}
+
+    # Sharing switched on: the first pull keeps the runs made while it was off, and the push
+    # at the end of that run shares them.
+    a_on = a.get("a_three")
+    assert a.local_runs() == local_only | {b_run, a_on}
+    assert set(shared_runs(state_uri)) == local_only | {b_run, a_on}
+
+
+def test_each_environment_carries_its_own_unpushed_rows(tmp_path):
+    # With a store, each environment has its own shared state and its own local database.
+    store = tmp_path / "store"
+
+    def machine(name: str) -> Machine:
+        m = Machine(tmp_path / name, tmp_path / "unused")
+        del m.env["BARCA_STATE_URI"]
+        m.env["BARCA_REMOTE_URI"] = str(store)
+        return m
+
+    def get(m: Machine, name: str, *args: str, **env: str) -> str:
+        (m.root / f"{name}.py").write_text(quick(name))
+        out = m.barca("get", f"{name}.py", "--json", *args, **env)
+        assert out.returncode == 0, out.stderr
+        return json.loads(out.stdout)["run_id"]
+
+    a, b = machine("a"), machine("b")
+    staging, default = (store / env / "state" / "metadata.db" for env in ("staging", "default"))
+
+    # Runs recorded locally only, one in each environment.
+    default_local = get(a, "one", BARCA_STATE="off")
+    staging_local = get(a, "one", "--env", "staging", BARCA_STATE="off")
+    assert not staging.exists() and not default.exists()
+    # Another machine creates the shared state of `staging`.
+    b_staging = get(b, "zero", "--env", "staging")
+
+    # A's next run in `staging` pulls it and carries over the staging run only.
+    staging_run = get(a, "two", "--env", "staging")
+    assert set(shared_runs(staging)) == {b_staging, staging_local, staging_run}
+    assert not default.exists()
+
+    # `default` has no shared state yet: A's local history there becomes it, as before.
+    default_run = get(a, "two")
+    assert set(shared_runs(default)) == {default_local, default_run}
+    assert set(shared_runs(staging)) == {b_staging, staging_local, staging_run}
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can write to a read-only directory")
+def test_a_run_whose_upload_failed_is_uploaded_by_the_next_run(machines, state_uri):
+    a, b = machines("a"), machines("b")
+    a_first = a.get("a_one")
+
+    # The upload at the end of A's next run fails: the shared location is not writable.
+    (a.root / "a_two.py").write_text(quick("a_two"))
+    for path in (state_uri.parent, state_uri):
+        path.chmod(0o555 if path.is_dir() else 0o444)
+    try:
+        out = a.barca("get", "a_two.py", "--json")
+    finally:
+        state_uri.parent.chmod(0o755)
+        state_uri.chmod(0o644)
+    assert out.returncode == 3, out.stderr
+    assert "shared state push" in out.stderr
+    (not_uploaded,) = a.local_runs() - {a_first}
+    assert set(shared_runs(state_uri)) == {a_first}
+
+    b_run = b.get("b_one")
+    (a.root / "a_three.py").write_text(quick("a_three"))
+    out = a.barca("get", "a_three.py", "--json")
     assert out.returncode == 0, out.stderr
-    assert note not in out.stderr
-    assert c_run in a.local_runs()
+    assert "kept 1 run and 1 finished step recorded only on this machine" in out.stderr
+    everything = {a_first, not_uploaded, b_run, json.loads(out.stdout)["run_id"]}
+    assert shared_runs(state_uri) == dict.fromkeys(everything, "success")
+    # Its result is still a cache hit.
+    out = a.barca("get", "a_two.py", "--json")
+    assert json.loads(out.stdout)["steps_executed"] == 0, out.stdout
+
+
+def test_a_damaged_shared_state_does_not_replace_the_local_history(machines, state_uri):
+    a = machines("a")
+    a_first = a.get("a_one")
+    good = state_uri.read_bytes()
+    state_uri.write_bytes(b"garbage")
+
+    for args in (("get", "a_one.py", "--json"), ("status", "a_one.py", "--json")):
+        out = a.barca(*args)
+        assert out.returncode == 3, (args, out.stderr)
+        assert "cannot be opened as a database" in out.stderr, out.stderr
+        assert "left as it was" in out.stderr, out.stderr
+        assert a.local_runs() == {a_first}
+        no_pull_leftovers(a)
+
+    # Once the shared state is repaired, the machine carries on.
+    state_uri.write_bytes(good)
+    assert a.local_runs() | {a.get("a_two")} == set(shared_runs(state_uri))
+
+
+def test_a_local_history_that_cannot_be_opened_is_replaced_with_a_warning(machines, state_uri):
+    a, b = machines("a"), machines("b")
+    a_first = a.get("a_one")
+    b_run = b.get("b_one")
+    a.db.write_bytes(b"garbage")
+    Path(f"{a.db}-wal").write_bytes(b"more garbage")
+
+    out = a.barca("status", "a_one.py", "--json")
+    assert out.returncode == 0, out.stderr
+    assert "warning: the local history could not be read" in out.stderr, out.stderr
+    assert a.local_runs() == {a_first, b_run}
