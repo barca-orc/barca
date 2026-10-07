@@ -423,7 +423,10 @@ async fn replace_locked(
                 state_prev::path(db_path)
             ))
         })?),
-        false => None,
+        false => {
+            state_prev::remove_leftover(db_path);
+            None
+        }
     };
     if stop_after == Some(ReplaceStage::PrevStaged) {
         // As a process killed here leaves it: the second name stays.
@@ -2493,8 +2496,18 @@ mod tests {
                 assert_eq!(runs(&local).await, generation_1.0, "{stop:?}");
             }
 
-            // The next pull ends where an undisturbed one would have, leaves no second name
-            // behind, and keeps the database it replaced.
+            // A pull that changes nothing keeps nothing, and still clears the leftover name.
+            crate::state_sync::checkpoint_truncate(&local)
+                .await
+                .unwrap();
+            let same = dir.path().join("same.db").to_string_lossy().to_string();
+            fs::copy(&local, &same).unwrap();
+            pull_for_tests(&local, Path::new(&same)).await;
+            assert!(!Path::new(&prev_tmp(&local)).exists(), "{stop:?}");
+            assert_eq!(rows_of_file(&dir, &prev).await, generation_0, "{stop:?}");
+
+            // The next pull that changes it ends where an undisturbed one would have, and
+            // keeps the database it replaced.
             let replaced = (runs(&local).await, steps(&local).await);
             let again = pushed_again_db(&dir, "again.db").await;
             add_run(&again, "theirs-4", "success").await;

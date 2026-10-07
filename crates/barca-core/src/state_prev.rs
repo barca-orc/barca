@@ -19,7 +19,7 @@
 //! A hard link costs the same whatever the size of the history, and nothing is read or
 //! written. `<db>.prev` only ever changes by that last rename, so at every instant it is
 //! either the previous generation, whole, or the new one, whole; a process that dies at any
-//! point leaves at worst a `.prev.tmp`, which the next pull removes. A pull that dies between
+//! point leaves at worst a `.prev.tmp`, which the next pull removes ([`remove_leftover`]). A pull that dies between
 //! steps 2 and 3 has replaced the database without updating `<db>.prev`, which then still
 //! holds the generation before.
 //!
@@ -92,6 +92,12 @@ impl Kept {
         }
         Ok(())
     }
+}
+
+/// Remove a `<db>.prev.tmp` left by a pull that was killed, for a pull that keeps nothing
+/// itself. The caller holds the database's lock, so no other pull is between its steps.
+pub(crate) fn remove_leftover(db_path: &str) {
+    let _ = remove_if_there(&tmp_path(db_path));
 }
 
 impl Drop for Kept {
@@ -170,6 +176,20 @@ mod tests {
         kept.publish().unwrap();
         assert_eq!(fs::read(path(&db)).unwrap(), b"generation 1");
         assert_eq!(fs::read(&db).unwrap(), b"generation 2");
+    }
+
+    #[test]
+    fn a_leftover_is_removed_without_touching_the_database_or_prev() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = db(&dir);
+        fs::write(&db, b"generation 1").unwrap();
+        fs::write(path(&db), b"generation 0").unwrap();
+        std::mem::forget(Kept::stage(&db).unwrap());
+        remove_leftover(&db);
+        assert!(!Path::new(&tmp_path(&db)).exists());
+        assert_eq!(fs::read(&db).unwrap(), b"generation 1");
+        assert_eq!(fs::read(path(&db)).unwrap(), b"generation 0");
+        remove_leftover(&db); // nothing there: nothing happens
     }
 
     #[cfg(unix)]
