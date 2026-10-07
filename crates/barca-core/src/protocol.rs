@@ -141,6 +141,9 @@ pub enum TransferRequest {
         #[serde(skip_serializing_if = "Option::is_none")]
         sha256: Option<String>,
     },
+    /// Is the store holding `root` there and listable? Answered `Done` only when its bucket,
+    /// container or root directory positively answers a listing. Creates nothing.
+    Probe { id: u64, root: String },
     /// Finish in-flight transfers, then exit.
     Shutdown,
 }
@@ -780,6 +783,15 @@ mod tests {
             }
             _ => panic!("expected Error"),
         }
+        let probe = serde_json::to_value(TransferRequest::Probe {
+            id: 9,
+            root: "s3://b/p/default/artifacts".to_string(),
+        })
+        .unwrap();
+        assert_eq!(
+            probe,
+            serde_json::json!({"type": "probe", "id": 9, "root": "s3://b/p/default/artifacts"})
+        );
         // A reply without attempts (older helper) counts as one attempt.
         let bare: TransferReply =
             serde_json::from_str(r#"{"type":"error","id":5,"message":"x"}"#).unwrap();

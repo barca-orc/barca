@@ -171,6 +171,30 @@ def get_file(src: str, local_path: "str | Path") -> None:
     get_fs(src).get_file(src, str(local_path))
 
 
+def check_store(root: str) -> None:
+    """Raise unless the store holding `root` is positively there and can be listed.
+
+    For a directory store that is the root directory itself. For an object store it is the
+    bucket or container: a listing of it has to succeed (an empty one is fine). A bucket that
+    was deleted, a misspelled name, an endpoint that answers 404 to everything and a store
+    that cannot be reached all raise here, which is what tells them apart from one object
+    being absent from a store that is otherwise fine.
+
+    Nothing is created: this never makes a bucket, a container or a directory.
+    """
+    local = local_path_of(root)
+    if local is not None:
+        with os.scandir(local) as entries:  # raises unless it is a readable directory
+            next(entries, None)
+        return
+    fs = get_fs(root)
+    container = fs._strip_protocol(root).strip("/").split("/", 1)[0]
+    if not container:
+        raise ValueError(f"no bucket or container in {root}")
+    fs.invalidate_cache()
+    fs.ls(container, detail=False)
+
+
 def exists(path: "str | Path") -> bool:
     """Existence check that works for local paths and remote URIs."""
     if is_remote(path):

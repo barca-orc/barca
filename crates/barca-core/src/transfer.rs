@@ -55,6 +55,11 @@ impl ArtifactLayout {
         &self.local_root
     }
 
+    /// The store root, without a trailing slash.
+    pub fn store_root(&self) -> &str {
+        &self.store_root
+    }
+
     /// Store location of a local artifact path, or None when the path is not
     /// under the local root.
     pub fn store_for(&self, local: &str) -> Option<String> {
@@ -358,6 +363,15 @@ impl TransferClient {
         report
     }
 
+    /// Ask the helper whether the artifact store is there: its bucket, container or root
+    /// directory exists and can be listed. `Err` carries the store's own error (or a timeout,
+    /// or a helper that is gone). Nothing is created in the store.
+    pub async fn probe(&mut self) -> Result<(), String> {
+        let root = self.layout.store_root().to_string();
+        let rx = self.send(|id| TransferRequest::Probe { id, root });
+        settle(rx).await.map(|_| ()).map_err(|f| f.message)
+    }
+
     /// Number of uploads queued since the last drain.
     pub fn pending_uploads(&self) -> usize {
         self.uploads.len()
@@ -454,6 +468,7 @@ async fn io_task(
                 let entry = match &req {
                     TransferRequest::Put { id, remote, .. } => Some((*id, format!("put {remote}"))),
                     TransferRequest::Get { id, remote, .. } => Some((*id, format!("get {remote}"))),
+                    TransferRequest::Probe { id, root } => Some((*id, format!("probe {root}"))),
                     TransferRequest::Shutdown => None,
                 };
                 if write_frame(&mut stream, &req).await.is_err() {
@@ -940,9 +955,31 @@ for t in threads: t.join()
             failures[0].message.contains("FileNotFoundError"),
             "{failures:?}"
         );
-        // The helper says the object is not there, which is what lets the run compute the
-        // step again instead of failing (#252).
+        // The helper says the object is not there. Together with a store that answers a
+        // probe, that is what lets the run compute the step again instead of failing (#252).
         assert!(failures[0].missing, "{failures:?}");
+        assert_eq!(within(c.probe()).await, Ok(()));
+
+        // The same "not found" from a store that is gone: the probe fails, and creates
+        // nothing.
+        std::fs::rename(&fx.store, fx.store.with_extension("unmounted")).unwrap();
+        let orphan = c
+            .fetch(
+                "gone2",
+                &format!("{}/gone2/h.json", fx.store.display()),
+                None,
+            )
+            .unwrap();
+        let failures = within(c.await_fetches(&[orphan])).await.failures;
+        assert!(failures[0].missing, "{failures:?}");
+        let probe = within(c.probe()).await;
+        assert!(
+            probe
+                .as_ref()
+                .is_err_and(|e| e.contains("FileNotFoundError")),
+            "{probe:?}"
+        );
+        assert!(!fx.store.exists());
         within(c.shutdown()).await;
     }
 }

@@ -14,6 +14,9 @@ reply carries the request id.
   → {"type": "get", "id", "remote", "local"}    download remote → local (atomic)
        optional "sha256": the hash recorded for the artifact. A local copy with that hash
        is kept as it is; any other is replaced by the store's copy.
+  → {"type": "probe", "id", "root"}             is the store holding `root` there and listable?
+       Replies "done" only when its bucket, container or root directory positively answers a
+       listing; anything else is an "error". Nothing is ever created by a probe.
   → {"type": "shutdown"}                        finish in-flight work, exit
   ← {"type": "done", "id", "size_bytes", "sha256", "fetched", "mismatch"}
        "sha256" is the local file's; "fetched" is false when a get left the local file as it
@@ -25,7 +28,8 @@ reply carries the request id.
                                                 a stalled attempt fails after
                                                 BARCA_TRANSFER_TIMEOUT seconds.
        "missing" is true when the source does not exist (for a get: the object is not in the
-       store). The coordinator recomputes such a cached result instead of failing the run.
+       store). That alone does not say the store is there: a deleted bucket answers the same
+       way. The coordinator recomputes such a cached result only after a "probe" succeeded.
 
 Transfers go through barca._storage, so credentials and BARCA_STORAGE_OPTIONS
 behave exactly as they do for workers and the state helper.
@@ -143,7 +147,10 @@ def _staged_get(remote: str, local: str, expected: str | None) -> dict:
 
 
 def _transfer(msg: dict) -> dict:
-    """Perform one put/get; return the reply fields describing the local file."""
+    """Perform one request; for a put/get return the reply fields describing the local file."""
+    if msg["type"] == "probe":
+        _storage.check_store(msg["root"])
+        return {"size_bytes": 0, "fetched": False, "mismatch": False}
     local = msg["local"]
     if msg["type"] == "put":
         _storage.put_file(local, msg["remote"])
@@ -320,7 +327,7 @@ def serve(
                 # attempt may still be stuck, and must not hold up exit.
                 requests.wait_idle()
                 return
-            if kind in ("put", "get"):
+            if kind in ("put", "get", "probe"):
                 requests.accept(msg["id"])
                 pool.submit(_handle, msg, requests, retries, backoff)
     finally:

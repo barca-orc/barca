@@ -269,6 +269,39 @@ class TestErrors:
         helper.request({"type": "put", "id": 2, "local": str(src), "remote": "memory://ok/x"})
         assert _sized(helper.reply()) == {"type": "done", "id": 2, "size_bytes": 2}
 
+    def test_a_probe_succeeds_only_when_the_store_is_there(self, helper, tmp_path):
+        """What lets the coordinator tell a missing object from a store that is gone (#252)."""
+        store = tmp_path / "store"
+        (store / "default" / "artifacts").mkdir(parents=True)
+        helper.request({"type": "probe", "id": 1, "root": str(store / "default" / "artifacts")})
+        assert helper.reply() == {
+            "type": "done",
+            "id": 1,
+            "size_bytes": 0,
+            "fetched": False,
+            "mismatch": False,
+        }
+
+        gone = tmp_path / "unmounted" / "default" / "artifacts"
+        helper.request({"type": "probe", "id": 2, "root": str(gone)})
+        r = helper.reply()
+        assert r["type"] == "error" and r["id"] == 2
+        assert "FileNotFoundError" in r["message"]
+        assert not gone.exists() and not gone.parent.exists(), "a probe must create nothing"
+
+    def test_a_probe_of_an_object_store_lists_its_bucket(self, helper, tmp_path):
+        import fsspec
+
+        fs = fsspec.filesystem("memory")
+        fs.pipe("/probe-bucket/proj/artifacts/n/h.json", b"1")
+        # The bucket is there, even though this root prefix holds nothing.
+        helper.request({"type": "probe", "id": 1, "root": "memory://probe-bucket/other/artifacts"})
+        assert helper.reply()["type"] == "done"
+        helper.request({"type": "probe", "id": 2, "root": "memory://no-such-bucket/proj/artifacts"})
+        r = helper.reply()
+        assert r["type"] == "error" and "FileNotFoundError" in r["message"]
+        assert not fs.exists("/no-such-bucket"), "a probe must create nothing"
+
     def test_missing_local_put_errors(self, helper, tmp_path):
         helper.request(
             {"type": "put", "id": 9, "local": str(tmp_path / "gone"), "remote": "memory://x/y"}
