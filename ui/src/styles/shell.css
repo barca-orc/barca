@@ -375,17 +375,20 @@
   color: var(--text-muted);
 }
 .barca-table-tools { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding-bottom: 12px; }
-.barca-search {
+/* The table's search box. One focus ring, on the box: the input inside would
+   otherwise get the global :focus-visible glow as well. */
+.barca-table-search {
   display: inline-flex; align-items: center; gap: 7px;
   height: 30px; padding: 0 10px; min-width: 260px;
   border: 1px solid var(--border-default); border-radius: var(--radius-sm);
   background: var(--bg-inset); color: var(--text-muted);
 }
-.barca-search:focus-within { border-color: var(--signal); }
-.barca-search input {
+.barca-table-search:focus-within { border-color: var(--signal); box-shadow: var(--focus-glow); }
+.barca-table-search input {
   flex: 1; border: 0; outline: 0; background: transparent;
   color: var(--text-default); font-family: var(--font-mono); font-size: var(--text-sm);
 }
+.barca-table-search input:focus-visible { box-shadow: none; }
 .barca-chips { display: flex; gap: 6px; flex-wrap: wrap; }
 .barca-chips button {
   display: inline-flex; align-items: center; gap: 6px;

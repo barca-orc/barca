@@ -167,7 +167,7 @@ export function AssetsPage() {
           </div>
         </div>
         <div className="barca-table-tools">
-          <label className="barca-search">
+          <label className="barca-table-search">
             <Search size={13} />
             <input
               placeholder="Search by name or file"
