@@ -322,6 +322,85 @@ def test_a_pipeline_file_wins_over_a_root_directory_without_init(tmp_path):
     assert actions["a/p.py:val"] == "run", "compute() in b/shared.py changed"
 
 
+OTHER_PIPELINE = """
+    from barca import asset
+
+
+    def compute():
+        return {value!r}
+
+
+    @asset()
+    def upstream() -> int:
+        return 1
+"""
+
+
+@pytest.mark.parametrize("target", ["p.py", "a/p.py"])
+@pytest.mark.parametrize(
+    "imports, body",
+    [
+        ("from shared.compute import compute", "return compute()"),
+        ("from shared import compute", "return compute.compute()"),
+        ("import shared.compute", "return shared.compute.compute()"),
+    ],
+    ids=["from N.sub import name", "from N import sub", "import N.sub"],
+)
+def test_a_pipeline_file_does_not_hide_a_directory_without_init(tmp_path, target, imports, body):
+    # `shared/` has no `__init__.py` and holds `compute.py`; an unrelated pipeline file is
+    # called `b/shared.py`. `shared.compute` can only be the file in the directory (a pipeline
+    # file is never a package), so that is what runs and what is hashed.
+    files = {
+        target: pipeline(imports, body),
+        "shared/compute.py": helper("in the directory"),
+        "b/shared.py": OTHER_PIPELINE.format(value="b"),
+    }
+    p = Project(tmp_path, files, target=target)
+    p.assert_reruns("in the directory", "cold run")
+    p.assert_cached("nothing changed")
+    write(tmp_path, {"b/shared.py": OTHER_PIPELINE.format(value="edited")})
+    p.assert_cached("b/shared.py is not what the step imports")
+    write(tmp_path, {"shared/compute.py": helper("new")})
+    p.assert_reruns("new", "compute() in shared/compute.py changed")
+
+
+def test_a_helper_named_like_another_pipeline_file_hashes_both(tmp_path):
+    # `a/p.py` imports `shared`: `shared.py` in the root, or the pipeline file `b/shared.py`
+    # if this worker has loaded it (its directory is then on the import path, before the
+    # root). Here `val` reads `b/shared.py`'s asset, so the worker has, and `b/shared.py` is
+    # what runs. Which one runs is not known when planning, so both are hashed.
+    files = {
+        "a/p.py": """
+            from barca import asset, asset_ref
+            from shared import compute
+
+
+            @asset(inputs={"u": asset_ref("b/shared.py:upstream")})
+            def val(u: int):
+                return compute()
+        """,
+        "shared.py": helper("root"),
+        "b/shared.py": OTHER_PIPELINE.format(value="from b"),
+    }
+    write(tmp_path, {"barca.toml": "", **files})
+
+    def val_action() -> str:
+        plan = barca(tmp_path, "get", "val", "--dry-run", "--json")
+        return {step["id"]: step["action"] for step in plan["steps"]}["a/p.py:val"]
+
+    first = barca(tmp_path, "get", "val")
+    assert first["steps_executed"] == 2 and first["final_output"] == "from b"
+    assert val_action() == "cached"
+    write(tmp_path, {"b/shared.py": OTHER_PIPELINE.format(value="edited")})
+    assert val_action() == "run", "compute() in b/shared.py, the file that ran, changed"
+    write(tmp_path, {"b/shared.py": OTHER_PIPELINE.format(value="from b")})
+    assert val_action() == "cached"
+    write(tmp_path, {"shared.py": helper("edited")})
+    assert val_action() == "run", (
+        "compute() in shared.py, which runs when b/ is not loaded, changed"
+    )
+
+
 # ─── What is never followed ──────────────────────────────────────────────────
 
 

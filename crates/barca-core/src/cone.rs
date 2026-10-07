@@ -83,6 +83,13 @@ pub trait ModuleSource {
     /// `None` when `name` is not a project module (standard library, installed package,
     /// namespace package, or nothing at all).
     fn module(&self, name: &str) -> Option<Rc<Module>>;
+
+    /// Other project files a worker may load under `name` instead of [`ModuleSource::module`],
+    /// when which one it loads cannot be known while planning. Each is a [`Module`] under a
+    /// name of its own; its definitions are added to the cone beside `module`'s.
+    fn alternatives(&self, _name: &str) -> Vec<Rc<Module>> {
+        Vec::new()
+    }
 }
 
 /// A fixed set of modules held in memory (tests, and callers with no project around them).
@@ -357,61 +364,71 @@ impl Cone<'_> {
         let found = (depth < MAX_MODULES_DEEP)
             .then(|| self.modules.module(module))
             .flatten();
-        let def = found.as_ref().and_then(|m| m.definitions().get(name));
-        match (found.as_deref(), def) {
-            (
-                Some(imported),
-                Some(
-                    ModuleDef::Function(code)
-                    | ModuleDef::Class(code)
-                    | ModuleDef::Assignment(code),
-                ),
+        if !found.is_some_and(|imported| self.definition(&imported, name, depth)) {
+            // Not a project module, or nothing barca can read `name` from there (defined
+            // dynamically, a module binding, a star import): a constant marker for the binding,
+            // so the hash still says the name is imported.
+            self.parts
+                .push((bound.to_string(), format!("import:{module}:{bound}").into()));
+        }
+        if depth < MAX_MODULES_DEEP {
+            for alternative in self.modules.alternatives(module) {
+                self.definition(&alternative, name, depth);
+            }
+        }
+    }
+
+    /// Add `module`'s definition of `name` and what it uses. `false` when it has none that can
+    /// be read statically.
+    fn definition(&mut self, module: &Module, name: &str, depth: usize) -> bool {
+        match module.definitions().get(name) {
+            Some(
+                ModuleDef::Function(code) | ModuleDef::Class(code) | ModuleDef::Assignment(code),
             ) => {
                 self.parts
-                    .push((format!("{module}:{name}"), code.source_text.clone()));
+                    .push((format!("{}:{name}", module.name), code.source_text.clone()));
                 let site = Site {
-                    module: imported,
+                    module,
                     is_pipeline: false,
                     depth: depth + 1,
                 };
                 self.follow(site, &code.uses);
+                true
             }
-            (
-                Some(_),
-                Some(ModuleDef::FromImport {
-                    module: next,
-                    name: original,
-                }),
-            ) => self.import(next, original, name, depth + 1),
-            // Not a project module, or nothing barca can read `name` from there (defined
-            // dynamically, a module binding, a star import): a constant marker for the binding,
-            // so the hash still says the name is imported.
-            _ => self
-                .parts
-                .push((bound.to_string(), format!("import:{module}:{bound}").into())),
+            Some(ModuleDef::FromImport {
+                module: next,
+                name: original,
+            }) => {
+                self.import(next, original, name, depth + 1);
+                true
+            }
+            Some(ModuleDef::ModuleImport { .. }) | None => false,
         }
     }
 
     /// Rule 5: the module's whole source, and everything its definitions use.
     fn whole_module(&mut self, name: &str, depth: usize) {
-        let Some(module) = self.modules.module(name) else {
-            return;
-        };
-        if depth >= MAX_MODULES_DEEP || !self.visited.insert(format!("{name}:*")) {
+        if depth >= MAX_MODULES_DEEP {
             return;
         }
-        self.parts
-            .push((format!("{name}:*"), module.source.clone()));
-        let every_definition = Uses {
-            names: module.definitions().keys().cloned().collect(),
-            ..Uses::default()
-        };
-        let site = Site {
-            module: &module,
-            is_pipeline: false,
-            depth: depth + 1,
-        };
-        self.follow(site, &every_definition);
+        let candidates = self.modules.module(name).into_iter();
+        for module in candidates.chain(self.modules.alternatives(name)) {
+            if !self.visited.insert(format!("{}:*", module.name)) {
+                continue;
+            }
+            self.parts
+                .push((format!("{}:*", module.name), module.source.clone()));
+            let every_definition = Uses {
+                names: module.definitions().keys().cloned().collect(),
+                ..Uses::default()
+            };
+            let site = Site {
+                module: &module,
+                is_pipeline: false,
+                depth: depth + 1,
+            };
+            self.follow(site, &every_definition);
+        }
     }
 }
 

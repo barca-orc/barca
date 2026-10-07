@@ -170,26 +170,24 @@ struct ImportPath {
     /// The directory of the pipeline files importing through this path.
     dir: PathBuf,
     path: Vec<PathBuf>,
-    pipelines: Rc<[Rc<PipelineFile>]>,
+    /// The project root, for labels that do not depend on where the project lives.
+    root: PathBuf,
+    /// The plan's pipeline files by stem, each list ordered by directory.
+    by_stem: Rc<HashMap<String, Vec<Rc<PipelineFile>>>>,
     files: Rc<SourceFiles>,
     found: RefCell<HashMap<String, Found>>,
 }
 
 impl ImportPath {
+    /// What `name` is on the import path, by Python's rules; never a pipeline file reached by
+    /// its stem (see [`ImportPath::module`]). Used for `name` itself and as the parent of
+    /// `name.sub`.
     fn find(&self, name: &str) -> Found {
         if let Some(found) = self.found.borrow().get(name) {
             return found.clone();
         }
         let found = match name.rsplit_once('.') {
-            None => match self.search(name, name, &self.path) {
-                module @ Found::Module(..) => module,
-                // A namespace package loses to a regular module anywhere on `sys.path`, so a
-                // pipeline file of that name still wins over a directory without `__init__.py`.
-                not_a_module => match self.other_pipeline(name) {
-                    Found::Missing => not_a_module,
-                    pipeline => pipeline,
-                },
-            },
+            None => self.search(name, name, &self.path),
             Some((parent, leaf)) => match self.find(parent) {
                 Found::Module(_, Some(dir)) => self.search(name, leaf, &[dir]),
                 Found::Namespace(dirs) => self.search(name, leaf, &dirs),
@@ -233,25 +231,75 @@ impl ImportPath {
         }
     }
 
-    /// A pipeline file in another directory, by its stem. Every pipeline directory a worker has
-    /// loaded from stays on its `sys.path` (`barca docs discovery`, "Node ids"), so the name can
-    /// resolve at run time; it is tried last, as that path is searched last.
-    fn other_pipeline(&self, name: &str) -> Found {
-        self.pipelines
-            .iter()
-            .find(|p| p.stem == name && p.dir != self.dir)
-            .map_or(Found::Missing, |p| {
-                Found::Module(Rc::new(Module::new(name, p.source.clone(), false)), None)
-            })
+    /// Pipeline files in other directories whose stem is the top-level name `name`.
+    fn pipelines_named(&self, name: &str) -> impl Iterator<Item = &Rc<PipelineFile>> {
+        let named = self.by_stem.get(name).map_or(&[][..], Vec::as_slice);
+        named.iter().filter(|p| p.dir != self.dir)
+    }
+
+    /// `file` as the module `name`.
+    fn pipeline_module(&self, file: &PipelineFile, name: &str) -> Option<Rc<Module>> {
+        self.files.module(file.path.clone(), name, false)
+    }
+
+    /// Whether the import path itself (not another pipeline's directory) reaches `file`.
+    fn on_path(&self, file: &PipelineFile) -> bool {
+        self.path.contains(&file.dir)
     }
 }
 
+/// The module whose *contents* an import of `name` reads, for the cone.
+///
+/// A worker's `sys.path` is the import path of the file it is loading (see the top of this
+/// file) plus, between the file's directory and the root, the directory of every other
+/// pipeline file that worker has loaded by path. Whether it has loaded one is not known when
+/// planning, so a top-level name `N` that is also another pipeline file's stem (`b/N.py`) can
+/// mean two things. What the worker does, established by running it for a pipeline in the
+/// root, in a subdirectory and in a package (they agree), `b/` loaded or not:
+///
+/// | `N` on the import path | form                              | `b/` not loaded | `b/` loaded     |
+/// |------------------------|-----------------------------------|-----------------|-----------------|
+/// | regular module/package | `import N`, `from N import attr`  | the path's `N`  | `b/N.py`        |
+/// | regular package        | `N.sub` forms                     | `N/sub.py`      | import fails    |
+/// | directory, no init     | `import N`, `from N import attr`  | attr not found  | `b/N.py`        |
+/// | directory, no init     | `N.sub` forms                     | `N/sub.py`      | import fails    |
+/// | nothing                | `import N`, `from N import attr`  | import fails    | `b/N.py`        |
+/// | nothing                | `N.sub` forms                     | import fails    | import fails    |
+///
+/// (`N.sub` forms: `import N.sub`, `from N import sub`, `from N.sub import name`. Without a
+/// `b/N.py`, only the first column exists.)
+///
+/// So, to hash whatever can run:
+/// - `N.sub` always resolves on the import path ([`ImportPath::find`]): a pipeline file is
+///   never a package, and never hides the submodules of a directory.
+/// - The contents of `N` itself are the path's regular module when there is one, otherwise
+///   `b/N.py` ([`ModuleSource::module`]).
+/// - When both exist, either may run, so `b/N.py` is hashed as well
+///   ([`ModuleSource::alternatives`]).
 impl ModuleSource for ImportPath {
     fn module(&self, name: &str) -> Option<Rc<Module>> {
         match self.find(name) {
             Found::Module(module, _) => Some(module),
-            Found::Namespace(_) | Found::Missing => None,
+            Found::Namespace(_) | Found::Missing => self
+                .pipelines_named(name)
+                .next()
+                .and_then(|file| self.pipeline_module(file, name)),
         }
+    }
+
+    fn alternatives(&self, name: &str) -> Vec<Rc<Module>> {
+        if !matches!(self.find(name), Found::Module(..)) {
+            return Vec::new();
+        }
+        // A file on the import path is the path's own `N`, or legitimately shadowed by it.
+        self.pipelines_named(name)
+            .filter(|file| !self.on_path(file))
+            .filter_map(|file| {
+                let dir = file.dir.strip_prefix(&self.root).unwrap_or(&file.dir);
+                let label = format!("{name}@{}", dir.to_string_lossy().replace('\\', "/"));
+                self.pipeline_module(file, &label)
+            })
+            .collect()
     }
 }
 
@@ -264,8 +312,8 @@ pub struct ProjectCones {
     files: Rc<SourceFiles>,
     /// The plan's pipeline files, in the order given.
     pipelines: Vec<Rc<PipelineFile>>,
-    /// The same files in the order the by-stem fallback tries them: by directory, then as given.
-    by_directory: Rc<[Rc<PipelineFile>]>,
+    /// The same files by stem, each list ordered by directory, then as given.
+    by_stem: Rc<HashMap<String, Vec<Rc<PipelineFile>>>>,
     /// [`package_of`] each pipeline directory, asked once.
     packages: HashMap<PathBuf, Option<String>>,
     /// Pipeline files that share a directory and a layout share an import path, and with it
@@ -301,11 +349,15 @@ impl ProjectCones {
         }
         let mut by_directory = pipelines.clone();
         by_directory.sort_by(|a, b| a.dir.cmp(&b.dir));
+        let mut by_stem: HashMap<String, Vec<Rc<PipelineFile>>> = HashMap::new();
+        for file in by_directory {
+            by_stem.entry(file.stem.clone()).or_default().push(file);
+        }
         ProjectCones {
             root,
             files: Rc::new(files),
             pipelines,
-            by_directory: by_directory.into(),
+            by_stem: Rc::new(by_stem),
             packages: HashMap::new(),
             import_paths: HashMap::new(),
         }
@@ -326,7 +378,8 @@ impl ProjectCones {
             .or_insert_with(|| ImportPath {
                 dir: file.dir.clone(),
                 path: layout.path,
-                pipelines: self.by_directory.clone(),
+                root: self.root.clone(),
+                by_stem: self.by_stem.clone(),
                 files: self.files.clone(),
                 found: RefCell::new(HashMap::new()),
             });
@@ -777,6 +830,185 @@ mod tests {
             p.hash("a/p.py"),
             Project::new(&[("a/p.py", USES_HELPERS)]).hash("a/p.py")
         );
+    }
+
+    // ─── A top-level name that is also another pipeline file's stem ──────────────
+
+    /// Every cell of the table on `impl ModuleSource for ImportPath`, for a pipeline in the
+    /// root, in a subdirectory and in a package: the files a worker can load for the import
+    /// (with `b/` loaded or not) are exactly the files whose edit changes the hash. A cell
+    /// whose import always fails tracks nothing, and no cell reads an unrelated file.
+    #[test]
+    fn a_name_shared_with_another_pipeline_file_follows_what_the_worker_can_load() {
+        const MODULE: &str = "def name():\n    return 1\n";
+        // (form, reads `shared.sub` rather than an attribute of `shared`, pipeline source)
+        let forms: [(&str, bool, &str); 5] = [
+            (
+                "import N",
+                false,
+                "import shared\n\n\ndef step():\n    return shared.name()\n",
+            ),
+            (
+                "from N import attr",
+                false,
+                "from shared import name\n\n\ndef step():\n    return name()\n",
+            ),
+            (
+                "import N.sub",
+                true,
+                "import shared.sub\n\n\ndef step():\n    return shared.sub.name()\n",
+            ),
+            (
+                "from N import sub",
+                true,
+                "from shared import sub\n\n\ndef step():\n    return sub.name()\n",
+            ),
+            (
+                "from N.sub import name",
+                true,
+                "from shared.sub import name\n\n\ndef step():\n    return name()\n",
+            ),
+        ];
+        // What `shared` is in the root, which is on every pipeline's import path.
+        let kinds: [(&str, &[&str]); 3] = [
+            ("regular package", &["shared/__init__.py", "shared/sub.py"]),
+            ("directory without init", &["shared/sub.py"]),
+            ("nothing", &[]),
+        ];
+        let mut cells = 0;
+        for pipeline in ["p.py", "a/p.py", "pkg/p.py"] {
+            for (kind, kind_files) in kinds {
+                for with_stem in [false, true] {
+                    for (form, sub_form, source) in forms {
+                        let mut files: Vec<(String, &str)> =
+                            kind_files.iter().map(|f| (f.to_string(), MODULE)).collect();
+                        files.push((pipeline.to_string(), source));
+                        if pipeline == "pkg/p.py" {
+                            files.push(("pkg/__init__.py".to_string(), ""));
+                        }
+                        let mut plan = vec![pipeline];
+                        if with_stem {
+                            files.push(("b/shared.py".to_string(), MODULE));
+                            plan.push("b/shared.py");
+                        }
+                        let borrowed: Vec<(&str, &str)> =
+                            files.iter().map(|(f, s)| (f.as_str(), *s)).collect();
+                        let project = Project::new(&borrowed);
+
+                        let expected: Vec<&str> = match (kind, sub_form) {
+                            ("regular package", true) => vec!["shared/sub.py"],
+                            ("regular package", false) if with_stem => {
+                                vec!["shared/__init__.py", "b/shared.py"]
+                            }
+                            ("regular package", false) => vec!["shared/__init__.py"],
+                            ("directory without init", true) => vec!["shared/sub.py"],
+                            (_, false) if with_stem => vec!["b/shared.py"],
+                            _ => vec![],
+                        };
+
+                        let (before, read) = project.plan(&plan);
+                        let candidates = ["shared/__init__.py", "shared/sub.py", "b/shared.py"];
+                        for file in candidates {
+                            if !files.iter().any(|(f, _)| f == file) {
+                                continue;
+                            }
+                            project.write(file, &MODULE.replace("return 1", "return 22"));
+                            let changed = project.plan(&plan).0[0] != before[0];
+                            project.write(file, MODULE);
+                            assert_eq!(
+                                changed,
+                                expected.contains(&file),
+                                "{pipeline}, `shared` is {kind}, b/shared.py: {with_stem}, \
+                                 `{form}`: editing {file}"
+                            );
+                        }
+                        assert!(
+                            read.iter().all(|f| candidates.contains(&f.as_str())),
+                            "{pipeline}, {kind}, {form}: read {read:?}"
+                        );
+                        cells += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(cells, 3 * 3 * 2 * 5);
+    }
+
+    #[test]
+    fn a_name_in_the_pipeline_directory_follows_the_same_table() {
+        const MODULE: &str = "def name():\n    return 1\n";
+        let attr = "from shared import name\n\n\ndef step():\n    return name()\n";
+        let sub = "from shared.sub import name\n\n\ndef step():\n    return name()\n";
+        let edited = MODULE.replace("return 1", "return 22");
+        let changes = |project: &Project, plan: &[&str], file: &str| {
+            let before = project.plan(plan).0[0].clone();
+            project.write(file, &edited);
+            let changed = project.plan(plan).0[0] != before;
+            project.write(file, MODULE);
+            changed
+        };
+
+        // A module beside a subdirectory pipeline shadows a root directory without init, and
+        // makes `shared.sub` unimportable. A package pipeline does not see its own directory.
+        for (pipeline, own, source, expected) in [
+            ("a/p.py", "a/shared.py", attr, &["a/shared.py"][..]),
+            ("a/p.py", "a/shared.py", sub, &[][..]),
+            ("pkg/p.py", "pkg/shared.py", attr, &[][..]),
+            ("pkg/p.py", "pkg/shared.py", sub, &["shared/sub.py"][..]),
+        ] {
+            let project = Project::new(&[
+                (pipeline, source),
+                ("pkg/__init__.py", ""),
+                (own, MODULE),
+                ("shared/sub.py", MODULE),
+            ]);
+            for file in [own, "shared/sub.py"] {
+                let tracked = expected.contains(&file);
+                assert_eq!(
+                    changes(&project, &[pipeline], file),
+                    tracked,
+                    "{pipeline} {file}"
+                );
+            }
+        }
+
+        // A directory without init beside the pipeline, and `b/shared.py`.
+        for (pipeline, source, expected) in [
+            ("a/p.py", attr, &["b/shared.py"][..]),
+            ("a/p.py", sub, &["a/shared/sub.py"][..]),
+            ("pkg/p.py", attr, &["b/shared.py"][..]),
+            ("pkg/p.py", sub, &[][..]),
+        ] {
+            let own_sub = pipeline.replace("p.py", "shared/sub.py");
+            let project = Project::new(&[
+                (pipeline, source),
+                ("pkg/__init__.py", ""),
+                (&own_sub, MODULE),
+                ("b/shared.py", MODULE),
+            ]);
+            let plan = [pipeline, "b/shared.py"];
+            for file in [own_sub.as_str(), "b/shared.py"] {
+                let tracked = expected.contains(&file);
+                assert_eq!(changes(&project, &plan, file), tracked, "{pipeline} {file}");
+            }
+        }
+    }
+
+    #[test]
+    fn alternatives_are_labelled_relative_to_the_root() {
+        // The hash must not depend on where the project is checked out.
+        let files = [
+            (
+                "a/p.py",
+                "from shared import name\n\n\ndef step():\n    return name()\n",
+            ),
+            ("shared.py", "def name():\n    return 1\n"),
+            ("b/shared.py", "def name():\n    return 2\n"),
+        ];
+        let plan = ["a/p.py", "b/shared.py"];
+        let first = Project::new(&files).plan(&plan).0;
+        let second = Project::new(&files).plan(&plan).0;
+        assert_eq!(first[0], second[0]);
     }
 
     // ─── Cost: only what is imported is read, once ───────────────────────────────
