@@ -179,7 +179,7 @@
   letter-spacing: -0.015em;
 }
 .barca-view-actions { margin-left: auto; display: flex; align-items: center; gap: 6px; }
-.barca-view-body { flex: 1; min-height: 0; overflow: auto; padding: 18px 24px; }
+.barca-view-body { flex: 1; min-height: 0; overflow: auto; padding: 18px 24px; scrollbar-gutter: stable; }
 
 /* connection chip */
 .barca-conn {
@@ -189,7 +189,23 @@
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--text-muted);
+  /* Fits "barca serve · v0.18.0" so connecting -> online does not move the bar. */
+  min-width: 150px;
+  justify-content: flex-end;
+  white-space: nowrap;
 }
+
+/* Layout stability. Anything that arrives after the first paint reserves its space:
+   a Skeleton sized like the content, or a fixed-size slot that is always rendered.
+   `pnpm test:e2e` (layout-shift.spec.ts) fails when a page moves while data loads. */
+.barca-skeleton {
+  display: block;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(90deg, var(--bg-inset) 25%, var(--bg-hover) 50%, var(--bg-inset) 75%);
+  background-size: 200% 100%;
+  animation: barca-shimmer 1.4s var(--ease-in-out) infinite;
+}
+@keyframes barca-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 
 /* asset list (foundation placeholder for the graph) */
 .barca-asset-row {
@@ -383,7 +399,9 @@
   font-size: var(--text-xs);
   color: var(--text-muted);
 }
-.barca-table-tools { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding-bottom: 12px; }
+.barca-table-tools { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding-bottom: 12px; min-height: 42px; }
+/* The chips-only rows are shorter than the search row; the same minimum keeps them from
+   growing when their first chip appears. */
 /* The table's search box. One focus ring, on the box: the input inside would
    otherwise get the global :focus-visible glow as well. */
 .barca-table-search {
@@ -476,7 +494,7 @@
 .barca-assets-split > .barca-view-body { flex: 1; min-width: 0; }
 .barca-table tbody tr[aria-selected="true"] { background: var(--bg-hover); box-shadow: inset 2px 0 0 var(--signal); }
 .barca-panel {
-  width: 440px; flex: none; overflow: auto;
+  width: 440px; flex: none; overflow: auto; scrollbar-gutter: stable;
   border-left: 1px solid var(--border-default); background: var(--bg-raised);
   padding: 16px 18px 28px;
 }
@@ -518,3 +536,15 @@
 /* A table's scroll area starts flush with its sticky header: any top padding
    leaves a strip above the pinned header where scrolled rows show through. */
 .barca-table-scroll { padding-top: 0; }
+
+/* Duration distribution under "took": the last attempt's bin is highlighted. The slot has
+   a fixed height and is rendered whether or not there is a distribution yet. */
+.barca-hist { margin: 6px 0 10px; height: 56px; display: flex; flex-direction: column; }
+.barca-hist-bars { display: flex; align-items: flex-end; gap: 2px; height: 36px; border-bottom: 1px solid var(--border-subtle); }
+.barca-hist-bars span { flex: 1; background: var(--status-success); opacity: 0.45; border-radius: 2px 2px 0 0; }
+.barca-hist-bars span.is-last { background: var(--signal); opacity: 1; }
+.barca-hist-axis { display: flex; justify-content: space-between; margin-top: 3px; font-family: var(--font-mono); font-size: var(--text-2xs); }
+.barca-hist-note { margin: 0; flex: 1; display: flex; align-items: center; font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--text-muted); }
+/* History while loading: the stats row, then the bars, as tall as they will be. */
+.barca-stats { min-height: 34px; }
+.barca-table-skeleton { display: flex; flex-direction: column; gap: 4px; padding-top: 4px; }

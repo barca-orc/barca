@@ -21,3 +21,9 @@ export type { DagNodeProps } from './DagNode'
 
 export { LogViewer } from './LogViewer'
 export type { LogViewerProps } from './LogViewer'
+
+export { Skeleton } from './Skeleton'
+export type { SkeletonProps } from './Skeleton'
+
+export { ConnectionBadge } from './ConnectionBadge'
+export type { ConnectionBadgeProps } from './ConnectionBadge'

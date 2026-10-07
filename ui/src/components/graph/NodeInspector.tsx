@@ -1,8 +1,6 @@
 import { X, Download, Play, Terminal, CircleAlert } from 'lucide-react'
 import { match } from 'ts-pattern'
 import { Button, IconButton, StatusBadge, Tag, StatusDot, LogViewer } from '@/components'
-import { useTriggerGet } from '@/hooks/useTriggerGet'
-import { useTriggerRun } from '@/hooks/useTriggerRun'
 import { freshnessLabel } from '@/lib/status'
 import { shortName } from '@/lib/graph'
 import { runFeedback } from '@/lib/runFeedback'
@@ -20,8 +18,11 @@ interface NodeInspectorProps {
   error: string | null
   /** The server refuses runs (`barca serve --read-only`). */
   readOnly: boolean
-  /** Fired when a get/run is triggered, with the run handle + target node id. */
-  onTrigger: (handle: string, nodeId: string) => void
+  /** The node's trigger verb and state (owned by the page, shared with the topbar). */
+  verb: 'run' | 'get'
+  triggering: boolean
+  triggerError: Error | null
+  onFire: () => void
   onClose: () => void
 }
 
@@ -59,24 +60,14 @@ export function NodeInspector({
   running,
   error,
   readOnly,
-  onTrigger,
+  verb,
+  triggering,
+  triggerError,
+  onFire,
   onClose,
 }: NodeInspectorProps) {
-  const getTrigger = useTriggerGet()
-  const runTrigger = useTriggerRun()
   const name = shortName(asset.id)
-
-  // Canonical barca verbs: `run` a task (always re-executes), `get` an asset or
-  // sensor (cache-aware). No "materialize".
   const isTask = asset.kind === 'task'
-  const trigger = isTask ? runTrigger : getTrigger
-  const verb = isTask ? 'run' : 'get'
-
-  const onFire = () => {
-    trigger.mutate(name, {
-      onSuccess: (data) => onTrigger(data.run_id, asset.id),
-    })
-  }
 
   // Presentation logic (pure, tested) decides the feedback descriptor; this
   // component only maps each descriptor variant to elements. Exhaustive on both
@@ -148,7 +139,7 @@ export function NodeInspector({
             variant="signal"
             size="sm"
             iconLeft={isTask ? <Play size={12} /> : <Download size={12} />}
-            loading={trigger.isPending || running}
+            loading={triggering || running}
             disabled={readOnly}
             title={readOnly ? 'This server is read-only' : undefined}
             onClick={onFire}
@@ -164,8 +155,8 @@ export function NodeInspector({
 
         {/* Failure of the trigger request itself (network/404), distinct from a
             run that started and then failed. */}
-        {trigger.isError && (
-          <ErrorPanel title={`could not start ${verb}`} message={(trigger.error as Error).message} />
+        {triggerError && (
+          <ErrorPanel title={`could not start ${verb}`} message={triggerError.message} />
         )}
       </div>
     </div>

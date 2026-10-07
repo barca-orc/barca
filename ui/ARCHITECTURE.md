@@ -88,6 +88,31 @@ The two pure steps are covered by `runStream.test.ts` and `runFeedback.test.ts`,
 including the worker-failure path (`"No module named 'sklearn'"` → node `failed` + error
 surfaced). No browser, no server, no mocks.
 
+## Layout stability
+
+A page must not move when its data arrives. The rules:
+
+- **Reserve the space.** Content that loads later gets a `Skeleton` sized like what will
+  replace it, or a fixed-size slot that is always rendered (the node panel's duration
+  histogram shows "needs two or more successful runs" in the same box). Never render
+  `{data && <Thing/>}` where `Thing` changes the height of what follows it.
+- **Late things go last.** A control that appears after data loads (a filter chip) sits after
+  the controls that are always there, so it pushes nothing that was already placed.
+- **Three states, not two.** "Not loaded yet" is its own state (`lib/connection.ts`:
+  connecting / online / offline). Showing the failure state until the data arrives is wrong
+  and shifts when the truth lands.
+- **Fixed-width digits.** `font-variant-numeric: tabular-nums` is on `body`; numbers that
+  update in place keep their width.
+- **Scrollbars take their space always** (`scrollbar-gutter: stable` on the scroll areas).
+
+`e2e/layout-shift.spec.ts` enforces this: every flow runs with the API held back 800ms (so the
+loading state is visible and the data lands after the browser's 500ms input window) and
+fails over a small shift budget, naming the elements that moved. A new page or panel gets a
+flow there. Run it with `pnpm test:e2e`; `e2e/helpers/layoutShift.ts` has the helpers.
+
+Known gap: the self-hosted fonts load with `font-display: swap`, which reflows text once when
+they arrive. The tests do not exercise that (fonts are local and fast).
+
 ## Toolchain
 
 - **pnpm**, **strict TypeScript** (latest stable), **ts-pattern** across the board.

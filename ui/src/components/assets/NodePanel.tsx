@@ -1,10 +1,10 @@
 import { useEffect } from 'react'
 import { GitBranch, X } from 'lucide-react'
-import { IconButton, StatusBadge, Tag } from '@/components'
+import { IconButton, Skeleton, StatusBadge, Tag } from '@/components'
 import { useAssetDetail } from '@/hooks/useAssetDetail'
 import { buildRows, formatAgo, formatSeconds, severityStatus } from '@/lib/assetTable'
 import { freshnessLabel } from '@/lib/status'
-import { downstreamOf, formatBytes, historyBars, shortHash } from '@/lib/nodeDetail'
+import { downstreamOf, durationHistogram, formatBytes, historyBars, shortHash } from '@/lib/nodeDetail'
 import type { NodeState } from '@/lib/types'
 
 interface NodePanelProps {
@@ -46,6 +46,7 @@ export function NodePanel({ node, nodes, nowMs, onSelect, onOpenGraph, onClose }
   const last = node.last_materialization
   const stats = detail?.stats
   const bars = stats ? historyBars(stats.recent_runs) : []
+  const histogram = stats ? durationHistogram(stats.recent_runs, last?.elapsed_seconds ?? null) : []
   const upstream = node.inputs
     .map((id) => nodes.find((n) => n.id === id))
     .filter((n): n is NodeState => n !== undefined)
@@ -118,6 +119,35 @@ export function NodePanel({ node, nodes, nowMs, onSelect, onOpenGraph, onClose }
               {formatAgo(last.created_at, nowMs)} · {last.created_at} UTC
             </Row>
             {last.elapsed_seconds !== null && <Row k="took">{formatSeconds(last.elapsed_seconds)}</Row>}
+            {last.elapsed_seconds !== null && (
+              <div
+                className="barca-hist"
+                aria-label="Distribution of successful run durations; the last attempt is highlighted"
+              >
+                {isLoading ? (
+                  <Skeleton height={36} />
+                ) : histogram.length > 0 ? (
+                  <>
+                    <div className="barca-hist-bars">
+                      {histogram.map((b, i) => (
+                        <span
+                          key={i}
+                          className={b.isLast ? 'is-last' : undefined}
+                          style={{ height: `${b.heightPct}%` }}
+                          title={b.label}
+                        />
+                      ))}
+                    </div>
+                    <div className="barca-hist-axis">
+                      <span>{formatSeconds(histogram[0]?.from ?? 0)}</span>
+                      <span>{formatSeconds(histogram[histogram.length - 1]?.to ?? 0)}</span>
+                    </div>
+                  </>
+                ) : (
+                  <p className="barca-hist-note">needs two or more successful runs</p>
+                )}
+              </div>
+            )}
             {last.format && (
               <Row k="output">
                 {last.format}
@@ -133,7 +163,14 @@ export function NodePanel({ node, nodes, nowMs, onSelect, onOpenGraph, onClose }
       </Section>
 
       <Section title="History">
-        {isLoading && <p className="barca-panel-note">Loading…</p>}
+        {isLoading && (
+          <>
+            <div className="barca-stats">
+              <Skeleton width={220} height={34} />
+            </div>
+            <Skeleton height={44} style={{ margin: '12px 0 8px' }} />
+          </>
+        )}
         {isError && <p className="barca-panel-note">Couldn't load run history.</p>}
         {stats && stats.total_runs === 0 && <p className="barca-panel-note">No runs recorded.</p>}
         {stats && stats.total_runs > 0 && (
@@ -161,10 +198,12 @@ export function NodePanel({ node, nodes, nowMs, onSelect, onOpenGraph, onClose }
                   <span>max</span>
                 </div>
               )}
-              <div>
-                <b>{Math.round(stats.cache_hit_rate * 100)}%</b>
-                <span>cache hits</span>
-              </div>
+              {node.kind !== 'task' && (
+                <div>
+                  <b>{Math.round(stats.cache_hit_rate * 100)}%</b>
+                  <span>cache hits</span>
+                </div>
+              )}
             </div>
             <div className="barca-bars" aria-label="Recent run durations, oldest first">
               {bars.map((b, i) => (
@@ -222,7 +261,9 @@ export function NodePanel({ node, nodes, nowMs, onSelect, onOpenGraph, onClose }
       </Section>
 
       <Section title="Metadata">
-        {detail && <Row k="runs when">{freshnessLabel(detail.asset.freshness)}</Row>}
+        <Row k="runs when">
+          {detail ? freshnessLabel(detail.asset.freshness) : <Skeleton width={72} height={12} />}
+        </Row>
         {row?.nextRunMs != null && (
           <Row k="next run">{new Date(row.nextRunMs).toLocaleString()}</Row>
         )}

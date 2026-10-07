@@ -1,10 +1,11 @@
 import { useMemo } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
 import { ArrowDown, ArrowUp, Search, X } from 'lucide-react'
-import { StatusBadge, StatusDot, Tag } from '@/components'
+import { ConnectionBadge, Skeleton, StatusBadge, StatusDot, Tag } from '@/components'
 import { useAssetStates } from '@/hooks/useAssetStates'
 import { NodePanel } from '@/components/assets/NodePanel'
 import { useHealth } from '@/hooks/useHealth'
+import { connection } from '@/lib/connection'
 import { inPipeline, pipelineName } from '@/lib/pipeline'
 import {
   EMPTY_FILTERS,
@@ -98,7 +99,7 @@ function SortHeader({
 
 export function AssetsPage() {
   const { data, isError, error, dataUpdatedAt } = useAssetStates()
-  const { data: health } = useHealth()
+  const { data: health, isError: healthError } = useHealth()
   const navigate = useNavigate()
   // The sort lives in the URL (#/assets?sort=typical&dir=desc), so it survives
   // a reload and can be shared.
@@ -152,18 +153,17 @@ export function AssetsPage() {
         <div className="barca-view-bar">
           <div className="barca-view-title">
             <h1>{pipeline ? pipelineName(pipeline) : 'Assets'}</h1>
-            {data && (
+            {data ? (
               <span className="barca-count" title={pipeline ?? undefined}>
                 {pipeline ? `${rows.length} of ${data.length} nodes · ${pipeline}` : `${rows.length} nodes`}
               </span>
+            ) : (
+              <Skeleton width={64} height={14} />
             )}
           </div>
           <div className="barca-view-actions">
             {health?.read_only && <Tag tone="bare">read-only</Tag>}
-            <span className="barca-conn">
-              <StatusDot status={health && !isError ? 'success' : 'queued'} size={6} />
-              {health ? `barca serve · v${health.version}` : 'offline'}
-            </span>
+            <ConnectionBadge connection={connection(health, healthError)} />
           </div>
         </div>
         <div className="barca-table-tools">
@@ -175,6 +175,21 @@ export function AssetsPage() {
               onChange={(e) => setFilters({ ...filters, query: e.target.value })}
               autoFocus
             />
+          </label>
+
+          <label className="barca-select">
+            <span>Last run</span>
+            <select
+              value={filters.lastRun}
+              onChange={(e) => setFilters({ ...filters, lastRun: e.target.value as LastRun })}
+            >
+              {LAST_RUNS.map((l) => (
+                <option key={l} value={l}>
+                  {LAST_RUN_LABEL[l]}
+                  {l === 'any' ? '' : ` (${counts.lastRun[l]})`}
+                </option>
+              ))}
+            </select>
           </label>
 
           <div className="barca-chips" role="group" aria-label="Kind">
@@ -191,20 +206,6 @@ export function AssetsPage() {
             ))}
           </div>
 
-          <label className="barca-select">
-            <span>Last run</span>
-            <select
-              value={filters.lastRun}
-              onChange={(e) => setFilters({ ...filters, lastRun: e.target.value as LastRun })}
-            >
-              {LAST_RUNS.map((l) => (
-                <option key={l} value={l}>
-                  {LAST_RUN_LABEL[l]}
-                  {l === 'any' ? '' : ` (${counts.lastRun[l]})`}
-                </option>
-              ))}
-            </select>
-          </label>
 
           {(counts.scheduled > 0 || filters.scheduled) && (
             <div className="barca-chips">
@@ -266,7 +267,11 @@ export function AssetsPage() {
             Can't load state: {error instanceof Error ? error.message : 'barca serve is not reachable'}
           </p>
         ) : !data ? (
-          <p className="barca-table-empty">Loading…</p>
+          <div className="barca-table-skeleton" aria-label="Loading">
+            {[0, 1, 2, 3, 4, 5].map((i) => (
+              <Skeleton key={i} height={52} />
+            ))}
+          </div>
         ) : visible.length === 0 ? (
           <p className="barca-table-empty">Nothing matches.</p>
         ) : (
