@@ -382,7 +382,7 @@ async fn run_helper(
     cmd.stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
-    let mut child = cmd.spawn().map_err(HelperFailed::Spawn)?;
+    let mut child = crate::helper_proc::spawn(&mut cmd).map_err(HelperFailed::Spawn)?;
     let pid = child.id();
     // Held until the helper is done or told to stop: `wait_with_output` would close it at
     // once.

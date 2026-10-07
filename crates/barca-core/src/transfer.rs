@@ -204,7 +204,7 @@ impl Launching {
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
             .kill_on_drop(true);
-        let mut child = cmd.spawn().map_err(|e| {
+        let mut child = crate::helper_proc::spawn(&mut cmd).map_err(|e| {
             std::fs::remove_file(&socket_path).ok();
             BarcaError::Other(format!("failed to spawn transfer helper: {e}"))
         })?;

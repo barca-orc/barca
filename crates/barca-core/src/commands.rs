@@ -4584,11 +4584,15 @@ fn resolve_dynamic_partitions(nodes: &mut [crate::model::ExtractedNode], python:
                     .write_all(script.as_bytes())
                     .expect("failed to write script");
                 let script_path = script_file.path().to_path_buf();
-                let output = Command::new(python)
-                    .arg(&script_path)
+                let mut eval = Command::new(python);
+                eval.arg(&script_path)
                     .arg(module_path.to_string_lossy().as_ref())
                     .arg(source_text)
-                    .output()
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped());
+                let output = crate::helper_proc::spawn_std(&mut eval)
+                    .and_then(|child| child.wait_with_output())
                     .unwrap_or_else(|e| {
                         panic!(
                             "Failed to evaluate partition expression for {}: {e}",
