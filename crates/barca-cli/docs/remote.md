@@ -481,7 +481,10 @@ in place (only byte ranges are fetched), and results recorded before barca store
 Ctrl-C cancels a `barca get` or `barca run` at any point: while steps run, and while barca is
 uploading, downloading, or pulling or pushing the shared history. The command exits 130 with the
 `cancelled` error. It makes no difference whether the terminal sent the signal to every process
-of the job or something sent SIGINT to barca alone, and no process prints a traceback.
+of the job or something sent SIGINT to barca alone. Barca and its helper processes print no
+traceback. One exception, with or without a store: a Ctrl-C that reaches a worker while it is
+still starting up (the first moments of a run) can print that worker's `KeyboardInterrupt`
+traceback, and the command then takes about 10 seconds to exit, still with 130.
 
 1. **The first Ctrl-C cancels the run.** Steps and transfers in flight are stopped, what
    finished is recorded in this machine's history, the run as `cancelled`, and the run wraps
@@ -540,8 +543,9 @@ not act on Ctrl-C themselves. They are started outside the terminal's job (in a 
 of their own), so the terminal's Ctrl-C reaches barca only, which decides what it means and
 stops them. If barca itself is killed (`kill -9`, out of memory), nobody is left to stop them,
 so they watch for that: each exits on its own, at once and without output, and removes the temp
-file it was writing. A download of the history
-that was cut this way can leave `.barca/metadata.db.pull-*`; the next pull removes it.
+file it was writing. A download of the history that was cut this way can leave
+`.barca/metadata.db.pull-*`, and an upload `.barca/metadata.db.push-*`; the next pull removes
+both.
 
 ## Settings
 

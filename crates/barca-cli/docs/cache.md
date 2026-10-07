@@ -256,6 +256,7 @@ output, so the next `--dry-run` or `barca status` shows its consumers as stale.
 .barca/metadata.db                          run history and materialization records (local DB)
 .barca/metadata.db.base                     with shared history: a counter of pulls and uploads (`barca docs remote`)
 .barca/metadata.db.prev                     with shared history: the local DB as it was before the last pull that changed it
+.barca/metadata.db.pull-*, .push-*          with shared history: a download or upload in progress; what a killed command left is removed by the next pull
 .barca/artifacts/<node>/<run_hash>.<ext>    one file per result
 ```
 
@@ -263,7 +264,7 @@ output, so the next `--dry-run` or `barca status` shows its consumers as stale.
 computation, not the bytes: the run hash covers the step's code and inputs, so the same step
 with the same inputs always writes the same path. A step is meant to be a pure function of its
 code and inputs (what changes outside comes in through a sensor, whose output is part of the
-run hash), so computing it again writes the same bytes and the file is immutable in practice.
+run hash), so computing it again is expected to write the same bytes.
 Barca does not enforce that. Computing the result again (`--refresh`, `--refresh-all`, or a
 missing artifact that something needs) overwrites the file, and a function that is not
 deterministic then leaves different bytes at the same path; with an artifact store, a machine
