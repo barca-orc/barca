@@ -42,6 +42,7 @@ remote = ["fsspec", "adlfs", "s3fs", "gcsfs", "google-cloud-storage"]
 # Azurite). Not part of a normal install.
 test = [
     "pytest",
+    "pytest-xdist>=3.8,<4",
     "pandas",
     "pyarrow",
     "polars",
