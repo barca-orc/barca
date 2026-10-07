@@ -15,6 +15,13 @@ description: 'barca.toml, env var/CLI precedence, --env separation, and the opti
 > `.barca/` stays anchored to the same place as its config. The cwd-only rule below
 > described 0.5 to 0.12.
 
+> **Amended (after 0.17.0, issue #221):** §4.1 now defines what a pull does to the local
+> database, in "What a pull does to the local database". A pull used to replace only the
+> main database file and leave the old write-ahead log beside it, which could drop other
+> machines' history at the next push; and since 0.17.0 a run records its finished steps
+> locally before its push. "Nothing is lost" now also covers local rows that were never
+> pushed, a killed run's included.
+
 ## 1. Summary
 
 Configuration resolves through three layers — **CLI flag > environment variable >
@@ -107,10 +114,69 @@ file, so the blob is always a complete, standalone SQLite file openable with sto
 **required** setting for `barca serve` today (see
 [RFC-0004](/rfcs/0004-http-server-api/) §4.5).
 
+**What a pull does to the local database.** A pull happens at the start of `barca get` and
+`barca run`, before `--dry-run` and `barca status` look, and on every push conflict. After
+it, the local database holds exactly: every row of the pulled blob, plus the *unpushed*
+local rows, each row once. Nothing else of the old local database survives, in particular
+not its write-ahead log.
+
+A local row is *unpushed* when the pulled blob does not have it, decided from the two
+databases alone (there is no "pushed" marker to keep in step):
+
+| row | identity | unpushed when |
+|---|---|---|
+| run (`runs`) | `run_id` | the blob has no run with that `run_id` |
+| step (`materializations`) | `(run_id, node_id)`: a step has one outcome per run | the blob has no step with that pair |
+| captured output (`logs`) | `run_id` | the blob has no line for that run |
+
+This covers a run killed before its push (its run row and the steps it recorded as they
+finished), a run whose push failed, and runs made with `state = "off"`. A run the blob
+holds as `running` or `interrupted` while the local database holds the outcome the run
+recorded for itself (`success`, `failed`, `cancelled`) takes the local outcome; in every
+other case the blob's run row stands. Only runs the blob does not hold with such an
+outcome are compared step by step: a run writes nothing after the push that carries its
+outcome.
+
+Not carried, by decision: a step row with no `run_id` (written before 0.17, which did not
+record it, so it cannot be told from a pushed row); a successful step whose artifact is
+not reachable from this machine (a local path that does not exist; a store URI is not
+checked), because it would be a cache hit with nothing behind it; cost estimates and
+scheduler state, which are not history.
+
+Carried rows are local until the next push from that machine (the end of its next
+`get`/`run`); read-only commands carry them and push nothing. A killed run therefore
+resumes on its own machine at once and reaches other machines, as `interrupted`, with
+that next push.
+
+The sequence, all of it under the database's cross-process lock except the download:
+
+1. Download the blob to `<db>.pull-<pid>-<n>` next to the database.
+2. Carry: copy the unpushed rows from the local database onto the downloaded file, in one
+   transaction. The local database is only read.
+3. Fold: checkpoint both write-ahead logs into their main files and verify they are
+   empty. Each database is now one self-contained file.
+4. Swap: remove the local sidecar files (empty by now), fsync the downloaded file when it
+   carries rows that exist nowhere else, and rename it over the local database.
+
+A process killed before the rename leaves the old local database whole, unpushed rows
+included; one killed after it leaves the new one whole. The next pull starts again from
+step 1, and because step 2 adds only rows the target lacks, repeating it adds nothing
+twice. A downloaded file that cannot be opened as a database fails the command (exit 3)
+and leaves an existing local database untouched. A local database that cannot be opened
+has nothing that can be carried: it is replaced, with a warning.
+
+Because a pull keeps unpushed rows, it needs no knowledge of whether a run is live in the
+project: a second `get`/`run`, `--dry-run` and `barca status` pull while a run is going,
+and that run's row and recorded steps are still there afterwards. The pid and host on a
+run row have one purpose, reporting a run whose process is gone as `interrupted`.
+
+With `state = "off"` nothing is pulled or pushed, and none of the above runs.
+
 ### 4.2 Implementation Details
 
 Resolution lives in `crates/barca-core/src/config.rs`; the shared-state pull/checkpoint/push
-sequence lives in `crates/barca-core/src/state_sync.rs` (Rust side) and
+sequence lives in `crates/barca-core/src/state_sync.rs` (Rust side; the swap of the local
+database is `db::replace_db`, and what it carries over is `state_carry.rs`) and
 `python/barca/_state.py` (`python -m barca._state`, the Python-side counterpart for
 backends gcsfs can't express a generation precondition on — see
 [Remote Storage](/reference/remote-storage/) §Credentials).
@@ -150,9 +216,13 @@ pull/replay-on-conflict protocol is what makes cross-machine cache hits safe
 (see [RFC-0005](/rfcs/0005-artifact-serialization-and-storage/) §5): a machine that
 loses the conditional-upload race never overwrites another machine's newer state, it
 replays on top of it. Covered by the backend conformance suite (conditional create,
-cross-machine cache hit, concurrent-writer conflict → replay) run against MinIO /
-fake-gcs-server / Azurite on every PR, plus `crates/barca-core/src/config.rs` unit
-tests for precedence resolution.
+cross-machine cache hit, concurrent-writer conflict → replay, a pull over unpushed
+local runs) run against MinIO / fake-gcs-server / Azurite on every PR, plus
+`crates/barca-core/src/config.rs` unit tests for precedence resolution. The pull rules of
+§4.1 are pinned by `crates/barca-core/src/state_carry.rs` (what is unpushed), the
+`replace_db` tests in `crates/barca-core/src/db.rs` (the sequence, a death at each point,
+unreadable and older-schema databases) and `python/tests/test_state_pull.py` (killed
+runs, concurrent runs and read-only commands, across project directories sharing a state).
 
 ## 6. Performance
 

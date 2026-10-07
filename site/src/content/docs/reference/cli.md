@@ -383,9 +383,9 @@ Each node also lists `env`, the environment variables it declares with `env=[...
 status shows at most 100 nodes unless you pass `--limit N` or `--all`; the `summary` still counts
 every node, and the JSON reports `total` and `truncated` (see [Bounded output](#bounded-output)).
 
-With [shared remote state](/reference/remote-storage/), status first replaces the local copy of
-the history with the shared one, as a run does. It skips that while a `barca get` or `barca run`
-is in progress in the project, reads the local copy instead, and says so in one line on stderr.
+With [shared remote state](/reference/remote-storage/), status first pulls the shared history, as
+a run does. A pull keeps what was recorded only on this machine, so this is safe while a run is
+going: its finished steps still show.
 
 Status reads the metadata DB as it is at that moment: while a `barca get` is running, the steps it
 has finished already show as `cached` (a partitioned asset as `partial`).
