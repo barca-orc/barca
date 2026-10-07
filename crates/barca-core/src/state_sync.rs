@@ -255,20 +255,45 @@ async fn pull_into(
     })
 }
 
+/// How many of the integrity check's problems the error lists after the instructions.
+const LISTED_PROBLEMS: usize = 20;
+
 /// The error for a shared state object that is not a database this version of barca can use
 /// ([`crate::state_validate`]). It is not a connection or credentials problem and retrying
-/// does not help, so it says what the object is, that nothing was changed, and how to put a
-/// good history back.
-fn invalid_shared_state(uri: &str, db_path: &str, why: &str) -> BarcaError {
-    BarcaError::Other(format!(
-        "the shared history {uri} is not a database barca can use: {why}.\n\
+/// does not help. The first line says what the object is and what is wrong with it, in one
+/// line; then that nothing was changed and where the repair is described; the full list of
+/// what an integrity check found comes last, so that it never pushes the instructions away.
+fn invalid_shared_state(
+    uri: &str,
+    db_path: &str,
+    invalid: &crate::state_validate::Invalid,
+) -> BarcaError {
+    let mut message = format!(
+        "the shared history {uri} is not a database barca can use: {}.\n\
          The local history {db_path} was left as it was, and nothing was uploaded.\n\
-         To repair it, put back an earlier copy of that object (a bucket version or a backup), \
-         or remove the object and run `barca get` on the machine whose local history is the \
-         most complete: that run uploads its history as the new shared history. See `barca \
-         docs remote`, \"If the shared history is damaged\". Until then, BARCA_STATE=off runs \
-         with local history only."
-    ))
+         To repair it, follow `barca docs remote`, section \"If the shared history is damaged\": \
+         put back an earlier copy of that object (a bucket version or a backup), or remove the \
+         object and run `barca get` on the machine whose local history is the most complete and \
+         intact. If this project shared its history with barca 0.17.1 or earlier, the local \
+         copies are probably damaged too: follow the section \"Upgrading a project whose shared \
+         history was damaged by 0.17.1 or earlier\" instead. Until then, BARCA_STATE=off runs \
+         with local history only.",
+        invalid.why
+    );
+    if invalid.details.len() > 1 {
+        message.push_str("\nWhat the integrity check found:");
+        for problem in invalid.details.iter().take(LISTED_PROBLEMS) {
+            message.push_str("\n  ");
+            message.push_str(problem);
+        }
+        if invalid.details.len() > LISTED_PROBLEMS {
+            message.push_str(&format!(
+                "\n  (and {} more)",
+                invalid.details.len() - LISTED_PROBLEMS
+            ));
+        }
+    }
+    BarcaError::Other(message)
 }
 
 enum HelperFailed {

@@ -114,12 +114,41 @@ pub(crate) enum Pages {
 /// A downloaded shared state that passed every rule, open for the carry.
 pub(crate) type Valid = (Database, Connection);
 
+/// Why a download is not valid.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Invalid {
+    /// One line: which rule failed and how.
+    pub why: String,
+    /// Every problem the integrity check reported, one per entry, when that is what failed.
+    pub details: Vec<String>,
+}
+
+impl From<String> for Invalid {
+    fn from(why: String) -> Self {
+        Invalid {
+            why,
+            details: Vec::new(),
+        }
+    }
+}
+
+/// The problems in what `PRAGMA integrity_check` returned: one per line of every row, without
+/// the `*** in database main ***` banner SQLite puts before a group of them.
+fn integrity_problems(rows: &[String]) -> Vec<String> {
+    rows.iter()
+        .flat_map(|row| row.lines())
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && *line != "ok" && !line.starts_with("***"))
+        .map(str::to_string)
+        .collect()
+}
+
 /// Rules 1 to 4 on the downloaded file at `path`. The outer error is this machine failing to
 /// check; the inner `Err` says why the download is not valid. Afterwards the file has barca's
 /// current schema (the migrations are applied to it between rules 3 and 4).
-pub(crate) async fn open(path: &str, pages: Pages) -> Result<Result<Valid, String>, BarcaError> {
+pub(crate) async fn open(path: &str, pages: Pages) -> Result<Result<Valid, Invalid>, BarcaError> {
     if let Err(why) = whole_file(path) {
-        return Ok(Err(why));
+        return Ok(Err(why.into()));
     }
     // Reading only: whatever the engine cannot read here is the file's fault.
     let read = async {
@@ -133,31 +162,29 @@ pub(crate) async fn open(path: &str, pages: Pages) -> Result<Result<Valid, Strin
             tables.push(row.get::<String>(0)?);
         }
         drop(rows);
-        let mut problems = Vec::new();
+        let mut checked = Vec::new();
         if pages == Pages::Check {
             let mut rows = conn.query("PRAGMA integrity_check", ()).await?;
             while let Some(row) = rows.next().await? {
-                let line = row.get::<String>(0)?;
-                if line != "ok" {
-                    problems.push(line);
-                }
+                checked.push(row.get::<String>(0)?);
             }
         }
+        let problems = integrity_problems(&checked);
         Ok::<_, turso::Error>((db, conn, tables, problems))
     };
     let (db, conn, tables, problems) = match read.await {
         Ok(read) => read,
-        Err(e) => return Ok(Err(format!("it cannot be read as a database: {e}"))),
+        Err(e) => return Ok(Err(format!("it cannot be read as a database: {e}").into())),
     };
     if !problems.is_empty() {
-        let more = match problems.len() {
-            1 => String::new(),
-            n => format!(" (and {} more)", n - 1),
+        let count = match problems.len() {
+            1 => "1 problem".to_string(),
+            n => format!("{n} problems, the first"),
         };
-        return Ok(Err(format!(
-            "its integrity check failed: {}{more}",
-            problems[0]
-        )));
+        return Ok(Err(Invalid {
+            why: format!("its integrity check found {count}: {}", problems[0]),
+            details: problems,
+        }));
     }
     if let Some(missing) = HISTORY_TABLES
         .iter()
@@ -165,13 +192,14 @@ pub(crate) async fn open(path: &str, pages: Pages) -> Result<Result<Valid, Strin
     {
         return Ok(Err(format!(
             "it is a SQLite database but not a barca history: it has no `{missing}` table"
-        )));
+        )
+        .into()));
     }
     let migrated = crate::db::init_schema(&conn).await;
     // Tables with barca's names and another program's columns can make a migration fail; then
     // the schema is the reason, and it is the download's fault.
     if let Err(why) = usable_schema(&conn).await? {
-        return Ok(Err(why));
+        return Ok(Err(why.into()));
     }
     migrated.map_err(|e| {
         BarcaError::Db(format!(
@@ -257,7 +285,28 @@ mod tests {
     }
 
     async fn verdict(path: &str) -> Result<(), String> {
-        open(path, Pages::Check).await.unwrap().map(|_| ())
+        open(path, Pages::Check)
+            .await
+            .unwrap()
+            .map(|_| ())
+            .map_err(|invalid| invalid.why)
+    }
+
+    #[test]
+    fn integrity_problems_are_one_per_line_without_the_banner() {
+        let rows = vec![
+            "*** in database main ***\nPage 17: never used\nPage 18: never used".to_string(),
+            "wrong # of entries in index idx_mat_run".to_string(),
+        ];
+        assert_eq!(
+            integrity_problems(&rows),
+            [
+                "Page 17: never used",
+                "Page 18: never used",
+                "wrong # of entries in index idx_mat_run"
+            ]
+        );
+        assert!(integrity_problems(&["ok".to_string()]).is_empty());
     }
 
     fn tmp() -> (tempfile::TempDir, String) {

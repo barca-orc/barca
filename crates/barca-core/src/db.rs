@@ -233,7 +233,7 @@ pub(crate) enum Replaced {
     Superseded,
     /// The download is not a database this version of barca can use
     /// ([`crate::state_validate`]), and why: nothing was touched.
-    Invalid(String),
+    Invalid(crate::state_validate::Invalid),
 }
 
 /// Replace the database at `db_path` with a download of the shared state. This is the only
@@ -465,9 +465,15 @@ async fn replace_locked(
         std::mem::forget(prev);
         return Ok(Replaced::Swapped(carried));
     }
-    if let Some(prev) = prev {
+    if let Some(prev) = prev
+        && let Err(e) = prev.publish()
+    {
         // The swap is done and stands whatever happens to the name of the old file.
-        prev.publish().ok();
+        eprintln!(
+            "[barca] warning: the local history was replaced, but the one it replaced could \
+             not be kept as {}: {e}",
+            state_prev::path(db_path)
+        );
     }
     // Best effort: it only keeps the same rows from being announced twice.
     state_base::write(
@@ -2248,7 +2254,7 @@ mod tests {
         };
         let refused = replace_db(&local, incoming).await.unwrap();
         assert!(
-            matches!(&refused, Replaced::Invalid(why) if why.contains("too short")),
+            matches!(&refused, Replaced::Invalid(invalid) if invalid.why.contains("too short")),
             "{refused:?}"
         );
         assert_eq!((runs(&local).await, steps(&local).await), before);
