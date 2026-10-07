@@ -52,6 +52,7 @@ separate test files.
 | `test_reliability.py` | Retry / timeout behavior |
 | `test_cross_file.py` | Cross-file dependency resolution |
 | `test_adaptive_executor.py` | Worker pool sizing |
+| `test_artifact_lru.py` | The worker's in-memory artifact cache: isolation of cached values per type, size limits |
 | `test_retries.py` | `retries=` / `retry_backoff=` |
 
 ### Shell integration (`tests/integration/`, CI only)
