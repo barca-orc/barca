@@ -12,25 +12,20 @@ failures" worker behavior, asserting *observable* facts:
     just set the var before invoking barca.
 """
 
-import shutil
 import sqlite3
 import textwrap
 from pathlib import Path
 
-import pytest
-
 import barca
+import pytest
 from barca.api import BarcaError
 
 
 @pytest.fixture(autouse=True)
-def clean_barca_dir():
-    barca_dir = Path(".barca")
-    if barca_dir.exists():
-        shutil.rmtree(barca_dir)
-    yield
-    if barca_dir.exists():
-        shutil.rmtree(barca_dir)
+def clean_barca_dir(tmp_path, monkeypatch):
+    # The API resolves .barca relative to cwd. Give each test its own project,
+    # so another pytest worker cannot delete its database or input artifacts.
+    monkeypatch.chdir(tmp_path)
 
 
 @pytest.fixture

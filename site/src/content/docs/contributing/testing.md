@@ -148,7 +148,17 @@ No test compares the other site pages with the manual. `reference/sql.md`,
   a wheel with `maturin build --release`, installs it, and runs the shell integration tests.
 - **backends**: starts the three emulators, checks and builds the web UI (typecheck, lint,
   test, build), builds a wheel and installs it with the `test` extra, runs the whole Python
-  suite with the three `BARCA_TEST_*` endpoints set, then runs `test_reverse_proxy.sh`.
+  suite with four pytest workers (`-n 4 --dist loadscope`) and the three `BARCA_TEST_*`
+  endpoints set, then runs `test_reverse_proxy.sh`. Tests are grouped by class or module
+  to reuse fixtures; the slowest 30 tests are printed in the log. API tests
+  use a separate temporary working directory per test, keeping `.barca` databases and
+  artifacts isolated from other workers.
+
+Cargo builds in the runner's local `target/` directory. Each job restores and saves a
+separate Rust dependency archive with `Swatinem/rust-cache`; the shared Depot disk holds
+only pip downloads. Building directly on that shared disk caused truncated object files
+and invalid Rust metadata, including after target directories were separated by PR.
+Cache preparation does not delete other runs' build directories.
 
 ## Reference for test authors
 
