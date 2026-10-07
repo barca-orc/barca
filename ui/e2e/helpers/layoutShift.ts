@@ -10,7 +10,7 @@ export interface Shift {
 interface LayoutShiftEntry extends PerformanceEntry {
   value: number
   hadRecentInput: boolean
-  sources: { node: Element | null }[]
+  sources: { node: Node | null }[]
 }
 
 declare global {
@@ -34,7 +34,7 @@ export async function trackLayoutShift(page: Page) {
           value: entry.value,
           at: Math.round(entry.startTime),
           elements: entry.sources.map((s) => {
-            const el = s.node
+            const el = s.node instanceof Element ? s.node : s.node?.parentElement
             const cls = (el?.getAttribute?.('class') ?? '').split(' ').filter(Boolean).slice(0, 2)
             return el ? [el.tagName.toLowerCase(), ...cls].join('.') : '(removed)'
           }),
@@ -62,7 +62,7 @@ export function describeShifts(shifts: Shift[]): string {
  * state and the shift when the data lands is measured. Static files are not delayed.
  */
 export async function slowApi(page: Page, ms = 800) {
-  await page.route(/^http:\/\/localhost:5173\/(state|assets|health)(\/|$|\?)/, async (route) => {
+  await page.route(/\/(state|assets|health)(\/|$|\?)/, async (route) => {
     await new Promise((resolve) => setTimeout(resolve, ms))
     await route.continue()
   })

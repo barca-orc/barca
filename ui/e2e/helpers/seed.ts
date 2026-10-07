@@ -1,6 +1,6 @@
 import { expect, type APIRequestContext } from '@playwright/test'
 
-const API = 'http://127.0.0.1:8274'
+const API = process.env.BARCA_E2E_API ?? 'http://127.0.0.1:8274'
 
 /**
  * Run a task through the API `times` times and wait for each run to finish, so the node panel
