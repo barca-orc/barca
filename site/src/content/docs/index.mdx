@@ -1,9 +1,9 @@
 ---
 title: Barca
-description: The invisible asset orchestrator. Rust plans it. Python runs it. You just write functions.
+description: Barca runs Python functions as a dependency graph and caches their results.
 template: splash
 hero:
-  tagline: Rust plans it. Python runs it. You just write functions.
+  tagline: Runs Python functions as a dependency graph and caches their results.
   actions:
     - text: Get Started
       link: /getting-started/
@@ -16,70 +16,88 @@ hero:
 
 import { Card, CardGrid } from '@astrojs/starlight/components';
 
-Barca is a hybrid Rust+Python asset orchestrator. It discovers functions decorated
-with `@asset()`, `@sensor()`, and `@task()`, builds a dependency graph via static
-analysis (no imports), generates a phased execution plan, and dispatches work to
-Python workers — all in under 40ms of framework overhead.
+You mark functions with `@asset`, `@sensor` or `@task` and declare their inputs. The
+`barca` binary, written in Rust, reads the source without importing it, works out what
+needs to run, and runs it in Python worker processes. Results are stored as files under
+`.barca/`. An asset runs again only when its code or its inputs change; sensors and tasks
+run every time.
+
+There is no server to run and no configuration file to write. `barca serve` adds
+schedules, an HTTP API and a web UI when you want them.
 
 ```python
+# pipeline.py
 from barca import asset
+
 
 @asset()
 def raw_data() -> list[dict]:
     return [{"x": 1}, {"x": 2}, {"x": 3}]
+
 
 @asset(inputs={"data": raw_data})
 def summary(data: list[dict]) -> dict:
     return {"count": len(data), "total": sum(d["x"] for d in data)}
 ```
 
-```bash
-barca get pipeline.py
 ```
+$ barca get pipeline.py
+[barca] 2/2 steps | done in 0.0s
+Run 51fabebab1c0 | all assets in 0.135s (2 steps, 1 phase)
 
-No config files. No YAML. No daemon. Just functions and a fast binary.
+Value:
+{
+  "count": 3,
+  "total": 6
+}
+```
 
 ## Install
 
 ```bash
-uv add barca
+uv add barca          # or: pip install barca
 ```
 
+Python 3.12 or later; uv is not required. [Getting Started](/getting-started/) walks through
+the first run.
+
+## What to know first
+
 <CardGrid>
-	<Card title="Static analysis, always" icon="magnifier">
-		The Rust binary parses your Python source with [ruff](https://github.com/astral-sh/ruff)'s
-		AST — it never imports your code to build the dependency graph.
+	<Card title="Where results live" icon="document">
+		`.barca/` in the project root holds the cache and the run history; git already ignores
+		it. A [remote store](/reference/remote-storage/) is an optional shared copy, and `--env`
+		keeps dev and prod apart.
 	</Card>
-	<Card title="Rust-speed planning" icon="rocket">
-		Parsing, DAG construction, and phased execution planning happen in
-		compiled Rust — around 38ms of total framework overhead for a trivial asset.
+	<Card title="Inspection commands" icon="magnifier">
+		`barca list`, `barca status`, `--dry-run` and `barca plan` show what exists, what is
+		cached and what would run. [`barca sql`](/reference/sql/) queries cached results. All
+		print JSON when piped.
 	</Card>
-	<Card title="Content-addressed caching" icon="seti:lock">
-		Every artifact is hashed and stored at `{artifacts}/{node}/{run_hash}{ext}`,
-		so unchanged assets never re-run.
+	<Card title="Outside data comes in through a sensor" icon="information">
+		An asset that reads a file or a bucket in its own body is computed once and then served
+		from cache. Put a `@sensor` in front of it. See the
+		[guide](/guide/#4-sensors-data-from-outside).
 	</Card>
-	<Card title="Artifact-based data passing" icon="seti:db">
-		Each step fully materializes its output to a cache artifact (json, pickle, or
-		parquet). Downstream steps read those files back — never in-process lazy handles.
+	<Card title="Large inputs" icon="seti:db">
+		An unannotated parquet input is read in full with pandas. Annotate the parameter
+		`duckdb.DuckDBPyRelation` or `pl.LazyFrame` to read only what the step uses. See
+		[Large inputs](/patterns/08-large-inputs/).
 	</Card>
-	<Card title="Built-in scheduler" icon="setting">
-		`barca serve` runs your `@task`s on a cron tick — down to the second — with
-		no external cron and no daemon service. See [Scheduling](/scheduling/).
+	<Card title="get for assets, run for tasks" icon="list-format">
+		The target comes first, then files: `barca get <asset> <files>`,
+		`barca run <task> <files>`. `get` uses the cache. A task always runs. See the
+		[CLI reference](/reference/cli/).
+	</Card>
+	<Card title="Scheduler and server" icon="setting">
+		`barca serve` runs `Schedule("<cron>")` nodes on their cron ticks and serves an HTTP API
+		and a web UI. See [Scheduling](/scheduling/).
 	</Card>
 </CardGrid>
 
 ## How it works
 
-1. **Rust binary** parses Python source using ruff's AST (pure static analysis, no import)
-2. Builds a petgraph DAG from decorator metadata
-3. Generates a phased execution plan (phases run sequentially, streams within a phase run in parallel)
-4. Maintains a pool of stateless Python workers and dispatches one task at a time via a Unix domain socket
-5. Collects results and persists them to `.barca/metadata.db` (Turso/libSQL)
-
-## Node kinds
-
-| Kind | Decorator | Cached | Can be input |
-|------|-----------|--------|---------------|
-| **asset** | `@asset()` | Yes | Yes |
-| **sensor** | `@sensor()` | No (always re-runs) | Yes |
-| **task** | `@task()` | No (always re-runs) | Yes (to other tasks) |
+The binary parses your Python source and does not import it, so decorators and `inputs=` have
+to be written literally. An asset is cached by run hash, which covers its code and its inputs,
+not the bytes of its result. [Architecture](/architecture/#a-run) describes a run step by step,
+and [Philosophy](/philosophy/) says what each design choice costs.

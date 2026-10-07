@@ -1,78 +1,92 @@
 ---
 title: Conditional Execution
-description: Barca has no built-in conditional primitive — conditionals are just Python inside the function body.
+description: Barca has no conditional construct. Branch inside the function body, or raise in a gate step to stop what depends on it.
 ---
 
-Barca does not have a built-in conditional primitive. Conditionals are just Python.
+Use this when what a step does depends on the data. Barca has no conditional construct: the
+graph is read from the source before anything runs and has the same shape on every run. A
+condition is an `if` inside a function body, or a step that raises so that the steps after
+it do not run.
 
-## The right way
-
-Write your branching logic inside the task or asset body:
+## Example: branch inside the body
 
 ```python
 from barca import asset, task
 
+
 @asset()
-def validation_report() -> dict:
-    results = run_validation_suite()
-    return {"passed": results.all_ok, "details": results.summary}
+def validation() -> dict:
+    rows = [{"id": 1, "amount": 9.5}, {"id": 2, "amount": -1.0}]
+    bad = [r["id"] for r in rows if r["amount"] < 0]
+    return {"passed": not bad, "bad_ids": bad}
 
-@task(inputs={"result": validation_report})
-def act_on_validation(result: dict) -> None:
+
+@task(inputs={"result": validation})
+def publish(result: dict) -> dict:
     if result["passed"]:
-        deploy_to_prod()
-    else:
-        notify_failure(result["details"])
+        return {"action": "published"}
+    return {"action": "held back", "bad_ids": result["bad_ids"]}
 ```
 
-The DAG structure stays fixed. The runtime behavior varies based on the data flowing through it.
+```bash
+barca run publish pipeline.py
+```
 
-This works the same way for assets:
+```
+[barca] 2/2 steps | done in 0.0s
+Run 51f18c924f70 | ran 'publish' in 0.089s (2 steps, 2 phases)
+
+Value:
+{
+  "action": "held back",
+  "bad_ids": [
+    2
+  ]
+}
+```
+
+Both steps run and the run succeeds. The branch taken is visible only in what the task
+returns or prints.
+
+## Example: a gate that stops the run
+
+To make a failed check stop everything after it and fail the command, raise in a step and
+make the later steps depend on it. The `_` prefix makes the dependency ordering-only
+([Ordering-Only Dependencies](/patterns/03-ordering-only-deps/)).
 
 ```python
-@asset(inputs={"raw": raw_data})
-def cleaned(raw: dict) -> dict:
-    if raw["format"] == "v2":
-        return parse_v2(raw)
-    else:
-        return parse_legacy(raw)
+@task(inputs={"result": validation})
+def gate(result: dict) -> None:
+    if not result["passed"]:
+        raise ValueError(f"validation failed for ids {result['bad_ids']}")
+
+
+@task(inputs={"_gate": gate})
+def publish_gated(_gate) -> dict:
+    return {"action": "published"}
 ```
 
-## Why this is the right model
-
-Barca handles execution order, caching, and data passing. Control flow is your code. There is no reason to push conditionals into the framework layer because:
-
-- Python already has `if`/`else`, `match`, and exception handling.
-- The DAG is built statically from decorators. Dynamic DAG shapes would break caching and make plans non-deterministic.
-- Keeping conditionals in function bodies means you can test them with plain `pytest` -- no orchestrator needed.
-
-## Common mistakes
-
-### Trying to express conditionals in decorators
-
-```python
-# Wrong -- there is no `when=` parameter.
-@task(when=lambda: env == "prod")
-def deploy(): ...
+```bash
+barca run publish_gated pipeline.py
 ```
 
-Barca decorators declare identity, inputs, and execution policy. They do not express runtime control flow. Put the condition inside the function body.
-
-### Splitting branches into separate DAG paths
-
-```python
-# Unnecessary complexity.
-@task(inputs={"r": validation_report})
-def deploy_if_passed(r: dict) -> None:
-    if not r["passed"]:
-        return  # no-op
-    deploy_to_prod()
-
-@task(inputs={"r": validation_report})
-def notify_if_failed(r: dict) -> None:
-    if r["passed"]:
-        return  # no-op
-    notify_failure(r["details"])
+```
+[barca] 0/3 steps | failed in 0.0s
+[barca] run failed: step 'pipeline.py:gate' failed (exit 1)
+Worker failed: ValueError: validation failed for ids [2]
+  File ".../pipeline.py", line 21, in gate
+    raise ValueError(f"validation failed for ids {result['bad_ids']}")
 ```
 
-This runs both tasks every time, with one silently doing nothing. A single task with an `if`/`else` is simpler and clearer.
+`publish_gated` does not run and the command exits 1.
+
+## Limits
+
+- **A step cannot be skipped from the outside.** Every step in the target's cone either runs,
+  is served from cache, or is skipped because a step it depends on failed. A step that decides
+  to do nothing still runs and still counts as a success.
+- **Decorators take no condition.** There is no `when=` argument. On 0.18.0
+  `@task(when=lambda: ...)` is not an error: the keyword is ignored and the task runs.
+- **A gate that raises fails the run.** That is the intent of a gate, but it means the exit
+  code is 1 and steps downstream are reported as skipped. If "nothing to do" is a normal
+  outcome, branch in the body and return a value that says so.

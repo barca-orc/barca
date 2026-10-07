@@ -1,235 +1,154 @@
 ---
 title: "Workflow: Execution Controls and Ad Hoc Params"
-description: Retries, timeouts, cancellation, and ad hoc runtime parameters.
+description: Timeouts, retries and cancellation as they work in barca 0.18.0. Ad hoc runtime parameters are not implemented.
 ---
 
-This document specifies retries, timeouts, cancellation, and ad hoc runtime parameters.
+This page covers timeouts, retries and cancellation. Everything shown was run with barca 0.18.0.
 
-This workflow assumes the Barca core constraints documented in [Core Constraints](/core-constraints/).
+**Ad hoc runtime parameters are not implemented.** An earlier version of this page proposed a
+`--param x=7` flag. No such flag exists: `barca get flaky pipeline.py --param x=7` exits 2 with
+`unexpected argument '--param' found`. To run one function over a set of values, use
+[partitions](/workflows/03-parametrized-assets-and-partitions/). To make a value from outside
+part of the cache key, declare an environment variable with `env=[...]` (`barca docs assets`).
 
-## Summary
-
-For the MVP:
-
-- assets, sensors, and tasks all support `timeout_seconds`, defaulting to `300`
-- failed attempts retry per-node `retries`/`retry_backoff`, defaulting to `retries=1` (no retry)
-- running work must be visible in real time in UI and TUI
-- users can cancel running work in real time
-- cancelled work is marked `cancelled` and treated as incomplete
-- ad hoc runtime params are a planned concept — the cache-identity hash already reserves a slot for them, but no CLI or API surface sets them yet
-
-## Timeout
-
-Recommended decorator shape additions:
+## Example
 
 ```python
-@asset(..., timeout_seconds=300)
-@sensor(..., timeout_seconds=300)
-@task(..., timeout_seconds=300)
-```
+# pipeline.py
+import time
+from pathlib import Path
 
-Timeouts are expressed in seconds.
+from barca import asset
 
-The timeout applies per attempt.
 
-If a node exceeds its timeout:
-
-- the worker is terminated
-- the attempt is marked timed out
-- Barca applies the standard retry policy
-
-## Retry policy
-
-Retry policy is per-node and configurable, declared as decorator kwargs:
-
-```python
 @asset(retries=3, retry_backoff=1.0)
-@sensor(retries=3, retry_backoff=1.0)
-@task(retries=3, retry_backoff=1.0)
+def flaky() -> dict:
+    marker = Path("attempts.txt")
+    n = int(marker.read_text()) + 1 if marker.exists() else 1
+    marker.write_text(str(n))
+    if n < 3:
+        raise RuntimeError(f"attempt {n} failed")
+    return {"attempts": n}
+
+
+@asset(timeout_seconds=2)
+def slow() -> dict:
+    time.sleep(30)
+    return {"done": True}
+
+
+@asset(inputs={"s": slow})
+def after_slow(s: dict) -> dict:
+    return s
+
+
+@asset()
+def long_running() -> dict:
+    time.sleep(60)
+    return {"done": True}
 ```
 
-- `retries` — total attempts on failure (`1` = no retry, the default).
-- `retry_backoff` — base delay in seconds. Delay before attempt N is `retry_backoff * N` (linear, not exponential).
+## Retries
 
-Rust owns the retry loop; each retry is a fresh worker invocation. Retries do not cascade — a parent's retry does not re-run its children, and a child's retries do not trigger its parent.
+`retries=` is the total number of attempts; the default is 1, which means no retry.
+`retry_backoff=` is a base delay in seconds; the default is 0. After the Nth failed attempt
+barca waits `N × retry_backoff` seconds before the next one. Both are accepted on `@asset`,
+`@task` and `@sensor`.
 
-### Why per-node configuration
+```bash
+barca get flaky pipeline.py --agent
+```
 
-For pure assets, repeated failure usually means:
+```
+[barca] step:pipeline.py:flaky completed 1.5s (1/1)
+[barca] 1/1 steps | done in 1.5s
+{"elapsed_seconds":4.736054959,"final_output":{"attempts":3}, ... "status":"success", ... "steps_executed":1,"warnings":[]}
+```
 
-- bad input
-- bad logic
+The function ran three times and the third attempt succeeded. The output does not say how many
+attempts were made: failed attempts that are followed by a success are not reported, and the
+step counts once. With `retries=4`, the measured gaps between the starts of attempts were 1.1 s,
+2.2 s and 3.2 s for `retry_backoff=1.0`, and about 0.1 s each for `retry_backoff=0`.
 
-A fixed global policy would either retry cheap flaky steps too little or retry expensive deterministic failures too much. Letting each node declare its own `retries`/`retry_backoff` (with a conservative `retries=1` default) keeps the common case simple while leaving room for flaky I/O-bound steps to opt into retries explicitly.
+When every attempt fails, the step fails with the last error and the run exits 1:
 
-If all retries fail, the node remains failed/stale until the user fixes the issue and reruns it.
+```
+[barca] step:pipeline.py:flaky failed: RuntimeError: attempt 2 failed
+[barca] 0/1 steps | failed in 0.0s
+```
+
+A retry re-runs one step. It does not re-run the step's upstream, and a downstream step's
+retries do not re-run this one. See [Error Handling](/patterns/06-error-handling/).
+
+## Timeouts
+
+`timeout_seconds=` is a limit per attempt. The default is 300.
+
+```bash
+barca get after_slow pipeline.py --agent
+```
+
+```
+[barca] step:pipeline.py:slow failed: TimeoutError: Function '<lambda>' exceeded timeout of 2s
+[barca] 0/2 steps | failed in 0.0s
+{"elapsed_seconds":2.111709792,"error":"TimeoutError: Function '<lambda>' exceeded timeout of 2s","failed_node":"pipeline.py:slow", ... "status":"failed","steps":[{... "id":"pipeline.py:slow", ... "status":"failed"},{"detail":"a step it depends on failed","id":"pipeline.py:after_slow","kind":"asset","reason":"upstream_failed", ... "status":"skipped"}],"steps_executed":1,"warnings":[]}
+[barca] run failed: step 'pipeline.py:slow' failed (exit 1)
+```
+
+A timeout is a step failure: exit code 1, the step is `failed`, and steps that depend on it are
+`skipped` with reason `upstream_failed`. The error names the function as `<lambda>`, not `slow`;
+`failed_node` has the real name. The progress line reports `failed in 0.0s` although the run
+took 2.1 seconds; `elapsed_seconds` in the JSON is the correct figure.
 
 ## Cancellation
 
-Users should be able to see running work and cancel it in real time.
-
-That means UI and TUI should show:
-
-- currently running nodes
-- start time
-- attempt number
-- timeout deadline
-
-When a user cancels a running node:
-
-- Barca should send termination to the worker
-- mark the run record as `cancelled`
-- treat the execution as incomplete or partial
-- avoid publishing partial outputs as current outputs
-
-Cancellation is an operator action, not a successful completion.
-
-## State model additions
-
-The execution state model should include:
-
-- `running`
-- `failed`
-- `timed_out`
-- `cancelled`
-- `fresh`
-- `stale_waiting_for_schedule`
-- `stale_waiting_for_upstream`
-- `runnable_stale`
-- `historical`
-
-For the MVP, `cancelled` should mean:
-
-- this run did not complete successfully
-- any temp outputs should be discarded or left unpublished
-- the node may still be stale and runnable later
-
-## Why partial state should not be published
-
-If a run times out or is cancelled, its outputs are not trustworthy as current materializations.
-
-So Barca should:
-
-- allow logs and attempt metadata to remain visible
-- keep temp or debug artifacts if useful
-- never publish partial outputs as the selected current result
-
-## Ad hoc runtime parameters
-
-**Not yet implemented.** `barca get`/`barca run` take no `--param` flag today, and nothing in the CLI or `barca.api` sets per-run parameters. `run_hash` already reserves a slot for them (`hash::run_hash(definition_hash, partition_key, upstream_ids, params)`), but every call site passes `None` — the plumbing exists at the hashing layer only. The design below is the intended shape once it ships.
-
-Barca should support explicit runtime parameters that are not durable partition keys.
-
-This is a separate concept from partitions.
-
-Examples:
-
-```python
-@asset()
-def square(x: int) -> int:
-    return x**2
-```
-
-Users should be able to run this with ad hoc params like:
+Ctrl-C (SIGINT) cancels a run. Barca stops its workers and records the run as `cancelled`.
 
 ```bash
-# Proposed — not implemented today.
-barca get square pipeline.py --param x=7
-barca get square pipeline.py --param x=14
+barca get long_running pipeline.py --agent     # then Ctrl-C after two seconds
 ```
 
-## Why ad hoc params matter
-
-Not every repeated input belongs in the partition universe.
-
-Some inputs are just runtime arguments.
-
-Barca should still cache them.
-
-That means cache identity must include:
-
-- definition hash
-- resolved upstream materialization IDs
-- explicit runtime params
-
-## Example: cyclical values and cache reuse
-
-Consider:
-
-```python
-@asset()
-def day_number(day_name: str) -> int:
-    mapping = {
-        "monday": 1,
-        "tuesday": 2,
-        "wednesday": 3,
-        "thursday": 4,
-        "friday": 5,
-        "saturday": 6,
-        "sunday": 7,
-    }
-    return mapping[day_name]
+```
+[barca] 0/1 steps | cancelled after 0.0s
+{"code":130,"error":"run cancelled","kind":"cancelled","remediation":"Re-run the same command; steps that finished before the cancel are cached and will not re-run."}
 ```
 
-If Barca has already materialized:
+The exit code is 130. The interrupted step leaves no result: steps that finished before the
+cancel stay cached, and the next run computes the rest.
 
-- `day_number(day_name="monday")`
+Under `barca serve`, `DELETE /run/{run_id}` cancels a run the same way
+([Server API](/reference/server-api/)).
 
-and later the same function definition and same input recur, Barca should reuse the cached result immediately.
-
-This is true even if the call occurs much later in wall-clock time.
-
-The cache key is provenance plus params, not recency.
-
-## Params vs partitions
-
-Use partitions when the input space is:
-
-- durable
-- enumerable
-- operator-visible as a managed set
-
-Use ad hoc params when the input is:
-
-- one-off or user-provided at call time
-- not part of the durable partition universe
-
-Both should participate in cache identity, but only partitions define managed sub-assets in the graph.
-
-## Recommended API stance
-
-For the MVP:
-
-- allow ad hoc params in CLI and execution helpers
-- include params in `run_hash`
-- do not force every repeated input into partitions
-
-Useful shapes:
+## Seeing what happened
 
 ```bash
-# Proposed — not implemented today.
-barca get square pipeline.py --param x=7
+barca history
+barca status pipeline.py
 ```
 
-## Failure model for pure assets
+```
+RUN_ID         CMD     STATUS      STEPS CACHED   TIME STARTED
+-----------------------------------------------------------------------------
+51fd65520f50   get     cancelled       1      0   2.0s 2026-10-07 18:14:54
+51faebb38cf0   get     failed          1      0   2.1s 2026-10-07 18:14:52
+51f883ff8a10   get     success         1      0   4.7s 2026-10-07 18:14:45
+```
 
-For pure assets, failure should be treated straightforwardly.
+```
+NAME          KIND    STATE        WHY           LAST RUN                           SHAPE         DEPS
+long_running  asset   never-run    no_record     -                                  -             -
+slow          asset   never-run    failed        failed 2026-10-07 18:14:54         -             -
+after_slow    asset   never-run    no_record     -                                  -             slow
+flaky         asset   cached       materialized  success 2026-10-07 18:14:50 1.48s  dict (1 key)  -
+```
 
-If an asset fails repeatedly, the expectation is:
+Run statuses in `barca history` are `success`, `failed`, `cancelled`, `running` and
+`interrupted` (the process was killed; `barca docs cache`). There is no separate `timed_out`
+status. The cancelled run above is listed with 1 step although its step did not finish.
 
-- the logic is wrong
-- the input is wrong
-- the user fixes it and reruns
+## Limits
 
-Barca does not need to add more complicated automatic healing behavior in the MVP.
-
-## Acceptance criteria
-
-- Assets, sensors, and tasks all support `timeout_seconds=300` by default.
-- Failed attempts retry per the node's `retries`/`retry_backoff` (default `retries=1`, i.e. no retry).
-- Running nodes are visible in UI and TUI.
-- Users can cancel running nodes in real time.
-- Cancelled runs are marked `cancelled` and remain incomplete.
-- Ad hoc params are supported in CLI invocations. (Not yet implemented.)
-- Ad hoc params are included in cache identity. (Reserved in `run_hash`, but unset — not yet wired to any input.)
-- Repeated calls with the same code, upstream provenance, and params reuse cache immediately.
+- Retry attempts are not visible in the output or in `barca history`.
+- There is no terminal UI for watching or cancelling a run. `barca status` from a second
+  terminal shows the steps a running command has finished; the web UI and the cancel endpoint
+  need `barca serve`.

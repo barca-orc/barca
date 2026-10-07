@@ -1,84 +1,69 @@
 ---
 title: Philosophy
-description: Barca is to Airflow, Dagster, and Prefect what DuckDB is to Snowflake.
+description: The design goals behind barca, the reason for each, and what each one costs.
 ---
 
-Barca is to Airflow, Dagster, and Prefect what DuckDB is to Snowflake.
+Barca runs Python functions as a dependency graph and caches their results. It suits data
+pipelines that run on one machine and want dependency ordering, caching and parallel execution
+without operating a scheduler service. It is embedded in the way DuckDB or SQLite are: a
+binary and a directory inside your project, not a service you deploy.
 
-## The problem
+## The pipeline is ordinary Python
 
-Every mainstream data orchestrator asks you to become its tenant. You adopt its project structure, learn its DSL, deploy its server, and rewrite your functions to fit its opinions. The orchestrator becomes the center of gravity — your code orbits it.
+The decorators (`@asset`, `@sensor`, `@task`) return the function unchanged, so a pipeline
+file can be imported, called and tested without barca.
 
-This is backwards. The orchestrator exists to serve the code, not the other way around.
+Cost: barca knows only what the decorators declare. A dependency that is not in `inputs=` is
+not in the graph.
 
-Most teams don't need a platform. They need the *capabilities* of a platform — dependency resolution, caching, staleness tracking, parallel execution — without the operational overhead of running one.
+## Planning reads source and does not import it
 
-## The position
+The binary parses your files with ruff's Python parser, so planning has no import side effects
+and does not wait for your packages to load. (The exception: a non-literal
+`partitions(<expression>)` is evaluated by Python at plan time.)
 
-Barca is an embedded orchestrator. It adds DAG semantics to plain Python functions the way DuckDB adds OLAP semantics to plain files. No server. No config. No project scaffolding. No framework to learn.
+Cost: decorators, `inputs=` and `freshness=` must be written literally. `inputs` built in a
+loop is not seen. Some code changes are not seen by the cache either, a star import for
+example; `barca docs cache` lists them.
 
-You write normal Python:
+## No server and no configuration by default
 
-```python
-@asset()
-def raw_data() -> list[dict]:
-    return load_from_source()
+`barca get` plans, runs and exits. State is the `.barca/` directory. `barca.toml` is optional.
 
-@asset(inputs={"data": raw_data})
-def cleaned(data: list[dict]) -> list[dict]:
-    return [clean(row) for row in data]
-```
+Cost: nothing happens when no command is running. Cron schedules need `barca serve`
+([Scheduling](/scheduling/)), which has no authentication of its own
+([Deploying](/deploying/)).
 
-These are real functions. They run standalone with `python my_pipeline.py`. The decorators are identity functions — pure no-ops. Barca reads your source statically, builds the DAG from the decorator signatures, and handles the rest: what to run, in what order, what to cache, what to skip.
+## One install
 
-Your code never knows the orchestrator is there.
+`pip install barca` installs the binary, the decorators and the worker. The worker needs only
+the standard library; parquet and remote storage are extras.
 
-## Design principles
+Cost: a wheel must exist for your platform. 0.18.0 has wheels for macOS on Apple Silicon and
+x86-64 Linux with glibc, and requires Python 3.12 or later.
 
-**Invisible by default.** If the orchestrator adds perceptible latency, requires manual steps, or forces you to think about it during normal development, it's failing. The planning phase exists in Rust specifically so that overhead drops below human perception — not because Rust is fashionable, but because invisibility is a hard performance requirement.
+## Rust plans, Python executes
 
-**Static analysis, never import.** Barca parses your Python source as text via AST. It never imports your modules during planning. This makes the orchestrator a genuine observer: it reasons *about* your code without *becoming* part of your code. No import side effects, no environment coupling, no accidental execution.
+Parsing, hashing, cache lookup and the metadata database are in the Rust binary, so a command
+with nothing to run returns without starting Python. Your functions run in ordinary Python
+processes from your environment. Measured run times are on the
+[framework comparison](/comparisons/framework-comparison/) page.
 
-**Your code is the source of truth.** Barca doesn't generate code, doesn't require config files, and doesn't own your project structure. Your Python functions are the pipeline definition. Barca discovers them, infers the graph, and gets out of the way.
+Cost: two languages, and a protocol between them ([Architecture](/architecture/)).
 
-**Single install, zero config.** `uv add barca` gives you everything — the CLI, the decorators, the runtime. No `barca init`, no YAML, no manifest. Barca scans your project for decorated functions and builds the graph automatically.
+## A step is a function of its declared inputs
 
-**Scales down to a single script.** The minimum viable Barca project is one Python file with one decorated function. There is no setup cost. If you later need partitions, scheduling, sensors, or a server — those capabilities are there, but they're opt-in, not required.
+A result is cached by run hash: a hash of the function's code, the helper code it reaches and
+its inputs. If none of those changed, the function does not run. Every result is written to a
+file, and the next step reads that file.
 
-**Hyper-performant.** Performance isn't a feature — it's a prerequisite for invisibility. Planning happens in microseconds. Execution runs across a pool of stateless Python worker processes for true parallelism. Caching is content-addressed so identical work is never repeated. The framework should be the fastest part of your pipeline, never the bottleneck.
+Cost: an asset that reads a file or a bucket in its own body is computed once and then served
+from cache; outside data has to come in through a `@sensor`. Every step boundary pays for
+serialisation.
 
-**Flexible and extensible.** Barca has strong opinions about how little it should impose, not about how you should write your code. Sensors bring external state in. Effects push state out. Partitions fan work out. Schedules drive reconciliation. Each primitive composes with the others, and `@unsafe` exists as an explicit escape hatch when static analysis can't follow your code.
+## What barca does not do
 
-## Why asset-based
-
-Everything in Barca is an asset, a sensor, or an effect. This is a deliberate constraint, not a limitation.
-
-The asset model gives you strong guarantees the way Rust's ownership model gives you memory safety — it feels rigid until you realize it eliminates entire classes of bugs. When every node in the graph is a function that takes data and returns data:
-
-- **Caching is automatic.** If the inputs haven't changed, the output hasn't changed. No manual cache invalidation, no stale data.
-- **Staleness propagates.** Change an upstream asset's code and every downstream consumer knows it's stale — without you tracking dependencies manually.
-- **Provenance is free.** Every output is traceable to the exact code version, upstream versions, and partition key that produced it.
-- **The graph is statically analyzable.** Barca can reason about your entire pipeline without running any of it.
-
-The three node types cover the full surface area of data work:
-
-- **Assets** produce and cache values. They're the core abstraction — pure functions from data to data.
-- **Sensors** observe external state and bring it into the graph. They return `(update_detected, output)` tuples, making them the incremental processing primitive — the sensor scopes work to "what changed," and downstream assets process only that delta.
-- **Effects** push state out of the graph — write to a database, send an email, call an API. They never cache and can't be consumed by assets or sensors, though they can chain to other effects.
-
-Partitions extend the model to parallel and dynamic workloads. `partitions()` declares a static fan-out. `partitions_from()` derives partition values from an upstream asset at plan time, enabling dynamic partition universes that change as data changes. `collect()` fans partitions back in for aggregation.
-
-### What the asset model doesn't try to do
-
-Barca is not a general-purpose workflow engine. It doesn't do procedural task chains, human-in-the-loop approval gates, or infrastructure orchestration. Those are legitimate needs served by tools like Temporal, Airflow, or Step Functions. Barca's scope is data pipelines — where the fundamental operation is "function takes data, returns data." DuckDB doesn't try to be Postgres. Barca doesn't try to be Temporal.
-
-## What this means in practice
-
-| | Platform orchestrators | Barca |
-|---|---|---|
-| Install | Server + workers + config | `uv add barca` |
-| Startup overhead | Seconds to minutes | Imperceptible |
-| Learning curve | Framework-specific patterns | Write normal Python |
-| Minimum project | Team with infra support | One file, one function |
-| Code ownership | Framework owns the structure | You own everything |
-| Runs without the orchestrator | No | Yes — decorators are no-ops |
+- Distribute a run across machines. A remote store shares results between machines only.
+- General workflows: approval gates, or workflows that wait on external events.
+- Act on `Always` or `Manual` freshness. Only `Schedule` has an effect today
+  ([Core constraints](/core-constraints/#freshness-declarations)).
