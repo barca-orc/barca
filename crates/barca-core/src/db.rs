@@ -337,7 +337,8 @@ async fn replace_locked(
     // A download that is byte-for-byte the local database (the usual case: nothing was pushed
     // since this machine last pulled or pushed) replaces it with itself. Only then are its
     // pages not all read again.
-    let unchanged = wal_is_clean(db_path) && state_validate::same_bytes(db_path, &staged_path);
+    let unchanged =
+        log_holds_no_frame(db_path) && state_validate::same_bytes(db_path, &staged_path);
     let pages = match unchanged {
         true => state_validate::Pages::SameAsLocal,
         false => state_validate::Pages::Check,
@@ -869,6 +870,17 @@ pub fn wal_is_clean(db_path: &str) -> bool {
     match fs::metadata(format!("{db_path}-wal")) {
         Err(_) => true,
         Ok(m) => m.len() == 0,
+    }
+}
+
+/// True when the write-ahead log beside `db_path` holds no frame, so the main file is the whole
+/// database: the log is absent, empty, or only its 32-byte header (which the engine writes
+/// when it opens a database, as `barca history` does, without changing anything).
+fn log_holds_no_frame(db_path: &str) -> bool {
+    const WAL_HEADER: u64 = 32;
+    match fs::metadata(format!("{db_path}-wal")) {
+        Err(_) => true,
+        Ok(m) => m.len() <= WAL_HEADER,
     }
 }
 
@@ -2391,6 +2403,21 @@ mod tests {
             pull_for_tests(&local, Path::new(&same)).await;
             assert_eq!(fs::read(&prev).unwrap(), first_generation);
         }
+
+        // The same after a command that only opened the database: the engine leaves the
+        // header of a log behind and no frame, so the main file is still the whole database
+        // and the download is still it, byte for byte (no page of it is read again).
+        let same = dir.path().join("same.db").to_string_lossy().to_string();
+        fs::copy(&local, &same).unwrap();
+        init_db(&local).await.unwrap();
+        let log = fs::metadata(format!("{local}-wal")).map_or(0, |m| m.len());
+        assert_eq!(
+            log, 32,
+            "the engine no longer leaves a header-only log on open"
+        );
+        assert!(log_holds_no_frame(&local) && !wal_is_clean(&local));
+        pull_for_tests(&local, Path::new(&same)).await;
+        assert_eq!(fs::read(&prev).unwrap(), first_generation);
 
         // One generation: the next pull that changes the database replaces it.
         let second = (runs(&local).await, steps(&local).await);
