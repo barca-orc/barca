@@ -279,6 +279,65 @@ Put an empty `barca.toml` at the top of a project to anchor it.
 Never delete files under `.barca/` to force a recompute: use `--refresh <asset>` (below), which
 also keeps the metadata DB consistent. To look at a cached result, use `barca sql` (`barca docs sql`).
 
+## A cached result whose artifact is missing
+
+A cached result is a row in `.barca/metadata.db`; its artifact is a file. The file can go
+missing while the row stays: a disk cleanup, a container restarted without a volume for
+`.barca/artifacts/`, or someone deleting the directory. Barca then computes the result again
+when, and only when, something needs to read it:
+
+```bash
+barca run publish pipeline.py                    # model ran, publish ran
+rm .barca/artifacts/pipeline.py--model/*.json
+barca run publish pipeline.py --dry-run --json   # model: "action": "run", "reason": "artifact_missing"
+barca run publish pipeline.py                    # model runs again, then publish; exit 0
+barca run publish pipeline.py                    # model is cached again
+```
+
+- **Needed** means one of: a step that is going to run takes the artifact as an input; a
+  `partitions_from` step is expanded from it; or it is the output the command returns: the
+  targets you named, or with no target the one asset whose value is `final_output` (the last
+  asset). A partitioned asset is returned as a whole, so every one of its partitions is
+  checked (one file lookup per key, a few milliseconds at 5,000 keys). Every other asset at the
+  end of a pipeline is treated like an intermediate and is not looked at.
+- **Missing** means not on this machine's disk and, with an artifact store, not in the store
+  either (`barca docs remote`). The store has to be there for that to count: if its bucket,
+  container or directory is gone, misnamed or unreachable, the run fails with exit 3 and
+  computes nothing, because then nothing is known about the artifact.
+- The step runs with `reason: "artifact_missing"` and a warning on stderr names the file:
+  `[barca] warning: pipeline.py:model: the artifact of its cached result is missing: <path>.
+  Computing it again.` Its run hash does not change, so the artifact lands at the same path and
+  nothing downstream is invalidated. If the recomputed step reads an input that is missing too,
+  that one is computed first, by the same rule. For a partitioned asset only the keys whose
+  artifact is missing run.
+- **An artifact nothing reads is not looked at.** With `model` deleted and `report` (which
+  reads it) cached, `barca get report pipeline.py` executes 0 steps and `model` stays `cached`:
+  you can prune large intermediates and keep the final outputs. `model` is computed again the
+  first time something needs it.
+- `--dry-run` and `barca status` predict the same thing: `model` is `run` / `stale` with reason
+  `artifact_missing` under `barca run publish`, and `cached` under `barca get report`.
+- Under `barca serve` a scheduled task whose input was deleted recomputes the input once, on its
+  next tick, and keeps succeeding.
+
+Known limits:
+
+- Only existence is checked. A file that is there but truncated or edited is read as it is (with
+  an artifact store, a copy that does not match its recorded hash is replaced: `barca docs
+  remote`). A directory at the artifact's path counts as present.
+- `--agent` announces each step once, with its outcome. A cached step whose artifact is not on
+  disk waits: it prints `step:<id> completed` if it is computed again, or `step:<id> cached` at
+  the end of the run if nothing needed it. The one exception is a result in a remote store
+  whose object turns out to be deleted when it is fetched: its `cached` line was already
+  printed, and the warning and a `completed` line for the same step follow
+  (`barca docs contract`).
+- A function that is not deterministic may return a different value when it is computed again;
+  cached steps downstream of it keep the results they were computed with (as after
+  `--refresh --no-cascade`).
+- A dry run does not contact a remote artifact store. A result recorded in one is predicted as
+  `cached` even if the object has since been deleted from the bucket; the real run finds out
+  when it fetches it, and computes it again. A store that is a directory is checked, and if
+  the directory itself is gone the dry run predicts `cached` where the run exits 3.
+
 ## Controlling the cache
 
 | Goal | Command |
@@ -355,9 +414,11 @@ Each step has an `action`:
 | `unknown` | Cannot be known without running: a dynamic partition (`partitions_from`) whose source has to run first to produce its keys (`reason: "partitions_unknown"`), or an asset reading a sensor with no recorded output (`reason: "sensor_output_unknown"`), and anything that depends on either. |
 
 `reason` is one of `task` and `sensor` (always run), `refresh` (named in `--refresh`),
-`refresh_cascade` (downstream of an asset named in `--refresh`), `refresh_all` (`--refresh-all`), or
+`refresh_cascade` (downstream of an asset named in `--refresh`), `refresh_all` (`--refresh-all`),
 `not_materialized` (no cached result for this code and these inputs: never run, or the code, an
-upstream or a sensor's output changed). Under `--no-cascade`, a cached step downstream of a
+upstream or a sensor's output changed), or `artifact_missing` (the result is cached, but its
+artifact is gone and something needs to read it: see "A cached result whose artifact is missing"
+above). Under `--no-cascade`, a cached step downstream of a
 refreshed asset carries a `warning` (see the refresh notes above). A step that reads a sensor is
 predicted from the sensor's last recorded output, and its `detail` says so. `summary` counts
 steps, one per partition key.

@@ -86,6 +86,7 @@ function staleReason(reason: CacheStatus['reason']): string {
     .with('upstream_stale', () => 'upstream')
     .with('sensor_output_unknown', () => 'sensor')
     .with('failed', () => 'last run failed')
+    .with('artifact_missing', () => 'artifact missing')
     .with(
       'materialized',
       'no_record',

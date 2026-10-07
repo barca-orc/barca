@@ -410,7 +410,8 @@ def test_stalled_store_times_out_instead_of_hanging(tmp_path, backend, container
     assert all("TimeoutError" in r["error_message"] for r in rows)
 
 
-def test_cache_hit_with_missing_object_fails_fast_with_hint(tmp_path, backend, container, proxy):
+def test_cache_hit_with_missing_object_is_recomputed_fast(tmp_path, backend, container, proxy):
+    """A result whose object is gone from the store is computed again, not a failed run (#252)."""
     state = tmp_path / "state.db"
     a = Project(tmp_path / "a", backend, container, proxy.endpoint, state)
     proc, _ = a.get()
@@ -420,8 +421,158 @@ def test_cache_hit_with_missing_object_fails_fast_with_hint(tmp_path, backend, c
         if "total" in path:
             fs.rm(path)
 
+    # Another machine: nothing on its disk, and `total` is in neither place.
     b = Project(tmp_path / "b", backend, container, proxy.endpoint, state)
     proc, took = b.get()
-    assert proc.returncode != 0, _explain(proc)
-    assert "could not fetch" in proc.stderr and "--refresh-all" in proc.stderr, _explain(proc)
+    assert proc.returncode == 0, _explain(proc)
+    assert "could not fetch" not in proc.stderr, _explain(proc)
+    assert "pipeline.py:total: the artifact of its cached result is missing" in proc.stderr
+    # Only `total` runs; `numbers`, which it reads, is fetched.
+    assert "step:pipeline.py:total completed" in proc.stderr, _explain(proc)
+    assert "step:pipeline.py:numbers completed" not in proc.stderr, _explain(proc)
     assert took < 30, f"missing object took {took:.1f}s — retried a permanent error?"
+    assert any("total" in path for path in _stored(backend, container)), "not uploaded again"
+
+
+def _no_step_ran(proc: subprocess.CompletedProcess) -> bool:
+    return " completed " not in proc.stderr
+
+
+def _container_exists(backend, name: str) -> bool:
+    fs = backend.fs()
+    fs.invalidate_cache()
+    try:
+        return bool(fs.exists(name))
+    except Exception:
+        return False
+
+
+def _assert_store_failure(proc: subprocess.CompletedProcess) -> None:
+    """Exit 3 with the fetch error and its hint, and nothing computed on the store's account."""
+    assert proc.returncode == 3, _explain(proc)
+    assert "could not fetch" in proc.stderr and "--refresh-all" in proc.stderr, _explain(proc)
+    assert _no_step_ran(proc), _explain(proc)
+    assert "the artifact of its cached result is missing" not in proc.stderr, _explain(proc)
+
+
+def test_a_deleted_bucket_is_a_failed_run_not_a_recompute(tmp_path, backend, container, proxy):
+    """Every object of a deleted bucket answers "not found": that is not a missing artifact."""
+    state = tmp_path / "state.db"
+    a = Project(tmp_path / "a", backend, container, proxy.endpoint, state)
+    proc, _ = a.get()
+    assert proc.returncode == 0, _explain(proc)
+    backend.fs().rm(container, recursive=True)
+    # Not a skip: if the emulator keeps the bucket, this test proves nothing and must say so.
+    assert not _container_exists(backend, container), (
+        f"setup failed: the {backend.id} emulator did not delete the bucket"
+    )
+
+    b = Project(tmp_path / "b", backend, container, proxy.endpoint, state)
+    proc, took = b.get()
+    _assert_store_failure(proc)
+    assert "is not there or cannot be listed" in proc.stderr, _explain(proc)
+    assert took < 30, f"a deleted bucket took {took:.1f}s to report"
+    assert not _container_exists(backend, container), "the run re-created the bucket"
+
+
+def test_a_wrong_bucket_name_is_a_failed_run_not_a_recompute(tmp_path, backend, container, proxy):
+    """A misspelled bucket must not turn into a full recompute written to a new bucket."""
+    state = tmp_path / "state.db"
+    a = Project(tmp_path / "a", backend, container, proxy.endpoint, state)
+    proc, _ = a.get()
+    assert proc.returncode == 0, _explain(proc)
+    before = _stored(backend, container)
+
+    wrong = f"{container}-typo"
+    b = Project(tmp_path / "b", backend, wrong, proxy.endpoint, state)
+    proc, took = b.get()
+    _assert_store_failure(proc)
+    assert took < 30, f"a wrong bucket name took {took:.1f}s to report"
+    assert not _container_exists(backend, wrong), "the run created the misspelled bucket"
+    assert _stored(backend, container) == before
+
+
+def test_an_unreachable_store_fails_a_fetch_in_bounded_time(tmp_path, backend, container, proxy):
+    """Connection refused on a fetch: exit 3, nothing recomputed, within `transfer_timeout`."""
+    state = tmp_path / "state.db"
+    a = Project(tmp_path / "a", backend, container, proxy.endpoint, state)
+    proc, _ = a.get()
+    assert proc.returncode == 0, _explain(proc)
+
+    # An endpoint nothing listens on. (Closing the proxy's listener is not enough: on Linux a
+    # thread blocked in accept() keeps the socket accepting.)
+    with socket.socket() as unused:
+        unused.bind(("127.0.0.1", 0))
+        dead = f"http://127.0.0.1:{unused.getsockname()[1]}"
+    b = Project(tmp_path / "b", backend, container, dead, state, transfer_timeout=5)
+    proc, took = b.get(timeout=110)
+    _assert_store_failure(proc)
+    # One attempt may run for transfer_timeout; it is then abandoned, not retried.
+    assert took < 45, f"an unreachable store held the run for {took:.1f}s"
+    assert len(_stored(backend, container)) == 2
+
+
+def test_a_stalled_store_fails_a_fetch_instead_of_hanging(tmp_path, backend, container, proxy):
+    state = tmp_path / "state.db"
+    a = Project(tmp_path / "a", backend, container, proxy.endpoint, state)
+    proc, _ = a.get()
+    assert proc.returncode == 0, _explain(proc)
+
+    proxy.stall = True
+    b = Project(tmp_path / "b", backend, container, proxy.endpoint, state, transfer_timeout=3)
+    proc, took = b.get(timeout=90)
+    _assert_store_failure(proc)
+    assert "TimeoutError" in proc.stderr, _explain(proc)
+    assert took < 45, f"a stalled store held the run for {took:.1f}s"
+
+
+def test_credentials_that_cannot_list_say_so_instead_of_bucket_not_found(tmp_path):
+    """Get/put without list (S3 `s3:ListBucket` denied): exit 3 naming the permission.
+
+    MinIO only: an anonymous bucket policy is the one restricted identity an emulator lets a
+    test create through the S3 API. The classification for the other backends is unit-tested
+    (test_storage.py).
+    """
+    backend = S3()
+    if not _reachable(backend.endpoint):
+        pytest.skip(f"s3 emulator not reachable at {backend.endpoint}")
+    container = f"barca-faults-{uuid.uuid4().hex[:12]}"
+    fs = backend.fs()
+    fs.mkdir(container)
+    try:
+        state = tmp_path / "state.db"
+        a = Project(tmp_path / "a", backend, container, backend.endpoint, state)
+        proc, _ = a.get()
+        assert proc.returncode == 0, _explain(proc)
+        for path in _stored(backend, container):
+            if "total" in path:
+                fs.rm(path)
+        policy = {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Principal": {"AWS": ["*"]},
+                    "Action": ["s3:GetObject", "s3:PutObject"],
+                    "Resource": [f"arn:aws:s3:::{container}/*"],
+                }
+            ],
+        }
+        fs.call_s3("put_bucket_policy", Bucket=container, Policy=json.dumps(policy))
+
+        b = Project(tmp_path / "b", backend, container, backend.endpoint, state)
+        toml = (b.dir / "barca.toml").read_text().split("[remote.storage_options.s3]")[0]
+        (b.dir / "barca.toml").write_text(
+            toml + "[remote.storage_options.s3]\nanon = true\n"
+            f'client_kwargs = {{ endpoint_url = "{backend.endpoint}" }}\n'
+        )
+        proc, _ = b.get()
+        _assert_store_failure(proc)
+        assert "is not permitted" in proc.stderr and "s3:ListBucket" in proc.stderr, _explain(proc)
+        assert "was not found" not in proc.stderr, _explain(proc)
+        assert not any("total" in path for path in _stored(backend, container))
+    finally:
+        try:
+            fs.rm(container, recursive=True)
+        except Exception:
+            pass
