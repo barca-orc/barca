@@ -117,7 +117,7 @@ GET /health
 ```
 
 ```json
-{ "status": "ok", "version": "0.16.0", "read_only": false, "scheduler": true }
+{ "status": "ok", "version": "0.17.0", "read_only": false, "scheduler": true }
 ```
 
 `scheduler` is `true` when this server fires `Schedule(...)` nodes: on by default, `false` with

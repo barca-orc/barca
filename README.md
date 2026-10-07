@@ -320,7 +320,7 @@ barca serve pipeline.py --read-only      # inspect only: no runs, no scheduler, 
 Runs are async: `POST` returns a `run_id` immediately, then you poll `/status/{run_id}`.
 
 ```bash
-curl localhost:8274/health                       # {"status":"ok","version":"0.16.0"}
+curl localhost:8274/health                       # {"status":"ok","version":"0.17.0"}
 curl localhost:8274/assets                       # list assets + deps
 curl localhost:8274/plan                          # execution plan JSON
 curl -XPOST localhost:8274/run                    # → {"run_id":"…"}; poll /status/<id>
