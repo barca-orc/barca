@@ -93,7 +93,8 @@ pub struct Carried {
     pub log_lines: usize,
     /// Successful steps left behind because their artifact is not reachable from here.
     pub steps_without_artifact: usize,
-    /// Why the local file is not a database, when it is not: nothing could be carried.
+    /// Why the local file held nothing that could be carried (not a database, empty, or not
+    /// a barca database), when that is so: it was replaced, and the user is told.
     pub unreadable: Option<String>,
     /// True when the local database was opened and compared with the pulled one (false when
     /// there was none, or the base record showed nothing had been written to it).
@@ -130,9 +131,8 @@ impl Carried {
     pub fn note(&self) -> Option<String> {
         if let Some(why) = &self.unreadable {
             return Some(format!(
-                "[barca] warning: the local history file is not a database ({why}); it was \
-                 replaced by the shared history, and anything recorded only on this machine is \
-                 gone"
+                "[barca] warning: the local history file held no barca history ({why}); it \
+                 was replaced by the shared history"
             ));
         }
         if self.announced {
@@ -809,6 +809,11 @@ mod tests {
             unreadable: Some("short read".into()),
             ..Default::default()
         };
-        assert!(unreadable.note().unwrap().contains("is not a database"));
+        assert!(
+            unreadable
+                .note()
+                .unwrap()
+                .contains("held no barca history (short read)")
+        );
     }
 }

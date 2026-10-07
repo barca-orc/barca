@@ -71,11 +71,12 @@ pub struct Pulled {
 }
 
 /// The name of the file a pull downloads into, next to the database (so the swap is a rename
-/// on one filesystem): `<db>.pull-<host>-<pid>-<n>`.
-fn staged_path(db_path: &str) -> PathBuf {
+/// on one filesystem): `<db>.pull-<host>-<pid>-<n>`. A push uploads a copy named the same way,
+/// `<db>.push-…`.
+fn staged_path(db_path: &str, kind: &str) -> PathBuf {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     PathBuf::from(format!(
-        "{db_path}.pull-{}-{}-{}",
+        "{db_path}.{kind}-{}-{}-{}",
         host_tag(),
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
@@ -98,8 +99,8 @@ fn host_tag() -> String {
 /// A download nobody has touched for this long is abandoned whoever made it.
 const ABANDONED_AFTER: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 
-/// Remove what pulls that died part-way left next to the database: `<db>.pull-…` files (and
-/// their sidecars) made on this host by a process that is gone, or older than
+/// Remove what pulls and pushes that died part-way left next to the database: `<db>.pull-…`
+/// and `<db>.push-…` files (and their sidecars) made on this host by a process that is gone, or older than
 /// [`ABANDONED_AFTER`]. A process id alone means nothing across machines or containers that
 /// share the project directory, so another host's recent file is left alone. They are
 /// abandoned downloads; the local database never depended on them.
@@ -113,14 +114,17 @@ fn remove_abandoned_pulls(db_path: &str) {
     } else {
         dir
     };
-    let prefix = format!("{name}.pull-");
+    let prefixes = [format!("{name}.pull-"), format!("{name}.push-")];
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
     let ours = host_tag();
     for entry in entries.flatten() {
         let file_name = entry.file_name();
-        let Some(rest) = file_name.to_str().and_then(|n| n.strip_prefix(&prefix)) else {
+        let Some(rest) = file_name
+            .to_str()
+            .and_then(|n| prefixes.iter().find_map(|p| n.strip_prefix(p.as_str())))
+        else {
             continue;
         };
         let mut fields = rest.split('-');
@@ -142,33 +146,43 @@ fn remove_abandoned_pulls(db_path: &str) {
     }
 }
 
-/// How many times a pull downloads again because the local database changed under it and its
-/// new base could not be read (a swap cut short). Each try is a fresh download.
-const PULL_ATTEMPTS: u32 = 4;
+/// How many downloads a pull makes without holding the database's lock before it takes the
+/// lock for the whole of one. A download is discarded when another barca process replaced or
+/// pushed the local database while it was on its way.
+const UNLOCKED_ATTEMPTS: u32 = 2;
 
 /// Bring the local database at `cfg.db_path` up to the shared state blob. When the remote
 /// object does not exist yet the token is `StateToken(None)` and the local database is left
 /// untouched (the first push creates the shared state from it).
 ///
 /// Afterwards the local database holds every row of the blob the returned token names, plus
-/// the local rows that were never pushed, and nothing else:
+/// the local rows that were never pushed, and nothing else. The full path: the blob is
+/// downloaded next to the database, with no lock held, and swapped in by
+/// [`crate::db::replace_db`], which carries the unpushed rows over, never lets the old
+/// write-ahead log be applied to the new file (#221), and refuses a download that another
+/// process's pull or push has overtaken (the pull then starts again, the last time holding
+/// the lock throughout).
 ///
-/// - when the shared state is still the blob the local database is based on
-///   ([`crate::state_base`]), nothing is downloaded and nothing changes;
-/// - otherwise the blob is downloaded next to the database, with no lock held, and swapped
-///   in by [`crate::db::replace_db`], which carries the unpushed rows over, never lets the old
-///   write-ahead log be applied to the new file (#221), and refuses a download that another
-///   process's pull or push has overtaken. The local database is then already based on a blob
-///   at least as new, whose token is returned.
+/// Two shortcuts, both only when the base record is trusted, that is when the local database
+/// is provably the file a pull or push left and nothing wrote to it since
+/// ([`crate::state_base::Base::trusted`]): a shared state that is still that blob is not
+/// downloaded, and a download takes the local database's place without the two being compared.
 pub async fn pull_state(python: &Path, cfg: &ResolvedConfig) -> Result<Pulled, BarcaError> {
     let uri = cfg
         .state_uri
         .as_deref()
         .ok_or_else(|| BarcaError::Other("pull_state called without a state uri".into()))?;
     remove_abandoned_pulls(&cfg.db_path);
-    for _ in 0..PULL_ATTEMPTS {
-        let staged = staged_path(&cfg.db_path);
-        let result = pull_into(python, cfg, uri, &staged).await;
+    for attempt in 0..=UNLOCKED_ATTEMPTS {
+        // The last time, nothing can get in between: the lock is taken before the record is
+        // read and held until the swap is done.
+        let lock = if attempt == UNLOCKED_ATTEMPTS {
+            Some(crate::db::lock_db(&cfg.db_path).await?)
+        } else {
+            None
+        };
+        let staged = staged_path(&cfg.db_path, "pull");
+        let result = pull_into(python, cfg, uri, &staged, lock.as_ref()).await;
         // Gone already when it was swapped in; left behind when the pull failed part-way or
         // the download was discarded.
         let _ = std::fs::remove_file(&staged);
@@ -178,36 +192,32 @@ pub async fn pull_state(python: &Path, cfg: &ResolvedConfig) -> Result<Pulled, B
         }
     }
     Err(BarcaError::Other(format!(
-        "shared state pull from {uri}: the local database {} kept being replaced by other barca \
-         processes; re-run",
+        "shared state pull from {uri}: the local database {} changed while its lock was held",
         cfg.db_path
     )))
 }
 
-/// One download and swap. `None` when the download was overtaken and the local database's new
-/// base is not known yet: try again.
+/// One download and swap. `None` when the download was overtaken: try again.
 async fn pull_into(
     python: &Path,
     cfg: &ResolvedConfig,
     uri: &str,
     staged: &Path,
+    held: Option<&crate::db::DbLock>,
 ) -> Result<Option<Pulled>, BarcaError> {
     use crate::state_base;
     // Read before the download begins: a change by the time of the swap means the download
     // may be older than the local database.
     let base_raw = state_base::read_raw(&cfg.db_path);
-    // The blob the local database is known to hold, if it is there and looks like a database:
-    // when the shared state is still that blob there is nothing to pull.
-    let based_on = state_base::parse(base_raw.as_deref())
-        .map(|b| b.token)
-        .filter(|t| !t.is_empty())
-        .filter(|_| {
-            Path::new(&cfg.db_path).exists() && crate::db::not_a_database(&cfg.db_path).is_none()
-        });
+    // The blob the local database provably is, if any: when the shared state is still that
+    // blob there is nothing to pull.
+    let is_exactly = state_base::parse(base_raw.as_deref())
+        .filter(|b| b.trusted(&cfg.db_path))
+        .map(|b| b.token);
 
     let mut cmd = state_cmd(python, cfg);
     cmd.arg("pull").arg(uri).arg(staged);
-    if let Some(token) = &based_on {
+    if let Some(token) = &is_exactly {
         cmd.arg("--unless-token").arg(token);
     }
     let out = cmd
@@ -252,7 +262,11 @@ async fn pull_into(
         token,
         base_at_start: base_raw.as_deref(),
     };
-    match crate::db::replace_db(&cfg.db_path, incoming).await? {
+    let replaced = match held {
+        Some(lock) => crate::db::replace_db_holding(lock, &cfg.db_path, incoming).await?,
+        None => crate::db::replace_db(&cfg.db_path, incoming).await?,
+    };
+    match replaced {
         crate::db::Replaced::Swapped(carried) => {
             let kind = if carried.compared {
                 PullKind::Merged
@@ -261,9 +275,10 @@ async fn pull_into(
             };
             done(token, carried, kind)
         }
-        // The local database holds every row of the blob its base record names, so that is
-        // the token this command's later push must be conditional on.
-        crate::db::Replaced::Superseded(Some(base)) if !base.token.is_empty() => {
+        // Another process just brought the local database up to date. If its record is
+        // trusted the local database is exactly the blob it names, and that is the token a
+        // later push must be conditional on. Otherwise: pull again.
+        crate::db::Replaced::Superseded(Some(base)) if base.trusted(&cfg.db_path) => {
             done(&base.token, Carried::default(), PullKind::Superseded)
         }
         crate::db::Replaced::Superseded(_) => Ok(None),
@@ -289,14 +304,12 @@ fn helper_cause(stderr: &[u8]) -> String {
         .to_string()
 }
 
-/// Fold the local database's write-ahead log into its main file and conditionally upload it
-/// over the shared state blob.
+/// Conditionally upload the local database over the shared state blob.
 ///
-/// The cross-process lock is held from the checkpoint until the upload has been recorded, so
-/// what is uploaded is one consistent file (turso keeps most data in `metadata.db-wal`:
-/// uploading the main file without a checkpoint would upload an old or empty database), no
-/// other barca process can replace or write the database under the upload, and the base
-/// record names the new blob only while the local database is exactly it.
+/// What is uploaded is a copy taken under the database's lock, right after its write-ahead
+/// log was folded in ([`crate::db::copy_for_push`]). The upload itself holds no lock, so a
+/// slow one keeps no other barca command waiting. Afterwards the base record is updated only
+/// if the local database is still the file that was copied.
 pub async fn push_state(
     python: &Path,
     cfg: &ResolvedConfig,
@@ -306,10 +319,24 @@ pub async fn push_state(
         .state_uri
         .as_deref()
         .ok_or_else(|| BarcaError::Other("push_state called without a state uri".into()))?;
-    let _lock = crate::db::lock_db(&cfg.db_path).await?;
-    crate::db::fold_log(&cfg.db_path).await?;
+    let copy = crate::db::copy_for_push(&cfg.db_path, staged_path(&cfg.db_path, "push")).await?;
+    let outcome = upload(python, cfg, uri, &copy.path, token).await;
+    let _ = std::fs::remove_file(&copy.path);
+    if let Ok(PushOutcome::Pushed(new_token)) = &outcome {
+        crate::db::record_pushed(&cfg.db_path, &copy, new_token).await;
+    }
+    outcome
+}
+
+async fn upload(
+    python: &Path,
+    cfg: &ResolvedConfig,
+    uri: &str,
+    file: &Path,
+    token: &StateToken,
+) -> Result<PushOutcome, BarcaError> {
     let mut cmd = state_cmd(python, cfg);
-    cmd.arg("push").arg(uri).arg(&cfg.db_path);
+    cmd.arg("push").arg(uri).arg(file);
     if let Some(ref t) = token.0 {
         cmd.arg("--token").arg(t);
     }
@@ -334,7 +361,6 @@ pub async fn push_state(
         .get("token")
         .and_then(|t| t.as_str())
         .ok_or_else(|| BarcaError::Other("state push: helper returned no token".into()))?;
-    crate::db::record_pushed(&cfg.db_path, new_token);
     Ok(PushOutcome::Pushed(new_token.to_string()))
 }
 
@@ -342,8 +368,7 @@ pub async fn push_state(
 /// left behind. Must be called with no other connections open on the file
 /// (the caller drops all handles first).
 pub async fn checkpoint_truncate(db_path: &str) -> Result<(), BarcaError> {
-    let _lock = crate::db::lock_db(db_path).await?;
-    crate::db::fold_log(db_path).await
+    crate::db::fold_log_locked(db_path).await
 }
 
 pub use crate::db::wal_is_clean;
