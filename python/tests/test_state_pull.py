@@ -511,7 +511,7 @@ def test_a_local_history_that_cannot_be_opened_is_replaced_with_a_warning(machin
 
     out = a.barca("status", "a_one.py", "--json")
     assert out.returncode == 0, out.stderr
-    assert "warning: the local history file is not a database" in out.stderr, out.stderr
+    assert "warning: the local history file held no barca history" in out.stderr, out.stderr
     assert a.local_runs() == {a_first, b_run}
 
 
@@ -541,17 +541,16 @@ def test_a_pull_does_only_the_work_the_situation_needs(machines, state_uri):
     # database's place without either being read, however long the history is.
     b.get("b_one")
     assert pull_kind(get()) == "Replaced"
-    # A has a run that was never pushed. While the shared state stays as it is there is
-    # still nothing to pull; the run made here pushes the unpushed one along with itself.
+    # A wrote to its database without pushing (a run with state off). The record no longer
+    # describes the file, so the pull takes the full path even though the shared state did
+    # not move: download, compare, keep the unpushed run. The run made here then pushes it.
     unpushed = a.get("a_off", BARCA_STATE="off")
-    assert pull_kind(get()) == "Unchanged"
-    assert unpushed in shared_runs(state_uri)
-    # Unpushed rows and a shared state that moved: now the two are compared.
-    a.get("a_off_again", BARCA_STATE="off")
-    b.get("b_two")
     out = get()
     assert pull_kind(out) == "Merged"
     assert "kept 1 run and 1 finished step" in out.stderr
+    assert unpushed in shared_runs(state_uri)
+    # In sync again.
+    assert pull_kind(get()) == "Unchanged"
 
 
 def test_what_a_pull_kept_is_said_once_until_it_is_pushed(machines, state_uri):
@@ -654,6 +653,208 @@ def test_a_truncated_local_history_is_replaced_with_a_warning(machines, state_ur
 
     out = a.barca("status", "a_one.py", "--json")
     assert out.returncode == 0, out.stderr
-    assert "warning: the local history file is not a database" in out.stderr, out.stderr
+    assert "warning: the local history file held no barca history" in out.stderr, out.stderr
     assert "cut short" in out.stderr, out.stderr
     assert a.local_runs() == {a_first, b_run}
+
+
+# ─── the base record is trusted only for the very file it was written for ────
+#
+# `.barca/metadata.db.base` lets a pull skip the download when the shared state is still the
+# blob the local database is. If it were believed about any other file, the run would push
+# that file over the shared history. Each test ends by checking that the shared state still
+# holds every run of every machine.
+
+TASK = "from barca import task\n\n\n@task()\ndef chore() -> int:\n    return 1\n"
+
+
+def recreate_with(a: Machine, command: str) -> set[str]:
+    """Delete A's local database (the record stays) and let `command` be the next thing to
+    touch the project. Returns the runs that command recorded locally, if any."""
+    a.db.unlink()
+    Path(f"{a.db}-wal").unlink(missing_ok=True)
+    assert Path(f"{a.db}.base").exists()
+    off = {"BARCA_STATE": "off"}
+    made: set[str] = set()
+    if command == "history":
+        assert a.barca("history", "--json").returncode == 0
+    elif command == "stats":
+        a.barca("stats", "a_one", "a_one.py", "--json")
+    elif command == "list":
+        assert a.barca("list", "a_one.py", "--json").returncode == 0
+    elif command == "plan":
+        assert a.barca("plan", "a_one.py").returncode == 0
+    elif command == "status":
+        assert a.barca("status", "a_one.py", "--json", **off).returncode == 0
+    elif command == "get with state off":
+        made.add(a.get("a_local", **off))
+    elif command == "run with state off":
+        (a.root / "chore.py").write_text(TASK)
+        out = a.barca("run", "chore", "chore.py", "--json", **off)
+        assert out.returncode == 0, out.stderr
+        made.add(json.loads(out.stdout)["run_id"])
+    elif command == "serve":
+        proc = subprocess.Popen(
+            [_find_binary(), "serve", "a_one.py", "--port", "0"],
+            cwd=a.root,
+            env={**a.env, **off},
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        try:
+            deadline = time.time() + 5
+            while not a.db.exists() and time.time() < deadline and proc.poll() is None:
+                time.sleep(0.05)
+        finally:
+            proc.kill()
+            proc.wait(timeout=WAIT)
+    else:
+        raise AssertionError(command)
+    return made
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "history",
+        "stats",
+        "list",
+        "plan",
+        "status",
+        "get with state off",
+        "run with state off",
+        "serve",
+    ],
+)
+def test_a_database_recreated_under_an_old_record_is_not_pushed_over_the_shared_history(
+    machines, state_uri, command
+):
+    a, b = machines("a"), machines("b")
+    a_first = a.get("a_one")
+    b_run = b.get("b_one")
+    a_second = a.get("a_two")  # A is in sync: its record names the current shared state
+    everything = {a_first, b_run, a_second}
+    assert set(shared_runs(state_uri)) == everything
+
+    made = recreate_with(a, command)
+
+    out = a.barca("get", "a_one.py", "--json", BARCA_TRACE_TIMING="1")
+    assert out.returncode == 0, out.stderr
+    assert pull_kind(out) != "Unchanged", out.stderr
+    everything |= made | {json.loads(out.stdout)["run_id"]}
+    assert set(shared_runs(state_uri)) == everything
+    assert a.local_runs() == everything
+
+
+@pytest.mark.parametrize("preserve_times", [False, True], ids=["cp", "cp -p"])
+def test_an_older_copy_put_back_over_the_database_is_not_pushed_over_the_shared_history(
+    machines, state_uri, preserve_times
+):
+    a, b = machines("a"), machines("b")
+    a_first = a.get("a_one")
+    backup = a.root / "backup.db"
+    subprocess.run(["cp", "-p", str(a.db), str(backup)], check=True)
+    b_run = b.get("b_one")
+    a_second = a.get("a_two")
+    everything = {a_first, b_run, a_second}
+    assert set(shared_runs(state_uri)) == everything
+
+    # Someone restores yesterday's copy. The record still names today's shared state.
+    Path(f"{a.db}-wal").unlink(missing_ok=True)
+    subprocess.run(["cp", *(["-p"] if preserve_times else []), str(backup), str(a.db)], check=True)
+    assert a.local_runs() == {a_first}
+
+    out = a.barca("get", "a_one.py", "--json", BARCA_TRACE_TIMING="1")
+    assert out.returncode == 0, out.stderr
+    assert pull_kind(out) != "Unchanged", out.stderr
+    everything.add(json.loads(out.stdout)["run_id"])
+    assert set(shared_runs(state_uri)) == everything
+    assert a.local_runs() == everything
+
+
+def test_a_record_copied_from_another_project_is_not_believed(machines, state_uri):
+    a, b, c = machines("a"), machines("b"), machines("c")
+    a_first = a.get("a_one")
+    b_run = b.get("b_one")
+    a_second = a.get("a_two")
+    everything = {a_first, b_run, a_second}
+
+    # C has a database of its own with one local run, and A's record beside it.
+    c_local = c.get("c_one", BARCA_STATE="off")
+    record = Path(f"{c.db}.base")
+    record.write_bytes(Path(f"{a.db}.base").read_bytes())
+
+    out = c.barca("get", "c_one.py", "--json", BARCA_TRACE_TIMING="1")
+    assert out.returncode == 0, out.stderr
+    assert pull_kind(out) == "Merged", out.stderr
+    everything |= {c_local, json.loads(out.stdout)["run_id"]}
+    assert set(shared_runs(state_uri)) == everything
+    assert c.local_runs() == everything
+
+
+def test_a_write_by_another_program_that_leaves_size_and_mtime_alone_is_noticed(
+    machines, state_uri
+):
+    a, b = machines("a"), machines("b")
+    a_first = a.get("a_one")
+    b_run = b.get("b_one")
+    a_second = a.get("a_two")  # in sync, record written
+
+    # Another program adds a row. The file keeps its size, and its modification time is put
+    # back (as a coarse-timestamp filesystem, `touch -r` or a restoring copy would leave it).
+    before = a.db.stat()
+    conn = sqlite3.connect(a.db)
+    conn.execute(
+        "INSERT INTO runs (run_id, command, files, status) VALUES ('by-hand', 'get', '[]', 'success')"
+    )
+    conn.commit()
+    conn.close()
+    Path(f"{a.db}-wal").unlink(missing_ok=True)
+    Path(f"{a.db}-shm").unlink(missing_ok=True)
+    os.utime(a.db, ns=(before.st_atime_ns, before.st_mtime_ns))
+    after = a.db.stat()
+    assert (after.st_size, after.st_mtime_ns) == (before.st_size, before.st_mtime_ns)
+
+    # The shared state moves, then A pulls: the row must be compared and kept, not replaced.
+    b_two = b.get("b_two")
+    out = a.barca("get", "a_one.py", "--json", BARCA_TRACE_TIMING="1")
+    assert out.returncode == 0, out.stderr
+    assert pull_kind(out) == "Merged", out.stderr
+    everything = {a_first, b_run, a_second, b_two, "by-hand", json.loads(out.stdout)["run_id"]}
+    assert set(shared_runs(state_uri)) == everything
+
+
+def test_resetting_and_rolling_back_the_shared_history_as_documented(machines, state_uri):
+    a, b = machines("a"), machines("b")
+    a_first = a.get("a_one")
+    older = state_uri.read_bytes()
+    b_run = b.get("b_one")
+    a_second = a.get("a_two")
+    b.get("b_two", BARCA_STATE="off")  # B has something it never uploaded
+    (b_local,) = b.local_runs() - {a_first, b_run}
+
+    # Rolled back to an older copy. A is in sync, so it follows the shared history...
+    state_uri.write_bytes(older)
+    out = a.barca("status", "a_one.py", "--json")
+    assert out.returncode == 0, out.stderr
+    assert a.local_runs() == {a_first}
+    # ...and B, which has a run not yet uploaded, keeps every run the older copy lacks and
+    # uploads them with its next run.
+    b_three = b.get("b_three")
+    assert set(shared_runs(state_uri)) == {a_first, b_run, b_local, b_three}
+
+    # Deleted: the next run creates it again from that machine's whole local copy.
+    state_uri.unlink()
+    a_third = a.get("a_three")
+    assert set(shared_runs(state_uri)) == {a_first, a_third}
+
+    # Reset on purpose, as the manual says: the shared file and three files on each machine.
+    state_uri.unlink()
+    for machine in (a, b):
+        for suffix in ("", "-wal", ".base"):
+            Path(f"{machine.db}{suffix}").unlink(missing_ok=True)
+    a_new = a.get("a_four")
+    b_new = b.get("b_four")
+    assert set(shared_runs(state_uri)) == {a_new, b_new}
+    assert a_second not in b.local_runs()
+    assert b.local_runs() == {a_new, b_new}
