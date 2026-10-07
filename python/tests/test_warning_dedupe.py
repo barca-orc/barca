@@ -61,9 +61,9 @@ def noisy() -> dict:
     return {"n": 1}
 
 
-@asset(inputs={"x": noisy})
-def broken(x: dict) -> dict:
-    for _ in range(4 if x is not None else 0):
+@asset(inputs={"_x": noisy})
+def broken(_x) -> dict:
+    for _ in range(4):
         log.warning("Could not parse .netrc file")
     raise ValueError("Could not parse .netrc file")
 """
@@ -249,3 +249,55 @@ def test_many_distinct_warnings_are_bounded(tmp_path: Path) -> None:
     summary = [ln for ln in lines if " more: " in ln]
     assert len(summary) == 11, r.stderr
     assert summary[-1] == "[barca] 502 more: 502 other repeated warnings", r.stderr
+
+
+# A partitioned step that ignores an input: barca's own plan-time warning (#231) about it.
+PLAN_WARNED = """
+import logging
+from barca import asset, collect, partitions
+
+log = logging.getLogger("aiohttp.client")
+
+
+@asset()
+def seed() -> dict:
+    return {"s": 1}
+
+
+@asset(
+    inputs={"seed": seed},
+    partitions={"k": partitions(["k0", "k1", "k2", "k3", "k4", "k5", "k6", "k7"])},
+)
+def fetch(seed: dict, k: str) -> dict:
+    for _ in range(5):
+        log.warning("Could not parse .netrc file")
+    return {"k": k}
+
+
+@asset(inputs={"parts": collect(fetch)})
+def total(parts: list[dict]) -> dict:
+    return {"n": len(parts)}
+
+
+@asset(inputs={"parts": collect(fetch)})
+def count(parts: list[dict]) -> int:
+    return len(parts)
+"""
+
+
+def test_a_plan_warning_is_printed_once_however_many_partitions_and_targets(tmp_path: Path) -> None:
+    """barca's own warning about a step is one line per run: not one per partition key, not one
+    per target that shares the step, and never part of the `N more:` summary, which counts
+    what the workers suppressed."""
+    (tmp_path / "p.py").write_text(PLAN_WARNED)
+    r = _barca(tmp_path, "get", "total,count", "p.py", "--json", BARCA_POOL_SIZE="4")
+    assert r.returncode == 0, r.stderr
+    lines = r.stderr.splitlines()
+    own = [ln for ln in lines if ln.startswith("[barca] warning: ")]
+    assert len(own) == 1 and "p.py:fetch never uses its input `seed`" in own[0], r.stderr
+    assert own[0] == lines[0], r.stderr  # before any step output
+    out = json.loads(r.stdout)
+    assert [(w["node"], w["param"]) for w in out["warnings"]] == [("p.py:fetch", "seed")]
+    # The workers' repeated library warning is collapsed exactly as without the plan warning.
+    assert lines.count(NETRC) == 1, r.stderr
+    assert [ln for ln in lines if " more: " in ln] == [f"[barca] 39 more: {NETRC}"], r.stderr
