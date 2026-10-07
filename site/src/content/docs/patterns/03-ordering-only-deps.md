@@ -27,13 +27,22 @@ The `_migrate` parameter name starts with `_`, which tells barca to establish th
 - **Value is not passed.** The function receives `None` for `_`-prefixed parameters, making it clear the dependency is structural. The upstream artifact is still materialized and cached as normal -- the `_` prefix only affects what the downstream function sees.
 - **DAG is still correct.** The edge is still present in the execution plan. Barca will still schedule `seed_data` in a later tier than `migrate_db`.
 
-## Unused data inputs are flagged
+## The `_` prefix is how you declare an input unused on purpose
 
-A data input (no `_` prefix) is loaded in full before the step runs. If the function never
-references it, or only `del`s it, `barca plan`, `barca get` and `barca run` print a warning on
-stderr and add a `warnings` entry to the JSON output. The fix is to remove the input, or to
-rename it `_<name>` when you only need the ordering. Passing the parameter to a helper counts as
-using it. See `barca docs assets`.
+An input without the `_` prefix is loaded and passed whether or not the function uses it. At plan
+time barca reads each function body and, when a step never mentions an input (or only `del`s it),
+`barca plan`, `barca get`, `barca run` and `--dry-run` print one line on stderr and add an entry
+to the `warnings` array of their JSON output:
+
+```
+[barca] warning: pipeline.py:seed_data never uses its input `migrate`. It is still loaded in full each time the step runs, and it counts toward the step's cache key. Use it, remove it from inputs=, or rename the parameter `_migrate` if it is there for ordering only (a `_` input is not loaded and never flagged)
+```
+
+A `_`-prefixed input is never flagged: the prefix is the documented way to say the input is there
+for ordering only. The step still runs after the upstream and still re-runs when the upstream
+changes; only removing the input removes that dependency. There is no flag or config key to turn
+the warning off. The exact rule, and what is never reported (stubs, `**kwargs`, `locals()`,
+duckdb relation inputs, sensor inputs), is in `barca docs assets`, "Unused inputs".
 
 ## Common mistakes
 
@@ -46,7 +55,7 @@ def seed_data(migrate):  # never used, but barca still passes the value
     insert_seed_records()
 ```
 
-This is functionally correct but unclear to readers -- the parameter looks like it carries data. Use the `_` prefix to signal that the dependency is for ordering only and the value is not needed.
+This runs, but the upstream value is loaded for nothing, the parameter looks like it carries data, and barca prints the unused-input warning above on every `plan`, `get` and `run` that includes the step. Use the `_` prefix to signal that the dependency is for ordering only and the value is not needed.
 
 ### Trying to use `after=`
 

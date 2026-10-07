@@ -21,6 +21,8 @@ pub mod state_sync;
 pub mod status;
 pub mod telemetry;
 pub mod transfer;
+pub mod unused_inputs;
+pub mod warnings;
 
 pub use dag::Dag;
 pub use events::RunEvent;
@@ -90,6 +92,8 @@ pub struct PartialRun {
     pub phases: usize,
     /// What happened to each step that was reached; the failed step has status `failed`.
     pub steps: Vec<commands::StepReport>,
+    /// Plan-time warnings for the steps this run planned (the same list a successful run has).
+    pub warnings: Vec<warnings::PlanWarning>,
 }
 
 impl FailedStep {

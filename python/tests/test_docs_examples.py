@@ -229,6 +229,50 @@ def test_assets_topic_example(binary, topics, tmp_path):
     }
 
 
+def test_assets_topic_unused_input_example(binary, topics, tmp_path):
+    """The "Unused inputs" section: the example pipeline produces exactly the warning line and
+    the JSON entry the manual prints, on every planning command, and exit 0."""
+    body = topics["assets"]
+    code = next(b for b in blocks(body, "python") if "is never used" in b)
+    (tmp_path / "pipeline.py").write_text(code)
+    documented_line = next(
+        b.strip() for b in blocks(body, "") if b.startswith("[barca] warning: pipeline.py:report")
+    )
+    documented_json = json.loads(next(b for b in blocks(body, "json") if "unused_input" in b))
+    for args in (
+        ["plan", "pipeline.py"],
+        ["get", "report", "pipeline.py", "--json"],
+        ["get", "report", "pipeline.py", "--dry-run", "--json"],
+        ["get", "pipeline.py", "--json"],
+    ):
+        proc = barca(binary, tmp_path, *args)
+        out = result(proc)
+        assert documented_line in proc.stderr.splitlines(), (args, proc.stderr)
+        [warning] = out["warnings"]
+        assert {k: warning[k] for k in ("kind", "node", "param")} == {
+            k: documented_json[k] for k in ("kind", "node", "param")
+        }
+        assert "[barca] warning: " + warning["message"] == documented_line
+        assert warning["message"].startswith(documented_json["message"].removesuffix("..."))
+    # "not about other steps in the file": `raw` alone has nothing to report.
+    proc = barca(binary, tmp_path, "get", "raw", "pipeline.py", "--json")
+    assert result(proc)["warnings"] == [] and "warning" not in proc.stderr
+    # "`barca list` and `barca status` do not report it."
+    for cmd in ("list", "status"):
+        proc = barca(binary, tmp_path, cmd, "pipeline.py", "--json")
+        assert "warnings" not in result(proc) and "never uses" not in proc.stderr
+    # The fix the message names: `_raw` is ordering only, receives None, and is not flagged.
+    fixed = code.replace('{"raw": raw}', '{"_raw": raw}').replace(
+        "report(raw: list)", "report(_raw)"
+    )
+    assert fixed != code
+    (tmp_path / "pipeline.py").write_text(fixed.replace("return 42", "return _raw"))
+    proc = barca(binary, tmp_path, "get", "report", "pipeline.py", "--json")
+    out = result(proc)
+    assert out["warnings"] == [] and out["final_output"] is None
+    assert "warning" not in proc.stderr
+
+
 def test_scheduling_topic_example(binary, topics, tmp_path):
     write_example(topics, "scheduling", tmp_path)
     nodes = result(barca(binary, tmp_path, "list", "pipeline.py", "--json"))["nodes"]

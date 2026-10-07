@@ -52,7 +52,6 @@ def check_b(s: dict) -> dict:
 
 @task(inputs={"s": src})
 def boom(s: dict) -> None:
-    _ = s
     raise ValueError("check failed on purpose")
 
 
@@ -63,7 +62,7 @@ def broken() -> dict:
 
 @task(inputs={"b": broken})
 def needs_broken(b: dict) -> None:
-    _ = b
+    pass
 
 
 @task(inputs={"d": deeper})
@@ -78,6 +77,7 @@ SINGLE_KEYS = {
     "steps_executed",
     "phases",
     "final_output",
+    "warnings",
     "steps",
 }
 

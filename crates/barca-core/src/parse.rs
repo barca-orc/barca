@@ -65,95 +65,6 @@ pub fn extract_nodes(source: &str, file_path: &str) -> Result<Vec<ExtractedNode>
     Ok(nodes)
 }
 
-/// Data inputs (wired by `inputs=`, not `_`-prefixed) that the function body never uses: the
-/// parameter is never referenced, or only appears as a `del <name>` target (#231).
-///
-/// Every declared data input is loaded in full before the step runs, so an unused one is pure
-/// cost. This is static and conservative: any other mention of the name counts as use (passing
-/// it to a helper, a nested function or comprehension, an f-string), and a body that calls
-/// `locals()` / `vars()`, or a function with `**kwargs`, is never flagged. `_`-prefixed
-/// (ordering-only) inputs are never flagged. Parameters not in the signature are ignored.
-pub fn unused_data_inputs(source_text: &str, inputs: &[DeclaredInput]) -> Vec<String> {
-    use ruff_python_ast::visitor::{self, Visitor};
-
-    struct Uses<'a> {
-        used: std::collections::HashSet<&'a str>,
-        dynamic: bool,
-    }
-    impl<'a> Visitor<'a> for Uses<'a> {
-        fn visit_stmt(&mut self, stmt: &'a Stmt) {
-            if let Stmt::Delete(d) = stmt {
-                // `del df` is not a use; `del df[0]` / `del df.x` still reads `df`.
-                for target in &d.targets {
-                    if !matches!(target, Expr::Name(_)) {
-                        self.visit_expr(target);
-                    }
-                }
-                return;
-            }
-            visitor::walk_stmt(self, stmt);
-        }
-        fn visit_expr(&mut self, expr: &'a Expr) {
-            match expr {
-                Expr::Name(n) => {
-                    self.used.insert(n.id.as_str());
-                }
-                Expr::Call(c) => {
-                    if let Expr::Name(f) = &*c.func
-                        && matches!(f.id.as_str(), "locals" | "vars" | "eval" | "exec")
-                    {
-                        self.dynamic = true;
-                    }
-                }
-                _ => {}
-            }
-            visitor::walk_expr(self, expr);
-        }
-    }
-
-    let candidates: Vec<&DeclaredInput> = inputs
-        .iter()
-        .filter(|i| !i.param_name.starts_with('_'))
-        .collect();
-    if candidates.is_empty() {
-        return Vec::new();
-    }
-    let Ok(parsed) = parse_module(source_text) else {
-        return Vec::new();
-    };
-    let module = parsed.into_syntax();
-    let Some(func) = module.body.iter().find_map(|s| match s {
-        Stmt::FunctionDef(f) => Some(f),
-        _ => None,
-    }) else {
-        return Vec::new();
-    };
-    if func.parameters.kwarg.is_some() {
-        return Vec::new();
-    }
-    let in_signature = |name: &str| {
-        func.parameters
-            .iter_non_variadic_params()
-            .any(|p| p.parameter.name.as_str() == name)
-    };
-    let mut uses = Uses {
-        used: Default::default(),
-        dynamic: false,
-    };
-    visitor::walk_body(&mut uses, &func.body);
-    if uses.dynamic {
-        return Vec::new();
-    }
-    let mut out: Vec<String> = Vec::new();
-    for input in candidates {
-        let name = input.param_name.as_str();
-        if in_signature(name) && !uses.used.contains(name) && !out.iter().any(|o| o == name) {
-            out.push(name.to_string());
-        }
-    }
-    out
-}
-
 /// What the top-level names of a file are bound to, for resolving `inputs=` references:
 /// functions defined in the file, names imported with `from M import x [as y]`, and modules
 /// imported with `import M [as m]`. Module names keep their leading dots (`.sources`).
@@ -304,6 +215,10 @@ fn try_extract_function(
         Vec::new()
     };
     let (param_types, return_type) = extract_type_annotations(func);
+    let unused_inputs =
+        crate::unused_inputs::unused_inputs(func, &inputs, &param_types, &|local| {
+            names.from_imports.get(local).map(|(_, name)| name.as_str())
+        });
 
     let start = func.range().start().to_usize();
     let end = func.range().end().to_usize();
@@ -332,6 +247,7 @@ fn try_extract_function(
         return_type,
         parallel_calls,
         env,
+        unused_inputs,
     }))
 }
 
@@ -1319,66 +1235,5 @@ def conditional():
 "#;
         let nodes = extract_nodes(src, "test.py").unwrap();
         assert_eq!(nodes[0].parallel_calls.len(), 1);
-    }
-}
-
-#[cfg(test)]
-mod unused_input_tests {
-    use super::*;
-
-    fn unused(src: &str) -> Vec<String> {
-        let nodes = extract_nodes(src, "t.py").unwrap();
-        let n = nodes.last().unwrap();
-        unused_data_inputs(&n.source_text, &n.inputs)
-    }
-
-    const HEAD: &str = "from barca import asset\n@asset\ndef up(): return 1\n";
-
-    fn step(params: &str, body: &str, inputs: &str) -> String {
-        format!("{HEAD}@asset(inputs={{{inputs}}})\ndef s({params}):\n{body}\n")
-    }
-
-    #[test]
-    fn never_referenced_is_flagged() {
-        assert_eq!(unused(&step("a", "    return 1", "\"a\": up")), ["a"]);
-    }
-
-    #[test]
-    fn del_only_is_flagged() {
-        assert_eq!(
-            unused(&step("a", "    del a\n    return 1", "\"a\": up")),
-            ["a"]
-        );
-    }
-
-    #[test]
-    fn used_in_any_way_is_not_flagged() {
-        for body in [
-            "    return a",
-            "    return helper(a)",
-            "    del a[0]\n    return 1",
-            "    return f\"{a}\"",
-            "    return [x for x in a]",
-            "    def inner():\n        return a\n    return inner()",
-        ] {
-            assert!(unused(&step("a", body, "\"a\": up")).is_empty(), "{body}");
-        }
-    }
-
-    #[test]
-    fn dynamic_access_and_kwargs_are_not_flagged() {
-        assert!(unused(&step("a", "    return locals()", "\"a\": up")).is_empty());
-        assert!(unused(&step("a, **kw", "    return helper(**kw)", "\"a\": up")).is_empty());
-    }
-
-    #[test]
-    fn underscore_params_are_never_flagged() {
-        assert!(unused(&step("_a", "    return 1", "\"_a\": up")).is_empty());
-    }
-
-    #[test]
-    fn only_the_unused_one_is_named() {
-        let src = step("a, b", "    return a", "\"a\": up, \"b\": up");
-        assert_eq!(unused(&src), ["b"]);
     }
 }

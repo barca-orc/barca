@@ -7,5 +7,6 @@
 [barca] step:pipeline.py:numbers cached
 [barca] step:pipeline.py:per_key[k=a] completed <secs>s (<n>/<total>)
 [barca] step:pipeline.py:per_key[k=b] completed <secs>s (<n>/<total>)
+[barca] step:pipeline.py:report completed <secs>s (<n>/<total>)
 [barca] step:pipeline.py:total cached env CONTRACT_API_TOKEN=<unset> CONTRACT_REGION=eu
-[barca] warning: step `broken` declares input `t` but never uses it; it is still loaded in full before every run. Remove the dependency, or rename the parameter `_t` if only ordering is needed (ordering-only inputs are not loaded)
+[barca] warning: pipeline.py:report never uses its input `rows`. It is still loaded in full each time the step runs, and it counts toward the step's cache key. Use it, remove it from inputs=, or rename the parameter `_rows` if it is there for ordering only (a `_` input is not loaded and never flagged)

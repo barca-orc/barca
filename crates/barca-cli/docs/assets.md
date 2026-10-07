@@ -118,26 +118,78 @@ planner. Mark code barca cannot reason about with `@unsafe` (silences purity war
 
 ## Unused inputs
 
-Every declared data input is loaded in full before the step runs, whether or not the function
-uses it. At plan time barca reads the function body and warns when a data input (a parameter
-wired by `inputs=` whose name does not start with `_`) is never referenced, or appears only in
-a `del` statement:
+A declared input costs something even when the function ignores it: the upstream is
+materialized first, its value is loaded and passed, and it is part of the step's cache key. At
+plan time barca reads each function body (statically: nothing is imported or run) and warns
+about an input the function never uses:
+
+```python
+from barca import asset
+
+
+@asset()
+def raw() -> list:
+    return [1, 2, 3]
+
+
+@asset(inputs={"raw": raw})
+def report(raw: list) -> int:      # `raw` is never used
+    return 42
+```
 
 ```
-[barca] warning: step `report` declares input `raw` but never uses it; it is still loaded in full before every run. Remove the dependency, or rename the parameter `_raw` if only ordering is needed (ordering-only inputs are not loaded)
+[barca] warning: pipeline.py:report never uses its input `raw`. It is still loaded in full each time the step runs, and it counts toward the step's cache key. Use it, remove it from inputs=, or rename the parameter `_raw` if it is there for ordering only (a `_` input is not loaded and never flagged)
 ```
 
-The warning is printed once per command on stderr (`plan`, `get`, `run`, `get --dry-run`) and
-is also a `warnings` entry in the JSON of `barca plan` and `barca get|run --json`:
-`{"kind": "unused_input", "node": "report", "param": "raw", "message": "..."}`. The key is
-absent when there is nothing to warn about. The fix is to remove the input, or to rename the
-parameter `_raw` (and the key in `inputs=`) when you only need the upstream to run first:
-ordering-only inputs are not loaded.
+**The rule.** An input is reported when its parameter name does not start with `_` and the
+function body never mentions the name, or mentions it only as `del name`. Any other mention
+counts as a use, anywhere in the body: reading it, passing it to a helper, a nested function, a
+comprehension, an f-string, assigning to it. The check is deliberately conservative, so a
+warning means the input really is unused; when barca cannot tell, it says nothing.
 
-The check is conservative, because barca cannot see through a call. Any other mention of the
-name counts as a use: passing it to a helper, a nested function, a comprehension, an f-string.
-A body that calls `locals()`, `vars()`, `eval()` or `exec()`, and a function with `**kwargs`,
-are never flagged. A warning does not change the exit code or the cache.
+**Never reported:**
+
+- an input whose name starts with `_`. This is the way to say "unused on purpose": the step
+  still runs after the upstream and still re-runs when the upstream changes, but nothing is
+  loaded and the parameter is `None` (`barca docs tasks`). Rename both
+  the key in `inputs=` and the parameter;
+- a function whose body is only a docstring, `pass`, `...` or `raise`: a stub, or a gate that
+  only raises, uses nothing by definition;
+- a function that takes `**kwargs`, or whose body mentions a name through which Python can
+  reach a parameter without naming it, as a bare name or as an attribute
+  (`builtins.locals()`, `inspect.currentframe().f_locals`, `sys._getframe()`, `**locals()`).
+  Then no input of that function is reported.
+  Dynamic access names: `locals`, `vars`, `eval`, `exec`, `currentframe`, `_getframe`, `f_locals`, `getargvalues`.
+- an input annotated `duckdb.DuckDBPyRelation`: it is also bound as a view named after the
+  parameter, so SQL text anywhere can read it (`barca docs types`);
+- an input that comes from a `@sensor`: depending on a sensor without reading its value is how
+  a step is made to re-run when outside state changes (`barca docs cache`).
+
+**Where it appears.** `barca plan`, `barca get`, `barca run` and `get|run --dry-run` report the
+same warnings in the same two places: one `[barca] warning: ...` line per unused input on
+stderr, in every output mode (`--pretty`, `--json`, `--agent`), printed before any step runs; and
+the `warnings` array of the JSON output, `[]` when there are none:
+
+```json
+{"kind": "unused_input", "node": "pipeline.py:report", "param": "raw", "message": "pipeline.py:report never uses its input `raw`. ..."}
+```
+
+Only the steps the command plans are checked: `barca get report pipeline.py` warns about
+`report` and what is upstream of it, not about other steps in the file; `barca plan` and
+`barca get` with no target cover the whole file. A step is reported once per unused input, however
+many partition keys it has, and whether or not it is served from cache: the list depends on the
+source and the target only. `barca list` and `barca status` do not report it. A warning never
+changes the exit code or the cache.
+
+For an input annotated `pl.LazyFrame` the message says, instead of "loaded in full", that a
+parquet artifact is opened but not read.
+
+**Limitations.** The check works on names, in one function body. It does not follow the value: an
+input that is only assigned to (`raw = None`) or only passed to a helper that ignores it is not
+reported. A function that reaches its parameters through an alias the list above cannot see
+(`grab = locals` at module level, then `grab()` in the body) is reported although it uses the
+input; mention the input by name, or `_`-prefix it, to say otherwise. There is no flag or
+configuration key that turns the warning off.
 
 ## Sensors
 

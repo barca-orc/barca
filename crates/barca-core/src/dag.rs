@@ -15,23 +15,6 @@ use crate::model::{DagNode, EdgeKind, ExtractedNode, NodeKind};
 pub struct Dag {
     pub graph: DiGraph<DagNode, EdgeKind>,
     index: HashMap<String, NodeIndex>,
-    /// Plan-time warnings found by static analysis (e.g. a declared input the step never uses).
-    /// Empty unless the DAG was built from source by `commands::build_dag`.
-    pub warnings: Vec<PlanWarning>,
-}
-
-/// A plan-time warning about a step, found without importing user code.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
-pub struct PlanWarning {
-    /// What was found. Currently only `unused_input`.
-    pub kind: String,
-    /// The step's function name.
-    pub node: String,
-    /// The parameter concerned.
-    pub param: String,
-    /// The full human-readable message, with the suggested fix.
-    pub message: String,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -570,11 +553,7 @@ impl Dag {
             }
         }
 
-        let dag = Dag {
-            graph,
-            index,
-            warnings: Vec::new(),
-        };
+        let dag = Dag { graph, index };
 
         // Verify acyclicity.
         if toposort(&dag.graph, None).is_err() {
@@ -743,6 +722,7 @@ mod tests {
             return_type: None,
             parallel_calls: Vec::new(),
             env: Vec::new(),
+            unused_inputs: Vec::new(),
         }
     }
 
