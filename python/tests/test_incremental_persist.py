@@ -59,8 +59,8 @@ def part(k: str) -> str:
     return k
 
 
-@asset(inputs={"p": collect(part)})
-def after(p) -> int:
+@asset(inputs={"_p": collect(part)})
+def after(_p) -> int:
     time.sleep(0.6)
     return 1
 """

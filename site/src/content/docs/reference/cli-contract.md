@@ -314,6 +314,39 @@ can be `null`.
 
 Every schema below is stable unless its section says otherwise.
 
+### Plan warnings
+
+`plan`, `get`, `run` and `get|run --dry-run` carry a top-level `warnings` key in every JSON
+document they print on stdout: success, failed (`status: "failed"`), several targets and dry run
+alike. It is **always present and always an array**, `[]` when there is nothing to report, like
+every other array in these schemas (an empty array is never dropped, and never `null`). In the
+tables below a section whose fixture run had no warning shows only the `warnings` row; one that
+had a warning also shows the item rows.
+
+Each item is an object with exactly these keys, all strings and always present:
+
+| Key | Value |
+|---|---|
+| `kind` | what was found. `unused_input` is the only value so far; treat an unknown value as "other" |
+| `node` | the step's node id, `file.py:name` (never a partition key: a partitioned step is reported once) |
+| `param` | the parameter concerned |
+| `message` | the warning in words, with what to do about it. The wording is not contract |
+
+The list covers the steps the command planned (the targets' cones; the whole project for `plan`
+or `get` with no target), one item per step and parameter, in plan order. It is a function of the
+source files and the targets only: cache state, `--refresh*`, `--env` and the output mode do not
+change it, so a dry run reports exactly what the real run will. Each item is also printed once on
+stderr as `[barca] warning: <message>` before any step runs, in every output mode. Warnings never
+change the exit code, and the error envelope on stderr never contains them. `list`, `status`,
+`history`, `stats` and `sql` have no `warnings` key. `barca serve` carries the same array in
+`GET /plan` and in `result.warnings` of `GET /status/{run_id}` (experimental with the rest of
+that API).
+
+`unused_input`: a step declares an input its function never uses (`barca docs assets`, "Unused
+inputs", has the exact rule and what is never reported). Stability: the key, its presence and the
+item keys are stable on `get` and `run`, and experimental with the rest of the output on `plan`;
+the set of `kind` values grows additively.
+
 ### get and run: one target
 
 `barca get <asset> files --json` and `barca run <task> files --json` print one JSON line.
@@ -337,6 +370,7 @@ Every schema below is stable unless its section says otherwise.
 | `steps[].run_hash` | string | always |
 | `steps[].status` | string | always |
 | `steps_executed` | integer | always |
+| `warnings` | array | always |
 <!-- END GENERATED schema get -->
 
 - `status` is `success` (see the failed result line below for `failed`).
@@ -378,6 +412,7 @@ For a parquet or pickle artifact, `final_output` is a pointer instead of the val
 | `steps[].run_hash` | string | always |
 | `steps[].status` | string | always |
 | `steps_executed` | integer | always |
+| `warnings` | array | always |
 <!-- END GENERATED schema get_artifact_pointer -->
 
 A partitioned step carries `partitions` (counted in keys; `will_run_keys` is capped at 20):
@@ -405,6 +440,7 @@ A partitioned step carries `partitions` (counted in keys; `will_run_keys` is cap
 | `steps[].run_hash` | string | sometimes |
 | `steps[].status` | string | always |
 | `steps_executed` | integer | always |
+| `warnings` | array | always |
 <!-- END GENERATED schema get_partitioned -->
 
 `run` prints the same shape:
@@ -429,6 +465,12 @@ A partitioned step carries `partitions` (counted in keys; `will_run_keys` is cap
 | `steps[].run_hash` | string | always |
 | `steps[].status` | string | always |
 | `steps_executed` | integer | always |
+| `warnings` | array | always |
+| `warnings[]` | object | always |
+| `warnings[].kind` | string | always |
+| `warnings[].message` | string | always |
+| `warnings[].node` | string | always |
+| `warnings[].param` | string | always |
 <!-- END GENERATED schema run -->
 
 ### get and run: a failed step
@@ -457,6 +499,7 @@ envelope goes to stderr:
 | `steps[].run_hash` | string | always |
 | `steps[].status` | string | always |
 | `steps_executed` | integer | always |
+| `warnings` | array | always |
 <!-- END GENERATED schema run_failed -->
 
 ### get and run: several targets
@@ -492,6 +535,7 @@ failed, and the exit code is then 1. Steps skipped because an upstream failed ha
 | `targets.<name>.final_output._barca_artifact.path` | string | always |
 | `targets.<name>.final_output._barca_artifact.size_bytes` | integer | always |
 | `targets.<name>.status` | string | always |
+| `warnings` | array | always |
 <!-- END GENERATED schema get_multi_target -->
 
 <!-- BEGIN GENERATED schema run_multi_target_failed -->
@@ -519,6 +563,12 @@ failed, and the exit code is then 1. Steps skipped because an upstream failed ha
 | `targets.<name>.failed_node` | string | sometimes |
 | `targets.<name>.final_output` | `<user value>` | sometimes |
 | `targets.<name>.status` | string | always |
+| `warnings` | array | always |
+| `warnings[]` | object | always |
+| `warnings[].kind` | string | always |
+| `warnings[].message` | string | always |
+| `warnings[].node` | string | always |
+| `warnings[].param` | string | always |
 <!-- END GENERATED schema run_multi_target_failed -->
 
 ### Dry run
@@ -550,6 +600,7 @@ document has `target` (a name, or `null` for a whole file):
 | `summary.unknown` | integer | always |
 | `summary.will_run` | integer | always |
 | `target` | string | always |
+| `warnings` | array | always |
 <!-- END GENERATED schema get_dry_run -->
 
 With several targets, `targets` replaces `target`: an object keyed by target name in the order
@@ -582,6 +633,12 @@ The top-level `summary` counts the union once.
 | `targets.<name>.summary.cached` | integer | always |
 | `targets.<name>.summary.unknown` | integer | always |
 | `targets.<name>.summary.will_run` | integer | always |
+| `warnings` | array | always |
+| `warnings[]` | object | always |
+| `warnings[].kind` | string | always |
+| `warnings[].message` | string | always |
+| `warnings[].node` | string | always |
+| `warnings[].param` | string | always |
 <!-- END GENERATED schema run_dry_run_multi_target -->
 
 ### list
@@ -788,6 +845,8 @@ are `null` when the asset never ran; `recent_runs[].error_message` is a string f
 "<id>"}` for a phase that waits on a node gathering several upstream results. `plan` reads no
 state and takes no `--env`.
 
+`warnings` is the plan-warnings array described under "Plan warnings" above.
+
 <!-- BEGIN GENERATED schema plan -->
 | Key | Type | Present |
 |---|---|---|
@@ -802,6 +861,12 @@ state and takes no `--env`.
 | `phases[].streams[].steps[]` | string | always |
 | `phases[].streams[].stream_id` | string | always |
 | `total_steps` | integer | always |
+| `warnings` | array | always |
+| `warnings[]` | object | always |
+| `warnings[].kind` | string | always |
+| `warnings[].message` | string | always |
+| `warnings[].node` | string | always |
+| `warnings[].param` | string | always |
 <!-- END GENERATED schema plan -->
 
 ### docs
@@ -901,7 +966,9 @@ placeholders:
 [barca] step:pipeline.py:numbers cached
 [barca] step:pipeline.py:per_key[k=a] completed <secs>s (<n>/<total>)
 [barca] step:pipeline.py:per_key[k=b] completed <secs>s (<n>/<total>)
+[barca] step:pipeline.py:report completed <secs>s (<n>/<total>)
 [barca] step:pipeline.py:total cached env CONTRACT_API_TOKEN=<unset> CONTRACT_REGION=eu
+[barca] warning: pipeline.py:report never uses its input `rows`. It is still loaded in full each time the step runs, and it counts toward the step's cache key. Use it, remove it from inputs=, or rename the parameter `_rows` if it is there for ordering only (a `_` input is not loaded and never flagged)
 ```
 <!-- END GENERATED agent-lines -->
 
@@ -915,7 +982,7 @@ placeholders:
 | `[barca] still running (<n>s): <id>` | a step in flight for `BARCA_PROGRESS_SECS` (every mode) | experimental |
 | `[barca] <n> more: <first line of a warning>` | before the end-of-run line (every mode): a `logging` WARNING printed because logging is unconfigured, or a `warnings` warning, from a step's process was printed once and suppressed `<n>` more times in this run; beyond ten texts, one `[barca] <n> more: <k> other repeated warnings` (`barca docs agents`) | experimental |
 | `[barca] skipped N task(s) ...`, `[barca] nothing to get ...` | `get` with no target skipped tasks | experimental |
-| `[barca] warning: ...`, `[barca] SINK FAILED: ...` | warnings (always this lowercase prefix; the text after it may change) and failed sinks | experimental |
+| `[barca] warning: ...`, `[barca] SINK FAILED: ...` | warnings (always this lowercase prefix; the text after it may change) and failed sinks. A plan warning (see "Plan warnings") is printed before the first `step:` line, once per run, with or without `--agent`; read it from the JSON `warnings` array rather than from this line | experimental |
 
 `env` values: `<unset>` for an unset variable, `<redacted>` for secret-looking names (`*_TOKEN`,
 `*_SECRET`, `*_KEY`, `*_PASSWORD`), double quotes around values with spaces. With several targets

@@ -64,8 +64,10 @@ def keys(parts: list) -> list:
     return sorted(p["key"] for p in parts)
 
 
-@task(inputs={"t": total})
-def report(t: dict) -> dict:
+# `rows` is never used: the one plan warning of the fixture (`unused_input`), so the commands
+# that plan `report` show a filled `warnings` array and the others an empty one.
+@task(inputs={"t": total, "rows": numbers})
+def report(t: dict, rows: list) -> dict:
     return {"reported": t["total"]}
 
 
@@ -120,6 +122,7 @@ AGENT_RUNS = [
     ["get", "keys", "pipeline.py", "--agent", "--refresh-all"],
     ["get", "total", "pipeline.py", "--agent"],
     ["run", "broken", "pipeline.py", "--agent"],
+    ["run", "report", "pipeline.py", "--agent"],
 ]
 
 
@@ -351,3 +354,37 @@ def test_schema_reduction_ignores_values():
     assert {k: v for k, v in sa.items() if "env" not in k} == {
         k: v for k, v in sb.items() if "env" not in k
     }
+
+
+def test_warnings_is_always_an_array_filled_only_where_the_plan_has_an_unused_input(runs):
+    """`barca docs contract`, "Plan warnings": the key is on every plan/get/run document; the
+    fixture's one unused input (`report`'s `rows`) fills it exactly where `report` is planned."""
+    with_warning = {"plan", "run", "run_dry_run_multi_target", "run_multi_target_failed"}
+    without = {
+        "get_dry_run",
+        "get",
+        "get_artifact_pointer",
+        "get_partitioned",
+        "get_multi_target",
+        "run_failed",
+    }
+    item = {
+        "warnings[]": ("object", True),
+        "warnings[].kind": ("string", True),
+        "warnings[].message": ("string", True),
+        "warnings[].node": ("string", True),
+        "warnings[].param": ("string", True),
+    }
+    for case in with_warning | without:
+        s, _, proc = runs[case]
+        assert s["warnings"] == ("array", True), case
+        assert {k: v for k, v in s.items() if k.startswith("warnings[")} == (
+            item if case in with_warning else {}
+        ), case
+        doc = json.loads(proc.stdout)
+        expected = [("pipeline.py:report", "rows")] if case in with_warning else []
+        assert [(w["node"], w["param"]) for w in doc["warnings"]] == expected, case
+        assert all(w["kind"] == "unused_input" for w in doc["warnings"]), case
+    for case, *_ in CASES:
+        if case not in with_warning | without:
+            assert "warnings" not in runs[case][0], case

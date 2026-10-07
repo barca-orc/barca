@@ -21,3 +21,4 @@ targets.<name>.final_output._barca_artifact.format : string
 targets.<name>.final_output._barca_artifact.path : string
 targets.<name>.final_output._barca_artifact.size_bytes : integer
 targets.<name>.status : string
+warnings : array

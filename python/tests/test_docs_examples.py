@@ -229,6 +229,78 @@ def test_assets_topic_example(binary, topics, tmp_path):
     }
 
 
+def test_assets_topic_unused_input_example(binary, topics, tmp_path):
+    """The "Unused inputs" section: the example pipeline produces exactly the warning line and
+    the JSON entry the manual prints, on every planning command, and exit 0."""
+    body = topics["assets"]
+    code = next(b for b in blocks(body, "python") if "is never used" in b)
+    (tmp_path / "pipeline.py").write_text(code)
+    documented_line = next(
+        b.strip() for b in blocks(body, "") if b.startswith("[barca] warning: pipeline.py:report")
+    )
+    documented_json = json.loads(next(b for b in blocks(body, "json") if "unused_input" in b))
+    for args in (
+        ["plan", "pipeline.py"],
+        ["get", "report", "pipeline.py", "--json"],
+        ["get", "report", "pipeline.py", "--dry-run", "--json"],
+        ["get", "pipeline.py", "--json"],
+    ):
+        proc = barca(binary, tmp_path, *args)
+        out = result(proc)
+        assert documented_line in proc.stderr.splitlines(), (args, proc.stderr)
+        [warning] = out["warnings"]
+        assert {k: warning[k] for k in ("kind", "node", "param")} == {
+            k: documented_json[k] for k in ("kind", "node", "param")
+        }
+        assert "[barca] warning: " + warning["message"] == documented_line
+        assert warning["message"].startswith(documented_json["message"].removesuffix("..."))
+    # "not about other steps in the file": `raw` alone has nothing to report.
+    proc = barca(binary, tmp_path, "get", "raw", "pipeline.py", "--json")
+    assert result(proc)["warnings"] == [] and "warning" not in proc.stderr
+    # "`barca list` and `barca status` do not report it."
+    for cmd in ("list", "status"):
+        proc = barca(binary, tmp_path, cmd, "pipeline.py", "--json")
+        assert "warnings" not in result(proc) and "never uses" not in proc.stderr
+    # The fix the message names: `_raw` is ordering only, receives None, and is not flagged.
+    fixed = code.replace('{"raw": raw}', '{"_raw": raw}').replace(
+        "report(raw: list)", "report(_raw)"
+    )
+    assert fixed != code
+    (tmp_path / "pipeline.py").write_text(fixed.replace("return 42", "return _raw"))
+    proc = barca(binary, tmp_path, "get", "report", "pipeline.py", "--json")
+    out = result(proc)
+    assert out["warnings"] == [] and out["final_output"] is None
+    assert "warning" not in proc.stderr
+
+
+def test_site_ordering_only_pattern_example_runs(binary, tmp_path):
+    """The site's "Ordering-Only Dependencies" page: its "right way" example runs, in order,
+    without the unused-input warning. (The page is not a manual topic, so it is read from the
+    repository; the helpers it calls but does not define are stubbed.)"""
+    page = Path(__file__).resolve().parents[2] / (
+        "site/src/content/docs/patterns/03-ordering-only-deps.md"
+    )
+    if not page.exists():
+        pytest.skip("site docs are not in this checkout")
+    code = blocks(page.read_text(), "python")[0]
+    assert "def seed_data(_migrate):" in code
+    stubs = (
+        "\n\ndef run_migrations():\n    open('order.log', 'a').write('migrate\\n')\n"
+        "\n\ndef insert_seed_records():\n    open('order.log', 'a').write('seed\\n')\n"
+    )
+    (tmp_path / "pipeline.py").write_text(code + stubs)
+    proc = barca(binary, tmp_path, "run", "seed_data", "pipeline.py", "--json")
+    out = result(proc)
+    assert out["status"] == "success" and out["warnings"] == []
+    assert "warning" not in proc.stderr
+    assert (tmp_path / "order.log").read_text() == "migrate\nseed\n"
+    # Without the parameter the step cannot be called: barca passes `_migrate=None`.
+    broken = code.replace("def seed_data(_migrate):", "def seed_data():")
+    (tmp_path / "pipeline.py").write_text(broken + stubs)
+    proc = barca(binary, tmp_path, "run", "seed_data", "pipeline.py", "--json")
+    assert proc.returncode == 1 and "TypeError" in proc.stderr
+
+
 def test_scheduling_topic_example(binary, topics, tmp_path):
     write_example(topics, "scheduling", tmp_path)
     nodes = result(barca(binary, tmp_path, "list", "pipeline.py", "--json"))["nodes"]
@@ -573,3 +645,32 @@ def test_json_inspection_commands(binary, tmp_path):
     stats = result(barca(binary, tmp_path, "stats", "total", "pipeline.py", "--json"))
     assert stats["id"] == "pipeline.py:total"
     assert barca(binary, tmp_path, "get", "total", "pipeline.py").stdout.count("\n") == 1
+
+
+def test_big_inputs_topic_example(binary, topics, tmp_path, monkeypatch):
+    pytest.importorskip("duckdb")
+    pytest.importorskip("polars")
+    pytest.importorskip("pandas")
+    pytest.importorskip("pyarrow")
+    write_example(topics, "big-inputs", tmp_path)
+
+    # Aggregate over a lazy relation: written as parquet, a pointer on stdout.
+    per_bucket = result(barca(binary, tmp_path, "get", "per_bucket", "pipeline.py"))
+    assert per_bucket["final_output"]["_barca_artifact"]["format"] == "parquet"
+    bucket_3 = result(barca(binary, tmp_path, "get", "bucket_3", "pipeline.py"))
+    assert bucket_3["final_output"]["_barca_artifact"]["format"] == "parquet"
+
+    import barca as barca_api
+
+    monkeypatch.chdir(tmp_path)
+    assert barca_api.get("per_bucket", "pipeline.py")["n"].tolist() == [10000] * 10
+    assert barca_api.get("bucket_3", "pipeline.py")["id"].min() == 3
+
+    # The pandas path: narrow first, convert the small result.
+    first = result(barca(binary, tmp_path, "get", "first_ids", "pipeline.py"))
+    assert first["final_output"] == {"ids": [3, 13, 23, 33, 43]}
+
+    # An ordering-only input runs after its upstream and warns about nothing.
+    proc = barca(binary, tmp_path, "get", "after_events", "pipeline.py")
+    assert result(proc)["final_output"] == {"ran": True}
+    assert "warning" not in proc.stderr

@@ -19,3 +19,4 @@ steps[].reason : string
 steps[].run_hash : string  (optional)
 steps[].status : string
 steps_executed : integer
+warnings : array

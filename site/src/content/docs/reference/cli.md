@@ -68,6 +68,13 @@ collapsed. If the project configures logging, nothing from `logging` is collapse
 warnings included; `print` output, other log levels and errors are never collapsed
 (`barca docs agents`, "Repeated warnings").
 
+`plan`, `get`, `run` and `--dry-run` also report plan-time warnings about the steps they plan: one
+`[barca] warning: ...` line each on stderr, and a `warnings` array in their JSON output (`[]` when
+there are none). The one warning so far is `unused_input`: a step declares an input its function
+never uses, which is still loaded and still part of the cache key. Use the input, remove it, or
+rename it with a leading `_` (ordering only, never flagged). Warnings do not change the exit code
+(`barca docs assets`, "Unused inputs"; `barca docs contract`, "Plan warnings").
+
 > **Behavior change:** `get` and `run` used to print JSON by default even in a terminal.
 > They now print the human summary there; scripts and agents that capture stdout still get JSON.
 > The Python API (`barca.get`, `barca.history`, ...) always requests JSON.
