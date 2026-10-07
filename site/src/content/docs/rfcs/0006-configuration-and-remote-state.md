@@ -15,7 +15,7 @@ description: 'barca.toml, env var/CLI precedence, --env separation, and the opti
 > `.barca/` stays anchored to the same place as its config. The cwd-only rule below
 > described 0.5 to 0.12.
 
-> **Amended (after 0.17.0, issue #221):** §4.1 now defines what a pull does to the local
+> **Amended (after 0.17.1, issue #221):** §4.1 now defines what a pull does to the local
 > database, in "What a pull does to the local database". A pull used to replace only the
 > main database file and leave the old write-ahead log beside it, which could drop other
 > machines' history at the next push; and since 0.17.0 a run records its finished steps

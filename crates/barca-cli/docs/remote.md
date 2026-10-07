@@ -114,7 +114,7 @@ After a pull the local copy is the shared history plus what was recorded only on
   left in (a killed run, a database created by `barca history` before the first run), and
   whichever barca commands run in the project at the same time: a download that another
   command's pull or upload has overtaken is thrown away, never put in place of a newer copy.
-  A barca 0.17.0 or older running in the same project at the same moment does not take part
+  A barca 0.17.1 or older running in the same project at the same moment does not take part
   in this.
 - **What was recorded only here is kept.** A run that was killed (`kill -9`, out of memory, a
   lost machine) before it could upload, a run whose upload failed, and runs made with
