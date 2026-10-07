@@ -9,6 +9,7 @@ import pytest
 
 from barca import _artifacts, _storage
 
+from . import emulators
 from .test_state_backends import AzureBackend, GcsBackend, S3Backend
 
 duckdb = pytest.importorskip("duckdb")
@@ -20,8 +21,7 @@ pytest.importorskip("pyarrow")
 def remote(request, tmp_path, monkeypatch):
     """A fresh remote artifact URI holding an 8-column parquet file; yields (uri, size)."""
     be = request.param
-    if not be.available():
-        pytest.skip(f"{be.id} emulator not reachable")
+    emulators.require(be.id, be.available())
     for k, v in be.env().items():
         monkeypatch.setenv(k, v)
     # Emulator only: skip gcsfs's gRPC bucket-layout probe, which fake-gcs cannot answer.

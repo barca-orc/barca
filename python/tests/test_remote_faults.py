@@ -33,6 +33,8 @@ from urllib.parse import urlsplit
 
 import pytest
 
+from . import emulators
+
 S3_ENDPOINT = os.environ.get("BARCA_TEST_S3_ENDPOINT", "http://localhost:9100")
 S3_KEY = os.environ.get("BARCA_TEST_S3_KEY", "minioadmin")
 S3_SECRET = os.environ.get("BARCA_TEST_S3_SECRET", "minioadmin")
@@ -267,8 +269,7 @@ class Gcs:
 @pytest.fixture(params=[S3(), Azure(), Gcs()], ids=lambda b: b.id)
 def backend(request):
     be = request.param
-    if not _reachable(be.endpoint):
-        pytest.skip(f"{be.id} emulator not reachable at {be.endpoint}")
+    emulators.require(be.id, _reachable(be.endpoint), be.endpoint)
     return be
 
 
@@ -605,8 +606,7 @@ def test_credentials_that_cannot_list_say_so_instead_of_bucket_not_found(tmp_pat
     (test_storage.py).
     """
     backend = S3()
-    if not _reachable(backend.endpoint):
-        pytest.skip(f"s3 emulator not reachable at {backend.endpoint}")
+    emulators.require("s3", _reachable(backend.endpoint), backend.endpoint)
     container = f"barca-faults-{uuid.uuid4().hex[:12]}"
     fs = backend.fs()
     fs.mkdir(container)

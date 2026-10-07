@@ -37,6 +37,8 @@ import pytest
 from barca import _storage
 from barca._state import ConflictError, pull, push
 
+from . import emulators
+
 # ─── emulator endpoints (overridable for CI) ─────────────────────────────────
 
 S3_ENDPOINT = os.environ.get("BARCA_TEST_S3_ENDPOINT", "http://localhost:9100")
@@ -182,8 +184,8 @@ ALL_BACKENDS = [FileBackend(), S3Backend(), GcsBackend(), AzureBackend()]
 @pytest.fixture(params=ALL_BACKENDS, ids=lambda b: b.id)
 def backend(request, tmp_path, monkeypatch):
     be = request.param
-    if not be.available():
-        pytest.skip(f"{be.id} emulator not reachable")
+    if be.id != "file":
+        emulators.require(be.id, be.available())
     # Apply the env a real pull/push child process would receive, and clear the
     # per-protocol fs cache so each backend's options take effect.
     for k, v in be.env().items():

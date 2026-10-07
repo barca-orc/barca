@@ -63,7 +63,14 @@ separate test files.
 `test_remote_state.sh` — exercised in `.depot/workflows/ci.yml` against a `maturin build
 --release` wheel. A separate CI job (`backends`) runs the full Python suite, including the
 state-backend conformance tests, against local object-store emulators (MinIO, fake-gcs-server,
-Azurite) — no cloud credentials required.
+Azurite) — no cloud credentials required. Tests that need an emulator skip when it is not
+running, unless its `BARCA_TEST_*` variable is set (`BARCA_TEST_S3_ENDPOINT`,
+`BARCA_TEST_GCS_ENDPOINT`, `BARCA_TEST_AZURITE_HOST`): the `backends` job sets all three, so
+there an unreachable emulator fails the test instead (`python/tests/emulators.py`).
+
+Tests that must act while a helper process is in the middle of something (a Ctrl-C during an
+upload) do not sleep and hope: `python/tests/hold/` is a `sitecustomize` shim that pauses a
+barca helper at a named point until the test releases it (`BARCA_TEST_HOLD=<point>:<dir>`).
 
 ## Test patterns
 

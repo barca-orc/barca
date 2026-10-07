@@ -19,6 +19,8 @@ import pytest
 
 from barca.api import _find_binary
 
+from . import emulators
+
 S3_ENDPOINT = os.environ.get("BARCA_TEST_S3_ENDPOINT", "http://localhost:9100")
 GCS_ENDPOINT = os.environ.get("BARCA_TEST_GCS_ENDPOINT", "http://localhost:9200")
 AZURITE_HOST = os.environ.get("BARCA_TEST_AZURITE_HOST", "127.0.0.1:9210")
@@ -154,8 +156,7 @@ def machines(tmp_path: Path) -> tuple[Path, Path]:
 @pytest.mark.parametrize("backend", sorted(CASES))
 def test_env_vars_alone_share_one_cache_across_machines(backend, tmp_path):
     endpoint, make = CASES[backend]
-    if not _reachable(endpoint):
-        pytest.skip(f"{backend} emulator not reachable at {endpoint}")
+    emulators.require(backend, _reachable(endpoint), endpoint)
     uri, env = make()
     env = {**env, "BARCA_REMOTE_URI": uri}
     a, b = machines(tmp_path)
@@ -172,8 +173,7 @@ def test_env_vars_alone_share_one_cache_across_machines(backend, tmp_path):
 
 def test_gcs_storage_options_in_barca_toml_reach_the_shared_state(tmp_path):
     """The same settings as a barca.toml table instead of FSSPEC_GCS_* variables."""
-    if not _reachable(GCS_ENDPOINT):
-        pytest.skip(f"gcs emulator not reachable at {GCS_ENDPOINT}")
+    emulators.require("gcs", _reachable(GCS_ENDPOINT), GCS_ENDPOINT)
     uri, _ = gcs_case()
     a, b = machines(tmp_path)
     toml = (

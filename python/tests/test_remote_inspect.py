@@ -26,6 +26,8 @@ import pytest
 from barca import _inspect, _sql, _storage
 from barca.api import _find_binary
 
+from . import emulators
+
 pa = pytest.importorskip("pyarrow")
 pq = pytest.importorskip("pyarrow.parquet")
 pytest.importorskip("fsspec")
@@ -480,8 +482,7 @@ def remote_project(tmp_path_factory) -> Path:
     (`state = "off"`): these tests are about artifacts."""
     pytest.importorskip("pandas")
     pytest.importorskip("s3fs")
-    if not _reachable(S3_ENDPOINT):
-        pytest.skip(f"s3 emulator not reachable at {S3_ENDPOINT}")
+    emulators.require("s3", _reachable(S3_ENDPOINT), S3_ENDPOINT)
     import fsspec
 
     bucket = f"barca-inspect-{uuid.uuid4().hex[:8]}"
@@ -616,8 +617,7 @@ def test_status_and_sql_read_from_each_cloud(backend, tmp_path):
     from .test_remote_env_config import _reachable as reachable
 
     endpoint, make = CASES[backend]
-    if not reachable(endpoint):
-        pytest.skip(f"{backend} emulator not reachable at {endpoint}")
+    emulators.require(backend, reachable(endpoint), endpoint)
     uri, env = make()
     env = {**env, "BARCA_REMOTE_URI": uri}
     machine_a, machine_b = tmp_path / "a", tmp_path / "b"
