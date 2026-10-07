@@ -13,7 +13,7 @@ use crate::dispatch;
 use crate::dispatch::OutputRef;
 use crate::parse::extract_nodes;
 use crate::planner::{self, ExecutionPlan, Phase, ResourceConfig};
-use crate::recover;
+use crate::recover::{self, Work};
 use crate::state_sync;
 use crate::transfer::{ArtifactLayout, TransferClient};
 use serde::{Deserialize, Serialize};
@@ -742,6 +742,15 @@ fn end_of_run_line(completed: usize, total: usize, secs: f64, outcome: RunOutcom
     format!("[barca] {completed}/{total} steps | {how} {secs:.1}s")
 }
 
+/// The `--agent` line for a step served from cache: `[barca] step:<id> cached`, with its declared
+/// env.
+fn cached_step_line(dag: &Dag, display_id: &str) -> String {
+    format!(
+        "[barca] step:{display_id} cached{}",
+        env_suffix(dag, display_id)
+    )
+}
+
 /// The `--agent` line for a step that raised: `[barca] step:<id> failed: <first line of the
 /// error>`, beside the `completed` and `cached` lines.
 fn failed_step_line(node_id: &str, error: &str) -> String {
@@ -965,79 +974,12 @@ fn localize_decision(
     }
 }
 
-/// Of the artifacts at `check`, the paths that cannot be read on this machine: not on its
-/// disk and, for a store-backed cache hit, not in the store either. The store is asked only
-/// about `fetch`, which are downloaded as a side effect (see [`StoreSync::ensure_local`]);
-/// any other store-backed artifact is taken to be there, so nothing is downloaded that no
-/// one reads. An error is a store that could not be reached, which fails the run.
-async fn unreadable(
-    store: &mut Option<StoreSync>,
-    check: &[String],
-    fetch: &[String],
-    pb: Option<&indicatif::ProgressBar>,
-) -> Result<Vec<String>, String> {
-    let separate_store = store.is_some();
-    let in_store = |path: &str| {
-        store
-            .as_ref()
-            .is_some_and(|s| s.fetchable.contains_key(path))
-    };
-    let mut gone: Vec<String> = check
-        .iter()
-        .filter(|path| !in_store(path) && !recover::on_disk(path, separate_store))
-        .cloned()
-        .collect();
-    if let Some(s) = store.as_mut() {
-        gone.extend(s.ensure_local(fetch.iter().map(String::as_str), pb).await?);
-    }
-    Ok(gone)
-}
-
-/// The ids of the outputs a step produces: its own, or one per partition key.
-fn output_ids(step: &crate::planner::StreamStep) -> Vec<String> {
-    if step.partition_keys.is_empty() {
-        vec![step.step_id.display()]
-    } else {
-        step.partition_keys
-            .iter()
-            .map(|pk| pk.display_id(&step.step_id.base))
-            .collect()
-    }
-}
-
-/// What the run does next (see the loop in `execute`).
-enum Work<'p> {
-    /// A phase of the plan: expand its partitions, decide each step, run what is not cached.
-    Planned(&'p Phase),
-    /// Steps already decided to run, waiting for an input to be computed again.
-    Ready(Phase),
-    /// Cached outputs (by id) whose artifact is missing and needed: run their steps again.
-    Recompute(Vec<String>),
-    /// Every phase is done: check the outputs the command returns.
-    Returned,
-}
-
-/// The cached outputs whose artifact is at one of the `gone` paths, and that this run knows
-/// how to compute again.
-fn lost_outputs(
-    gone: &[String],
-    all_outputs: &HashMap<String, OutputRef>,
-    cached_node_ids: &HashSet<String>,
-    cached_steps: &recover::CachedSteps,
-) -> Vec<String> {
-    let gone: HashSet<&str> = gone.iter().map(String::as_str).collect();
-    recover::outputs_at(&gone, all_outputs, |id| {
-        cached_node_ids.contains(id) && cached_steps.knows(id)
-    })
-}
-
 /// The output a run returns as `final_output`: the target's when there is exactly one (for a
 /// partitioned target, the first partition by key), none when there are several (each target
 /// reports its own), and with no target the last planned asset's (a sensor's only when the plan
 /// has no asset).
 fn final_output_of(
     exec_plan: &ExecutionPlan,
-    dag: &Dag,
     target_ids: &[&str],
     several_targets: bool,
     all_outputs: &HashMap<String, OutputRef>,
@@ -1048,20 +990,7 @@ fn final_output_of(
     if several_targets {
         return None;
     }
-    let planned: Vec<&planner::StreamStep> = exec_plan
-        .phases
-        .iter()
-        .flat_map(|p| &p.streams)
-        .flat_map(|s| &s.steps)
-        .collect();
-    let last_planned_id = planned
-        .iter()
-        .rev()
-        .find(|st| {
-            dag.get_node(st.step_id.base_id())
-                .is_some_and(|n| n.kind() == crate::NodeKind::Asset)
-        })
-        .or(planned.last())
+    let last_planned_id = recover::returned_step(exec_plan)
         .map(|s| s.step_id.display())
         .unwrap_or_default();
     all_outputs.get(&last_planned_id).cloned().or_else(|| {
@@ -1074,35 +1003,9 @@ fn final_output_of(
     })
 }
 
-/// The stderr lines that say which cached results are computed again because their artifact
-/// is missing: one per node, naming one path.
-fn recompute_warnings(lost: &[(String, String)]) -> Vec<String> {
-    let mut by_node: Vec<(&str, &str, usize)> = Vec::new();
-    for (id, path) in lost {
-        let base = id.split('[').next().unwrap_or(id);
-        match by_node.iter_mut().find(|(b, _, _)| *b == base) {
-            Some((_, _, count)) => *count += 1,
-            None => by_node.push((base, path, 1)),
-        }
-    }
-    by_node
-        .into_iter()
-        .map(|(base, path, count)| {
-            let others = match count - 1 {
-                0 => String::new(),
-                n => format!(" (and {n} more of its partitions)"),
-            };
-            format!(
-                "[barca] warning: {base}: the artifact of its cached result is missing: \
-                 {path}{others}. Computing it again."
-            )
-        })
-        .collect()
-}
-
 /// This run's link to a separate artifact store: the transfer helper plus
 /// the cache hits whose artifacts still live only in the store.
-struct StoreSync {
+pub(crate) struct StoreSync {
     client: TransferClient,
     layout: ArtifactLayout,
     /// Local mirror path → (node id, store location, recorded SHA-256), for
@@ -1110,9 +1013,82 @@ struct StoreSync {
     /// intermediates a run never reads are never downloaded. With a recorded
     /// hash, a copy already on disk is checked against it on first use too.
     fetchable: HashMap<String, (String, String, Option<String>)>,
+    /// Local mirror paths of fetches the store answered with "no such object",
+    /// until [`Self::take_missing`] collects them.
+    missing: Vec<String>,
+    /// Whether the store itself is there, once it has been asked (see
+    /// [`Self::confirm_present`]).
+    present: Option<Result<(), String>>,
 }
 
 impl StoreSync {
+    fn new(client: TransferClient) -> Self {
+        Self {
+            layout: client.layout().clone(),
+            client,
+            fetchable: HashMap::new(),
+            missing: Vec::new(),
+            present: None,
+        }
+    }
+
+    /// Whether `path` is the local mirror of a cache hit that has not been
+    /// fetched in this run: its artifact is read from the store if it is not
+    /// here.
+    pub(crate) fn holds(&self, path: &str) -> bool {
+        self.fetchable.contains_key(path)
+    }
+
+    /// The local mirror paths of the artifacts [`Self::ensure_local`] found
+    /// to be absent from the store since this was last called.
+    pub(crate) fn take_missing(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.missing)
+    }
+
+    /// Whether a cache hit whose artifact is not on this disk is known to be
+    /// absent, without asking a remote store: a local row, or a directory
+    /// store, is a stat away. Unknown (false) for a result in a remote store.
+    fn known_absent(store: Option<&Self>, path: &str) -> bool {
+        match store.and_then(|s| s.fetchable.get(path)) {
+            Some((_, at, _)) => {
+                !std::path::Path::new(path).exists()
+                    && crate::transfer::local_path(at).is_some_and(|stored| !stored.exists())
+            }
+            None => !recover::on_disk(path, store.is_some()),
+        }
+    }
+
+    /// Make sure the store itself is there before the cached results `lost`
+    /// are computed again on the strength of "not in the store": its bucket,
+    /// container or root directory must answer a listing. Asked once per run.
+    ///
+    /// An object that is absent from a store that is there is a missing
+    /// artifact. A store that is gone, misnamed or unreachable answers the
+    /// same way for every object, and recomputing then would turn an outage or
+    /// a bad setting into a full recompute written to the wrong place.
+    pub(crate) async fn confirm_present(&mut self, lost: &[String]) -> Result<(), String> {
+        if self.present.is_none() {
+            self.present = Some(self.client.probe().await);
+        }
+        let Some(Err(why)) = &self.present else {
+            return Ok(());
+        };
+        let shown: Vec<String> = lost.iter().take(10).map(|id| format!("  {id}")).collect();
+        let more = match lost.len().saturating_sub(shown.len()) {
+            0 => String::new(),
+            n => format!("\n  ... and {n} more"),
+        };
+        Err(format!(
+            "could not fetch {} cached artifact(s) from the artifact store: the store at {} \
+             is not there or cannot be listed ({why}).\n{}{more}\n\
+             Nothing was recomputed. Check the store location and credentials, or re-run with \
+             --refresh-all to recompute them.",
+            lost.len(),
+            self.layout.store_root(),
+            shown.join("\n")
+        ))
+    }
+
     /// Point lazily read parquet inputs that are not on this disk at the store,
     /// so the step's reader fetches only the byte ranges its query uses. They
     /// stay fetchable: a later eager reader still downloads the whole artifact.
@@ -1139,15 +1115,17 @@ impl StoreSync {
     }
 
     /// Make the store-backed artifacts among `paths` local, reporting any
-    /// fetch on stderr (through the progress bar when one is live). Returns
-    /// the local paths of those that are not in the store: their step has to
-    /// be computed again. Any other failure (permissions, a store that cannot
-    /// be reached) is an error naming what could not be fetched.
-    async fn ensure_local<'a>(
+    /// fetch on stderr (through the progress bar when one is live). A fetch
+    /// the store answers with "no such object" is not an error: its local
+    /// path is kept for [`Self::take_missing`], and the caller decides
+    /// whether to compute that result again. Any other failure (permissions,
+    /// a store that cannot be reached) is an error naming what could not be
+    /// fetched.
+    pub(crate) async fn ensure_local<'a>(
         &mut self,
         paths: impl IntoIterator<Item = &'a str>,
         pb: Option<&indicatif::ProgressBar>,
-    ) -> Result<Vec<String>, String> {
+    ) -> Result<(), String> {
         let mut locals = Vec::new();
         for path in paths {
             if let Some((node, store, sha256)) = self.fetchable.remove(path)
@@ -1157,7 +1135,7 @@ impl StoreSync {
             }
         }
         if locals.is_empty() {
-            return Ok(Vec::new());
+            return Ok(());
         }
         let started = Instant::now();
         let report = self.client.await_fetches(&locals).await;
@@ -1202,11 +1180,13 @@ impl StoreSync {
         }
         let (missing, failed): (Vec<_>, Vec<_>) = report.failures.iter().partition(|f| f.missing);
         if failed.is_empty() {
-            return Ok(missing
-                .iter()
-                .filter_map(|f| self.layout.local_for(&f.store))
-                .map(|local| local.to_string_lossy().into_owned())
-                .collect());
+            self.missing.extend(
+                missing
+                    .iter()
+                    .filter_map(|f| self.layout.local_for(&f.store))
+                    .map(|local| local.to_string_lossy().into_owned()),
+            );
+            return Ok(());
         }
         let detail: Vec<String> = failed
             .iter()
@@ -1750,37 +1730,6 @@ impl Executed {
 
 /// `barca get|run --dry-run` — report what the command would do, without doing it.
 ///
-/// Dry run: the cached steps a run would compute again because it reads one of the artifacts at
-/// `needed` and finds it missing (and, for each such step, what it reads in turn). Their report
-/// lines become `run` with reason `artifact_missing`, and they leave `all_outputs`.
-///
-/// A dry run does not contact a remote artifact store: a result recorded in one counts as
-/// available whether or not its local copy is here, so a real run that finds the object gone
-/// computes a step the dry run reported as cached. A store that is a directory is looked at.
-fn predict_recomputes(
-    needed: Vec<String>,
-    cached_steps: &recover::CachedSteps,
-    all_outputs: &mut HashMap<String, OutputRef>,
-    layout: Option<&ArtifactLayout>,
-    steps: &mut [StepReport],
-    summary: &mut ExplainSummary,
-) {
-    let gone = |oref: &OutputRef| match layout.and_then(|l| l.local_for(&oref.path)) {
-        // Recorded in the store: read from its local mirror, or fetched from the store.
-        Some(mirror) => {
-            !mirror.exists()
-                && crate::transfer::local_path(&oref.path).is_some_and(|stored| !stored.exists())
-        }
-        None => !recover::on_disk(&oref.path, layout.is_some()),
-    };
-    for id in recover::predict_lost(cached_steps, all_outputs, &needed, gone) {
-        if recover::mark_recomputed(steps, &id, true) {
-            summary.cached = summary.cached.saturating_sub(1);
-            summary.will_run += 1;
-        }
-    }
-}
-
 /// Plans exactly as a real run does and sends every step through [`decide_step`], so the
 /// prediction is the real run's decision. Nothing executes, no worker starts, and nothing is
 /// written: no `.barca` directory is created and no run is recorded. A dry run cannot know
@@ -1897,9 +1846,9 @@ pub(crate) async fn explain_dag(
             .into_iter()
             .map(|o| o.path.clone())
             .collect();
-        predict_recomputes(
+        recover::predict_recomputes(
             sources,
-            &cached_steps,
+            &mut cached_steps,
             &mut all_outputs,
             layout.as_ref(),
             &mut steps,
@@ -2065,13 +2014,10 @@ pub(crate) async fn explain_dag(
                 steps: to_run,
             }],
         };
-        let inputs = recover::input_paths(&dispatch::build_provided_inputs(&running, &all_outputs))
-            .into_iter()
-            .map(str::to_string)
-            .collect();
-        predict_recomputes(
+        let inputs = recover::input_paths(&dispatch::build_provided_inputs(&running, &all_outputs));
+        recover::predict_recomputes(
             inputs,
-            &cached_steps,
+            &mut cached_steps,
             &mut all_outputs,
             layout.as_ref(),
             &mut steps,
@@ -2083,12 +2029,12 @@ pub(crate) async fn explain_dag(
     // The outputs the command was asked for are read by whoever ran it.
     let returned = all_outputs
         .iter()
-        .filter(|(id, _)| requested.contains(id.split('[').next().unwrap_or(id)))
+        .filter(|(id, _)| requested.contains(recover::base_of(id)))
         .map(|(_, o)| o.path.clone())
         .collect();
-    predict_recomputes(
+    recover::predict_recomputes(
         returned,
-        &cached_steps,
+        &mut cached_steps,
         &mut all_outputs,
         layout.as_ref(),
         &mut steps,
@@ -2362,13 +2308,7 @@ async fn execute(
     // artifact dir; the transfer helper uploads finished artifacts in the
     // background and fetches cache hits recorded by other machines.
     let mut store: Option<StoreSync> = if let Some(start) = transfer_start {
-        let client = start.join().await??;
-        let layout = client.layout().clone();
-        Some(StoreSync {
-            client,
-            layout,
-            fetchable: HashMap::new(),
-        })
+        Some(StoreSync::new(start.join().await??))
     } else {
         None
     };
@@ -2422,8 +2362,12 @@ async fn execute(
     let mut queue: VecDeque<Work<'_>> = exec_plan.phases.iter().map(Work::Planned).collect();
     queue.push_back(Work::Returned);
     let mut next_idx = 0usize;
+    // `--agent`: cached steps whose `cached` line is held back because their artifact is known
+    // to be absent. Each is announced once, with what became of it: `completed` if something
+    // needed it and it was computed again, `cached` at the end of the run if nothing did.
+    let mut held_cached_lines: Vec<String> = Vec::new();
 
-    while let Some(work) = queue.pop_front() {
+    loop {
         // Stop scheduling new phases once cancelled; partial results from
         // completed phases are persisted below.
         if cancel.is_cancelled() {
@@ -2432,6 +2376,9 @@ async fn execute(
             }
             break;
         }
+        let Some(work) = queue.pop_front() else {
+            break;
+        };
         let phase_idx = next_idx;
         next_idx += 1;
         trace_point!("phase{phase_idx}_start");
@@ -2448,11 +2395,10 @@ async fn execute(
                 }
             }
             Work::Returned => {
-                // The outputs this command hands back are read by whoever ran it: the ones it
-                // prints are made local, and every requested one must be on disk or in the
-                // store.
+                // The output this command hands back is read by whoever ran it: what it
+                // prints is made local, and every part of it must be on disk or in the store.
                 let returned: Vec<String> =
-                    final_output_of(&exec_plan, &dag, &target_ids, keep_going, &all_outputs)
+                    final_output_of(&exec_plan, &target_ids, keep_going, &all_outputs)
                         .iter()
                         .chain(
                             target_outcomes(&dag, &targets, &all_outputs, &all_failures)
@@ -2463,22 +2409,31 @@ async fn execute(
                         .collect();
                 let check: Vec<String> = cached_node_ids
                     .iter()
-                    .filter(|id| requested.contains(id.split('[').next().unwrap_or(id)))
+                    .filter(|id| requested.contains(recover::base_of(id)))
                     .filter_map(|id| all_outputs.get(id))
                     .map(|o| o.path.clone())
                     .chain(returned.iter().cloned())
                     .collect();
-                let gone = match unreadable(&mut store, &check, &returned, pb.as_ref()).await {
-                    Ok(gone) => gone,
+                let lost = recover::lost(
+                    &mut store,
+                    &check,
+                    &returned,
+                    pb.as_ref(),
+                    &all_outputs,
+                    &cached_node_ids,
+                    &mut cached_steps,
+                )
+                .await;
+                match lost {
+                    Ok(lost) if lost.is_empty() => {}
+                    Ok(lost) => {
+                        queue.push_front(Work::Returned);
+                        queue.push_front(Work::Recompute(cached_steps.first_layer(&lost)));
+                    }
                     Err(e) => {
                         transfer_error = Some(e);
                         break;
                     }
-                };
-                let lost = lost_outputs(&gone, &all_outputs, &cached_node_ids, &cached_steps);
-                if !lost.is_empty() {
-                    queue.push_front(Work::Returned);
-                    queue.push_front(Work::Recompute(cached_steps.first_layer(&lost)));
                 }
                 continue;
             }
@@ -2488,31 +2443,39 @@ async fn execute(
                     .into_iter()
                     .map(|o| o.path.clone())
                     .collect();
-                let gone = match unreadable(&mut store, &sources, &sources, pb.as_ref()).await {
-                    Ok(gone) => gone,
+                let lost = recover::lost(
+                    &mut store,
+                    &sources,
+                    &sources,
+                    pb.as_ref(),
+                    &all_outputs,
+                    &cached_node_ids,
+                    &mut cached_steps,
+                )
+                .await;
+                match lost {
+                    Ok(lost) if lost.is_empty() => {}
+                    Ok(lost) => {
+                        queue.push_front(Work::Planned(phase));
+                        queue.push_front(Work::Recompute(cached_steps.first_layer(&lost)));
+                        continue;
+                    }
                     Err(e) => {
                         transfer_error = Some(e);
                         break;
                     }
-                };
-                let lost = lost_outputs(&gone, &all_outputs, &cached_node_ids, &cached_steps);
-                if !lost.is_empty() {
-                    queue.push_front(Work::Planned(phase));
-                    queue.push_front(Work::Recompute(cached_steps.first_layer(&lost)));
-                    continue;
                 }
 
                 // Multi-target run after a failure: drop the steps that depend on a failed
-                // step; the rest of the phase still runs.
+                // step before they are decided; the rest of the phase still runs.
                 let unblocked_phase;
                 let phase = if keep_going && !failed_bases.is_empty() {
                     let mut p = phase.clone();
-                    for stream in &mut p.streams {
-                        stream.steps.retain(|st| {
+                    recover::drop_blocked(
+                        &mut p,
+                        |base| blocking_failure(&dag, base, &failed_bases),
+                        |st, up| {
                             let base = st.step_id.base_id();
-                            let Some(up) = blocking_failure(&dag, base, &failed_bases) else {
-                                return true;
-                            };
                             step_reports.push(StepReport {
                                 id: base.to_string(),
                                 kind: kind_str(dag.get_node(base).map(|n| n.kind())),
@@ -2525,10 +2488,8 @@ async fn execute(
                                 ..Default::default()
                             });
                             skipped_bases.insert(base.to_string());
-                            false
-                        });
-                    }
-                    p.streams.retain(|s| !s.steps.is_empty());
+                        },
+                    );
                     unblocked_phase = p;
                     &unblocked_phase
                 } else {
@@ -2590,10 +2551,14 @@ async fn execute(
                                     );
                                 }
                                 if agent_mode {
-                                    eprintln!(
-                                        "[barca] step:{display_id} cached{}",
-                                        env_suffix(&dag, &display_id)
-                                    );
+                                    // Announce a step once, with its true outcome: when its
+                                    // artifact is known to be gone it may yet be computed
+                                    // again, so its line waits until that is settled.
+                                    if StoreSync::known_absent(store.as_ref(), &oref.path) {
+                                        held_cached_lines.push(display_id.clone());
+                                    } else {
+                                        eprintln!("{}", cached_step_line(&dag, &display_id));
+                                    }
                                 }
                                 all_outputs.insert(display_id.clone(), oref);
                                 cached_node_ids.insert(display_id);
@@ -2642,26 +2607,22 @@ async fn execute(
         // A phase that waited for a recompute may since have lost an upstream to a failure
         // (several targets keep going around one): its blocked steps do not run.
         if keep_going && !failed_bases.is_empty() {
-            for stream in &mut filtered_phase.streams {
-                stream.steps.retain(|st| {
-                    let base = st.step_id.base_id();
-                    if blocking_failure(&dag, base, &failed_bases).is_none() {
-                        return true;
-                    }
-                    skipped_bases.insert(base.to_string());
+            recover::drop_blocked(
+                &mut filtered_phase,
+                |base| blocking_failure(&dag, base, &failed_bases),
+                |st, _| {
+                    skipped_bases.insert(st.step_id.base_id().to_string());
                     if recompute {
                         // Its artifact is still missing and it cannot be computed: it is no
                         // longer an output of this run.
-                        for id in output_ids(st) {
+                        for id in recover::output_ids(st) {
                             recover::mark_recomputed(&mut step_reports, &id, false);
                             cached_node_ids.remove(&id);
                             all_outputs.remove(&id);
                         }
                     }
-                    false
-                });
-            }
-            filtered_phase.streams.retain(|s| !s.steps.is_empty());
+                },
+            );
             if filtered_phase.streams.is_empty() {
                 continue;
             }
@@ -2672,33 +2633,40 @@ async fn execute(
         // reader in the phase scans lazily, which are read in place). An input that is
         // neither on disk nor in the store has its step computed again first.
         let mut provided = dispatch::build_provided_inputs(&filtered_phase, &all_outputs);
-        let paths_of = |provided: &HashMap<String, dispatch::ProvidedInput>| -> Vec<String> {
-            recover::input_paths(provided)
-                .into_iter()
-                .map(str::to_string)
-                .collect()
-        };
-        let check = paths_of(&provided);
+        let check = recover::input_paths(&provided);
         if let Some(s) = store.as_ref() {
             s.read_in_place(
                 &mut provided,
                 &dispatch::lazily_read_inputs(&filtered_phase),
             );
         }
-        let fetch = paths_of(&provided);
-        let gone = match unreadable(&mut store, &check, &fetch, pb.as_ref()).await {
-            Ok(gone) => gone,
+        let fetch = recover::input_paths(&provided);
+        let lost = recover::lost(
+            &mut store,
+            &check,
+            &fetch,
+            pb.as_ref(),
+            &all_outputs,
+            &cached_node_ids,
+            &mut cached_steps,
+        )
+        .await;
+        trace_point!("phase{phase_idx}_inputs_local");
+        let lost = match lost {
+            Ok(lost) => lost,
             Err(e) => {
+                if !recompute {
+                    // Decided to run, but never dispatched: say so (see below the loop).
+                    queue.push_front(Work::Ready(filtered_phase));
+                }
                 transfer_error = Some(e);
                 break;
             }
         };
-        trace_point!("phase{phase_idx}_inputs_local");
-        let lost = lost_outputs(&gone, &all_outputs, &cached_node_ids, &cached_steps);
         if !lost.is_empty() {
             queue.push_front(if recompute {
-                let ids = filtered_phase.streams.iter().flat_map(|s| &s.steps);
-                Work::Recompute(ids.flat_map(output_ids).collect())
+                let steps = filtered_phase.streams.iter().flat_map(|s| &s.steps);
+                Work::Recompute(steps.flat_map(recover::output_ids).collect())
             } else {
                 Work::Ready(filtered_phase)
             });
@@ -2711,7 +2679,7 @@ async fn execute(
             // other step of this run.
             let mut lost: Vec<(String, String)> = Vec::new();
             for step in filtered_phase.streams.iter().flat_map(|s| &s.steps) {
-                for id in output_ids(step) {
+                for id in recover::output_ids(step) {
                     recover::mark_recomputed(&mut step_reports, &id, false);
                     cached_node_ids.remove(&id);
                     if let Some(oref) = all_outputs.remove(&id) {
@@ -2719,7 +2687,7 @@ async fn execute(
                     }
                 }
             }
-            for line in recompute_warnings(&lost) {
+            for line in recover::recompute_warnings(&lost) {
                 note(&pb, &line);
             }
         }
@@ -2996,6 +2964,25 @@ async fn execute(
         }
     }
 
+    // Whatever is still queued when the loop ends was never dispatched, whatever ended it (a
+    // failed step, a failed recompute, cancellation, an infrastructure error). A step that had
+    // been decided to run and was waiting for an input must not be reported as having run: it
+    // is skipped, like a step the coordinator never started.
+    for work in queue.drain(..) {
+        if let Work::Ready(phase) = work {
+            for step in phase.streams.iter().flat_map(|s| &s.steps) {
+                skipped_bases.insert(step.step_id.base_id().to_string());
+            }
+        }
+    }
+    // A cached step whose `cached` line was held back and that was not computed again after
+    // all is announced now.
+    for id in held_cached_lines {
+        if cached_node_ids.contains(&id) {
+            eprintln!("{}", cached_step_line(&dag, &id));
+        }
+    }
+
     // All phases done (or aborted/cancelled) — release the worker pool before
     // persisting.
     let repeated_warnings = pool.take_repeated_warnings();
@@ -3226,7 +3213,7 @@ async fn execute(
 
     let outcomes = target_outcomes(&dag, &targets, &all_outputs, &all_failures);
 
-    let final_output = final_output_of(&exec_plan, &dag, &target_ids, keep_going, &all_outputs);
+    let final_output = final_output_of(&exec_plan, &target_ids, keep_going, &all_outputs);
 
     // The outputs this command returns were made readable here when the last phase finished
     // (`Work::Returned`). A run that stopped at a failed step did not get that far and may still
@@ -5008,75 +4995,6 @@ mod store_tests {
                 _ => panic!("expected Local"),
             }
         }
-    }
-
-    #[tokio::test]
-    async fn only_what_is_not_on_disk_is_unreadable_without_a_store() {
-        let dir = tempfile::tempdir().unwrap();
-        let here = dir.path().join("h.json").to_string_lossy().into_owned();
-        std::fs::write(&here, "1").unwrap();
-        let gone = dir.path().join("gone.json").to_string_lossy().into_owned();
-        let check = vec![here, gone.clone()];
-        let unreadable = unreadable(&mut None, &check, &check, None).await;
-        assert_eq!(unreadable, Ok(vec![gone]));
-    }
-
-    #[test]
-    fn lost_outputs_are_the_cached_ones_this_run_can_compute_again() {
-        let outputs: HashMap<String, OutputRef> = HashMap::from([
-            ("p.py:cached".to_string(), oref("/a/cached.json")),
-            ("p.py:ran".to_string(), oref("/a/ran.json")),
-            ("p.py:unknown".to_string(), oref("/a/unknown.json")),
-        ]);
-        let cached_ids: HashSet<String> = ["p.py:cached", "p.py:unknown"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        let mut cached_steps = recover::CachedSteps::default();
-        cached_steps.remember(crate::planner::StreamStep {
-            step_id: crate::StepId::unpartitioned("p.py:cached"),
-            kind: crate::NodeKind::Asset,
-            function_name: std::sync::Arc::from("cached"),
-            source_file: std::sync::Arc::from("p.py"),
-            inputs: HashMap::new(),
-            pending_partitions: HashMap::new(),
-            serializer: None,
-            sinks: vec![],
-            run_hashes: HashMap::new(),
-            timeout_seconds: 0,
-            retries: 1,
-            retry_backoff_seconds: 0.0,
-            partition_keys: vec![],
-            param_types: HashMap::new(),
-            return_type: None,
-        });
-        let gone: Vec<String> = ["/a/cached.json", "/a/ran.json", "/a/unknown.json"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        // Not `ran` (computed in this run) and not `unknown` (no step to run again).
-        assert_eq!(
-            lost_outputs(&gone, &outputs, &cached_ids, &cached_steps),
-            ["p.py:cached"]
-        );
-    }
-
-    #[test]
-    fn a_recompute_is_announced_once_per_node() {
-        let lost = vec![
-            ("p.py:part[k=a]".to_string(), "/a/part/1.json".to_string()),
-            ("p.py:model".to_string(), "/a/model/2.json".to_string()),
-            ("p.py:part[k=b]".to_string(), "/a/part/3.json".to_string()),
-        ];
-        assert_eq!(
-            recompute_warnings(&lost),
-            [
-                "[barca] warning: p.py:part: the artifact of its cached result is missing: \
-                 /a/part/1.json (and 1 more of its partitions). Computing it again.",
-                "[barca] warning: p.py:model: the artifact of its cached result is missing: \
-                 /a/model/2.json. Computing it again.",
-            ]
-        );
     }
 
     #[tokio::test]

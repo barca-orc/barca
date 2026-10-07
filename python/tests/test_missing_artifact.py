@@ -3,11 +3,13 @@
 The rule (`barca docs cache`, "A cached result whose artifact is missing"):
 
 - an artifact is needed when a step that is going to run reads it, when a `partitions_from`
-  step is expanded from it, or when it is an output the command was asked for (its targets;
-  with no target, every asset nothing else in the plan reads);
+  step is expanded from it, or when it is the output the command returns (its targets; with
+  no target, the one asset whose value is `final_output`);
 - a needed artifact that is neither on disk nor in the artifact store has its step run again,
   reported with reason `artifact_missing`;
-- an artifact nothing reads is not looked at: a pruned intermediate stays cached.
+- an artifact nothing reads is not looked at: a pruned intermediate, or an asset at the end of
+  the pipeline that is not returned, stays cached;
+- a store that is gone or unreachable is a failed run (exit 3), never a reason to recompute.
 
 `--dry-run` and `barca status` predict the same thing.
 """
@@ -78,6 +80,48 @@ def keys() -> list:
 @asset(partitions={"k": partitions_from(keys)})
 def per_key(k: str) -> dict:
     return {"k": k}
+"""
+
+# `b` can be made to fail, fail once, or wait, by files that are not part of its code (so its
+# run hash, and with it the cached result, stays the same).
+RECOVERY = """
+import time
+from pathlib import Path
+
+from barca import asset, task
+
+
+@asset()
+def a() -> dict:
+    return {"v": 1}
+
+
+@asset(inputs={"a": a}, retries=3, retry_backoff=0.05)
+def b(a: dict) -> dict:
+    Path("b.started").write_text("x")
+    if Path("fail-b").exists():
+        raise RuntimeError("b cannot be computed right now")
+    if Path("fail-b-once").exists():
+        Path("fail-b-once").unlink()
+        raise RuntimeError("b failed once")
+    while Path("hold-b").exists():
+        time.sleep(0.05)
+    return {"v": a["v"] + 1}
+
+
+@asset(inputs={"a": a})
+def side(a: dict) -> dict:
+    return {"side": a["v"]}
+
+
+@task(inputs={"b": b})
+def publish(b: dict) -> None:
+    print("publish", b["v"])
+
+
+@task(inputs={"side": side})
+def other(side: dict) -> None:
+    print("other", side["side"])
 """
 
 SCHEDULED = """
@@ -219,16 +263,40 @@ def test_a_recomputed_step_recomputes_its_own_missing_input(tmp_path):
     assert doc["final_output"] == {"from": 1}
 
 
-def test_without_a_target_the_ends_of_the_pipeline_are_recomputed(tmp_path):
+def test_without_a_target_the_returned_asset_is_recomputed(tmp_path):
     root = project(tmp_path)
     assert result(cli(root, "get", "pipeline.py", "--json"))["steps_executed"] == 2
     shutil.rmtree(root / ".barca" / "artifacts")
 
     doc = result(cli(root, "get", "pipeline.py", "--json"))
-    # `report` is what the pipeline produces; `model` is read to compute it.
+    # `report` is the value the command returns; `model` is read to compute it.
     assert by_name(doc, "status") == {"model": "ran", "report": "ran"}
     assert doc["final_output"] == {"from": 1}
     assert result(cli(root, "get", "pipeline.py", "--json"))["steps_executed"] == 0
+
+
+def test_without_a_target_an_end_of_the_pipeline_that_is_not_returned_stays_cached(tmp_path):
+    root = project(tmp_path, RECOVERY)
+    first = result(cli(root, "get", "pipeline.py", "--json"))
+    assert first["steps_executed"] == 3 and first["final_output"] == {"v": 2}
+    # `side` is read by no asset, and it is not the value the command returns (`b` is).
+    drop(root, "side")
+
+    doc = result(cli(root, "get", "pipeline.py", "--json"))
+    assert doc["steps_executed"] == 0
+    assert by_name(doc, "status") == {"a": "cached", "b": "cached", "side": "cached"}
+    assert artifacts(root, "side") == []
+    plan = result(cli(root, "get", "pipeline.py", "--dry-run", "--json"))
+    assert plan["summary"] == {"will_run": 0, "cached": 3, "unknown": 0}
+    status = result(cli(root, "status", "side", "pipeline.py", "--json"))
+    assert {n["name"]: n["cache"]["state"] for n in status["nodes"]}["a"] == "cached"
+
+    # Asked for by name, or read by a step that runs, it is computed again.
+    assert statuses(cli(root, "run", "other", "--json")) == {
+        "a": "cached",
+        "side": "ran",
+        "other": "ran",
+    }
 
 
 def test_several_targets_each_get_their_artifact_back(tmp_path):
@@ -241,6 +309,200 @@ def test_several_targets_each_get_their_artifact_back(tmp_path):
     assert by_name(doc, "status") == {"model": "ran", "report": "cached"}
     assert doc["targets"]["model"] == {"status": "success", "final_output": {"v": 1}}
     assert doc["targets"]["report"] == {"status": "success", "final_output": {"from": 1}}
+
+
+# ─── A recompute that does not finish ────────────────────────────────────────
+
+
+def agent_steps(stderr: str, name: str) -> list[str]:
+    """What `--agent` said about step `name`: the word after its id on each of its lines."""
+    prefix = f"[barca] step:pipeline.py:{name} "
+    return [
+        line[len(prefix) :].split()[0] for line in stderr.splitlines() if line.startswith(prefix)
+    ]
+
+
+def rows(root: Path, name: str) -> list[tuple[str, int]]:
+    """(status, attempts) of every materialization of `name`, oldest first."""
+    db = sqlite3.connect(root / ".barca" / "metadata.db")
+    try:
+        return db.execute(
+            "select status, attempts from materializations where node_id = ? order by id",
+            (f"pipeline.py:{name}",),
+        ).fetchall()
+    finally:
+        db.close()
+
+
+def history(root: Path) -> list[dict]:
+    return json.loads(cli(root, "history", "--json").stdout)["runs"]
+
+
+def recovery_project(tmp_path: Path) -> Path:
+    """`a -> b -> publish` and `a -> side -> other`, all run once, then `b`'s artifact deleted."""
+    root = project(tmp_path, RECOVERY)
+    assert result(cli(root, "run", "publish,other", "--json"))["steps_executed"] == 5
+    drop(root, "b")
+    (root / "b.started").unlink()
+    return root
+
+
+def test_a_step_waiting_for_a_recompute_that_fails_is_skipped_not_ran(tmp_path):
+    root = recovery_project(tmp_path)
+    (root / "fail-b").write_text("")
+
+    proc = cli(root, "run", "publish", "--json", "--agent")
+    assert proc.returncode == 1, proc.stderr
+    doc = json.loads(proc.stdout)
+    assert doc["status"] == "failed" and doc["failed_node"] == "pipeline.py:b"
+    # `publish` was decided to run and was waiting for `b`: it never started.
+    assert by_name(doc, "status") == {"a": "cached", "b": "failed", "publish": "skipped"}
+    assert by_name(doc, "reason") == {
+        "a": None,
+        "b": "artifact_missing",
+        "publish": "upstream_failed",
+    }
+    assert doc["steps_executed"] == 1
+    # --agent, history and the database agree: only `b` was attempted.
+    assert agent_steps(proc.stderr, "publish") == []
+    assert agent_steps(proc.stderr, "b") == ["failed:"]
+    run = history(root)[0]
+    assert (run["status"], run["steps_executed"]) == ("failed", 1)
+    assert rows(root, "publish") == [("success", 1)]
+    assert rows(root, "b") == [("success", 1), ("failed", 3)]
+
+    # Once `b` can be computed, the same command recovers.
+    (root / "fail-b").unlink()
+    assert statuses(cli(root, "run", "publish", "--json")) == {
+        "a": "cached",
+        "b": "ran",
+        "publish": "ran",
+    }
+
+
+def test_with_several_targets_only_the_one_behind_the_failed_recompute_is_skipped(tmp_path):
+    root = recovery_project(tmp_path)
+    (root / "fail-b").write_text("")
+
+    proc = cli(root, "run", "publish,other", "--json")
+    assert proc.returncode == 1, proc.stderr
+    doc = json.loads(proc.stdout)
+    assert by_name(doc, "status") == {
+        "a": "cached",
+        "side": "cached",
+        "other": "ran",
+        "b": "failed",
+        "publish": "skipped",
+    }
+    assert doc["targets"]["other"]["status"] == "success"
+    assert doc["targets"]["publish"]["status"] == "failed"
+    assert doc["targets"]["publish"]["failed_node"] == "pipeline.py:b"
+    assert rows(root, "publish") == [("success", 1)]
+    assert rows(root, "other") == [("success", 1), ("success", 1)]
+
+
+def test_a_recomputed_step_keeps_its_retries(tmp_path):
+    root = recovery_project(tmp_path)
+    (root / "fail-b-once").write_text("")
+
+    doc = result(cli(root, "run", "publish", "--json"))
+    assert by_name(doc, "status") == {"a": "cached", "b": "ran", "publish": "ran"}
+    assert by_name(doc, "reason")["b"] == "artifact_missing"
+    # The first attempt raised; the second is the one recorded.
+    assert rows(root, "b") == [("success", 1), ("success", 2)]
+
+
+def start(root: Path, *args: str) -> subprocess.Popen:
+    return subprocess.Popen(
+        [_find_binary(), *args],
+        cwd=root,
+        env=clean_env(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+
+def wait_for_file(path: Path, timeout: float = 60) -> None:
+    deadline = time.monotonic() + timeout
+    while not path.exists():
+        if time.monotonic() > deadline:
+            raise AssertionError(f"timed out waiting for {path.name}")
+        time.sleep(0.05)
+
+
+def test_ctrl_c_during_a_recompute_cancels_the_run_and_the_next_one_recovers(tmp_path):
+    root = recovery_project(tmp_path)
+    (root / "hold-b").write_text("")
+
+    proc = start(root, "run", "publish", "--json", "--agent")
+    wait_for_file(root / "b.started")
+    proc.send_signal(signal.SIGINT)
+    _, err = proc.communicate(timeout=60)
+    assert proc.returncode == 130, err
+    # Nothing claims `publish` ran, and the run is recorded as cancelled.
+    assert agent_steps(err, "publish") == [] and agent_steps(err, "b") == []
+    assert history(root)[0]["status"] == "cancelled"
+    assert rows(root, "publish") == [("success", 1)]
+    assert rows(root, "b") == [("success", 1)]
+    assert artifacts(root, "b") == []
+
+    (root / "hold-b").unlink()
+    doc = result(cli(root, "run", "publish", "--json"))
+    assert by_name(doc, "status") == {"a": "cached", "b": "ran", "publish": "ran"}
+    assert by_name(doc, "reason")["b"] == "artifact_missing"
+
+
+def test_a_run_killed_during_a_recompute_is_interrupted_and_the_next_one_recovers(tmp_path):
+    root = recovery_project(tmp_path)
+    (root / "hold-b").write_text("")
+
+    proc = start(root, "run", "publish", "--json", "--agent")
+    wait_for_file(root / "b.started")
+    os.kill(proc.pid, signal.SIGKILL)
+    # wait(), not communicate(): the orphaned worker still holds the pipes.
+    assert proc.wait(timeout=60) == -signal.SIGKILL
+    for pipe in (proc.stdout, proc.stderr):
+        pipe.close()
+
+    # Nobody saw the run end. Its row stays `running`, and history reports that as
+    # `interrupted` because its process is gone (the handling of killed runs from #220).
+    run = history(root)[0]
+    assert run["status"] == "interrupted" and run["finished_at"] is None
+    assert rows(root, "publish") == [("success", 1)]
+
+    # The orphaned worker may or may not finish writing `b` once released. Either way the
+    # next run ends with `b`'s artifact in place and `publish` run on it.
+    (root / "hold-b").unlink()
+    time.sleep(0.5)
+    proc = cli(root, "run", "publish", "--json")
+    doc = result(proc)
+    assert by_name(doc, "status")["publish"] == "ran"
+    assert by_name(doc, "status")["b"] in ("ran", "cached")
+    assert "publish 2" in proc.stderr
+    assert len(artifacts(root, "b")) == 1
+    assert [r["status"] for r in history(root)[:2]] == ["success", "interrupted"]
+
+
+def test_agent_mode_announces_a_step_once_with_its_outcome(tmp_path):
+    root = project(tmp_path, RECOVERY)
+    assert result(cli(root, "get", "pipeline.py", "--json"))["steps_executed"] == 3
+    # `b` is returned and reads `a`: both are computed again. `side` is not needed.
+    for name in ("a", "b", "side"):
+        drop(root, name)
+
+    proc = cli(root, "get", "pipeline.py", "--json", "--agent")
+    assert statuses(proc) == {"a": "ran", "side": "cached", "b": "ran"}
+    # Never `cached` and then `completed` for the same step.
+    assert agent_steps(proc.stderr, "a") == ["completed"]
+    assert agent_steps(proc.stderr, "b") == ["completed"]
+    assert agent_steps(proc.stderr, "side") == ["cached"]
+
+    # With every artifact in place each step is announced as cached, as before.
+    proc = cli(root, "run", "publish", "--json", "--agent")
+    assert agent_steps(proc.stderr, "a") == ["cached"]
+    assert agent_steps(proc.stderr, "b") == ["cached"]
+    assert agent_steps(proc.stderr, "publish") == ["completed"]
 
 
 # ─── --dry-run and status ────────────────────────────────────────────────────
@@ -444,6 +706,38 @@ def test_a_result_gone_from_both_that_nothing_reads_is_not_recomputed(tmp_path):
     assert doc["steps_executed"] == 0
     assert doc["final_output"] == {"from": 1}
     assert store_files(store, "model") == []
+
+
+def test_a_directory_store_that_is_gone_fails_the_run_instead_of_recomputing(tmp_path):
+    root = project(tmp_path)
+    store = tmp_path / "store"
+    env = {"BARCA_REMOTE_URI": str(store), "BARCA_STATE": "off"}
+    assert result(cli(root, "run", "publish", "--json", **env))["steps_executed"] == 2
+    # The share goes away, and the local copy of what `publish` reads is gone as well.
+    store.rename(tmp_path / "unmounted")
+    drop(root, "model")
+
+    proc = cli(root, "run", "publish", "--json", "--agent", **env)
+    # "Not found" from a store that is not there says nothing about the artifact.
+    assert proc.returncode == 3, proc.stderr
+    assert "could not fetch 1 cached artifact(s)" in proc.stderr
+    assert "is not there or cannot be listed" in proc.stderr
+    assert "--refresh-all" in proc.stderr
+    assert agent_steps(proc.stderr, "model") == ["cached"]
+    assert agent_steps(proc.stderr, "publish") == []
+    assert "publish 1" not in proc.stderr
+    assert artifacts(root, "model") == [], "it was recomputed"
+    assert not store.exists(), "the run wrote to a store that is not there"
+    # The dry run does not promise a recompute either.
+    plan = result(cli(root, "run", "publish", "--dry-run", "--json", **env))
+    assert by_name(plan, "action") == {"model": "cached", "publish": "run"}
+
+    # With the share back the artifact is fetched and nothing is recomputed.
+    (tmp_path / "unmounted").rename(store)
+    assert statuses(cli(root, "run", "publish", "--json", **env)) == {
+        "model": "cached",
+        "publish": "ran",
+    }
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root reads files whatever their mode")

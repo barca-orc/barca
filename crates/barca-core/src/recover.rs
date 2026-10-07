@@ -6,25 +6,39 @@
 //!
 //! - A missing artifact matters only when something is about to **read** it: a step that is
 //!   going to run takes it as an input, a `partitions_from` step is expanded from it, or it is
-//!   an output the command was asked for (see [`requested`]). A pruned intermediate that
-//!   nothing reads stays cached and costs nothing.
-//! - "Missing" means not on this machine's disk and not fetchable from the artifact store. For
-//!   a row recorded in the store, the readable copy is its local mirror; the recorded store
-//!   location is never checked directly.
+//!   the output the command returns (see [`requested`]). Anything else, a pruned intermediate
+//!   or an asset at the end of the pipeline that is not returned, stays cached and costs
+//!   nothing.
+//! - "Missing" means not on this machine's disk and not in the artifact store. For a row
+//!   recorded in the store, the readable copy is its local mirror; the store is asked only when
+//!   the mirror is absent. With a store, nothing is recomputed unless the store itself is known
+//!   to be there (see [`lost`]): a store that is gone, misnamed or unreachable is a failed run,
+//!   never a reason to compute everything again and write it somewhere new.
 //! - The step that produced a needed, missing artifact is run again, with reason
 //!   `artifact_missing`. Its run hash is unchanged, so the artifact lands at the same path and
 //!   nothing downstream is invalidated. Its own inputs are subject to the same rule.
 //!
-//! This module holds the parts both callers share and that can be tested without a run: which
-//! artifacts are on disk, which steps to run again, and how a step's report line changes.
 //! `commands::execute` applies it where a phase's inputs are made available;
-//! `commands::explain_dag` predicts it with [`predict_lost`].
+//! `commands::explain_dag` predicts it with [`predict_recomputes`].
 
-use crate::commands::{PartitionSummary, RunReason, StepReport};
+use crate::commands::{ExplainSummary, PartitionSummary, RunReason, StepReport, StoreSync};
 use crate::dispatch::{OutputRef, ProvidedInput, build_provided_inputs};
 use crate::model::NodeKind;
 use crate::planner::{ExecutionPlan, Phase, PhaseReason, StreamStep, WorkerStream};
+use crate::transfer::ArtifactLayout;
 use std::collections::{HashMap, HashSet};
+
+/// What a run does next (see the loop in `commands::execute`).
+pub(crate) enum Work<'p> {
+    /// A phase of the plan: expand its partitions, decide each step, run what is not cached.
+    Planned(&'p Phase),
+    /// Steps already decided to run, waiting for an input to be computed again.
+    Ready(Phase),
+    /// Cached outputs (by id) whose artifact is missing and needed: run their steps again.
+    Recompute(Vec<String>),
+    /// Every phase is done: check the output the command returns.
+    Returned,
+}
 
 /// Whether the artifact recorded at `path` can be read from this machine as it is.
 ///
@@ -43,43 +57,84 @@ pub(crate) fn on_disk(path: &str, separate_store: bool) -> bool {
 }
 
 /// The base node id of a step or output id (`p.py:a[k=1]` -> `p.py:a`).
-fn base_of(id: &str) -> &str {
+pub(crate) fn base_of(id: &str) -> &str {
     id.split('[').next().unwrap_or(id)
 }
 
-/// The base ids of the outputs a command was asked for: its targets, or with no target every
-/// planned asset that no other planned step reads (the ends of the pipeline). These are read by
-/// whoever ran the command, so their artifacts are needed even though no step consumes them.
-pub(crate) fn requested(plan: &ExecutionPlan, target_ids: &[&str]) -> HashSet<String> {
-    if !target_ids.is_empty() {
-        return target_ids.iter().map(|id| id.to_string()).collect();
-    }
+/// The step whose value a run with no target returns as `final_output`: the last planned asset
+/// (a sensor or task only when the plan has no asset).
+pub(crate) fn returned_step(plan: &ExecutionPlan) -> Option<&StreamStep> {
     let steps = || {
         plan.phases
             .iter()
             .flat_map(|p| &p.streams)
             .flat_map(|s| &s.steps)
     };
-    let read: HashSet<&str> = steps()
-        .flat_map(|st| st.inputs.values())
-        .map(|up| base_of(up))
-        .collect();
     steps()
-        .filter(|st| st.kind == NodeKind::Asset && !read.contains(st.step_id.base_id()))
+        .rev()
+        .find(|st| st.kind == NodeKind::Asset)
+        .or_else(|| steps().next_back())
+}
+
+/// The base ids of the outputs a command returns to its caller: its targets, or with no target
+/// the one asset whose value is the run's `final_output`. Their artifacts are needed even
+/// though no step reads them. Every other asset at the end of a pipeline is treated like a
+/// pruned intermediate.
+pub(crate) fn requested(plan: &ExecutionPlan, target_ids: &[&str]) -> HashSet<String> {
+    if !target_ids.is_empty() {
+        return target_ids.iter().map(|id| id.to_string()).collect();
+    }
+    returned_step(plan)
+        .filter(|st| st.kind == NodeKind::Asset)
         .map(|st| st.step_id.base_id().to_string())
+        .into_iter()
         .collect()
 }
 
 /// The paths a phase's provided inputs are read from.
-pub(crate) fn input_paths(provided: &HashMap<String, ProvidedInput>) -> Vec<&str> {
+pub(crate) fn input_paths(provided: &HashMap<String, ProvidedInput>) -> Vec<String> {
     provided
         .values()
         .flat_map(|p| match p {
             ProvidedInput::Single(o) => std::slice::from_ref(o),
             ProvidedInput::Collected(v) => v.as_slice(),
         })
-        .map(|o| o.path.as_str())
+        .map(|o| o.path.clone())
         .collect()
+}
+
+/// The ids of the outputs a step produces: its own, or one per partition key.
+pub(crate) fn output_ids(step: &StreamStep) -> Vec<String> {
+    if step.partition_keys.is_empty() {
+        vec![step.step_id.display()]
+    } else {
+        step.partition_keys
+            .iter()
+            .map(|pk| pk.display_id(&step.step_id.base))
+            .collect()
+    }
+}
+
+/// Remove from `phase` every step for which `blocked` names a failed step upstream of it
+/// (given the step's base id), calling `dropped` with the step and that upstream. Streams left
+/// empty are removed. Used when several targets keep going around a failure.
+pub(crate) fn drop_blocked<'a>(
+    phase: &mut Phase,
+    blocked: impl Fn(&str) -> Option<&'a str>,
+    mut dropped: impl FnMut(&StreamStep, &'a str),
+) {
+    for stream in &mut phase.streams {
+        stream
+            .steps
+            .retain(|st| match blocked(st.step_id.base_id()) {
+                Some(upstream) => {
+                    dropped(st, upstream);
+                    false
+                }
+                None => true,
+            });
+    }
+    phase.streams.retain(|s| !s.steps.is_empty());
 }
 
 /// The ids (sorted) of the outputs among `outputs` that are at one of `paths` and that
@@ -87,7 +142,7 @@ pub(crate) fn input_paths(provided: &HashMap<String, ProvidedInput>) -> Vec<&str
 pub(crate) fn outputs_at(
     paths: &HashSet<&str>,
     outputs: &HashMap<String, OutputRef>,
-    is_cached: impl Fn(&str) -> bool,
+    mut is_cached: impl FnMut(&str) -> bool,
 ) -> Vec<String> {
     if paths.is_empty() {
         return Vec::new();
@@ -103,55 +158,61 @@ pub(crate) fn outputs_at(
 
 /// The steps a run served from cache, kept so that one can be run again if its artifact turns
 /// out to be missing when something needs it.
+///
+/// Remembering a step costs nothing beyond keeping it: the lookup table by output id is built
+/// only when something is first looked up, so a run that recovers nothing never pays for it,
+/// and one that does pays once per step, not once per lookup.
 #[derive(Default)]
 pub(crate) struct CachedSteps {
-    /// Base node id -> the planned steps of that node (a partitioned node is planned as
-    /// several, each holding some of its keys).
-    by_base: HashMap<String, Vec<StreamStep>>,
+    /// The planned steps served from cache (a partitioned node is planned as several steps,
+    /// each holding some of its keys).
+    steps: Vec<StreamStep>,
+    /// Output id -> (index into `steps`, index of the partition key when expanded by key),
+    /// for the first `indexed` steps.
+    index: HashMap<String, (usize, Option<usize>)>,
+    indexed: usize,
 }
 
 impl CachedSteps {
     /// Remember a step that was served from cache, wholly or for some of its partition keys.
     pub(crate) fn remember(&mut self, step: StreamStep) {
-        self.by_base
-            .entry(step.step_id.base_id().to_string())
-            .or_default()
-            .push(step);
+        self.steps.push(step);
+    }
+
+    /// Bring the lookup table up to date with the steps remembered since it was last used.
+    fn reindex(&mut self) {
+        for (slot, step) in self.steps.iter().enumerate().skip(self.indexed) {
+            if step.partition_keys.is_empty() {
+                self.index.insert(step.step_id.display(), (slot, None));
+            } else {
+                for (key, pk) in step.partition_keys.iter().enumerate() {
+                    self.index
+                        .insert(pk.display_id(&step.step_id.base), (slot, Some(key)));
+                }
+            }
+        }
+        self.indexed = self.steps.len();
     }
 
     /// Whether the step that produced output `id` is remembered.
-    pub(crate) fn knows(&self, id: &str) -> bool {
-        self.find(id).is_some()
-    }
-
-    /// The remembered step that produced output `id`, and the index of its partition key when
-    /// the step is expanded by key.
-    fn find(&self, id: &str) -> Option<(&StreamStep, Option<usize>)> {
-        let base = base_of(id);
-        self.by_base.get(base)?.iter().find_map(|step| {
-            if step.partition_keys.is_empty() {
-                (step.step_id.display() == id).then_some((step, None))
-            } else {
-                step.partition_keys
-                    .iter()
-                    .position(|pk| pk.display_id(base) == id)
-                    .map(|i| (step, Some(i)))
-            }
-        })
+    pub(crate) fn knows(&mut self, id: &str) -> bool {
+        self.reindex();
+        self.index.contains_key(id)
     }
 
     /// Of the cached outputs `ids`, those whose step reads none of the others. Run these
     /// first: a step never shares a phase with the producer of one of its inputs, so each
     /// reads complete inputs (a `collect()` consumer would otherwise be handed only the keys
     /// that were still cached).
-    pub(crate) fn first_layer(&self, ids: &[String]) -> Vec<String> {
+    pub(crate) fn first_layer(&mut self, ids: &[String]) -> Vec<String> {
+        self.reindex();
         let bases: HashSet<&str> = ids.iter().map(|id| base_of(id)).collect();
         let first: Vec<String> = ids
             .iter()
             .filter(|id| {
                 let own = base_of(id);
-                self.find(id).is_none_or(|(step, _)| {
-                    !step
+                self.index.get(id.as_str()).is_none_or(|(slot, _)| {
+                    !self.steps[*slot]
                         .inputs
                         .values()
                         .map(|up| base_of(up))
@@ -171,36 +232,49 @@ impl CachedSteps {
     /// A phase that runs again exactly the steps that produced `ids`: one stream per node, a
     /// partitioned node with only the keys named. Ids that are not remembered are left out;
     /// `None` when that leaves nothing.
-    pub(crate) fn phase_for(&self, ids: &[String]) -> Option<Phase> {
+    pub(crate) fn phase_for(&mut self, ids: &[String]) -> Option<Phase> {
+        self.reindex();
         let mut order: Vec<&str> = Vec::new();
         let mut steps: HashMap<&str, StreamStep> = HashMap::new();
+        let mut seen: HashSet<&str> = HashSet::new();
         for id in ids {
-            let Some((found, key)) = self.find(id) else {
+            let Some(&(slot, key)) = self.index.get(id.as_str()) else {
                 continue;
             };
-            let base = base_of(id);
+            if !seen.insert(id.as_str()) {
+                continue;
+            }
+            let found = &self.steps[slot];
             let Some(key) = key else {
                 // Not expanded by key: the step is its own unit of work.
-                if !steps.contains_key(id.as_str()) {
-                    order.push(id.as_str());
-                    steps.insert(id.as_str(), found.clone());
-                }
+                order.push(id.as_str());
+                steps.insert(id.as_str(), found.clone());
                 continue;
             };
-            let step = steps.entry(base).or_insert_with(|| {
-                order.push(base);
+            let step = steps.entry(base_of(id)).or_insert_with(|| {
+                order.push(base_of(id));
+                // Everything but the keys, which are copied one at a time below.
                 StreamStep {
-                    partition_keys: Vec::new(),
+                    step_id: found.step_id.clone(),
+                    kind: found.kind,
+                    function_name: found.function_name.clone(),
+                    source_file: found.source_file.clone(),
+                    inputs: found.inputs.clone(),
+                    pending_partitions: found.pending_partitions.clone(),
+                    serializer: found.serializer.clone(),
+                    sinks: found.sinks.clone(),
                     run_hashes: HashMap::new(),
-                    ..found.clone()
+                    timeout_seconds: found.timeout_seconds,
+                    retries: found.retries,
+                    retry_backoff_seconds: found.retry_backoff_seconds,
+                    partition_keys: Vec::new(),
+                    param_types: found.param_types.clone(),
+                    return_type: found.return_type,
                 }
             });
-            let pk = &found.partition_keys[key];
-            if !step.partition_keys.contains(pk) {
-                step.partition_keys.push(pk.clone());
-                if let Some(h) = found.run_hashes.get(id) {
-                    step.run_hashes.insert(id.clone(), h.clone());
-                }
+            step.partition_keys.push(found.partition_keys[key].clone());
+            if let Some(h) = found.run_hashes.get(id) {
+                step.run_hashes.insert(id.clone(), h.clone());
             }
         }
         if order.is_empty() {
@@ -220,12 +294,126 @@ impl CachedSteps {
     }
 }
 
+/// Real run: the cached outputs among `check` (artifact paths) that have to be computed again
+/// because their artifact cannot be read here: it is not on this disk and, for a result
+/// recorded in the artifact store, not in the store either. The store is asked only about
+/// `fetch`, which are downloaded as a side effect; any other store-backed artifact is taken to
+/// be there, so nothing is downloaded that no one reads.
+///
+/// With a store, an artifact counts as missing only when the store itself answers: before
+/// anything is recomputed the store is confirmed to be there and listable (once per run). A
+/// store that is gone, misnamed or unreachable is an error, as is any fetch that fails for
+/// another reason; the run then fails without computing or uploading anything on its account.
+pub(crate) async fn lost(
+    store: &mut Option<StoreSync>,
+    check: &[String],
+    fetch: &[String],
+    pb: Option<&indicatif::ProgressBar>,
+    all_outputs: &HashMap<String, OutputRef>,
+    cached_ids: &HashSet<String>,
+    cached_steps: &mut CachedSteps,
+) -> Result<Vec<String>, String> {
+    let separate_store = store.is_some();
+    let in_store = |path: &str| store.as_ref().is_some_and(|s| s.holds(path));
+    let mut gone: HashSet<&str> = check
+        .iter()
+        .map(String::as_str)
+        .filter(|path| !in_store(path) && !on_disk(path, separate_store))
+        .collect();
+    let missing_from_store = match store.as_mut() {
+        Some(s) => {
+            s.ensure_local(fetch.iter().map(String::as_str), pb).await?;
+            s.take_missing()
+        }
+        None => Vec::new(),
+    };
+    gone.extend(missing_from_store.iter().map(String::as_str));
+    let lost = outputs_at(&gone, all_outputs, |id| {
+        cached_ids.contains(id) && cached_steps.knows(id)
+    });
+    if !lost.is_empty()
+        && let Some(s) = store.as_mut()
+    {
+        s.confirm_present(&lost).await?;
+    }
+    Ok(lost)
+}
+
+/// The stderr lines that say which cached results are computed again because their artifact
+/// is missing: one per node, naming one path.
+pub(crate) fn recompute_warnings(lost: &[(String, String)]) -> Vec<String> {
+    let mut nodes: Vec<(&str, &str, usize)> = Vec::new();
+    let mut slot: HashMap<&str, usize> = HashMap::new();
+    for (id, path) in lost {
+        let base = base_of(id);
+        match slot.get(base) {
+            Some(&i) => nodes[i].2 += 1,
+            None => {
+                slot.insert(base, nodes.len());
+                nodes.push((base, path, 1));
+            }
+        }
+    }
+    nodes
+        .into_iter()
+        .map(|(base, path, count)| {
+            let others = match count - 1 {
+                0 => String::new(),
+                n => format!(" (and {n} more of its partitions)"),
+            };
+            format!(
+                "[barca] warning: {base}: the artifact of its cached result is missing: \
+                 {path}{others}. Computing it again."
+            )
+        })
+        .collect()
+}
+
+/// Dry run: whether the artifact of cached output `oref` would be found missing by a run.
+///
+/// A dry run does not contact a remote artifact store: a result recorded in one counts as
+/// available whether or not its local copy is here, so a real run that finds the object gone
+/// computes a step the dry run reported as cached. A store that is a directory is looked at,
+/// and as in a real run its artifact is missing only if the store directory itself is there.
+fn predicted_gone(oref: &OutputRef, layout: Option<&ArtifactLayout>) -> bool {
+    match layout.and_then(|l| l.local_for(&oref.path).map(|mirror| (l, mirror))) {
+        // Recorded in the store: read from its local mirror, or fetched from the store.
+        Some((layout, mirror)) => {
+            !mirror.exists()
+                && crate::transfer::local_path(&oref.path).is_some_and(|stored| !stored.exists())
+                && crate::transfer::local_path(layout.store_root())
+                    .is_some_and(|root| root.is_dir())
+        }
+        None => !on_disk(&oref.path, layout.is_some()),
+    }
+}
+
+/// Dry run: the cached steps a run would compute again because it reads one of the artifacts at
+/// `needed` and finds it missing (and, for each such step, what it reads in turn). Their report
+/// lines become `run` with reason `artifact_missing`, and they leave `all_outputs`.
+pub(crate) fn predict_recomputes(
+    needed: Vec<String>,
+    cached_steps: &mut CachedSteps,
+    all_outputs: &mut HashMap<String, OutputRef>,
+    layout: Option<&ArtifactLayout>,
+    steps: &mut [StepReport],
+    summary: &mut ExplainSummary,
+) {
+    let gone = |oref: &OutputRef| predicted_gone(oref, layout);
+    for id in predict_lost(cached_steps, all_outputs, &needed, gone) {
+        if mark_recomputed(steps, &id, true) {
+            summary.cached = summary.cached.saturating_sub(1);
+            summary.will_run += 1;
+        }
+    }
+}
+
 /// Dry run: the cached outputs that a run reading `needed` (artifact paths) would find missing
 /// and compute again, followed through the inputs of each step it would then run. They are
 /// removed from `outputs`, which holds the cached outputs only. `gone` says whether the
 /// artifact of an output is unavailable.
 pub(crate) fn predict_lost(
-    cached: &CachedSteps,
+    cached: &mut CachedSteps,
     outputs: &mut HashMap<String, OutputRef>,
     needed: &[String],
     gone: impl Fn(&OutputRef) -> bool,
@@ -251,7 +439,6 @@ pub(crate) fn predict_lost(
             .map(|phase| {
                 input_paths(&build_provided_inputs(&phase, outputs))
                     .into_iter()
-                    .map(str::to_string)
                     .collect()
             })
             .unwrap_or_default();
@@ -409,42 +596,247 @@ mod tests {
         assert!(on_disk(dir.path().to_str().unwrap(), false));
     }
 
+    fn plan(steps: Vec<StreamStep>) -> ExecutionPlan {
+        ExecutionPlan {
+            total_steps: steps.len(),
+            phases: vec![Phase {
+                reason: PhaseReason::Initial,
+                streams: vec![WorkerStream {
+                    stream_id: "s".to_string(),
+                    steps,
+                }],
+            }],
+        }
+    }
+
     #[test]
     fn with_targets_the_targets_are_requested() {
-        let plan = ExecutionPlan {
-            phases: vec![],
-            total_steps: 0,
-        };
         assert_eq!(
-            requested(&plan, &["p.py:a", "p.py:b"]),
+            requested(&plan(vec![]), &["p.py:a", "p.py:b"]),
             HashSet::from(["p.py:a".to_string(), "p.py:b".to_string()])
         );
     }
 
     #[test]
-    fn without_a_target_the_assets_nothing_reads_are_requested() {
+    fn without_a_target_only_the_returned_asset_is_requested() {
         let mut task = step("p.py:publish", &[("m", "p.py:mid")], &[]);
         task.kind = NodeKind::Task;
-        let plan = ExecutionPlan {
-            total_steps: 5,
-            phases: vec![Phase {
-                reason: PhaseReason::Initial,
-                streams: vec![WorkerStream {
-                    stream_id: "s".to_string(),
-                    steps: vec![
-                        step("p.py:src", &[], &[]),
-                        step("p.py:mid", &[("src", "p.py:src")], &[]),
-                        step("p.py:report", &[("mid", "p.py:mid")], &[]),
-                        step("p.py:parts", &[("src", "p.py:src")], &["a", "b"]),
-                        task,
-                    ],
-                }],
-            }],
-        };
-        // Not `src` or `mid` (read by others), and not the task (never cached).
+        let plan = plan(vec![
+            step("p.py:src", &[], &[]),
+            step("p.py:mid", &[("src", "p.py:src")], &[]),
+            step("p.py:side", &[("src", "p.py:src")], &["a", "b"]),
+            step("p.py:report", &[("mid", "p.py:mid")], &[]),
+            task,
+        ]);
+        // `report` is the last planned asset: its value is the run's `final_output`. `side` is
+        // also read by nothing, but it is not returned, so it is treated like an intermediate.
+        assert_eq!(
+            returned_step(&plan).unwrap().step_id.base_id(),
+            "p.py:report"
+        );
         assert_eq!(
             requested(&plan, &[]),
-            HashSet::from(["p.py:report".to_string(), "p.py:parts".to_string()])
+            HashSet::from(["p.py:report".to_string()])
+        );
+    }
+
+    #[test]
+    fn a_plan_without_assets_returns_its_last_step_and_requests_nothing() {
+        let mut task = step("p.py:publish", &[], &[]);
+        task.kind = NodeKind::Task;
+        let plan = plan(vec![task]);
+        assert_eq!(
+            returned_step(&plan).unwrap().step_id.base_id(),
+            "p.py:publish"
+        );
+        assert!(requested(&plan, &[]).is_empty());
+        assert!(returned_step(&self::plan(vec![])).is_none());
+    }
+
+    #[test]
+    fn drop_blocked_removes_the_steps_behind_a_failure_and_reports_each() {
+        let mut phase = Phase {
+            reason: PhaseReason::Initial,
+            streams: vec![
+                WorkerStream {
+                    stream_id: "a".to_string(),
+                    steps: vec![step("p.py:ok", &[], &[]), step("p.py:blocked", &[], &[])],
+                },
+                WorkerStream {
+                    stream_id: "b".to_string(),
+                    steps: vec![step("p.py:also_blocked", &[], &["1", "2"])],
+                },
+            ],
+        };
+        let mut dropped: Vec<(String, &str)> = Vec::new();
+        drop_blocked(
+            &mut phase,
+            |base| base.contains("blocked").then_some("p.py:failed"),
+            |st, up| dropped.push((st.step_id.base_id().to_string(), up)),
+        );
+        assert_eq!(
+            dropped,
+            [
+                ("p.py:blocked".to_string(), "p.py:failed"),
+                ("p.py:also_blocked".to_string(), "p.py:failed")
+            ]
+        );
+        // The stream left empty is gone; the other keeps its unblocked step.
+        assert_eq!(phase.streams.len(), 1);
+        assert_eq!(phase.streams[0].steps[0].step_id.base_id(), "p.py:ok");
+    }
+
+    #[test]
+    fn output_ids_are_one_per_key() {
+        assert_eq!(output_ids(&step("p.py:a", &[], &[])), ["p.py:a"]);
+        assert_eq!(
+            output_ids(&step("p.py:a", &[], &["1", "2"])),
+            ["p.py:a[k=1]", "p.py:a[k=2]"]
+        );
+    }
+
+    #[tokio::test]
+    async fn without_a_store_what_is_lost_is_cached_not_on_disk_and_known() {
+        let dir = tempfile::tempdir().unwrap();
+        let at = |name: &str| dir.path().join(name).to_string_lossy().into_owned();
+        std::fs::write(at("here.json"), "1").unwrap();
+        let outputs = HashMap::from([
+            ("p.py:here".to_string(), oref(&at("here.json"))),
+            ("p.py:gone".to_string(), oref(&at("gone.json"))),
+            ("p.py:ran".to_string(), oref(&at("ran.json"))),
+            ("p.py:unknown".to_string(), oref(&at("unknown.json"))),
+        ]);
+        let cached_ids: HashSet<String> = ids(&["p.py:here", "p.py:gone", "p.py:unknown"])
+            .into_iter()
+            .collect();
+        let mut cached = CachedSteps::default();
+        cached.remember(step("p.py:here", &[], &[]));
+        cached.remember(step("p.py:gone", &[], &[]));
+        let check: Vec<String> = outputs.values().map(|o| o.path.clone()).collect();
+        let lost = lost(
+            &mut None,
+            &check,
+            &check,
+            None,
+            &outputs,
+            &cached_ids,
+            &mut cached,
+        )
+        .await;
+        // Not `here` (on disk), not `ran` (computed in this run, so not a cache hit), and not
+        // `unknown` (no step to run again).
+        assert_eq!(lost, Ok(ids(&["p.py:gone"])));
+    }
+
+    #[test]
+    fn a_recompute_is_announced_once_per_node() {
+        let lost = vec![
+            ("p.py:part[k=a]".to_string(), "/a/part/1.json".to_string()),
+            ("p.py:model".to_string(), "/a/model/2.json".to_string()),
+            ("p.py:part[k=b]".to_string(), "/a/part/3.json".to_string()),
+        ];
+        assert_eq!(
+            recompute_warnings(&lost),
+            [
+                "[barca] warning: p.py:part: the artifact of its cached result is missing: \
+                 /a/part/1.json (and 1 more of its partitions). Computing it again.",
+                "[barca] warning: p.py:model: the artifact of its cached result is missing: \
+                 /a/model/2.json. Computing it again.",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_dry_run_looks_at_a_directory_store_only_when_the_store_is_there() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = dir.path().join("local");
+        let store = dir.path().join("store");
+        std::fs::create_dir_all(local.join("n")).unwrap();
+        std::fs::create_dir_all(store.join("n")).unwrap();
+        let layout = ArtifactLayout::new(&local, store.to_str().unwrap());
+        let stored = oref(store.join("n/h.json").to_str().unwrap());
+
+        // Neither copy, and the store directory is there: the object is missing.
+        assert!(predicted_gone(&stored, Some(&layout)));
+        // A copy in the store is fetched; a local mirror is read as it is.
+        std::fs::write(store.join("n/h.json"), "1").unwrap();
+        assert!(!predicted_gone(&stored, Some(&layout)));
+        std::fs::remove_file(store.join("n/h.json")).unwrap();
+        std::fs::write(local.join("n/h.json"), "1").unwrap();
+        assert!(!predicted_gone(&stored, Some(&layout)));
+        // The store itself is gone (unmounted): nothing is known to be missing, and a run
+        // would fail rather than recompute.
+        std::fs::remove_file(local.join("n/h.json")).unwrap();
+        std::fs::remove_dir_all(&store).unwrap();
+        assert!(!predicted_gone(&stored, Some(&layout)));
+
+        // A result in a remote store is never looked up by a dry run.
+        let remote = ArtifactLayout::new(&local, "s3://b/p");
+        assert!(!predicted_gone(&oref("s3://b/p/n/h.json"), Some(&remote)));
+        // A row outside the store is a file on this disk, or nothing.
+        assert!(predicted_gone(&oref("/elsewhere/n/h.json"), Some(&remote)));
+        assert!(predicted_gone(&oref("/elsewhere/n/h.json"), None));
+    }
+
+    #[test]
+    fn steps_remembered_after_a_lookup_are_found_too() {
+        let mut cached = CachedSteps::default();
+        cached.remember(step("p.py:a", &[], &["1"]));
+        assert!(cached.knows("p.py:a[k=1]") && !cached.knows("p.py:b"));
+        cached.remember(step("p.py:b", &[], &[]));
+        cached.remember(step("p.py:a", &[], &["2"]));
+        assert!(cached.knows("p.py:b") && cached.knows("p.py:a[k=2]"));
+        assert!(!cached.knows("p.py:a[k=3]") && !cached.knows("p.py:a"));
+    }
+
+    /// Lookups are by index, not by scanning every key of the node (#252 review): with the
+    /// scan, recovering every key of a 20,000-key node formatted 400 million ids and took
+    /// minutes; indexed it is a few thousandths of that. The bound is loose on purpose.
+    #[test]
+    fn recovering_every_key_of_a_large_node_is_linear() {
+        const KEYS: usize = 20_000;
+        let keys: Vec<String> = (0..KEYS).map(|i| format!("{i:05}")).collect();
+        let key_refs: Vec<&str> = keys.iter().map(String::as_str).collect();
+        let mut cached = CachedSteps::default();
+        // Planned as several steps, as the planner splits a partitioned node across streams.
+        for chunk in key_refs.chunks(KEYS / 8) {
+            cached.remember(step("p.py:part", &[], chunk));
+        }
+        let all: Vec<String> = keys.iter().map(|k| format!("p.py:part[k={k}]")).collect();
+        let mut outputs: HashMap<String, OutputRef> = all
+            .iter()
+            .map(|id| (id.clone(), oref(&format!("/a/{id}.json"))))
+            .collect();
+        let mut reports = vec![StepReport {
+            id: "p.py:part".to_string(),
+            kind: "asset".to_string(),
+            action: Some("cached".to_string()),
+            partitions: Some(PartitionSummary {
+                total: KEYS,
+                cached: KEYS,
+                will_run: 0,
+                will_run_keys: vec![],
+            }),
+            ..Default::default()
+        }];
+
+        let started = std::time::Instant::now();
+        assert!(all.iter().all(|id| cached.knows(id)));
+        assert_eq!(cached.first_layer(&all).len(), KEYS);
+        let phase = cached.phase_for(&all).unwrap();
+        assert_eq!(phase.streams[0].steps[0].partition_keys.len(), KEYS);
+        assert_eq!(phase.streams[0].steps[0].run_hashes.len(), KEYS);
+        let needed: Vec<String> = outputs.values().map(|o| o.path.clone()).collect();
+        let lost = predict_lost(&mut cached, &mut outputs, &needed, |_| true);
+        assert_eq!(lost.len(), KEYS);
+        for id in &lost {
+            assert!(mark_recomputed(&mut reports, id, true));
+        }
+        assert_eq!(recompute_warnings(&[]).len(), 0);
+        let took = started.elapsed();
+        assert!(
+            took < std::time::Duration::from_secs(5),
+            "recovering {KEYS} keys took {took:?}"
         );
     }
 
@@ -533,7 +925,7 @@ mod tests {
 
         // Only `report` is gone: `mid` is read to compute it again, and is there.
         let mut outputs = all();
-        let lost = predict_lost(&cached, &mut outputs, &needed, |o| {
+        let lost = predict_lost(&mut cached, &mut outputs, &needed, |o| {
             o.path == "/a/report.json"
         });
         assert_eq!(lost, ids(&["p.py:report"]));
@@ -541,13 +933,15 @@ mod tests {
 
         // Everything is gone: each step's input is needed in turn.
         let mut outputs = all();
-        let lost = predict_lost(&cached, &mut outputs, &needed, |_| true);
+        let lost = predict_lost(&mut cached, &mut outputs, &needed, |_| true);
         assert_eq!(lost, ids(&["p.py:report", "p.py:mid", "p.py:src"]));
         assert!(outputs.is_empty());
 
         // `mid` is gone but nothing that runs reads it: nothing is lost.
         let mut outputs = all();
-        let lost = predict_lost(&cached, &mut outputs, &needed, |o| o.path == "/a/mid.json");
+        let lost = predict_lost(&mut cached, &mut outputs, &needed, |o| {
+            o.path == "/a/mid.json"
+        });
         assert!(lost.is_empty());
         assert_eq!(outputs.len(), 3);
     }
