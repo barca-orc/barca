@@ -19,6 +19,8 @@ export default defineConfig(({ command }) => ({
       '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
   },
+  // Playwright specs in e2e/ run with `pnpm test:e2e`, not vitest.
+  test: { exclude: ['e2e/**', 'node_modules/**'] },
   server: {
     proxy: {
       // Everything outside /ui/ is the API.

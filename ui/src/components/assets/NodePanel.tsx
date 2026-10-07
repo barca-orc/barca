@@ -1,10 +1,10 @@
 import { useEffect } from 'react'
 import { GitBranch, X } from 'lucide-react'
-import { IconButton, StatusBadge, Tag } from '@/components'
+import { IconButton, KeyValue, Section, SidePanel, Skeleton, StatusBadge, Tag } from '@/components'
 import { useAssetDetail } from '@/hooks/useAssetDetail'
 import { buildRows, formatAgo, formatSeconds, severityStatus } from '@/lib/assetTable'
 import { freshnessLabel } from '@/lib/status'
-import { downstreamOf, formatBytes, historyBars, shortHash } from '@/lib/nodeDetail'
+import { downstreamOf, durationHistogram, formatBytes, historyBars, shortHash } from '@/lib/nodeDetail'
 import type { NodeState } from '@/lib/types'
 
 interface NodePanelProps {
@@ -15,24 +15,6 @@ interface NodePanelProps {
   onSelect: (id: string) => void
   onOpenGraph: (id: string) => void
   onClose: () => void
-}
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <section className="barca-panel-sect">
-      <h3>{title}</h3>
-      {children}
-    </section>
-  )
-}
-
-function Row({ k, children }: { k: string; children: React.ReactNode }) {
-  return (
-    <div className="barca-kv">
-      <span>{k}</span>
-      <span>{children}</span>
-    </div>
-  )
 }
 
 /**
@@ -46,6 +28,7 @@ export function NodePanel({ node, nodes, nowMs, onSelect, onOpenGraph, onClose }
   const last = node.last_materialization
   const stats = detail?.stats
   const bars = stats ? historyBars(stats.recent_runs) : []
+  const histogram = stats ? durationHistogram(stats.recent_runs, last?.elapsed_seconds ?? null) : []
   const upstream = node.inputs
     .map((id) => nodes.find((n) => n.id === id))
     .filter((n): n is NodeState => n !== undefined)
@@ -58,49 +41,46 @@ export function NodePanel({ node, nodes, nowMs, onSelect, onOpenGraph, onClose }
   }, [onClose])
 
   return (
-    <aside className="barca-panel" aria-label={`${node.name} details`}>
-      <header className="barca-panel-head">
-        <div>
-          <div className="barca-panel-title">
-            <h2>{node.name}</h2>
-            <Tag size="sm">{node.kind}</Tag>
-          </div>
-          <div className="barca-cell-sub">{row?.file}</div>
-        </div>
-        <div className="barca-panel-actions">
+    <SidePanel
+      label={`${node.name} details`}
+      title={node.name}
+      badge={<Tag size="sm">{node.kind}</Tag>}
+      subtitle={row?.file}
+      actions={
+        <>
           <IconButton label="Open in graph" size="sm" onClick={() => onOpenGraph(node.id)}>
             <GitBranch size={14} />
           </IconButton>
           <IconButton label="Close (Esc)" size="sm" onClick={onClose}>
             <X size={14} />
           </IconButton>
-        </div>
-      </header>
-
+        </>
+      }
+    >
       <Section title="State">
         {row && <StatusBadge status={severityStatus(row.severity)} label={row.stateLabel} />}
-        <p className="barca-panel-note">{node.cache.detail}</p>
+        <p className="barca-note">{node.cache.detail}</p>
         {node.cache.run_hash && (
-          <Row k="cache key">
+          <KeyValue label="cache key">
             <code title={node.cache.run_hash}>{shortHash(node.cache.run_hash)}</code>
-          </Row>
+          </KeyValue>
         )}
         {node.cache.artifact && (
-          <Row k="cached result">
+          <KeyValue label="cached result">
             <code className="barca-wrap" title={node.cache.artifact}>
               {node.cache.artifact}
             </code>
-          </Row>
+          </KeyValue>
         )}
         {node.partitions && (
           <>
-            <Row k="partitions">
+            <KeyValue label="partitions">
               {node.partitions.cached} of {node.partitions.total} cached
-            </Row>
+            </KeyValue>
             {node.partitions.missing_keys.length > 0 && (
-              <Row k="missing keys">
+              <KeyValue label="missing keys">
                 <code className="barca-wrap">{node.partitions.missing_keys.join(', ')}</code>
-              </Row>
+              </KeyValue>
             )}
           </>
         )}
@@ -109,33 +89,69 @@ export function NodePanel({ node, nodes, nowMs, onSelect, onOpenGraph, onClose }
       <Section title="Last attempt">
         {last ? (
           <>
-            <Row k="status">
+            <KeyValue label="status">
               <span className={last.status === 'failed' ? 'barca-cell-failed' : undefined}>
                 {last.status}
               </span>
-            </Row>
-            <Row k="when">
+            </KeyValue>
+            <KeyValue label="when">
               {formatAgo(last.created_at, nowMs)} · {last.created_at} UTC
-            </Row>
-            {last.elapsed_seconds !== null && <Row k="took">{formatSeconds(last.elapsed_seconds)}</Row>}
+            </KeyValue>
+            {last.elapsed_seconds !== null && <KeyValue label="took">{formatSeconds(last.elapsed_seconds)}</KeyValue>}
+            {last.elapsed_seconds !== null && (
+              <div
+                className="barca-hist"
+                aria-label="Distribution of successful run durations; the last attempt is highlighted"
+              >
+                {isLoading ? (
+                  <Skeleton height={36} />
+                ) : histogram.length > 0 ? (
+                  <>
+                    <div className="barca-hist-bars">
+                      {histogram.map((b, i) => (
+                        <span
+                          key={i}
+                          className={b.isLast ? 'is-last' : undefined}
+                          style={{ height: `${b.heightPct}%` }}
+                          title={b.label}
+                        />
+                      ))}
+                    </div>
+                    <div className="barca-hist-axis">
+                      <span>{formatSeconds(histogram[0]?.from ?? 0)}</span>
+                      <span>{formatSeconds(histogram[histogram.length - 1]?.to ?? 0)}</span>
+                    </div>
+                  </>
+                ) : (
+                  <p className="barca-hist-note">needs two or more successful runs</p>
+                )}
+              </div>
+            )}
             {last.format && (
-              <Row k="output">
+              <KeyValue label="output">
                 {last.format}
                 {last.size_bytes !== null && ` · ${formatBytes(last.size_bytes)}`}
-              </Row>
+              </KeyValue>
             )}
-            {last.partition && <Row k="partition">{last.partition}</Row>}
+            {last.partition && <KeyValue label="partition">{last.partition}</KeyValue>}
             {last.error && <pre className="barca-error">{last.error}</pre>}
           </>
         ) : (
-          <p className="barca-panel-note">Never ran.</p>
+          <p className="barca-note">Never ran.</p>
         )}
       </Section>
 
       <Section title="History">
-        {isLoading && <p className="barca-panel-note">Loading…</p>}
-        {isError && <p className="barca-panel-note">Couldn't load run history.</p>}
-        {stats && stats.total_runs === 0 && <p className="barca-panel-note">No runs recorded.</p>}
+        {isLoading && (
+          <>
+            <div className="barca-stats">
+              <Skeleton width={220} height={34} />
+            </div>
+            <Skeleton height={44} style={{ margin: '12px 0 8px' }} />
+          </>
+        )}
+        {isError && <p className="barca-note">Couldn't load run history.</p>}
+        {stats && stats.total_runs === 0 && <p className="barca-note">No runs recorded.</p>}
         {stats && stats.total_runs > 0 && (
           <>
             <div className="barca-stats">
@@ -161,10 +177,12 @@ export function NodePanel({ node, nodes, nowMs, onSelect, onOpenGraph, onClose }
                   <span>max</span>
                 </div>
               )}
-              <div>
-                <b>{Math.round(stats.cache_hit_rate * 100)}%</b>
-                <span>cache hits</span>
-              </div>
+              {node.kind !== 'task' && (
+                <div>
+                  <b>{Math.round(stats.cache_hit_rate * 100)}%</b>
+                  <span>cache hits</span>
+                </div>
+              )}
             </div>
             <div className="barca-bars" aria-label="Recent run durations, oldest first">
               {bars.map((b, i) => (
@@ -201,7 +219,7 @@ export function NodePanel({ node, nodes, nowMs, onSelect, onOpenGraph, onClose }
       </Section>
 
       <Section title="Lineage">
-        <Row k="upstream">
+        <KeyValue label="upstream">
           {upstream.length === 0
             ? '–'
             : upstream.map((n) => (
@@ -209,8 +227,8 @@ export function NodePanel({ node, nodes, nowMs, onSelect, onOpenGraph, onClose }
                   {n.name}
                 </button>
               ))}
-        </Row>
-        <Row k="downstream">
+        </KeyValue>
+        <KeyValue label="downstream">
           {downstream.length === 0
             ? '–'
             : downstream.map((n) => (
@@ -218,20 +236,22 @@ export function NodePanel({ node, nodes, nowMs, onSelect, onOpenGraph, onClose }
                   {n.name}
                 </button>
               ))}
-        </Row>
+        </KeyValue>
       </Section>
 
       <Section title="Metadata">
-        {detail && <Row k="runs when">{freshnessLabel(detail.asset.freshness)}</Row>}
+        <KeyValue label="runs when">
+          {detail ? freshnessLabel(detail.asset.freshness) : <Skeleton width={72} height={12} />}
+        </KeyValue>
         {row?.nextRunMs != null && (
-          <Row k="next run">{new Date(row.nextRunMs).toLocaleString()}</Row>
+          <KeyValue label="next run">{new Date(row.nextRunMs).toLocaleString()}</KeyValue>
         )}
-        <Row k="partitioned">{node.partitioned ? 'yes' : 'no'}</Row>
-        <Row k="env vars">{node.env.length ? <code>{node.env.join(', ')}</code> : '–'}</Row>
-        <Row k="id">
+        <KeyValue label="partitioned">{node.partitioned ? 'yes' : 'no'}</KeyValue>
+        <KeyValue label="env vars">{node.env.length ? <code>{node.env.join(', ')}</code> : '–'}</KeyValue>
+        <KeyValue label="id">
           <code className="barca-wrap">{node.id}</code>
-        </Row>
+        </KeyValue>
       </Section>
-    </aside>
+    </SidePanel>
   )
 }

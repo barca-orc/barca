@@ -38,6 +38,58 @@ export function historyBars(runs: AssetRunEntry[]): HistoryBar[] {
   })
 }
 
+export interface DurationBin {
+  /** Lower edge, seconds (inclusive). */
+  from: number
+  /** Upper edge, seconds (exclusive, except the last bin). */
+  to: number
+  count: number
+  /** Height relative to the fullest bin, 0-100. */
+  heightPct: number
+  /** True when the last attempt's duration falls in this bin. */
+  isLast: boolean
+  label: string
+}
+
+/**
+ * Histogram of successful-run durations (`binCount` equal-width bins from the
+ * fastest to the slowest run). `lastSeconds` marks the bin the last attempt
+ * landed in. Returns [] with fewer than two timed runs: a distribution of one
+ * point says nothing the number doesn't.
+ */
+export function durationHistogram(
+  runs: AssetRunEntry[],
+  lastSeconds: number | null,
+  binCount = 10,
+): DurationBin[] {
+  const xs = runs
+    .filter((r) => r.status === 'success' && r.elapsed_seconds !== null)
+    .map((r) => r.elapsed_seconds as number)
+  if (xs.length < 2) return []
+  const lo = Math.min(...xs)
+  const hi = Math.max(...xs)
+  // All runs identical: a single bin.
+  const n = hi === lo ? 1 : binCount
+  const width = (hi - lo) / n
+  const index = (x: number) => (n === 1 ? 0 : Math.min(n - 1, Math.floor((x - lo) / width)))
+  const counts = new Array<number>(n).fill(0)
+  for (const x of xs) counts[index(x)] = (counts[index(x)] ?? 0) + 1
+  const peak = Math.max(...counts)
+  const lastBin = lastSeconds !== null && lastSeconds >= lo && lastSeconds <= hi ? index(lastSeconds) : -1
+  return counts.map((count, i) => {
+    const from = lo + i * width
+    const to = n === 1 ? hi : lo + (i + 1) * width
+    return {
+      from,
+      to,
+      count,
+      heightPct: count === 0 ? 0 : Math.max(6, Math.round((count / peak) * 100)),
+      isLast: i === lastBin,
+      label: `${formatSeconds(from)}–${formatSeconds(to)} · ${count} run${count === 1 ? '' : 's'}`,
+    }
+  })
+}
+
 export function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`
   const units = ['KB', 'MB', 'GB', 'TB']

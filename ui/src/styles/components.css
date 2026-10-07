@@ -1,0 +1,72 @@
+/* ============================================================
+   barca · component styles
+   The CSS of the primitives in components/ that need pseudo-
+   classes or child selectors (inline styles cannot). Class names
+   are the components' own; pages never use them directly: they
+   render the component. Page layout stays in shell.css.
+   ============================================================ */
+
+/* ── SearchInput ──────────────────────────────────────────── */
+/* One focus ring, on the box: the input inside would otherwise get the global
+   :focus-visible glow as well. */
+.barca-search {
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 30px; padding: 0 10px; min-width: 260px;
+  border: 1px solid var(--border-default); border-radius: var(--radius-sm);
+  background: var(--bg-inset); color: var(--text-muted);
+}
+.barca-search:focus-within { border-color: var(--signal); box-shadow: var(--focus-glow); }
+.barca-search input {
+  flex: 1; border: 0; outline: 0; background: transparent;
+  color: var(--text-default); font-family: var(--font-mono); font-size: var(--text-sm);
+}
+.barca-search input:focus-visible { box-shadow: none; }
+
+/* ── Chip / ChipGroup ─────────────────────────────────────── */
+.barca-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.barca-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 26px; padding: 0 9px;
+  border: 1px solid var(--border-default); border-radius: var(--radius-pill);
+  background: transparent; color: var(--text-muted);
+  font-family: var(--font-mono); font-size: var(--text-xs); cursor: pointer;
+}
+.barca-chip:hover { background: var(--bg-hover); }
+.barca-chip.is-on { border-color: var(--signal); color: var(--text-strong); }
+
+/* ── Select ───────────────────────────────────────────────── */
+.barca-select {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-muted);
+}
+.barca-select select {
+  height: 26px; padding: 0 6px;
+  border: 1px solid var(--border-default); border-radius: var(--radius-sm);
+  background: var(--bg-inset); color: var(--text-default);
+  font: inherit;
+}
+
+/* ── SidePanel / Section / KeyValue ───────────────────────── */
+.barca-sidepanel {
+  flex: none; overflow: auto; scrollbar-gutter: stable;
+  border-left: 1px solid var(--border-default); background: var(--bg-raised);
+  padding: 16px 18px 28px;
+}
+.barca-sidepanel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.barca-sidepanel-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.barca-sidepanel-title h2 {
+  margin: 0; font-family: var(--font-mono); font-size: 15px; font-weight: 500;
+  color: var(--text-strong); word-break: break-all;
+}
+.barca-sidepanel-actions { display: flex; gap: 4px; flex: none; }
+.barca-sidepanel code { font-family: var(--font-mono); font-size: var(--text-xs); }
+.barca-section { margin-top: 18px; }
+.barca-section h3 {
+  margin: 0 0 8px; font-size: var(--text-2xs); font-weight: 500; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--text-muted);
+}
+.barca-kv { display: grid; grid-template-columns: 110px 1fr; gap: 8px; padding: 3px 0; font-size: var(--text-sm); min-width: 0; }
+.barca-kv > span:first-child { color: var(--text-muted); font-family: var(--font-mono); font-size: var(--text-xs); }
+.barca-kv > span:last-child { min-width: 0; }
+.barca-note { margin: 6px 0; font-size: var(--text-sm); color: var(--text-default); }
+.barca-wrap { word-break: break-all; }

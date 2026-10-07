@@ -29,6 +29,9 @@
 /* Base element defaults (reset, body, scrollbars, focus rings) */
 @import './base.css';
 
+/* Component primitives (components/) */
+@import './components.css';
+
 /* App chrome (sidebar + topbar + content frame) */
 @import './shell.css';
 

@@ -1,9 +1,10 @@
 import { useNavigate, useSearchParams } from "react-router";
-import { StatusBadge, StatusDot, Tag } from "@/components";
+import { ConnectionBadge, StatusBadge, Tag } from "@/components";
 import { useAssets } from "@/hooks/useAssets";
 import { useAssetStates } from "@/hooks/useAssetStates";
 import { useHealth } from "@/hooks/useHealth";
 import { severityStatus } from "@/lib/assetTable";
+import { connection } from "@/lib/connection";
 import { inPipeline, pipelineName } from "@/lib/pipeline";
 import { scheduleRows } from "@/lib/schedules";
 
@@ -16,7 +17,7 @@ export function SchedulesPage() {
   // never show invented schedules, so placeholder data is treated as loading.
   const { data: assets, isPlaceholderData, isError } = useAssets();
   const { data: states, dataUpdatedAt } = useAssetStates();
-  const { data: health } = useHealth();
+  const { data: health, isError: healthError } = useHealth();
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const pipeline = params.get("pipeline");
@@ -51,21 +52,16 @@ export function SchedulesPage() {
           </div>
           <div className="barca-view-actions">
             {health?.read_only && <Tag tone="bare">read-only</Tag>}
-            <span className="barca-conn">
-              <StatusDot
-                status={health?.scheduler ? "success" : "queued"}
-                size={6}
-              />
-              {health
-                ? health.scheduler
-                  ? "scheduler running"
-                  : "scheduler not running on this server"
-                : "offline"}
-            </span>
+            <ConnectionBadge
+              connection={connection(health, healthError)}
+              onlineLabel={
+                health?.scheduler ? "scheduler running" : "scheduler not running on this server"
+              }
+            />
           </div>
         </div>
         {health && !health.scheduler && rows.length > 0 && (
-          <p className="barca-panel-note">
+          <p className="barca-note">
             This server doesn't fire schedules (
             {health.read_only ? "--read-only" : "--no-schedule"}
             ). "Next run" is when each cron next matches — it happens only where

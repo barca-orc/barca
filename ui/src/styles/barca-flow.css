@@ -81,7 +81,7 @@
   border-radius: var(--radius-sm);
 }
 .react-flow__minimap-mask {
-  fill: rgba(8, 11, 10, 0.72);
+  fill: var(--graph-mask);
 }
 
 /* Attribution is hidden via proOptions, but belt-and-suspenders */
