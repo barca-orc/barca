@@ -184,7 +184,8 @@ describe('buildRows', () => {
       ),
     )
     expect(row.severity).toBe('failed')
-    expect(row.stateLabel).toBe('failed · always runs')
+    // "always runs" says nothing for a task: it's just failed.
+    expect(row.stateLabel).toBe('failed')
     expect(row.last?.error).toBe('AssertionError: 3 rows with negative units')
     expect(row.last?.ago).toBe('35m ago')
   })
@@ -295,5 +296,12 @@ describe('sorting', () => {
     expect(parseSort('typical', null)).toEqual({ key: 'typical', dir: 'desc' })
     expect(parseSort('bogus', 'asc')).toEqual(DEFAULT_SORT)
     expect(parseSort(null, null)).toEqual(DEFAULT_SORT)
+  })
+})
+
+describe('failed labels', () => {
+  it('an asset keeps its cache state: a good cached result may still be served', () => {
+    const row = only(buildRows([node({ id: 'p.py:a', last_materialization: failedAttempt })], NOW))
+    expect(row.stateLabel).toBe('failed · cached')
   })
 })
