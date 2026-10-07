@@ -118,13 +118,26 @@ last run id, last status) for each job. See the
   **once** on restart to catch up. Ticks missed during a long outage are not
   replayed one-for-one, and brand-new jobs are anchored to "now" (no
   first-launch stampede).
-- **Same tick, one run** — the nodes due at the same tick run together as one run
-  over the union of their cones, so an upstream they share (a scheduled asset that a
-  scheduled task reads, say) is computed once. A failure in one node stops only the
-  nodes downstream of it, and `GET /schedule` reports each node's own status. Catch-up
-  runs at startup are still one run per node.
-- **No self-overlap** — if a job's previous run is still going when the next
-  tick arrives, that tick is skipped.
+- **Shared upstream, one run** — jobs due at the same tick that have a step in
+  common (a sensor or asset upstream of several of them, or a scheduled asset that
+  a scheduled task reads) run together as one run over the union of their cones, so
+  that step is computed once. "The same tick" is the moment, not the cron text:
+  `0 5 * * *` and `*/5 * * * *` are due together at 05:00. Jobs caught up at startup
+  are treated the same way. Jobs with nothing in common each get their own run, and
+  so does a job that a shared run would make wait for a step it does not depend on.
+  With a remote artifact store, runs are not shared: each due job gets its own run,
+  and an upstream two of them share may be computed by both.
+- **No self-overlap, per job** — if a job's previous run is still going when the
+  next tick arrives, that tick is skipped. "Still going" is the job's own step: once
+  it has ended, the job's next tick fires even while a slower job it ran with keeps
+  the shared run open.
+- **A failure stays local** — a job that fails stops only the jobs downstream of it.
+  The shared run is then `failed`, like `barca get a,b` when one target fails, and
+  `GET /status/{run_id}` lists every job's outcome under `result.targets`.
+  `GET /schedule` reports each job's own status.
+- **Time limit** — a run is stopped after 10 minutes per job in it, so a run shared
+  by three jobs has 30 minutes. Cancelling a shared run (`DELETE /run/{run_id}`)
+  cancels all of it; jobs whose step had already ended keep their results.
 - **Disable it** — `barca serve --no-schedule job.py` serves the HTTP API
   without firing anything on a clock.
 

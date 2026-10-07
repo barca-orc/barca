@@ -743,7 +743,12 @@ counts every node even when `nodes` is truncated.
 | `truncated` | boolean | always |
 <!-- END GENERATED schema history -->
 
-Newest first. `files` is an array of the `.py` files the run was given. `target`,
+Newest first. `command` is `get`, `run` or `serve`. `serve` (experimental, with `barca serve`)
+is a run its scheduler started for nodes of both kinds, assets and tasks, that shared a run;
+a scheduled run over assets only is `get` and over tasks only is `run`
+(`barca docs scheduling`). `target` is the target as given, several targets comma-separated
+(`a,b`); for a scheduled run it is the node ids. `files` is an array of the `.py` files the run
+was given. `target`,
 `steps_total`, `finished_at` and `elapsed_seconds` can be `null` (no target; a run still in
 progress or interrupted). `status` is `running`, `success`, `failed`, `cancelled` or
 `interrupted`: a `running` run counts the steps it has recorded so far in `steps_executed`, and

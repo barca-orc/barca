@@ -48,11 +48,36 @@ something that identifies the version of the data, such as an etag or a last-mod
 
 `POST /run/<task>` is different from a tick: it recomputes every upstream asset.
 
-A tick is skipped while the previous run of the same scheduled node is still going. Nodes due
-at the same tick run together as one run over the union of their cones, so an upstream they
-share is computed once. A failure in one of them stops only the nodes downstream of it, and
-`GET /schedule` reports each node's own `last_status`. (Catch-up runs at startup are still one
-run per node.)
+A tick is skipped while the previous run of the same scheduled node is still going.
+
+Nodes that are due at the same tick and have a step in common run together, as one run over
+the union of their cones, so the step they share is computed once: a sensor or asset upstream of
+several of them, or a scheduled asset that a scheduled task reads. "Due at the same tick" is
+about the moment, not the cron text: `0 5 * * *` and `*/5 * * * *` are due together at 05:00.
+The nodes caught up when the server starts are treated the same way. Nodes with nothing in
+common each get their own run, as does a node that a shared run would hold back (it would wait
+for a step it does not depend on). Sharing a run does not tie the nodes to each other:
+
+- "Still going" is judged per node. Once a node's own step has ended, its next tick fires, even
+  while a slower node it ran with keeps the shared run open, and what that run computed is
+  served from cache.
+- A node that fails stops only the nodes downstream of it. The run is then `failed`, as
+  `barca get a,b` is when one target fails: `GET /status/<run>` lists every node's outcome
+  under `result.targets`, and the run is one `failed` row in `barca history`.
+- `GET /schedule` reports each node's own `last_status`, and the run it last fired into as
+  `last_run` (the same id for nodes that shared a run).
+- A run is stopped after 10 minutes per node in it (20 minutes for two nodes), and
+  `DELETE /run/<run>` cancels the whole run: nodes whose step had already ended keep their
+  results.
+
+In `barca history`, a shared run's `target` is the node ids separated by commas. Its `command`
+is `get` when the nodes are all assets and sensors, `run` when they are all tasks, and `serve`
+when it has both.
+
+Known limit: runs are not shared when artifacts go to a remote store (`barca docs remote`).
+There a step is recorded only when its run ends, so a node in a shared run could not fire again
+until the whole run had ended. Such a server starts one run per due node, and an upstream that
+two of them share may be computed by both.
 
 ```bash
 barca list pipeline.py                         # shows each schedule and its next fire time

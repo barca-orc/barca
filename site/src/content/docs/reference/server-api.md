@@ -86,6 +86,43 @@ Poll `GET /status/{run_id}` until `status` reaches a terminal state (`complete`,
 the server's polling id; `result.run_id` is the persisted database run id (the run is also
 written to `.barca/metadata.db`, same as a CLI run).
 
+#### Runs over several targets
+
+The scheduler starts one run for jobs that fire together and have a step in common (see
+[Scheduling](#scheduling)). Such a run reports the way `barca get a,b` does. Its `result` has `targets` in place of
+`final_output`, keyed by node id in the order the jobs were fired:
+
+```json
+{
+  "handle": "1fb2a4c81d52",
+  "status": "failed",
+  "result": {
+    "run_id": "1fb2a4c9e0aa",
+    "elapsed_seconds": 0.31,
+    "steps_executed": 3,
+    "phases": 1,
+    "steps": [ … ],
+    "targets": {
+      "pipeline.py:tracked": { "status": "success", "final_output": { "path": ".barca/artifacts/…", "format": "json", "size_bytes": 34 } },
+      "pipeline.py:report": { "status": "success" },
+      "pipeline.py:broken": { "status": "failed", "error": "RuntimeError: boom\n  File …", "failed_node": "pipeline.py:broken" }
+    }
+  },
+  "error": "1 of 3 targets failed: pipeline.py:broken",
+  "started_at": 1780721263.05,
+  "finished_at": 1780721263.41
+}
+```
+
+- `status` is `complete` when every target succeeded and `failed` when any target failed;
+  `error` then names the failed targets. A failure stops only the targets downstream of it.
+- Each target is `{ "status": "success", "final_output"? }` or `{ "status": "failed", "error",
+  "failed_node" }`. `failed_node` is the step that failed: the target itself, or a step upstream
+  of it. A task that returns nothing has no `final_output`.
+- Unlike a single-target run, whose `result` is `null` when it fails, this `result` is present
+  on `failed` too. It is `null` when the run was cancelled or timed out.
+- A scheduled job that fires alone is a single-target run, with the payload shown above.
+
 In-flight run state is held in memory and is not persisted across a server restart. The run
 history in the database persists regardless. A background sweep evicts finished runs
 (`complete`/`failed`/`cancelled`) from memory once they are more than an hour old (checked every 5
@@ -104,6 +141,11 @@ already-completed steps are persisted, and the run's status transitions to `canc
 `{ "run_id": "...", "status": "cancelling" }`; poll `/status/{run_id}` to observe the
 transition. Cancelling a run that already finished returns `409`. Runs that exceed the
 server's 10-minute timeout are stopped the same way and reported as `failed`.
+
+A run shared by several scheduled jobs is cancelled as a whole. Jobs whose own step had already
+ended keep their recorded results; the rest are cancelled. Its time limit is 10 minutes per job
+in it (30 minutes for three jobs), because the jobs share one worker pool; `error` reads
+`run timed out after 1800s`.
 
 ### Health
 
@@ -141,7 +183,16 @@ GET /logs/{run_id}     → { "logs": [{ node_id, seq, line }, ...] }
 ```
 
 Events are `run_started`, `log` (`{ node_id, line }`, one per line a step prints), `step_finished`
-(`{ node_id, ok, elapsed_seconds?, error? }`) and `run_finished` (`{ run_id, ok }`). A client that
+(`{ node_id, ok, elapsed_seconds?, error? }`), `target_finished` (`{ node_id, ok }`) and
+`run_finished` (`{ run_id, ok }`). `target_finished` is sent once for each target the run was given
+(none for `POST /run`), when every step of that target has ended and is recorded in the metadata
+DB: in a run over several targets that can be long before `run_finished`. Steps are recorded
+during a run at most every half second, so the event can follow the step by that long; with a
+remote artifact store, where steps are recorded when the run ends, it is sent just before
+`run_finished`. Its `ok` is `false` when a step of the target failed or
+did not run because something upstream failed. `run_finished` has `ok: true` only when the run's
+status is `complete`. A `step_finished` with `ok: false` can be followed by a retry of the same
+step; `target_finished` is sent only when the outcome is final. A client that
 connects after the run started first receives the events it missed; the stream stays open after
 `run_finished` (with a keep-alive every 15s) until the run is evicted. The response carries
 `X-Accel-Buffering: no` so nginx passes events through as they happen. `/logs` accepts either the
@@ -188,8 +239,30 @@ job whose cron matches the current second, triggers a run through the same run p
 - **Tasks** are executed via the `run` path. A tick reuses cached upstream assets, as
   `barca run <task>` does; `POST /run/{task}` recomputes every upstream asset.
 
+Jobs that fire together and **have a step in common share one run** over the union of their
+cones, so that step runs once: a sensor or asset upstream of several of them, or one job
+upstream of another. "Together" means due at the same tick, whatever the cron expression
+(`0 5 * * *` and `*/5 * * * *` are due together at 05:00), assets, sensors and tasks alike, and
+it covers the jobs caught up at startup. In a shared run a task still always runs and assets
+are still cache-aware.
+
+Jobs with nothing in common each get their own run: sharing one would compute nothing fewer
+times and would tie them to each other's timing, failure status, cancellation and time limit.
+A job is also left out of a shared run that would hold it back. A run executes in phases, and
+a job whose step is in a later phase waits for every step of the earlier ones; if one of those
+is a step the job does not depend on, the job runs on its own.
+
+Runs are **not shared when artifacts go to a remote store** (`[remote].uri` or
+`BARCA_REMOTE_URI` is set; see [Remote storage](/reference/remote-storage/)).
+There a step is recorded only when its run ends, so a job in a shared run could not fire again
+before the whole run ended. Such a server starts one run per due job, as every server did
+before 0.18, and a step upstream of two jobs due together may be computed by both.
+
 Each scheduled run gets a normal `run_id`, is visible via `GET /status/{run_id}`, and is
-persisted to `.barca/metadata.db` (`barca history`), like a manually triggered run.
+persisted to `.barca/metadata.db` (`barca history`), like a manually triggered run. A shared
+run is one history row: `target` is its node ids separated by commas, and `command` is `get`
+when they are all assets and sensors, `run` when they are all tasks, and `serve` when it has
+both.
 Inspect the live schedule with `GET /schedule` or, statically, with `barca list <files>`
 (scheduled definitions show their next fire time).
 
@@ -205,6 +278,12 @@ Behavior:
   machine's CPUs); their writes to the shared `metadata.db` are serialized by a process-wide
   DB lock. A scheduled job never overlaps *itself*: if its previous run is still
   pending/running when the next tick arrives, that tick is skipped.
+- **Sharing a run does not tie jobs together.** "Still running" is judged by the job's own
+  step: once it has ended (completed, failed for good, or skipped because something upstream
+  failed) and is recorded, the job's next tick fires, even while a slower job keeps the shared
+  run open, and finds what that run computed already cached. At a tick where only some due
+  jobs are still running, those are skipped and the rest are fired. A job that fails stops
+  only the jobs downstream of it.
 - **Reload.** Under `--watch`, editing a source file re-reads the schedule live (within a
   second). Without `--watch` the job set is fixed for the process lifetime.
 
@@ -229,11 +308,19 @@ Each `ScheduleEntry` is:
 ```
 
 `next_fire`/`last_fired` are unix epoch seconds (`last_fired` is `null` until the first
-fire); `last_run` is the most recent scheduled `run_id` and `last_status` its state
-(`pending`/`running`/`complete`/`failed`/`cancelled`, or `null` if none yet). Nodes due at
-the same tick share one run, so they share a `last_run`; `last_status` is still per node
-(`failed` for a node that failed or sat downstream of a failure, even though the run itself
-completed).
+fire). `last_run` is the `run_id` of the run the job last fired into; jobs that shared a run
+report the same one. `last_status` is the job's own state in that run, or `null` if it has not
+fired:
+
+- `pending` or `running` until the job's own step has ended;
+- then `complete` or `failed` (failed: its step failed, or did not run because a step upstream
+  of it failed), whatever the other jobs of a shared run go on to do. So one entry can read
+  `complete` while `GET /status/{last_run}` still reads `running`, or reads `failed` because a
+  different job failed;
+- `cancelled` if the run was cancelled before the job's step ended, and `failed` if the run
+  timed out or failed first.
+
+`last_status` is kept after the run itself is evicted from memory.
 
 ## Python client
 

@@ -10,6 +10,12 @@ description: 'barca serve — endpoints, the async run/poll contract, cron sched
 
 ---
 
+> **Amended (0.18, issue #253):** scheduled jobs that fire together (due at the same tick, or
+> caught up together at startup) and have a step in common now share one run, so that step is
+> computed once. The per-job guarantees of §4.5 are unchanged and are stated there job by job;
+> §4.1 gains the status payload of a run over several targets, the `target_finished` event and
+> the time limit of a shared run. Before 0.18 every due job started its own run.
+
 ## 1. Summary
 
 `barca serve` starts an axum-based HTTP/JSON API (`barca-server`) that exposes the same
@@ -104,6 +110,39 @@ Response is `{"run_id": "...", "status": "cancelling"}` — poll `/status` to ob
 actual transition. Cancelling an already-finished run returns `409`. Runs exceeding the
 server's 10-minute timeout are stopped the same way and reported as `failed`.
 
+**Runs over several targets.** A run the scheduler starts for several jobs that share it
+(§4.5) is one run with one `run_id`, and reports like `barca get a,b`:
+
+- *Status.* `complete` when every target succeeded. `failed` when any target failed, with
+  `error` naming them (`"1 of 3 targets failed: pipeline.py:broken"`). A failure stops only
+  the targets downstream of it; the others still run.
+- *Result.* `result` has `targets` in place of `final_output`: an object keyed by node id, in
+  the order the jobs were fired, each `{"status": "success", "final_output": {...}}` or
+  `{"status": "failed", "error": "...", "failed_node": "..."}` (`failed_node` is the step that
+  failed: the target itself or a step upstream of it). Unlike a single-target run, whose
+  `result` is `null` when it fails, this result is present on `failed` too, because the other
+  targets have outcomes worth reading. It is `null` when the run was cancelled or timed out.
+- *Events.* `/events/{run_id}` carries one `target_finished` event (`{node_id, ok}`) per
+  target, emitted when that target's own steps have all ended **and are recorded** in the
+  metadata DB, which can be long before the run ends. Finished steps are recorded during the
+  run at most every half second, so the event follows the step by up to that long; a target
+  whose steps were not recorded during the run is announced when the run's results are
+  written, just before `run_finished`. The order matters: whoever acts on the event (the
+  scheduler firing the job's next tick) must find the job's results cached. `run_finished` has
+  `ok: false` whenever the status is not `complete`. Every run with a named target emits
+  `target_finished`, single-target runs included.
+- *History and telemetry.* One row in `barca history` and one trace: `target` is the node ids
+  comma-separated, as for `barca get a,b`; `status` is `failed` when any target failed;
+  `command` is `get` when the targets are all assets and sensors, `run` when they are all
+  tasks, and `serve` when they are both (no CLI command takes that mix).
+- *Time limit.* The 10-minute limit is per target: a run over `n` targets is stopped after
+  `n` × 10 minutes. Jobs that each had a run, a worker pool and 10 minutes now share one run
+  and one pool, so the shared run gets the sum. A job is therefore never stopped earlier than
+  it was before 0.18, but one hung job holds its shared run open for up to `n` × 10 minutes
+  (the other jobs are not held: §4.5).
+- *Cancellation.* `DELETE /run/{run_id}` cancels the whole run. Targets whose steps had
+  already ended keep their recorded results; the rest are cancelled.
+
 **Errors.** `{"error": "..."}` body with: `404` (unknown asset/run), `400`
 (parse/DAG errors), `409` (ambiguous `{name}` match, or cancel-after-finish), `500`
 (execution/DB failure).
@@ -154,6 +193,46 @@ difference is the caller: an axum handler instead of `barca-cli`'s `main()`.
 - On startup, a scheduled tick that elapsed while the server was down fires **once** to
   catch up; jobs never seen before are anchored to "now" (no first-launch stampede).
   Individual ticks missed during a longer outage are not replayed one-for-one.
+- **Jobs that fire together share a run when they have a step in common** (0.18). Among the
+  jobs due at one tick, those whose cones overlap (a sensor or asset upstream of more than one
+  of them, or one job upstream of another) go into a single run over the union of their
+  cones, so the common step runs once. The same holds for the jobs caught up together at
+  startup. Jobs are compared by the instant they are due, not by their cron text: `0 5 * * *`
+  and `*/5 * * * *` are due together at 05:00 and not at 05:05.
+  - Jobs with nothing in common do not share a run. One run would compute nothing fewer
+    times, and would tie them to each other's timing, failure status, cancellation and time
+    limit.
+  - A job is also left out of a shared run that would hold it back. A run executes in phases
+    and a phase starts when the one before it has ended, so a job whose step is in a later
+    phase waits for every step of the earlier ones. If one of those is a step the job does
+    not depend on, the job runs on its own instead (and may compute the common step a second
+    time, as before 0.18).
+  - A job that ends up alone runs as it always did (`get` for an asset or sensor, `run` for a
+    task) and its `/status` payload is unchanged.
+- **Sharing a run does not tie jobs to each other.** The guarantees above hold for each job
+  on its own:
+  - *Overlap* is judged by the job's own step. A job's "previous run" is still going only
+    until that job's step (every partition of it) has ended and is recorded: completed,
+    failed for good, or skipped because a step upstream of it failed. From then on its next
+    tick fires, even while a slower job keeps the shared run open, and finds what that run
+    computed already cached. At a tick where some due jobs are still running and some are
+    not, the ones still running are skipped and the rest are fired.
+  - *Failure.* A job that fails stops only the jobs downstream of it in that run.
+  - *Catch-up* is decided per job (did *this* job miss a tick?), then the jobs that did are
+    fired as jobs due together are.
+- **Not with a remote artifact store.** When artifacts go to a store other than the local
+  artifact directory, a step is recorded only when its run ends, once its upload is confirmed
+  (see [Remote storage](/reference/remote-storage/)). A job in a shared run could
+  then not fire again before the whole run ended without recomputing what the run had just
+  computed. Keeping each job's ticks independent comes first, so such a server keeps the
+  pre-0.18 behavior: one run per due job, and a step upstream of two jobs due together may be
+  computed by both. Sharing runs there needs steps recorded as they finish (§11).
+- `GET /schedule` is per job. `last_run` is the handle of the run the job last fired into
+  (jobs that shared a run report the same one). `last_status` is the job's own: `pending` or
+  `running` until its step has ended, then `complete` or `failed`, whatever the run's other
+  jobs go on to do; `cancelled` if the run was cancelled before the job's step ended, and
+  `failed` if the run timed out or failed first. It stays available after the run itself is
+  evicted from memory.
 
 ## 5. Determinism, Caching & Testing
 
@@ -164,6 +243,13 @@ execute concurrently (bounded by a run pool sized to CPU count); their writes to
 shared `metadata.db` are serialized by a process-wide DB lock. Covered by
 `barca-server`'s `cargo test` suite and the shell integration tests in
 `tests/integration/`.
+
+The shared-run semantics of §4.5 are tested without the wall clock. The planning functions
+(`plan_tick`, `plan_catchup`, and `barca_core::share::shared_run_groups`, which decides who
+shares a run) are pure and take the time or the DAG as an argument; the server-level
+tests in `crates/barca-server/src/scheduler/batch_tests.rs` call the scheduler's `tick` and
+`catch_up` with a fixed time against real pipelines, and hold a slow step open with a file
+the test creates, so no assertion races a cron tick.
 
 ## 6. Performance
 
@@ -206,3 +292,5 @@ polling-only is explicitly called out as a v1 limitation?
 - Serving a future web UI's static assets from the same process (`barca-server`'s
   layering already anticipates this — see [Architecture](/architecture/)).
 - Shared remote state support in `serve` (currently rejected at startup, §4.5).
+- Shared runs with a remote artifact store (§4.5): record a step when its upload is confirmed
+  rather than at the end of the run, so a target can be announced finished mid-run there too.

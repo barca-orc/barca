@@ -60,7 +60,7 @@ What the spans carry:
 | Span | Tag or metric | Value |
 |---|---|---|
 | run | `barca.run_id` | the run id `barca get --json` prints (also on every step span) |
-| run | `barca.command`, `barca.target` | `get` or `run`, and the target as given |
+| run | `barca.command`, `barca.target` | `get`, `run` or `serve`, and the target as given (several targets: comma-separated). `serve` is a `barca serve` scheduled run over both assets and tasks (`barca docs scheduling`) |
 | run | `barca.status` | `success`, `failed` or `cancelled`; the span is an error unless `success` |
 | run | `barca.steps.total`, `barca.steps.executed`, `barca.steps.cached` | step counts |
 | step | `barca.node`, `barca.kind` | node id; `asset`, `task` or `sensor` |
