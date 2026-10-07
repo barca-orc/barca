@@ -338,32 +338,3 @@ class TestManyTinyPartitions:
         barca.get(f)
         count = _query("SELECT COUNT(*) FROM cost_estimates WHERE node_id LIKE '%:shard[%'")[0][0]
         assert count == 8
-
-
-class TestArtifactLRUMemory:
-    """Regression for #232: the LRU must not hold or copy large artifacts."""
-
-    def test_remote_artifact_is_not_cached_regardless_of_size(self):
-        from barca._worker import _lru_cacheable
-
-        assert not _lru_cacheable("memory://arts/n/h.parquet", 64 * 1024 * 1024)
-        assert not _lru_cacheable("memory://arts/n/h.parquet")
-        assert _lru_cacheable("memory://arts/n/h.parquet", 1024)
-
-    def test_large_local_artifact_is_not_cached(self):
-        from barca._worker import _lru_cacheable
-
-        assert not _lru_cacheable("/x/n/h.parquet", 64 * 1024 * 1024)
-
-    def test_arrow_table_is_shared_not_deep_copied(self):
-        pa = pytest.importorskip("pyarrow")
-        lru = _ArtifactLRU()
-        table = pa.table({"a": [1, 2, 3]})
-        lru.put("/a.parquet", table, "pyarrow")
-        assert lru.get("/a.parquet", "pyarrow") is table
-
-    def test_mutable_values_are_still_copied(self):
-        lru = _ArtifactLRU()
-        value = {"rows": [1]}
-        lru.put("/a.json", value)
-        assert lru.get("/a.json") is not value

@@ -98,11 +98,18 @@ def _peak_rss_bytes() -> int:
         return 0
 
 
-# Artifacts above this size skip the tier-1 cache, local or remote: the deepcopy that
-# guards against mutation would cost more than the disk read it saves, and a cached
-# copy of a large frame is a second copy of it in memory. A remote artifact's size is
-# unknown at read time (workers read the fetched local copy), so it is not cached.
+# Tier-1 cache limits. Sizes are bytes of the serialized artifact: known without touching the
+# value, and the same unit for every type and for local and remote artifacts.
+#
+# One artifact: above this the copy that isolates a cached value costs more than the read it
+# saves, and the cached value is a second copy of a large frame in memory.
 _LRU_MAX_ARTIFACT_BYTES = 8 * 1024 * 1024
+# All artifacts cached by one worker: room for eight of the largest, so what a worker holds
+# does not grow with the number of steps it runs. (Serialized bytes: a compressed parquet
+# file is larger in memory.)
+_LRU_MAX_TOTAL_BYTES = 8 * _LRU_MAX_ARTIFACT_BYTES
+# Entries: bounds the per-object overhead of many tiny artifacts, which the byte limits miss.
+_LRU_MAX_ENTRIES = 16
 
 
 def _lru_frame_type(frame_type: str | None) -> bool:
@@ -129,13 +136,37 @@ def _result_frame_type(value) -> "str | None | bool":
     return kind
 
 
-def _lru_cacheable(path: str, size_bytes=None) -> bool:
-    if size_bytes is not None:
-        return size_bytes <= _LRU_MAX_ARTIFACT_BYTES
+def _artifact_size(path: str) -> "int | None":
+    """Serialized size of a local or remote artifact in bytes, or None when it can't be read."""
     try:
-        return os.path.getsize(path) <= _LRU_MAX_ARTIFACT_BYTES
-    except OSError:
-        return False
+        return _storage.size(path)
+    except Exception:
+        return None
+
+
+def _isolated_copy(value):
+    """A copy of `value` that shares no mutable state with it.
+
+    The one place that decides how each type goes into and comes out of the tier-1 cache:
+
+    - polars DataFrame: `clone()`. Constant time and memory: columns are reference-counted and
+      copied on write, so an in-place edit of either frame (`df[0, "a"] = x`, `insert_column`,
+      `extend`, `drop_in_place`, ...) never reaches the other.
+    - everything else: `copy.deepcopy`, a real copy. That includes pandas frames (a shallow
+      copy shares its numpy blocks), containers of frames, and pyarrow Tables: a Table has no
+      mutating methods, but its buffers are writable through the buffer protocol
+      (`np.frombuffer(table.column(0).chunk(0).buffers()[1])`), so a shared one is not isolated.
+
+    Raises whatever `copy.deepcopy` raises for a value that can't be copied.
+
+    Not covered: a polars frame built over a numpy array (`pl.DataFrame({"a": arr})` does not
+    copy `arr`) still changes when the step that returned it writes to that array afterwards.
+    """
+    if _frame_kind(value) == "polars":
+        return value.clone()
+    import copy
+
+    return copy.deepcopy(value)
 
 
 class _ArtifactLRU:
@@ -146,56 +177,87 @@ class _ArtifactLRU:
     invalidation is automatic (changed input → changed hash → new path → miss).
     Frame type is part of the key so a polars consumer never hits a cached pandas
     materialization of the same path.
-    Values are returned as deep copies (immutable Arrow/polars frames are shared, not copied) so a task mutating its input can never
-    poison a later task's view; if a value can't be deep-copied, the entry is
-    dropped and the caller falls through to the store (tier 2). Pure
-    luck-optimization: always safe to miss, never persisted, never gates
+
+    Isolation: the cache keeps its own copy of every value and hands out a fresh
+    copy on every hit (`_isolated_copy`), so a task mutating its input can never
+    poison a later task's view; if a value can't be copied, the entry is dropped
+    and the caller falls through to the store (tier 2).
+
+    Bounds: `admit` takes an artifact only when its serialized size is known and at
+    most `_LRU_MAX_ARTIFACT_BYTES`, wherever it is stored; the least recently used
+    entries are evicted to stay within `max_total_bytes` and `max_entries`.
+
+    Pure luck-optimization: always safe to miss, never persisted, never gates
     correctness.
     """
 
-    def __init__(self, max_entries: int = 16):
+    def __init__(
+        self,
+        max_entries: int = _LRU_MAX_ENTRIES,
+        max_total_bytes: int = _LRU_MAX_TOTAL_BYTES,
+    ):
         from collections import OrderedDict
 
-        self._entries: "OrderedDict[tuple[str, str], object]" = OrderedDict()
+        # key -> (value, serialized size in bytes)
+        self._entries: "OrderedDict[tuple[str, str], tuple[object, int]]" = OrderedDict()
         self._max = max_entries
+        self._max_total_bytes = max_total_bytes
+        self._total_bytes = 0
 
     @staticmethod
     def _key(path: str, frame_type: str | None) -> tuple[str, str]:
         return (path, frame_type or "pandas")
+
+    def _drop(self, key) -> None:
+        _value, size = self._entries.pop(key)
+        self._total_bytes -= size
 
     def get(self, path: str, frame_type: str | None = None):
         """Return a safe copy of the cached value, or None on miss."""
         key = self._key(path, frame_type)
         if key not in self._entries:
             return None
-        import copy
-
         self._entries.move_to_end(key)
         try:
-            value = self._entries[key]
-            return value if _share_by_reference(value) else copy.deepcopy(value)
+            return _isolated_copy(self._entries[key][0])
         except Exception:
-            del self._entries[key]
+            self._drop(key)
             return None
 
-    def put(self, path: str, value, frame_type: str | None = None) -> None:
-        import copy
+    def put(self, path: str, value, frame_type: str | None = None, size_bytes: int = 0) -> None:
+        """Cache a copy of `value`, counting `size_bytes` against the byte limit.
 
+        Applies only the cache-wide limits; `admit` is the entry point that also applies the
+        per-artifact one.
+        """
         key = self._key(path, frame_type)
         try:
-            self._entries[key] = value if _share_by_reference(value) else copy.deepcopy(value)
+            cached = _isolated_copy(value)
         except Exception:
             return
-        self._entries.move_to_end(key)
-        while len(self._entries) > self._max:
-            self._entries.popitem(last=False)
+        if key in self._entries:
+            self._drop(key)
+        self._entries[key] = (cached, size_bytes)
+        self._total_bytes += size_bytes
+        while self._entries and (
+            len(self._entries) > self._max or self._total_bytes > self._max_total_bytes
+        ):
+            self._drop(next(iter(self._entries)))
 
+    def admit(
+        self, path: str, value, frame_type: str | None = None, size_bytes: "int | None" = None
+    ) -> bool:
+        """Cache the artifact at `path` if its serialized size allows; return whether it did.
 
-def _share_by_reference(value) -> bool:
-    """Immutable frames (Arrow tables, polars DataFrames) need no defensive copy."""
-    return _frame_kind(value) in ("pyarrow", "polars") and (
-        type(value).__name__ != "LazyFrame"
-    )
+        `size_bytes` is the size when the caller already knows it; otherwise the store is
+        asked. An artifact whose size is unknown or over `_LRU_MAX_ARTIFACT_BYTES` is not cached.
+        """
+        if size_bytes is None:
+            size_bytes = _artifact_size(path)
+        if size_bytes is None or size_bytes > _LRU_MAX_ARTIFACT_BYTES:
+            return False
+        self.put(path, value, frame_type, size_bytes)
+        return True
 
 
 def _default_artifact_dir() -> str:
@@ -360,8 +422,8 @@ def _load_artifact(path, lru, fmt=None, *, frame_type=None):
     if fmt is None:
         fmt = _EXT_FORMATS.get(_storage.suffix(path), "json")
     value = deserialize(path, fmt, frame_type=frame_type)
-    if cacheable and _lru_cacheable(path):
-        lru.put(path, value, frame_type)
+    if cacheable:
+        lru.admit(path, value, frame_type)
     return value
 
 
@@ -410,13 +472,15 @@ def _load_collected_artifacts(artifacts, lru=None, *, param=None, frame_type=Non
                 raise FileNotFoundError(f"Input artifact for parameter '{param}' not found: {path}")
             raise FileNotFoundError(f"Input artifact not found: {path}")
         fmt = artifact.get("format") or _EXT_FORMATS.get(_storage.suffix(path), "json")
-        return deserialize(path, fmt, frame_type=frame_type)
+        value = deserialize(path, fmt, frame_type=frame_type)
+        # The size lookup is I/O too (a request, for a remote path), so it runs in the pool.
+        return value, (_artifact_size(path) if lru is not None else None)
 
     with ThreadPoolExecutor(max_workers=min(len(to_fetch), _COLLECT_IO_MAX_WORKERS)) as ex:
-        for (i, artifact), value in zip(to_fetch, ex.map(_fetch, to_fetch)):
+        for (i, artifact), (value, size) in zip(to_fetch, ex.map(_fetch, to_fetch)):
             results[i] = value
-            if lru is not None and _lru_cacheable(artifact["path"]):
-                lru.put(artifact["path"], value, frame_type)
+            if lru is not None and size is not None:
+                lru.admit(artifact["path"], value, frame_type, size)
 
     return results
 
@@ -807,10 +871,8 @@ def _run_daemon_step(step, modules, art_dir, lru):
         # A downstream step in this worker may consume what we just produced, keyed by the
         # reader it is equivalent to so a consumer never gets a different frame type.
         result_type = _result_frame_type(result)
-        if result_type is not False and _lru_cacheable(
-            artifact["path"], artifact.get("size_bytes")
-        ):
-            lru.put(artifact["path"], result, result_type)
+        if result_type is not False:
+            lru.admit(artifact["path"], result, result_type, artifact.get("size_bytes"))
         return True
 
     except BaseException as exc:
