@@ -1992,11 +1992,21 @@ async fn execute(
     // is a hard error — silently diverging local runs are worse than stopping.
     let mut state_token = match pull {
         Some(pull) => {
-            let (state_sync::Pulled { token, carried }, took) = pull.join().await??;
+            let (pulled, took) = pull.join().await??;
+            let state_sync::Pulled {
+                token,
+                carried,
+                kind,
+            } = pulled;
+            trace_point!("state_sync_pull ({kind:?})");
             if let Some(note) = carried.note() {
                 eprintln!("{note}");
             }
             match token.0 {
+                Some(_) if kind == state_sync::PullKind::Unchanged => eprintln!(
+                    "[barca] shared state unchanged ({:.2}s)",
+                    took.as_secs_f64()
+                ),
                 Some(_) => eprintln!(
                     "[barca] pulled state ({}) in {:.2}s",
                     fmt_bytes(std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0)),
@@ -2803,13 +2813,12 @@ async fn execute(
     }
 
     // Shared remote state: fold the WAL into the main file and conditionally
-    // upload it. On conflict (another machine pushed first): pull the fresh
+    // upload it (`push_state` does both under the database lock). On conflict (another machine pushed first): pull the fresh
     // database, replay this run's ledger onto it, retry.
     if state_sync_on {
         let mut attempt = 0u32;
         let t_push = Instant::now();
         loop {
-            state_sync::checkpoint_truncate(&db_path).await?;
             match state_sync::push_state(python, cfg, state_token.as_ref().unwrap()).await? {
                 state_sync::PushOutcome::Pushed(_) => {
                     eprintln!(
@@ -3072,9 +3081,9 @@ const RECORD_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50
 ///
 /// It is an optimisation of *when* rows land, never the only writer: the end-of-run
 /// [`persist_run`] writes every row of the run that is not already there (rows carry the run
-/// id). So a write that fails here, rows still queued at [`StepRecorder::finish`], and rows
-/// lost because another process replaced the local DB with the shared state mid-run are all
-/// made good at the end.
+/// id). So a write that fails here and rows still queued at [`StepRecorder::finish`] are made
+/// good at the end. (A pull of the shared state by another process mid-run keeps the rows
+/// written here: see `state_carry`.)
 struct StepRecorder {
     tx: tokio::sync::mpsc::UnboundedSender<StepRow>,
     stop: CancellationToken,
@@ -3637,7 +3646,7 @@ mod persist_tests {
         state_sync::checkpoint_truncate(shared).await.unwrap();
         let staged = dir.path().join("staged.db");
         std::fs::copy(shared, &staged).unwrap();
-        db::replace_db(local, &staged).await.unwrap();
+        db::pull_for_tests(local, &staged, "token").await;
     }
 
     #[tokio::test]

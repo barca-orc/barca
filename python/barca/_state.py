@@ -12,7 +12,9 @@ Every backend implements the same contract:
                         read BEFORE downloading, so a concurrent replace
                         between the token read and the download yields a
                         stale token — which safely fails the later push with
-                        a conflict, never the reverse.
+                        a conflict, never the reverse. With unless_token, an
+                        object whose token is still that one is not
+                        downloaded: the caller already has it.
   push(uri, local, token) -> new token. token=None means create-only (the
                         object must not exist). Raises ConflictError when
                         the precondition fails (someone else pushed first).
@@ -139,11 +141,15 @@ def _file_lock(target: Path):
     return lock()
 
 
-def _file_pull(target: Path, local_path: "Path | str") -> "str | None":
+def _file_pull(
+    target: Path, local_path: "Path | str", unless_token: "str | None" = None
+) -> "str | None":
     with _file_lock(target):
         if not target.exists():
             return None
         token = _sha256(target)
+        if token == unless_token:
+            return token
 
         def fetch(tmp):
             import shutil
@@ -249,11 +255,15 @@ def _gcs_token(uri: str) -> "str | None":
     return str(fetched.generation) if fetched is not None else None
 
 
-def _gcs_pull(uri: str, local_path: "Path | str") -> "str | None":
+def _gcs_pull(
+    uri: str, local_path: "Path | str", unless_token: "str | None" = None
+) -> "str | None":
     blob = _gcs_blob(uri)
     fetched = blob.bucket.get_blob(blob.name)  # token read before download
     if fetched is None:
         return None
+    if str(fetched.generation) == unless_token:
+        return unless_token
     _staged_download(fetched.download_to_filename, local_path)
     return str(fetched.generation)
 
@@ -268,21 +278,25 @@ def _gcs_push(uri: str, local_path: "Path | str", token: "str | None") -> None:
 # ─── Public API ──────────────────────────────────────────────────────────────
 
 
-def pull(state_uri: str, local_path: "Path | str") -> "str | None":
+def pull(
+    state_uri: str, local_path: "Path | str", unless_token: "str | None" = None
+) -> "str | None":
     """Download the state blob to local_path (atomic replace).
 
     Returns the concurrency token, or None when the remote object is absent
-    (local_path is then left untouched).
+    (local_path is then left untouched). When the remote object's token is
+    unless_token, nothing is downloaded either: the returned token equals
+    unless_token, which is how the caller tells.
     """
     local_target = _storage.local_path_of(state_uri)
     if local_target is not None:
-        return _file_pull(local_target, local_path)
+        return _file_pull(local_target, local_path, unless_token)
     if _protocol(state_uri) in ("gs", "gcs"):
-        return _gcs_pull(state_uri, local_path)
+        return _gcs_pull(state_uri, local_path, unless_token)
 
     token = _remote_token(state_uri)
-    if token is None:
-        return None
+    if token is None or token == unless_token:
+        return token
     _staged_download(lambda tmp: _storage.get_file(state_uri, tmp), local_path)
     return token
 
@@ -351,8 +365,13 @@ def main(argv: "list[str] | None" = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if len(argv) >= 3 and argv[0] == "pull":
         uri, local = argv[1], argv[2]
-        token = pull(uri, local)
-        print(json.dumps({"exists": token is not None, "token": token}))
+        unless = argv[argv.index("--unless-token") + 1] if "--unless-token" in argv else None
+        token = pull(uri, local, unless)
+        report = {"exists": token is not None, "token": token}
+        if unless is not None:
+            # Only for a caller that asked: true means nothing was downloaded.
+            report["unchanged"] = token == unless
+        print(json.dumps(report))
         return 0
     if len(argv) >= 3 and argv[0] == "push":
         uri, local = argv[1], argv[2]
@@ -367,7 +386,7 @@ def main(argv: "list[str] | None" = None) -> int:
         print(json.dumps({"token": new_token}))
         return 0
     print(
-        "usage: python -m barca._state pull <uri> <local>\n"
+        "usage: python -m barca._state pull <uri> <local> [--unless-token T]\n"
         "       python -m barca._state push <uri> <local> [--token T]",
         file=sys.stderr,
     )

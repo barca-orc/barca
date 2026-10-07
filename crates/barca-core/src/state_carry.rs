@@ -15,15 +15,19 @@
 //!   end-of-run ledger uses to add only what is missing;
 //! - a run's **log lines** are unpushed when the pulled database has none for that run.
 //!
-//! Only the runs the pulled database does not hold as finished are compared step by step (see
-//! [`SETTLED`]), so a pull with nothing to carry costs one scan of `runs` on each side.
+//! Only runs that can differ are compared step by step: those the pulled database lacks, and
+//! those it holds as unfinished (see [`SETTLED`]) in a different state than the local one (a
+//! run's `steps_executed` moves with every step it records). So this costs one scan of `runs`
+//! on each side plus work for those runs. It is not run at all when the base record shows
+//! that nothing was written locally since the last pull or push ([`crate::state_base`]).
 //!
 //! Copying is idempotent: carrying the same local database onto the same pulled one twice
 //! adds nothing the second time. That is what makes an interrupted pull safe to repeat.
 //!
 //! Not carried: a step row with no `run_id` (written before 0.17, which did not record it), a
-//! successful step whose artifact is no longer reachable from this machine (it would be a
-//! cache hit on nothing), and the cost estimates and scheduler state, which are not history
+//! successful step of a run made on this host whose artifact is no longer reachable from here
+//! (it would be a cache hit on nothing; steps of other hosts' runs came from the shared state
+//! and go back as they are), and the cost estimates and scheduler state, which are not history
 //! (timings are rebuilt by running; `barca serve` does not share state).
 
 use crate::BarcaError;
@@ -89,8 +93,15 @@ pub struct Carried {
     pub log_lines: usize,
     /// Successful steps left behind because their artifact is not reachable from here.
     pub steps_without_artifact: usize,
-    /// Why the local database could not be read, when it could not: nothing was carried.
+    /// Why the local file is not a database, when it is not: nothing could be carried.
     pub unreadable: Option<String>,
+    /// True when the local database was opened and compared with the pulled one (false when
+    /// there was none, or the base record showed nothing had been written to it).
+    pub compared: bool,
+    /// The runs something was carried for, in the order found.
+    pub kept_runs: Vec<String>,
+    /// True when an earlier pull already said this (the same rows, still not pushed).
+    pub announced: bool,
 }
 
 impl Carried {
@@ -99,14 +110,33 @@ impl Carried {
         self.runs + self.steps + self.log_lines > 0
     }
 
+    /// Identifies what was kept, so that keeping the same rows again is not announced again.
+    pub fn digest(&self) -> String {
+        if !self.wrote() && self.steps_without_artifact == 0 {
+            return String::new();
+        }
+        format!(
+            "{}:{}:{}:{}:{}",
+            self.runs,
+            self.steps,
+            self.log_lines,
+            self.steps_without_artifact,
+            self.kept_runs.join(",")
+        )
+    }
+
     /// One line for stderr saying what the pull kept or could not keep; None when there is
-    /// nothing to say. Informational, not part of the CLI contract.
+    /// nothing to say, or nothing new. Informational, not part of the CLI contract.
     pub fn note(&self) -> Option<String> {
         if let Some(why) = &self.unreadable {
             return Some(format!(
-                "[barca] warning: the local history could not be read ({why}); it was replaced \
-                 by the shared history, and anything recorded only on this machine is gone"
+                "[barca] warning: the local history file is not a database ({why}); it was \
+                 replaced by the shared history, and anything recorded only on this machine is \
+                 gone"
             ));
+        }
+        if self.announced {
+            return None;
         }
         let plural = |n: usize, word: &str| format!("{n} {word}{}", if n == 1 { "" } else { "s" });
         let mut kept = Vec::new();
@@ -164,6 +194,13 @@ fn text(v: &Value) -> Option<&str> {
     }
 }
 
+fn int(v: &Value) -> i64 {
+    match v {
+        Value::Integer(n) => *n,
+        _ => 0,
+    }
+}
+
 fn insert_sql(table: &str, columns: &[&str]) -> String {
     let marks: Vec<String> = (1..=columns.len()).map(|i| format!("?{i}")).collect();
     format!(
@@ -217,31 +254,48 @@ pub(crate) async fn carry_unpushed(
 ) -> Result<Carried, BarcaError> {
     let mut carried = Carried::default();
 
-    let pulled_status: HashMap<String, String> = rows_of(
+    // (status, steps_executed) of every run the pulled database holds.
+    let pulled_runs: HashMap<String, (String, i64)> = rows_of(
         pulled,
-        "SELECT run_id, status FROM runs",
+        "SELECT run_id, status, COALESCE(steps_executed, 0) FROM runs",
         vec![],
         "reading the pulled runs",
     )
     .await?
     .iter()
-    .filter_map(|r| Some((text(&r[0])?.to_string(), text(&r[1])?.to_string())))
+    .filter_map(|r| {
+        Some((
+            text(&r[0])?.to_string(),
+            (text(&r[1])?.to_string(), int(&r[2])),
+        ))
+    })
     .collect();
 
-    // Local runs the pulled database does not hold as finished, oldest first.
-    let open: Vec<(String, String)> = rows_of(
+    // Local runs that can hold something the pulled database lacks, oldest first.
+    let this_host = crate::db::local_host();
+    let open: Vec<OpenRun> = rows_of(
         local,
-        "SELECT run_id, status FROM runs ORDER BY id",
+        "SELECT run_id, status, COALESCE(steps_executed, 0), COALESCE(host, '') FROM runs \
+         ORDER BY id",
         vec![],
         "reading the local runs",
     )
     .await?
     .iter()
-    .filter_map(|r| Some((text(&r[0])?.to_string(), text(&r[1])?.to_string())))
-    .filter(|(run_id, _)| {
-        pulled_status
-            .get(run_id)
-            .is_none_or(|status| !SETTLED.contains(&status.as_str()))
+    .filter_map(|r| {
+        Some(OpenRun {
+            run_id: text(&r[0])?.to_string(),
+            status: text(&r[1])?.to_string(),
+            steps_executed: int(&r[2]),
+            ours: !this_host.is_empty() && text(&r[3]) == Some(this_host.as_str()),
+        })
+    })
+    .filter(|run| match pulled_runs.get(&run.run_id) {
+        None => true,
+        Some((status, _)) if SETTLED.contains(&status.as_str()) => false,
+        Some((status, steps)) => {
+            (status.as_str(), *steps) != (run.status.as_str(), run.steps_executed)
+        }
     })
     .collect();
     if open.is_empty() {
@@ -249,7 +303,8 @@ pub(crate) async fn carry_unpushed(
     }
 
     pulled.execute("BEGIN", ()).await.map_err(db_err("begin"))?;
-    let copied = copy_runs(local, pulled, &open, &pulled_status, &mut carried).await;
+    let known: HashSet<&str> = pulled_runs.keys().map(String::as_str).collect();
+    let copied = copy_runs(local, pulled, &open, &known, &mut carried).await;
     if let Err(e) = copied {
         pulled.execute("ROLLBACK", ()).await.ok();
         return Err(e);
@@ -261,11 +316,20 @@ pub(crate) async fn carry_unpushed(
     Ok(carried)
 }
 
+/// A local run that is compared with the pulled database.
+struct OpenRun {
+    run_id: String,
+    status: String,
+    steps_executed: i64,
+    /// Made on this host: its artifacts are expected here.
+    ours: bool,
+}
+
 async fn copy_runs(
     local: &Connection,
     pulled: &Connection,
-    open: &[(String, String)],
-    pulled_status: &HashMap<String, String>,
+    open: &[OpenRun],
+    known: &HashSet<&str>,
     carried: &mut Carried,
 ) -> Result<(), BarcaError> {
     let run_select = format!(
@@ -291,13 +355,15 @@ async fn copy_runs(
         column_index(STEP_COLUMNS, "artifact_path"),
     );
 
-    for (run_id, local_status) in open {
+    for run in open {
+        let (run_id, local_status) = (&run.run_id, &run.status);
         let id = || vec![Value::Text(run_id.clone())];
+        let before = (carried.runs, carried.steps, carried.log_lines);
 
         // The run row. The pulled database may hold it as `running` or `interrupted` while
         // this machine saw it end: then the outcome it recorded for itself stands.
-        match pulled_status.get(run_id) {
-            None => {
+        match known.contains(run_id.as_str()) {
+            false => {
                 for row in rows_of(local, &run_select, id(), "reading a local run").await? {
                     pulled
                         .execute(run_insert.as_str(), row)
@@ -306,7 +372,7 @@ async fn copy_runs(
                     carried.runs += 1;
                 }
             }
-            Some(_) if SETTLED.contains(&local_status.as_str()) => {
+            true if SETTLED.contains(&local_status.as_str()) => {
                 let outcome = rows_of(
                     local,
                     "SELECT status, steps_executed, steps_cached, finished_at, elapsed_seconds \
@@ -327,7 +393,7 @@ async fn copy_runs(
                         .map_err(db_err("writing a run's outcome"))?;
                 }
             }
-            Some(_) => {}
+            true => {}
         }
 
         // Its steps: the ones the pulled database has no row for.
@@ -339,7 +405,8 @@ async fn copy_runs(
             if there.contains(&node_id) {
                 continue;
             }
-            if text(&row[step_status]) == Some("success")
+            if run.ours
+                && text(&row[step_status]) == Some("success")
                 && !artifact_reachable(text(&row[step_path]).unwrap_or(""))
             {
                 carried.steps_without_artifact += 1;
@@ -371,6 +438,9 @@ async fn copy_runs(
                 carried.log_lines += 1;
             }
         }
+        if before != (carried.runs, carried.steps, carried.log_lines) {
+            carried.kept_runs.push(run_id.clone());
+        }
     }
     Ok(())
 }
@@ -401,12 +471,23 @@ pub(crate) mod testing {
         conn.execute(sql, params).await.unwrap();
     }
 
+    /// A run made on this host, with `steps_executed` at the number of steps it has recorded
+    /// so far (as the recorder keeps it).
     pub(crate) async fn add_run(db_path: &str, run_id: &str, status: &str) {
+        add_run_from(db_path, run_id, status, &db::local_host()).await;
+    }
+
+    pub(crate) async fn add_run_from(db_path: &str, run_id: &str, status: &str, host: &str) {
         exec(
             db_path,
             "INSERT INTO runs (run_id, command, files, status, steps_executed, host) \
-             VALUES (?1, 'get', '[\"f.py\"]', ?2, 0, 'some-other-host')",
-            vec![Value::Text(run_id.into()), Value::Text(status.into())],
+             VALUES (?1, 'get', '[\"f.py\"]', ?2, \
+             (SELECT COUNT(*) FROM materializations WHERE run_id = ?1), ?3)",
+            vec![
+                Value::Text(run_id.into()),
+                Value::Text(status.into()),
+                Value::Text(host.into()),
+            ],
         )
         .await;
     }
@@ -566,8 +647,8 @@ mod tests {
         // Another process on this machine pushed the local database mid-run: the shared copy
         // has `ended` and `died` as `running`, with the one step each had recorded by then.
         for run in ["ended", "died", "noticed"] {
-            add_run(&pulled, run, "running").await;
             add_step(&pulled, run, "f.py:a", &file).await;
+            add_run(&pulled, run, "running").await;
             add_step(&local, run, "f.py:a", &file).await;
             add_step(&local, run, "f.py:b", &file).await;
         }
@@ -599,11 +680,11 @@ mod tests {
             )
             .await,
             [
-                "died\trunning\t0\t0\tNULL\tNULL",
+                "died\trunning\t1\t0\tNULL\tNULL",
                 // The outcome the run recorded for itself replaces `running`.
                 "ended\tfailed\t2\t3\t1.5\t2026-01-01 00:00:00",
                 // A local `running` never overwrites what the shared copy says.
-                "noticed\tinterrupted\t0\t0\tNULL\tNULL",
+                "noticed\tinterrupted\t1\t0\tNULL\tNULL",
             ]
         );
         let mut want = Vec::new();
@@ -613,6 +694,39 @@ mod tests {
             }
         }
         assert_eq!(steps(&pulled).await, want);
+
+        // The pulled database is the local one now. At the next pull `died` and `noticed` are
+        // in the same state on both sides, so they are not compared again (a step added to
+        // one behind the recorder's back shows that they are skipped).
+        add_step(&pulled, "died", "f.py:unseen", &file).await;
+        add_step(&pulled, "noticed", "f.py:unseen", &file).await;
+        let fresh = fresh_db(&dir, "fresh.db").await;
+        for run in ["died", "noticed"] {
+            add_step(&fresh, run, "f.py:a", &file).await;
+        }
+        add_run(&fresh, "died", "running").await;
+        add_run(&fresh, "noticed", "interrupted").await;
+        // (`ended` is not in the fresh copy at all, so it is carried whole.)
+        assert_eq!(carry(&pulled, &fresh).await.kept_runs, ["ended"]);
+    }
+
+    #[tokio::test]
+    async fn another_hosts_steps_go_back_as_they_came() {
+        // Rows of a run made elsewhere can only be here because they were pulled. If the
+        // shared state no longer has them (it was rolled back), they are carried whole: their
+        // artifacts were never expected on this machine.
+        let dir = tempfile::tempdir().unwrap();
+        let gone = dir.path().join("gone.json").to_string_lossy().to_string();
+        let pulled = fresh_db(&dir, "pulled.db").await;
+        let local = fresh_db(&dir, "local.db").await;
+        add_step(&local, "theirs", "f.py:a", &gone).await;
+        add_run_from(&local, "theirs", "success", "another-machine").await;
+
+        let carried = carry(&local, &pulled).await;
+        assert_eq!(
+            (carried.runs, carried.steps, carried.steps_without_artifact),
+            (1, 1, 0)
+        );
     }
 
     #[tokio::test]
@@ -695,6 +809,6 @@ mod tests {
             unreadable: Some("short read".into()),
             ..Default::default()
         };
-        assert!(unreadable.note().unwrap().contains("could not be read"));
+        assert!(unreadable.note().unwrap().contains("is not a database"));
     }
 }
