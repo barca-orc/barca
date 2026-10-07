@@ -3189,6 +3189,7 @@ async fn execute(
     // database, replay this run's ledger onto it, retry.
     if state_sync_on {
         let mut attempt = 0u32;
+        let mut pushed_again = false;
         let t_push = Instant::now();
         loop {
             let outcome =
@@ -3199,10 +3200,15 @@ async fn execute(
                     ..
                 } => false,
                 // Uploaded, but another process wrote to the local database (or replaced
-                // it) while the upload was on its way. Treated like a conflict: pull what was
-                // just uploaded, which keeps those rows, and push again. When the retries are
-                // used up the upload still stands, and the rows go with a later push.
-                state_sync::PushOutcome::Pushed { .. } => attempt < cfg.push_retries,
+                // it) while the upload was on its way. Treated like a conflict, once: pull
+                // what was just uploaded, which keeps those rows, and push again. Only once,
+                // because a run going in the same project writes during every upload, and
+                // chasing it would cost a pull and an upload each time for rows that run
+                // pushes itself when it ends. The upload stands either way; rows written
+                // after it go with the next push from this machine.
+                state_sync::PushOutcome::Pushed { .. } => {
+                    !std::mem::replace(&mut pushed_again, true) && attempt < cfg.push_retries
+                }
                 state_sync::PushOutcome::Conflict => {
                     if attempt >= cfg.push_retries {
                         return Err(BarcaError::Other(format!(

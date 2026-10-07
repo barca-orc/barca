@@ -135,6 +135,12 @@ fn remove_abandoned_pulls(db_path: &str) {
     }
 }
 
+/// How long the download of a pull's last attempt may take. That attempt holds the database's
+/// lock, so every other barca command in the project waits for it; they give up after 60
+/// seconds ([`crate::db`]'s lock wait). Shorter than that, so that a stalled store fails this
+/// one pull and lets the others go on, instead of failing all of them.
+const LOCKED_DOWNLOAD_LIMIT: std::time::Duration = std::time::Duration::from_secs(45);
+
 /// How many downloads a pull makes without holding the database's lock before it takes the
 /// lock for the whole of one. A download is discarded when another barca process replaced or
 /// pushed the local database while it was on its way.
@@ -164,7 +170,8 @@ pub async fn pull_state(python: &Path, cfg: &ResolvedConfig) -> Result<Pulled, B
             None
         };
         let staged = staged_path(&cfg.db_path, "pull");
-        let result = pull_into(python, cfg, uri, &staged, lock.as_ref()).await;
+        let limit = lock.is_some().then_some(LOCKED_DOWNLOAD_LIMIT);
+        let result = pull_into(python, cfg, uri, &staged, lock.as_ref(), limit).await;
         // Gone already when it was swapped in; left behind when the pull failed part-way or
         // the download was discarded.
         let _ = std::fs::remove_file(&staged);
@@ -186,17 +193,25 @@ async fn pull_into(
     uri: &str,
     staged: &Path,
     held: Option<&crate::db::DbLock>,
+    limit: Option<std::time::Duration>,
 ) -> Result<Option<Pulled>, BarcaError> {
     // Read before the download begins: a change by the time of the swap means the download
     // may be older than the local database.
     let base_raw = crate::state_base::read_raw(&cfg.db_path);
-    let out = state_cmd(python, cfg)
-        .arg("pull")
-        .arg(uri)
-        .arg(staged)
-        .output()
-        .await
-        .map_err(|e| BarcaError::Other(format!("failed to spawn state helper: {e}")))?;
+    let mut download = state_cmd(python, cfg);
+    download.arg("pull").arg(uri).arg(staged);
+    let out = helper_output(download, limit).await.map_err(|e| match e {
+        HelperFailed::Spawn(e) => BarcaError::Other(format!("failed to spawn state helper: {e}")),
+        HelperFailed::TimedOut(limit) => BarcaError::Other(format!(
+            "shared state pull from {uri}: the download did not finish within {}s and was \
+             stopped. Other barca commands in this project were changing the local history at \
+             the same time, so this download was made while holding its lock, which cannot be \
+             held for longer.\nThe local history {} was left as it was. Run the command again; \
+             if the store is slow or unreachable, BARCA_STATE=off runs with local history only.",
+            limit.as_secs(),
+            cfg.db_path
+        )),
+    })?;
     if !out.status.success() {
         return Err(BarcaError::Other(format!(
             "shared state pull from {uri} failed: {}\n\
@@ -254,6 +269,30 @@ fn invalid_shared_state(uri: &str, db_path: &str, why: &str) -> BarcaError {
          docs remote`, \"If the shared history is damaged\". Until then, BARCA_STATE=off runs \
          with local history only."
     ))
+}
+
+enum HelperFailed {
+    Spawn(std::io::Error),
+    TimedOut(std::time::Duration),
+}
+
+/// Run a state helper to its end and collect its output. With a `limit`, a helper still
+/// running after that long is killed and the call fails.
+async fn helper_output(
+    mut cmd: Command,
+    limit: Option<std::time::Duration>,
+) -> Result<std::process::Output, HelperFailed> {
+    // Dropping the future (the limit passed, or the run was cancelled) must not leave a
+    // download running that nobody waits for.
+    cmd.kill_on_drop(true);
+    let output = cmd.output();
+    match limit {
+        None => output.await.map_err(HelperFailed::Spawn),
+        Some(limit) => match tokio::time::timeout(limit, output).await {
+            Ok(out) => out.map_err(HelperFailed::Spawn),
+            Err(_) => Err(HelperFailed::TimedOut(limit)),
+        },
+    }
 }
 
 /// The reason a state helper failed: its last `error: ...` line (what `python -m barca._state`
@@ -373,6 +412,43 @@ error: RefreshError: Reauthentication is needed.\n";
 
     use super::*;
     use turso::Builder;
+
+    /// The last attempt of a pull downloads while holding the database's lock. A helper that
+    /// stalls is stopped at the limit, so the lock is given back; one that finishes in time
+    /// is not disturbed.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_helper_that_outlives_its_limit_is_killed_and_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("pid");
+        let script = format!("echo $$ > {}; exec sleep 30", pid_file.display());
+        let mut stalled = Command::new("sh");
+        stalled.arg("-c").arg(&script);
+        let started = std::time::Instant::now();
+        let limit = std::time::Duration::from_millis(500);
+        let failed = helper_output(stalled, Some(limit)).await;
+        assert!(matches!(failed, Err(HelperFailed::TimedOut(l)) if l == limit));
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
+        // The process is gone, not left downloading.
+        let pid: i64 = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while crate::db::pid_alive(pid) && std::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(
+            !crate::db::pid_alive(pid),
+            "the stalled helper is still running"
+        );
+
+        let mut quick = Command::new("sh");
+        quick.arg("-c").arg("echo done");
+        let out = helper_output(quick, Some(std::time::Duration::from_secs(30))).await;
+        assert_eq!(out.ok().map(|o| o.stdout), Some(b"done\n".to_vec()));
+    }
 
     async fn open_and_count(db_path: &str, table: &str) -> u64 {
         let db = Builder::new_local(db_path).build().await.unwrap();

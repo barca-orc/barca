@@ -77,7 +77,8 @@ pub(crate) fn write(
                 .unwrap_or_default(),
         },
         seq: match before {
-            Some(b) => b.seq.saturating_add(1),
+            // Wrapping: at the largest value the next state must still differ from this one.
+            Some(b) => b.seq.wrapping_add(1),
             // No readable predecessor: start from the clock, which no earlier state used.
             None => std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -139,5 +140,20 @@ mod tests {
         // A record from before the field existed says nothing.
         fs::write(path(&db), br#"{"seq":7,"kept":""}"#).unwrap();
         assert_eq!(pulled(&db), "");
+    }
+
+    #[test]
+    fn the_counter_still_changes_at_its_largest_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("m.db").to_string_lossy().to_string();
+        let last = serde_json::to_vec(&Base {
+            seq: u64::MAX,
+            ..Default::default()
+        })
+        .unwrap();
+        fs::write(path(&db), &last).unwrap();
+        write(&db, read_raw(&db).as_deref(), "", None).unwrap();
+        assert_ne!(read_raw(&db), Some(last));
+        assert_eq!(parse(read_raw(&db).as_deref()).unwrap().seq, 0);
     }
 }

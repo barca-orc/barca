@@ -877,3 +877,57 @@ def test_a_slow_upload_keeps_no_other_command_waiting_and_loses_no_write(
     assert set(shared_runs(state_uri)) == {a_first, b_run, a_two, during}
     assert a.local_runs() == {a_first, b_run, a_two, during}
     no_pull_leftovers(a)
+
+
+BUSY_SIBLING = """#!/bin/sh
+# Stands in for another run going in the same project: every time the shared state is
+# uploaded, something is recorded in the local database while the upload is on its way.
+case "$*" in
+  *"barca._state push"*)
+    echo x >> uploads
+    BARCA_STATE=off {barca} get w.py --refresh-all --json >/dev/null 2>&1 ;;
+esac
+exec {python} "$@"
+"""
+
+
+def test_writes_during_every_upload_cost_one_more_upload_not_one_per_retry(
+    machines, state_uri, tmp_path
+):
+    a = machines("a")
+    a_first = a.get("a_one")
+    (a.root / "w.py").write_text(quick("w"))
+    (a.root / "a_two.py").write_text(quick("a_two"))
+
+    busy_bin = tmp_path / "busy-bin"
+    busy_bin.mkdir()
+    (busy_bin / "barca").write_bytes(Path(_find_binary()).read_bytes())
+    (busy_bin / "barca").chmod(0o755)
+    (busy_bin / "python").write_text(
+        BUSY_SIBLING.format(python=sys.executable, barca=_find_binary())
+    )
+    (busy_bin / "python").chmod(0o755)
+    out = subprocess.run(
+        [str(busy_bin / "barca"), "get", "a_two.py", "--json"],
+        cwd=a.root,
+        capture_output=True,
+        text=True,
+        env=a.env,
+        timeout=WAIT * 2,
+    )
+    assert out.returncode == 0, out.stderr
+    a_two = json.loads(out.stdout)["run_id"]
+
+    # The run uploaded, saw the write, and uploaded once more. It did not go on chasing a
+    # writer that writes during every upload (that was one pull and one upload per retry,
+    # `push_retries` times).
+    assert (a.root / "uploads").read_text().count("x") == 2, out.stderr
+    assert "after 1 conflict retry" in out.stderr, out.stderr
+    during = [r["run_id"] for r in reversed(a.history()) if r["run_id"] not in (a_first, a_two)]
+    assert len(during) == 2, a.history()
+    # What was written during the first upload went with the second; what was written
+    # during the second is local, and goes with the next run from this machine.
+    assert set(shared_runs(state_uri)) == {a_first, a_two, during[0]}
+    a_three = a.get("a_three")
+    assert set(shared_runs(state_uri)) == {a_first, a_two, a_three, *during}
+    no_pull_leftovers(a)

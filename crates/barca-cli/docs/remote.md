@@ -136,11 +136,14 @@ After a pull the local copy is the shared history plus what was recorded only on
 
 Every pull works the same way, whatever state the local copy is in: download the shared
 history, add to the download what only the local copy has, and put the result in the local
-copy's place. Nothing is assumed about the local copy, so it does not matter whether it was
-written by a run that did not upload, deleted and created again (`barca history`, `barca stats`,
-`barca get` and `barca run` create it), restored from a backup, or changed by another program.
-Finding what only the local copy has reads the end of its history and its indexes, not the whole
-of it, so a long history does not make a pull slower.
+copy's place. Nothing is remembered about the local copy from one command to the next, so it
+does not matter whether it was written by a run that did not upload, deleted and created again
+(`barca history`, `barca stats`, `barca get` and `barca run` create it), or replaced as a whole
+file by an older or newer copy of itself (restored from a backup, or from `metadata.db.prev`).
+That covers what barca writes and whole-file replacement. It does not cover another program
+editing rows inside the file: finding what only the local copy has reads the end of its history
+and its indexes, not the whole of it (so a long history does not make that slower), and that
+relies on history only ever being added at the end, which barca's own writes keep.
 
 A pull is safe while a run is going in the same project. `--dry-run`, `barca status` and a second
 `barca get` or `barca run` pull as usual; the running run's row and the steps it has finished stay
@@ -149,7 +152,16 @@ Every run finishes and uploads; one that finds the shared history changed merges
 above. An upload sends a copy of the history taken at that moment, so other barca commands in
 the project do not wait for it, however slow it is; if one of them writes to the local copy
 meanwhile, the run uploads once more when the first upload is done (it reports this as a
-conflict retry).
+conflict retry). Once more only: what is written during that second upload (by a run still
+going in the project, say) is uploaded by that run when it ends, or with the next run from this
+machine.
+
+A download does not hold the project's lock either, with one exception. If two other barca
+commands in a row replace or upload the local copy while one pull is downloading, that pull's
+third download is made holding the lock, so that nothing can overtake it again; other barca
+commands in the project wait for it meanwhile. That download may take 45 seconds. After that it
+is stopped, the pull fails (exit 3) with the local copy untouched, and the commands that were
+waiting go on; run the failed command again.
 
 Files next to the database, all local: a download goes to
 `.barca/metadata.db.pull-<host>-<pid>-<n>` and is moved into place once complete, an upload is
