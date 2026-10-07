@@ -133,6 +133,8 @@ def get_fs(path: "str | Path"):
 # handler, which may interrupt the very thread that holds the lock.
 _staged: set[str] = set()
 _staged_lock = threading.RLock()
+# Set by `discard_staged`: the process is on its way out and stages nothing more.
+_leaving = False
 
 
 @contextmanager
@@ -142,12 +144,19 @@ def staged_beside(dest: Path):
     The same directory means the same filesystem, so the rename is atomic and ``dest`` is
     never seen half written. The temp file is removed when the block ends without having
     renamed it, and by ``discard_staged`` when the process is told to stop in the middle.
+
+    Creating the file and registering it happen under one lock, the one ``discard_staged``
+    takes: a process that is leaving either removes the file or was never given it. (The
+    thread that leaves is not the thread that stages, so without this a temp file created at
+    the wrong moment was left behind: twice in 180 runs of the Ctrl-C tests.)
     """
     dest.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=dest.parent, prefix=f".{dest.name}.", suffix=".tmp")
-    os.close(fd)
     with _staged_lock:
+        if _leaving:
+            raise InterruptedError(f"not staging {dest.name}: the process is exiting")
+        fd, tmp = tempfile.mkstemp(dir=dest.parent, prefix=f".{dest.name}.", suffix=".tmp")
         _staged.add(tmp)
+    os.close(fd)
     try:
         yield Path(tmp)
     finally:
@@ -157,8 +166,11 @@ def staged_beside(dest: Path):
 
 
 def discard_staged() -> None:
-    """Remove every temp file ``staged_beside`` has open. For a process about to exit."""
+    """Remove every temp file ``staged_beside`` has open, and let it open no more. For a
+    process about to exit."""
+    global _leaving
     with _staged_lock:
+        _leaving = True
         paths = list(_staged)
     for tmp in paths:
         try:

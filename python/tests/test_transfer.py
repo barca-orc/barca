@@ -568,6 +568,73 @@ class TestSignals:
         assert list(dest.parent.iterdir()) == []
 
 
+class TestStaging:
+    """Temp files beside their destination (`_storage.staged_beside`), and a process that
+    leaves in the middle (`_storage.discard_staged`)."""
+
+    @pytest.fixture(autouse=True)
+    def _fresh(self, monkeypatch):
+        monkeypatch.setattr(_storage, "_leaving", False)
+        monkeypatch.setattr(_storage, "_staged", set())
+
+    def test_a_staged_file_is_removed_when_its_block_ends_without_installing_it(self, tmp_path):
+        with pytest.raises(RuntimeError), _storage.staged_beside(tmp_path / "h.json") as tmp:
+            tmp.write_text("half")
+            raise RuntimeError("the transfer failed")
+        assert list(tmp_path.iterdir()) == []
+
+    def test_leaving_removes_what_is_staged_and_stages_nothing_more(self, tmp_path):
+        with _storage.staged_beside(tmp_path / "h.json") as tmp:
+            assert tmp.exists()
+            _storage.discard_staged()
+            assert not tmp.exists()
+        # A transfer that starts after the process began to leave gets no temp file: nothing
+        # can be created that nobody is left to remove.
+        with pytest.raises(InterruptedError), _storage.staged_beside(tmp_path / "late.json"):
+            pass
+        assert list(tmp_path.iterdir()) == []
+
+    def test_a_file_cannot_be_created_between_the_look_and_the_exit(self, tmp_path, monkeypatch):
+        """The window the soak hit: one thread leaves while another is creating its temp file.
+        The file is created while the staging lock is held, so leaving waits for it."""
+        import tempfile as real_tempfile
+
+        entered, proceed, left = threading.Event(), threading.Event(), threading.Event()
+        real = real_tempfile.mkstemp
+
+        def slow_mkstemp(**kwargs):
+            entered.set()
+            assert proceed.wait(30)
+            return real(**kwargs)
+
+        monkeypatch.setattr(_storage.tempfile, "mkstemp", slow_mkstemp)
+        outcome = []
+
+        def stage():
+            try:
+                with _storage.staged_beside(tmp_path / "h.json") as tmp:
+                    assert left.wait(30)  # the other thread has discarded by now
+                    outcome.append(tmp.exists())
+            except InterruptedError:
+                outcome.append("refused")
+
+        def leave():
+            _storage.discard_staged()
+            left.set()
+
+        stager = threading.Thread(target=stage)
+        stager.start()
+        assert entered.wait(30)  # inside mkstemp, lock held
+        leaver = threading.Thread(target=leave)
+        leaver.start()
+        assert not left.wait(0.2), "leaving did not wait for the file being created"
+        proceed.set()
+        stager.join(30)
+        leaver.join(30)
+        assert outcome == [False]  # created, registered, then removed by the leaver
+        assert list(tmp_path.iterdir()) == []
+
+
 class TestCoordinatorGone:
     """The helper is deaf to Ctrl-C, so it has to notice by itself that the coordinator is
     gone, and then leave without a word and without a half-written file (#249)."""

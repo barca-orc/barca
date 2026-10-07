@@ -409,7 +409,8 @@ async fn run_helper(
         _ = cancelled => HelperFailed::Cancelled,
         _ = timed_out => HelperFailed::TimedOut(limit.expect("a limit that passed")),
     };
-    drop(lifeline);
+    // The lifeline stays open while the helper is asked to stop: it has one way out at a
+    // time, the orderly one (SIGTERM unwinds through its cleanup).
     if let Some(pid) = pid {
         let grace = crate::helper_proc::STOP_GRACE;
         crate::helper_proc::terminate(pid);
@@ -420,6 +421,7 @@ async fn run_helper(
             let _ = tokio::time::timeout(grace, &mut output).await;
         }
     }
+    drop(lifeline);
     Err(why)
 }
 
