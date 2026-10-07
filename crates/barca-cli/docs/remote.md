@@ -102,6 +102,88 @@ Two machines finishing runs at the same time do not lose history: the second det
 conflict, re-reads and merges. Set `BARCA_STATE=off` to keep history on each machine and share
 only results.
 
+### The local copy of the history
+
+Each machine works on a local copy, `.barca/metadata.db`. `barca get` and `barca run` bring it up
+to the shared history when they start (a pull) and upload it when they end; `--dry-run` and
+`barca status` pull before they look, and upload nothing. `barca history` and `barca stats` read
+the local copy as it is.
+
+After a pull the local copy is the shared history plus what was recorded only on this machine:
+
+- **Nothing other machines uploaded is dropped by a pull**, whatever state the local copy was
+  left in (a killed run, a database created by `barca history` before the first run), and
+  whichever barca commands run in the project at the same time: a download that another
+  command's pull or upload has overtaken is thrown away, never put in place of a newer copy.
+  A barca 0.17.1 or older running in the same project at the same moment does not take part
+  in this.
+- **What was recorded only here is kept.** A run that was killed (`kill -9`, out of memory, a
+  lost machine) before it could upload, a run whose upload failed, and runs made with
+  `BARCA_STATE=off` are still in the local copy after the pull, with their finished steps and
+  captured output. The pull says so on stderr, for example
+  `[barca] kept 1 run and 2 finished steps recorded only on this machine (not yet in the shared history)`.
+  So after a kill the next `barca get` serves the steps the killed run finished from cache
+  (`barca docs cache`, "While a run is going, and after one is killed").
+- **They are shared by the next upload.** When the next `barca get` or `barca run` on this
+  machine ends, those runs and steps are in the shared history; a killed run shows there as
+  `interrupted`. `--dry-run` and `barca status` keep them locally and upload nothing, and the
+  `kept` line is printed once, not by every command until then.
+- **Nothing is there twice.** A run is identified by its run id and a step by its run id and
+  node, so a row both copies hold appears once, however many pulls happen before an upload.
+- **A step of a run made here is kept only with its result.** If its result file is no longer on
+  this machine it is left out (stderr: `left out 1 step whose result file is no longer here`)
+  and runs again; the run it belonged to is kept.
+
+Every pull works the same way, whatever state the local copy is in: download the shared
+history, add to the download what only the local copy has, and put the result in the local
+copy's place. Nothing is assumed about the local copy, so it does not matter whether it was
+written by a run that did not upload, deleted and created again (`barca history`, `barca stats`,
+`barca get` and `barca run` create it), restored from a backup, or changed by another program.
+Finding what only the local copy has reads the end of its history and its indexes, not the whole
+of it, so a long history does not make a pull slower.
+
+A pull is safe while a run is going in the same project. `--dry-run`, `barca status` and a second
+`barca get` or `barca run` pull as usual; the running run's row and the steps it has finished stay
+in the local copy, so `barca status` shows its progress next to what other machines uploaded.
+Every run finishes and uploads; one that finds the shared history changed merges as described
+above. An upload sends a copy of the history taken at that moment, so other barca commands in
+the project do not wait for it, however slow it is; if one of them writes to the local copy
+meanwhile, the run uploads once more when the first upload is done (it reports this as a
+conflict retry).
+
+Files next to the database, all local: a download goes to
+`.barca/metadata.db.pull-<host>-<pid>-<n>` and is moved into place once complete, an upload is
+sent from `.barca/metadata.db.push-<host>-<pid>-<n>`, and `.barca/metadata.db.base` is a counter
+that changes every time the local copy is replaced or uploaded, which is how a pull notices
+that its download was overtaken. Leftovers of a killed command are removed by a later pull. You
+can delete any of them when no barca command is running; nothing is concluded from the counter
+about what the local copy holds. If barca is killed during a pull, the local copy is either the
+old one, whole, or the new one, whole.
+
+When something is wrong, the local copy is replaced only if it certainly holds no history:
+
+- A downloaded history that is not a database does not replace an existing local copy: the
+  command fails (exit 3).
+- A local copy that another program holds open (a DB browser, a script using `sqlite3`), that
+  cannot be read (permissions, I/O), whose main file is empty while its `-wal` file is not, or
+  that fails for any reason barca does not recognise is left exactly as it was: barca waits up
+  to 5 seconds for a lock, then the command fails (exit 3) and says what to close or check.
+- A local file that certainly holds no barca history is replaced, with a warning on stderr
+  that says why: it is not a database (no SQLite header, cut short, or reported corrupt when
+  read), it is empty, it is a database without barca's tables, or only a `-wal` file was left.
+
+**Resetting or rolling back the shared history.** Every machine keeps whatever the shared
+history lacks, so removing history takes more than changing the shared file:
+
+- If `state/metadata.db` is deleted, the next `barca get` or `barca run` on any machine creates
+  it again from that machine's whole local copy.
+- If it is replaced by an older copy, each machine keeps every run the older copy lacks at its
+  next pull, and uploads them with its next run.
+- To reset on purpose: with no barca command running anywhere, delete the shared file and, on
+  each machine, `rm -f .barca/metadata.db .barca/metadata.db-wal .barca/metadata.db.base` (for
+  a named environment the same three files under `.barca/envs/<env>/`). Result files are not
+  affected.
+
 `barca get --json` reports a result as it does without a store: json values inline, parquet and
 pickle as a pointer (`{"_barca_artifact": {"path", ...}}`) to the copy in `.barca/artifacts/`.
 A final output another machine produced is downloaded first.
@@ -242,17 +324,16 @@ the copies while the objects are unchanged (`barca docs sql`).
 - `barca serve` does not share history yet; set `BARCA_STATE=off` for it.
 - The shared history is updated once, when a run ends. A run records each finished step in the
   local copy as it goes (`barca docs cache`, "While a run is going, and after one is killed"), but
-  other machines see none of it until the run ends, and never see a run that was killed. With a
-  remote artifact store a run records nothing early: a step is recorded once its upload is
-  confirmed, when the run ends.
-- On the machine a run is on, `barca status` during the run and resuming after `kill -9` can be
-  relied on only while no other machine updates the shared history in the meantime:
-  every `barca get`, `barca run`, `--dry-run` and `barca status` starts by replacing the local
-  copy with the shared one. After a run is killed, the next run on that machine can also
-  overwrite history other machines added in the meantime (result files are not touched;
-  those steps run again). If a run was killed and other machines are active, delete
-  `.barca/metadata.db` and `.barca/metadata.db-wal` on that machine before the next run: it
-  then starts from the shared history alone, and recomputes what the killed run had finished.
+  other machines see none of it until the run ends. A run that was killed is seen by other
+  machines only after another `barca get` or `barca run` on the same machine has ended; if that
+  machine never runs again, they never see it. With a remote artifact store a run records
+  nothing early: a step is recorded once its upload is confirmed, when the run ends, so a
+  killed run leaves its run row and no steps.
+- Carried across a pull: runs, steps and captured output. Not carried: step rows written by
+  barca before 0.17 that were never uploaded (they do not say which run wrote them), and the
+  timing estimates used to size batches, which are rebuilt by running.
+- Without a store (only `BARCA_STATE_URI` set), history is shared but result files are not: a
+  step another machine computed is recorded with a path on that machine.
 - `barca status` does not describe a remote json or pickle result larger than 16 MB, and
   `barca sql` downloads a whole artifact before querying it.
 - `.barca/artifacts/` has no size cap (see Failures).

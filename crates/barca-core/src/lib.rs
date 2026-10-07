@@ -19,6 +19,8 @@ pub mod project_modules;
 pub mod protocol;
 mod recover;
 pub mod sql;
+pub(crate) mod state_base;
+pub mod state_carry;
 pub mod state_sync;
 pub mod status;
 pub mod telemetry;

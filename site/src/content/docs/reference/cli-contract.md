@@ -906,7 +906,9 @@ contract.
 ## stderr
 
 stderr carries progress, warnings, your steps' own `print` output and errors. Only the error
-envelope and the `--agent` lines below are contract.
+envelope and the `--agent` lines below are contract. Other `[barca] ...` lines, such as
+`[barca] pulled state ...` and the `[barca] kept ...` line a pull prints when it keeps history
+recorded only on this machine (`barca docs remote`), are informational and not contract.
 
 ### Error envelope (stable)
 

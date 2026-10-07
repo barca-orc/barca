@@ -51,6 +51,10 @@ the same remediation as `get` and `run`. A target is one name or several, comma-
 spaces (`a,b`), parsed exactly as `get` and `run` parse them; the JSON names them in `targets`
 (and the single one in `target`).
 
+With shared remote state (`barca docs remote`), status first pulls the shared history, as a run
+does, so it also shows what other machines computed. A pull keeps what was recorded only on this
+machine, so this is safe while a run is going: its finished steps still show.
+
 Status reads the metadata DB as it is at that moment, and a run records each step as it
 finishes. So while a `barca get` is running, status in another terminal already shows the steps
 it has finished as `cached` (a partitioned asset as `partial`, with counts); see `barca docs
