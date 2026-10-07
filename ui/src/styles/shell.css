@@ -500,3 +500,7 @@
   margin: 0 8px 2px 0; padding: 0; border: 0; background: none; cursor: pointer;
   font-family: var(--font-mono); font-size: var(--text-xs); color: var(--signal); text-decoration: underline dotted;
 }
+
+/* A table's scroll area starts flush with its sticky header: any top padding
+   leaves a strip above the pinned header where scrolled rows show through. */
+.barca-table-scroll { padding-top: 0; }
