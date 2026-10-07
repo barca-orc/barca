@@ -105,6 +105,8 @@ An edit in one of these does not change the hash; recompute with `--refresh-all`
   these, and barca does not run your code to plan;
 - `from helpers import *`, and names a module defines anywhere but at its top level (inside an
   `if` or `try`, or assigned dynamically);
+- module-level constants bound by tuple unpacking (`A, B = 1, 2`), and augmented assignments to
+  a module-level name (`A += 1`): only a plain `A = ...` or `A: int = ...` is a definition;
 - a module reached through another module's `import` (`from helpers import other` where
   `helpers.py` does `import other`): import it directly;
 - what a helper refers to only in a decorator, a default argument value, an `except` clause's
@@ -133,6 +135,12 @@ reaches, uses:
 - or if its pipeline file is inside a package (`pkg/__init__.py` next to it) and imports
   project modules (`from .helpers import f`, `from pkg.helpers import f`): these now resolve
   from the root, as they do when the step runs.
+
+One more case can recompute once: a step whose helpers import the **same name from two
+different modules outside the project** (one helper does `from numpy import array`, another
+`from jax.numpy import array`). Before 0.18 such a step had two possible hashes, picked at random
+on every run, so it missed its cache about half the time; it now has one, and recomputes once
+if its last result was recorded under the other.
 
 Every other step keeps its hash and its cached results.
 
