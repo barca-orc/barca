@@ -498,6 +498,49 @@ def test_ctrl_c_after_a_failed_run_was_shared_leaves_its_record_as_it_is(project
     assert shared_history(store, make, "other")[0] == "failed"
 
 
+def test_a_second_ctrl_c_while_a_worker_reports_the_first_prints_no_traceback(tmp_path):
+    """Workers are in the terminal's job and do get Ctrl-C: the step is interrupted and the
+    worker reports that. A second Ctrl-C arriving during the report used to escape as an
+    uncaught KeyboardInterrupt, with a traceback (once in 300 runs of the matrix below).
+
+    Made certain here: the step raises KeyboardInterrupt, and the second signal is sent from
+    inside the report."""
+    import sys
+    import textwrap
+
+    script = textwrap.dedent(
+        """
+        import os, signal, sys
+        from pathlib import Path
+        from barca import _duckdb, _runtime, _worker
+
+        reported = []
+        _runtime.emit_step_error = lambda **kw: reported.append(kw)
+        real = _duckdb.explain_error
+
+        def pressed_again(exc, views):
+            os.kill(os.getpid(), signal.SIGINT)
+            for _ in range(1000):  # give the interpreter every chance to deliver it
+                pass
+            return real(exc, views)
+
+        _duckdb.explain_error = pressed_again
+        source = Path(sys.argv[1]) / "mod.py"
+        source.write_text("def interrupted():\\n    raise KeyboardInterrupt\\n")
+        step = {"node_id": "mod.py:interrupted", "function_name": "interrupted",
+                "source_file": str(source), "kind": "asset", "inputs": {}, "run_hash": "h"}
+        ok = _worker._run_daemon_step(step, {}, str(Path(sys.argv[1]) / "arts"), _worker._ArtifactLRU())
+        print("reported", ok, reported[0]["error_type"])
+        """
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", script, str(tmp_path)], capture_output=True, text=True, timeout=120
+    )
+    assert proc.stdout.strip() == "reported False KeyboardInterrupt", proc.stderr
+    assert "Traceback" not in proc.stderr, proc.stderr
+    assert proc.returncode == 0
+
+
 # ─── barca itself is killed ──────────────────────────────────────────────────
 
 KILLED = {

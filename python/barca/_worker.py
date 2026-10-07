@@ -839,6 +839,15 @@ def run_batch(batch):
             _materialize(result, node_id, art_dir, step, elapsed)
 
 
+def _ignore_further_interrupts() -> None:
+    import signal
+
+    try:
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+    except ValueError:
+        pass  # not the main thread: nothing to change
+
+
 def _run_daemon_step(step, modules, art_dir, lru):
     """Execute one step in daemon mode and emit its result or error.
 
@@ -960,6 +969,12 @@ def _run_daemon_step(step, modules, art_dir, lru):
         # errors are OSError subclasses, so a socket-error catch here would
         # swallow them; genuine socket death surfaces when the emit below
         # fails, and that propagates to the caller.)
+        if isinstance(exc, KeyboardInterrupt):
+            # Ctrl-C reached this worker and interrupted the step. A second Ctrl-C (people
+            # press it twice) must not interrupt the report of the first: it would leave
+            # this function as an uncaught KeyboardInterrupt and print a traceback. The
+            # coordinator has the same signal and stops this worker.
+            _ignore_further_interrupts()
         wall = time.perf_counter() - t0
         message = str(exc)
         if isinstance(exc, SystemExit):
