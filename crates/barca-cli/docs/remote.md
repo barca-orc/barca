@@ -93,8 +93,9 @@ reference: https://barca.sh/reference/config/
 ```
 
 `<env>` is `default` unless you pass `--env` (`barca docs cache`). Barca reads and writes objects
-and reads their metadata; it never deletes or lists. In practice that is `s3:GetObject`,
-`s3:PutObject` and `s3:ListBucket` on S3, the Storage Object User role on GCS (replacing the
+and reads their metadata; it never deletes, and it lists the bucket only once, before it
+recomputes a result whose artifact is missing (see "Failures"). In practice that is
+`s3:GetObject`, `s3:PutObject` and `s3:ListBucket` on S3, the Storage Object User role on GCS (replacing the
 history object needs delete permission there), and Storage Blob Data Contributor on Azure.
 
 Two machines finishing runs at the same time do not lose history: the second detects the
@@ -196,6 +197,10 @@ exceeds `transfer_timeout` fails as stalled and is not retried.
   `could not fetch N cached artifact(s) from the artifact store: the store at <uri> is not
   there or cannot be listed`. Nothing is recomputed, nothing is uploaded, and no bucket,
   container or directory is created.
+- **Credentials that can read and write but not list**: that listing is refused, and the same
+  error says so instead of "not found": `listing '<bucket>' is not permitted ... barca needs
+  s3:ListBucket on the bucket` (on GCS `storage.objects.list`, on Azure the Storage Blob Data
+  Reader or Contributor role). Exit 3; grant the permission, or recompute with `--refresh-all`.
 - **Cached artifact that cannot be fetched** for any other reason (permission or
   authentication errors, a store that cannot be reached, a stalled transfer): the run exits 3
   with `could not fetch ... cached artifact(s)`, naming each one and the store's error. Fix

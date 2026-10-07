@@ -121,7 +121,8 @@ artifact file if another task consumes it).
   artifact can be read is decided only when something needs to read it — a step that is
   going to run takes it as an input, a `partitions_from` step is expanded from it, or it is
   the output the command returns (its targets; with no target, the one asset whose value is
-  `final_output`, per [RFC-0002](/rfcs/0002-cli-surface/)). A needed artifact that is neither on this machine's disk nor
+  `final_output`, per [RFC-0002](/rfcs/0002-cli-surface/); a partitioned returned asset
+  is returned whole, so each of its partitions is checked). A needed artifact that is neither on this machine's disk nor
   fetchable from the artifact store has its producing step run again in the same run, with
   reason `artifact_missing`; the run hash is unchanged, so the artifact lands at the same
   path and no downstream row is invalidated. For a store-backed row the readable copy is

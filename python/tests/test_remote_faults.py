@@ -462,8 +462,10 @@ def test_a_deleted_bucket_is_a_failed_run_not_a_recompute(tmp_path, backend, con
     proc, _ = a.get()
     assert proc.returncode == 0, _explain(proc)
     backend.fs().rm(container, recursive=True)
-    if _container_exists(backend, container):
-        pytest.skip(f"the {backend.id} emulator did not delete the bucket")
+    # Not a skip: if the emulator keeps the bucket, this test proves nothing and must say so.
+    assert not _container_exists(backend, container), (
+        f"setup failed: the {backend.id} emulator did not delete the bucket"
+    )
 
     b = Project(tmp_path / "b", backend, container, proxy.endpoint, state)
     proc, took = b.get()
@@ -522,3 +524,55 @@ def test_a_stalled_store_fails_a_fetch_instead_of_hanging(tmp_path, backend, con
     _assert_store_failure(proc)
     assert "TimeoutError" in proc.stderr, _explain(proc)
     assert took < 45, f"a stalled store held the run for {took:.1f}s"
+
+
+def test_credentials_that_cannot_list_say_so_instead_of_bucket_not_found(tmp_path):
+    """Get/put without list (S3 `s3:ListBucket` denied): exit 3 naming the permission.
+
+    MinIO only: an anonymous bucket policy is the one restricted identity an emulator lets a
+    test create through the S3 API. The classification for the other backends is unit-tested
+    (test_storage.py).
+    """
+    backend = S3()
+    if not _reachable(backend.endpoint):
+        pytest.skip(f"s3 emulator not reachable at {backend.endpoint}")
+    container = f"barca-faults-{uuid.uuid4().hex[:12]}"
+    fs = backend.fs()
+    fs.mkdir(container)
+    try:
+        state = tmp_path / "state.db"
+        a = Project(tmp_path / "a", backend, container, backend.endpoint, state)
+        proc, _ = a.get()
+        assert proc.returncode == 0, _explain(proc)
+        for path in _stored(backend, container):
+            if "total" in path:
+                fs.rm(path)
+        policy = {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Principal": {"AWS": ["*"]},
+                    "Action": ["s3:GetObject", "s3:PutObject"],
+                    "Resource": [f"arn:aws:s3:::{container}/*"],
+                }
+            ],
+        }
+        fs.call_s3("put_bucket_policy", Bucket=container, Policy=json.dumps(policy))
+
+        b = Project(tmp_path / "b", backend, container, backend.endpoint, state)
+        toml = (b.dir / "barca.toml").read_text().split("[remote.storage_options.s3]")[0]
+        (b.dir / "barca.toml").write_text(
+            toml + "[remote.storage_options.s3]\nanon = true\n"
+            f'client_kwargs = {{ endpoint_url = "{backend.endpoint}" }}\n'
+        )
+        proc, _ = b.get()
+        _assert_store_failure(proc)
+        assert "is not permitted" in proc.stderr and "s3:ListBucket" in proc.stderr, _explain(proc)
+        assert "was not found" not in proc.stderr, _explain(proc)
+        assert not any("total" in path for path in _stored(backend, container))
+    finally:
+        try:
+            fs.rm(container, recursive=True)
+        except Exception:
+            pass

@@ -66,27 +66,7 @@ _PERMANENT = (
 )
 
 
-def _http_status(exc: BaseException) -> int | None:
-    """The HTTP status a cloud SDK attached to its error, if any.
-
-    azure.core's HttpResponseError carries `status_code`; gcsfs and
-    google.api_core errors carry `code`; requests-style errors carry
-    `response.status_code`.
-    """
-    for value in (
-        getattr(exc, "status_code", None),
-        getattr(exc, "code", None),
-        getattr(getattr(exc, "response", None), "status_code", None),
-    ):
-        if value is None:
-            continue
-        try:
-            status = int(value)
-        except (TypeError, ValueError):
-            continue
-        if 100 <= status <= 599:
-            return status
-    return None
+_http_status = _storage.http_status
 
 
 def _is_permanent(exc: BaseException) -> bool:

@@ -296,7 +296,9 @@ barca run publish pipeline.py                    # model is cached again
 - **Needed** means one of: a step that is going to run takes the artifact as an input; a
   `partitions_from` step is expanded from it; or it is the output the command returns: the
   targets you named, or with no target the one asset whose value is `final_output` (the last
-  asset). Every other asset at the end of a pipeline is treated like an intermediate.
+  asset). A partitioned asset is returned as a whole, so every one of its partitions is
+  checked (one file lookup per key, a few milliseconds at 5,000 keys). Every other asset at the
+  end of a pipeline is treated like an intermediate and is not looked at.
 - **Missing** means not on this machine's disk and, with an artifact store, not in the store
   either (`barca docs remote`). The store has to be there for that to count: if its bucket,
   container or directory is gone, misnamed or unreachable, the run fails with exit 3 and

@@ -180,6 +180,9 @@ def check_store(root: str) -> None:
     that cannot be reached all raise here, which is what tells them apart from one object
     being absent from a store that is otherwise fine.
 
+    The error says which it was: FileNotFoundError when the store answers that the bucket is
+    not there, PermissionError (naming the permission to grant) when it refuses the listing.
+
     Nothing is created: this never makes a bucket, a container or a directory.
     """
     local = local_path_of(root)
@@ -192,11 +195,66 @@ def check_store(root: str) -> None:
     if not container:
         raise ValueError(f"no bucket or container in {root}")
     fs.invalidate_cache()
-    # Both have to hold: the store says the bucket exists, and it can be listed. A listing
-    # alone is not proof (some servers answer an unknown bucket with an empty listing).
+    # The listing comes first: it is what tells "not permitted" from "not there". An
+    # existence check answers False for both.
+    try:
+        fs.ls(container, detail=False)
+    except Exception as exc:
+        status = http_status(exc)
+        if isinstance(exc, PermissionError) or status in (401, 403):
+            raise PermissionError(
+                f"listing {container!r} is not permitted ({type(exc).__name__}: {exc}). "
+                f"These credentials may read and write objects but cannot list the "
+                f"{_container_word(root)}; barca needs {list_permission(root)} to tell a "
+                f"missing artifact from a missing store"
+            ) from exc
+        if isinstance(exc, FileNotFoundError) or status == 404:
+            raise FileNotFoundError(
+                f"{_container_word(root)} {container!r} was not found ({type(exc).__name__}: {exc})"
+            ) from exc
+        raise
+    # A listing alone is not proof: some servers answer an unknown bucket with an empty one.
     if not fs.exists(container):
-        raise FileNotFoundError(f"bucket or container {container!r} does not exist")
-    fs.ls(container, detail=False)
+        raise FileNotFoundError(f"{_container_word(root)} {container!r} was not found")
+
+
+def _container_word(root: str) -> str:
+    return "container" if _scheme(root) in ("abfs", "abfss", "az") else "bucket"
+
+
+def list_permission(root: str) -> str:
+    """The permission that lets these credentials list the store holding `root`."""
+    scheme = _scheme(root)
+    if scheme in ("s3", "s3a"):
+        return "s3:ListBucket on the bucket"
+    if scheme in ("gs", "gcs"):
+        return "storage.objects.list (in the Storage Object User role)"
+    if scheme in ("abfs", "abfss", "az"):
+        return "the Storage Blob Data Reader or Contributor role (list blobs)"
+    return "permission to list it"
+
+
+def http_status(exc: BaseException) -> int | None:
+    """The HTTP status a cloud SDK attached to its error, if any.
+
+    azure.core's HttpResponseError carries `status_code`; gcsfs and
+    google.api_core errors carry `code`; requests-style errors carry
+    `response.status_code`.
+    """
+    for value in (
+        getattr(exc, "status_code", None),
+        getattr(exc, "code", None),
+        getattr(getattr(exc, "response", None), "status_code", None),
+    ):
+        if value is None:
+            continue
+        try:
+            status = int(value)
+        except (TypeError, ValueError):
+            continue
+        if 100 <= status <= 599:
+            return status
+    return None
 
 
 def exists(path: "str | Path") -> bool:
