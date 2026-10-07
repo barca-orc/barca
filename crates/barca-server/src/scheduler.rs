@@ -523,6 +523,18 @@ fn publish_status(state: &AppState, job_id: &str, handle: &str, status: RunStatu
     }
 }
 
+/// The DAG of the server's files, for deciding which jobs share a run. `None` (with a note on
+/// stderr) when it cannot be read; every job then runs on its own.
+async fn read_dag(state: &AppState) -> Option<barca_core::Dag> {
+    match commands::build_dag(&state.config.files, &state.config.python).await {
+        Ok(dag) => Some(dag),
+        Err(e) => {
+            eprintln!("[barca] scheduler: due jobs will not share runs: {e}");
+            None
+        }
+    }
+}
+
 /// Log the current schedule and each job's next fire time.
 fn log_schedule(jobs: &[ScheduledJob], zone: &Zone) {
     if jobs.is_empty() {
@@ -552,10 +564,15 @@ struct Scheduler {
     state: AppState,
     zone: Zone,
     jobs: Vec<ScheduledJob>,
+    /// The DAG the job set was read from, for deciding which due jobs share a run. `None` when
+    /// it could not be read: then nothing is shared.
+    dag: Option<barca_core::Dag>,
     /// The metadata DB that holds each job's last fire time. `None`: durability is disabled,
     /// so there is no catch-up.
     db_path: Option<String>,
     ledger: Ledger,
+    /// What [`Scheduler::explain_once`] has already said.
+    explained: Mutex<std::collections::HashSet<(String, String)>>,
 }
 
 impl Scheduler {
@@ -563,6 +580,7 @@ impl Scheduler {
     async fn load(state: AppState) -> Self {
         let zone = Zone::parse(&state.config.timezone);
         let jobs = collect_jobs(&state.config.files, &state.config.python).await;
+        let dag = read_dag(&state).await;
         let db_path = match db::ensure_env_dirs(&state.config.resolved.env) {
             Ok(_) => {
                 let path = state.config.resolved.db_path.clone();
@@ -578,8 +596,10 @@ impl Scheduler {
             state,
             zone,
             jobs,
+            dag,
             db_path,
             ledger: Ledger::default(),
+            explained: Mutex::default(),
         }
     }
 
@@ -587,6 +607,8 @@ impl Scheduler {
     /// the blocking pool inside `commands::list_assets`.
     async fn reload(&mut self) {
         self.jobs = collect_jobs(&self.state.config.files, &self.state.config.python).await;
+        self.dag = read_dag(&self.state).await;
+        self.explained.lock().unwrap().clear();
         eprintln!("[barca] schedule reloaded: {} job(s)", self.jobs.len());
         log_schedule(&self.jobs, &self.zone);
         self.publish();
@@ -641,7 +663,7 @@ impl Scheduler {
 
     /// Fire the jobs that are due together, sharing runs where [`Scheduler::groups`] says to.
     async fn fire(&self, due: &[&ScheduledJob], fired_at: i64, what: &str) {
-        let groups = self.groups(due).await;
+        let groups = self.groups(due);
         for jobs in runs_for(due, groups.as_deref()) {
             self.start_run(&jobs, fired_at, what).await;
         }
@@ -652,23 +674,39 @@ impl Scheduler {
     /// nothing from one run, and would only be tied to each other's timing, failures and
     /// cancellation, so they stay apart. `None`: every job gets its own run.
     ///
+    /// Decided from the DAG read with the job set, so a tick reads no source file.
+    ///
     /// Nothing is shared when artifacts go to a remote store. There a step is recorded only
     /// when its run ends (once its upload is confirmed), so a job could not be told apart from
     /// the run it is in: it would wait for the slowest job it fired with before its next tick
     /// could fire. Keeping every job's ticks independent comes first, so such a server keeps
     /// one run per job (and a step upstream of two jobs due together may be computed by both).
-    async fn groups(&self, due: &[&ScheduledJob]) -> Option<Vec<Vec<String>>> {
-        let config = &self.state.config;
-        if due.len() < 2 || config.resolved.remote_artifacts() {
+    fn groups(&self, due: &[&ScheduledJob]) -> Option<Vec<Vec<String>>> {
+        if due.len() < 2 || self.state.config.resolved.remote_artifacts() {
             return None;
         }
+        let dag = self.dag.as_ref()?;
         let ids: Vec<String> = due.iter().map(|job| job.id.clone()).collect();
-        match barca_core::share::shared_run_groups_in(&config.files, &config.python, &ids).await {
-            Ok(groups) => Some(groups),
-            Err(e) => {
-                eprintln!("[barca] scheduler: running each due job on its own: {e}");
-                None
-            }
+        let sharing = barca_core::share::shared_run_groups(dag, &ids);
+        for out in &sharing.left_out {
+            self.explain_once(out);
+        }
+        Some(sharing.groups)
+    }
+
+    /// Say on stderr, once per job and reason, why a job that has a step in common with
+    /// others still runs on its own. Not part of any contract: it is there so the answer to
+    /// "why was this computed twice" can be read off the server's log.
+    fn explain_once(&self, out: &barca_core::share::LeftOut) {
+        let reason = (out.target.clone(), out.waits_for.clone());
+        if self.explained.lock().unwrap().insert(reason) {
+            eprintln!(
+                "[barca] {} runs on its own, not in one run with {}: there it would wait for \
+                 {}, which it does not depend on (steps they have in common may run once per run)",
+                out.target,
+                out.with.join(", "),
+                out.waits_for
+            );
         }
     }
 
@@ -1176,32 +1214,65 @@ mod tests {
         assert!(runs_for(&[], Some(&groups)).is_empty(), "nothing due");
     }
 
-    #[tokio::test]
-    async fn nothing_is_shared_with_a_remote_artifact_store() {
+    /// A DAG in which `a` and `t` read `base`.
+    fn shared_dag() -> barca_core::Dag {
+        let source = concat!(
+            "from barca import asset, task\n\n",
+            "@asset()\ndef base() -> dict:\n    return {}\n\n",
+            "@asset(inputs={\"base\": base})\ndef a(base: dict) -> dict:\n    return {}\n\n",
+            "@task(inputs={\"base\": base})\ndef t(base: dict) -> None:\n    pass\n",
+        );
+        let nodes = barca_core::parse::extract_nodes(source, "f.py").unwrap();
+        barca_core::Dag::build(&nodes).unwrap()
+    }
+
+    fn two_jobs_on_one_upstream(state: &AppState) -> Scheduler {
+        let jobs = vec![
+            job("f.py:a", NodeKind::Asset, "* * * * * *"),
+            job("f.py:t", NodeKind::Task, "* * * * * *"),
+        ];
+        let mut sched = scheduler(state, jobs);
+        sched.dag = Some(shared_dag());
+        sched
+    }
+
+    #[test]
+    fn jobs_with_a_step_in_common_are_grouped_from_the_dag_read_with_the_job_set() {
+        let st = app_state();
+        let sched = two_jobs_on_one_upstream(&st);
+        let due: Vec<&ScheduledJob> = sched.jobs.iter().collect();
+        // No source file is read at a tick (the state's file does not even exist).
+        assert_eq!(
+            sched.groups(&due),
+            Some(vec![vec!["f.py:a".to_string(), "f.py:t".to_string()]])
+        );
+        assert_eq!(
+            sched.groups(&due[..1]),
+            None,
+            "one due job needs no grouping"
+        );
+    }
+
+    #[test]
+    fn nothing_is_shared_with_a_remote_artifact_store() {
         let mut st = app_state();
         let mut config = (*st.config).clone();
         // A store that is not the local artifact dir.
         config.resolved.artifact_root = "/nonexistent-barca-test-store".to_string();
         assert!(config.resolved.remote_artifacts());
         st.config = std::sync::Arc::new(config);
-        let sched = scheduler(
-            &st,
-            vec![
-                job("f.py:a", NodeKind::Asset, "* * * * * *"),
-                job("f.py:t", NodeKind::Task, "* * * * * *"),
-            ],
-        );
+        let sched = two_jobs_on_one_upstream(&st);
         let due: Vec<&ScheduledJob> = sched.jobs.iter().collect();
-        assert_eq!(sched.groups(&due).await, None, "one run per job");
+        assert_eq!(sched.groups(&due), None, "one run per job");
     }
 
-    #[tokio::test]
-    async fn one_due_job_needs_no_grouping() {
+    #[test]
+    fn nothing_is_shared_when_the_dag_could_not_be_read() {
         let st = app_state();
-        let sched = scheduler(&st, vec![job("f.py:a", NodeKind::Asset, "* * * * * *")]);
+        let mut sched = two_jobs_on_one_upstream(&st);
+        sched.dag = None;
         let due: Vec<&ScheduledJob> = sched.jobs.iter().collect();
-        // No DAG is read for a job that is due alone (the source file does not even exist).
-        assert_eq!(sched.groups(&due).await, None);
+        assert_eq!(sched.groups(&due), None);
     }
 
     // ─── startup catch-up ──────────────────────────────────────────────────
@@ -1332,8 +1403,10 @@ mod tests {
             state: state.clone(),
             zone: Zone::Local,
             jobs,
+            dag: None,
             db_path: None,
             ledger: Ledger::default(),
+            explained: Mutex::default(),
         }
     }
 

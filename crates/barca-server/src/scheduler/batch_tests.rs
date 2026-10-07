@@ -1,7 +1,11 @@
 //! Jobs that fire together, end to end: real runs of real pipelines, started by calling the
 //! scheduler's `tick` and `catch_up` with a fixed time, never by waiting for the wall clock to
-//! reach a cron match. Each test waits for a state with a deadline, and holds a slow step open
-//! with a file it creates itself, so nothing depends on how fast the machine is.
+//! reach a cron match. Each test waits for a state with a deadline, holds a slow step open
+//! with a file it creates itself, and expires a run's time limit itself ([`TestTimeLimit`]), so
+//! no outcome depends on how fast the machine is or on time passing.
+//!
+//! The pipelines need two workers at once (one holds the slow step). `BARCA_POOL_SIZE=2` runs
+//! them the way a two-core CI runner does.
 
 use super::*;
 use crate::state::ServeConfig;
@@ -21,7 +25,7 @@ const PRELUDE: &str = r#"
 import os
 import time
 
-from barca import asset, task, Schedule
+from barca import asset, sensor, task, Schedule
 
 DIR = "@DIR@"
 
@@ -87,6 +91,9 @@ impl Project {
             resolved,
             read_only: false,
         });
+        // Two runs at a time, whatever the machine: what a two-core CI runner allows.
+        state.run_slots = std::sync::Arc::new(tokio::sync::Semaphore::new(2));
+        state.run_slot_count = 2;
         configure(&mut state);
         let scheduler = Scheduler::load(state.clone()).await;
         scheduler.publish();
@@ -624,6 +631,67 @@ async fn a_fast_job_keeps_ticking_while_a_job_it_fired_with_is_still_running() {
     assert_eq!(p.runs_of("slow"), 2);
 }
 
+/// Two jobs behind one sensor, one of which also reads a root of its own.
+const SENSOR_AND_AN_EXTRA_ROOT: &str = r#"
+@sensor()
+def version() -> tuple[bool, str]:
+    count_run("version")
+    return True, "v1"
+
+
+@asset(freshness=Schedule("* * * * * *"), inputs={"version": version})
+def tracked(version: str) -> dict:
+    return {"version": version}
+
+
+@asset(inputs={"version": version})
+def feed(version: str) -> dict:
+    return {"version": version}
+
+
+@asset()
+def model() -> dict:
+    return {"n": 1}
+
+
+@task(freshness=Schedule("* * * * * *"), inputs={"feed": feed, "model": model})
+def publish(feed: dict, model: dict) -> None:
+    count_run("publish")
+"#;
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_job_that_one_run_would_hold_back_keeps_its_own_run() {
+    let p = Project::new(SENSOR_AND_AN_EXTRA_ROOT, |_| {}).await;
+    p.tick(0).await;
+    // One run would plan `model` (which only `publish` reads) ahead of `tracked`.
+    let own = p.job("tracked").handle;
+    let other = p.job("publish").handle;
+    assert_ne!(own, other, "tracked is not held back by publish's upstream");
+    p.until_run_is_over(&own).await;
+    p.until_run_is_over(&other).await;
+    assert_eq!(p.run_status(&own), RunStatus::Complete);
+    assert_eq!(p.run_status(&other), RunStatus::Complete);
+    // The price, as before runs were shared: each run polls the sensor.
+    assert_eq!(p.runs_of("version"), 2);
+
+    // The scheduler has said why, once, however many ticks follow: whichever of the two it
+    // looked at first would wait for a step of the other's.
+    let said = |p: &Project| p.scheduler.explained.lock().unwrap().clone();
+    let reasons = said(&p);
+    assert_eq!(reasons.len(), 1, "{reasons:?}");
+    let (job, waits_for) = reasons.iter().next().unwrap();
+    assert!(
+        (*job == p.id("tracked") && waits_for.ends_with(":model"))
+            || (*job == p.id("publish") && *waits_for == p.id("tracked")),
+        "{reasons:?}"
+    );
+    p.tick(1).await;
+    assert_eq!(said(&p).len(), 1);
+    let (own, other) = (p.job("tracked").handle, p.job("publish").handle);
+    p.until_run_is_over(&own).await;
+    p.until_run_is_over(&other).await;
+}
+
 /// A scheduled asset and a scheduled task on a shared upstream, and a task that stays running.
 const SHARED_UPSTREAM_AND_SLOW: &str = r#"
 @asset()
@@ -745,43 +813,94 @@ async fn cancelling_a_shared_run_stops_the_jobs_still_running_in_it() {
     assert_eq!(p.run_status(&next), RunStatus::Complete);
 }
 
+/// A time limit the test owns: it records the limit each run asks to wait for, and no limit
+/// expires until the test says so. No test waits for time to pass.
+#[derive(Clone)]
+struct TestTimeLimit {
+    asked: std::sync::Arc<Mutex<Vec<Duration>>>,
+    expired: tokio::sync::watch::Sender<bool>,
+}
+
+impl TestTimeLimit {
+    fn new() -> Self {
+        Self {
+            asked: Default::default(),
+            expired: tokio::sync::watch::channel(false).0,
+        }
+    }
+
+    /// Put this in place of the server's clock.
+    fn install(&self, state: &mut AppState) {
+        let timer = self.clone();
+        state.sleep = std::sync::Arc::new(move |limit| {
+            timer.asked.lock().unwrap().push(limit);
+            let mut expired = timer.expired.subscribe();
+            Box::pin(async move {
+                let _ = expired.wait_for(|expired| *expired).await;
+            })
+        });
+    }
+
+    /// The limits runs have asked to wait for, in order.
+    fn asked(&self) -> Vec<Duration> {
+        self.asked.lock().unwrap().clone()
+    }
+
+    /// Every limit asked for has now run out.
+    fn expire(&self) {
+        self.expired.send_replace(true);
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_shared_run_gets_the_time_limit_once_per_job() {
-    // 3 seconds per target, so 6 for a run over two jobs.
-    let limit = Duration::from_secs(3);
-    let p = Project::new(FAST_AND_HELD, |state| state.run_timeout = limit).await;
+    let limit = TestTimeLimit::new();
+    let p = Project::new(FAST_AND_HELD, |state| limit.install(state)).await;
     p.tick(0).await;
     let handle = p.job("slow").handle;
     assert_eq!(p.job("fast").handle, handle, "one run for both");
-    p.until_run_is_over(&handle).await;
+    p.until("fast to end and slow to start", |p| {
+        p.job("fast").status == RunStatus::Complete && p.runs_of("slow") == 1
+    })
+    .await;
 
+    // Two jobs, so twice the ten minutes each would have had in a run of its own.
+    assert_eq!(limit.asked(), [Duration::from_secs(1200)]);
+    assert_eq!(p.run_status(&handle), RunStatus::Running);
+
+    limit.expire();
+    p.until_run_is_over(&handle).await;
     let status = p.get(&format!("/status/{handle}")).await;
     assert_eq!(status["status"], "failed", "{status}");
-    assert_eq!(status["error"], "run timed out after 6s");
-    let ran_for = status["finished_at"].as_f64().unwrap() - status["started_at"].as_f64().unwrap();
-    assert!(
-        ran_for >= 6.0,
-        "stopped after {ran_for}s: before both jobs had their {limit:?}"
-    );
+    assert_eq!(status["error"], "run timed out after 1200s");
+    assert_eq!(status["result"], Value::Null);
+    // The job that was still running is failed with the run; the one that had ended is not.
     assert_eq!(p.schedule_entry("slow").await["last_status"], "failed");
+    assert_eq!(p.schedule_entry("fast").await["last_status"], "complete");
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_job_alone_in_its_run_keeps_the_single_time_limit() {
-    let limit = Duration::from_secs(2);
+    let limit = TestTimeLimit::new();
     let p = Project::new(
         r#"
 @task(freshness=Schedule("* * * * * *"))
 def slow() -> None:
+    count_run("slow")
     wait_for_release()
 "#,
-        |state| state.run_timeout = limit,
+        |state| limit.install(state),
     )
     .await;
     p.tick(0).await;
     let handle = p.job("slow").handle;
+    p.until("slow to start", |p| p.runs_of("slow") == 1).await;
+    assert_eq!(limit.asked(), [Duration::from_secs(600)]);
+
+    limit.expire();
     p.until_run_is_over(&handle).await;
     let status = p.get(&format!("/status/{handle}")).await;
     assert_eq!(status["status"], "failed", "{status}");
-    assert_eq!(status["error"], "run timed out after 2s");
+    assert_eq!(status["error"], "run timed out after 600s");
+    assert_eq!(p.schedule_entry("slow").await["last_status"], "failed");
 }

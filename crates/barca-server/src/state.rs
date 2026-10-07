@@ -4,6 +4,7 @@ use barca_core::CancellationToken;
 use barca_core::RunEvent;
 use barca_core::commands::{AssetSummary, GetResult, MultiResult, PlanResult};
 use dashmap::DashMap;
+use futures::future::BoxFuture;
 use serde::Serialize;
 use std::net::IpAddr;
 use std::path::PathBuf;
@@ -66,9 +67,14 @@ pub enum RunStatus {
     Cancelled,
 }
 
-/// How long one target of a run may take (10 minutes). A run over several targets (the
-/// scheduled nodes due at one tick) gets this much per target: see [`AppState::run_timeout`].
-pub const DEFAULT_RUN_TIMEOUT: Duration = Duration::from_secs(600);
+/// How long one target of a run may take (10 minutes). A run over several targets (scheduled
+/// nodes that share a run) gets this much per target.
+pub const RUN_TIMEOUT_PER_TARGET: Duration = Duration::from_secs(600);
+
+/// Waits out a duration: how a run waits for its time limit. The server waits on the real
+/// clock ([`AppState::new`]); a test substitutes a wait it ends itself, so it can check what
+/// limit a run was given and what happens when it expires without the time passing.
+pub type Sleeper = Arc<dyn Fn(Duration) -> BoxFuture<'static, ()> + Send + Sync>;
 
 /// What a run that ran to its end produced.
 ///
@@ -258,9 +264,8 @@ pub struct AppState {
     /// Bumped by the `--watch` file watcher on every DAG invalidation, so the
     /// scheduler can re-read its job set without a restart.
     pub dag_generation: Arc<AtomicU64>,
-    /// The time limit of a run, per target: a run over `n` targets is stopped and reported
-    /// `failed` after `n` times this. [`DEFAULT_RUN_TIMEOUT`] unless a test shortens it.
-    pub run_timeout: Duration,
+    /// How a run waits out its time limit.
+    pub sleep: Sleeper,
 }
 
 impl AppState {
@@ -276,7 +281,7 @@ impl AppState {
             shutdown: CancellationToken::new(),
             schedule: Arc::new(RwLock::new(Vec::new())),
             dag_generation: Arc::new(AtomicU64::new(0)),
-            run_timeout: DEFAULT_RUN_TIMEOUT,
+            sleep: Arc::new(|limit| Box::pin(tokio::time::sleep(limit))),
         }
     }
 }

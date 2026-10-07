@@ -6,7 +6,8 @@
 
 use crate::error::ApiError;
 use crate::state::{
-    AppState, Durations, NodeState, RunChannel, RunResult, RunState, RunStatus, now_ts,
+    AppState, Durations, NodeState, RUN_TIMEOUT_PER_TARGET, RunChannel, RunResult, RunState,
+    RunStatus, now_ts,
 };
 use axum::Json;
 use axum::extract::{Path, State};
@@ -589,7 +590,7 @@ fn spawn_run(state: AppState, kind: RunKind) -> String {
         let cfg = st.config.resolved.clone();
         // Each target gets the per-target limit: nodes that used to have a run each, and a
         // limit each, share this run's worker pool.
-        let time_limit = st.run_timeout * kind.targets();
+        let time_limit = RUN_TIMEOUT_PER_TARGET * kind.targets();
 
         let mut timed_out = None;
         let outcome: Result<RunResult, BarcaError> = {
@@ -640,7 +641,7 @@ fn spawn_run(state: AppState, kind: RunKind) -> String {
             // returns — nothing is left running in the background.
             tokio::select! {
                 res = &mut fut => res,
-                _ = tokio::time::sleep(time_limit) => {
+                _ = (st.sleep)(time_limit) => {
                     // An operator cancel that is still unwinding when the deadline
                     // hits stays classified as cancelled, not as a timeout.
                     if !cancel.is_cancelled() {
