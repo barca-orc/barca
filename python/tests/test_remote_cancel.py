@@ -130,8 +130,23 @@ class Run:
     def held_at(self, point: str) -> "Run":
         """Wait until a helper is held at `point`."""
         marker = self.hold_dir / f"{point}.started"
-        wait_until(marker.exists, f"a helper reached '{point}'", self.proc)
+        self._wait(marker.exists, f"a helper reached '{point}'")
         return self
+
+    def _wait(self, done, what: str) -> None:
+        """`wait_until`, and if it gives up: what barca printed and what its job looks like."""
+        try:
+            wait_until(done, what, self.proc)
+        except AssertionError as failed:
+            job = subprocess.run(
+                ["ps", "-o", "pid,ppid,stat,etime,command", "-g", str(self.proc.pid)],
+                capture_output=True,
+                text=True,
+            ).stdout
+            raise AssertionError(
+                f"{failed}\n--- stderr so far:\n{self.err_path.read_text()}\n"
+                f"--- held: {sorted(p.name for p in self.hold_dir.iterdir())}\n--- job:\n{job}"
+            ) from None
 
     def arrivals(self, point: str) -> list[int]:
         """The pids of every helper that reached `point` so far."""
@@ -139,7 +154,7 @@ class Run:
         return [int(p) for p in listed.read_text().split()] if listed.exists() else []
 
     def printed(self, text: str) -> "Run":
-        wait_until(lambda: text in self.err_path.read_text(), f"'{text}' on stderr", self.proc)
+        self._wait(lambda: text in self.err_path.read_text(), f"'{text}' on stderr")
         return self
 
     def sigint(self, whole_group: bool = True) -> None:
