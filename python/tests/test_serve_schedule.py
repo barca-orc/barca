@@ -49,8 +49,8 @@ def model() -> dict:
     return {"t": time.time()}
 
 
-@task(freshness=Schedule("* * * * * *"), inputs={"feed": feed, "model": model})
-def publish(feed: dict, model: dict) -> None:
+@task(freshness=Schedule("* * * * * *"), inputs={"feed": feed, "_model": model})
+def publish(feed: dict, _model) -> None:
     print("publish", feed["version"])
 """
 

@@ -38,7 +38,7 @@ json and pickle artifacts ignore annotations.
 **Lazy inputs read only what the step uses.** The eager readers load the whole file. A
 `pl.LazyFrame` or duckdb relation reads nothing up front: the query the step builds decides
 which columns and row groups are read when it runs. For a large upstream that a step filters,
-projects or aggregates, annotate the input as lazy. With a remote artifact store, a lazy input
+projects or aggregates, annotate the input as lazy (`barca docs big-inputs`). With a remote artifact store, a lazy input
 is read in place and only the byte ranges its query touches are fetched (`barca docs remote`).
 
 ```python
@@ -119,4 +119,4 @@ barca.duckdb_connection().execute("SET threads = 4")   # runs once per worker pr
 - Everything is materialized between steps. To cache several results from one computation,
   define several assets or return the one you want cached.
 
-See also: `barca docs cache`, `barca docs examples/duckdb`.
+See also: `barca docs big-inputs`, `barca docs cache`, `barca docs examples/duckdb`.

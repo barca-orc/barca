@@ -13,7 +13,10 @@ Examples:
   barca plan pipeline.py              # phases and steps that would run; nothing executes
   barca plan pipeline.py other.py     # several files form one DAG
 
-Output: always pretty-printed JSON {total_steps, phases: [{reason, streams: [{stream_id, steps}]}]}.
+Output: always pretty-printed JSON {total_steps, phases: [{reason, streams: [{stream_id, steps}]}],
+warnings}. `warnings` is always an array ([] when there are none) of {kind, node, param, message}:
+plan-time warnings such as an input a step never uses, each also one `[barca] warning: ...` line on
+stderr (barca docs assets, "Unused inputs").
 `reason` is an object: {"type": "initial"} or {"type": "fan_in", "node_id": ...}.
 Planning is static analysis: it never imports your code or reads state, so it takes no --env.
 Experimental: the layout may change between releases (barca docs contract).

@@ -67,6 +67,8 @@ Examples:
 Several targets: comma-separated, no spaces. Every target runs even if another fails (a failure
 skips only what depends on it); exit 1 if any failed. JSON output then carries `targets`, keyed by
 target, instead of `final_output` (see barca get --help, barca docs agents).
+`warnings` is always an array, as on `barca get`: plan-time warnings for the steps in the cone, such
+as an input a step never uses (barca docs assets); [] when there are none.
 
 --refresh takes ONE comma-separated list (`--refresh a,b`), never `--refresh a b`. It re-runs the
 assets you name and every asset downstream of them in the task's cone (reason `refresh_cascade`),

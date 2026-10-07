@@ -131,29 +131,18 @@ pub fn configured() -> Vec<(String, Box<dyn Integration>)> {
             Some(Ok(Some(integration))) => out.push((name, integration)),
             // Switched off by its own settings: nothing to send, nothing to say.
             Some(Ok(None)) => {}
-            Some(Err(e)) => warn_once(format!("telemetry '{name}' is off: {e}")),
-            None => warn_once(format!(
-                "unknown telemetry integration '{name}' in BARCA_TELEMETRY (known: {})",
-                KNOWN.join(", ")
-            )),
+            Some(Err(e)) => {
+                crate::warnings::warn_once(&format!("telemetry '{name}' is off: {e}"));
+            }
+            None => {
+                crate::warnings::warn_once(&format!(
+                    "unknown telemetry integration '{name}' in BARCA_TELEMETRY (known: {})",
+                    KNOWN.join(", ")
+                ));
+            }
         }
     }
     out
-}
-
-/// A configuration warning, printed once per process: `barca serve` configures telemetry
-/// for every run it starts, and a bad setting should not be repeated on every tick.
-fn warn_once(message: String) {
-    static SEEN: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
-        std::sync::OnceLock::new();
-    let seen = SEEN.get_or_init(Default::default);
-    if seen
-        .lock()
-        .map(|mut s| s.insert(message.clone()))
-        .unwrap_or(true)
-    {
-        eprintln!("[barca] warning: {message}");
-    }
 }
 
 /// Send `run` to every integration, each bounded by [`EXPORT_TIMEOUT`].

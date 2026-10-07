@@ -16,3 +16,4 @@ summary.cached : integer
 summary.unknown : integer
 summary.will_run : integer
 target : string
+warnings : array

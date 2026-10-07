@@ -77,6 +77,7 @@ SINGLE_KEYS = {
     "steps_executed",
     "phases",
     "final_output",
+    "warnings",
     "steps",
 }
 

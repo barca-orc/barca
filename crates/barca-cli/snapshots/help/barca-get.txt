@@ -76,7 +76,11 @@ Output format: --json / --pretty / -o, else BARCA_OUTPUT=json|pretty, else the t
 (TTY -> pretty, piped -> JSON). JSON is one line on stdout with status ("success"), run_id,
 steps_executed (0 = all cached), phases, final_output, and `steps`: what happened to each step
 (ran or cached, and why; `env` holds the values of variables the node declares with env=[...],
-secrets redacted). For parquet/pickle assets final_output is a pointer,
+secrets redacted). `warnings` is always an array: plan-time warnings for the steps this command
+planned, [] when there are none; each is {kind, node, param, message} and is also one
+`[barca] warning: ...` line on stderr. The only kind is unused_input: a step declares an input its
+function never uses (barca docs assets, "Unused inputs"). Warnings never change the exit code.
+--dry-run reports the same list. For parquet/pickle assets final_output is a pointer,
 {"_barca_artifact": {"path", "format", "size_bytes"}}; the Python API (barca.get)
 loads the value for you.
 Several targets (`a,b`, comma-separated, no spaces): final_output is replaced by `targets`, keyed by
