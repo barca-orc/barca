@@ -625,7 +625,7 @@ mod tests {
         assert!(!on_disk("s3://other/p/n/h.json", true));
     }
 
-    /// An artifact is one file (#249). Until 0.18 a directory at the path counted as present,
+    /// An artifact is one file (#249). Through 0.18.0 a directory at the path counted as present,
     /// and the step that read it then failed with `IsADirectoryError`.
     #[test]
     fn only_a_file_is_an_artifact_a_directory_or_a_dangling_link_is_missing() {
