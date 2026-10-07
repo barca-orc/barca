@@ -92,6 +92,14 @@ pub async fn serve(config: ServeConfig) -> Result<(), ServeError> {
         if n_files == 1 { "" } else { "s" },
         if watch { " · watch" } else { "" },
     );
+    if !addr.ip().is_loopback() {
+        eprintln!(
+            "[barca] warning: listening on {} with no authentication — anyone who can reach \
+             port {} can trigger runs",
+            addr.ip(),
+            addr.port()
+        );
+    }
 
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())

@@ -16,6 +16,7 @@ memory, and can be cancelled mid-flight via `DELETE /run/{run_id}`.
 ```bash
 barca serve pipeline.py                   # serve a DAG, default port 8274
 barca serve pipeline.py --port 8400       # custom port
+barca serve pipeline.py --host 0.0.0.0    # listen on every interface (containers, VMs)
 barca serve pipeline.py --watch           # dev mode: re-parse DAG on file change
 barca serve pipeline.py --no-schedule     # disable the cron scheduler
 barca serve pipeline.py --timezone utc    # evaluate cron in UTC (default: local)
@@ -23,9 +24,13 @@ barca serve pipeline.py --read-only       # inspect only: no runs, no scheduler,
 barca serve a.py b.py                      # multiple source files
 ```
 
-The server binds to `127.0.0.1` (local only). There is no authentication in v1 — do not
-expose it to untrusted networks. It also serves the web UI at `/ui/`; see
-[Deploying](/deploying/) for running it behind nginx.
+The server binds to `127.0.0.1` by default (local only). `--host` takes an IP address:
+`0.0.0.0` (or `::`) listens on every interface, which a container or VM needs for the port to
+be reachable from outside. There is no authentication in v1, and `POST /run` executes your
+pipeline, so anyone who can reach the port can trigger runs. With a non-loopback `--host`,
+barca prints a warning on stderr at startup; keep the server on a private network or behind a
+proxy that authenticates. It also serves
+the web UI at `/ui/`; see [Deploying](/deploying/) for running it behind nginx or Traefik.
 
 `--watch` is a **local development convenience**: it re-parses the DAG when a source file
 changes so `/assets` and `/plan` reflect edits without a restart. It is off by default and

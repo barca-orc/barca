@@ -235,7 +235,7 @@ barca status [target] [file.py ...] [--json|--pretty]  Cache state, last run, ar
 barca sql "<query>" [file.py ...] [--json] Query cached results with DuckDB (experimental)
 barca history [--limit N] [--json|--pretty] Show recent run history
 barca stats <target> [file.py ...] [--json|--pretty]  Timing/cache stats for an asset
-barca serve [file.py ...] [--port N]       Run the HTTP API server + cron scheduler
+barca serve [file.py ...] [--port N] [--host IP]  Run the HTTP API server + cron scheduler
 barca docs [topic] [--all] [--json]        Built-in manual: concepts, formats, examples
 barca --help                               Show help (every command ends with examples)
 ```
@@ -304,11 +304,13 @@ See the [Scheduling guide](https://barca.sh/scheduling/) for the full story
 `barca serve` starts a long-running HTTP server that exposes the orchestrator as a
 JSON API — for triggering runs programmatically and polling status — and serves the
 web UI at `http://127.0.0.1:8274/ui/`. It also runs the built-in cron scheduler above.
-It binds to `127.0.0.1` by default (local only, no auth); to run it behind nginx, see
-[Deploying](https://barca.sh/deploying/).
+It binds to `127.0.0.1` by default (local only). There is no authentication, so
+`--host 0.0.0.0` (needed in a container or on a VM) belongs on a private network or behind
+an authenticating proxy; see [Deploying](https://barca.sh/deploying/) for nginx and Traefik.
 
 ```bash
 barca serve pipeline.py --port 8274      # default port 8274
+barca serve pipeline.py --host 0.0.0.0   # listen on every interface (containers, VMs)
 barca serve pipeline.py --watch          # dev mode: re-parse DAG on file change
 barca serve pipeline.py --no-schedule    # HTTP API only, don't fire scheduled jobs
 barca serve pipeline.py --timezone utc   # evaluate cron in UTC (default: local)

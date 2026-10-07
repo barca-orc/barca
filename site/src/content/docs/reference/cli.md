@@ -18,7 +18,7 @@ barca run <task[,task...]> [file.py|dir/ ...] [--refresh a,b [--no-cascade] | --
 barca plan [file.py|dir/ ...]                Emit the execution plan as JSON (experimental)
 barca history [-l N | --all] [--json|--pretty]  Show recent run history
 barca stats <target> [file.py|dir/ ...]       Show timing/cache stats for an asset
-barca serve [file.py|dir/ ...] [--port N] [--watch] [--no-schedule] [--timezone TZ] [--read-only]
+barca serve [file.py|dir/ ...] [--port N] [--host IP] [--watch] [--no-schedule] [--timezone TZ] [--read-only]
                                                Run the HTTP API server
 barca list [file.py|dir/ ...] [-l N | --all] [--json]  List discovered definitions and their deps
 barca status [target[,target...]] [file.py|dir/ ...] [--json] [--sample N]
@@ -242,12 +242,14 @@ barca stats summary pipeline.py --fields status,error_message   # JSON; trims re
 ## serve
 
 Start a long-running HTTP server that exposes the orchestrator as a JSON API and serves the web UI
-at `/ui/`. Binds to `127.0.0.1` (local only, no auth). See [Server API](/reference/server-api/) for
-the full endpoint reference and [Deploying](/deploying/) for running it behind nginx.
+at `/ui/`. Binds to `127.0.0.1` by default (local only); `--host 0.0.0.0` listens on every
+interface. There is no authentication. See [Server API](/reference/server-api/) for the full
+endpoint reference and [Deploying](/deploying/) for running it behind nginx or Traefik.
 
 ```bash
 barca serve pipeline.py                 # default port 8274
 barca serve pipeline.py --port 8400     # custom port
+barca serve pipeline.py --host 0.0.0.0  # every interface (containers, VMs); no auth
 barca serve pipeline.py --watch         # dev mode: re-parse the DAG on file change
 barca serve pipeline.py --no-schedule   # disable the cron scheduler
 barca serve pipeline.py --timezone utc  # evaluate cron in UTC (default: local)

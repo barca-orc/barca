@@ -24,7 +24,7 @@ fn default_run_concurrency() -> usize {
 pub struct ServeConfig {
     /// Python source files that define the DAG this server operates on.
     pub files: Vec<String>,
-    /// Bind address (defaults to 127.0.0.1 — local only, no auth).
+    /// Bind address (`--host`, default 127.0.0.1 — local only). There is no auth.
     pub host: IpAddr,
     /// Bind port (default 8274).
     pub port: u16,

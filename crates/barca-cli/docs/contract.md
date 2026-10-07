@@ -178,6 +178,7 @@ default, and any aliases.
 |---|---|---|---|---|
 | `<FILES>...` | - | - | experimental (with the command) | Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`). With --watch, files added later are not picked up until restart |
 | `-p, --port` | `PORT` | default `8274` | experimental (with the command) | Port to bind on |
+| `--host` | `HOST` | default `127.0.0.1` | experimental (with the command) | IP address to bind on; 0.0.0.0 (or ::) listens on every interface. The API has no authentication |
 | `--watch` | - | default `false` | experimental (with the command) | Dev mode: re-parse the DAG when source files change |
 | `--no-schedule` | - | default `false` | experimental (with the command) | Disable the cron scheduler (Schedule(...) assets will not auto-fire) |
 | `--timezone` | `TIMEZONE` | default `local` | experimental (with the command) | Timezone for cron evaluation: local (default), utc, or an IANA name |
