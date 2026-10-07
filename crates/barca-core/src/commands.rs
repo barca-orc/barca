@@ -2047,6 +2047,8 @@ async fn execute(
 
     let targets = resolve_targets(&dag, target_names, command_label)?;
     let target_ids: Vec<&str> = targets.iter().map(|(_, id)| id.as_str()).collect();
+    // The targets of a mixed run are jobs of their own (scheduled nodes that share a run).
+    let independent_targets = command_label == MIXED_COMMAND;
     let command_label = recorded_command(&dag, command_label, &target_ids);
     if command_label == "get"
         && target_ids.is_empty()
@@ -2072,7 +2074,10 @@ async fn execute(
         pool_size,
         concurrency_groups: HashMap::new(),
     };
-    let exec_plan = plan_for_targets(&dag, &target_ids, &config, command_label);
+    let mut exec_plan = plan_for_targets(&dag, &target_ids, &config, command_label);
+    if independent_targets {
+        exec_plan = planner::unpack_streams(exec_plan, &dag);
+    }
     trace_point!("planned");
     // When each target's own steps have ended, reported to `event_tx` while the run goes on.
     let mut progress = TargetProgress::new(&target_ids, &exec_plan);
@@ -2258,6 +2263,7 @@ async fn execute(
         run_id: run_id.clone(),
         artifact_root: worker_artifact_root,
         storage_options_json: cfg.storage_options_json.clone(),
+        one_node_per_lease: independent_targets,
     };
     let mut pool = crate::io_loop::WorkerPool::start(io_config).map_err(BarcaError::Other)?;
     // Finished steps are written to the local metadata DB while the run goes on (#214).
@@ -2423,17 +2429,19 @@ async fn execute(
         drop(cache);
         trace_point!("phase{phase_idx}_cache_check_done");
 
+        recorder.announce(
+            &event_tx,
+            progress.phase_decided(phase_idx, &uncached_streams),
+        );
+
+        if uncached_streams.is_empty() {
+            continue;
+        }
+
         let filtered_phase = Phase {
             reason: phase_ref.reason.clone(),
             streams: uncached_streams,
         };
-        // A target whose steps in this phase were all cached (or dropped) is finished now.
-        progress.dispatched(&filtered_phase);
-        announce_finished_targets(&mut progress, phase_idx, &recorder, event_tx.as_ref());
-
-        if filtered_phase.streams.is_empty() {
-            continue;
-        }
 
         steps_executed += filtered_phase
             .streams
@@ -2597,13 +2605,10 @@ async fn execute(
 
         // A target is finished when its last step ends, which can be long before the phase
         // does: say so then.
-        let progress_ref = &mut progress;
-        let recorder_ref = &recorder;
-        let target_tx = event_tx.as_ref();
+        let (progress_ref, recorder_ref, target_tx) = (&mut progress, &recorder, &event_tx);
         let on_end_cb: crate::io_loop::EndCallback<'_> =
             Box::new(move |node_id: &str, completed: bool| {
-                progress_ref.step_ended(node_id, completed);
-                announce_finished_targets(progress_ref, phase_idx, recorder_ref, target_tx);
+                recorder_ref.announce(target_tx, progress_ref.step_ended(node_id, completed));
             });
 
         // Drive this phase against the persistent pool. The cost model both
@@ -3061,24 +3066,6 @@ async fn execute(
     })
 }
 
-/// Queue a `TargetFinished` event for each target whose steps have all ended, now that the
-/// phases up to `decided_phase` are decided. Each target is announced once, and only after its
-/// steps are recorded: the event goes out through the recorder, behind the rows queued so far.
-fn announce_finished_targets(
-    progress: &mut TargetProgress,
-    decided_phase: usize,
-    recorder: &StepRecorder,
-    event_tx: Option<&UnboundedSender<crate::RunEvent>>,
-) {
-    for (node_id, ok) in progress.take_finished(decided_phase) {
-        if let Some(tx) = event_tx.cloned() {
-            recorder.after_recorded(Box::new(move || {
-                let _ = tx.send(crate::RunEvent::TargetFinished { node_id, ok });
-            }));
-        }
-    }
-}
-
 // ─── run persistence ──────────────────────────────────────────────────────────
 
 /// Everything one run wants written to the metadata DB, held in memory so a
@@ -3304,6 +3291,24 @@ impl StepRecorder {
     /// run ended first), `then` is returned by [`StepRecorder::finish`] instead. Never blocks.
     fn after_recorded(&self, then: AfterRecorded) {
         self.tx.send(Recorded::After(then)).ok();
+    }
+
+    /// Send `events` to `event_tx` (if the run has a listener) once every step queued so far
+    /// is recorded: a listener told that a target is finished must find its steps in the DB.
+    fn announce(
+        &self,
+        event_tx: &Option<UnboundedSender<crate::RunEvent>>,
+        events: Vec<crate::RunEvent>,
+    ) {
+        let Some(tx) = event_tx else {
+            return;
+        };
+        for event in events {
+            let tx = tx.clone();
+            self.after_recorded(Box::new(move || {
+                let _ = tx.send(event);
+            }));
+        }
     }
 
     /// Stop the background task and wait for it, so no connection is left open. Rows it had

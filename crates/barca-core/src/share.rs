@@ -18,41 +18,60 @@ use crate::dag::Dag;
 use crate::planner::{ExecutionPlan, ResourceConfig};
 use std::collections::{HashMap, HashSet};
 
-/// Split `targets` (node ids) into the groups that should each be one run. Every target is in
-/// exactly one group; groups, and the targets inside each, keep the order given. An id the DAG
-/// does not know is a group of its own.
-pub fn shared_run_groups(dag: &Dag, targets: &[String]) -> Vec<Vec<String>> {
+/// Who shares a run, and who was kept out of one.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Sharing {
+    /// The groups that should each be one run. Every target is in exactly one; groups, and
+    /// the targets inside each, keep the order given.
+    pub groups: Vec<Vec<String>>,
+    /// The targets that have a step in common with others and still run alone, with why.
+    pub left_out: Vec<LeftOut>,
+}
+
+/// A target kept out of a shared run because the run would hold it back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeftOut {
+    pub target: String,
+    /// The targets it would have shared the run with.
+    pub with: Vec<String>,
+    /// A step the shared run plans ahead of the target, though the target does not need it.
+    pub waits_for: String,
+}
+
+/// Split `targets` (node ids) into the groups that should each be one run. An id the DAG does
+/// not know is a group of its own.
+pub fn shared_run_groups(dag: &Dag, targets: &[String]) -> Sharing {
     let position: HashMap<&str, usize> = targets
         .iter()
         .enumerate()
         .map(|(i, t)| (t.as_str(), i))
         .collect();
-    let mut groups: Vec<Vec<String>> = Vec::new();
+    let mut sharing = Sharing::default();
     let mut undecided = overlapping(dag, targets);
     while let Some(group) = undecided.pop() {
         match delayed_target(dag, &group) {
             // Sharing would hold this target back: it runs alone, and what is left is grouped
             // again, since it may have been the only thing connecting the others.
-            Some(delayed) => {
-                let rest: Vec<String> = group.into_iter().filter(|t| *t != delayed).collect();
-                groups.push(vec![delayed]);
+            Some((target, waits_for)) => {
+                let rest: Vec<String> = group.into_iter().filter(|t| *t != target).collect();
+                sharing.groups.push(vec![target.clone()]);
                 undecided.extend(overlapping(dag, &rest));
+                sharing.left_out.push(LeftOut {
+                    target,
+                    with: rest,
+                    waits_for,
+                });
             }
-            None => groups.push(group),
+            None => sharing.groups.push(group),
         }
     }
-    groups.sort_by_key(|group| position[group[0].as_str()]);
-    groups
-}
-
-/// [`shared_run_groups`] for the DAG of `file_args`, read now.
-pub async fn shared_run_groups_in(
-    file_args: &[String],
-    python: &std::path::Path,
-    targets: &[String],
-) -> Result<Vec<Vec<String>>, crate::BarcaError> {
-    let dag = commands::build_dag(file_args, python).await?;
-    Ok(shared_run_groups(&dag, targets))
+    sharing
+        .groups
+        .sort_by_key(|group| position[group[0].as_str()]);
+    sharing
+        .left_out
+        .sort_by_key(|out| position[out.target.as_str()]);
+    sharing
 }
 
 /// Group `targets` by overlapping cones: two targets are together when they have a step in
@@ -84,8 +103,9 @@ fn overlapping(dag: &Dag, targets: &[String]) -> Vec<Vec<String>> {
     groups.into_iter().map(|(_, members)| members).collect()
 }
 
-/// The first target of `group` that one run over the whole group would hold back, if any.
-fn delayed_target(dag: &Dag, group: &[String]) -> Option<String> {
+/// The first target of `group` that one run over the whole group would hold back, with a
+/// step it would wait for, if there is one.
+fn delayed_target(dag: &Dag, group: &[String]) -> Option<(String, String)> {
     if group.len() < 2 {
         return None;
     }
@@ -95,16 +115,23 @@ fn delayed_target(dag: &Dag, group: &[String]) -> Option<String> {
         concurrency_groups: HashMap::new(),
     };
     let plan = commands::plan_for_targets(dag, &ids, &config, commands::MIXED_COMMAND);
-    group
-        .iter()
-        .find(|target| waits_for_a_step_it_does_not_need(dag, &plan, target))
-        .cloned()
+    group.iter().find_map(|target| {
+        step_it_waits_for_without_needing(dag, &plan, target).map(|step| (target.clone(), step))
+    })
 }
 
-/// Whether `target` would wait, in `plan`, for a step outside its cone. A phase starts only
-/// when the one before it has ended, so the target waits for every step of the phases before
-/// the one its own step is in.
-fn waits_for_a_step_it_does_not_need(dag: &Dag, plan: &ExecutionPlan, target: &str) -> bool {
+/// A step outside `target`'s cone that `target` would wait for in `plan`, if there is one.
+///
+/// A phase starts only when the one before it has ended, so a target waits for every step of
+/// the phases before the one its own step is in. Inside a phase it waits for nothing but its
+/// own inputs: a run over independent targets gives every chain its own stream
+/// (`planner::unpack_streams`) and leases a worker one node at a time. So this is the whole
+/// condition, read off the plan: no estimate is involved.
+fn step_it_waits_for_without_needing(
+    dag: &Dag,
+    plan: &ExecutionPlan,
+    target: &str,
+) -> Option<String> {
     let steps_of = |phase: &crate::planner::Phase| -> Vec<String> {
         phase
             .streams
@@ -113,18 +140,15 @@ fn waits_for_a_step_it_does_not_need(dag: &Dag, plan: &ExecutionPlan, target: &s
             .map(|st| st.step_id.base_id().to_string())
             .collect()
     };
-    let Some(own_phase) = plan
+    let own_phase = plan
         .phases
         .iter()
-        .rposition(|phase| steps_of(phase).iter().any(|id| id == target))
-    else {
-        return false;
-    };
+        .rposition(|phase| steps_of(phase).iter().any(|id| id == target))?;
     let cone: HashSet<&str> = dag.subgraph(target).into_iter().collect();
     plan.phases[..own_phase]
         .iter()
         .flat_map(steps_of)
-        .any(|id| !cone.contains(id.as_str()))
+        .find(|id| !cone.contains(id.as_str()))
 }
 
 #[cfg(test)]
@@ -139,6 +163,7 @@ mod tests {
     fn groups(dag: &Dag, targets: &[&str]) -> Vec<Vec<String>> {
         let targets: Vec<String> = targets.iter().map(|t| format!("p.py:{t}")).collect();
         shared_run_groups(dag, &targets)
+            .groups
             .into_iter()
             .map(|g| g.iter().map(|t| t.replace("p.py:", "")).collect())
             .collect()
@@ -279,14 +304,114 @@ def joined(shared: dict, slow_root: dict) -> None:
         };
         let both = ["p.py:quick", "p.py:joined"];
         let plan = commands::plan_for_targets(&dag, &both, &config, commands::MIXED_COMMAND);
-        assert!(waits_for_a_step_it_does_not_need(&dag, &plan, "p.py:quick"));
-        assert!(!waits_for_a_step_it_does_not_need(
-            &dag,
-            &plan,
-            "p.py:joined"
-        ));
+        let waits_for = |target| step_it_waits_for_without_needing(&dag, &plan, target);
+        assert_eq!(waits_for("p.py:quick").as_deref(), Some("p.py:slow_root"));
+        assert_eq!(waits_for("p.py:joined"), None);
 
         assert_eq!(groups(&dag, &["quick", "joined"]), [["quick"], ["joined"]]);
+        // And the reason is reported, so the scheduler can say why.
+        let targets = ["p.py:quick".to_string(), "p.py:joined".to_string()];
+        assert_eq!(
+            shared_run_groups(&dag, &targets).left_out,
+            [LeftOut {
+                target: "p.py:quick".to_string(),
+                with: vec!["p.py:joined".to_string()],
+                waits_for: "p.py:slow_root".to_string(),
+            }]
+        );
+    }
+
+    /// Two jobs behind one sensor. `tracked` reads only the sensor. `publish` also reads
+    /// `model`, a root of its own, which the shared plan puts in the first phase next to the
+    /// sensor: `tracked`, in the second phase, would wait for it.
+    const SENSOR_AND_AN_EXTRA_ROOT: &str = r#"
+from barca import asset, sensor, task
+
+
+@sensor()
+def version() -> tuple[bool, str]:
+    return True, "v1"
+
+
+@asset(inputs={"version": version})
+def tracked(version: str) -> dict:
+    return {}
+
+
+@asset(inputs={"version": version})
+def feed(version: str) -> dict:
+    return {}
+
+
+@asset()
+def model() -> dict:
+    return {}
+
+
+@task(inputs={"feed": feed, "model": model})
+def publish(feed: dict, model: dict) -> None:
+    pass
+
+
+@task(inputs={"feed": feed})
+def announce(feed: dict) -> None:
+    pass
+"#;
+
+    #[test]
+    fn jobs_that_read_one_sensor_side_by_side_share_a_run() {
+        let dag = dag(SENSOR_AND_AN_EXTRA_ROOT);
+        // Both read the sensor directly: neither has anything planned ahead of it but the sensor.
+        assert_eq!(groups(&dag, &["tracked", "feed"]), [["tracked", "feed"]]);
+        // A job and the job downstream of it: everything ahead of `announce` is its own upstream.
+        assert_eq!(groups(&dag, &["feed", "announce"]), [["feed", "announce"]]);
+    }
+
+    #[test]
+    fn a_job_further_from_the_shared_step_does_not_share_with_a_nearer_one() {
+        let dag = dag(SENSOR_AND_AN_EXTRA_ROOT);
+        // `announce` is two steps below the sensor, `tracked` one. In one run `announce` would
+        // be in the phase after `tracked` and wait for it, though it does not read it.
+        let targets = ["p.py:tracked".to_string(), "p.py:announce".to_string()];
+        let sharing = shared_run_groups(&dag, &targets);
+        assert_eq!(
+            sharing.groups,
+            [
+                vec!["p.py:tracked".to_string()],
+                vec!["p.py:announce".to_string()]
+            ]
+        );
+        assert_eq!(
+            sharing.left_out,
+            [LeftOut {
+                target: "p.py:announce".to_string(),
+                with: vec!["p.py:tracked".to_string()],
+                waits_for: "p.py:tracked".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_job_behind_a_shared_sensor_does_not_share_with_one_that_has_another_root() {
+        let dag = dag(SENSOR_AND_AN_EXTRA_ROOT);
+        let targets = ["p.py:tracked".to_string(), "p.py:publish".to_string()];
+        let sharing = shared_run_groups(&dag, &targets);
+        // Refused: the sensor is polled by each job's own run, as before runs were shared.
+        assert_eq!(
+            sharing.groups,
+            [
+                vec!["p.py:tracked".to_string()],
+                vec!["p.py:publish".to_string()]
+            ]
+        );
+        assert_eq!(
+            sharing.left_out,
+            [LeftOut {
+                target: "p.py:tracked".to_string(),
+                with: vec!["p.py:publish".to_string()],
+                waits_for: "p.py:model".to_string(),
+            }]
+        );
     }
 
     #[test]

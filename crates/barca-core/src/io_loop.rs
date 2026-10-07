@@ -51,6 +51,13 @@ pub struct IoConfig {
     /// Merged fsspec storage options (JSON), forwarded to workers (for remote
     /// `@sink` destinations).
     pub storage_options_json: Option<String>,
+    /// Lease a worker steps of one node at a time (its partition keys may still go together).
+    /// A worker runs its lease in order, so a step leased behind a slow step of another node
+    /// waits for it even while other workers are idle. That is a fair trade for throughput in
+    /// an ordinary run, and not acceptable when the run's targets are independent jobs (the
+    /// scheduled nodes `barca serve` runs together): there a job's step must not wait for
+    /// another job's.
+    pub one_node_per_lease: bool,
 }
 
 /// Callback invoked on each step completion with (node_id, artifact_json, attempts made).
@@ -749,39 +756,12 @@ impl WorkerPool {
                 }
             };
 
-            // Lease a batch: K sized from the head item's measured cost.
-            // The ceiling input is the pull-eligible pool (ready items), not
-            // pending work blocked on upstreams — items that can't be pulled
-            // this wave mustn't let one worker drain the whole ready queue.
-            let first = coord.next_ready().expect("ready_count checked above");
-            let head_node = coord.item(first).step_id.display();
-            let remaining = coord.ready_count() + 1;
-            let k = cost
-                .batch_size(&head_node, remaining, self.config.pool_size.max(1))
-                .max(1);
-            // Fill the batch up to K, but never pack estimated-heavy items
-            // behind a light head: the batch has a work budget of K × the
-            // head's cost (what K was computed for), and an item that would
-            // blow it goes back for its own pull. Guards the over-batch
-            // tail-block when a phase mixes light and heavy nodes.
-            let head_est = cost.estimate(&head_node);
-            let budget = head_est * k as f64 * 1.5;
-            let mut acc = head_est;
-            let mut batch = vec![first];
-            while batch.len() < k {
-                match coord.next_ready() {
-                    Some(id) => {
-                        let est = cost.estimate(&coord.item(id).step_id.display());
-                        if acc + est > budget {
-                            coord.return_leased(id);
-                            break;
-                        }
-                        acc += est;
-                        batch.push(id);
-                    }
-                    None => break,
-                }
-            }
+            let batch = lease_batch(
+                coord,
+                cost,
+                self.config.pool_size,
+                self.config.one_node_per_lease,
+            );
 
             let msg = if batch.len() == 1 {
                 let step = build_step_json(coord.item(batch[0]), coord);
@@ -1079,6 +1059,54 @@ fn build_step_json(item: &crate::coordinator::Item, coord: &Coordinator) -> serd
     })
 }
 
+/// Take the next lease off the ready queue: the items one worker will run, in order. The caller
+/// has checked that an item is ready.
+///
+/// K is sized from the head item's measured cost. The ceiling input is the pull-eligible pool
+/// (ready items), not pending work blocked on upstreams — items that can't be pulled this
+/// wave mustn't let one worker drain the whole ready queue.
+///
+/// With `one_node_per_lease`, the lease stops at the first item of another node (see
+/// [`IoConfig::one_node_per_lease`]).
+fn lease_batch(
+    coord: &mut Coordinator,
+    cost: &CostModel,
+    pool_size: usize,
+    one_node_per_lease: bool,
+) -> Vec<ItemId> {
+    let first = coord.next_ready().expect("an item is ready");
+    let head = coord.item(first).step_id.clone();
+    let head_node = head.display();
+    let remaining = coord.ready_count() + 1;
+    let k = cost
+        .batch_size(&head_node, remaining, pool_size.max(1))
+        .max(1);
+    // Fill the batch up to K, but never pack estimated-heavy items
+    // behind a light head: the batch has a work budget of K × the
+    // head's cost (what K was computed for), and an item that would
+    // blow it goes back for its own pull. Guards the over-batch
+    // tail-block when a phase mixes light and heavy nodes.
+    let head_est = cost.estimate(&head_node);
+    let budget = head_est * k as f64 * 1.5;
+    let mut acc = head_est;
+    let mut batch = vec![first];
+    while batch.len() < k {
+        let Some(id) = coord.next_ready() else {
+            break;
+        };
+        let step = &coord.item(id).step_id;
+        let est = cost.estimate(&step.display());
+        let other_node = one_node_per_lease && step.base_id() != head.base_id();
+        if other_node || acc + est > budget {
+            coord.return_leased(id);
+            break;
+        }
+        acc += est;
+        batch.push(id);
+    }
+    batch
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1086,6 +1114,109 @@ mod tests {
     use super::*;
     use crate::coordinator::ItemSpec;
     use std::collections::HashMap;
+
+    fn item_spec(node: &str) -> ItemSpec {
+        ItemSpec {
+            fn_ref: node.to_string(),
+            function_name: node.rsplit(':').next().unwrap().to_string(),
+            source_file: "f.py".to_string(),
+            direct_args: Vec::new(),
+            direct_kwargs: HashMap::new(),
+            dag_inputs: HashMap::new(),
+            timeout_seconds: 300,
+            retries: 1,
+            retry_backoff_seconds: 0.0,
+            serializer: None,
+            run_hash: None,
+            sinks: Vec::new(),
+            upstream_inputs: HashMap::new(),
+            collected_inputs: HashMap::new(),
+            param_types: HashMap::new(),
+            return_type: None,
+            kind: "task".to_string(),
+            is_dynamic: false,
+        }
+    }
+
+    const NODES: [&str; 4] = ["f.py:slow", "f.py:fast", "f.py:quick", "f.py:other"];
+
+    /// A cost model that remembers each of `nodes` as taking half a millisecond, as it would
+    /// after a run in which they did. (How long a step takes this time, it cannot know.)
+    fn light_costs(nodes: &[&str]) -> CostModel {
+        let mut cost = CostModel::new();
+        cost.seed(nodes.iter().map(|node| {
+            let estimate = crate::cost::NodeEstimate {
+                estimate_seconds: 0.0005,
+                cpu_seconds: 0.0005,
+                max_rss_bytes: 0,
+                samples: 1,
+            };
+            (node.to_string(), estimate)
+        }));
+        cost
+    }
+
+    /// A coordinator with one ready, unpartitioned step per node.
+    fn ready_steps(nodes: &[&str]) -> Coordinator {
+        let mut coord = Coordinator::new();
+        for node in nodes {
+            let step = crate::StepId::unpartitioned(*node);
+            coord.add_item(step, item_spec(node), Vec::new());
+        }
+        coord
+    }
+
+    /// The node ids of a lease, in the order the worker would run them.
+    fn leased(coord: &Coordinator, batch: &[ItemId]) -> Vec<String> {
+        batch
+            .iter()
+            .map(|id| coord.item(*id).step_id.display())
+            .collect()
+    }
+
+    #[test]
+    fn a_lease_can_put_a_step_behind_a_step_of_another_node() {
+        // Four ready steps that were quick last time: they are leased two at a time.
+        let mut coord = ready_steps(&NODES);
+        let batch = lease_batch(&mut coord, &light_costs(&NODES), 2, false);
+        // `fast` would run on the same worker after `slow`, however long `slow` takes now.
+        assert_eq!(leased(&coord, &batch), ["f.py:slow", "f.py:fast"]);
+    }
+
+    #[test]
+    fn one_node_per_lease_never_puts_a_step_behind_another_nodes() {
+        let mut coord = ready_steps(&NODES);
+        let cost = light_costs(&NODES);
+        // Every lease is one node, so each step goes to the next free worker.
+        for node in NODES {
+            let batch = lease_batch(&mut coord, &cost, 2, true);
+            assert_eq!(leased(&coord, &batch), [node]);
+        }
+        assert_eq!(coord.ready_count(), 0, "nothing was dropped");
+    }
+
+    #[test]
+    fn one_node_per_lease_still_leases_the_keys_of_one_node_together() {
+        let mut coord = Coordinator::new();
+        for week in ["w1", "w2", "w3", "w4"] {
+            let key =
+                crate::PartitionKey::from(HashMap::from([("week".to_string(), week.to_string())]));
+            let step = crate::StepId::new("f.py:weekly", key);
+            coord.add_item(step, item_spec("f.py:weekly"), Vec::new());
+        }
+        let other = crate::StepId::unpartitioned("f.py:other");
+        coord.add_item(other, item_spec("f.py:other"), Vec::new());
+        let cost = light_costs(&["f.py:weekly", "f.py:other"]);
+        let batch = lease_batch(&mut coord, &cost, 2, true);
+        assert!(batch.len() > 1, "partition keys are still batched");
+        assert!(
+            leased(&coord, &batch)
+                .iter()
+                .all(|id| id.starts_with("f.py:weekly[")),
+            "and only keys of the one node: {:?}",
+            leased(&coord, &batch)
+        );
+    }
 
     #[test]
     fn build_step_json_includes_sinks() {
@@ -1322,6 +1453,7 @@ mod tests {
                     run_id: "test-shutdown".to_string(),
                     artifact_root: ".".to_string(),
                     storage_options_json: None,
+                    one_node_per_lease: false,
                 },
                 socket_path: socket_path.clone(),
                 listener,

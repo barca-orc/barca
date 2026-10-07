@@ -703,6 +703,49 @@ pub fn plan_from_dag(dag: &Dag, config: &ResourceConfig) -> ExecutionPlan {
     plan(dag, &topology, config)
 }
 
+/// Undo the packing of independent chains into shared streams.
+///
+/// A phase with more chains than workers has its chains packed into `pool_size` streams, and a
+/// stream runs its steps in order: a chain packed behind a slow one waits for it, though the
+/// two have nothing to do with each other. That is a throughput choice in an ordinary run. In a
+/// run whose targets are independent jobs (the scheduled nodes `barca serve` runs together) it
+/// would make one job wait for another, so there every chain gets a stream of its own and only
+/// waits for a free worker.
+///
+/// A stream is cut wherever a step does not read the step before it. Steps that do (a real
+/// chain) stay together, in order.
+pub fn unpack_streams(mut plan: ExecutionPlan, dag: &Dag) -> ExecutionPlan {
+    for phase in &mut plan.phases {
+        let mut streams: Vec<WorkerStream> = Vec::new();
+        for stream in std::mem::take(&mut phase.streams) {
+            let mut chains: Vec<Vec<StreamStep>> = Vec::new();
+            for step in stream.steps {
+                let follows = chains.last().and_then(|c| c.last()).is_some_and(|prev| {
+                    dag.upstream(step.step_id.base_id())
+                        .contains(&prev.step_id.base_id())
+                });
+                match chains.last_mut() {
+                    Some(chain) if follows => chain.push(step),
+                    _ => chains.push(vec![step]),
+                }
+            }
+            let cut = chains.len() > 1;
+            for (i, steps) in chains.into_iter().enumerate() {
+                streams.push(WorkerStream {
+                    stream_id: if cut {
+                        format!("{}-c{i}", stream.stream_id)
+                    } else {
+                        stream.stream_id.clone()
+                    },
+                    steps,
+                });
+            }
+        }
+        phase.streams = streams;
+    }
+    plan
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // Tests
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -715,6 +758,102 @@ mod tests {
 
     fn build_test_dag(specs: &[(&str, &[&str])]) -> Dag {
         build_dag_with_sensors(specs, &[])
+    }
+
+    /// The steps of each stream of a phase, as node names.
+    fn stream_steps(phase: &Phase) -> Vec<Vec<String>> {
+        let mut streams: Vec<Vec<String>> = phase
+            .streams
+            .iter()
+            .map(|s| {
+                s.steps
+                    .iter()
+                    .map(|st| st.step_id.base_id().replace("test.py:", ""))
+                    .collect()
+            })
+            .collect();
+        streams.sort();
+        streams
+    }
+
+    #[test]
+    fn more_chains_than_workers_are_packed_behind_each_other() {
+        // Four independent jobs on one upstream, two workers.
+        let dag = build_test_dag(&[
+            ("base", &[]),
+            ("slow", &["base"]),
+            ("fast", &["base"]),
+            ("quick", &["base"]),
+            ("other", &["base"]),
+        ]);
+        let config = ResourceConfig {
+            pool_size: 2,
+            concurrency_groups: HashMap::new(),
+        };
+        let plan = plan_from_dag(&dag, &config);
+        let jobs = plan.phases.last().unwrap();
+        assert_eq!(jobs.streams.len(), 2, "four chains in two streams");
+        assert!(
+            jobs.streams.iter().all(|s| s.steps.len() == 2),
+            "so each stream runs one job after another: {:?}",
+            stream_steps(jobs)
+        );
+
+        // Unpacked, no job is behind another.
+        let plan = unpack_streams(plan, &dag);
+        let jobs = plan.phases.last().unwrap();
+        assert_eq!(
+            stream_steps(jobs),
+            [["fast"], ["other"], ["quick"], ["slow"]]
+        );
+        let ids: HashSet<&str> = jobs.streams.iter().map(|s| s.stream_id.as_str()).collect();
+        assert_eq!(ids.len(), 4, "stream ids stay distinct");
+    }
+
+    #[test]
+    fn unpacking_keeps_a_real_chain_in_one_stream_in_order() {
+        // a -> b -> c is one chain; `lone` is packed with it when there is one worker.
+        let dag = build_test_dag(&[("a", &[]), ("b", &["a"]), ("c", &["b"]), ("lone", &[])]);
+        let config = ResourceConfig {
+            pool_size: 1,
+            concurrency_groups: HashMap::new(),
+        };
+        let plan = plan_from_dag(&dag, &config);
+        assert_eq!(plan.phases.len(), 1);
+        assert_eq!(plan.phases[0].streams.len(), 1, "everything in one stream");
+        let total = plan.total_steps;
+
+        let plan = unpack_streams(plan, &dag);
+        assert_eq!(
+            stream_steps(&plan.phases[0]),
+            [vec!["a", "b", "c"], vec!["lone"]]
+        );
+        assert_eq!(plan.total_steps, total);
+    }
+
+    #[test]
+    fn unpacking_changes_nothing_when_nothing_was_packed() {
+        let dag = build_test_dag(&[("base", &[]), ("left", &["base"]), ("right", &["base"])]);
+        let config = ResourceConfig {
+            pool_size: 8,
+            concurrency_groups: HashMap::new(),
+        };
+        let plan = plan_from_dag(&dag, &config);
+        let before: Vec<Vec<String>> = plan.phases.iter().flat_map(stream_steps).collect();
+        let ids: Vec<String> = plan
+            .phases
+            .iter()
+            .flat_map(|p| p.streams.iter().map(|s| s.stream_id.clone()))
+            .collect();
+        let plan = unpack_streams(plan, &dag);
+        let after: Vec<Vec<String>> = plan.phases.iter().flat_map(stream_steps).collect();
+        assert_eq!(before, after);
+        let ids_after: Vec<String> = plan
+            .phases
+            .iter()
+            .flat_map(|p| p.streams.iter().map(|s| s.stream_id.clone()))
+            .collect();
+        assert_eq!(ids, ids_after);
     }
 
     /// Like `build_test_dag`, with the nodes named in `sensors` declared as `@sensor`.
