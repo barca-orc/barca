@@ -36,6 +36,12 @@ const DELIBERATE: &[(&str, &str, &str)] = &[
     // ... including the four that mention the input only where it does not count (docstring,
     // comment, a longer identifier, another name), next to the SQL-in-a-string steps that
     // must stay silent.
+    // A call named like a query entry point, on a package known to be unrelated.
+    (
+        "python/tests/test_unused_input_warning.py",
+        "arrow_table",
+        "orders",
+    ),
     (
         "python/tests/test_unused_input_warning.py",
         "docstring_only",

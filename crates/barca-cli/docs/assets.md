@@ -177,8 +177,12 @@ on its own: a docstring that describes an input does not use it. Comments never 
   (`from duckdb import sql as dsql`); any argument that is not a literal makes it unreadable.
   Using such a call as a value instead of calling it (`q = duckdb.sql`,
   `map(con.execute, queries)`) silences the function too. The one exception: a call on a name
-  that an import binds to a module other than duckdb, polars or pandas, and that the function
-  never rebinds, is not a query entry point (`pa.table(d)`, `np.view(...)`).
+  that `import` binds to a module of the Python standard library or to one of the packages
+  listed below, and that the function never rebinds, is not a query entry point
+  (`pa.table(d)`, `np.view(...)`, `json.query(...)`). A call on any other module stays silent:
+  it may be your own (`mylib.sql(QUERY)` where `mylib` does `from duckdb import sql`, a `db`
+  helper wrapping a connection) or a package barca does not know.
+  Unrelated packages: `pyarrow`, `numpy`, `matplotlib`, `scipy`, `sklearn`, `requests`, `httpx`, `aiohttp`, `urllib3`, `yaml`, `orjson`, `torch`, `tensorflow`, `xgboost`, `lightgbm`, `statsmodels`, `seaborn`, `plotly`, `networkx`, `sympy`, `boto3`, `botocore`, `fsspec`, `tqdm`, `pydantic`, `click`, `rich`, `PIL`, `cv2`, `jinja2`, `dateutil`, `pytz`, `barca`.
   Query entry points: `sql`, `execute`, `executemany`, `query`, `from_query`, `table`, `view`, `read_sql`, `read_sql_query`, `SQLContext`.
 - an input annotated `duckdb.DuckDBPyRelation`: barca binds it as a view named after the
   parameter, so SQL in a helper function, which this check does not read, can use it without
@@ -213,19 +217,19 @@ warning. That costs missed warnings:
 - A string that happens to contain the input's name counts as a use, whatever the string is
   for: `return {"orders": 1}` or a log message naming `orders` hides an unused `orders`.
 - Any call named like a query entry point with an argument that is not a literal silences the
-  whole function, SQL or not, unless it is a call on an imported module other than duckdb,
-  polars or pandas: `client.query(params)`, `cursor.execute(statement, values)` and
-  `tensor.view(n, -1)` silence, because a local variable may hold anything. So does any use of
-  such an attribute as a value (`request.query`, `self.table`), and any mention of a dynamic
-  access name.
+  whole function, SQL or not, unless it is a call on a standard-library module or one of the
+  listed packages: `client.query(params)`, `cursor.execute(statement, values)`,
+  `tensor.view(n, -1)` and `mylib.table(name)` silence, because a local variable or a module
+  barca does not know may hold anything. So does any use of such an attribute as a value
+  (`request.query`, `self.table`), and any mention of a dynamic access name.
 - An unused `duckdb.DuckDBPyRelation` input and an unused sensor input are never reported.
 
 And one wrong warning it cannot avoid: a function whose input is read only from somewhere this
 check does not look. That is a helper function that inspects its caller's frame, DuckDB with
 `python_scan_all_frames` reading a caller's variable from SQL inside a helper, or an alias made
-outside the body (`grab = locals` at module level, then `grab()`), or a module of your own
-that re-exports a query entry point (`mylib.sql(QUERY)` where `mylib` does
-`from duckdb import sql`). Mention the input by name
+outside the body (`grab = locals` at module level, then `grab()`), or a file of your own that
+is named like a standard-library module or a listed package and re-exports a query entry point
+(a project `json.py` doing `from duckdb import sql`). Mention the input by name
 in the body, or `_`-prefix it, to say otherwise. There is no flag or configuration key that
 turns the warning off.
 

@@ -22,6 +22,7 @@ pub mod state_sync;
 pub mod status;
 pub mod telemetry;
 pub mod transfer;
+pub mod unrelated_modules;
 pub mod unused_inputs;
 pub mod warnings;
 

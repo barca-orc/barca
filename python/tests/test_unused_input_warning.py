@@ -655,3 +655,73 @@ def test_mixed_concatenations_aliases_and_keyword_queries_are_not_reported(tmp_p
         out = json.loads(run.stdout)
         assert (out["final_output"], out["warnings"]) == (60, []), target
         assert stderr_warnings(run) == [], target
+
+
+# A project with its own modules: one re-exports a DuckDB entry point, one wraps a connection.
+OWN_MODULES = {
+    "mylib.py": "from duckdb import sql\n",
+    "db.py": (
+        "import duckdb\n\n_con = duckdb.connect()\n"
+        "_con.execute('set python_scan_all_frames=true')\n\n\n"
+        "def query(text):\n    return _con.sql(text)\n"
+    ),
+    "pipeline.py": """
+import pandas as pd
+import pyarrow as pa
+
+import db
+import mylib
+from barca import asset
+
+QUERY = "select sum(amount) from orders"
+
+
+@asset()
+def frame() -> pd.DataFrame:
+    return pd.DataFrame({"amount": [10, 20, 30]})
+
+
+@asset(inputs={"orders": frame})
+def reexported_entry_point(orders: pd.DataFrame) -> int:
+    return int(mylib.sql(QUERY).fetchone()[0])
+
+
+@asset(inputs={"orders": frame})
+def own_query_helper(orders: pd.DataFrame) -> int:
+    return int(db.query(QUERY).fetchone()[0])
+
+
+@asset(inputs={"orders": frame})
+def arrow_table(orders: pd.DataFrame) -> int:
+    data = {"a": [1, 2]}
+    return pa.table(data).num_rows
+""",
+}
+
+
+def test_a_call_on_a_project_module_is_never_narrowed_but_a_known_package_is(tmp_path):
+    """`mylib.sql(QUERY)` is a re-exported `duckdb.sql` and `db.query(QUERY)` a helper of the
+    project: both read `orders` by name, return 60 and must not warn. `pa.table(data)` is a
+    call on a package known not to read the caller's variables: `orders` is really unused."""
+    for name, source in OWN_MODULES.items():
+        (tmp_path / name).write_text(source)
+    for target, value, expected in [
+        ("reexported_entry_point", 60, []),
+        ("own_query_helper", 60, []),
+        ("arrow_table", 2, [("pipeline.py:arrow_table", "orders")]),
+    ]:
+        run = barca(tmp_path, "get", target, "pipeline.py", "--json")
+        assert run.returncode == 0, (target, run.stderr)
+        out = json.loads(run.stdout)
+        assert (out["final_output"], pairs(out["warnings"])) == (value, expected), target
+        assert len(stderr_warnings(run)) == len(expected), target
+
+
+def test_the_manual_lists_exactly_the_packages_the_check_knows_to_be_unrelated(tmp_path):
+    topic = barca(tmp_path, "docs", "assets").stdout
+    documented = manual_list(topic, "Unrelated packages:")
+    source = Path(__file__).resolve().parents[2] / "crates/barca-core/src/unrelated_modules.rs"
+    if not source.exists():
+        pytest.skip("the Rust sources are not in this checkout")
+    block = source.read_text().split("pub const THIRD_PARTY: &[&str] = &[")[1].split("];")[0]
+    assert documented == [n.strip().strip('"') for n in block.split(",") if n.strip()]

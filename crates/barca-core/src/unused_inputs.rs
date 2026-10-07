@@ -55,9 +55,11 @@ pub const STACK_MODULE: (&str, &str) = ("inspect", "stack");
 /// with what, is not followed.
 ///
 /// One case is provably not an entry point: `module.name(...)` where `module` is bound by an
-/// import to a module other than [`QUERY_MODULES`] and never rebound (`pa.table(d)`,
-/// `np.view(...)`, `json.query`). Every other receiver (a local, a parameter, an attribute
-/// chain, a call result) may be a connection, a cursor, a frame or a relation, and silences.
+/// import to a module of [`crate::unrelated_modules`] (the standard library and a list of
+/// well-known packages) and never rebound: `pa.table(d)`, `np.view(...)`, `json.query`. Every
+/// other receiver silences: a local, a parameter, an attribute chain, a call result (it may be
+/// a connection, a cursor, a frame or a relation), and any module not on that list, such as
+/// a module of the project (`mylib.sql(QUERY)` may be a re-exported `duckdb.sql`).
 pub const SQL_ENTRY_POINTS: &[&str] = &[
     "sql",
     "execute",
@@ -70,9 +72,6 @@ pub const SQL_ENTRY_POINTS: &[&str] = &[
     "read_sql_query",
     "SQLContext",
 ];
-
-/// The libraries whose calls can resolve a caller's variable by name.
-pub const QUERY_MODULES: &[&str] = &["duckdb", "polars", "pandas"];
 
 /// What a name at the top of the file was imported as, for seeing through aliases.
 pub enum Imported<'n> {
@@ -284,7 +283,7 @@ impl Uses<'_, '_, '_> {
 
     /// Whether `expr` refers to one of [`SQL_ENTRY_POINTS`]: `anything.sql`, a from-imported
     /// `sql` under any local name, or (`bare` only, for a callee) an unimported name `sql`.
-    /// `module.sql` is not one when `module` is provably a module outside [`QUERY_MODULES`].
+    /// `module.sql` is not one when `module` is provably an unrelated module.
     fn is_entry_point(&self, expr: &Expr, bare: bool) -> bool {
         match expr {
             Expr::Name(n) => {
@@ -303,8 +302,9 @@ impl Uses<'_, '_, '_> {
         }
     }
 
-    /// `receiver` is a name that an import binds to a module outside [`QUERY_MODULES`], and
-    /// nothing in the function rebinds it. Anything less certain is `false`.
+    /// `receiver` is a name that an import binds to a module of [`crate::unrelated_modules`]
+    /// (absolute import, known not to be the user's code), and nothing in the function rebinds
+    /// it. Anything less certain is `false`.
     fn is_other_module(&self, receiver: &Expr) -> bool {
         let Expr::Name(n) = receiver else {
             return false;
@@ -312,8 +312,7 @@ impl Uses<'_, '_, '_> {
         let name = n.id.as_str();
         match self.import_of(name) {
             Some((module, None)) if !self.rebound.contains(&name) => {
-                let root = module.split('.').next().unwrap_or(module);
-                !QUERY_MODULES.contains(&root)
+                crate::unrelated_modules::is_unrelated(module)
             }
             _ => false,
         }
@@ -779,10 +778,12 @@ mod tests {
     }
 
     #[test]
-    fn a_call_on_a_module_that_is_not_duckdb_polars_or_pandas_is_not_an_entry_point() {
+    fn a_call_on_a_known_unrelated_module_is_not_an_entry_point() {
         const IMPORTS: &str = "import pyarrow as pa\nimport numpy as np\nimport json\n\
                                import matplotlib.pyplot as plt\nimport duckdb as d\n\
-                               import polars\nimport pandas as pd";
+                               import polars\nimport pandas as pd\n\
+                               import mylib\nimport db\nimport mypkg.queries as mq\n\
+                               import ibis\nfrom mypkg import queries\nfrom . import local_sql";
         let with = |body: &str| {
             let src = step(
                 "orders, threshold",
@@ -809,6 +810,16 @@ mod tests {
             "    return client.query(q)",
             "    return df.query(expr)",
             "    return rel.view(name)",
+            // A module that is not on the allow-list may be the user's own, re-exporting
+            // `duckdb.sql` or wrapping a connection: never narrowed.
+            "    return mylib.sql(QUERY)",
+            "    return db.query(QUERY)",
+            "    return mq.execute(QUERY)",
+            "    return queries.execute(QUERY)",
+            "    return local_sql.sql(QUERY)",
+            "    return ibis.table(name)", // a package the list has never heard of
+            "    import helpers\n    return helpers.sql(QUERY)",
+            "    f = mylib.sql\n    return f(QUERY)",
             "    return d.sql(q)", // duckdb under an alias
             "    return polars.sql(q)",
             "    return pd.read_sql(q, con)",
@@ -823,6 +834,34 @@ mod tests {
             "    with connect() as plt:\n        return plt.table(name)",
         ] {
             assert!(with(body).is_empty(), "{body}");
+        }
+    }
+
+    #[test]
+    fn the_allow_list_is_the_standard_library_and_named_packages_only() {
+        use crate::unrelated_modules::{STDLIB, THIRD_PARTY, is_unrelated};
+        for module in [
+            "json",
+            "os.path",
+            "pyarrow",
+            "pyarrow.parquet",
+            "matplotlib.pyplot",
+        ] {
+            assert!(is_unrelated(module), "{module}");
+        }
+        // The libraries that do read the caller's variables, and anything unknown.
+        for module in [
+            "duckdb",
+            "polars",
+            "pandas",
+            "mylib",
+            "db",
+            "sqlalchemy",
+            "ibis",
+            "",
+        ] {
+            assert!(!is_unrelated(module), "{module}");
+            assert!(!STDLIB.contains(&module) && !THIRD_PARTY.contains(&module));
         }
     }
 
