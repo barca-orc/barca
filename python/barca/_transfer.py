@@ -37,15 +37,15 @@ behave exactly as they do for workers and the state helper.
 
 import hashlib
 import os
+import signal
 import socket
 import sys
-import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from barca import _runtime, _storage
+from barca import _lifeline, _runtime, _storage
 
 _DEFAULT_CONCURRENCY = 4
 _DEFAULT_RETRIES = 3
@@ -63,6 +63,8 @@ _PERMANENT = (
     ValueError,
     TypeError,
     ImportError,
+    # A local directory in the way that cannot be moved: retrying changes nothing.
+    _storage.ArtifactPathError,
 )
 
 
@@ -108,22 +110,22 @@ def _staged_get(remote: str, local: str, expected: str | None) -> dict:
 
     Returns the reply fields. The store's copy is used even when it does not have the
     `expected` hash; the caller is told so it can warn. A local file that already holds the
-    store's bytes is left untouched.
+    store's bytes is left untouched. A directory at `local` is not an artifact: it is moved
+    out of the way, never deleted (`_storage.make_way`).
     """
     dest = Path(local)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=dest.parent, prefix=f".{dest.name}.", suffix=".tmp")
-    os.close(fd)
-    try:
+    # Before anything is staged beside it: if the directory cannot be moved, that is the
+    # error to report, not a temp file that could not be created next to it.
+    _storage.make_way(dest)
+    with _storage.staged_beside(dest) as tmp:
         _storage.get_file(remote, tmp)
         digest = _sha256(tmp)
         mismatch = expected is not None and digest != expected
         fetched = not (mismatch and _local_sha256(dest) == digest)
         if fetched:
+            _storage.make_way(dest)
             os.replace(tmp, dest)
         return {"sha256": digest, "fetched": fetched, "mismatch": mismatch}
-    finally:
-        Path(tmp).unlink(missing_ok=True)
 
 
 def _transfer(msg: dict) -> dict:
@@ -325,11 +327,42 @@ def _env_float(name: str, default: float) -> float:
     return float(raw) if raw else default
 
 
+def _stop(signum, frame) -> None:
+    """Asked to stop mid-transfer: leave no half-written temp file behind, then exit."""
+    _storage.discard_staged()
+    os._exit(128 + signum)
+
+
 def main() -> int:
     if not os.environ.get("BARCA_SOCKET"):
         print("BARCA_SOCKET not set", file=sys.stderr)
         return 1
-    sock = _runtime.connect()
+    # What Ctrl-C means for the run is the coordinator's decision alone: it cancels the run
+    # and stops this helper (SIGTERM). Acting on an interrupt here as well would end the
+    # helper under a coordinator that is still waiting on it, and print a KeyboardInterrupt
+    # traceback. The coordinator starts this process in a group of its own, which the
+    # terminal's Ctrl-C does not reach; a SIGINT sent to it directly is ignored too.
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    # Outside the terminal's foreground group, a write to the terminal (a warning on stderr)
+    # would stop the process if the terminal is set to `tostop`. Ignored, the write goes
+    # through.
+    signal.signal(signal.SIGTTOU, signal.SIG_IGN)
+    signal.signal(signal.SIGTERM, _stop)
+    # Deaf to Ctrl-C, so this process must notice by itself when the coordinator is gone.
+    _lifeline.watch()
+    try:
+        sock = _runtime.connect()
+    except OSError as exc:
+        # No socket to connect to. If the coordinator has gone (it failed, or was cancelled,
+        # before it ever used this helper) there is nobody to tell: exit without a word.
+        if _lifeline.coordinator_gone(wait=1.0):
+            return 0
+        print(
+            f"[barca] transfer helper: cannot reach the coordinator at "
+            f"{os.environ['BARCA_SOCKET']}: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return 1
     assert sock is not None
     serve(
         sock,
@@ -338,6 +371,9 @@ def main() -> int:
         timeout=_env_float("BARCA_TRANSFER_TIMEOUT", _DEFAULT_TIMEOUT),
     )
     _runtime.disconnect()
+    # Whatever was still in flight is abandoned (the coordinator disconnected, or an attempt
+    # timed out): leave no temp file of it.
+    _storage.discard_staged()
     # Exit without joining pool threads: a timed-out attempt may be stuck in
     # a network call that would otherwise keep the process alive.
     sys.stdout.flush()

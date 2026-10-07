@@ -1,12 +1,16 @@
-import { useMemo, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useOutletContext, useSearchParams } from 'react-router'
 import { Filter, Maximize, ArrowRight, ArrowDown } from 'lucide-react'
-import { IconButton, StatusDot } from '@/components'
+import { ConnectionBadge, IconButton, StatusDot } from '@/components'
 import { GraphCanvas, type GraphCanvasHandle } from '@/components/graph/GraphCanvas'
 import { NodeInspector } from '@/components/graph/NodeInspector'
 import { useAssets } from '@/hooks/useAssets'
 import { useHealth } from '@/hooks/useHealth'
+import { connection } from '@/lib/connection'
 import { useRunStream } from '@/hooks/useRunStream'
+import { useTriggerNode } from '@/hooks/useTriggerNode'
+import type { AppShellContext } from '@/layouts/shellContext'
+import { shortName } from '@/lib/graph'
 import { inPipeline, sourceFile, pipelineName } from '@/lib/pipeline'
 import { overlayRunStatus, type LayoutDir } from '@/lib/graph'
 import type { StatusKind } from '@/lib/types'
@@ -14,8 +18,8 @@ import type { StatusKind } from '@/lib/types'
 const LEGEND: StatusKind[] = ['success', 'running', 'queued', 'failed']
 
 export function GraphPage() {
-  const { data: allAssets = [], isError } = useAssets()
-  const { data: health } = useHealth()
+  const { data: allAssets = [] } = useAssets()
+  const { data: health, isError: healthError } = useHealth()
   const [dir, setDir] = useState<LayoutDir>('LR')
   // `?focus=<node id>` (from the Assets table) opens with that node selected.
   const [searchParams] = useSearchParams()
@@ -30,8 +34,8 @@ export function GraphPage() {
   const canvasRef = useRef<GraphCanvasHandle>(null)
 
   const stream = useRunStream(run?.handle ?? null)
+  const { setTopbarRun } = useOutletContext<AppShellContext>()
 
-  const connected = !!health && !isError
   const title = pipeline
     ? pipelineName(pipeline)
     : assets[0] && assets.every((a) => sourceFile(a.id) === sourceFile(assets[0]!.id))
@@ -42,6 +46,31 @@ export function GraphPage() {
     () => assets.find((a) => a.id === selected) ?? null,
     [assets, selected],
   )
+
+  const onTrigger = useCallback(
+    (handle: string, nodeId: string) => setRun({ handle, nodeId }),
+    [],
+  )
+  const trigger = useTriggerNode(selectedAsset, onTrigger)
+  const readOnly = health?.read_only ?? false
+
+  // The topbar's Run button acts on the selected node, same as the inspector's.
+  const { fire, verb } = trigger
+  const triggering = trigger.isPending || stream.running
+  const selectedName = selectedAsset ? shortName(selectedAsset.id) : null
+  useEffect(() => {
+    setTopbarRun({
+      onRun: fire,
+      disabled: !selectedName || readOnly,
+      loading: triggering,
+      title: readOnly
+        ? 'This server is read-only'
+        : selectedName
+          ? `${verb} ${selectedName}`
+          : 'Select a node to run',
+    })
+    return () => setTopbarRun(null)
+  }, [setTopbarRun, fire, verb, selectedName, readOnly, triggering])
 
   // Live status overlay: stream-derived, plus an optimistic "running" on the
   // triggered node so the click feels instant before the first event lands.
@@ -61,10 +90,10 @@ export function GraphPage() {
             <h1>{title}</h1>
           </div>
           <div className="barca-view-actions">
-            <span className="barca-conn">
-              <StatusDot status={connected ? 'success' : 'queued'} size={6} />
-              {connected ? `barca serve · v${health.version}` : 'offline · mock data'}
-            </span>
+            <ConnectionBadge
+              connection={connection(health, healthError)}
+              offlineLabel="offline · mock data"
+            />
             <IconButton
               label={dir === 'LR' ? 'Top-down layout' : 'Left-right layout'}
               onClick={() => setDir((d) => (d === 'LR' ? 'TB' : 'LR'))}
@@ -107,8 +136,11 @@ export function GraphPage() {
             logs={stream.logs}
             running={stream.running}
             error={selectedError}
-            readOnly={health?.read_only ?? false}
-            onTrigger={(handle, nodeId) => setRun({ handle, nodeId })}
+            readOnly={readOnly}
+            verb={trigger.verb}
+            triggering={trigger.isPending}
+            triggerError={trigger.error}
+            onFire={trigger.fire}
             onClose={() => setSelected(null)}
           />
         )}

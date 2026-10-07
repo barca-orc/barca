@@ -18,10 +18,14 @@ into the filesystem constructor as an escape hatch.
 """
 
 import datetime
+import errno
 import json
 import os
 import shutil
+import sys
+import tempfile
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -123,17 +127,143 @@ def get_fs(path: "str | Path"):
         return fs
 
 
+# ─── Putting a file in place ──────────────────────────────────────────────────
+
+# Temp files that are being written now. Reentrant: `discard_staged` runs in a signal
+# handler, which may interrupt the very thread that holds the lock.
+_staged: set[str] = set()
+_staged_lock = threading.RLock()
+# Set by `discard_staged`: the process is on its way out and stages nothing more.
+_leaving = False
+
+
+@contextmanager
+def staged_beside(dest: Path):
+    """Yield a new temp file in ``dest``'s directory, to be written and renamed over ``dest``.
+
+    The same directory means the same filesystem, so the rename is atomic and ``dest`` is
+    never seen half written. The temp file is removed when the block ends without having
+    renamed it, and by ``discard_staged`` when the process is told to stop in the middle.
+
+    Creating the file and registering it happen under one lock, the one ``discard_staged``
+    takes: a process that is leaving either removes the file or was never given it. (The
+    thread that leaves is not the thread that stages, so without this a temp file created at
+    the wrong moment was left behind: twice in 180 runs of the Ctrl-C tests.)
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with _staged_lock:
+        if _leaving:
+            raise InterruptedError(f"not staging {dest.name}: the process is exiting")
+        fd, tmp = tempfile.mkstemp(dir=dest.parent, prefix=f".{dest.name}.", suffix=".tmp")
+        _staged.add(tmp)
+    os.close(fd)
+    try:
+        yield Path(tmp)
+    finally:
+        with _staged_lock:
+            _staged.discard(tmp)
+        Path(tmp).unlink(missing_ok=True)
+
+
+def discard_staged() -> None:
+    """Remove every temp file ``staged_beside`` has open, and let it open no more. For a
+    process about to exit."""
+    global _leaving
+    with _staged_lock:
+        _leaving = True
+        paths = list(_staged)
+    for tmp in paths:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
+# What a directory found at an artifact's path is renamed to (`-2`, `-3`, ... when taken).
+MOVED_ASIDE_SUFFIX = ".moved-aside"
+
+
+class ArtifactPathError(OSError):
+    """A directory sits where an artifact file belongs and could not be moved out of the way.
+
+    Not an error of the step that was writing its result: barca's own artifact directory is
+    in a state barca cannot repair (the coordinator reports it as an infrastructure failure,
+    exit 3). The message names the path, the reason and what to do.
+    """
+
+
+def make_way(dest: "str | Path") -> "Path | None":
+    """Clear a directory that sits where barca is about to put the artifact file ``dest``.
+
+    Call this only for paths inside barca's own artifact directory, never for a path the
+    user chose (a ``@sink``). An artifact is always one file, so a directory at its path is
+    something barca did not make and cannot read. Nothing in it is ever deleted:
+
+    - an empty directory is removed (there is nothing to lose);
+    - any other directory is renamed to a sibling, ``<name>.moved-aside`` (``-2``, ``-3``,
+      ... if that exists), with everything in it, and a warning on stderr names both paths.
+
+    Only a directory is ever moved. Another process may be installing the same artifact at
+    this moment (two runs, or the transfer helper and a worker), so what is at ``dest`` can
+    change between looking and acting: both operations used here refuse anything that is not
+    a directory at the moment they act (``rmdir``, and a rename of ``dest/``, which the
+    kernel resolves only if it is a directory). A regular file, the artifact another process
+    just put there, is never renamed.
+
+    A symlink is left alone, whatever it points to: the rename that installs the artifact
+    replaces the link itself and never reaches its target. (It is told apart before acting;
+    barca's own processes never create one, so only a third party making a symlink there in
+    that instant could have it followed.) Returns where a directory was
+    moved to, or None. Raises ArtifactPathError when a directory is there and cannot be moved.
+    """
+    dest = Path(dest)
+    if dest.is_symlink() or not dest.is_dir():
+        return None
+    try:
+        dest.rmdir()
+        return None
+    except (FileNotFoundError, NotADirectoryError):
+        return None  # another process cleared it, or put the artifact there, first
+    except OSError as exc:
+        if exc.errno not in (errno.ENOTEMPTY, errno.EEXIST):
+            raise _blocked(dest, exc) from exc
+    for n in range(1, 1000):
+        aside = dest.with_name(dest.name + MOVED_ASIDE_SUFFIX + ("" if n == 1 else f"-{n}"))
+        if os.path.lexists(aside):
+            continue
+        try:
+            # The trailing separator makes this a rename of a directory or nothing.
+            os.rename(f"{dest}{os.sep}", aside)
+        except (FileNotFoundError, NotADirectoryError):
+            return None  # another process moved it, or put the artifact there, first
+        except OSError as exc:
+            raise _blocked(dest, exc) from exc
+        print(
+            f"[barca] warning: {dest} is a directory, not an artifact. Moved it, with its "
+            f"contents, to {aside}; barca does not use it, delete it if you do not need it.",
+            file=sys.stderr,
+            flush=True,
+        )
+        return aside
+    raise _blocked(dest, FileExistsError("every .moved-aside name beside it is taken"))
+
+
+def _blocked(dest: Path, exc: OSError) -> ArtifactPathError:
+    return ArtifactPathError(
+        f"a directory sits where the artifact {dest} belongs and could not be moved aside "
+        f"({type(exc).__name__}: {exc}).\n"
+        f"Barca renames such a directory to {dest.name}{MOVED_ASIDE_SUFFIX} and needs write "
+        f"permission on {dest.parent} for that. Grant it, or move or remove the directory "
+        "yourself, then run the command again. Nothing was deleted."
+    )
+
+
 def _copy_local(src: "str | Path", dst: "str | Path") -> None:
     """Copy into a local store path, creating parents. Atomic at the destination."""
     dst = Path(dst)
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dst.with_name(f".{dst.name}.{os.getpid()}.{threading.get_ident()}.tmp")
-    try:
+    with staged_beside(dst) as tmp:
         shutil.copyfile(src, tmp)
         os.replace(tmp, dst)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
 
 
 def put_file(local_path: "str | Path", dest: str) -> None:

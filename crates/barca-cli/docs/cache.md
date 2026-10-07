@@ -256,12 +256,21 @@ output, so the next `--dry-run` or `barca status` shows its consumers as stale.
 .barca/metadata.db                          run history and materialization records (local DB)
 .barca/metadata.db.base                     with shared history: a counter of pulls and uploads (`barca docs remote`)
 .barca/metadata.db.prev                     with shared history: the local DB as it was before the last pull that changed it
-.barca/artifacts/<node>/<run_hash>.<ext>    one immutable file per materialization
+.barca/metadata.db.pull-*, .push-*          with shared history: a download or upload in progress; what a killed command left is removed by the next pull
+.barca/artifacts/<node>/<run_hash>.<ext>    one file per result
 ```
 
-`<ext>` is `.json`, `.pkl` or `.parquet` (see `barca docs types`). Artifacts are
-content-addressed, so they can be shared between machines: set `BARCA_REMOTE_URI` and your
-cloud's credentials (`barca docs remote`).
+`<ext>` is `.json`, `.pkl` or `.parquet` (see `barca docs types`). An artifact's path names the
+computation, not the bytes: the run hash covers the step's code and inputs, so the same step
+with the same inputs always writes the same path. A step is meant to be a pure function of its
+code and inputs (what changes outside comes in through a sensor, whose output is part of the
+run hash), so computing it again is expected to write the same bytes.
+Barca does not enforce that. Computing the result again (`--refresh`, `--refresh-all`, or a
+missing artifact that something needs) overwrites the file, and a function that is not
+deterministic then leaves different bytes at the same path; with an artifact store, a machine
+whose history still has the earlier hash is warned (`barca docs remote`, "Checking a local copy
+against the store"). Because the path is the same on every machine, artifacts can be shared:
+set `BARCA_REMOTE_URI` and your cloud's credentials (`barca docs remote`).
 
 `.barca/` lives in the **project root**: the nearest directory at or above the one you run barca
 from that holds a `barca.toml`. Without a `barca.toml` above you, the current directory is the
@@ -320,11 +329,63 @@ barca run publish pipeline.py                    # model is cached again
 - Under `barca serve` a scheduled task whose input was deleted recomputes the input once, on its
   next tick, and keeps succeeding.
 
+### A directory at an artifact's path
+
+An artifact is one file. If a **directory** sits at an artifact's path (made by hand, by a tool
+that unpacked something there, or by a mistaken `mkdir -p`), it is not an artifact, and barca
+treats the result exactly as if the file were missing: it is fetched from the artifact store, or
+computed again with `reason: "artifact_missing"`, when something needs to read it, and it is not
+looked at otherwise. The same holds for a symlink there that leads to a directory or to nothing.
+
+Barca then has to put a file where the directory is. It never deletes what it finds:
+
+- an **empty** directory is removed;
+- a directory **with anything in it** is renamed, contents and all, to
+  `<run_hash>.<ext>.moved-aside` beside it (`.moved-aside-2`, `-3`, ... if that name is taken),
+  and stderr says so:
+  `[barca] warning: <path> is a directory, not an artifact. Moved it, with its contents, to
+  <path>.moved-aside; barca does not use it, delete it if you do not need it.`
+- a **symlink** is replaced by the artifact file. Only the link goes; what it pointed to is not
+  touched.
+
+The run goes on and exits 0. Only a directory is ever moved: an artifact file that another
+barca process wrote in the same instant is never renamed.
+
+**Where they are, and getting rid of them.** A moved-aside directory stays beside the artifact,
+in `.barca/artifacts/<node>/` (under `.barca/envs/<env>/artifacts/` for a named environment).
+Barca never reads one again, never lists them in `barca status` or any other command, and never
+deletes one: they are yours, and they take disk space until you remove them. To see them all:
+
+```
+find .barca -name '*.moved-aside*'
+```
+
+Delete the ones you do not need. Deleting the whole of `.barca/artifacts/` to reclaim disk
+removes them with everything else (results are computed again, or downloaded again from an
+artifact store, when something needs them).
+
+**If barca may not move it.** Renaming needs write permission on the directory that holds the
+artifact. Without it the run exits 3 (an infrastructure error, not a failed step) and names the
+path and the permission; nothing is deleted. Grant the permission, or move or remove the
+directory yourself, and run the command again.
+
+This applies only inside barca's own artifact directory (`.barca/artifacts/`). Barca moves,
+renames and replaces nothing anywhere else:
+
+- a `@sink` path is yours. Barca writes the file there and changes nothing else: a directory at
+  the path fails that sink (`[barca] SINK FAILED: ... IsADirectoryError`) and is left as it is,
+  and a symlink is written through (the file it points to is written, the link stays). The
+  asset itself succeeds either way (`barca docs sinks`);
+- a directory at an object's path in an artifact store that is a shared directory fails the
+  fetch or the upload with exit 3, naming the path, and is left as it is. The error says to
+  remove or rename it there; `--refresh-all` does not help (`barca docs remote`).
+
 Known limits:
 
-- Only existence is checked. A file that is there but truncated or edited is read as it is (with
-  an artifact store, a copy that does not match its recorded hash is replaced: `barca docs
-  remote`). A directory at the artifact's path counts as present.
+- Only whether the artifact is a file is checked. A file that is there but truncated or edited
+  is read as it is (with an artifact store, a copy that does not match its recorded hash is
+  replaced: `barca docs remote`). A symlink to a file counts as that file and is read; writing
+  the artifact again replaces the link.
 - `--agent` announces each step once, with its outcome. A cached step whose artifact is not on
   disk waits: it prints `step:<id> completed` if it is computed again, or `step:<id> cached` at
   the end of the run if nothing needed it. The one exception is a result in a remote store
@@ -435,7 +496,10 @@ A real `barca get` / `barca run` returns the same per-step information in a `ste
 cached step also prints `[barca] step:<id> cached` on stderr, so a log shows what was served from
 cache as well as what ran. A step whose node declares `env=[...]` also carries `env`, the values
 it was hashed with (`null` when unset, `<redacted>` for secret-looking names), in both the JSON
-`steps` entry and the `--agent` line (`... env SOURCE_CSV=b.csv`). `barca history --json` and `barca stats` show the same over time.
+`steps` entry and the `--agent` line (`... env SOURCE_CSV=b.csv`). With an artifact store, a step
+whose stored result (or an input it read) is not the copy that was recorded carries
+`artifact_mismatch: true` and a `warning` (`barca docs remote`). `barca history --json` and
+`barca stats` show runs and timings over time.
 
 ## Concurrent runs
 
@@ -469,7 +533,9 @@ barca history --json            # the run is `running`; `steps_executed` is the 
 - **History says so.** `barca history` reports a run whose process no longer exists as
   `interrupted`, with `finished_at` and `elapsed_seconds` `null` (nobody saw it end) and
   `steps_executed` at what it had recorded. Ctrl-C is different: the run stops its workers,
-  records itself and is `cancelled`.
+  records itself and is `cancelled` (exit 130). With an artifact store that also holds while
+  artifacts upload, download or the shared history is pushed, and the cancelled run then shares
+  its record for at most 10 seconds; a second Ctrl-C ends that (`barca docs remote`, "Ctrl-C").
 
 Known limits:
 

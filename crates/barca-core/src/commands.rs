@@ -779,7 +779,7 @@ pub(crate) fn refresh_name_matches(node_id: &str, name: &str) -> bool {
 }
 
 /// The function name of a node id (`pipeline.py:src` -> `src`, `pipeline.py:p[k=v]` -> `p`).
-fn short_name(node_id: &str) -> &str {
+pub(crate) fn short_name(node_id: &str) -> &str {
     let base = node_id.split('[').next().unwrap_or(node_id);
     base.rsplit(':').next().unwrap_or(base)
 }
@@ -1014,22 +1014,33 @@ pub(crate) struct StoreSync {
     /// intermediates a run never reads are never downloaded. With a recorded
     /// hash, a copy already on disk is checked against it on first use too.
     fetchable: HashMap<String, (String, String, Option<String>)>,
+    /// Base step id -> what was found, for each store copy fetched in this run that does not
+    /// have its recorded hash. Put on the step reports when the run ends ([`crate::mismatch`]).
+    mismatched: HashMap<String, String>,
     /// Local mirror paths of fetches the store answered with "no such object",
     /// until [`Self::take_missing`] collects them.
     missing: Vec<String>,
     /// Whether the store itself is there, once it has been asked (see
     /// [`Self::confirm_present`]).
     present: Option<Result<(), String>>,
+    /// The run's cancellation: a wait on the store ends when it fires.
+    cancel: CancellationToken,
 }
 
+/// What a wait on the artifact store reports when the run is cancelled during it. The run
+/// then ends as cancelled; this text is never the error a user sees.
+const STORE_WAIT_CANCELLED: &str = "run cancelled";
+
 impl StoreSync {
-    fn new(client: TransferClient) -> Self {
+    fn new(client: TransferClient, cancel: CancellationToken) -> Self {
         Self {
             layout: client.layout().clone(),
             client,
             fetchable: HashMap::new(),
+            mismatched: HashMap::new(),
             missing: Vec::new(),
             present: None,
+            cancel,
         }
     }
 
@@ -1052,7 +1063,7 @@ impl StoreSync {
     fn known_absent(store: Option<&Self>, path: &str) -> bool {
         match store.and_then(|s| s.fetchable.get(path)) {
             Some((_, at, _)) => {
-                !std::path::Path::new(path).exists()
+                !std::path::Path::new(path).is_file()
                     && crate::transfer::local_path(at).is_some_and(|stored| !stored.exists())
             }
             None => !recover::on_disk(path, store.is_some()),
@@ -1069,7 +1080,12 @@ impl StoreSync {
     /// a bad setting into a full recompute written to the wrong place.
     pub(crate) async fn confirm_present(&mut self, lost: &[String]) -> Result<(), String> {
         if self.present.is_none() {
-            self.present = Some(self.client.probe().await);
+            let answer = tokio::select! {
+                biased;
+                _ = self.cancel.cancelled() => return Err(STORE_WAIT_CANCELLED.to_string()),
+                answer = self.client.probe() => answer,
+            };
+            self.present = Some(answer);
         }
         let Some(Err(why)) = &self.present else {
             return Ok(());
@@ -1106,7 +1122,7 @@ impl StoreSync {
             let dispatch::ProvidedInput::Single(oref) = input else {
                 continue;
             };
-            if oref.format != "parquet" || std::path::Path::new(&oref.path).exists() {
+            if oref.format != "parquet" || std::path::Path::new(&oref.path).is_file() {
                 continue;
             }
             if let Some((_, at, _)) = self.fetchable.get(&oref.path) {
@@ -1139,7 +1155,13 @@ impl StoreSync {
             return Ok(());
         }
         let started = Instant::now();
-        let report = self.client.await_fetches(&locals).await;
+        // Ctrl-C ends the wait at once: the run is cancelled and the helper is stopped, with
+        // whatever it was downloading discarded (`TransferClient::abort`).
+        let report = tokio::select! {
+            biased;
+            _ = self.cancel.cancelled() => return Err(STORE_WAIT_CANCELLED.to_string()),
+            report = self.client.await_fetches(&locals) => report,
+        };
         if report.transferred > 0 {
             let msg = format!(
                 "[barca] fetched {} cached artifact{} ({}) in {:.1}s",
@@ -1165,19 +1187,14 @@ impl StoreSync {
             }
         }
         for (base, at, count) in differing {
-            let others = match count - 1 {
-                0 => String::new(),
-                n => format!(" (and {n} more of its partitions)"),
-            };
-            let msg = format!(
-                "[barca] warning: {base}: the copy at {at}{others} is not the one this result \
-                 was recorded with (another run overwrote it, or it was changed). Using it. \
-                 Recompute with --refresh {base}."
-            );
+            // The same words on stderr and, at the end of the run, in the JSON step entries.
+            let finding = crate::mismatch::describe(&base, at, count - 1);
+            let msg = format!("[barca] warning: {base}: {finding}");
             match pb {
                 Some(bar) if !bar.is_hidden() => bar.println(&msg),
                 _ => eprintln!("{msg}"),
             }
+            self.mismatched.insert(base, finding);
         }
         let (missing, failed): (Vec<_>, Vec<_>) = report.failures.iter().partition(|f| f.missing);
         if failed.is_empty() {
@@ -1193,14 +1210,43 @@ impl StoreSync {
             .iter()
             .map(|f| format!("  {} ({}): {}", f.key, f.store, f.message))
             .collect();
+        let messages: Vec<&str> = failed.iter().map(|f| f.message.as_str()).collect();
         Err(format!(
-            "could not fetch {} cached artifact(s) from the artifact store:\n{}\n\
-             Re-run with --refresh-all to recompute them.",
+            "could not fetch {} cached artifact(s) from the artifact store:\n{}\n{}",
             failed.len(),
-            detail.join("\n")
+            detail.join("\n"),
+            transfer_remedy(&messages, "Re-run with --refresh-all to recompute them.")
         ))
     }
 }
+
+/// What to do about failed transfers, given the helper's error messages; `otherwise` when
+/// nothing more specific is known.
+///
+/// A directory at an object's path in a store that is a shared directory is not fixed by
+/// recomputing: the upload would meet the same directory. Barca changes nothing in a store
+/// but its own objects, so the directory has to be removed there. A local directory that
+/// could not be moved aside says what to do in its own message.
+fn transfer_remedy(messages: &[&str], otherwise: &str) -> String {
+    if messages.iter().any(|m| m.starts_with("IsADirectoryError")) {
+        "A directory sits where the artifact's object belongs in the store. Remove or rename \
+         it there (barca changes nothing in a store but its own objects), then run the \
+         command again."
+            .to_string()
+    } else if messages
+        .iter()
+        .any(|m| m.starts_with(BLOCKED_ARTIFACT_PATH))
+    {
+        "Then run the command again.".to_string()
+    } else {
+        otherwise.to_string()
+    }
+}
+
+/// How an error starts when a directory at an artifact path could not be moved aside
+/// (`barca._storage.ArtifactPathError`): the state of barca's own artifact directory, not a
+/// fault of the step that was writing there.
+const BLOCKED_ARTIFACT_PATH: &str = "ArtifactPathError";
 
 fn fmt_bytes(n: u64) -> String {
     const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
@@ -1327,9 +1373,15 @@ pub struct StepReport {
     /// The cached artifact, when the step is served from cache.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifact: Option<String>,
-    /// Set when a cached step depends on an asset refreshed in the same run.
+    /// Something to know about the step, in words: it was served from cache although an asset
+    /// it depends on was refreshed in the same run, or `artifact_mismatch` is set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub warning: Option<String>,
+    /// `true` when the artifact store's copy of this step's result, or of an input the step
+    /// read in this run, does not have the hash recorded for it. The store's copy was used,
+    /// and `warning` says which and how to recompute it. Absent otherwise (never `false`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_mismatch: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub partitions: Option<PartitionSummary>,
     /// Declared env values the step used (`@asset(env=[...])`): name -> value, `null` when unset,
@@ -1558,7 +1610,7 @@ pub async fn get(
     python: &std::path::Path,
     policy: CachePolicy,
     agent_mode: bool,
-    cancel: CancellationToken,
+    cancel: impl Into<crate::interrupt::Interrupt>,
 ) -> Result<GetResult, BarcaError> {
     let names: Vec<String> = target_name.map(str::to_string).into_iter().collect();
     execute(
@@ -1577,7 +1629,7 @@ pub async fn run(
     python: &std::path::Path,
     policy: CachePolicy,
     agent_mode: bool,
-    cancel: CancellationToken,
+    cancel: impl Into<crate::interrupt::Interrupt>,
 ) -> Result<GetResult, BarcaError> {
     execute(
         cfg,
@@ -1654,7 +1706,7 @@ pub async fn get_many(
     python: &std::path::Path,
     policy: CachePolicy,
     agent_mode: bool,
-    cancel: CancellationToken,
+    cancel: impl Into<crate::interrupt::Interrupt>,
 ) -> Result<MultiResult, BarcaError> {
     execute(
         cfg,
@@ -1681,7 +1733,7 @@ pub async fn run_many(
     python: &std::path::Path,
     policy: CachePolicy,
     agent_mode: bool,
-    cancel: CancellationToken,
+    cancel: impl Into<crate::interrupt::Interrupt>,
 ) -> Result<MultiResult, BarcaError> {
     execute(
         cfg,
@@ -1809,7 +1861,7 @@ pub(crate) async fn explain_dag(
     // while a run is going in the same project: what that run has recorded so far is still
     // there afterwards, next to what other machines pushed.
     if cfg.state == crate::config::StateMode::Optimistic && cfg.state_uri.is_some() {
-        let pulled = state_sync::pull_state(python, cfg).await?;
+        let pulled = state_sync::pull_state(python, cfg, state_sync::Until::done()).await?;
         if let Some(note) = pulled.carried.note() {
             eprintln!("{note}");
         }
@@ -2104,9 +2156,11 @@ async fn execute(
     agent_mode: bool,
     policy: CachePolicy,
     command_label: &str,
-    cancel: CancellationToken,
+    interrupt: impl Into<crate::interrupt::Interrupt>,
     event_tx: Option<UnboundedSender<crate::RunEvent>>,
 ) -> Result<Executed, BarcaError> {
+    let interrupt = interrupt.into();
+    let cancel = interrupt.cancel.clone();
     let t0 = Instant::now();
     // BARCA_TRACE_TIMING=1: emit a millisecond-resolution waterfall of every
     // major checkpoint in this run to stderr (DAG parse, planning, DB setup,
@@ -2135,17 +2189,22 @@ async fn execute(
     let state_sync_on =
         cfg.state == crate::config::StateMode::Optimistic && cfg.state_uri.is_some();
     let pull = state_sync_on.then(|| {
-        let (python, cfg) = (python.to_path_buf(), cfg.clone());
+        let (python, cfg, cancel) = (python.to_path_buf(), cfg.clone(), cancel.clone());
         Background::spawn(async move {
             let started = Instant::now();
-            let pulled = state_sync::pull_state(&python, &cfg).await?;
+            // Ctrl-C while the shared state is still being pulled ends the command here:
+            // nothing has run and no run has been created yet.
+            let until = state_sync::Until::cancelled(&cancel);
+            let pulled = state_sync::pull_state(&python, &cfg, until).await?;
             Ok::<_, BarcaError>((pulled, started.elapsed()))
         })
     });
-    let transfer_start = cfg.remote_artifacts().then(|| {
-        let (python, cfg, run_id) = (python.to_path_buf(), cfg.clone(), run_id.clone());
-        Background::spawn(async move { TransferClient::start(&python, &cfg, &run_id).await })
-    });
+    // Not a task: the helper connects on its own while this function goes on, and the value
+    // stops it if this function returns before using it (see `transfer::Launching`).
+    let mut transfer_start = match cfg.remote_artifacts() {
+        true => Some(TransferClient::launch(python, cfg, &run_id)?),
+        false => None,
+    };
 
     let dag = build_dag(file_args, python).await?;
     trace_point!("dag_built");
@@ -2194,7 +2253,18 @@ async fn execute(
     // is a hard error — silently diverging local runs are worse than stopping.
     let mut state_token = match pull {
         Some(pull) => {
-            let (state_sync::Pulled { token, carried }, took) = pull.join().await??;
+            let pulled = match pull.join().await.and_then(|pulled| pulled) {
+                Ok(pulled) => pulled,
+                Err(e) => {
+                    // The command ends here (the pull failed, or Ctrl-C cancelled it). It
+                    // does not return before the transfer helper it started is gone.
+                    if let Some(start) = transfer_start.take() {
+                        start.stop().await;
+                    }
+                    return Err(e);
+                }
+            };
+            let (state_sync::Pulled { token, carried }, took) = pulled;
             if let Some(note) = carried.note() {
                 eprintln!("{note}");
             }
@@ -2337,7 +2407,7 @@ async fn execute(
     // artifact dir; the transfer helper uploads finished artifacts in the
     // background and fetches cache hits recorded by other machines.
     let mut store: Option<StoreSync> = if let Some(start) = transfer_start {
-        Some(StoreSync::new(start.join().await??))
+        Some(StoreSync::new(start.connect().await?, cancel.clone()))
     } else {
         None
     };
@@ -2955,6 +3025,19 @@ async fn execute(
                 continue;
             }
             let node_id = item.step_id.display();
+            if error_msg.starts_with(BLOCKED_ARTIFACT_PATH) {
+                // The step ran; its result could not be written because barca's artifact
+                // directory is in a state barca cannot repair. Infrastructure (exit 3), not a
+                // failed step: there is nothing in the step to fix.
+                let why = error_msg
+                    .strip_prefix(BLOCKED_ARTIFACT_PATH)
+                    .map_or(error_msg, |m| m.trim_start_matches([':', ' ']));
+                transfer_error.get_or_insert(format!(
+                    "the result of {node_id} could not be written: {why}"
+                ));
+                failed_bases.insert(item.step_id.base_id().to_string());
+                continue;
+            }
             if agent_mode {
                 eprintln!("{}", failed_step_line(&node_id, error_msg));
             }
@@ -3002,7 +3085,10 @@ async fn execute(
 
         // Stop after collecting partial results if the pool itself failed, or if a step failed
         // and there is only one target (several targets keep going around the failure).
-        if phase_error.is_some() || (step_failure.is_some() && !keep_going) {
+        if phase_error.is_some()
+            || transfer_error.is_some()
+            || (step_failure.is_some() && !keep_going)
+        {
             break;
         }
     }
@@ -3064,11 +3150,29 @@ async fn execute(
         );
     }
 
-    let was_cancelled = cancel.is_cancelled();
+    let mut was_cancelled = cancel.is_cancelled();
 
     // Artifact store, before anything is recorded: wait for every upload. Rows are recorded
     // only for artifacts confirmed in the store, so the metadata never points at a missing
     // object. The transfer client stays up to fetch the final outputs below.
+    //
+    // Ctrl-C during the wait cancels the run like one during a step: the uploads still in
+    // flight are abandoned and their steps are not recorded.
+    let drained = match store.as_mut() {
+        Some(s) if !was_cancelled => {
+            let queued = s.client.pending_uploads();
+            let t_drain = Instant::now();
+            let report = tokio::select! {
+                biased;
+                _ = cancel.cancelled() => None,
+                report = s.client.drain() => Some(report),
+            };
+            trace_point!("store_sync_drained ({queued} uploads)");
+            was_cancelled = report.is_none();
+            report.map(|report| (report, t_drain))
+        }
+        _ => None,
+    };
     if was_cancelled {
         if let Some(s) = store.take() {
             let (unconfirmed, hashes) = s.client.abort().await;
@@ -3082,11 +3186,7 @@ async fn execute(
                 }
             }
         }
-    } else if let Some(s) = store.as_mut() {
-        let queued = s.client.pending_uploads();
-        let t_drain = Instant::now();
-        let report = s.client.drain().await;
-        trace_point!("store_sync_drained ({queued} uploads)");
+    } else if let Some((report, t_drain)) = drained {
         // The hash of the bytes that reached the store is recorded with the row, so any
         // machine can check its copy of the artifact against it.
         for (node, sha256) in &report.hashes {
@@ -3120,11 +3220,16 @@ async fn execute(
                 });
                 detail.push(format!("  {} ({}): {}", f.key, f.store, f.message));
             }
+            let messages: Vec<&str> = report.failures.iter().map(|f| f.message.as_str()).collect();
             transfer_error.get_or_insert(format!(
                 "{} artifact upload(s) failed — those steps were not recorded and \
-                 will recompute next run:\n{}",
+                 will recompute next run:\n{}{}",
                 report.failures.len(),
-                detail.join("\n")
+                detail.join("\n"),
+                match transfer_remedy(&messages, "") {
+                    remedy if remedy.is_empty() => remedy,
+                    remedy => format!("\n{remedy}"),
+                }
             ));
         }
     }
@@ -3145,7 +3250,7 @@ async fn execute(
         .snapshot()
         .map(|(node_id, est)| (node_id.clone(), *est))
         .collect();
-    let ledger = RunLedger {
+    let mut ledger = RunLedger {
         run_id: &run_id,
         status: if was_cancelled {
             "cancelled"
@@ -3184,63 +3289,83 @@ async fn execute(
         trace_point!("telemetry_exported");
     }
 
-    // Shared remote state: fold the WAL into the main file and conditionally
-    // upload it (`push_state` does both under the database lock). On conflict (another machine pushed first): pull the fresh
-    // database, replay this run's ledger onto it, retry.
+    // Shared remote state: upload the local history (`push_state` folds the WAL in and copies
+    // it under the database lock). See `SharedPush::run` for conflicts.
     if state_sync_on {
-        let mut attempt = 0u32;
-        let mut pushed_again = false;
+        let mut push = SharedPush {
+            python,
+            cfg,
+            db_path: &db_path,
+            run_id: &run_id,
+            logs: &logs_buffer,
+            token: state_token.take().expect("pulled when state sync is on"),
+        };
         let t_push = Instant::now();
-        loop {
-            let outcome =
-                state_sync::push_state(python, cfg, state_token.as_ref().unwrap()).await?;
-            let again = match outcome {
-                state_sync::PushOutcome::Pushed {
-                    local_unchanged: true,
-                    ..
-                } => false,
-                // Uploaded, but another process wrote to the local database (or replaced
-                // it) while the upload was on its way. Treated like a conflict, once: pull
-                // what was just uploaded, which keeps those rows, and push again. Only once,
-                // because a run going in the same project writes during every upload, and
-                // chasing it would cost a pull and an upload each time for rows that run
-                // pushes itself when it ends. The upload stands either way; rows written
-                // after it go with the next push from this machine.
-                state_sync::PushOutcome::Pushed { .. } => {
-                    !std::mem::replace(&mut pushed_again, true) && attempt < cfg.push_retries
+        let mut pushed: Option<u32> = None;
+        if !was_cancelled {
+            // Ctrl-C stops the push. The run's work is done and recorded, but the command is
+            // cancelled before its record was shared, so the record says `cancelled`; the
+            // wrap-up below then tries to share that.
+            match push
+                .run(&ledger, state_sync::Until::cancelled(&cancel))
+                .await
+            {
+                Ok(retries) => pushed = Some(retries),
+                Err(BarcaError::Cancelled) => {
+                    // The ledger too, so that a replay after a conflict keeps the mark.
+                    ledger.status = "cancelled";
+                    cancel_recorded_run(&db_path, &ledger).await?;
+                    was_cancelled = true;
                 }
-                state_sync::PushOutcome::Conflict => {
-                    if attempt >= cfg.push_retries {
-                        return Err(BarcaError::Other(format!(
-                            "shared state push conflicted {attempt} times — results were \
-                             computed but the shared state was not updated; re-run to retry"
-                        )));
-                    }
-                    true
-                }
-            };
-            if !again {
-                eprintln!(
-                    "[barca] pushed state ({}) in {:.2}s{}",
-                    fmt_bytes(std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0)),
-                    t_push.elapsed().as_secs_f64(),
-                    match attempt {
-                        0 => String::new(),
-                        1 => " after 1 conflict retry".to_string(),
-                        n => format!(" after {n} conflict retries"),
-                    }
-                );
-                trace_point!("state_sync_pushed (attempts={})", attempt + 1);
-                break;
+                Err(e) => return Err(e),
             }
-            attempt += 1;
-            // The pull carries this run's rows over with the rest of the local database; the
-            // ledger then adds whatever is still missing (both are idempotent), so the run
-            // is whole however much of it made the trip.
-            state_token = Some(state_sync::pull_state(python, cfg).await?.token);
-            db::init_db(&db_path).await?;
-            persist_run(&db_path, &ledger).await?;
-            db::insert_logs(&db_path, &run_id, &logs_buffer).await?;
+        }
+        if was_cancelled && pushed.is_none() {
+            // Wrap-up of a cancelled run: what it finished is worth sharing, so that other
+            // machines do not compute it again, but nobody who pressed Ctrl-C should wait on
+            // a slow store. The push gets `WRAP_UP_LIMIT`, and a second Ctrl-C ends it at
+            // once. Nothing is lost when it does not finish: the record is in the local
+            // history, a pull keeps what was recorded only here, and the next run on this
+            // machine uploads it.
+            let limit = crate::interrupt::WRAP_UP_LIMIT;
+            let until = state_sync::Until {
+                cancel: Some(&interrupt.abandon),
+                deadline: Some(Instant::now() + limit),
+            };
+            let why = match push.run(&ledger, until).await {
+                Ok(retries) => {
+                    pushed = Some(retries);
+                    None
+                }
+                Err(BarcaError::Cancelled) if interrupt.abandon.is_cancelled() => {
+                    Some("stopped by a second Ctrl-C".to_string())
+                }
+                Err(BarcaError::Cancelled) => Some(format!(
+                    "the upload did not finish within {}s",
+                    limit.as_secs()
+                )),
+                // The run is cancelled whatever became of the push: say why, do not fail.
+                Err(e) => Some(e.to_string().lines().next().unwrap_or_default().to_string()),
+            };
+            if let Some(why) = why {
+                eprintln!(
+                    "[barca] the shared history was not updated ({why}). This run is recorded \
+                     on this machine; the next barca get or barca run here uploads it."
+                );
+            }
+        }
+        if let Some(retries) = pushed {
+            eprintln!(
+                "[barca] pushed state ({}) in {:.2}s{}",
+                fmt_bytes(std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0)),
+                t_push.elapsed().as_secs_f64(),
+                match retries {
+                    0 => String::new(),
+                    1 => " after 1 conflict retry".to_string(),
+                    n => format!(" after {n} conflict retries"),
+                }
+            );
+            trace_point!("state_sync_pushed (attempts={})", retries + 1);
         }
     }
 
@@ -3288,10 +3413,18 @@ async fn execute(
             .map(|o| o.path.clone())
             .collect();
         let fetched = s.ensure_local(paths.iter().map(String::as_str), None).await;
+        if fetched.is_err() && cancel.is_cancelled() {
+            // Ctrl-C while the returned output was being fetched. The run itself is over:
+            // its record is written and, with shared history, uploaded, and it stays as it
+            // is, the same on every machine. Only the command is cancelled.
+            s.client.abort().await;
+            return Err(BarcaError::Cancelled);
+        }
         s.client.shutdown().await;
         if let Err(e) = fetched {
             return Err(BarcaError::Other(e));
         }
+        crate::mismatch::mark(&dag, &mut step_reports, &s.mismatched);
     }
 
     Ok(Executed {
@@ -3319,6 +3452,85 @@ async fn execute(
 }
 
 // ─── run persistence ──────────────────────────────────────────────────────────
+
+/// The upload of one run's record to the shared history.
+struct SharedPush<'a> {
+    python: &'a std::path::Path,
+    cfg: &'a crate::config::ResolvedConfig,
+    db_path: &'a str,
+    run_id: &'a str,
+    logs: &'a [(String, String)],
+    /// The token of the shared history the local one was last brought up to.
+    token: state_sync::StateToken,
+}
+
+impl SharedPush<'_> {
+    /// Upload the local history. On conflict (another machine pushed first): pull the fresh
+    /// history, replay this run's ledger onto it, and upload again, up to `push_retries`
+    /// times. Returns the number of retries. `Err(BarcaError::Cancelled)` when `until` stopped
+    /// it; the shared history is then the old one or the new one, never part of one.
+    async fn run(
+        &mut self,
+        ledger: &RunLedger<'_>,
+        until: state_sync::Until<'_>,
+    ) -> Result<u32, BarcaError> {
+        let (python, cfg) = (self.python, self.cfg);
+        let mut attempt = 0u32;
+        let mut pushed_again = false;
+        loop {
+            let again = match state_sync::push_state(python, cfg, &self.token, until).await? {
+                state_sync::PushOutcome::Pushed {
+                    local_unchanged: true,
+                    ..
+                } => false,
+                // Uploaded, but another process wrote to the local database (or replaced
+                // it) while the upload was on its way. Treated like a conflict, once: pull
+                // what was just uploaded, which keeps those rows, and push again. Only once,
+                // because a run going in the same project writes during every upload, and
+                // chasing it would cost a pull and an upload each time for rows that run
+                // pushes itself when it ends. The upload stands either way; rows written
+                // after it go with the next push from this machine.
+                state_sync::PushOutcome::Pushed { .. } => {
+                    !std::mem::replace(&mut pushed_again, true) && attempt < cfg.push_retries
+                }
+                state_sync::PushOutcome::Conflict => {
+                    if attempt >= cfg.push_retries {
+                        return Err(BarcaError::Other(format!(
+                            "shared state push conflicted {attempt} times — results were \
+                             computed but the shared state was not updated; re-run to retry"
+                        )));
+                    }
+                    true
+                }
+            };
+            if !again {
+                return Ok(attempt);
+            }
+            attempt += 1;
+            // The pull carries this run's rows over with the rest of the local database; the
+            // ledger then adds whatever is still missing (both are idempotent), so the run
+            // is whole however much of it made the trip.
+            self.token = state_sync::pull_state(python, cfg, until).await?.token;
+            db::init_db(self.db_path).await?;
+            persist_run(self.db_path, ledger).await?;
+            db::insert_logs(self.db_path, self.run_id, self.logs).await?;
+        }
+    }
+}
+
+/// Record as `cancelled` a run that was already recorded with its outcome, because Ctrl-C
+/// arrived while its record was being shared. The steps it recorded stay: they finished.
+async fn cancel_recorded_run(db_path: &str, l: &RunLedger<'_>) -> Result<(), BarcaError> {
+    db::finish_run(
+        db_path,
+        l.run_id,
+        "cancelled",
+        l.steps_executed,
+        l.steps_cached,
+        l.elapsed,
+    )
+    .await
+}
 
 /// Everything one run wants written to the metadata DB, held in memory so a
 /// state-push conflict can replay it onto a freshly pulled database.
@@ -4372,11 +4584,15 @@ fn resolve_dynamic_partitions(nodes: &mut [crate::model::ExtractedNode], python:
                     .write_all(script.as_bytes())
                     .expect("failed to write script");
                 let script_path = script_file.path().to_path_buf();
-                let output = Command::new(python)
-                    .arg(&script_path)
+                let mut eval = Command::new(python);
+                eval.arg(&script_path)
                     .arg(module_path.to_string_lossy().as_ref())
                     .arg(source_text)
-                    .output()
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped());
+                let output = crate::helper_proc::spawn_std(&mut eval)
+                    .and_then(|child| child.wait_with_output())
                     .unwrap_or_else(|e| {
                         panic!(
                             "Failed to evaluate partition expression for {}: {e}",

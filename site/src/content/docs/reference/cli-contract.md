@@ -129,7 +129,7 @@ default, and any aliases.
 | `--no-cache` | - | default `false`; hidden from `--help` | experimental: deprecated: the old spelling of --refresh-all; warns on stderr and will be removed | Deprecated spelling of --refresh-all (prints a warning; removed in a future minor) |
 | `--dry-run` | - | default `false` | stable | Show what this command would do (each step cached or will-run, and why) without running or writing anything |
 | `--agent` | - | default `false` | stable | Agent-friendly output: plain structured progress lines instead of visual progress bar |
-| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `run_hash`, `artifact`, `warning`, `partitions`, `env` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones |
+| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `partitions`, `env` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
 
 #### barca run
@@ -146,7 +146,7 @@ default, and any aliases.
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `--agent` | - | default `false` | stable | Agent-friendly output: plain structured progress lines instead of visual progress bar |
-| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `run_hash`, `artifact`, `warning`, `partitions`, `env` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones |
+| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `partitions`, `env` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
 
 #### barca plan
@@ -301,7 +301,11 @@ task/asset misuse, a `.py` file that does not parse, a DAG that cannot be built 
 names no definition, a cycle, a partitioned asset in an unpartitioned asset's `inputs=` without
 `collect()`, a `partitions_from()` the asset cannot mirror), invalid `--env` or `barca.toml`. `infra`:
 barca or its environment failed (metadata DB, workers, remote state, I/O); retrying may help.
-`cancelled`: interrupted with Ctrl-C.
+`cancelled`: interrupted with Ctrl-C, at any point of a `get` or `run`: while steps run, and
+with an artifact store also while artifacts upload or download or the shared history is pulled
+or pushed. The exit code is 130 whatever the store does: a cancelled run spends at most 10
+seconds sharing its record, a second Ctrl-C ends that at once, and a push that fails then is a
+line on stderr, not exit 3 (`barca docs remote`, "Ctrl-C").
 
 ## JSON output schemas
 
@@ -385,7 +389,8 @@ the set of `kind` values grows additively.
 - `get` and `run` share one refresh vocabulary: `--refresh a,b` (cascading downstream),
   `--no-cascade`, `--refresh-all`. `artifact` appears on cached steps, `run_hash`
   on unpartitioned steps, `warning` on a cached step whose upstream was refreshed without
-  cascading, `env` on nodes that declare `env=[...]` (`null` for an unset variable,
+  cascading and on a step with `artifact_mismatch` (see "A store copy that differs from its
+  recorded hash" below), `env` on nodes that declare `env=[...]` (`null` for an unset variable,
   `"<redacted>"` for secret-looking names).
 
 For a parquet or pickle artifact, `final_output` is a pointer instead of the value:
@@ -501,6 +506,59 @@ envelope goes to stderr:
 | `steps_executed` | integer | always |
 | `warnings` | array | always |
 <!-- END GENERATED schema run_failed -->
+
+### get and run: a store copy that differs from its recorded hash
+
+With an artifact store, an artifact fetched from the store is checked against the SHA-256
+recorded when it was written (`barca docs remote`, "Checking a local copy against the store"). A copy with
+other bytes is still used, the exit code does not change, and the result says so on the step
+entries:
+
+<!-- BEGIN GENERATED schema get_artifact_mismatch -->
+| Key | Type | Present |
+|---|---|---|
+| `elapsed_seconds` | number | always |
+| `final_output` | `<user value>` | always |
+| `phases` | integer | always |
+| `run_id` | string | always |
+| `status` | string | always |
+| `steps` | array | always |
+| `steps[]` | object | always |
+| `steps[].artifact` | string | sometimes |
+| `steps[].artifact_mismatch` | boolean | sometimes |
+| `steps[].detail` | string | sometimes |
+| `steps[].id` | string | always |
+| `steps[].kind` | string | always |
+| `steps[].reason` | string | sometimes |
+| `steps[].run_hash` | string | always |
+| `steps[].status` | string | always |
+| `steps[].warning` | string | sometimes |
+| `steps_executed` | integer | always |
+| `warnings` | array | always |
+<!-- END GENERATED schema get_artifact_mismatch -->
+
+- `steps[].artifact_mismatch` is the boolean `true`, or the key is absent. It is never `false`
+  and never `null`: test for the key. It is on the step the artifact belongs to, whatever that
+  step's `status`, and on every step that read the artifact as an input in this run (`status`
+  `ran`, `partial` or `failed`). A step that only depends on such a reader does not have it.
+- `steps[].warning` on the same entries is the finding in words: the store location, and the
+  `--refresh` that recomputes the step. The wording is not contract; `artifact_mismatch` is.
+- The key appears on `get` and `run`, with one target or several, in a failed run's result
+  line, with `--agent`, and in `result.steps` of `barca serve`'s `GET /status/{run_id}`.
+  `--fields` accepts it (`--fields id,status,artifact_mismatch`). It never appears with
+  `--dry-run`, which does not contact the store, nor in `status`, `history` or `stats`, which
+  describe recorded results and do not fetch.
+- It is not an item of the top-level `warnings` array. That array is the plan warnings (see
+  "Plan warnings"): a function of the source files and the targets, the same in a dry run and
+  whatever is cached. A mismatch is found only when a run fetches an artifact, so it is
+  reported where the other facts about what happened to a step are.
+- stderr has the same finding in every output mode, `--agent` included, as
+  `[barca] warning: <id>: the copy at <location> is not the one this result was recorded
+  with ...`. Like every `[barca] warning:` line its wording is experimental: read the key.
+
+In the fixture run above, the store's copy of one asset was overwritten after it was recorded;
+that asset and the step recomputed from it carry the key, and the two other steps do not.
+Stability: stable.
 
 ### get and run: several targets
 
@@ -985,7 +1043,7 @@ placeholders:
 | `[barca] step:<id> cached[ env NAME=VALUE ...]` | a step was served from cache. Printed when the step is decided, or, when its artifact is not on disk, at the end of the run once it is settled that nothing needed it (if something did, the step prints `completed` or `failed` instead, never both). Exception: a result in a remote artifact store whose object proves to be deleted when it is fetched has already printed `cached`; a `[barca] warning: <id>: the artifact of its cached result is missing ...` line and then `completed` or `failed` for the same step follow | stable |
 | `[barca] step:<id> failed: <first line of the error>` | a step raised | stable |
 | `[barca] run failed: step '<id>' failed (exit <code>)` | just before the error envelope of a failed step (every mode) | stable |
-| `[barca] <n>/<total> steps \| done in <secs>s` | end of a run that executed steps, with or without `--agent`; `failed in` when a step failed, `cancelled after` on Ctrl-C (never `done` then) | stable |
+| `[barca] <n>/<total> steps \| done in <secs>s` | end of a run that executed steps, with or without `--agent`; `failed in` when a step failed, `cancelled after` on a Ctrl-C that arrives while steps are running (never `done` then). The line is about the steps: with an artifact store, a Ctrl-C after the last step finished (while artifacts upload or the shared history is pushed) follows a `done` line, and the exit code (130) and the error envelope still say `cancelled` (`barca docs remote`, "Ctrl-C") | stable |
 | `[barca] still running (<n>s): <id>` | a step in flight for `BARCA_PROGRESS_SECS` (every mode) | experimental |
 | `[barca] <n> more: <first line of a warning>` | before the end-of-run line (every mode): a `logging` WARNING printed because logging is unconfigured, or a `warnings` warning, from a step's process was printed once and suppressed `<n>` more times in this run; beyond ten texts, one `[barca] <n> more: <k> other repeated warnings` (`barca docs agents`) | experimental |
 | `[barca] skipped N task(s) ...`, `[barca] nothing to get ...` | `get` with no target skipped tasks | experimental |

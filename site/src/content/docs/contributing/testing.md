@@ -44,6 +44,11 @@ pytest python/tests/test_sql.py -q        # one file
 Most tests in `python/tests/` create a temporary project with decorated functions, run the
 real `barca` binary on it, and check the output, exit code and files.
 
+Tests that must act while a helper process is in the middle of something (a Ctrl-C during an
+upload, in `test_remote_cancel.py`) do not sleep and hope: `python/tests/hold/` is a
+`sitecustomize` shim that pauses a barca helper at a named point until the test releases it
+(`BARCA_TEST_HOLD=<point>:<dir>`).
+
 ## Storage backend tests and emulators
 
 Tests of remote storage and shared history (`test_state_backends.py`, `test_remote_faults.py`,
@@ -59,9 +64,10 @@ and need no cloud account:
 `BARCA_TEST_S3_KEY` and `BARCA_TEST_S3_SECRET` default to `minioadmin`.
 
 Without the variables set, a test whose emulator is not reachable at the default address is
-skipped, so the suite passes on a machine with no emulators. In `test_state_backends.py`, when a
-variable is set and its emulator is not reachable, the test fails instead of skipping. CI sets
-all three, so a broken emulator cannot make the backend job pass by skipping.
+skipped, so the suite passes on a machine with no emulators. When a variable is set and its
+emulator is not reachable, every test that needs it fails instead of skipping
+(`python/tests/emulators.py`; `test_emulators.py` tests that rule). CI sets all three, so a
+broken emulator cannot make the backend job pass by skipping.
 
 CI starts the emulators with Docker, at pinned versions:
 

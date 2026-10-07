@@ -43,7 +43,7 @@ Options:
       --fields <FIELDS>
           Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones
 
-          [possible values: id, kind, action, status, reason, detail, run_hash, artifact, warning, partitions, env]
+          [possible values: id, kind, action, status, reason, detail, run_hash, artifact, warning, artifact_mismatch, partitions, env]
 
       --env <ENV>
           Environment name (separates cache/state per environment)

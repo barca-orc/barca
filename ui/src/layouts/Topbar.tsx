@@ -3,12 +3,15 @@ import { Search, Sun, Moon, Bell, Settings, Activity, Slash, Play } from 'lucide
 import { Button, IconButton } from '@/components'
 import { useTheme } from '@/context/theme'
 
+import type { TopbarRun } from './shellContext'
+
 interface TopbarProps {
   crumbs: string[]
-  onRun?: () => void
+  /** The current page's Run action; omitted when the page has nothing to run. */
+  run?: TopbarRun | null
 }
 
-export function Topbar({ crumbs, onRun }: TopbarProps) {
+export function Topbar({ crumbs, run }: TopbarProps) {
   const { theme, toggleTheme } = useTheme()
   return (
     <header className="barca-topbar">
@@ -46,9 +49,19 @@ export function Topbar({ crumbs, onRun }: TopbarProps) {
           <Settings size={15} />
         </IconButton>
         <div className="barca-divider-v" />
-        <Button variant="signal" size="sm" iconLeft={<Play size={12} />} onClick={onRun}>
-          Run
-        </Button>
+        {run && (
+          <Button
+            variant="signal"
+            size="sm"
+            iconLeft={<Play size={12} />}
+            loading={run.loading}
+            disabled={run.disabled}
+            title={run.title}
+            onClick={run.onRun}
+          >
+            Run
+          </Button>
+        )}
       </div>
     </header>
   )

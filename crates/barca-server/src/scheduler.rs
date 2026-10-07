@@ -255,6 +255,43 @@ fn needs_catchup<Tz: TimeZone>(cron: &Cron, last_fired: &DateTime<Tz>, now: &Dat
     }
 }
 
+/// Catch-up at startup, as of `now`: fire once each job whose scheduled tick elapsed while
+/// the server was down, however many ticks that was, and move its last-fired record to `now`.
+/// A job with no record is anchored to `now` and does not run (no stampede on first launch).
+/// Returns (handle of the run triggered per job, last-fired epoch per job).
+///
+/// `now` is a parameter so a restart across a tick can be tested with fixed times.
+async fn catch_up(
+    state: &AppState,
+    jobs: &[ScheduledJob],
+    zone: &Zone,
+    now: &DateTime<FixedOffset>,
+    db_path: &str,
+) -> (HashMap<String, String>, HashMap<String, i64>) {
+    let saved = db::get_schedule_state(db_path).await.unwrap_or_default();
+    let mut last_handle: HashMap<String, String> = HashMap::new();
+    let mut last_fired = saved.clone();
+    for job in jobs {
+        match saved.get(&job.id) {
+            Some(&last_epoch) => {
+                let last = zone.timestamp(last_epoch);
+                if needs_catchup(&job.cron, &last, now) {
+                    let handle = trigger(state, job);
+                    eprintln!("[barca] catch-up run {} → {handle}", job.id);
+                    last_handle.insert(job.id.clone(), handle);
+                    last_fired.insert(job.id.clone(), now.timestamp());
+                    persist_fired(db_path, &job.id, now.timestamp()).await;
+                }
+            }
+            None => {
+                last_fired.insert(job.id.clone(), now.timestamp());
+                persist_fired(db_path, &job.id, now.timestamp()).await;
+            }
+        }
+    }
+    (last_handle, last_fired)
+}
+
 /// Record that `node_id` fired at `epoch` seconds. Best-effort durability.
 async fn persist_fired(db_path: &str, node_id: &str, epoch: i64) {
     if let Err(e) = db::upsert_schedule_state(db_path, node_id, epoch).await {
@@ -343,35 +380,11 @@ pub async fn run_scheduler(state: AppState) {
     // Handle issued and last-fired epoch per job. `last_handle` powers the
     // overlap skip ("passes do not overlap"); `last_fired` powers durability and
     // the `/schedule` view. Entries for jobs removed on reload are harmless.
-    let mut last_handle: HashMap<String, String> = HashMap::new();
-    let mut last_fired: HashMap<String, i64> = HashMap::new();
-
-    // Catch-up: fire once per job whose scheduled tick elapsed while the daemon
-    // was down. Jobs with no prior record are anchored to now (no first-launch
-    // stampede). Requires durability; skipped entirely if the DB is unavailable.
-    if let Some(dbp) = &db_path {
-        let saved = db::get_schedule_state(dbp).await.unwrap_or_default();
-        last_fired = saved.clone();
-        let now = zone.now();
-        for job in &jobs {
-            match saved.get(&job.id) {
-                Some(&last_epoch) => {
-                    let last = zone.timestamp(last_epoch);
-                    if needs_catchup(&job.cron, &last, &now) {
-                        let handle = trigger(&state, job);
-                        eprintln!("[barca] catch-up run {} → {handle}", job.id);
-                        last_handle.insert(job.id.clone(), handle);
-                        last_fired.insert(job.id.clone(), now.timestamp());
-                        persist_fired(dbp, &job.id, now.timestamp()).await;
-                    }
-                }
-                None => {
-                    last_fired.insert(job.id.clone(), now.timestamp());
-                    persist_fired(dbp, &job.id, now.timestamp()).await;
-                }
-            }
-        }
-    }
+    // Catch-up requires durability; it is skipped entirely if the DB is unavailable.
+    let (mut last_handle, mut last_fired) = match &db_path {
+        Some(dbp) => catch_up(&state, &jobs, &zone, &zone.now(), dbp).await,
+        None => (HashMap::new(), HashMap::new()),
+    };
     publish_registry(&state, &jobs, &last_handle, &last_fired);
 
     let mut seen_gen = state.dag_generation.load(Ordering::Relaxed);
@@ -753,6 +766,111 @@ mod tests {
         let plan = plan_tick(&at(5, 0), &jobs, &last, |h| h == "ha");
         assert_eq!(skipped_ids(&plan), vec!["f.py:a"]);
         assert_eq!(fired_ids(&plan), vec!["f.py:b"]);
+    }
+
+    // ─── catch-up across a restart (fixed times, a real schedule_state table) ──
+
+    /// A metadata DB in a temp dir, and the UTC instant `hour:minute` on 2026-07-02.
+    async fn schedule_db() -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metadata.db").display().to_string();
+        barca_core::db::init_db(&path).await.unwrap();
+        (dir, path)
+    }
+
+    fn utc(day: u32, hour: u32, minute: u32) -> DateTime<FixedOffset> {
+        Utc.with_ymd_and_hms(2026, 7, day, hour, minute, 0)
+            .single()
+            .unwrap()
+            .fixed_offset()
+    }
+
+    #[tokio::test]
+    async fn a_first_start_anchors_every_job_to_now_and_runs_nothing() {
+        let (_dir, db_path) = schedule_db().await;
+        let st = app_state();
+        let jobs = [job("f.py:daily", NodeKind::Asset, "0 6 * * *")];
+        let now = utc(2, 9, 0);
+
+        let (handles, fired) = catch_up(&st, &jobs, &Zone::Utc, &now, &db_path).await;
+
+        assert!(handles.is_empty());
+        assert!(st.runs.is_empty(), "nothing may run on a first start");
+        assert_eq!(
+            fired,
+            HashMap::from([("f.py:daily".to_string(), now.timestamp())])
+        );
+        assert_eq!(db::get_schedule_state(&db_path).await.unwrap(), fired);
+    }
+
+    #[tokio::test]
+    async fn a_tick_missed_while_the_server_was_down_runs_once_when_it_comes_back() {
+        let (_dir, db_path) = schedule_db().await;
+        let jobs = [
+            job("f.py:daily", NodeKind::Asset, "0 6 * * *"),
+            job("f.py:hourly", NodeKind::Task, "0 * * * *"),
+        ];
+        // Running at 05:10: both jobs are anchored. The server then stops.
+        let stopped = utc(2, 5, 10);
+        catch_up(&app_state(), &jobs, &Zone::Utc, &stopped, &db_path).await;
+
+        // Back at 05:50: no tick of either job has passed.
+        let st = app_state();
+        let early = utc(2, 5, 50);
+        let (handles, fired) = catch_up(&st, &jobs, &Zone::Utc, &early, &db_path).await;
+        assert!(handles.is_empty() && st.runs.is_empty());
+        assert_eq!(
+            fired["f.py:daily"],
+            stopped.timestamp(),
+            "the record is not moved"
+        );
+
+        // Back three days later: `daily` missed three ticks and `hourly` dozens. Each runs
+        // exactly once, and its record moves to the restart time.
+        let st = app_state();
+        let back = utc(5, 9, 30);
+        let (handles, fired) = catch_up(&st, &jobs, &Zone::Utc, &back, &db_path).await;
+        assert_eq!(handles.len(), 2);
+        assert_eq!(
+            st.runs.len(),
+            2,
+            "one run per job, however many ticks were missed"
+        );
+        for id in ["f.py:daily", "f.py:hourly"] {
+            assert!(st.runs.contains_key(&handles[id]), "{id}");
+            assert_eq!(fired[id], back.timestamp(), "{id}");
+        }
+        assert_eq!(db::get_schedule_state(&db_path).await.unwrap(), fired);
+
+        // A restart right after has nothing left to catch up: the catch-up does not repeat.
+        let st = app_state();
+        let again = utc(5, 9, 31);
+        let (handles, fired) = catch_up(&st, &jobs, &Zone::Utc, &again, &db_path).await;
+        assert!(handles.is_empty() && st.runs.is_empty());
+        assert_eq!(fired["f.py:hourly"], back.timestamp());
+    }
+
+    #[tokio::test]
+    async fn a_job_added_while_the_server_was_down_is_anchored_not_run() {
+        let (_dir, db_path) = schedule_db().await;
+        let old = job("f.py:daily", NodeKind::Asset, "0 6 * * *");
+        catch_up(
+            &app_state(),
+            std::slice::from_ref(&old),
+            &Zone::Utc,
+            &utc(2, 5, 0),
+            &db_path,
+        )
+        .await;
+
+        let st = app_state();
+        let jobs = [old, job("f.py:new", NodeKind::Asset, "0 6 * * *")];
+        let back = utc(4, 9, 0);
+        let (handles, fired) = catch_up(&st, &jobs, &Zone::Utc, &back, &db_path).await;
+
+        assert_eq!(handles.keys().collect::<Vec<_>>(), ["f.py:daily"]);
+        assert_eq!(st.runs.len(), 1);
+        assert_eq!(fired["f.py:new"], back.timestamp());
     }
 
     // ─── kind-based dispatch ───────────────────────────────────────────────

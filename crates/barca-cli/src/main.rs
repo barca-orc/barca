@@ -295,7 +295,7 @@ Topics are compiled into the binary: offline, and always matching this version."
 #[command(
     name = "barca",
     about = "Invisible asset orchestrator. Discover a project's assets and tasks with `barca list <file.py>`",
-    long_about = "Barca runs Python asset graphs with content-addressed caching.\n\
+    long_about = "Barca runs Python asset graphs with caching by run hash.\n\
                   Every asset output is fully materialized to an artifact file at step \
                   boundaries (json, pickle, or parquet) — that persistence is the cache \
                   checkpoint. pandas/polars DataFrames, pyarrow Tables and duckdb relations \
@@ -1073,17 +1073,24 @@ fn print_failed_run(err: &barca_core::BarcaError, mode: OutputMode) {
     );
 }
 
-/// A token that cancels on Ctrl-C, so an interrupted run terminates its
-/// workers and is recorded as `cancelled` instead of lingering as `running`.
-fn cancel_on_ctrl_c() -> barca_core::CancellationToken {
-    let cancel = barca_core::CancellationToken::new();
-    let c = cancel.clone();
+/// The run's stop signals, driven by Ctrl-C. The first one cancels the run: its workers and
+/// transfers are stopped and it is recorded as `cancelled` instead of lingering as `running`,
+/// then it wraps up (it shares its record, for a bounded time). A second one abandons the
+/// wrap-up. Every Ctrl-C counts, whether the terminal sent it to the whole job or something
+/// sent SIGINT to barca alone.
+fn cancel_on_ctrl_c() -> barca_core::interrupt::Interrupt {
+    let interrupt = barca_core::interrupt::Interrupt::new();
+    let seen = interrupt.clone();
     tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
-            c.cancel();
+        use tokio::signal::unix::{SignalKind, signal};
+        let Ok(mut sigint) = signal(SignalKind::interrupt()) else {
+            return;
+        };
+        while sigint.recv().await.is_some() {
+            seen.interrupt();
         }
     });
-    cancel
+    interrupt
 }
 
 #[allow(clippy::result_large_err)] // cold path: one CliError per process, right before exiting
