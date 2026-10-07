@@ -15,11 +15,11 @@ def migrate_db():
     run_migrations()
 
 @task(inputs={"_migrate": migrate_db})
-def seed_data():
+def seed_data(_migrate):
     insert_seed_records()
 ```
 
-The `_migrate` parameter name starts with `_`, which tells barca to establish the DAG edge (ensuring `migrate_db` finishes before `seed_data` starts) and pass `None` to the function instead of the upstream value. The function body never references `_migrate`.
+The `_migrate` parameter name starts with `_`, which tells barca to establish the DAG edge (ensuring `migrate_db` finishes before `seed_data` starts) and pass `None` to the function instead of the upstream value. The function must still accept the parameter (barca passes `_migrate=None`; without it the call fails with a `TypeError`), but its body never references `_migrate`.
 
 ## Why this works
 
@@ -41,8 +41,10 @@ to the `warnings` array of their JSON output:
 A `_`-prefixed input is never flagged: the prefix is the documented way to say the input is there
 for ordering only. The step still runs after the upstream and still re-runs when the upstream
 changes; only removing the input removes that dependency. There is no flag or config key to turn
-the warning off. The exact rule, and what is never reported (stubs, `**kwargs`, `locals()`,
-duckdb relation inputs, sensor inputs), is in `barca docs assets`, "Unused inputs".
+the warning off. A name that appears inside a string in the body counts as used (SQL such as
+`duckdb.sql("select * from orders")`, a pandas `query("x > @limit")`). The exact rule, and what is
+never reported (stubs, `**kwargs`, `locals()`, queries built outside the body, duckdb relation
+inputs, sensor inputs), is in `barca docs assets`, "Unused inputs".
 
 ## Common mistakes
 

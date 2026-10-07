@@ -338,8 +338,9 @@ source files and the targets only: cache state, `--refresh*`, `--env` and the ou
 change it, so a dry run reports exactly what the real run will. Each item is also printed once on
 stderr as `[barca] warning: <message>` before any step runs, in every output mode. Warnings never
 change the exit code, and the error envelope on stderr never contains them. `list`, `status`,
-`history`, `stats` and `sql` have no `warnings` key. `barca serve`'s `GET /plan` carries the same
-array (experimental with the rest of that API).
+`history`, `stats` and `sql` have no `warnings` key. `barca serve` carries the same array in
+`GET /plan` and in `result.warnings` of `GET /status/{run_id}` (experimental with the rest of
+that API).
 
 `unused_input`: a step declares an input its function never uses (`barca docs assets`, "Unused
 inputs", has the exact rule and what is never reported). Stability: the key, its presence and the

@@ -273,6 +273,34 @@ def test_assets_topic_unused_input_example(binary, topics, tmp_path):
     assert "warning" not in proc.stderr
 
 
+def test_site_ordering_only_pattern_example_runs(binary, tmp_path):
+    """The site's "Ordering-Only Dependencies" page: its "right way" example runs, in order,
+    without the unused-input warning. (The page is not a manual topic, so it is read from the
+    repository; the helpers it calls but does not define are stubbed.)"""
+    page = Path(__file__).resolve().parents[2] / (
+        "site/src/content/docs/patterns/03-ordering-only-deps.md"
+    )
+    if not page.exists():
+        pytest.skip("site docs are not in this checkout")
+    code = blocks(page.read_text(), "python")[0]
+    assert "def seed_data(_migrate):" in code
+    stubs = (
+        "\n\ndef run_migrations():\n    open('order.log', 'a').write('migrate\\n')\n"
+        "\n\ndef insert_seed_records():\n    open('order.log', 'a').write('seed\\n')\n"
+    )
+    (tmp_path / "pipeline.py").write_text(code + stubs)
+    proc = barca(binary, tmp_path, "run", "seed_data", "pipeline.py", "--json")
+    out = result(proc)
+    assert out["status"] == "success" and out["warnings"] == []
+    assert "warning" not in proc.stderr
+    assert (tmp_path / "order.log").read_text() == "migrate\nseed\n"
+    # Without the parameter the step cannot be called: barca passes `_migrate=None`.
+    broken = code.replace("def seed_data(_migrate):", "def seed_data():")
+    (tmp_path / "pipeline.py").write_text(broken + stubs)
+    proc = barca(binary, tmp_path, "run", "seed_data", "pipeline.py", "--json")
+    assert proc.returncode == 1 and "TypeError" in proc.stderr
+
+
 def test_scheduling_topic_example(binary, topics, tmp_path):
     write_example(topics, "scheduling", tmp_path)
     nodes = result(barca(binary, tmp_path, "list", "pipeline.py", "--json"))["nodes"]

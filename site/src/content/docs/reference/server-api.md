@@ -74,13 +74,21 @@ Poll `GET /status/{run_id}` until `status` reaches a terminal state (`complete`,
     "elapsed_seconds": 0.115,
     "steps_executed": 2,
     "phases": 1,
-    "final_output": { "path": ".barca/artifacts/…", "format": "json", "size_bytes": 8 }
+    "final_output": { "path": ".barca/artifacts/…", "format": "json", "size_bytes": 8 },
+    "steps": [{ "id": "pipeline.py:report", "kind": "asset", "status": "ran", "…": "…" }],
+    "warnings": []
   },
   "error": null,
   "started_at": 1780721263.05,
   "finished_at": 1780721263.17
 }
 ```
+
+`result.steps` says what happened to each planned step, as in the CLI's JSON. `result.warnings`
+is always an array: the plan-time warnings for the steps the run planned (`[]` when there are
+none), each `{ kind, node, param, message }`. The one kind so far is `unused_input`, a step that
+declares an input its function never uses; the server also prints each warning once on its
+stderr ([CLI contract](/reference/cli-contract/), "Plan warnings").
 
 `status` is one of `pending`, `running`, `complete`, `failed`, `cancelled`. The `handle` is
 the server's polling id; `result.run_id` is the persisted database run id (the run is also
@@ -168,8 +176,11 @@ and cache hit rate.
 ### Plan
 
 ```
-GET /plan              → { total_steps, phases: [{ reason: {type, node_id?}, streams: [{ stream_id, steps }] }] }
+GET /plan              → { total_steps, phases: [{ reason: {type, node_id?}, streams: [{ stream_id, steps }] }], warnings: [{ kind, node, param, message }] }
 ```
+
+`warnings` is always present: the plan-time warnings for every step of the project, `[]` when
+there are none (the same items as `result.warnings` above).
 
 ## Scheduling
 
