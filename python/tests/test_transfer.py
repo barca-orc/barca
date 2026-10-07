@@ -7,19 +7,24 @@ pinned by crates/barca-core/src/protocol.rs (TransferRequest/TransferReply).
 
 import hashlib
 import json
-import multiprocessing
 import os
+import shutil
 import signal
 import socket
 import struct
 import subprocess
 import sys
+import tempfile
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
 from barca import _runtime, _storage, _transfer
+
+# Test-only shim that pauses a helper process at a named point (see its docstring).
+HOLD_SHIM = str(Path(__file__).resolve().parent / "hold")
 
 
 @pytest.fixture(autouse=True)
@@ -330,63 +335,139 @@ class TestMakeWay:
         assert (tmp_path / "h.parquet.moved-aside" / "part-0").is_dir()
 
 
-def _fetch_in_process(remote: str, local: str, sha: str, barrier) -> None:
-    barrier.wait()
-    for _ in range(20):
-        out = _transfer._transfer({"type": "get", "remote": remote, "local": local, "sha256": sha})
-        assert out["sha256"] == sha
+class ProcessHelper:
+    """`python -m barca._transfer` as its own process, as the coordinator runs it.
 
+    `hold` pauses it at a point of python/tests/hold/sitecustomize.py until `release()`.
+    """
 
-class TestCrossProcess:
-    def test_two_processes_fetching_the_same_local_path_both_succeed(self, tmp_path):
-        """Both rename a staged temp file into place, so neither sees a partial file."""
-        body = b"x" * 200_000
-        sha = hashlib.sha256(body).hexdigest()
-        store = tmp_path / "store"
-        store.mkdir()
-        (store / "h.json").write_bytes(body)
-        local = tmp_path / "local" / "h.json"
-        ctx = multiprocessing.get_context("fork")
-        barrier = ctx.Barrier(2)
-        procs = [
-            ctx.Process(
-                target=_fetch_in_process, args=(str(store / "h.json"), str(local), sha, barrier)
-            )
-            for _ in range(2)
-        ]
-        for p in procs:
-            p.start()
-        for p in procs:
-            p.join(timeout=60)
-        assert [p.exitcode for p in procs] == [0, 0]
-        assert local.read_bytes() == body
-        assert sorted(p.name for p in local.parent.iterdir()) == ["h.json"]
-
-
-class TestInterrupt:
-    def test_ctrl_c_exits_quietly_without_a_traceback(self, tmp_path):
-        path = str(tmp_path / "s.sock")
+    def __init__(self, tmp_path, hold: str | None = None):
+        # A Unix socket path is limited to about 100 bytes; pytest's tmp_path is longer.
+        self._sockdir = tempfile.mkdtemp(prefix="bx", dir="/tmp")
+        self.hold_dir = tmp_path / f"hold-{os.path.basename(self._sockdir)}"
+        self.hold_dir.mkdir()
+        path = os.path.join(self._sockdir, "s")
         server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         server.bind(path)
         server.listen(1)
-        proc = subprocess.Popen(
-            [sys.executable, "-m", "barca._transfer"],
-            env={**os.environ, "BARCA_SOCKET": path},
-            stderr=subprocess.PIPE,
-            text=True,
+        server.settimeout(30)
+        env = {**os.environ, "BARCA_SOCKET": path}
+        if hold:
+            env["PYTHONPATH"] = HOLD_SHIM + os.pathsep + env.get("PYTHONPATH", "")
+            env["BARCA_TEST_HOLD"] = f"{hold}:{self.hold_dir}"
+        self.hold = hold
+        self.proc = subprocess.Popen(
+            [sys.executable, "-m", "barca._transfer"], env=env, stderr=subprocess.PIPE, text=True
         )
         try:
-            server.settimeout(30)
-            conn, _ = server.accept()
-            time.sleep(0.5)  # let it block in recv
-            proc.send_signal(signal.SIGINT)
-            _, err = proc.communicate(timeout=30)
+            self.peer, _ = server.accept()
         finally:
-            proc.kill()
             server.close()
-        assert "Traceback" not in err and "KeyboardInterrupt" not in err
-        assert proc.returncode == 130
-        conn.close()
+        self.peer.settimeout(30)
+
+    def request(self, msg: dict) -> None:
+        _send(self.peer, msg)
+
+    def reply(self) -> dict:
+        return _recv(self.peer)
+
+    def wait_until_held(self) -> None:
+        marker = self.hold_dir / f"{self.hold}.started"
+        deadline = time.monotonic() + 30
+        while not marker.exists():
+            assert self.proc.poll() is None, "the helper exited before reaching the hold"
+            assert time.monotonic() < deadline, f"the helper never reached {self.hold}"
+            time.sleep(0.02)
+
+    def release(self) -> None:
+        (self.hold_dir / "release").write_text("")
+
+    def finish(self) -> tuple[int, str]:
+        """Wait for the helper to exit; (exit code, stderr)."""
+        try:
+            _, err = self.proc.communicate(timeout=30)
+        finally:
+            self.proc.kill()
+            self.peer.close()
+            shutil.rmtree(self._sockdir, ignore_errors=True)
+        return self.proc.returncode, err
+
+
+@pytest.fixture
+def process_helper(tmp_path):
+    helpers = []
+
+    def start(hold: str | None = None) -> ProcessHelper:
+        helpers.append(ProcessHelper(tmp_path, hold))
+        return helpers[-1]
+
+    yield start
+    for h in helpers:
+        if h.proc.poll() is None:
+            h.proc.kill()
+            h.finish()
+
+
+def _store_file(tmp_path, body: bytes):
+    store = tmp_path / "store"
+    store.mkdir(exist_ok=True)
+    (store / "h.json").write_bytes(body)
+    return store / "h.json"
+
+
+class TestSignals:
+    """Ctrl-C is the coordinator's to act on; it stops the helper with SIGTERM
+    (crates/barca-core/src/helper_proc.rs)."""
+
+    def test_sigint_is_ignored_and_the_helper_keeps_serving(self, process_helper, tmp_path):
+        h = process_helper()
+        remote = _store_file(tmp_path, b'{"x": 1}')
+        # A reply proves the helper is in its serving loop before the signal is sent.
+        h.request({"type": "probe", "id": 1, "root": str(remote.parent)})
+        assert h.reply()["type"] == "done"
+
+        h.proc.send_signal(signal.SIGINT)
+        local = tmp_path / "local" / "h.json"
+        h.request({"type": "get", "id": 2, "remote": str(remote), "local": str(local)})
+        assert h.reply()["type"] == "done"  # still serving after the interrupt
+        assert local.read_bytes() == b'{"x": 1}'
+
+        h.request({"type": "shutdown"})
+        code, err = h.finish()
+        assert code == 0, err
+        assert "Traceback" not in err and "KeyboardInterrupt" not in err, err
+
+    def test_sigterm_mid_download_removes_the_temp_file_and_exits(self, process_helper, tmp_path):
+        h = process_helper(hold="get")
+        remote = _store_file(tmp_path, b'{"x": 1}')
+        local = tmp_path / "local" / "h.json"
+        h.request({"type": "get", "id": 1, "remote": str(remote), "local": str(local)})
+        h.wait_until_held()
+        # The download is under way: its temp file is there, the artifact is not.
+        assert [p.name.endswith(".tmp") for p in local.parent.iterdir()] == [True]
+
+        h.proc.send_signal(signal.SIGTERM)
+        code, err = h.finish()
+        assert code == 128 + signal.SIGTERM, err
+        assert list(local.parent.iterdir()) == []
+        assert "Traceback" not in err, err
+
+    def test_sigterm_mid_upload_to_a_directory_store_leaves_no_partial_object(
+        self, process_helper, tmp_path
+    ):
+        h = process_helper(hold="copied")
+        src = tmp_path / "a.json"
+        src.write_bytes(b'{"x": 1}')
+        dest = tmp_path / "store" / "n" / "h.json"
+        h.request({"type": "put", "id": 1, "local": str(src), "remote": str(dest)})
+        h.wait_until_held()
+        # Held between writing the temp file and renaming it: the object is not there yet.
+        assert [p.name.endswith(".tmp") for p in dest.parent.iterdir()] == [True]
+
+        h.proc.send_signal(signal.SIGTERM)
+        code, err = h.finish()
+        assert code == 128 + signal.SIGTERM, err
+        assert list(dest.parent.iterdir()) == []
 
 
 class TestConcurrency:

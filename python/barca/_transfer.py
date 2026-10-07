@@ -37,6 +37,7 @@ behave exactly as they do for workers and the state helper.
 
 import hashlib
 import os
+import signal
 import socket
 import sys
 import threading
@@ -321,23 +322,30 @@ def _env_float(name: str, default: float) -> float:
     return float(raw) if raw else default
 
 
+def _stop(signum, frame) -> None:
+    """Asked to stop mid-transfer: leave no half-written temp file behind, then exit."""
+    _storage.discard_staged()
+    os._exit(128 + signum)
+
+
 def main() -> int:
     if not os.environ.get("BARCA_SOCKET"):
         print("BARCA_SOCKET not set", file=sys.stderr)
         return 1
+    # Ctrl-C in a terminal reaches every process of the foreground job. What it means for the
+    # run is the coordinator's decision alone: it cancels the run and stops this helper
+    # (SIGTERM). Acting on the interrupt here as well would end the helper under a
+    # coordinator that is still waiting on it, and print a KeyboardInterrupt traceback.
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    signal.signal(signal.SIGTERM, _stop)
     sock = _runtime.connect()
     assert sock is not None
-    try:
-        serve(
-            sock,
-            concurrency=_env_int("BARCA_TRANSFER_CONCURRENCY", _DEFAULT_CONCURRENCY),
-            retries=_env_int("BARCA_TRANSFER_RETRIES", _DEFAULT_RETRIES),
-            timeout=_env_float("BARCA_TRANSFER_TIMEOUT", _DEFAULT_TIMEOUT),
-        )
-    except KeyboardInterrupt:
-        # Ctrl-C reaches the whole process group; the coordinator reports the
-        # cancellation, so exit quietly instead of printing a traceback.
-        os._exit(130)
+    serve(
+        sock,
+        concurrency=_env_int("BARCA_TRANSFER_CONCURRENCY", _DEFAULT_CONCURRENCY),
+        retries=_env_int("BARCA_TRANSFER_RETRIES", _DEFAULT_RETRIES),
+        timeout=_env_float("BARCA_TRANSFER_TIMEOUT", _DEFAULT_TIMEOUT),
+    )
     _runtime.disconnect()
     # Exit without joining pool threads: a timed-out attempt may be stuck in
     # a network call that would otherwise keep the process alive.

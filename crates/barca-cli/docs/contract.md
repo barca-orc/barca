@@ -296,7 +296,9 @@ task/asset misuse, a `.py` file that does not parse, a DAG that cannot be built 
 names no definition, a cycle, a partitioned asset in an unpartitioned asset's `inputs=` without
 `collect()`, a `partitions_from()` the asset cannot mirror), invalid `--env` or `barca.toml`. `infra`:
 barca or its environment failed (metadata DB, workers, remote state, I/O); retrying may help.
-`cancelled`: interrupted with Ctrl-C.
+`cancelled`: interrupted with Ctrl-C, at any point of a `get` or `run`: while steps run, and
+with an artifact store also while artifacts upload or download or the shared history is pulled
+or pushed (`barca docs remote`, "Ctrl-C").
 
 ## JSON output schemas
 
@@ -1027,7 +1029,7 @@ placeholders:
 | `[barca] step:<id> cached[ env NAME=VALUE ...]` | a step was served from cache. Printed when the step is decided, or, when its artifact is not on disk, at the end of the run once it is settled that nothing needed it (if something did, the step prints `completed` or `failed` instead, never both). Exception: a result in a remote artifact store whose object proves to be deleted when it is fetched has already printed `cached`; a `[barca] warning: <id>: the artifact of its cached result is missing ...` line and then `completed` or `failed` for the same step follow | stable |
 | `[barca] step:<id> failed: <first line of the error>` | a step raised | stable |
 | `[barca] run failed: step '<id>' failed (exit <code>)` | just before the error envelope of a failed step (every mode) | stable |
-| `[barca] <n>/<total> steps \| done in <secs>s` | end of a run that executed steps, with or without `--agent`; `failed in` when a step failed, `cancelled after` on Ctrl-C (never `done` then) | stable |
+| `[barca] <n>/<total> steps \| done in <secs>s` | end of a run that executed steps, with or without `--agent`; `failed in` when a step failed, `cancelled after` on a Ctrl-C that arrives while steps are running (never `done` then). The line is about the steps: with an artifact store, a Ctrl-C after the last step finished (while artifacts upload or the shared history is pushed) follows a `done` line, and the exit code (130) and the error envelope still say `cancelled` (`barca docs remote`, "Ctrl-C") | stable |
 | `[barca] still running (<n>s): <id>` | a step in flight for `BARCA_PROGRESS_SECS` (every mode) | experimental |
 | `[barca] <n> more: <first line of a warning>` | before the end-of-run line (every mode): a `logging` WARNING printed because logging is unconfigured, or a `warnings` warning, from a step's process was printed once and suppressed `<n>` more times in this run; beyond ten texts, one `[barca] <n> more: <k> other repeated warnings` (`barca docs agents`) | experimental |
 | `[barca] skipped N task(s) ...`, `[barca] nothing to get ...` | `get` with no target skipped tasks | experimental |

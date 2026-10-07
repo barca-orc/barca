@@ -20,9 +20,7 @@
 use crate::BarcaError;
 use crate::config::ResolvedConfig;
 use crate::protocol::{TransferReply, TransferRequest, read_frame, write_frame};
-use futures::StreamExt;
-use futures::stream::FuturesUnordered;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -181,7 +179,11 @@ pub struct TransferClient {
     io_task: JoinHandle<()>,
     socket_path: PathBuf,
     next_id: u64,
-    uploads: Vec<Pending>,
+    /// Uploads queued and not yet collected by [`Self::drain`], oldest first.
+    uploads: VecDeque<Pending>,
+    /// Outcomes `drain` has collected but not reported yet: (key, store, outcome). Only
+    /// non-empty when a `drain` was dropped before it finished (the run was cancelled).
+    settled: Vec<(String, String, Outcome)>,
     /// In-flight fetches keyed by local mirror path, so an artifact consumed
     /// by several steps is downloaded once.
     fetches: HashMap<PathBuf, Pending>,
@@ -229,6 +231,7 @@ impl TransferClient {
         std::fs::remove_file(&socket_path).ok();
         let listener = UnixListener::bind(&socket_path)
             .map_err(|e| BarcaError::Other(format!("transfer socket bind: {e}")))?;
+        crate::helper_proc::shield_from_ctrl_c(&mut cmd);
         cmd.env("BARCA_SOCKET", &socket_path)
             .stdin(Stdio::null())
             .stdout(Stdio::inherit())
@@ -264,7 +267,8 @@ impl TransferClient {
             io_task,
             socket_path,
             next_id: 0,
-            uploads: Vec::new(),
+            uploads: VecDeque::new(),
+            settled: Vec::new(),
             fetches: HashMap::new(),
         })
     }
@@ -295,7 +299,7 @@ impl TransferClient {
             local: local.to_string(),
             remote: store.clone(),
         });
-        self.uploads.push(Pending {
+        self.uploads.push_back(Pending {
             key: key.to_string(),
             store: store.clone(),
             rx,
@@ -378,18 +382,20 @@ impl TransferClient {
     }
 
     /// Await every upload queued since the last drain.
+    ///
+    /// Safe to drop midway (a cancelled run does): an upload leaves the queue only together
+    /// with its outcome, so [`Self::abort`] still knows which uploads were never confirmed.
     pub async fn drain(&mut self) -> TransferReport {
+        while let Some(next) = self.uploads.front_mut() {
+            let outcome = (&mut next.rx)
+                .await
+                .unwrap_or_else(|_| Err(Failed::helper_exited()));
+            let p = self.uploads.pop_front().expect("the upload just awaited");
+            self.settled.push((p.key, p.store, outcome));
+        }
         let mut report = TransferReport::default();
-        let mut inflight: FuturesUnordered<_> = self
-            .uploads
-            .drain(..)
-            .map(|p| async move {
-                let r = settle(p.rx).await;
-                (p.key, p.store, r)
-            })
-            .collect();
-        while let Some((key, store, r)) = inflight.next().await {
-            match r {
+        for (key, store, outcome) in self.settled.drain(..) {
+            match outcome {
                 Ok(t) => {
                     report.transferred += 1;
                     report.bytes += t.bytes;
@@ -424,24 +430,36 @@ impl TransferClient {
         std::fs::remove_file(&self.socket_path).ok();
     }
 
-    /// Stop the helper immediately, abandoning queued transfers. Returns the
-    /// keys of uploads not confirmed complete — their artifacts may be
-    /// missing from the store, so they must not be recorded — and the hash
-    /// of each upload that was confirmed.
+    /// Stop the helper now, abandoning queued and in-flight transfers (it is
+    /// asked to stop first, so it removes the temp files it was writing; see
+    /// [`crate::helper_proc`]). Returns the keys of uploads not confirmed
+    /// complete — their artifacts may be missing from the store, so they
+    /// must not be recorded — and the hash of each upload that was confirmed.
     pub async fn abort(mut self) -> (Vec<String>, HashMap<String, String>) {
         let mut unconfirmed = Vec::new();
         let mut hashes = HashMap::new();
-        for p in &mut self.uploads {
-            match p.rx.try_recv() {
-                Ok(Ok(t)) => {
+        let collected = self
+            .settled
+            .drain(..)
+            .map(|(key, _, outcome)| (key, outcome));
+        let queued = self.uploads.iter_mut().map(|p| {
+            (
+                p.key.clone(),
+                p.rx.try_recv()
+                    .unwrap_or_else(|_| Err(Failed::helper_exited())),
+            )
+        });
+        for (key, outcome) in collected.chain(queued) {
+            match outcome {
+                Ok(t) => {
                     if let Some(h) = t.sha256 {
-                        hashes.insert(p.key.clone(), h);
+                        hashes.insert(key, h);
                     }
                 }
-                _ => unconfirmed.push(p.key.clone()),
+                Err(_) => unconfirmed.push(key),
             }
         }
-        let _ = self.child.kill().await;
+        crate::helper_proc::stop(&mut self.child).await;
         self.io_task.abort();
         std::fs::remove_file(&self.socket_path).ok();
         (unconfirmed, hashes)
@@ -593,7 +611,8 @@ mod tests {
     // A stdlib-only stand-in speaking the same protocol, so these tests pin
     // the Rust side independent of barca._transfer. The store is a plain
     // directory. A store path containing "fail" errors; "die" makes the helper
-    // exit without replying; "slow" sleeps first.
+    // exit without replying; "slow" sleeps first; "hold" never finishes; "hashed"
+    // reports a hash, as the real helper always does.
 
     const FAKE_HELPER: &str = r#"
 import json, os, shutil, socket, struct, sys, threading, time
@@ -615,11 +634,14 @@ def send(m):
 def handle(m):
     src, dst = (m["local"], m["remote"]) if m["type"] == "put" else (m["remote"], m["local"])
     if "slow" in m["remote"]: time.sleep(0.3)
+    while "hold" in m["remote"]: time.sleep(0.05)
     if "die" in m["remote"]: os._exit(3)
     if "fail" in m["remote"]:
         return send({"type": "error", "id": m["id"], "message": "PermissionError: denied", "attempts": 2})
     os.makedirs(os.path.dirname(dst), exist_ok=True); shutil.copyfile(src, dst)
-    send({"type": "done", "id": m["id"], "size_bytes": os.path.getsize(dst)})
+    done = {"type": "done", "id": m["id"], "size_bytes": os.path.getsize(dst)}
+    if "hashed" in m["remote"]: done["sha256"] = "sha-of-" + os.path.basename(os.path.dirname(dst))
+    send(done)
 threads = []
 while True:
     m = recv()
@@ -867,6 +889,37 @@ for t in threads: t.join()
         assert_eq!(un, vec!["bad", "slow"]);
         // The fake helper reports no hash; a real one does (python/tests/test_transfer.py).
         assert!(hashes.is_empty());
+    }
+
+    /// Ctrl-C during the end-of-run wait drops `drain` midway. The uploads it had not seen
+    /// finish must still be reported as unconfirmed by `abort`, or their steps would be
+    /// recorded pointing at objects that are not in the store.
+    #[tokio::test]
+    async fn a_drain_dropped_midway_loses_no_upload() {
+        let fx = Fixture::new();
+        let mut c = fx.client().await;
+        let done = fx.write_local("hashed/h.json", b"1");
+        let stuck = fx.write_local("hold/h.json", b"1");
+        c.upload("done", &done).unwrap();
+        c.upload("stuck", &stuck).unwrap();
+        // Start draining and give up, again and again, until the first upload has been
+        // collected. The second never finishes, so no drain ever completes.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while c.pending_uploads() == 2 {
+            assert!(Instant::now() < deadline, "the first upload never finished");
+            let gave_up = tokio::time::timeout(Duration::from_millis(20), c.drain()).await;
+            assert!(
+                gave_up.is_err(),
+                "drain returned with an upload still in flight"
+            );
+        }
+        assert_eq!(c.pending_uploads(), 1);
+        let (unconfirmed, hashes) = within(c.abort()).await;
+        assert_eq!(unconfirmed, vec!["stuck"]);
+        assert_eq!(
+            hashes,
+            HashMap::from([("done".to_string(), "sha-of-hashed".to_string())])
+        );
     }
 
     #[tokio::test]

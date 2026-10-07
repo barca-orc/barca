@@ -16,7 +16,9 @@
 use crate::BarcaError;
 use crate::config::ResolvedConfig;
 use std::path::Path;
+use std::process::Stdio;
 use tokio::process::Command;
+use tokio_util::sync::CancellationToken;
 
 /// Opaque concurrency token for the remote state blob (etag / generation /
 /// sha256, depending on backend). `None` means the remote object is absent.
@@ -39,25 +41,73 @@ fn state_cmd(python: &Path, cfg: &ResolvedConfig) -> Command {
     if let Some(ref opts) = cfg.storage_options_json {
         cmd.env("BARCA_STORAGE_OPTIONS", opts);
     }
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
     cmd
+}
+
+/// Run the state helper to completion and return its output.
+///
+/// With `cancel`, Ctrl-C is the caller's to act on (see [`crate::helper_proc`]): the helper is
+/// started deaf to it, and when `cancel` fires it is asked to stop (it removes the temp file
+/// it was writing), waited for briefly, and the result is [`BarcaError::Cancelled`]. Without
+/// `cancel` nobody would stop a shielded helper, so it is left to die with the terminal's
+/// Ctrl-C like the command that started it.
+async fn run_helper(
+    mut cmd: Command,
+    cancel: Option<&CancellationToken>,
+) -> Result<std::process::Output, BarcaError> {
+    if cancel.is_some() {
+        crate::helper_proc::shield_from_ctrl_c(&mut cmd);
+    }
+    let child = cmd
+        .spawn()
+        .map_err(|e| BarcaError::Other(format!("failed to spawn state helper: {e}")))?;
+    let pid = child.id();
+    let output = child.wait_with_output();
+    tokio::pin!(output);
+    let cancelled = async {
+        match cancel {
+            Some(c) => c.cancelled().await,
+            None => std::future::pending().await,
+        }
+    };
+    tokio::select! {
+        out = &mut output => {
+            out.map_err(|e| BarcaError::Other(format!("state helper failed: {e}")))
+        }
+        _ = cancelled => {
+            if let Some(pid) = pid {
+                crate::helper_proc::terminate(pid);
+            }
+            // Dropping `output` after the grace kills a helper that is still there.
+            let _ = tokio::time::timeout(crate::helper_proc::STOP_GRACE, &mut output).await;
+            Err(BarcaError::Cancelled)
+        }
+    }
 }
 
 /// Download the shared state blob over `cfg.db_path`. Returns its token, or
 /// `StateToken(None)` when the remote object doesn't exist yet (the local
 /// file is left untouched for bootstrap).
-pub async fn pull_state(python: &Path, cfg: &ResolvedConfig) -> Result<StateToken, BarcaError> {
+///
+/// `cancel`, when given, stops the download (`Err(BarcaError::Cancelled)`): the local file is
+/// then as it was, because the helper replaces it only once the download is whole.
+pub async fn pull_state(
+    python: &Path,
+    cfg: &ResolvedConfig,
+    cancel: Option<&CancellationToken>,
+) -> Result<StateToken, BarcaError> {
     let uri = cfg
         .state_uri
         .as_deref()
         .ok_or_else(|| BarcaError::Other("pull_state called without a state uri".into()))?;
     let _g = crate::db::db_guard().await;
-    let out = state_cmd(python, cfg)
-        .arg("pull")
-        .arg(uri)
-        .arg(&cfg.db_path)
-        .output()
-        .await
-        .map_err(|e| BarcaError::Other(format!("failed to spawn state helper: {e}")))?;
+    let mut cmd = state_cmd(python, cfg);
+    cmd.arg("pull").arg(uri).arg(&cfg.db_path);
+    let out = run_helper(cmd, cancel).await?;
     if !out.status.success() {
         return Err(BarcaError::Other(format!(
             "shared state pull from {uri} failed: {}\n\
@@ -96,10 +146,15 @@ fn helper_cause(stderr: &[u8]) -> String {
 
 /// Conditionally upload `cfg.db_path` over the shared state blob.
 /// Call `checkpoint_truncate` first — the WAL must be folded in.
+///
+/// `cancel`, when given, stops the upload (`Err(BarcaError::Cancelled)`). The shared state is
+/// then either the old one or the new one, never a partial file: every backend replaces the
+/// object in one step.
 pub async fn push_state(
     python: &Path,
     cfg: &ResolvedConfig,
     token: &StateToken,
+    cancel: Option<&CancellationToken>,
 ) -> Result<PushOutcome, BarcaError> {
     let uri = cfg
         .state_uri
@@ -111,10 +166,7 @@ pub async fn push_state(
     if let Some(ref t) = token.0 {
         cmd.arg("--token").arg(t);
     }
-    let out = cmd
-        .output()
-        .await
-        .map_err(|e| BarcaError::Other(format!("failed to spawn state helper: {e}")))?;
+    let out = run_helper(cmd, cancel).await?;
     if out.status.code() == Some(EXIT_CONFLICT) {
         return Ok(PushOutcome::Conflict);
     }

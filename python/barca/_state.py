@@ -374,7 +374,17 @@ def main(argv: "list[str] | None" = None) -> int:
     return 1
 
 
+def _stop(signum, frame) -> None:
+    """Asked to stop mid-transfer: unwind, so the temp file being written is removed."""
+    raise SystemExit(128 + signum)
+
+
 if __name__ == "__main__":
+    import signal
+
+    # A run that is cancelled stops this helper with SIGTERM (it starts it deaf to Ctrl-C,
+    # which is the coordinator's to act on: crates/barca-core/src/helper_proc.rs).
+    signal.signal(signal.SIGTERM, _stop)
     try:
         sys.exit(main())
     except ConflictError as exc:  # pull never raises this; belt and braces

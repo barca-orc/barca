@@ -1023,10 +1023,16 @@ pub(crate) struct StoreSync {
     /// Whether the store itself is there, once it has been asked (see
     /// [`Self::confirm_present`]).
     present: Option<Result<(), String>>,
+    /// The run's cancellation: a wait on the store ends when it fires.
+    cancel: CancellationToken,
 }
 
+/// What a wait on the artifact store reports when the run is cancelled during it. The run
+/// then ends as cancelled; this text is never the error a user sees.
+const STORE_WAIT_CANCELLED: &str = "run cancelled";
+
 impl StoreSync {
-    fn new(client: TransferClient) -> Self {
+    fn new(client: TransferClient, cancel: CancellationToken) -> Self {
         Self {
             layout: client.layout().clone(),
             client,
@@ -1034,6 +1040,7 @@ impl StoreSync {
             mismatched: HashMap::new(),
             missing: Vec::new(),
             present: None,
+            cancel,
         }
     }
 
@@ -1073,7 +1080,12 @@ impl StoreSync {
     /// a bad setting into a full recompute written to the wrong place.
     pub(crate) async fn confirm_present(&mut self, lost: &[String]) -> Result<(), String> {
         if self.present.is_none() {
-            self.present = Some(self.client.probe().await);
+            let answer = tokio::select! {
+                biased;
+                _ = self.cancel.cancelled() => return Err(STORE_WAIT_CANCELLED.to_string()),
+                answer = self.client.probe() => answer,
+            };
+            self.present = Some(answer);
         }
         let Some(Err(why)) = &self.present else {
             return Ok(());
@@ -1143,7 +1155,13 @@ impl StoreSync {
             return Ok(());
         }
         let started = Instant::now();
-        let report = self.client.await_fetches(&locals).await;
+        // Ctrl-C ends the wait at once: the run is cancelled and the helper is stopped, with
+        // whatever it was downloading discarded (`TransferClient::abort`).
+        let report = tokio::select! {
+            biased;
+            _ = self.cancel.cancelled() => return Err(STORE_WAIT_CANCELLED.to_string()),
+            report = self.client.await_fetches(&locals) => report,
+        };
         if report.transferred > 0 {
             let msg = format!(
                 "[barca] fetched {} cached artifact{} ({}) in {:.1}s",
@@ -1812,7 +1830,7 @@ pub(crate) async fn explain_dag(
     // Shared remote state: pull it like a real run, so the cache check sees every machine's
     // materializations.
     if cfg.state == crate::config::StateMode::Optimistic && cfg.state_uri.is_some() {
-        state_sync::pull_state(python, cfg).await?;
+        state_sync::pull_state(python, cfg, None).await?;
     }
 
     // No metadata DB yet means nothing is cached. Do not create one just to look.
@@ -2135,10 +2153,12 @@ async fn execute(
     let state_sync_on =
         cfg.state == crate::config::StateMode::Optimistic && cfg.state_uri.is_some();
     let pull = state_sync_on.then(|| {
-        let (python, cfg) = (python.to_path_buf(), cfg.clone());
+        let (python, cfg, cancel) = (python.to_path_buf(), cfg.clone(), cancel.clone());
         Background::spawn(async move {
             let started = Instant::now();
-            let token = state_sync::pull_state(&python, &cfg).await?;
+            // Ctrl-C while the shared state is still being pulled ends the command here:
+            // nothing has run and no run has been created yet.
+            let token = state_sync::pull_state(&python, &cfg, Some(&cancel)).await?;
             Ok::<_, BarcaError>((token, started.elapsed()))
         })
     });
@@ -2334,7 +2354,7 @@ async fn execute(
     // artifact dir; the transfer helper uploads finished artifacts in the
     // background and fetches cache hits recorded by other machines.
     let mut store: Option<StoreSync> = if let Some(start) = transfer_start {
-        Some(StoreSync::new(start.join().await??))
+        Some(StoreSync::new(start.join().await??, cancel.clone()))
     } else {
         None
     };
@@ -3061,11 +3081,29 @@ async fn execute(
         );
     }
 
-    let was_cancelled = cancel.is_cancelled();
+    let mut was_cancelled = cancel.is_cancelled();
 
     // Artifact store, before anything is recorded: wait for every upload. Rows are recorded
     // only for artifacts confirmed in the store, so the metadata never points at a missing
     // object. The transfer client stays up to fetch the final outputs below.
+    //
+    // Ctrl-C during the wait cancels the run like one during a step: the uploads still in
+    // flight are abandoned and their steps are not recorded.
+    let drained = match store.as_mut() {
+        Some(s) if !was_cancelled => {
+            let queued = s.client.pending_uploads();
+            let t_drain = Instant::now();
+            let report = tokio::select! {
+                biased;
+                _ = cancel.cancelled() => None,
+                report = s.client.drain() => Some(report),
+            };
+            trace_point!("store_sync_drained ({queued} uploads)");
+            was_cancelled = report.is_none();
+            report.map(|report| (report, t_drain))
+        }
+        _ => None,
+    };
     if was_cancelled {
         if let Some(s) = store.take() {
             let (unconfirmed, hashes) = s.client.abort().await;
@@ -3079,11 +3117,7 @@ async fn execute(
                 }
             }
         }
-    } else if let Some(s) = store.as_mut() {
-        let queued = s.client.pending_uploads();
-        let t_drain = Instant::now();
-        let report = s.client.drain().await;
-        trace_point!("store_sync_drained ({queued} uploads)");
+    } else if let Some((report, t_drain)) = drained {
         // The hash of the bytes that reached the store is recorded with the row, so any
         // machine can check its copy of the artifact against it.
         for (node, sha256) in &report.hashes {
@@ -3189,7 +3223,20 @@ async fn execute(
         let t_push = Instant::now();
         loop {
             state_sync::checkpoint_truncate(&db_path).await?;
-            match state_sync::push_state(python, cfg, state_token.as_ref().unwrap()).await? {
+            // A run cancelled earlier still pushes what it finished, and that push is not
+            // interruptible (the one Ctrl-C has been spent). Otherwise Ctrl-C stops the push:
+            // the run's results stay in this machine's history only, and the run is recorded
+            // as cancelled.
+            let interruptible = (!was_cancelled).then_some(&cancel);
+            let token = state_token.as_ref().unwrap();
+            let pushed = match state_sync::push_state(python, cfg, token, interruptible).await {
+                Err(BarcaError::Cancelled) => {
+                    cancel_recorded_run(&db_path, &ledger).await?;
+                    return Err(BarcaError::Cancelled);
+                }
+                other => other?,
+            };
+            match pushed {
                 state_sync::PushOutcome::Pushed(_) => {
                     eprintln!(
                         "[barca] pushed state ({}) in {:.2}s{}",
@@ -3212,7 +3259,15 @@ async fn execute(
                         )));
                     }
                     attempt += 1;
-                    state_token = Some(state_sync::pull_state(python, cfg).await?);
+                    state_token = match state_sync::pull_state(python, cfg, interruptible).await {
+                        Err(BarcaError::Cancelled) => {
+                            // The local history is whichever copy the pull left: the run is
+                            // marked there if it is still in it.
+                            cancel_recorded_run(&db_path, &ledger).await.ok();
+                            return Err(BarcaError::Cancelled);
+                        }
+                        pulled => Some(pulled?),
+                    };
                     db::init_db(&db_path).await?;
                     persist_run(&db_path, &ledger).await?;
                     db::insert_logs(&db_path, &run_id, &logs_buffer).await?;
@@ -3265,6 +3320,13 @@ async fn execute(
             .map(|o| o.path.clone())
             .collect();
         let fetched = s.ensure_local(paths.iter().map(String::as_str), None).await;
+        if fetched.is_err() && cancel.is_cancelled() {
+            // Ctrl-C while the returned output was being fetched: the run finished and is
+            // recorded, but the command gives up, so it is recorded as cancelled.
+            s.client.abort().await;
+            cancel_recorded_run(&db_path, &ledger).await?;
+            return Err(BarcaError::Cancelled);
+        }
         s.client.shutdown().await;
         if let Err(e) = fetched {
             return Err(BarcaError::Other(e));
@@ -3297,6 +3359,21 @@ async fn execute(
 }
 
 // ─── run persistence ──────────────────────────────────────────────────────────
+
+/// Record as `cancelled` a run that was already recorded with its outcome, because Ctrl-C
+/// arrived afterwards (while its shared state was pushed or its output fetched). The steps it
+/// recorded stay: they finished.
+async fn cancel_recorded_run(db_path: &str, l: &RunLedger<'_>) -> Result<(), BarcaError> {
+    db::finish_run(
+        db_path,
+        l.run_id,
+        "cancelled",
+        l.steps_executed,
+        l.steps_cached,
+        l.elapsed,
+    )
+    .await
+}
 
 /// Everything one run wants written to the metadata DB, held in memory so a
 /// state-push conflict can replay it onto a freshly pulled database.

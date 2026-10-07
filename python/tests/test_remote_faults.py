@@ -73,7 +73,8 @@ pytestmark = pytest.mark.skipif(BARCA is None, reason="barca binary not installe
 
 
 class FaultProxy:
-    """Forwards to an emulator; can reset or stall new connections."""
+    """Forwards to an emulator; can reset or stall new connections, or stop forwarding a
+    request once `cut_after` bytes of it have gone upstream (an upload cut off midway)."""
 
     def __init__(self, target: tuple[str, int]):
         self.target = target
@@ -84,6 +85,11 @@ class FaultProxy:
         self.port = self.listener.getsockname()[1]
         self.resets_left = 0
         self.stall = False
+        # Bytes one connection may send upstream before the proxy stops forwarding it and
+        # holds it open. Small requests (listings, metadata) pass; a large upload is cut.
+        self.cut_after: int | None = None
+        self.cut = threading.Event()  # set when a connection has been cut
+        self._release = threading.Event()
         self.connections = 0
         self._held: list[socket.socket] = []
         self._lock = threading.Lock()
@@ -123,14 +129,20 @@ class FaultProxy:
         except OSError:
             conn.close()
             return
-        for a, b in ((conn, upstream), (upstream, conn)):
-            threading.Thread(target=self._pump, args=(a, b), daemon=True).start()
+        for a, b, limit in ((conn, upstream, self.cut_after), (upstream, conn, None)):
+            threading.Thread(target=self._pump, args=(a, b, limit), daemon=True).start()
 
-    @staticmethod
-    def _pump(src: socket.socket, dst: socket.socket) -> None:
+    def _pump(self, src: socket.socket, dst: socket.socket, limit: int | None) -> None:
+        sent = 0
         try:
             while data := src.recv(65536):
+                if limit is not None and sent + len(data) > limit:
+                    dst.sendall(data[: limit - sent])
+                    self.cut.set()
+                    self._release.wait()  # hold both ends open: the request never finishes
+                    return
                 dst.sendall(data)
+                sent += len(data)
         except OSError:
             pass
         finally:
@@ -142,6 +154,7 @@ class FaultProxy:
 
     def close(self) -> None:
         self._closed = True
+        self._release.set()
         self.listener.close()
         with self._lock:
             for c in self._held:
@@ -408,6 +421,64 @@ def test_stalled_store_times_out_instead_of_hanging(tmp_path, backend, container
     rows = a.rows("")
     assert rows and all(r["status"] == "failed" for r in rows), rows
     assert all("TimeoutError" in r["error_message"] for r in rows)
+
+
+BIG_PIPELINE = """
+from barca import asset
+
+
+@asset()
+def big() -> list:
+    return list(range(300_000))  # about 2 MB of json: several times the proxy's cut
+"""
+
+
+def test_ctrl_c_mid_upload_leaves_no_object_and_no_record(tmp_path, backend, container, proxy):
+    """An upload interrupted midway must never leave an object a later run could read (#249).
+
+    The proxy lets the first 128 KB of the upload reach the emulator and then holds the
+    connection, so the request is certainly in flight when Ctrl-C arrives. On every backend
+    the object appears only when its upload completes, so afterwards there is none; and the
+    step is not recorded, because its upload was never confirmed.
+    """
+    import signal
+
+    proxy.cut_after = 128 * 1024
+    a = Project(tmp_path / "a", backend, container, proxy.endpoint, tmp_path / "state.db")
+    (a.dir / "pipeline.py").write_text(BIG_PIPELINE)
+    proc = subprocess.Popen(
+        [BARCA, "get", "big", "pipeline.py", "--agent", "--json"],
+        cwd=a.dir,
+        env=a.env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,  # its own process group, like a foreground job
+    )
+    try:
+        assert proxy.cut.wait(120), "the upload never got under way"
+        os.killpg(proc.pid, signal.SIGINT)
+        out, err = proc.communicate(timeout=60)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    assert proc.returncode == 130, err
+    assert "Traceback" not in err and "KeyboardInterrupt" not in err, err
+    assert json.loads(err.strip().splitlines()[-1])["kind"] == "cancelled", err
+    assert _stored(backend, container) == [], "an interrupted upload left an object behind"
+    db = sqlite3.connect(a.dir / ".barca" / "metadata.db")
+    try:
+        assert db.execute("select count(*) from materializations").fetchone() == (0,)
+        assert db.execute("select status from runs").fetchall() == [("cancelled",)]
+    finally:
+        db.close()
+
+    # With the store answering again, the step runs and its object is whole.
+    proxy.cut_after = None
+    proc, _ = a.get("big")
+    assert proc.returncode == 0, _explain(proc)
+    (stored,) = _stored(backend, container)
+    assert json.loads(backend.fs().cat_file(stored)) == list(range(300_000))
 
 
 def test_cache_hit_with_missing_object_is_recomputed_fast(tmp_path, backend, container, proxy):

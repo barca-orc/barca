@@ -500,7 +500,8 @@ barca history --json            # the run is `running`; `steps_executed` is the 
 - **History says so.** `barca history` reports a run whose process no longer exists as
   `interrupted`, with `finished_at` and `elapsed_seconds` `null` (nobody saw it end) and
   `steps_executed` at what it had recorded. Ctrl-C is different: the run stops its workers,
-  records itself and is `cancelled`.
+  records itself and is `cancelled` (exit 130). With an artifact store that also holds while
+  artifacts upload, download or the shared history is pushed (`barca docs remote`, "Ctrl-C").
 
 Known limits:
 

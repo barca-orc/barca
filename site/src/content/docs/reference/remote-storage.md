@@ -310,6 +310,34 @@ Only artifacts a run reads are hashed, once per run. Not checked: a parquet inpu
 in place (only byte ranges are fetched), and results recorded before barca stored a hash. A
 `--dry-run` does not contact the store, so it never reports a mismatch.
 
+## Ctrl-C
+
+Ctrl-C cancels a run at any point, including while barca is uploading, downloading or pushing
+the shared history: the command exits 130 with the `cancelled` error, and the run is recorded
+as `cancelled`. What is left behind is always consistent:
+
+- A step is recorded only once its artifact is confirmed in the store. A step whose upload
+  was still in flight is not recorded, and runs again next time.
+- No partial file is left. A download, and an upload into a store that is a directory, is
+  written to a temp file beside its destination and renamed when whole; the temp file is
+  removed when the run is cancelled. An object store shows an object only once its upload has
+  completed, so an interrupted upload leaves the previous object, or none.
+- Interrupted while the shared history is pushed, the run's artifacts are in the store but the
+  shared history does not have the run. Its steps are recorded on this machine only, and the
+  next run starts from the shared history as every run does: if one exists, those steps are
+  computed again (and their objects overwritten); if none existed yet, they are cache hits and
+  that run pushes them.
+- Interrupted while the shared history is still being pulled, before anything ran, the command
+  exits 130 and no run is recorded.
+
+The end-of-run line (`[barca] <n>/<total> steps | done in <secs>s`) is about the steps. A Ctrl-C
+that arrives after the last step finished, while artifacts upload or the history is pushed,
+therefore follows a `done` line; the exit code and the error still say `cancelled`.
+
+Barca's helper processes do not act on Ctrl-C themselves: the terminal sends it to every process
+of the job, and the coordinator alone decides what it means and stops the helpers. They print
+no `KeyboardInterrupt` traceback.
+
 ## A directory where an artifact belongs
 
 An artifact is one file. A directory at an artifact's path under `.barca/artifacts/` is not a
