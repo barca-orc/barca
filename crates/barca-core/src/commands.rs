@@ -1828,9 +1828,14 @@ pub(crate) async fn explain_dag(
     let warnings = crate::warnings::for_plan(dag, &exec_plan);
 
     // Shared remote state: pull it like a real run, so the cache check sees every machine's
-    // materializations.
+    // materializations. A pull keeps the local rows that were never pushed, so this is safe
+    // while a run is going in the same project: what that run has recorded so far is still
+    // there afterwards, next to what other machines pushed.
     if cfg.state == crate::config::StateMode::Optimistic && cfg.state_uri.is_some() {
-        state_sync::pull_state(python, cfg, None).await?;
+        let pulled = state_sync::pull_state(python, cfg, None).await?;
+        if let Some(note) = pulled.carried.note() {
+            eprintln!("{note}");
+        }
     }
 
     // No metadata DB yet means nothing is cached. Do not create one just to look.
@@ -2158,8 +2163,8 @@ async fn execute(
             let started = Instant::now();
             // Ctrl-C while the shared state is still being pulled ends the command here:
             // nothing has run and no run has been created yet.
-            let token = state_sync::pull_state(&python, &cfg, Some(&cancel)).await?;
-            Ok::<_, BarcaError>((token, started.elapsed()))
+            let pulled = state_sync::pull_state(&python, &cfg, Some(&cancel)).await?;
+            Ok::<_, BarcaError>((pulled, started.elapsed()))
         })
     });
     let transfer_start = cfg.remote_artifacts().then(|| {
@@ -2214,7 +2219,10 @@ async fn execute(
     // is a hard error — silently diverging local runs are worse than stopping.
     let mut state_token = match pull {
         Some(pull) => {
-            let (token, took) = pull.join().await??;
+            let (state_sync::Pulled { token, carried }, took) = pull.join().await??;
+            if let Some(note) = carried.note() {
+                eprintln!("{note}");
+            }
             match token.0 {
                 Some(_) => eprintln!(
                     "[barca] pulled state ({}) in {:.2}s",
@@ -3216,41 +3224,35 @@ async fn execute(
     }
 
     // Shared remote state: fold the WAL into the main file and conditionally
-    // upload it. On conflict (another machine pushed first): pull the fresh
+    // upload it (`push_state` does both under the database lock). On conflict (another machine pushed first): pull the fresh
     // database, replay this run's ledger onto it, retry.
     if state_sync_on {
         let mut attempt = 0u32;
         let t_push = Instant::now();
         loop {
-            state_sync::checkpoint_truncate(&db_path).await?;
             // A run cancelled earlier still pushes what it finished, and that push is not
             // interruptible (the one Ctrl-C has been spent). Otherwise Ctrl-C stops the push:
             // the run's results stay in this machine's history only, and the run is recorded
             // as cancelled.
             let interruptible = (!was_cancelled).then_some(&cancel);
             let token = state_token.as_ref().unwrap();
-            let pushed = match state_sync::push_state(python, cfg, token, interruptible).await {
+            let outcome = match state_sync::push_state(python, cfg, token, interruptible).await {
                 Err(BarcaError::Cancelled) => {
                     cancel_recorded_run(&db_path, &ledger).await?;
                     return Err(BarcaError::Cancelled);
                 }
                 other => other?,
             };
-            match pushed {
-                state_sync::PushOutcome::Pushed(_) => {
-                    eprintln!(
-                        "[barca] pushed state ({}) in {:.2}s{}",
-                        fmt_bytes(std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0)),
-                        t_push.elapsed().as_secs_f64(),
-                        match attempt {
-                            0 => String::new(),
-                            1 => " after 1 conflict retry".to_string(),
-                            n => format!(" after {n} conflict retries"),
-                        }
-                    );
-                    trace_point!("state_sync_pushed (attempts={})", attempt + 1);
-                    break;
-                }
+            let again = match outcome {
+                state_sync::PushOutcome::Pushed {
+                    local_unchanged: true,
+                    ..
+                } => false,
+                // Uploaded, but another process wrote to the local database (or replaced
+                // it) while the upload was on its way. Treated like a conflict: pull what was
+                // just uploaded, which keeps those rows, and push again. When the retries are
+                // used up the upload still stands, and the rows go with a later push.
+                state_sync::PushOutcome::Pushed { .. } => attempt < cfg.push_retries,
                 state_sync::PushOutcome::Conflict => {
                     if attempt >= cfg.push_retries {
                         return Err(BarcaError::Other(format!(
@@ -3258,21 +3260,38 @@ async fn execute(
                              computed but the shared state was not updated; re-run to retry"
                         )));
                     }
-                    attempt += 1;
-                    state_token = match state_sync::pull_state(python, cfg, interruptible).await {
-                        Err(BarcaError::Cancelled) => {
-                            // The local history is whichever copy the pull left: the run is
-                            // marked there if it is still in it.
-                            cancel_recorded_run(&db_path, &ledger).await.ok();
-                            return Err(BarcaError::Cancelled);
-                        }
-                        pulled => Some(pulled?),
-                    };
-                    db::init_db(&db_path).await?;
-                    persist_run(&db_path, &ledger).await?;
-                    db::insert_logs(&db_path, &run_id, &logs_buffer).await?;
+                    true
                 }
+            };
+            if !again {
+                eprintln!(
+                    "[barca] pushed state ({}) in {:.2}s{}",
+                    fmt_bytes(std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0)),
+                    t_push.elapsed().as_secs_f64(),
+                    match attempt {
+                        0 => String::new(),
+                        1 => " after 1 conflict retry".to_string(),
+                        n => format!(" after {n} conflict retries"),
+                    }
+                );
+                trace_point!("state_sync_pushed (attempts={})", attempt + 1);
+                break;
             }
+            attempt += 1;
+            // The pull carries this run's rows over with the rest of the local database; the
+            // ledger then adds whatever is still missing (both are idempotent), so the run
+            // is whole however much of it made the trip.
+            state_token = match state_sync::pull_state(python, cfg, interruptible).await {
+                Err(BarcaError::Cancelled) => {
+                    // The pull keeps this run's rows, so its record is there to be marked.
+                    cancel_recorded_run(&db_path, &ledger).await.ok();
+                    return Err(BarcaError::Cancelled);
+                }
+                pulled => Some(pulled?.token),
+            };
+            db::init_db(&db_path).await?;
+            persist_run(&db_path, &ledger).await?;
+            db::insert_logs(&db_path, &run_id, &logs_buffer).await?;
         }
     }
 
@@ -3494,9 +3513,9 @@ const RECORD_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50
 ///
 /// It is an optimisation of *when* rows land, never the only writer: the end-of-run
 /// [`persist_run`] writes every row of the run that is not already there (rows carry the run
-/// id). So a write that fails here, rows still queued at [`StepRecorder::finish`], and rows
-/// lost because another process replaced the local DB with the shared state mid-run are all
-/// made good at the end.
+/// id). So a write that fails here and rows still queued at [`StepRecorder::finish`] are made
+/// good at the end. (A pull of the shared state by another process mid-run keeps the rows
+/// written here: see `state_carry`.)
 struct StepRecorder {
     tx: tokio::sync::mpsc::UnboundedSender<StepRow>,
     stop: CancellationToken,
@@ -3574,31 +3593,6 @@ async fn record_steps(db_path: &str, run_id: &str, rows: &[StepRow]) -> Result<(
         .await
         .map_err(|e| BarcaError::Db(format!("failed to commit: {e}")))?;
     Ok(())
-}
-
-/// The steps of `run_id` that already have a row: what the [`StepRecorder`] wrote during the
-/// run, or, on a replay after a shared-state conflict, what the pulled database already holds
-/// (another process on this machine can have pushed this run's rows along with its own).
-async fn recorded_steps(
-    conn: &turso::Connection,
-    run_id: &str,
-) -> std::collections::HashSet<String> {
-    let mut out = std::collections::HashSet::new();
-    let Ok(mut rows) = conn
-        .query(
-            "SELECT node_id FROM materializations WHERE run_id = ?1",
-            [run_id.to_string()],
-        )
-        .await
-    else {
-        return out;
-    };
-    while let Ok(Some(row)) = rows.next().await {
-        if let Ok(node_id) = row.get::<String>(0) {
-            out.insert(node_id);
-        }
-    }
-    out
 }
 
 /// The exception a step failure carries, as (type, message, traceback). A worker reports a
@@ -3770,7 +3764,9 @@ async fn persist_run(db_path: &str, l: &RunLedger<'_>) -> Result<(), BarcaError>
         .await
         .map_err(|e| BarcaError::Db(format!("failed to finish run: {e}")))?;
 
-    let already = recorded_steps(&conn, l.run_id).await;
+    // What the [`StepRecorder`] wrote during the run, or, on a replay after a shared-state
+    // conflict, what the pulled database holds of this run.
+    let already = crate::state_carry::steps_of_run(&conn, l.run_id).await;
 
     for (node_id, oref) in l.all_outputs {
         if l.cached_node_ids.contains(node_id) || already.contains(node_id) {
@@ -4074,6 +4070,72 @@ mod persist_tests {
         ));
         want.sort();
         assert_eq!(rows(&partial).await, want);
+    }
+
+    /// A pull, as `state_sync::pull_state` does it once the blob is downloaded: a fresh copy
+    /// of `shared` is swapped in for `local`, which keeps its unpushed rows.
+    async fn pull(dir: &tempfile::TempDir, shared: &str, local: &str) {
+        state_sync::checkpoint_truncate(shared).await.unwrap();
+        let staged = dir.path().join("staged.db");
+        std::fs::copy(shared, &staged).unwrap();
+        db::pull_for_tests(local, &staged).await;
+    }
+
+    #[tokio::test]
+    async fn a_pull_in_the_middle_of_a_run_leaves_the_run_whole_and_nothing_twice() {
+        // Another process in the same project (a second `barca get`, a `barca status`) pulls
+        // while this run is going; later the run's own push conflicts and it pulls again.
+        let dir = tempfile::tempdir().unwrap();
+        let mut fx = Fixture::new();
+        // The pull only carries steps whose artifact is there.
+        for (node, oref) in fx.outputs.iter_mut() {
+            let file = dir.path().join(crate::safe_node_id(node));
+            std::fs::write(&file, b"1").unwrap();
+            oref.path = file.to_string_lossy().to_string();
+        }
+        let shared = fresh_db(&dir, "shared.db").await;
+        db::create_run(&shared, "theirs", "get", "[\"g.py\"]", None, Some(1))
+            .await
+            .unwrap();
+        let local = fresh_db(&dir, "local.db").await;
+        db::create_run(&local, "r1", "get", "[\"f.py\"]", None, Some(5))
+            .await
+            .unwrap();
+        record_steps(&local, "r1", &[fx.row("f.py:a")])
+            .await
+            .unwrap();
+
+        // Mid-run pull: the run row and the recorded step are still there afterwards, so
+        // `barca status` goes on showing the step and `barca history` the run.
+        pull(&dir, &shared, &local).await;
+        let mid = run_record(&local, "r1").await;
+        assert_eq!((mid.status.as_str(), mid.steps_executed), ("running", 1));
+        assert_eq!(rows(&local).await.len(), 1);
+        run_record(&local, "theirs").await;
+
+        // The run goes on recording, ends, and writes its ledger and its log.
+        record_steps(&local, "r1", &[fx.row("f.py:part[k=1]")])
+            .await
+            .unwrap();
+        persist_run(&local, &fx.ledger("r1")).await.unwrap();
+        let log = [("f.py:a".to_string(), "hello".to_string())];
+        db::insert_logs(&local, "r1", &log).await.unwrap();
+        assert_eq!(rows(&local).await, complete("r1"));
+
+        // Its push conflicts: pull again, replay the ledger and the log.
+        db::create_run(&shared, "theirs-2", "get", "[\"g.py\"]", None, Some(1))
+            .await
+            .unwrap();
+        pull(&dir, &shared, &local).await;
+        db::init_db(&local).await.unwrap();
+        persist_run(&local, &fx.ledger("r1")).await.unwrap();
+        db::insert_logs(&local, "r1", &log).await.unwrap();
+
+        assert_eq!(rows(&local).await, complete("r1"));
+        assert_eq!(db::get_logs(&local, "r1").await.unwrap().len(), 1);
+        let end = run_record(&local, "r1").await;
+        assert_eq!((end.status.as_str(), end.steps_executed), ("failed", 4));
+        assert_eq!(db::count_runs(&local).await.unwrap(), 3);
     }
 
     #[tokio::test]

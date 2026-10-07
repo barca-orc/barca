@@ -254,6 +254,7 @@ output, so the next `--dry-run` or `barca status` shows its consumers as stale.
 
 ```
 .barca/metadata.db                          run history and materialization records (local DB)
+.barca/metadata.db.base                     with shared history: a counter of pulls and uploads (`barca docs remote`)
 .barca/artifacts/<node>/<run_hash>.<ext>    one file per result
 ```
 
@@ -509,8 +510,10 @@ barca history --json            # the run is `running`; `steps_executed` is the 
 
 Known limits:
 
-- With shared remote state (`barca docs remote`) these apply to the machine the run is on only,
-  and not reliably: see "Limitations" there.
+- With shared remote state (`barca docs remote`) all of this holds on the machine the run is on:
+  the pull at the start of a command keeps what a run recorded locally, so progress and resume
+  work whatever other machines upload in the meantime. Other machines see a run when it ends,
+  and a killed run once a later run on its machine has ended.
 - With a remote artifact store, steps are not recorded as they finish: a row is written only
   once the artifact's upload is confirmed, which happens when the run ends. Such a run shows no
   progress in `barca status`, and a killed one records nothing.

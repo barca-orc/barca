@@ -262,3 +262,55 @@ def test_stale_token_conflicts(backend, tmp_path):
     v3 = _write(tmp_path, "v3.db", b"three")
     with pytest.raises(ConflictError):
         push(uri, v3, tok1)  # stale precondition must be rejected
+
+
+# ─── through the CLI: what a pull does to the local database ─────────────────
+#
+# The same on every backend: the blob is downloaded next to the local database and swapped
+# in, and local runs that were never pushed are carried onto it (#221).
+
+
+def test_a_pull_keeps_local_runs_that_were_never_pushed(backend, tmp_path):
+    import json
+    import subprocess
+
+    from barca.api import _find_binary
+
+    uri = backend.make_uri(tmp_path)
+
+    def barca(machine: str, *args: str, **extra: str) -> dict:
+        root = tmp_path / machine
+        root.mkdir(exist_ok=True)
+        env = {
+            **{k: v for k, v in os.environ.items() if not k.startswith("BARCA_")},
+            **backend.env(),
+            "BARCA_STATE_URI": uri,
+            "BARCA_POOL_SIZE": "2",
+            **extra,
+        }
+        out = subprocess.run(
+            [_find_binary(), *args], cwd=root, capture_output=True, text=True, env=env
+        )
+        assert out.returncode == 0, out.stderr
+        return json.loads(out.stdout)
+
+    def get(machine: str, name: str, **extra: str) -> str:
+        source = (
+            f"from barca import asset\n\n\n@asset()\ndef {name}() -> str:\n    return {name!r}\n"
+        )
+        (tmp_path / machine).mkdir(exist_ok=True)
+        (tmp_path / machine / f"{name}.py").write_text(source)
+        return barca(machine, "get", f"{name}.py", "--json", **extra)["run_id"]
+
+    def history(machine: str) -> list[str]:
+        return sorted(r["run_id"] for r in barca(machine, "history", "--all", "--json")["runs"])
+
+    a_first = get("a", "one")  # creates the shared state
+    a_local = get("a", "two", BARCA_STATE="off")  # recorded on A only
+    b_first = get("b", "three")  # B pushes in the meantime
+    a_next = get("a", "four")  # A pulls B's push over its local database, then pushes
+
+    # A lost neither B's run nor its own unpushed one, and B gets all of it, each run once.
+    assert history("a") == sorted([a_first, a_local, b_first, a_next])
+    b_next = get("b", "five")
+    assert history("b") == sorted([a_first, a_local, b_first, a_next, b_next])
