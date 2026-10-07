@@ -280,6 +280,48 @@ def test_package_pipeline_imports_its_sibling(tmp_path, imports):
     p.check("pkg/helpers.py", "beside", ignored=("helpers.py",))
 
 
+def test_a_pipeline_file_wins_over_a_root_directory_without_init(tmp_path):
+    # `a/p.py` imports `shared`, which is the pipeline file `b/shared.py`; the root also has a
+    # directory `shared/` with no `__init__.py`. A worker that has loaded `b/shared.py` has `b/`
+    # on its import path, and a regular module beats a namespace package wherever it is on the
+    # path: the step runs `b/shared.py` (it returns its value), so that file must be hashed.
+    shared = """
+        from barca import asset
+
+
+        def compute():
+            return {value!r}
+
+
+        @asset()
+        def upstream() -> int:
+            return 1
+    """
+    files = {
+        "a/p.py": """
+            from barca import asset
+            from shared import compute, upstream
+
+
+            @asset(inputs={"u": upstream})
+            def val(u: int):
+                return compute()
+        """,
+        "b/shared.py": shared.format(value="from b"),
+        "shared/notes.txt": "a directory that is not a package\n",
+    }
+    write(tmp_path, {"barca.toml": "", **files})
+
+    first = barca(tmp_path, "get", "val")
+    assert first["steps_executed"] == 2 and first["final_output"] == "from b"
+    assert barca(tmp_path, "get", "val")["steps_executed"] == 0
+
+    write(tmp_path, {"b/shared.py": shared.format(value="edited")})
+    plan = barca(tmp_path, "get", "val", "--dry-run", "--json")
+    actions = {step["id"]: step["action"] for step in plan["steps"]}
+    assert actions["a/p.py:val"] == "run", "compute() in b/shared.py changed"
+
+
 # ─── What is never followed ──────────────────────────────────────────────────
 
 

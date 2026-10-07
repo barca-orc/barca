@@ -33,7 +33,11 @@ use std::rc::Rc;
 #[derive(Default)]
 struct SourceFiles {
     sources: RefCell<HashMap<PathBuf, Option<Rc<str>>>>,
+    /// Modules by file and import name, so a helper that several import paths reach under the
+    /// same name is parsed once per plan.
+    modules: RefCell<HashMap<(PathBuf, String), Rc<Module>>>,
     /// Files actually read from disk, in order.
+    #[cfg(test)]
     read: RefCell<Vec<PathBuf>>,
 }
 
@@ -50,6 +54,7 @@ impl SourceFiles {
             return known.clone();
         }
         let source: Option<Rc<str>> = std::fs::read_to_string(path).ok().map(Rc::from);
+        #[cfg(test)]
         if source.is_some() {
             self.read.borrow_mut().push(path.to_path_buf());
         }
@@ -57,6 +62,18 @@ impl SourceFiles {
             .borrow_mut()
             .insert(path.to_path_buf(), source.clone());
         source
+    }
+
+    /// The module in the file at `path`, imported as `name`; `None` when there is no such file.
+    fn module(&self, path: PathBuf, name: &str, is_package: bool) -> Option<Rc<Module>> {
+        let source = self.get(&path)?;
+        let module = self
+            .modules
+            .borrow_mut()
+            .entry((path, name.to_string()))
+            .or_insert_with(|| Rc::new(Module::new(name, source, is_package)))
+            .clone();
+        Some(module)
     }
 }
 
@@ -165,8 +182,13 @@ impl ImportPath {
         }
         let found = match name.rsplit_once('.') {
             None => match self.search(name, name, &self.path) {
-                Found::Missing => self.other_pipeline(name),
-                found => found,
+                module @ Found::Module(..) => module,
+                // A namespace package loses to a regular module anywhere on `sys.path`, so a
+                // pipeline file of that name still wins over a directory without `__init__.py`.
+                not_a_module => match self.other_pipeline(name) {
+                    Found::Missing => not_a_module,
+                    pipeline => pipeline,
+                },
             },
             Some((parent, leaf)) => match self.find(parent) {
                 Found::Module(_, Some(dir)) => self.search(name, leaf, &[dir]),
@@ -188,12 +210,17 @@ impl ImportPath {
         let mut portions = Vec::new();
         for dir in dirs {
             let package_dir = dir.join(leaf);
-            if let Some(source) = self.files.get(&package_dir.join("__init__.py")) {
-                let module = Module::new(name, source, true);
-                return Found::Module(Rc::new(module), Some(package_dir));
+            if let Some(module) = self
+                .files
+                .module(package_dir.join("__init__.py"), name, true)
+            {
+                return Found::Module(module, Some(package_dir));
             }
-            if let Some(source) = self.files.get(&dir.join(format!("{leaf}.py"))) {
-                return Found::Module(Rc::new(Module::new(name, source, false)), None);
+            if let Some(module) = self
+                .files
+                .module(dir.join(format!("{leaf}.py")), name, false)
+            {
+                return Found::Module(module, None);
             }
             if package_dir.is_dir() {
                 portions.push(package_dir);
@@ -310,7 +337,8 @@ impl ProjectCones {
     }
 
     /// The files read from disk so far (pipeline files are given, not read).
-    pub fn files_read(&self) -> Vec<PathBuf> {
+    #[cfg(test)]
+    fn files_read(&self) -> Vec<PathBuf> {
         self.files.read.borrow().clone()
     }
 }
@@ -657,6 +685,84 @@ mod tests {
             "east/p.py does not import west/helpers.py"
         );
         assert_ne!(before[1], after[1]);
+    }
+
+    #[test]
+    fn a_pipeline_file_wins_over_a_root_directory_without_init() {
+        // `<root>/shared/` has no `__init__.py`. When a worker can import `shared` at all it is
+        // `b/shared.py` (a regular module beats a namespace package wherever it is on
+        // `sys.path`), so that is the file to track. 0.17.0 did; the first cut of #194 did not.
+        let p = Project::new(&[
+            (
+                "a/p.py",
+                "from shared import compute\n\n\ndef step():\n    return compute()\n",
+            ),
+            ("b/shared.py", HELPER),
+            ("shared/notes.py", HELPER),
+        ]);
+        let plan = ["a/p.py", "b/shared.py"];
+        let before = p.plan(&plan).0[0].clone();
+        p.edit_compute("shared/notes.py");
+        assert_eq!(before, p.plan(&plan).0[0]);
+        p.edit_compute("b/shared.py");
+        assert_ne!(before, p.plan(&plan).0[0]);
+    }
+
+    #[test]
+    fn a_directory_without_init_is_still_a_namespace_package_beside_other_pipelines() {
+        // The by-stem fallback must not hide submodules of a namespace package when no
+        // pipeline file has its name.
+        let p = Project::new(&[
+            (
+                "a/p.py",
+                "from lib.utils import compute\n\n\ndef step():\n    return compute()\n",
+            ),
+            ("b/other.py", HELPER),
+            ("lib/utils.py", HELPER),
+        ]);
+        let plan = ["a/p.py", "b/other.py"];
+        let before = p.plan(&plan).0[0].clone();
+        p.edit_compute("lib/utils.py");
+        assert_ne!(before, p.plan(&plan).0[0]);
+    }
+
+    #[test]
+    fn a_module_beside_the_pipeline_wins_over_a_directory_without_init_beside_it() {
+        let p = Project::new(&[
+            ("pipelines/p.py", USES_HELPERS),
+            ("pipelines/helpers.py", HELPER),
+            ("pipelines/helpers/compute.py", HELPER),
+            ("helpers/compute.py", HELPER),
+        ]);
+        assert_tracks(
+            &p,
+            "pipelines/p.py",
+            "pipelines/helpers.py",
+            Some("pipelines/helpers/compute.py"),
+        );
+    }
+
+    #[test]
+    fn a_helper_is_parsed_once_per_plan_across_import_paths() {
+        let p = Project::new(&[
+            ("a/p.py", USES_HELPERS),
+            ("b/p.py", USES_HELPERS),
+            ("helpers.py", HELPER),
+        ]);
+        let sources: Vec<(PathBuf, Rc<str>)> = ["a/p.py", "b/p.py"]
+            .iter()
+            .map(|rel| (p.root.join(rel), Rc::from(USES_HELPERS)))
+            .collect();
+        let mut cones = ProjectCones::new(
+            &p.root,
+            sources.iter().map(|(p, s)| (p.as_path(), s.clone())),
+        );
+        let first = cones.pipeline(0).modules.module("helpers").unwrap();
+        let second = cones.pipeline(1).modules.module("helpers").unwrap();
+        assert!(
+            Rc::ptr_eq(&first, &second),
+            "two import paths parsed helpers.py separately"
+        );
     }
 
     #[test]
