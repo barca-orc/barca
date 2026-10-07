@@ -204,6 +204,44 @@ pub async fn assets(
     Ok(Json(result))
 }
 
+/// `GET /assets/{name}/schema` — inspect the selected node and its direct inputs.
+/// Reads artifact shapes on demand rather than on every `/state` poll. Uses the
+/// same safe inspector as `barca status`: parquet footers, JSON, pickle opcodes.
+pub async fn asset_schema(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Json<Vec<barca_core::status::NodeStatus>>, ApiError> {
+    let summaries = commands::list_assets(&state.config.files, &state.config.python).await?;
+    let matches: Vec<_> = summaries
+        .iter()
+        .filter(|s| s.id == name || s.id.ends_with(&format!(":{name}")))
+        .collect();
+    let summary = match matches.len() {
+        0 => return Err(ApiError::NotFound(format!("asset '{name}' not found"))),
+        1 => matches[0],
+        _ => return Err(ApiError::Conflict(format!("'{name}' is ambiguous"))),
+    };
+    let id = summary.id.clone();
+    let inputs = &summary.inputs;
+    let snapshot = snapshot_db(&state).await?;
+    let mut cfg = state.config.resolved.clone();
+    cfg.db_path = snapshot.path.clone();
+    let mut result = barca_core::status::status(
+        &cfg,
+        std::slice::from_ref(&id),
+        &state.config.files,
+        &state.config.python,
+        0,
+        false,
+    )
+    .await?;
+    result
+        .nodes
+        .retain(|n| n.id == id || inputs.contains(&n.id));
+    barca_core::status::read_schemas(&state.config.python, &cfg, &mut result.nodes).await;
+    Ok(Json(result.nodes))
+}
+
 /// `GET /assets/{name}` — summary joined with timing/cache stats for one asset.
 pub async fn asset_detail(
     State(state): State<AppState>,

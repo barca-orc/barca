@@ -49,6 +49,7 @@ All API responses are JSON, except the event stream and the UI.
 | `GET`  | `/state` | Every node: its `barca status` entry plus typical durations and next run. |
 | `GET`  | `/assets` | List every node with kind, freshness, upstream inputs and declared environment variables. |
 | `GET`  | `/assets/{name}` | One asset's summary joined with timing/cache stats. |
+| `GET`  | `/assets/{name}/schema` | Selected node and direct inputs as `NodeStatus[]`, with artifact shapes inspected on demand. |
 | `GET`  | `/plan` | Execution plan (phases and streams) as JSON. |
 | `POST` | `/run` | Get every asset and sensor, like `barca get <files>` with no target; tasks are skipped (use `/run/{target}`). Returns a `run_id` immediately. |
 | `POST` | `/run/{target}` | Trigger a task run. Every upstream asset is recomputed, as with `barca run <task> --refresh-all`. Returns a `run_id`. |
@@ -298,3 +299,16 @@ database failures.
 - Runs in progress are not persisted. After a restart their handles return `404`; finished runs
   remain in `barca history`.
 - One machine: steps run in worker processes on the host that runs the server.
+
+### Input and output schemas
+
+`GET /assets/{name}/schema` reads a private metadata snapshot and inspects the
+selected node and its direct inputs using the same reader as `barca status`.
+It returns `NodeStatus[]`. Each node's `shape` contains `type`, `rows` and
+`columns: [{name, type}]` when the artifact supports them. JSON objects report
+field names and types, JSON lists also report `item_types`; pickle reports its top-level type without unpickling. Reader failures
+appear in `shape.note`. No artifact or a failed latest attempt gives `shape: null`.
+For partitioned nodes this describes the latest materialized key, named in
+`last_materialization.partition`, rather than a union of every key's schema.
+No sample values are returned. Nested JSON fields report their container type (`dict` or `list`); this is not a recursive schema. Pickle types or constructors are identified from opcodes without executing them, and pickle column schemas are unavailable. This endpoint is available in read-only mode;
+unknown and ambiguous names return 404 and 409 respectively.
