@@ -556,6 +556,8 @@ def test_the_manual_lists_exactly_the_names_the_check_treats_specially(tmp_path)
         "executemany",
         "query",
         "from_query",
+        "table",
+        "view",
         "read_sql",
         "read_sql_query",
         "SQLContext",
@@ -576,3 +578,73 @@ def test_the_manual_lists_exactly_the_names_the_check_treats_specially(tmp_path)
     )
     proc = barca(write(tmp_path, source + changed), "plan", "pipeline.py")
     assert pairs(json_warnings(proc)) == [("pipeline.py:s0", "raw"), ("pipeline.py:s10", "raw")]
+
+
+MIXED = """
+import duckdb
+import pandas as pd
+from duckdb import sql as dsql
+from barca import asset
+
+QUERY = "select sum(amount) from orders"
+
+
+@asset()
+def frame() -> pd.DataFrame:
+    return pd.DataFrame({"amount": [10, 20, 30]})
+
+
+@asset(inputs={"orders": frame})
+def mixed_concatenation(orders: pd.DataFrame) -> int:
+    n = 0
+    rel = duckdb.sql("select 1 as one")
+    return int(rel.query("v", "select sum(amount) from orders " f"where amount > {n}").fetchone()[0])
+
+
+@asset(inputs={"orders": frame})
+def aliased_entry_point(orders: pd.DataFrame) -> int:
+    n = 0
+    return int(dsql("select sum(amount) from orders " f"where amount > {n}").fetchone()[0])
+
+
+@asset(inputs={"orders": frame})
+def aliased_with_a_constant(orders: pd.DataFrame) -> int:
+    return int(dsql(QUERY).fetchone()[0])
+
+
+@asset(inputs={"orders": frame})
+def query_by_keyword(orders: pd.DataFrame) -> int:
+    return int(duckdb.sql(alias="x", query=QUERY).fetchone()[0])
+
+
+@asset(inputs={"orders": frame})
+def table_by_variable(orders: pd.DataFrame) -> int:
+    name = "orders"
+    return int(duckdb.table(name).aggregate("sum(amount)").fetchone()[0])
+
+
+@asset(inputs={"orders": frame})
+def plain_part_outside_any_call(orders: pd.DataFrame) -> int:
+    n = 0
+    text = "select sum(amount) from orders " f"where amount > {n}"
+    return int(duckdb.sql(text).fetchone()[0])
+"""
+
+
+def test_mixed_concatenations_aliases_and_keyword_queries_are_not_reported(tmp_path):
+    """Second review: a plain string next to an f-string, an aliased entry point, a query
+    passed by keyword and `duckdb.table(name)` all read `orders`, return 60, and warned."""
+    cwd = write(tmp_path, MIXED)
+    for target in (
+        "mixed_concatenation",
+        "aliased_entry_point",
+        "aliased_with_a_constant",
+        "query_by_keyword",
+        "table_by_variable",
+        "plain_part_outside_any_call",
+    ):
+        run = barca(cwd, "get", target, "pipeline.py", "--json")
+        assert run.returncode == 0, (target, run.stderr)
+        out = json.loads(run.stdout)
+        assert (out["final_output"], out["warnings"]) == (60, []), target
+        assert stderr_warnings(run) == [], target

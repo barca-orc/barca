@@ -1,8 +1,9 @@
 //! Static check: which declared data inputs does a step's function never use? (#231)
 //!
 //! Pure function over the function's AST, called by the parser while it already holds the
-//! parsed file, so the check costs one extra walk of each decorated function body and no
-//! second parse. Nothing is imported or executed.
+//! parsed file, so the check costs two walks of each decorated function body that declares
+//! data inputs (one for the imports made inside it, one for the uses) and no second parse.
+//! Nothing is imported or executed.
 //!
 //! The rule is conservative: a warning must mean the input is really unused, so every case the
 //! analysis cannot see through reports nothing. See `barca docs assets`, "Unused inputs".
@@ -39,20 +40,25 @@ pub const DYNAMIC_ACCESS: &[&str] = &[
 /// is dynamic access like [`DYNAMIC_ACCESS`]: the frames it returns hold the parameters.
 pub const STACK_MODULE: (&str, &str) = ("inspect", "stack");
 
-/// Calls that take a query or an expression as text and resolve names in it against the
-/// caller's variables: DuckDB (`duckdb.sql`, `con.execute`, `duckdb.query`), polars
-/// (`pl.sql`, `pl.SQLContext`), pandas (`df.query`, `pd.read_sql` on a DuckDB connection;
-/// `df.eval` is covered by `eval` in [`DYNAMIC_ACCESS`]). Matched by the called name, bare or
-/// as an attribute. When such a call's query is a plain string literal, the literal itself is
-/// searched for input names. When it is anything else (a variable, a constant defined
-/// elsewhere, an f-string, a concatenation), the text cannot be read here, so the function is
-/// never reported.
+/// Calls that take a query, an expression or a table name as text and resolve names in it
+/// against the caller's variables: DuckDB (`duckdb.sql`, `con.execute`, `duckdb.query`,
+/// `duckdb.table("orders")`, `duckdb.view("orders")`), polars (`pl.sql`, `pl.SQLContext`),
+/// pandas (`df.query`, `pd.read_sql` on a DuckDB connection; `df.eval` is covered by `eval` in
+/// [`DYNAMIC_ACCESS`]). Matched by the called name: as an attribute (`d.sql`, whatever `d` is),
+/// bare, or bare under an import alias (`from duckdb import sql as dsql`).
+///
+/// When every argument of such a call is a literal, the string literals are searched for input
+/// names like any other string. When any argument is anything else (a variable, a constant
+/// defined elsewhere, an f-string, a concatenation), the text cannot be read here, so the
+/// function is never reported.
 pub const SQL_ENTRY_POINTS: &[&str] = &[
     "sql",
     "execute",
     "executemany",
     "query",
     "from_query",
+    "table",
+    "view",
     "read_sql",
     "read_sql_query",
     "SQLContext",
@@ -64,6 +70,16 @@ pub enum Imported<'n> {
     Name { module: &'n str, name: &'n str },
     /// `import module [as local]`
     Module(&'n str),
+}
+
+impl<'n> Imported<'n> {
+    /// (module, name imported from it), the name being `None` for a module import.
+    fn parts(&self) -> (&'n str, Option<&'n str>) {
+        match *self {
+            Imported::Name { module, name } => (module, Some(name)),
+            Imported::Module(module) => (module, None),
+        }
+    }
 }
 
 /// The data inputs of `func` that its body never uses, in declaration order.
@@ -89,8 +105,7 @@ pub enum Imported<'n> {
 /// - its body has no real statement: only a docstring, `pass`, `...` or `raise` (a stub, or a
 ///   gate that only raises, uses nothing by definition),
 /// - its body mentions one of [`DYNAMIC_ACCESS`] or `inspect.stack`,
-/// - its body calls one of [`SQL_ENTRY_POINTS`] with a query that is not a plain string
-///   literal.
+/// - its body calls one of [`SQL_ENTRY_POINTS`] with any argument that is not a literal.
 ///
 /// `imported` says what a top-level name of the file was imported as, so
 /// `from inspect import currentframe as cf` and `import inspect as i` are seen.
@@ -118,11 +133,14 @@ pub fn unused_inputs<'n>(
         return Vec::new();
     }
 
+    let mut local = LocalImports(Vec::new());
+    visitor::walk_body(&mut local, &func.body);
     let mut uses = Uses {
         candidates: &candidates,
         used: vec![false; candidates.len()],
         dynamic: false,
         imported,
+        local: local.0,
     };
     visitor::walk_body(&mut uses, &func.body);
     if uses.dynamic {
@@ -164,15 +182,46 @@ fn mentions_identifier(text: &str, name: &str) -> bool {
     })
 }
 
-struct Uses<'c, 'n> {
+/// Imports made inside the function body: local name -> what it is bound to.
+struct LocalImports<'a>(Vec<(&'a str, Imported<'a>)>);
+
+impl<'a> Visitor<'a> for LocalImports<'a> {
+    fn visit_stmt(&mut self, stmt: &'a Stmt) {
+        match stmt {
+            Stmt::ImportFrom(import) => {
+                let module = import.module.as_ref().map_or("", |m| m.as_str());
+                for alias in &import.names {
+                    let name = alias.name.as_str();
+                    let local = alias.asname.as_ref().map_or(name, |a| a.as_str());
+                    self.0.push((local, Imported::Name { module, name }));
+                }
+            }
+            Stmt::Import(import) => {
+                for alias in &import.names {
+                    let module = alias.name.as_str();
+                    let local = alias.asname.as_ref().map_or(module, |a| a.as_str());
+                    self.0.push((local, Imported::Module(module)));
+                }
+            }
+            _ => visitor::walk_stmt(self, stmt),
+        }
+    }
+    // Imports are statements: nothing to find inside expressions.
+    fn visit_expr(&mut self, _: &'a Expr) {}
+}
+
+struct Uses<'c, 'n, 'a> {
     candidates: &'c [&'c str],
     used: Vec<bool>,
     dynamic: bool,
+    /// Imports at the top of the file.
     imported: &'n dyn Fn(&str) -> Option<Imported<'n>>,
+    /// Imports inside the body; they shadow the file's.
+    local: Vec<(&'a str, Imported<'a>)>,
 }
 
-impl Uses<'_, '_> {
-    /// The text of a string literal in the body: every input named in it is mentioned.
+impl Uses<'_, '_, '_> {
+    /// The text of one string literal part of the body: every input named in it is mentioned.
     fn text(&mut self, text: &str) {
         for (i, name) in self.candidates.iter().enumerate() {
             if !self.used[i] && mentions_identifier(text, name) {
@@ -181,27 +230,45 @@ impl Uses<'_, '_> {
         }
     }
 
-    /// A call of one of [`SQL_ENTRY_POINTS`] whose query (the first argument) is not a plain
-    /// string literal: the names it reads cannot be known here.
-    fn is_unreadable_query(call: &ast::ExprCall) -> bool {
+    /// What the local name `local` was imported as: (module, original name) for a
+    /// from-import, (module, None) for a module import.
+    fn import_of<'s>(&'s self, local: &str) -> Option<(&'s str, Option<&'s str>)> {
+        if let Some((_, imported)) = self.local.iter().rev().find(|(l, _)| *l == local) {
+            return Some(imported.parts());
+        }
+        (self.imported)(local).map(|imported| imported.parts())
+    }
+
+    /// A call of one of [`SQL_ENTRY_POINTS`] with an argument that is not a literal: the
+    /// names it reads cannot be known here.
+    fn is_unreadable_query(&self, call: &ast::ExprCall) -> bool {
         let callee = match &*call.func {
-            Expr::Name(n) => n.id.as_str(),
+            Expr::Name(n) => match self.import_of(n.id.as_str()) {
+                Some((_, Some(original))) => original,
+                _ => n.id.as_str(),
+            },
             Expr::Attribute(a) => a.attr.as_str(),
             _ => return false,
         };
         if !SQL_ENTRY_POINTS.contains(&callee) {
             return false;
         }
-        let query = call
-            .arguments
-            .args
-            .first()
-            .or_else(|| call.arguments.keywords.first().map(|k| &k.value));
-        query.is_some_and(|q| !matches!(q, Expr::StringLiteral(_) | Expr::BytesLiteral(_)))
+        let literal = |e: &Expr| {
+            matches!(
+                e,
+                Expr::StringLiteral(_)
+                    | Expr::BytesLiteral(_)
+                    | Expr::NumberLiteral(_)
+                    | Expr::BooleanLiteral(_)
+                    | Expr::NoneLiteral(_)
+            )
+        };
+        let args = &call.arguments;
+        !(args.args.iter().all(literal) && args.keywords.iter().all(|k| literal(&k.value)))
     }
 }
 
-impl<'a> Visitor<'a> for Uses<'_, '_> {
+impl<'a> Visitor<'a> for Uses<'_, '_, 'a> {
     fn visit_stmt(&mut self, stmt: &'a Stmt) {
         match stmt {
             Stmt::Delete(del) => {
@@ -229,8 +296,8 @@ impl<'a> Visitor<'a> for Uses<'_, '_> {
                 if let Some(i) = self.candidates.iter().position(|c| *c == name) {
                     self.used[i] = true;
                 }
-                if let Some(Imported::Name { module, name }) = (self.imported)(name)
-                    && (DYNAMIC_ACCESS.contains(&name) || (module, name) == STACK_MODULE)
+                if let Some((module, Some(original))) = self.import_of(name)
+                    && (DYNAMIC_ACCESS.contains(&original) || (module, original) == STACK_MODULE)
                 {
                     self.dynamic = true;
                 }
@@ -244,8 +311,8 @@ impl<'a> Visitor<'a> for Uses<'_, '_> {
                     && let Expr::Name(receiver) = &*a.value
                 {
                     let local = receiver.id.as_str();
-                    let module = match (self.imported)(local) {
-                        Some(Imported::Module(module)) => module,
+                    let module = match self.import_of(local) {
+                        Some((module, None)) => module,
                         _ => local,
                     };
                     if module == STACK_MODULE.0 {
@@ -253,22 +320,29 @@ impl<'a> Visitor<'a> for Uses<'_, '_> {
                     }
                 }
             }
-            Expr::Call(call) if Self::is_unreadable_query(call) => self.dynamic = true,
-            Expr::StringLiteral(s) => self.text(s.value.to_str()),
-            Expr::BytesLiteral(b) => {
-                let bytes: Vec<u8> = b.value.bytes().collect();
-                self.text(&String::from_utf8_lossy(&bytes));
-            }
+            Expr::Call(call) if self.is_unreadable_query(call) => self.dynamic = true,
             _ => {}
         }
         visitor::walk_expr(self, expr);
     }
 
+    // Text is collected where the AST hands out every literal part, however the parts are
+    // combined: a plain string, each part of an implicit concatenation (also one that mixes
+    // plain strings with f-strings), bytes, and the literal text between the `{...}` of an
+    // f-string or t-string (a format spec included). No expression shape is matched.
+    fn visit_string_literal(&mut self, literal: &'a ast::StringLiteral) {
+        self.text(&literal.value);
+    }
+
+    fn visit_bytes_literal(&mut self, literal: &'a ast::BytesLiteral) {
+        self.text(&String::from_utf8_lossy(&literal.value));
+    }
+
     fn visit_interpolated_string_element(&mut self, element: &'a ast::InterpolatedStringElement) {
-        // The literal text of an f-string (or t-string); its `{...}` parts are walked as code.
         if let ast::InterpolatedStringElement::Literal(literal) = element {
             self.text(&literal.value);
         }
+        // The `{...}` parts are code: walked as expressions (nested strings included).
         visitor::walk_interpolated_string_element(self, element);
     }
 }
@@ -522,9 +596,115 @@ mod tests {
                 "{name}"
             );
         }
-        // A non-literal second argument (bind parameters) does not make the query unreadable.
-        let body = "    return con.execute(\"select * from orders where a > ?\", [limit])";
+        // Any non-literal argument, in any position or keyword, makes the call unreadable:
+        // which argument is the query depends on the callee.
+        for body in [
+            "    return duckdb.sql(alias=\"x\", query=Q)",
+            "    return duckdb.sql(\"select 1\", alias=name)",
+            "    return rel.query(\"v\", q)",
+            "    return con.execute(\"select * from t where a > ?\", [limit])",
+            "    return duckdb.table(name)",
+            "    return con.view(name)",
+        ] {
+            assert!(unused_orders("", body).is_empty(), "{body}");
+        }
+        // All-literal arguments are read: literals of other types do not hide anything.
+        let body =
+            "    return duckdb.sql(\"select * from orders\", alias=\"x\", limit=5, flag=True)";
         assert_eq!(unused_orders("", body), ["threshold"]);
+        assert_eq!(
+            unused_orders("", "    return duckdb.table(\"orders\")"),
+            ["threshold"]
+        );
+    }
+
+    #[test]
+    fn an_aliased_entry_point_or_dynamic_name_is_recognised() {
+        let with = |imports: &str, body: &str| {
+            let src = step(
+                "orders, threshold",
+                body,
+                "\"orders\": up, \"threshold\": up",
+            );
+            unused_in(&format!("{imports}\n{src}"))
+        };
+        // Imported at the top of the file ...
+        assert!(with("from duckdb import sql as dsql", "    return dsql(q)").is_empty());
+        assert!(
+            with(
+                "from duckdb import query as run_query",
+                "    return run_query(q)"
+            )
+            .is_empty()
+        );
+        assert!(with("import duckdb as d", "    return d.sql(q)").is_empty());
+        // ... or inside the body, before or after the use, also in a nested function.
+        for body in [
+            "    from duckdb import sql as dsql\n    return dsql(q)",
+            "    def inner():\n        return dsql(q)\n    from duckdb import sql as dsql\n    return inner()",
+            "    def inner():\n        from duckdb import sql as dsql\n        return dsql(q)\n    return inner()",
+            "    import duckdb as d\n    return d.sql(q)",
+            "    from inspect import currentframe as cf\n    return cf()",
+            "    from inspect import stack as st\n    return st()",
+            "    import inspect as i\n    return i.stack()",
+        ] {
+            assert!(with("", body).is_empty(), "{body}");
+        }
+        // An aliased entry point with a literal query is read like any other.
+        let body = "    return dsql(\"select * from orders\")";
+        assert_eq!(with("from duckdb import sql as dsql", body), ["threshold"]);
+        // An alias of something else is nothing special.
+        assert_eq!(
+            with("from mylib import compute as dsql", "    return dsql(q)"),
+            ["orders", "threshold"]
+        );
+    }
+
+    /// Every string shape: text is collected per literal part, however the parts are combined.
+    #[test]
+    fn every_literal_part_of_any_string_shape_is_searched() {
+        for body in [
+            // plain + f-string, both orders
+            "    return run(\"select sum(amount) from orders \" f\"where amount > {n}\")",
+            "    return run(f\"select {col} \" \"from orders\")",
+            // the f-string part itself names nothing: only its plain neighbour does
+            "    return run(\"from orders \" f\"{n}\")",
+            "    return run(f\"{n}\" \" from orders\")",
+            // three parts, mixed
+            "    return run(\"select * \" f\"from {schema}.t \" \"join orders using (id)\")",
+            "    return run(\"select * \" \"from \" \"orders\")",
+            "    return run(f\"a {x} \" f\"b {y} \" f\"from orders\")",
+            // bytes + bytes
+            "    return run(b\"select * \" b\"from orders\")",
+            // a string inside an f-string's expression part (nested), and a nested f-string
+            "    return run(f\"{lookup('orders')}\")",
+            "    return run(f\"{f'from orders {n}'}\")",
+            "    return run(f\"{tables['orders']!r:>10}\")",
+            // a format spec's literal text
+            "    return run(f\"{value:orders}\")",
+            "    return run(f\"{value:{width}} orders\")",
+            // multi-line concatenation in parentheses, and a raw string
+            "    q = (\n        \"select *\"\n        f\" from {schema}.t\"\n        \" join orders\"\n    )\n    return run(q)",
+            "    return run(r\"from orders\")",
+        ] {
+            assert_eq!(unused_orders("", body), ["threshold"], "{body}");
+        }
+        // The reproductions: through an entry point the mixed concatenation is also a
+        // non-literal argument, so nothing at all is reported.
+        for body in [
+            "    return rel.query(\"v\", \"select sum(amount) from orders \" f\"where amount > {n}\")",
+            "    from duckdb import sql as dsql\n    return dsql(\"select 1 from orders \" f\"where a > {n}\")",
+        ] {
+            assert!(unused_orders("", body).is_empty(), "{body}");
+        }
+        // Negative: none of these parts names the input.
+        for body in [
+            "    return run(\"select * \" f\"from reorders {n}\")",
+            "    return run(f\"{value:>10}\" \" from customers\")",
+            "    return run(b\"from \" b\"orders_v2\")",
+        ] {
+            assert_eq!(unused_orders("", body), ["orders", "threshold"], "{body}");
+        }
     }
 
     #[test]

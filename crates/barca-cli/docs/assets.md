@@ -168,12 +168,14 @@ on its own: a docstring that describes an input does not use it. Comments never 
   (`builtins.locals()`, `inspect.currentframe().f_locals`, `sys._getframe()`, `**locals()`).
   Then no input of that function is reported.
   Dynamic access names: `locals`, `vars`, `eval`, `exec`, `currentframe`, `_getframe`, `f_locals`, `f_back`, `getargvalues`, `inspect.stack`.
-- a function that passes a query barca cannot read to a call that resolves names from text:
-  the query is a variable, a module constant, an f-string or a concatenation rather than one
-  plain string (`duckdb.sql(QUERY)`, `con.execute(q)`, `pl.sql(q)`, `pl.SQLContext(frames)`,
-  `df.query(expr)`; `df.eval(expr)` is covered by `eval` above). Then no input of that function
-  is reported. The first argument is the query; the call is recognised by its name alone.
-  Query entry points: `sql`, `execute`, `executemany`, `query`, `from_query`, `read_sql`, `read_sql_query`, `SQLContext`.
+- a function that passes text barca cannot read to a call that resolves names from text: an
+  argument is a variable, a module constant, an f-string or a concatenation rather than a
+  literal (`duckdb.sql(QUERY)`, `con.execute(q)`, `duckdb.table(name)`, `pl.sql(q)`,
+  `pl.SQLContext(frames)`, `df.query(expr)`; `df.eval(expr)` is covered by `eval` above). Then
+  no input of that function is reported. The call is recognised by its name alone, as a method
+  or attribute of anything, or as a bare name, also under an import alias
+  (`from duckdb import sql as dsql`); any argument that is not a literal makes it unreadable.
+  Query entry points: `sql`, `execute`, `executemany`, `query`, `from_query`, `table`, `view`, `read_sql`, `read_sql_query`, `SQLContext`.
 - an input annotated `duckdb.DuckDBPyRelation`: barca binds it as a view named after the
   parameter, so SQL in a helper function, which this check does not read, can use it without
   the step's body naming it at all (`barca docs types`);
@@ -206,9 +208,9 @@ warning. That costs missed warnings:
   to a helper that ignores it is not reported.
 - A string that happens to contain the input's name counts as a use, whatever the string is
   for: `return {"orders": 1}` or a log message naming `orders` hides an unused `orders`.
-- Any call named like a query entry point with a non-literal first argument silences the whole
-  function, SQL or not (`client.query(params)`, `cursor.execute(statement)`), and so does any
-  mention of a dynamic access name.
+- Any call named like a query entry point with an argument that is not a literal silences the
+  whole function, SQL or not (`client.query(params)`, `cursor.execute(statement, values)`,
+  `tensor.view(n, -1)`), and so does any mention of a dynamic access name.
 - An unused `duckdb.DuckDBPyRelation` input and an unused sensor input are never reported.
 
 And one wrong warning it cannot avoid: a function whose input is read only from somewhere this
