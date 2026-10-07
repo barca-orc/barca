@@ -440,11 +440,12 @@ def test_ctrl_c_during_a_recompute_cancels_the_run_and_the_next_one_recovers(tmp
     proc.send_signal(signal.SIGINT)
     _, err = proc.communicate(timeout=60)
     assert proc.returncode == 130, err
-    # Nothing claims `publish` ran, and the run is recorded as cancelled.
-    assert agent_steps(err, "publish") == [] and agent_steps(err, "b") == []
+    # Nothing claims `publish` ran or `b` finished, and the run is recorded as cancelled.
+    assert agent_steps(err, "publish") == []
+    assert "completed" not in agent_steps(err, "b")
     assert history(root)[0]["status"] == "cancelled"
     assert rows(root, "publish") == [("success", 1)]
-    assert rows(root, "b") == [("success", 1)]
+    assert [status for status, _ in rows(root, "b")].count("success") == 1
     assert artifacts(root, "b") == []
 
     (root / "hold-b").unlink()

@@ -192,6 +192,10 @@ def check_store(root: str) -> None:
     if not container:
         raise ValueError(f"no bucket or container in {root}")
     fs.invalidate_cache()
+    # Both have to hold: the store says the bucket exists, and it can be listed. A listing
+    # alone is not proof (some servers answer an unknown bucket with an empty listing).
+    if not fs.exists(container):
+        raise FileNotFoundError(f"bucket or container {container!r} does not exist")
     fs.ls(container, detail=False)
 
 
