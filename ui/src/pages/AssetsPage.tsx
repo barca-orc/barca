@@ -167,7 +167,7 @@ export function AssetsPage() {
           </div>
         </div>
         <div className="barca-table-tools">
-          <label className="barca-search">
+          <label className="barca-table-search">
             <Search size={13} />
             <input
               placeholder="Search by name or file"
@@ -260,7 +260,7 @@ export function AssetsPage() {
       </div>
 
       <div className="barca-assets-split">
-      <div className="barca-view-body">
+      <div className="barca-view-body barca-table-scroll">
         {isError ? (
           <p className="barca-table-empty">
             Can't load state: {error instanceof Error ? error.message : 'barca serve is not reachable'}
