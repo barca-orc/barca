@@ -14,16 +14,22 @@ reply carries the request id.
   → {"type": "get", "id", "remote", "local"}    download remote → local (atomic)
        optional "sha256": the hash recorded for the artifact. A local copy with that hash
        is kept as it is; any other is replaced by the store's copy.
+  → {"type": "probe", "id", "root"}             is the store holding `root` there and listable?
+       Replies "done" only when its bucket, container or root directory positively answers a
+       listing; anything else is an "error". Nothing is ever created by a probe.
   → {"type": "shutdown"}                        finish in-flight work, exit
   ← {"type": "done", "id", "size_bytes", "sha256", "fetched", "mismatch"}
        "sha256" is the local file's; "fetched" is false when a get left the local file as it
        was; "mismatch" is true when the store's copy does not have the recorded hash. That
        is not an error: an artifact path is `{node}/{run_hash}`, so a refresh or a second
        machine computing the same step overwrites it, and the store's copy is still used.
-  ← {"type": "error", "id", "message", "attempts"}
+  ← {"type": "error", "id", "message", "attempts", "missing"}
                                                 final — transient errors are retried here;
                                                 a stalled attempt fails after
-                                                BARCA_TRANSFER_TIMEOUT seconds
+                                                BARCA_TRANSFER_TIMEOUT seconds.
+       "missing" is true when the source does not exist (for a get: the object is not in the
+       store). That alone does not say the store is there: a deleted bucket answers the same
+       way. The coordinator recomputes such a cached result only after a "probe" succeeded.
 
 Transfers go through barca._storage, so credentials and BARCA_STORAGE_OPTIONS
 behave exactly as they do for workers and the state helper.
@@ -60,27 +66,7 @@ _PERMANENT = (
 )
 
 
-def _http_status(exc: BaseException) -> int | None:
-    """The HTTP status a cloud SDK attached to its error, if any.
-
-    azure.core's HttpResponseError carries `status_code`; gcsfs and
-    google.api_core errors carry `code`; requests-style errors carry
-    `response.status_code`.
-    """
-    for value in (
-        getattr(exc, "status_code", None),
-        getattr(exc, "code", None),
-        getattr(getattr(exc, "response", None), "status_code", None),
-    ):
-        if value is None:
-            continue
-        try:
-            status = int(value)
-        except (TypeError, ValueError):
-            continue
-        if 100 <= status <= 599:
-            return status
-    return None
+_http_status = _storage.http_status
 
 
 def _is_permanent(exc: BaseException) -> bool:
@@ -141,7 +127,10 @@ def _staged_get(remote: str, local: str, expected: str | None) -> dict:
 
 
 def _transfer(msg: dict) -> dict:
-    """Perform one put/get; return the reply fields describing the local file."""
+    """Perform one request; for a put/get return the reply fields describing the local file."""
+    if msg["type"] == "probe":
+        _storage.check_store(msg["root"])
+        return {"size_bytes": 0, "fetched": False, "mismatch": False}
     local = msg["local"]
     if msg["type"] == "put":
         _storage.put_file(local, msg["remote"])
@@ -255,12 +244,24 @@ def _handle(msg: dict, requests: _Requests, retries: int, backoff: float) -> Non
             time.sleep(backoff * 2 ** (attempt - 1))
 
 
+def _is_missing(exc: BaseException) -> bool:
+    """True when the transfer failed because its source does not exist.
+
+    s3fs, adlfs and gcsfs raise FileNotFoundError for an object that is not there; an SDK
+    error that stays untranslated is judged by its HTTP status. Everything else (permissions,
+    authentication, a store that cannot be reached) is not "missing": the object may well be
+    there.
+    """
+    return isinstance(exc, FileNotFoundError) or _http_status(exc) == 404
+
+
 def _error(msg: dict, exc: BaseException, attempts: int) -> dict:
     return {
         "type": "error",
         "id": msg["id"],
         "message": f"{type(exc).__name__}: {exc}",
         "attempts": attempts,
+        "missing": _is_missing(exc),
     }
 
 
@@ -306,7 +307,7 @@ def serve(
                 # attempt may still be stuck, and must not hold up exit.
                 requests.wait_idle()
                 return
-            if kind in ("put", "get"):
+            if kind in ("put", "get", "probe"):
                 requests.accept(msg["id"])
                 pool.submit(_handle, msg, requests, retries, backoff)
     finally:

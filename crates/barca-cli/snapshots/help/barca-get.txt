@@ -90,6 +90,9 @@ Refresh: the same vocabulary as `barca run`. --refresh takes ONE comma-separated
 the cone (the target itself may be named) and also re-runs everything downstream of them;
 --no-cascade re-runs only the named ones. --refresh-all re-runs every asset in the cone.
 --no-cache is a deprecated spelling of --refresh-all: it still works and warns on stderr.
+A cached step whose artifact file is gone is computed again when something needs to read it (a
+step that runs takes it as an input, or it is a target), with reason `artifact_missing` and a
+warning on stderr. A missing artifact that nothing reads is left alone (barca docs cache).
 Targets must be assets; use `barca run` for tasks. With no target, get materializes every asset and
 sensor and skips tasks (previously it ran tasks too); stderr names the skipped tasks and the
 `barca run` command. A file with only tasks gets nothing: exit 0, empty `steps`.

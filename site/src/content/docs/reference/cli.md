@@ -355,7 +355,7 @@ spells it in snake_case, exactly like the `summary` keys; the table prints `neve
 | state | meaning | reasons |
 |---|---|---|
 | `cached` | a successful result matches this code and these inputs | `materialized` |
-| `stale` | ran before, but would run again | `changed`, `upstream_stale`, `failed` |
+| `stale` | ran before, but would run again | `changed`, `upstream_stale`, `failed`, `artifact_missing` |
 | `never_run` | no successful materialization recorded | `no_record`, `failed` |
 | `partial` | partitioned, some keys cached | `partitions_missing` |
 | `unknown` | dynamic partitions whose source has not run | `partitions_unknown` |
@@ -363,6 +363,9 @@ spells it in snake_case, exactly like the `summary` keys; the table prints `neve
 
 `changed` means the run hash differs from the last materialization: this function's code or its
 upstream outputs changed. barca stores only the combined hash, so it cannot say which.
+`artifact_missing` means the result is recorded but its artifact file is gone and a run would
+have to read it, so it would be computed again; a missing artifact that nothing reads leaves the
+node `cached` (`barca docs cache`, "A cached result whose artifact is missing").
 
 **Last materialization** is the most recent execution recorded in the metadata DB (success or
 failure): `status`, `created_at` (UTC), `elapsed_seconds`, `run_hash`, `artifact`, `format`,

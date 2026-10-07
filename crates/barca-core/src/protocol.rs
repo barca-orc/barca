@@ -141,6 +141,9 @@ pub enum TransferRequest {
         #[serde(skip_serializing_if = "Option::is_none")]
         sha256: Option<String>,
     },
+    /// Is the store holding `root` there and listable? Answered `Done` only when its bucket,
+    /// container or root directory positively answers a listing. Creates nothing.
+    Probe { id: u64, root: String },
     /// Finish in-flight transfers, then exit.
     Shutdown,
 }
@@ -169,6 +172,10 @@ pub enum TransferReply {
         /// Attempts the helper made (retries plus the first try).
         #[serde(default = "one")]
         attempts: u32,
+        /// True when the transfer failed because its source does not exist (for a `Get`, the
+        /// object is not in the store), as opposed to a store that could not be reached.
+        #[serde(default)]
+        missing: bool,
     },
 }
 
@@ -766,17 +773,34 @@ mod tests {
                 id,
                 message,
                 attempts,
+                missing,
             } => {
                 assert_eq!(id, 4);
                 assert_eq!(message, "PermissionError: no");
                 assert_eq!(attempts, 3);
+                // Not said to be missing: the object may well be there.
+                assert!(!missing);
             }
             _ => panic!("expected Error"),
         }
+        let probe = serde_json::to_value(TransferRequest::Probe {
+            id: 9,
+            root: "s3://b/p/default/artifacts".to_string(),
+        })
+        .unwrap();
+        assert_eq!(
+            probe,
+            serde_json::json!({"type": "probe", "id": 9, "root": "s3://b/p/default/artifacts"})
+        );
         // A reply without attempts (older helper) counts as one attempt.
         let bare: TransferReply =
             serde_json::from_str(r#"{"type":"error","id":5,"message":"x"}"#).unwrap();
         assert!(matches!(bare, TransferReply::Error { attempts: 1, .. }));
+        let gone: TransferReply = serde_json::from_str(
+            r#"{"type":"error","id":6,"message":"FileNotFoundError: x","attempts":1,"missing":true}"#,
+        )
+        .unwrap();
+        assert!(matches!(gone, TransferReply::Error { missing: true, .. }));
     }
 
     #[tokio::test]
