@@ -89,6 +89,15 @@ when Python imports it. The project root is the boundary (see "Where things live
 followed. As in Python, a package (`helpers/__init__.py`) wins over a module (`helpers.py`) in
 the same directory.
 
+A pipeline file can also be imported by its file name from a pipeline file in another directory
+(`a/p.py` does `from shared import f`, and `b/shared.py` is a pipeline file), because a worker
+keeps the directory of every pipeline file it has loaded on its import path. Barca follows it:
+`b/shared.py` is hashed when nothing on `a/p.py`'s own import path is a module called `shared`,
+and **as well as** that module when something is, since which of the two a worker runs depends
+on what it has loaded before. A pipeline file is never a package: `shared.sub` always means
+`sub.py` inside a `shared/` directory. Avoid the ambiguity by giving helper modules and pipeline
+files distinct names (`barca docs discovery`, "Node ids").
+
 Only files a step imports are read, each once per command. Barca never walks the project to
 look for helpers, and it never reads or hashes the standard library or installed packages,
 wherever the virtualenv is (`.venv/`, `venv/`, inside or outside the project): after upgrading
@@ -132,6 +141,8 @@ reaches, uses:
 - `from module import name as alias`, where `module` is a project module;
 - a project module as a value (`getattr(helpers, name)`, passing `helpers` along);
 - from a pipeline in a subdirectory, a module that lives in the project root;
+- a helper module with the same name as a pipeline file in another directory (both are hashed
+  now);
 - or if its pipeline file is inside a package (`pkg/__init__.py` next to it) and imports
   project modules (`from .helpers import f`, `from pkg.helpers import f`): these now resolve
   from the root, as they do when the step runs.
