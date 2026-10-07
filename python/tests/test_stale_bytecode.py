@@ -121,6 +121,37 @@ def test_helper_module_imported_by_the_pipeline(project):
     assert second["final_output"] == 2
 
 
+def test_root_module_imported_by_a_subdirectory_pipeline(project):
+    # A pipeline in a subdirectory can import modules from the project root, and they are in
+    # its dependency cone (#194), so they must run from source too, not from a stale .pyc.
+    (project / "barca.toml").write_text("")
+    write_pinned(
+        project / "shared.py",
+        """
+        def compute() -> int:
+            return 1
+        """,
+    )
+    write_pinned(
+        project / "pipelines" / "p.py",
+        """
+        from barca import asset
+        from shared import compute
+
+        @asset()
+        def val() -> int:
+            return compute()
+        """,
+    )
+    first = barca(project, "get", "val", "pipelines/p.py", "--json")
+    assert first["final_output"] == 1
+
+    same_size_edit(project / "shared.py", "return 1", "return 2")
+    second = barca(project, "get", "val", "pipelines/p.py", "--json")
+    assert steps(second)["val"]["run_hash"] != steps(first)["val"]["run_hash"]
+    assert second["final_output"] == 2
+
+
 def test_package_helper_with_relative_import(project):
     write_pinned(project / "lib" / "__init__.py", "from .core import compute\n")
     write_pinned(
