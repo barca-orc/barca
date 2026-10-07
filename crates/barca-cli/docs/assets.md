@@ -175,6 +175,10 @@ on its own: a docstring that describes an input does not use it. Comments never 
   no input of that function is reported. The call is recognised by its name alone, as a method
   or attribute of anything, or as a bare name, also under an import alias
   (`from duckdb import sql as dsql`); any argument that is not a literal makes it unreadable.
+  Using such a call as a value instead of calling it (`q = duckdb.sql`,
+  `map(con.execute, queries)`) silences the function too. The one exception: a call on a name
+  that an import binds to a module other than duckdb, polars or pandas, and that the function
+  never rebinds, is not a query entry point (`pa.table(d)`, `np.view(...)`).
   Query entry points: `sql`, `execute`, `executemany`, `query`, `from_query`, `table`, `view`, `read_sql`, `read_sql_query`, `SQLContext`.
 - an input annotated `duckdb.DuckDBPyRelation`: barca binds it as a view named after the
   parameter, so SQL in a helper function, which this check does not read, can use it without
@@ -209,14 +213,19 @@ warning. That costs missed warnings:
 - A string that happens to contain the input's name counts as a use, whatever the string is
   for: `return {"orders": 1}` or a log message naming `orders` hides an unused `orders`.
 - Any call named like a query entry point with an argument that is not a literal silences the
-  whole function, SQL or not (`client.query(params)`, `cursor.execute(statement, values)`,
-  `tensor.view(n, -1)`), and so does any mention of a dynamic access name.
+  whole function, SQL or not, unless it is a call on an imported module other than duckdb,
+  polars or pandas: `client.query(params)`, `cursor.execute(statement, values)` and
+  `tensor.view(n, -1)` silence, because a local variable may hold anything. So does any use of
+  such an attribute as a value (`request.query`, `self.table`), and any mention of a dynamic
+  access name.
 - An unused `duckdb.DuckDBPyRelation` input and an unused sensor input are never reported.
 
 And one wrong warning it cannot avoid: a function whose input is read only from somewhere this
 check does not look. That is a helper function that inspects its caller's frame, DuckDB with
 `python_scan_all_frames` reading a caller's variable from SQL inside a helper, or an alias made
-outside the body (`grab = locals` at module level, then `grab()`). Mention the input by name
+outside the body (`grab = locals` at module level, then `grab()`), or a module of your own
+that re-exports a query entry point (`mylib.sql(QUERY)` where `mylib` does
+`from duckdb import sql`). Mention the input by name
 in the body, or `_`-prefix it, to say otherwise. There is no flag or configuration key that
 turns the warning off.
 

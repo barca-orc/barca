@@ -50,7 +50,14 @@ pub const STACK_MODULE: (&str, &str) = ("inspect", "stack");
 /// When every argument of such a call is a literal, the string literals are searched for input
 /// names like any other string. When any argument is anything else (a variable, a constant
 /// defined elsewhere, an f-string, a concatenation), the text cannot be read here, so the
-/// function is never reported.
+/// function is never reported. The same holds when an entry point is used as a value instead
+/// of being called (`q = duckdb.sql`, `map(con.execute, queries)`): where it is called, and
+/// with what, is not followed.
+///
+/// One case is provably not an entry point: `module.name(...)` where `module` is bound by an
+/// import to a module other than [`QUERY_MODULES`] and never rebound (`pa.table(d)`,
+/// `np.view(...)`, `json.query`). Every other receiver (a local, a parameter, an attribute
+/// chain, a call result) may be a connection, a cursor, a frame or a relation, and silences.
 pub const SQL_ENTRY_POINTS: &[&str] = &[
     "sql",
     "execute",
@@ -63,6 +70,9 @@ pub const SQL_ENTRY_POINTS: &[&str] = &[
     "read_sql_query",
     "SQLContext",
 ];
+
+/// The libraries whose calls can resolve a caller's variable by name.
+pub const QUERY_MODULES: &[&str] = &["duckdb", "polars", "pandas"];
 
 /// What a name at the top of the file was imported as, for seeing through aliases.
 pub enum Imported<'n> {
@@ -105,7 +115,8 @@ impl<'n> Imported<'n> {
 /// - its body has no real statement: only a docstring, `pass`, `...` or `raise` (a stub, or a
 ///   gate that only raises, uses nothing by definition),
 /// - its body mentions one of [`DYNAMIC_ACCESS`] or `inspect.stack`,
-/// - its body calls one of [`SQL_ENTRY_POINTS`] with any argument that is not a literal.
+/// - its body calls one of [`SQL_ENTRY_POINTS`] with any argument that is not a literal, or
+///   uses one as a value.
 ///
 /// `imported` says what a top-level name of the file was imported as, so
 /// `from inspect import currentframe as cf` and `import inspect as i` are seen.
@@ -133,14 +144,17 @@ pub fn unused_inputs<'n>(
         return Vec::new();
     }
 
-    let mut local = LocalImports(Vec::new());
-    visitor::walk_body(&mut local, &func.body);
+    let mut scope = Bindings::default();
+    scope.visit_parameters(params);
+    visitor::walk_body(&mut scope, &func.body);
     let mut uses = Uses {
         candidates: &candidates,
         used: vec![false; candidates.len()],
         dynamic: false,
         imported,
-        local: local.0,
+        local: scope.imports,
+        rebound: scope.rebound,
+        callee: std::ptr::null(),
     };
     visitor::walk_body(&mut uses, &func.body);
     if uses.dynamic {
@@ -182,10 +196,15 @@ fn mentions_identifier(text: &str, name: &str) -> bool {
     })
 }
 
-/// Imports made inside the function body: local name -> what it is bound to.
-struct LocalImports<'a>(Vec<(&'a str, Imported<'a>)>);
+/// What the body binds: the imports made inside it, and every name that is a parameter or is
+/// assigned somewhere in it (so an imported module name may not be that module any more).
+#[derive(Default)]
+struct Bindings<'a> {
+    imports: Vec<(&'a str, Imported<'a>)>,
+    rebound: Vec<&'a str>,
+}
 
-impl<'a> Visitor<'a> for LocalImports<'a> {
+impl<'a> Visitor<'a> for Bindings<'a> {
     fn visit_stmt(&mut self, stmt: &'a Stmt) {
         match stmt {
             Stmt::ImportFrom(import) => {
@@ -193,21 +212,41 @@ impl<'a> Visitor<'a> for LocalImports<'a> {
                 for alias in &import.names {
                     let name = alias.name.as_str();
                     let local = alias.asname.as_ref().map_or(name, |a| a.as_str());
-                    self.0.push((local, Imported::Name { module, name }));
+                    self.imports.push((local, Imported::Name { module, name }));
                 }
             }
             Stmt::Import(import) => {
                 for alias in &import.names {
                     let module = alias.name.as_str();
                     let local = alias.asname.as_ref().map_or(module, |a| a.as_str());
-                    self.0.push((local, Imported::Module(module)));
+                    self.imports.push((local, Imported::Module(module)));
                 }
             }
             _ => visitor::walk_stmt(self, stmt),
         }
     }
-    // Imports are statements: nothing to find inside expressions.
-    fn visit_expr(&mut self, _: &'a Expr) {}
+
+    fn visit_expr(&mut self, expr: &'a Expr) {
+        if let Expr::Name(n) = expr
+            && !n.ctx.is_load()
+        {
+            self.rebound.push(n.id.as_str());
+        }
+        visitor::walk_expr(self, expr);
+    }
+
+    fn visit_parameter(&mut self, parameter: &'a ast::Parameter) {
+        self.rebound.push(parameter.name.as_str());
+        visitor::walk_parameter(self, parameter);
+    }
+
+    fn visit_except_handler(&mut self, handler: &'a ast::ExceptHandler) {
+        let ast::ExceptHandler::ExceptHandler(h) = handler;
+        if let Some(name) = &h.name {
+            self.rebound.push(name.as_str());
+        }
+        visitor::walk_except_handler(self, handler);
+    }
 }
 
 struct Uses<'c, 'n, 'a> {
@@ -218,6 +257,10 @@ struct Uses<'c, 'n, 'a> {
     imported: &'n dyn Fn(&str) -> Option<Imported<'n>>,
     /// Imports inside the body; they shadow the file's.
     local: Vec<(&'a str, Imported<'a>)>,
+    /// Parameters and names assigned in the body: not reliably what an import bound them to.
+    rebound: Vec<&'a str>,
+    /// The callee of the call being walked, so that it is not also taken for a value.
+    callee: *const Expr,
 }
 
 impl Uses<'_, '_, '_> {
@@ -239,18 +282,47 @@ impl Uses<'_, '_, '_> {
         (self.imported)(local).map(|imported| imported.parts())
     }
 
+    /// Whether `expr` refers to one of [`SQL_ENTRY_POINTS`]: `anything.sql`, a from-imported
+    /// `sql` under any local name, or (`bare` only, for a callee) an unimported name `sql`.
+    /// `module.sql` is not one when `module` is provably a module outside [`QUERY_MODULES`].
+    fn is_entry_point(&self, expr: &Expr, bare: bool) -> bool {
+        match expr {
+            Expr::Name(n) => {
+                let name = n.id.as_str();
+                match self.import_of(name) {
+                    Some((_, Some(original))) if !self.rebound.contains(&name) => {
+                        SQL_ENTRY_POINTS.contains(&original)
+                    }
+                    _ => bare && SQL_ENTRY_POINTS.contains(&name),
+                }
+            }
+            Expr::Attribute(a) => {
+                SQL_ENTRY_POINTS.contains(&a.attr.as_str()) && !self.is_other_module(&a.value)
+            }
+            _ => false,
+        }
+    }
+
+    /// `receiver` is a name that an import binds to a module outside [`QUERY_MODULES`], and
+    /// nothing in the function rebinds it. Anything less certain is `false`.
+    fn is_other_module(&self, receiver: &Expr) -> bool {
+        let Expr::Name(n) = receiver else {
+            return false;
+        };
+        let name = n.id.as_str();
+        match self.import_of(name) {
+            Some((module, None)) if !self.rebound.contains(&name) => {
+                let root = module.split('.').next().unwrap_or(module);
+                !QUERY_MODULES.contains(&root)
+            }
+            _ => false,
+        }
+    }
+
     /// A call of one of [`SQL_ENTRY_POINTS`] with an argument that is not a literal: the
     /// names it reads cannot be known here.
     fn is_unreadable_query(&self, call: &ast::ExprCall) -> bool {
-        let callee = match &*call.func {
-            Expr::Name(n) => match self.import_of(n.id.as_str()) {
-                Some((_, Some(original))) => original,
-                _ => n.id.as_str(),
-            },
-            Expr::Attribute(a) => a.attr.as_str(),
-            _ => return false,
-        };
-        if !SQL_ENTRY_POINTS.contains(&callee) {
+        if !self.is_entry_point(&call.func, true) {
             return false;
         }
         let literal = |e: &Expr| {
@@ -287,6 +359,12 @@ impl<'a> Visitor<'a> for Uses<'_, '_, 'a> {
     }
 
     fn visit_expr(&mut self, expr: &'a Expr) {
+        // An entry point used as a value (assigned, passed, stored) may be called anywhere
+        // with anything. The callee of a call is judged with its arguments instead.
+        let is_callee = std::ptr::eq(expr, self.callee);
+        if !is_callee && self.is_entry_point(expr, false) {
+            self.dynamic = true;
+        }
         match expr {
             Expr::Name(n) => {
                 let name = n.id.as_str();
@@ -320,7 +398,13 @@ impl<'a> Visitor<'a> for Uses<'_, '_, 'a> {
                     }
                 }
             }
-            Expr::Call(call) if self.is_unreadable_query(call) => self.dynamic = true,
+            Expr::Call(call) => {
+                if self.is_unreadable_query(call) {
+                    self.dynamic = true;
+                }
+                // The walk below visits the callee first.
+                self.callee = &*call.func;
+            }
             _ => {}
         }
         visitor::walk_expr(self, expr);
@@ -658,6 +742,99 @@ mod tests {
             with("from mylib import compute as dsql", "    return dsql(q)"),
             ["orders", "threshold"]
         );
+    }
+
+    #[test]
+    fn an_entry_point_used_as_a_value_is_never_reported() {
+        let with = |imports: &str, body: &str| {
+            let src = step(
+                "orders, threshold",
+                body,
+                "\"orders\": up, \"threshold\": up",
+            );
+            unused_in(&format!("{imports}\n{src}"))
+        };
+        for body in [
+            "    q = duckdb.sql\n    return q(QUERY)",
+            "    return functools.partial(duckdb.sql, QUERY)()",
+            "    return list(map(con.execute, queries))",
+            "    runners = [duckdb.sql, con.execute]\n    return runners[0](QUERY)",
+            "    return helper(run=duckdb.query)",
+            "    return {\"t\": con.table}[kind](name)",
+            "    return apply(dsql, QUERY)",
+            "    q = dsql\n    return q(QUERY)",
+        ] {
+            assert!(
+                with("from duckdb import sql as dsql", body).is_empty(),
+                "{body}"
+            );
+        }
+        // A local variable that merely has such a name is not an entry point used as a value.
+        for body in [
+            "    query = build()\n    return run(query)",
+            "    sql = 1\n    table = 2\n    return sql + table",
+        ] {
+            assert_eq!(with("", body), ["orders", "threshold"], "{body}");
+        }
+    }
+
+    #[test]
+    fn a_call_on_a_module_that_is_not_duckdb_polars_or_pandas_is_not_an_entry_point() {
+        const IMPORTS: &str = "import pyarrow as pa\nimport numpy as np\nimport json\n\
+                               import matplotlib.pyplot as plt\nimport duckdb as d\n\
+                               import polars\nimport pandas as pd";
+        let with = |body: &str| {
+            let src = step(
+                "orders, threshold",
+                body,
+                "\"orders\": up, \"threshold\": up",
+            );
+            unused_in(&format!("{IMPORTS}\n{src}"))
+        };
+        // Provably another module: reported again.
+        for body in [
+            "    return pa.table(d)",
+            "    arr = np.asarray(x)\n    return np.view(arr, kind)",
+            "    return plt.table(cellText=cells)",
+            "    return json.query(doc, path)",
+            "    f = pa.table\n    return f(data)",
+            "    import pyarrow\n    return pyarrow.table(data)",
+        ] {
+            assert_eq!(with(body), ["orders", "threshold"], "{body}");
+        }
+        // Not provably so: every doubt stays silent.
+        for body in [
+            "    return con.table(name)", // a local or global of unknown origin
+            "    return cur.execute(q)",
+            "    return client.query(q)",
+            "    return df.query(expr)",
+            "    return rel.view(name)",
+            "    return d.sql(q)", // duckdb under an alias
+            "    return polars.sql(q)",
+            "    return pd.read_sql(q, con)",
+            "    return get_con().execute(q)", // a call result
+            "    return self.con.execute(q)",  // an attribute chain
+            "    return pa.thing.table(name)",
+            "    return arr.view(np.int64)", // a local, whatever it holds
+            "    pa = connect()\n    return pa.table(name)", // rebound in the body
+            "    for np in cons:\n        np.execute(q)\n    return 1",
+            "    def inner(json):\n        return json.query(q)\n    return inner(con)",
+            "    f = lambda pa: pa.table(name)\n    return f(con)",
+            "    with connect() as plt:\n        return plt.table(name)",
+        ] {
+            assert!(with(body).is_empty(), "{body}");
+        }
+    }
+
+    #[test]
+    fn a_parameter_named_like_an_imported_module_is_not_that_module() {
+        let src = "import pyarrow as pa\n".to_string()
+            + &step(
+                "pa, orders",
+                "    return pa.table(name)",
+                "\"pa\": up, \"orders\": up",
+            );
+        assert!(unused_in(&src).is_empty());
     }
 
     /// Every string shape: text is collected per literal part, however the parts are combined.

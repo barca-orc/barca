@@ -624,6 +624,12 @@ def table_by_variable(orders: pd.DataFrame) -> int:
 
 
 @asset(inputs={"orders": frame})
+def entry_point_bound_to_a_local(orders: pd.DataFrame) -> int:
+    q = duckdb.sql
+    return int(q(QUERY).fetchone()[0])
+
+
+@asset(inputs={"orders": frame})
 def plain_part_outside_any_call(orders: pd.DataFrame) -> int:
     n = 0
     text = "select sum(amount) from orders " f"where amount > {n}"
@@ -641,6 +647,7 @@ def test_mixed_concatenations_aliases_and_keyword_queries_are_not_reported(tmp_p
         "aliased_with_a_constant",
         "query_by_keyword",
         "table_by_variable",
+        "entry_point_bound_to_a_local",
         "plain_part_outside_any_call",
     ):
         run = barca(cwd, "get", target, "pipeline.py", "--json")
