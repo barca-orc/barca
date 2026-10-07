@@ -56,6 +56,12 @@ separate test files.
 | `test_adaptive_executor.py` | Worker pool sizing |
 | `test_artifact_lru.py` | The worker's in-memory artifact cache: isolation of cached values per type, size limits |
 | `test_retries.py` | `retries=` / `retry_backoff=` |
+| `test_remote_verify.py`, `test_remote_verify_backends.py` | A fetched artifact checked against its recorded hash; a mismatch in `--json` (`steps[].artifact_mismatch`), on a directory store and on each emulator |
+| `test_directory_at_artifact_path.py` | A directory where an artifact file belongs: moved aside, never deleted; sinks and the store untouched |
+| `test_remote_cancel.py` | Ctrl-C during an upload, a fetch, the state pull and the state push: exit 130, `cancelled`, nothing partial left |
+| `test_mixed_readers.py` | Lazy and eager readers of one stored artifact in the same run |
+| `test_serve_catchup.py` | A cron tick missed while `barca serve` was down runs once on restart |
+| `test_emulators.py` | When an emulator-backed test may skip and when it must fail |
 
 ### Shell integration (`tests/integration/`, CI only)
 
