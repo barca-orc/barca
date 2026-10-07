@@ -11,10 +11,12 @@ description: 'barca serve — endpoints, the async run/poll contract, cron sched
 ---
 
 > **Amended (0.18, issue #253):** scheduled jobs that fire together (due at the same tick, or
-> caught up together at startup) and have a step in common now share one run, so that step is
-> computed once. The per-job guarantees of §4.5 are unchanged and are stated there job by job;
-> §4.1 gains the status payload of a run over several targets, the `target_finished` event and
-> the time limit of a shared run. Before 0.18 every due job started its own run.
+> caught up together at startup) now share one run when they have a step in common and the
+> shared run would delay none of them, so that step is computed once. The rule is narrow on
+> purpose and §4.5 says which shapes share and which do not. The per-job guarantees of §4.5
+> are unchanged and are stated there job by job; §4.1 gains the status payload of a run over
+> several targets, the `target_finished` event and the time limit of a shared run. Before 0.18
+> every due job started its own run.
 
 ## 1. Summary
 
@@ -108,7 +110,9 @@ returns `404` even though the DB row remains.
 partial results from already-completed steps, and transitions status to `cancelled`.
 Response is `{"run_id": "...", "status": "cancelling"}` — poll `/status` to observe the
 actual transition. Cancelling an already-finished run returns `409`. Runs exceeding the
-server's 10-minute timeout are stopped the same way and reported as `failed`.
+server's 10-minute timeout are stopped the same way and reported as `failed`. The run's row
+in `barca history` says `cancelled` for such a run, because the run itself only sees that it
+was stopped: the two surfaces disagree on a timeout, and `/status` is the one that knows why.
 
 **Runs over several targets.** A run the scheduler starts for several jobs that share it
 (§4.5) is one run with one `run_id`, and reports like `barca get a,b`:
@@ -137,9 +141,9 @@ server's 10-minute timeout are stopped the same way and reported as `failed`.
   tasks, and `serve` when they are both (no CLI command takes that mix).
 - *Time limit.* The 10-minute limit is per target: a run over `n` targets is stopped after
   `n` × 10 minutes. Jobs that each had a run, a worker pool and 10 minutes now share one run
-  and one pool, so the shared run gets the sum. A job is therefore never stopped earlier than
-  it was before 0.18, but one hung job holds its shared run open for up to `n` × 10 minutes
-  (the other jobs are not held: §4.5).
+  and one pool, so the shared run gets the sum. No job is stopped earlier than it was before
+  0.18. A job that hangs is stopped later: after `n` × 10 minutes instead of 10. Until then
+  only that job's ticks are skipped; the others are not held (§4.5).
 - *Cancellation.* `DELETE /run/{run_id}` cancels the whole run. Targets whose steps had
   already ended keep their recorded results; the rest are cancelled.
 
@@ -193,22 +197,41 @@ difference is the caller: an axum handler instead of `barca-cli`'s `main()`.
 - On startup, a scheduled tick that elapsed while the server was down fires **once** to
   catch up; jobs never seen before are anchored to "now" (no first-launch stampede).
   Individual ticks missed during a longer outage are not replayed one-for-one.
-- **Jobs that fire together share a run when they have a step in common** (0.18). Among the
-  jobs due at one tick, those whose cones overlap (a sensor or asset upstream of more than one
-  of them, or one job upstream of another) go into a single run over the union of their
-  cones, so the common step runs once. The same holds for the jobs caught up together at
-  startup. Jobs are compared by the instant they are due, not by their cron text: `0 5 * * *`
-  and `*/5 * * * *` are due together at 05:00 and not at 05:05.
-  - Jobs with nothing in common do not share a run. One run would compute nothing fewer
-    times, and would tie them to each other's timing, failure status, cancellation and time
-    limit.
-  - A job is also left out of a shared run that would hold it back. A run executes in phases
-    and a phase starts when the one before it has ended, so a job whose step is in a later
-    phase waits for every step of the earlier ones. If one of those is a step the job does
-    not depend on, the job runs on its own instead (and may compute the common step a second
-    time, as before 0.18).
+- **Which jobs share a run** (0.18). Jobs that are due together (at one tick, or caught up
+  together at startup) share one run when both of these hold:
+  1. they have a step in common: their cones overlap, directly or through a third job;
+  2. the shared run would plan nothing ahead of any of them except that job's own upstream.
+
+  The run is over the union of their cones, so the common step runs once. Jobs are compared by
+  the instant they are due, not by their cron text: `0 5 * * *` and `*/5 * * * *` are due
+  together at 05:00 and not at 05:05.
+
+  Condition 2 exists because a run executes in phases and a phase starts only when the one
+  before it has ended: a job waits for every step of the phases before its own. It is read off
+  the plan of the shared run, exactly; nothing is estimated. A job that fails it is taken out
+  and runs alone, and the rest are judged again. The shapes this gives:
+  - *Share:* jobs that read the same upstream side by side (two scheduled tasks reading one
+    asset; two scheduled assets reading one sensor), and a job with the jobs downstream of it
+    (a scheduled asset and the scheduled tasks that read it, the case #253 was filed for).
+  - *Do not share:* jobs at different depths below the common step, and a job that also reads
+    something the others do not. Example: `tracked` reads sensor `version`; `publish` reads
+    `feed` (which reads `version`) and `model`. In one run `publish` would wait for `tracked`
+    and `tracked` for `model`, so each gets its own run and `version` is polled by both, as
+    before 0.18. Sharing these needs a run that does not gate phases on steps a target does
+    not read (§11).
+  - Jobs with nothing in common never share: one run would compute nothing fewer times, and
+    would tie them to each other's failure status, cancellation and time limit.
   - A job that ends up alone runs as it always did (`get` for an asset or sensor, `run` for a
     task) and its `/status` payload is unchanged.
+
+  The decision uses the DAG read when the job set was read (at startup, and on `--watch`
+  reload), so a tick reads no source file. When condition 2 keeps a job out, the server says
+  so once on stderr, naming the job, the jobs it would have run with and the step it would
+  have waited for. That line is for people, not a contract.
+- **Inside a shared run** each job's step waits only for its own inputs and a free worker. The
+  run gives every chain a stream of its own (an ordinary run packs chains into as many streams
+  as workers, in order) and leases a worker steps of one node at a time (an ordinary run may
+  lease a quick step behind another node's). The jobs share one pool of workers, one per core.
 - **Sharing a run does not tie jobs to each other.** The guarantees above hold for each job
   on its own:
   - *Overlap* is judged by the job's own step. A job's "previous run" is still going only
@@ -294,3 +317,5 @@ polling-only is explicitly called out as a v1 limitation?
 - Shared remote state support in `serve` (currently rejected at startup, §4.5).
 - Shared runs with a remote artifact store (§4.5): record a step when its upload is confirmed
   rather than at the end of the run, so a target can be announced finished mid-run there too.
+- Shared runs for jobs at different depths or with extra roots (§4.5): an executor that starts
+  a step when its own inputs are ready instead of when the previous phase has ended.

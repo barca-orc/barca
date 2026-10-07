@@ -50,13 +50,27 @@ something that identifies the version of the data, such as an etag or a last-mod
 
 A tick is skipped while the previous run of the same scheduled node is still going.
 
-Nodes that are due at the same tick and have a step in common run together, as one run over
-the union of their cones, so the step they share is computed once: a sensor or asset upstream of
-several of them, or a scheduled asset that a scheduled task reads. "Due at the same tick" is
-about the moment, not the cron text: `0 5 * * *` and `*/5 * * * *` are due together at 05:00.
-The nodes caught up when the server starts are treated the same way. Nodes with nothing in
-common each get their own run, as does a node that a shared run would hold back (it would wait
-for a step it does not depend on). Sharing a run does not tie the nodes to each other:
+Nodes that are due at the same tick share one run when they have a step in common and that run
+would plan nothing ahead of any of them except its own upstream. The step they share is then
+computed once. "Due at the same tick" is about the moment, not the cron text: `0 5 * * *` and
+`*/5 * * * *` are due together at 05:00. The nodes caught up when the server starts are treated
+the same way.
+
+- Shares a run: nodes that read the same upstream side by side (two scheduled tasks reading
+  one asset, two scheduled assets reading one sensor), and a node with the nodes downstream of
+  it (a scheduled asset and the scheduled tasks that read it).
+- Does not share a run, and may compute the common step once each, as before 0.18: nodes at
+  different depths below the step they share, and a node that also reads something the others
+  do not. Example: `tracked` reads sensor `version`; task `publish` reads `feed` (which reads
+  `version`) and `model`. One run would make `publish` wait for `tracked` and `tracked` wait for
+  `model`, so each gets its own run and `version` is polled twice per tick. A run executes in
+  phases, each waiting for the one before, and barca only shares a run that delays no node.
+- Nodes with nothing in common always get their own run.
+
+When a node is kept out of a run for the second reason, `barca serve` says so once on stderr
+(`... runs on its own, not in one run with ...: there it would wait for ...`).
+
+Sharing a run does not tie the nodes to each other:
 
 - "Still going" is judged per node. Once a node's own step has ended, its next tick fires, even
   while a slower node it ran with keeps the shared run open, and what that run computed is
@@ -66,9 +80,15 @@ for a step it does not depend on). Sharing a run does not tie the nodes to each 
   under `result.targets`, and the run is one `failed` row in `barca history`.
 - `GET /schedule` reports each node's own `last_status`, and the run it last fired into as
   `last_run` (the same id for nodes that shared a run).
-- A run is stopped after 10 minutes per node in it (20 minutes for two nodes), and
-  `DELETE /run/<run>` cancels the whole run: nodes whose step had already ended keep their
-  results.
+- A shared run is stopped after 10 minutes per node in it (20 minutes for two nodes). So a
+  node that hangs is stopped later than the 10 minutes it would get alone, and until then only
+  that node's ticks are skipped. `DELETE /run/<run>` cancels the whole run: nodes whose step
+  had already ended keep their results.
+- The nodes of a shared run share one pool of workers (one per core). Each step waits only for
+  its own inputs and a free worker, never for another node's step.
+
+A run stopped by its time limit is `failed` in `GET /status/<run>` and `cancelled` in
+`barca history`.
 
 In `barca history`, a shared run's `target` is the node ids separated by commas. Its `command`
 is `get` when the nodes are all assets and sensors, `run` when they are all tasks, and `serve`

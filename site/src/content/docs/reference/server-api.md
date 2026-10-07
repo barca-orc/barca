@@ -88,7 +88,7 @@ written to `.barca/metadata.db`, same as a CLI run).
 
 #### Runs over several targets
 
-The scheduler starts one run for jobs that fire together and have a step in common (see
+The scheduler starts one run for jobs that fire together and can share one (see
 [Scheduling](#scheduling)). Such a run reports the way `barca get a,b` does. Its `result` has `targets` in place of
 `final_output`, keyed by node id in the order the jobs were fired:
 
@@ -145,7 +145,12 @@ server's 10-minute timeout are stopped the same way and reported as `failed`.
 A run shared by several scheduled jobs is cancelled as a whole. Jobs whose own step had already
 ended keep their recorded results; the rest are cancelled. Its time limit is 10 minutes per job
 in it (30 minutes for three jobs), because the jobs share one worker pool; `error` reads
-`run timed out after 1800s`.
+`run timed out after 1800s`. A job that hangs in a shared run is therefore stopped later than
+the 10 minutes it would get alone; until then only that job's ticks are skipped.
+
+A run stopped by its time limit is `failed` in `/status/{run_id}` but `cancelled` in
+`barca history`: the run itself only records that it was stopped, and only the server knows it
+was the time limit.
 
 ### Health
 
@@ -239,18 +244,26 @@ job whose cron matches the current second, triggers a run through the same run p
 - **Tasks** are executed via the `run` path. A tick reuses cached upstream assets, as
   `barca run <task>` does; `POST /run/{task}` recomputes every upstream asset.
 
-Jobs that fire together and **have a step in common share one run** over the union of their
-cones, so that step runs once: a sensor or asset upstream of several of them, or one job
-upstream of another. "Together" means due at the same tick, whatever the cron expression
+Jobs that fire together **share one run** over the union of their cones when they have a step
+in common and that run would plan nothing ahead of any of them except its own upstream. The
+common step then runs once. "Together" means due at the same tick, whatever the cron expression
 (`0 5 * * *` and `*/5 * * * *` are due together at 05:00), assets, sensors and tasks alike, and
 it covers the jobs caught up at startup. In a shared run a task still always runs and assets
 are still cache-aware.
 
-Jobs with nothing in common each get their own run: sharing one would compute nothing fewer
-times and would tie them to each other's timing, failure status, cancellation and time limit.
-A job is also left out of a shared run that would hold it back. A run executes in phases, and
-a job whose step is in a later phase waits for every step of the earlier ones; if one of those
-is a step the job does not depend on, the job runs on its own.
+- **Share a run:** jobs that read the same upstream side by side (two scheduled tasks reading
+  one asset, two scheduled assets reading one sensor), and a job with the jobs downstream of
+  it (a scheduled asset and the scheduled tasks that read it).
+- **Do not share a run:** jobs at different depths below the common step, and a job that also
+  reads something the others do not. A run executes in phases, each waiting for the one
+  before, so in one run such a job would wait for a step it does not read. Each gets its own
+  run and the common step may run once per run, as before 0.18. See the example under
+  [Scheduling caveats](/scheduling/#caveats). The server says so once on stderr
+  (`<job> runs on its own, not in one run with <jobs>: there it would wait for <step>`).
+- **Nothing in common:** always separate runs.
+
+Inside a shared run a job's step waits only for its own inputs and a free worker. The jobs
+share one pool of workers, one per core.
 
 Runs are **not shared when artifacts go to a remote store** (`[remote].uri` or
 `BARCA_REMOTE_URI` is set; see [Remote storage](/reference/remote-storage/)).

@@ -118,15 +118,39 @@ last run id, last status) for each job. See the
   **once** on restart to catch up. Ticks missed during a long outage are not
   replayed one-for-one, and brand-new jobs are anchored to "now" (no
   first-launch stampede).
-- **Shared upstream, one run** — jobs due at the same tick that have a step in
-  common (a sensor or asset upstream of several of them, or a scheduled asset that
-  a scheduled task reads) run together as one run over the union of their cones, so
-  that step is computed once. "The same tick" is the moment, not the cron text:
-  `0 5 * * *` and `*/5 * * * *` are due together at 05:00. Jobs caught up at startup
-  are treated the same way. Jobs with nothing in common each get their own run, and
-  so does a job that a shared run would make wait for a step it does not depend on.
-  With a remote artifact store, runs are not shared: each due job gets its own run,
-  and an upstream two of them share may be computed by both.
+- **Shared upstream, one run** — jobs due at the same tick share one run when they
+  have a step in common and that run would plan nothing ahead of any of them except
+  its own upstream. The common step is then computed once. "The same tick" is the
+  moment, not the cron text: `0 5 * * *` and `*/5 * * * *` are due together at
+  05:00. Jobs caught up at startup are treated the same way.
+  - *Shares:* jobs that read the same upstream side by side (two scheduled tasks
+    reading one asset), and a job with the jobs downstream of it (a scheduled asset
+    and the scheduled tasks that read it).
+  - *Does not share:* jobs at different depths below the common step, and a job
+    that also reads something the others do not. In the pipeline below, `tracked`
+    and `publish` each get their own run and `version` is polled twice per tick:
+    one run would make `publish` wait for `tracked`, and `tracked` wait for `model`.
+    `barca serve` says so once on stderr when it keeps a job out for this reason.
+  - Jobs with nothing in common always get their own run.
+  - With a remote artifact store, runs are not shared at all: each due job gets its
+    own run.
+
+  ```python
+  @sensor()
+  def version() -> tuple[bool, str]: ...
+
+  @asset(freshness=Schedule("*/5 * * * *"), inputs={"version": version})
+  def tracked(version: str) -> dict: ...
+
+  @asset(inputs={"version": version})
+  def feed(version: str) -> dict: ...
+
+  @asset()
+  def model() -> dict: ...
+
+  @task(freshness=Schedule("*/5 * * * *"), inputs={"feed": feed, "model": model})
+  def publish(feed: dict, model: dict) -> None: ...
+  ```
 - **No self-overlap, per job** — if a job's previous run is still going when the
   next tick arrives, that tick is skipped. "Still going" is the job's own step: once
   it has ended, the job's next tick fires even while a slower job it ran with keeps
@@ -135,9 +159,12 @@ last run id, last status) for each job. See the
   The shared run is then `failed`, like `barca get a,b` when one target fails, and
   `GET /status/{run_id}` lists every job's outcome under `result.targets`.
   `GET /schedule` reports each job's own status.
-- **Time limit** — a run is stopped after 10 minutes per job in it, so a run shared
-  by three jobs has 30 minutes. Cancelling a shared run (`DELETE /run/{run_id}`)
-  cancels all of it; jobs whose step had already ended keep their results.
+- **Time limit** — a shared run is stopped after 10 minutes per job in it, so a run
+  shared by three jobs has 30 minutes. A job that hangs is therefore stopped later
+  than the 10 minutes it would get alone; until then only that job's ticks are
+  skipped. Cancelling a shared run (`DELETE /run/{run_id}`) cancels all of it; jobs
+  whose step had already ended keep their results. The jobs of a shared run share
+  one pool of workers (one per core).
 - **Disable it** — `barca serve --no-schedule job.py` serves the HTTP API
   without firing anything on a clock.
 
