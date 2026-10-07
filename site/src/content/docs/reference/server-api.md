@@ -1,40 +1,43 @@
 ---
 title: Server API
-description: The barca serve HTTP/JSON API — endpoints, async runs, scheduling, and the Python client.
+description: The HTTP and JSON API of barca serve, with its endpoints, asynchronous runs, the scheduler and the Python client.
 ---
 
-`barca serve` starts a long-running HTTP server (the `barca-server` crate, built on
-[axum](https://github.com/tokio-rs/axum)) that exposes the orchestrator as a JSON API.
-It is the foundation for programmatic triggering, scheduling, and a future web UI.
+`barca serve` starts an HTTP server that runs assets and tasks on request, fires
+`Schedule(...)` nodes on their cron, and serves a web UI at `/ui/`.
 
-The server reuses `barca-core` directly — no subprocess, no separate daemon. Core commands
-are async and run on the server's runtime; runs execute in background tasks, are tracked in
-memory, and can be cancelled mid-flight via `DELETE /run/{run_id}`.
+The server binds to `127.0.0.1` and has no authentication: anyone who can reach the port can
+start and cancel runs. To reach it from another machine, put a reverse proxy that authenticates
+in front of it (see [Deploying](/deploying/)).
+
+Runs execute inside the server process, in the background. A run in progress is tracked in
+memory and can be cancelled with `DELETE /run/{run_id}`. Finished runs are written to
+`.barca/metadata.db`, like runs from the command line.
 
 ## Starting the server
 
 ```bash
-barca serve pipeline.py                   # serve a DAG, default port 8274
-barca serve pipeline.py --port 8400       # custom port
-barca serve pipeline.py --watch           # dev mode: re-parse DAG on file change
-barca serve pipeline.py --no-schedule     # disable the cron scheduler
-barca serve pipeline.py --timezone utc    # evaluate cron in UTC (default: local)
-barca serve pipeline.py --read-only       # inspect only: no runs, no scheduler, DB never written
-barca serve a.py b.py                      # multiple source files
+barca serve pipeline.py                   # one file, default port 8274
+barca serve --port 8400 --timezone utc    # every file in the project
 ```
 
-With a remote store, `barca serve` shares results but not history: it refuses to start
-unless shared history is off (`BARCA_STATE=off`, or `state = "off"` under `[remote]` in
-`barca.toml`), with `barca serve does not support shared remote state yet`. Runs it starts are
-recorded in the local `.barca/metadata.db` only.
+The flags (`--port`, `--watch`, `--no-schedule`, `--timezone`, `--read-only`, `--env`) are in
+the [CLI reference](/reference/cli/#serve). On start the server prints its address and the
+schedule on stderr:
 
-The server binds to `127.0.0.1` (local only). There is no authentication in v1 — do not
-expose it to untrusted networks. It also serves the web UI at `/ui/`; see
-[Deploying](/deploying/) for running it behind nginx.
+```
+[barca] serving on http://127.0.0.1:8274  (1 file)
+[barca] scheduling 1 asset:
+  pipeline.py:daily — 0 5 * * * (next 2026-10-08 05:00:00)
+```
 
-`--watch` is a **local development convenience**: it re-parses the DAG when a source file
-changes so `/assets` and `/plan` reflect edits without a restart. It is off by default and
-has no effect on the production serving path.
+`--watch` re-parses the DAG when a source file changes, so `/assets` and `/plan` reflect edits
+without a restart. Files added after the server started are not picked up until a restart, with
+or without `--watch`.
+
+`barca serve` does not support shared history. With a remote store configured it exits 2
+unless `state = "off"` is set in `barca.toml` or `BARCA_STATE=off` in the environment. See
+[Deploying](/deploying/#with-a-remote-store).
 
 ## Endpoints (v1)
 
@@ -44,11 +47,11 @@ All API responses are JSON, except the event stream and the UI.
 |--------|------|-------------|
 | `GET`  | `/health` | Liveness, version, whether the server is read-only, and whether it runs the scheduler. |
 | `GET`  | `/state` | Every node: its `barca status` entry plus typical durations and next run. |
-| `GET`  | `/assets` | List every node with kind, freshness, and upstream inputs. |
+| `GET`  | `/assets` | List every node with kind, freshness, upstream inputs and declared environment variables. |
 | `GET`  | `/assets/{name}` | One asset's summary joined with timing/cache stats. |
 | `GET`  | `/plan` | Execution plan (phases and streams) as JSON. |
 | `POST` | `/run` | Get every asset and sensor, like `barca get <files>` with no target; tasks are skipped (use `/run/{target}`). Returns a `run_id` immediately. |
-| `POST` | `/run/{target}` | Trigger a task run. Returns a `run_id`. |
+| `POST` | `/run/{target}` | Trigger a task run. Every upstream asset is recomputed, as with `barca run <task> --refresh-all`. Returns a `run_id`. |
 | `POST` | `/get/{target}` | Trigger a run scoped to one target asset. Returns a `run_id`. |
 | `DELETE` | `/run/{run_id}` | Cancel an in-flight run (workers terminated, status → `cancelled`). |
 | `GET`  | `/status/{run_id}` | Poll the status and result of a run. |
@@ -60,8 +63,8 @@ All API responses are JSON, except the event stream and the UI.
 
 ### Async runs
 
-Runs are asynchronous. `POST /run` and `POST /get/{target}` return immediately with a
-server-side polling handle:
+Runs are asynchronous. `POST /run`, `POST /run/{target}` and `POST /get/{target}` take no
+request body and return `200` immediately with a polling handle:
 
 ```json
 { "run_id": "1b942bb33182" }
@@ -79,7 +82,7 @@ Poll `GET /status/{run_id}` until `status` reaches a terminal state (`complete`,
     "elapsed_seconds": 0.115,
     "steps_executed": 2,
     "phases": 1,
-    "final_output": { "path": ".barca/artifacts/…", "format": "json", "size_bytes": 8 },
+    "final_output": { "path": ".barca/artifacts/…", "format": "json", "size_bytes": 11, "elapsed_seconds": 0.0076 },
     "steps": [{ "id": "pipeline.py:report", "kind": "asset", "status": "ran", "…": "…" }],
     "warnings": []
   },
@@ -87,6 +90,21 @@ Poll `GET /status/{run_id}` until `status` reaches a terminal state (`complete`,
   "started_at": 1780721263.05,
   "finished_at": 1780721263.17
 }
+```
+
+`result.final_output` is always a pointer to the artifact file (`path`, `format`,
+`size_bytes`, `elapsed_seconds`), for json results too. The command line prints a json value
+inline; the server does not. Read the file at `path`, relative to the project root.
+
+The target name is checked when the run starts, not when it is requested. A `POST` with an
+unknown target, or with an asset on `/run/{target}` or a task on `/get/{target}`, still returns
+`200` and a `run_id`; the run then has `"status": "failed"`, `"result": null` and the message
+in `error`:
+
+```json
+{ "handle": "52344f5c6f20", "status": "failed", "result": null,
+  "error": "Asset 'nope' not found. Available: pipeline.py:orders, pipeline.py:total",
+  "started_at": 1791397140.41, "finished_at": 1791397140.41 }
 ```
 
 `result.steps` says what happened to each planned step, as in the CLI's JSON, including
@@ -102,11 +120,10 @@ stderr ([CLI contract](/reference/cli-contract/), "Plan warnings").
 the server's polling id; `result.run_id` is the persisted database run id (the run is also
 written to `.barca/metadata.db`, same as a CLI run).
 
-In-flight run state is held in memory and is not persisted across a server restart. The run
-history in the database persists regardless. A background sweep evicts finished runs
-(`complete`/`failed`/`cancelled`) from memory once they are more than an hour old (checked every 5
-minutes), so `GET /status/{run_id}` for an old run eventually returns `404` even though its row
-remains in `barca history`.
+Run state is held in memory and is lost on a server restart; the run history in the database
+is not. Finished runs are removed from memory once they are more than an hour old, so
+`GET /status/{run_id}` for an old run returns `404` although its row remains in
+`barca history`.
 
 ### Cancelling a run
 
@@ -114,12 +131,12 @@ remains in `barca history`.
 DELETE /run/{run_id}
 ```
 
-Cancels a pending or running run: its Python workers are terminated, partial results from
-already-completed steps are persisted, and the run's status transitions to `cancelled`
-(both in `/status/{run_id}` and in the `runs` history table). The response is
-`{ "run_id": "...", "status": "cancelling" }`; poll `/status/{run_id}` to observe the
-transition. Cancelling a run that already finished returns `409`. Runs that exceed the
-server's 10-minute timeout are stopped the same way and reported as `failed`.
+Cancels a pending or running run. Its Python workers are terminated, the results of steps
+that had already finished are kept, and the run's status becomes `cancelled`, both in
+`/status/{run_id}` (with `"error": "run cancelled"`) and in `barca history`. The response is
+`{ "run_id": "...", "status": "cancelling" }`; poll `/status/{run_id}` to see the change.
+Cancelling a run that already finished returns `409`, and an unknown id `404`. A run that
+exceeds the server's 10-minute limit is stopped the same way and reported as `failed`.
 
 ### Health
 
@@ -177,9 +194,12 @@ GET /assets            → [AssetSummary, ...]
 GET /assets/{name}     → { "asset": AssetSummary | null, "stats": AssetStats }
 ```
 
-`AssetSummary` is `{ id, kind, freshness, inputs }`. `{name}` matches by asset name or full
-node id; an unknown name returns `404`. `AssetStats` carries run counts, timing percentiles,
-and cache hit rate.
+`AssetSummary` is `{ id, kind, freshness, inputs, env }`. Here `freshness` is an object,
+`{"type": "Always"}`, `{"type": "Manual"}` or `{"type": "Schedule", "value": "0 5 * * *"}`,
+unlike `barca list --json`, which prints a lowercase string. `{name}` matches by function name
+or full node id; an unknown name returns `404`. `AssetStats` is `{ node_id, total_runs,
+cache_hit_rate, avg_elapsed_seconds, median_elapsed_seconds, p95_elapsed_seconds,
+max_elapsed_seconds, recent_runs }`; the timings are `null` until the node has run.
 
 ### Plan
 
@@ -192,40 +212,24 @@ there are none (the same items as `result.warnings` above).
 
 ## Scheduling
 
-`barca serve` runs a **cron scheduler** — the piece that gives
-`@asset(freshness=Schedule("..."))` teeth. It is **on by default**; pass `--no-schedule`
-to turn it off.
+`barca serve` runs a cron scheduler for nodes declared with `freshness=Schedule("...")`. It is
+on by default; pass `--no-schedule` to turn it off. `Schedule` is the only freshness value the
+server acts on. `Always` and `Manual` are recorded and shown (`barca list`, `/assets`) and
+cause no runs.
 
-At startup the server enumerates every node whose freshness is `Schedule(cron)`, parses
-each cron expression (standard 5-field, or 6-field with a leading seconds field for
-sub-minute schedules), and logs the schedule (invalid or empty cron strings are logged and
-skipped, not fatal). A background task then wakes at each second boundary and, for every
-job whose cron matches the current second, triggers a run through the same run pool as
-`POST /run` / `POST /run/{target}`:
+Each second, every job whose cron matches triggers a run through the same run pool as the
+`POST` endpoints:
 
-- **Assets and sensors** are materialized via the `get` path, cache-aware.
-- **Tasks** are executed via the `run` path. A tick reuses cached upstream assets, as
+- **Assets and sensors** go through the `get` path, cache-aware. A sensor's tick runs the
+  sensor and does not trigger the assets that read it.
+- **Tasks** go through the `run` path. A tick reuses cached upstream assets, as
   `barca run <task>` does; `POST /run/{task}` recomputes every upstream asset.
 
-Each scheduled run gets a normal `run_id`, is visible via `GET /status/{run_id}`, and is
-persisted to `.barca/metadata.db` (`barca history`), like a manually triggered run.
-Inspect the live schedule with `GET /schedule` or, statically, with `barca list <files>`
-(scheduled definitions show their next fire time).
-
-Behavior:
-
-- **Timezone.** Cron is evaluated in the machine's local time by default. Pass
-  `--timezone utc` or `--timezone America/New_York` (any IANA name) to change it.
-- **Catch-up.** The scheduler persists the last fire time of each job. On startup, if a
-  scheduled tick elapsed while the daemon was down, the job fires **once** to catch up
-  (jobs never seen before are anchored to "now" — no first-launch stampede). Individual
-  ticks missed during a long outage are *not* replayed one-for-one.
-- **Concurrency.** Independent runs execute in parallel (bounded by a run pool sized to the
-  machine's CPUs); their writes to the shared `metadata.db` are serialized by a process-wide
-  DB lock. A scheduled job never overlaps *itself*: if its previous run is still
-  pending/running when the next tick arrives, that tick is skipped.
-- **Reload.** Under `--watch`, editing a source file re-reads the schedule live (within a
-  second). Without `--watch` the job set is fixed for the process lifetime.
+Each scheduled run gets a `run_id`, is visible via `GET /status/{run_id}`, and is written to
+`.barca/metadata.db` (`barca history`), like a run requested over HTTP. Independent runs
+execute in parallel, bounded by a run pool sized to the machine's CPUs. Timezone, catch-up
+after downtime, skipped overlapping ticks and reloading are described in
+[Scheduling](/scheduling/#caveats).
 
 ### `GET /schedule`
 
@@ -247,8 +251,9 @@ Each `ScheduleEntry` is:
 }
 ```
 
-`next_fire`/`last_fired` are unix epoch seconds (`last_fired` is `null` until the first
-fire); `last_run` is the most recent scheduled `run_id` and `last_status` its state
+`next_fire` and `last_fired` are unix epoch seconds. A job the scheduler has not seen before
+gets `last_fired` set to the time the server first started with it, so it is not `null` even
+though nothing has run. `last_run` is the most recent scheduled `run_id` and `last_status` its state
 (`pending`/`running`/`complete`/`failed`/`cancelled`, or `null` if none yet).
 
 ## Python client
@@ -270,20 +275,26 @@ for job in c.schedules():         # GET /schedule
 `Client` methods map to the endpoints above: `health()`, `assets()`, `asset(name)`,
 `plan()`, `schedules()`, `status(run_id)`, `cancel(run_id)` (also available as
 `Run.cancel()`), plus the two trigger verbs that mirror the CLI —
-`get(target=None)` (`barca get [TARGET]`; omit the target to get every asset and sensor, never tasks) and
-`run(target)` (`barca run TARGET`). The trigger methods return a `Run` whose `.wait()` blocks
-until the run reaches a terminal state. This complements `barca.api` (`barca.get`/`run`/…),
-which shells out to the binary for one-shot commands rather than talking to a server.
+`get(target=None)` (omit the target to get every asset and sensor, never tasks) and
+`run(target)`. The trigger methods return a `Run` with `.status()`, `.cancel()` and
+`.wait(timeout=600.0, poll=0.5)`, which blocks until the run is complete, failed or cancelled.
+`Client()` defaults to `http://127.0.0.1:8274`. There are no client methods for `/state`,
+`/events` or `/logs`. `barca.get`, `barca.run` and the other functions in `barca.api` are
+separate: they start the `barca` binary for one command and do not talk to a server.
 
 ## Errors
 
-Errors return a JSON body `{ "error": "..." }` with an appropriate status code: `404` for an
-unknown asset or run, `400` for parse/DAG errors, `403` for a run or cancel requested of a
+Errors return a JSON body `{ "error": "..." }`: `404` for an unknown name in
+`GET /assets/{name}` or an unknown run id, `400` for parse and DAG errors, `403` for a run or cancel requested of a
 `--read-only` server, `409` for conflicts (an ambiguous `{name}` match
 in `GET /assets/{name}`, or cancelling a run that already finished), and `500` for execution or
 database failures.
 
-## Not in v1
+## Limits
 
-No authentication (put it at a reverse proxy — see [Deploying](/deploying/)), no distributed
-execution, and no persistence of the in-memory run queue across restarts.
+- No authentication and no TLS. The server listens on `127.0.0.1` only; there is no flag to
+  change the address.
+- No shared history: `BARCA_STATE=off` is required with a remote store.
+- Runs in progress are not persisted. After a restart their handles return `404`; finished runs
+  remain in `barca history`.
+- One machine: steps run in worker processes on the host that runs the server.

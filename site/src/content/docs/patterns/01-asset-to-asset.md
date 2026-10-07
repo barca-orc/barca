@@ -1,62 +1,104 @@
 ---
 title: "Pattern: Asset-to-Asset"
-description: Pure data pipelines where assets chain via inputs=, each cached and re-run only when inputs change.
+description: Chain assets with inputs=. Each step is cached and runs again only when its code or an upstream changes.
 ---
 
-Pure data pipelines. Assets chain via `inputs=`. Each step is cached and only re-runs when its inputs change.
+Use this when one computed value feeds another and you want each step cached on its own.
+An asset names its upstream assets in `inputs=`; barca runs them in order and passes each
+result to the parameter of the same name.
 
-## The right way
+## Example
 
 ```python
 from barca import asset
 
-@asset
-def raw_data():
-    return load_csv("sales.csv")
 
-@asset(inputs={"data": raw_data})
-def cleaned(data):
-    return data.dropna().reset_index(drop=True)
+@asset()
+def raw_orders() -> list:
+    return [{"id": 1, "amount": 120.0}, {"id": 2, "amount": None}, {"id": 3, "amount": 45.5}]
 
-@asset(inputs={"data": cleaned})
-def summary(data):
-    return {"total": data["amount"].sum(), "count": len(data)}
+
+@asset(inputs={"orders": raw_orders})
+def cleaned(orders: list) -> list:
+    return [o for o in orders if o["amount"] is not None]
+
+
+@asset(inputs={"orders": cleaned})
+def summary(orders: list) -> dict:
+    return {"count": len(orders), "total": sum(o["amount"] for o in orders)}
 ```
+
+Save it as `pipeline.py` and ask for the last asset. The target comes first, then the file:
 
 ```bash
-barca get pipeline.py
+barca get summary pipeline.py
 ```
 
-Barca builds the DAG `raw_data -> cleaned -> summary`, hashes each step's code and inputs, and skips any step whose hash has not changed since the last run.
+## What barca does
 
-## Why this works
+The first run executes all three steps. Progress goes to stderr and the result to stdout
+(a summary in a terminal, one JSON object when piped or with `--json`):
 
-- **Hash-based invalidation.** Barca hashes the function source and the hashes of its upstream assets. If nothing changed, the step is skipped entirely.
-- **Pure functions.** Each asset is a pure transformation: same inputs produce the same output. This makes caching safe.
-- **Artifact-based data passing.** Intermediate results are serialized to disk (json, pickle, or parquet). Workers in different batches never share memory -- they read artifacts from the previous tier.
+```
+[barca] 3/3 steps | done in 0.0s
+Run 51dc7bf7a540 | got 'summary' in 0.058s (3 steps, 1 phase)
 
-## Common mistakes
-
-### Calling asset functions directly
-
-```python
-# Wrong -- bypasses the cache and the DAG entirely
-@asset
-def summary():
-    data = cleaned()  # direct Python call, barca never sees this dependency
-    return {"total": data["amount"].sum()}
+Value:
+{
+  "count": 2,
+  "total": 165.5
+}
 ```
 
-Barca uses static analysis to discover the graph. If you call `cleaned()` inside the function body instead of declaring it via `inputs=`, barca does not know about the dependency. The step will not wait for `cleaned` to finish, and caching will not work.
+The second run executes nothing. Every step has a run hash, computed from its code and its
+inputs' run hashes, and a result already stored under that hash is reused:
 
-### Mutating inputs in place
-
-```python
-# Wrong -- mutates the upstream artifact
-@asset(inputs={"data": raw_data})
-def cleaned(data):
-    data.drop(columns=["junk"], inplace=True)  # modifies the original object
-    return data
+```
+Run 51dc748e4ce8 | got 'summary' in 0.003s (0 steps, 1 phase)
 ```
 
-Even though barca serializes artifacts between tiers, within a single worker batch multiple steps may share references to the same deserialized object. Mutating in place can corrupt a value that another step in the same batch still needs. Always return a new object.
+Edit the body of `summary` and only `summary` runs again (`1/3 steps`). Edit `raw_orders` and
+all three run, because each downstream hash includes its upstream's.
+
+To see the state of each step without running anything, and to look at a stored result:
+
+```bash
+barca status pipeline.py
+barca sql "select * from cleaned"
+```
+
+```
+NAME        KIND   STATE   WHY           LAST RUN                           SHAPE            DEPS
+raw_orders  asset  cached  materialized  success 2026-10-07 18:12:41 0.00s  3 rows x 2 cols  -
+cleaned     asset  cached  materialized  success 2026-10-07 18:12:41 0.00s  2 rows x 2 cols  raw_orders
+summary     asset  cached  materialized  success 2026-10-07 18:12:41 0.00s  dict (2 keys)    cleaned
+
+3 cached, 0 stale, 0 never run, 0 partial, 0 unknown, 0 always run
+```
+
+```
+id  amount
+1   120.0
+3   45.5
+```
+
+Results are files under `.barca/artifacts/<node>/<run_hash>.json` (or `.parquet`, `.pkl`).
+`barca sql` and `barca status` read them for you. Git already ignores `.barca/`.
+
+## Limits
+
+- **The run hash covers code and inputs, not the outside world.** An asset that reads a file,
+  a bucket or a database in its own body is computed once and then served from cache, whatever
+  happens to that data. Put a sensor in front of it:
+  [Sensors and outside data](/workflows/06-sensors-and-external-observations/).
+- **A dependency must be declared in `inputs=`.** Calling another asset's function from the
+  body is an ordinary Python call. It works, but barca does not list it as a dependency
+  (`barca list` shows `-` under DEPS), does not cache the called function's result on its own,
+  and runs it inside the caller every time the caller runs. Editing the called function still
+  re-runs the caller, because functions a step uses are part of its hash.
+- **Every result is written to a file between steps.** Return data, not handles (an open
+  connection or a generator cannot be stored). Formats: `barca docs types`.
+- **Do not edit an input in place.** A step receives its own copy of a cached value, with some
+  gaps; see [Anti-Patterns](/patterns/07-anti-patterns/#mutating-asset-inputs-in-place).
+- A large parquet input is read whole unless its parameter is annotated as lazy:
+  [Large Inputs](/patterns/08-large-inputs/).

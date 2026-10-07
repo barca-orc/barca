@@ -1,7 +1,6 @@
-<p align="center">
-  <h1 align="center">barca</h1>
-  <p align="center"><strong>The invisible asset orchestrator.</strong><br/>Rust plans it. Python runs it. You just write functions.</p>
-</p>
+<h1 align="center">barca</h1>
+
+<p align="center">Runs Python functions as a dependency graph and caches their results.</p>
 
 <p align="center">
   <a href="https://pypi.org/project/barca/"><img alt="PyPI" src="https://img.shields.io/pypi/v/barca?style=flat-square&color=3572A5" /></a>
@@ -12,15 +11,26 @@
 
 ---
 
-Barca is an asset orchestrator that adds **zero perceptible overhead** to your Python pipelines. A compiled Rust binary handles parsing, DAG construction, and execution planning. Python does what it's best at: running your code.
+Barca runs Python functions as a dependency graph and caches their results.
+
+You mark functions with `@asset`, `@sensor` or `@task` and declare their inputs. The
+`barca` binary, written in Rust, reads the source without importing it, works out what
+needs to run, and runs it in Python worker processes. Results are stored as files under
+`.barca/`. An asset runs again only when its code or its inputs change; sensors and tasks
+run every time.
+
+There is no server to run and no configuration file to write. `barca serve` adds
+schedules, an HTTP API and a web UI when you want them.
 
 ```python
 # pipeline.py
 from barca import asset
 
+
 @asset()
 def raw_data() -> list[dict]:
     return [{"x": 1}, {"x": 2}, {"x": 3}]
+
 
 @asset(inputs={"data": raw_data})
 def summary(data: list[dict]) -> dict:
@@ -29,461 +39,356 @@ def summary(data: list[dict]) -> dict:
 
 ```
 $ barca get pipeline.py
-{"elapsed_seconds":0.27,"final_output":{"count":3,"total":6},"phases":1,"run_id":"...","steps_executed":2}
+[barca] 2/2 steps | done in 0.0s
+Run 51fabebab1c0 | all assets in 0.135s (2 steps, 1 phase)
+
+Value:
+{
+  "count": 3,
+  "total": 6
+}
+
+$ barca get pipeline.py
+Run 51fa8fe09d90 | all assets in 0.005s (0 steps, 1 phase)
+...
 ```
 
-No config files. No YAML. No daemon. Just functions and a fast binary.
+The second run executes 0 steps: both results come from the cache. Output shown in this
+file is from barca 0.18.0.
 
 ## Install
 
-Barca is designed for use with [uv](https://docs.astral.sh/uv/):
-
 ```bash
-uv add barca
+uv add barca          # or: pip install barca
 ```
 
-This gives you:
-- The `barca` CLI binary (compiled Rust)
-- Python API: `barca.get()`, `barca.plan()`
-- Decorator stubs for `@asset`, `@sensor`, `@task` (IDE autocomplete + type checking)
+Python 3.12 or later. The wheel contains the `barca` binary, the decorators and a Python
+API; wheels are published for macOS on Apple Silicon and x86-64 Linux with glibc. [uv](https://docs.astral.sh/uv/) is recommended, not required: barca runs your steps
+with the Python of the environment it is installed in, or `python3` on `PATH`.
 
-For optional parquet (DataFrame) support:
+Optional extras: `barca[parquet]` (pyarrow, for pandas DataFrames), and `barca[s3]`,
+`barca[gcs]`, `barca[azure]` or `barca[remote]` for a remote store. `barca sql` needs
+`duckdb` installed in the same environment.
 
-```bash
-uv add 'barca[parquet]'
+## Where results live
+
+```
+.barca/metadata.db                          run history and the record of what is cached
+.barca/artifacts/<node>/<run_hash>.<ext>    one file per result: .json, .pkl or .parquet
+.barca/envs/<env>/                          the same two, for each --env other than the default
 ```
 
-All in one wheel, built with [maturin](https://www.maturin.rs/). Requires Python >= 3.12.
-
-### From source
+- `.barca/` is created in the project root: the nearest directory at or above the current
+  one that holds a `barca.toml` (an empty file is enough), else the current directory.
+- Do not commit `.barca/`. Barca writes a `.gitignore` inside it, so git already ignores
+  it and nothing needs adding to your own.
+- Results are cached by run hash, which covers the function's code and its inputs, not
+  the bytes of the output.
+- Results are always written locally first. A remote store is an optional shared copy:
+  set `BARCA_REMOTE_URI=s3://my-bucket/barca/my-project` (or `gs://`, `abfs://`) and other
+  machines using the same location get cache hits for what this one computed.
+- `--env <name>` (or `BARCA_ENV`) keeps a separate cache and history, so dev and prod do
+  not share results.
 
 ```bash
-git clone https://github.com/barca-orc/barca.git
-cd barca
-uv sync
-cargo build --release
-maturin develop --release    # installs into current .venv
+barca get summary pipeline.py --env prod
+barca status pipeline.py --env prod
 ```
 
-## Quick start
+More: `barca docs cache`, `barca docs remote`.
+
+## Seeing what barca sees
+
+Ask the CLI instead of reading source files or opening files under `.barca/`. None of
+these commands runs a step.
+
+```bash
+barca list                                # every asset, sensor and task, with its inputs
+barca status                              # per node: cached or stale and why, last run, rows and columns
+barca get summary --dry-run               # what this exact command would run or serve from cache
+barca plan                                # the execution plan as JSON
+barca sql "select * from raw_data"        # query a cached result with DuckDB
+```
+
+After changing `summary` in the example above:
+
+```
+$ barca status
+NAME      KIND   STATE   WHY           LAST RUN                           SHAPE           DEPS
+raw_data  asset  cached  materialized  success 2026-10-07 18:14:53 0.00s  3 rows x 1 col  -
+summary   asset  stale   changed       success 2026-10-07 18:14:53 0.00s  dict (2 keys)   raw_data
+
+1 cached, 1 stale, 0 never run, 0 partial, 0 unknown, 0 always run
+```
+
+`barca sql` makes every node with a json or parquet result a view named after its
+function, so you can look at data without writing a step or a script:
+
+```
+$ barca sql "select count(*) as n, sum(x) as total from raw_data"
+n  total
+3  6
+
+$ barca sql "describe raw_data"
+column_name  column_type  null  key  default  extra
+x            BIGINT       YES
+```
+
+At most 100 rows are returned unless you pass `--limit N` or `--all`. Pickled results
+cannot be queried.
+
+**Scripts and AI agents.** `get`, `run` and the inspection commands print their result on
+stdout: a table or summary in a terminal, JSON when piped or captured (`--json` and
+`--pretty` override). Progress and errors go to stderr; in JSON mode an error is one JSON
+line with `error`, `code`, `kind` and `remediation`. Exit codes: `0` ok, `1` a step
+failed, `2` usage error, `3` barca or infrastructure failure, `130` cancelled.
+
+```
+$ barca sql "select * from raw_data where x > 1" --json
+{"columns": ["x"], "rows": [{"x": 2}, {"x": 3}], "total": 2, "truncated": false}
+```
+
+(Printed indented.) An agent should load
+[`SKILL.md`](SKILL.md), also printed by `barca docs skill`. `barca docs agents` is the full
+reference, and `barca docs contract` lists every command, flag, exit code and JSON schema,
+each marked stable or experimental.
+
+More: `barca docs status`, `barca docs sql`.
+
+## Data from outside comes in through a sensor
+
+An asset that reads a file, a bucket or a table in its own body has the same code and the
+same inputs on every run, so it is computed once and then served from cache, even after
+the data changes. Put a `@sensor` in front of it that returns something identifying the
+current version of the data, and make the asset take the sensor as an input:
 
 ```python
-# assets.py
+import hashlib
+from pathlib import Path
+
+from barca import asset, sensor
+
+
+@sensor()
+def orders_version() -> tuple[bool, str]:
+    # anything that identifies the version: an etag, a last-modified time
+    return True, hashlib.md5(Path("orders.csv").read_bytes()).hexdigest()
+
+
+@asset(inputs={"version": orders_version})
+def orders(version: str) -> list:
+    return Path("orders.csv").read_text().splitlines()[1:]
+
+
+@asset(inputs={"rows": orders})
+def order_count(rows: list) -> int:
+    return len(rows)
+```
+
+```bash
+barca get order_count pipeline.py    # 3 steps run
+barca get order_count pipeline.py    # 1 step runs: the sensor. orders and order_count are cached
+# ... a row is appended to orders.csv ...
+barca get order_count pipeline.py    # 3 steps run: the sensor returned a new value
+```
+
+A sensor runs every time, and the value it returns is part of the run hash of the assets
+that read it. Return only what identifies the data: a value that changes on every run,
+such as a timestamp, re-runs those assets every time.
+
+To recompute by hand, name the assets:
+
+```bash
+barca get order_count pipeline.py --refresh orders                # orders and everything downstream of it
+barca get order_count pipeline.py --refresh orders --no-cascade   # only orders; barca warns that order_count is out of date
+barca get order_count pipeline.py --refresh-all                   # every asset the target depends on
+```
+
+`--refresh` takes one comma-separated list (`--refresh a,b`). `--no-cache` is a deprecated
+spelling of `--refresh-all`. Do not delete files under `.barca/` to force a recompute.
+
+More: `barca docs cache`, which also lists what the run hash does not see (star imports,
+installed packages, environment variables not declared with `env=`).
+
+## Large inputs
+
+A DataFrame, Arrow table or DuckDB relation is stored as parquet. The annotation on the
+consuming parameter decides how it is read back:
+
+| Annotation | What is read |
+|---|---|
+| none, `pd.DataFrame`, `pl.DataFrame`, `pyarrow.Table` | the whole file, before the function runs (no annotation means pandas) |
+| `duckdb.DuckDBPyRelation`, `pl.LazyFrame` | nothing up front; then only the columns, and where the file's statistics allow the row groups, that the step's query uses |
+
+```python
+import duckdb
 from barca import asset
 
+
 @asset()
-def hello() -> dict:
-    return {"message": "Hello from barca!"}
+def events() -> duckdb.DuckDBPyRelation:
+    return duckdb.sql("select range as id, range % 10 as bucket from range(100000)")
+
+
+@asset(inputs={"events": events})
+def per_bucket(events: duckdb.DuckDBPyRelation) -> duckdb.DuckDBPyRelation:
+    # only the `bucket` column is read
+    return events.aggregate("bucket, count(*) as n").order("bucket")
 ```
+
+A declared input is always loaded, whether or not the function uses it. Barca warns when
+it plans a step that never uses one:
+
+```
+[barca] warning: pipeline.py:report never uses its input `events`. It is still loaded in full each time the step runs, and it counts toward the step's cache key. Use it, remove it from inputs=, or rename the parameter `_events` if it is there for ordering only (a `_` input is not loaded and never flagged)
+```
+
+json and pickle inputs are always read whole.
+
+More: `barca docs big-inputs`, `barca docs types`.
+
+## Commands
+
+The target comes first, then files or directories. Both are optional: with no files,
+barca reads every `.py` file under the project root that imports barca
+(`barca docs discovery`).
 
 ```bash
-barca get assets.py
+barca get summary pipeline.py     # an asset and what it depends on
+barca get pipeline.py             # every asset and sensor in the file; tasks are skipped
+barca run publish pipeline.py     # a task and what it depends on
 ```
 
-That's it. Barca parses your Python source with [ruff](https://github.com/astral-sh/ruff)'s AST parser (no import, pure static analysis), builds a dependency graph, generates a phased execution plan, spawns Python workers, and persists results to a local SQLite database -- all in under 40ms for a trivial asset.
+`get` is for assets and uses the cache. `run` is for tasks: the task always runs, and the
+assets it depends on come from the cache as with `get`. Using the wrong one is a usage
+error (exit 2) that names the right one. `barca pipeline.py` is short for
+`barca get pipeline.py`.
 
-## How it works
+| Command | What it does |
+|---|---|
+| `barca get [target] [files...]` | Get one asset, several (`a,b`), or with no target every asset and sensor. Runs only what is not cached. |
+| `barca run <task> [files...]` | Run a task, or several (`a,b`), and what they depend on. The task always runs. |
+| &nbsp;&nbsp;`get` and `run` flags | `--refresh a,b`, `--no-cascade`, `--refresh-all`, `--dry-run`, `--env <name>`, `--agent` (plain progress lines), `--json`, `--pretty`, `--fields` |
+| `barca list [files...]` | Every definition with its kind, freshness, inputs and declared `env`. `--json`, `--pretty`, `--limit N`, `--all`, `--fields` |
+| `barca status [target] [files...]` | Per node: cache state and why, last run, artifact rows and columns. `--sample N`, `--json`, `--pretty`, `--limit N`, `--all`, `--fields`, `--env` |
+| `barca sql "<query>" [files...]` | Query cached results with DuckDB (experimental). `--json`, `--pretty`, `--limit N`, `--all`, `--env` |
+| `barca plan [files...]` | The execution plan as JSON (experimental). No flags. |
+| `barca history` | Recent runs. `--limit N` (default 10), `--all`, `--json`, `--pretty`, `--fields`, `--env` |
+| `barca stats <target> [files...]` | Timing and cache statistics for one asset. `--json`, `--pretty`, `--fields`, `--env` |
+| `barca serve [files...]` | HTTP API, cron scheduler and web UI. `--port N`, `--watch`, `--no-schedule`, `--timezone`, `--read-only`, `--env` |
+| `barca docs [topic]` | The manual, compiled into the binary. `--all`, `--json`, `--fields` |
+| `barca version` | Print the version (also `barca --version`). |
 
-```
-                    ┌─────────────────────────────────────┐
-                    │          barca get pipeline.py       │
-                    └──────────────┬──────────────────────┘
-                                   │
-                    ┌──────────────▼──────────────────────┐
-                    │         Rust binary (barca)          │
-                    │                                      │
-                    │  1. Parse Python source (ruff AST)   │
-                    │  2. Build DAG (petgraph)              │
-                    │  3. Generate execution plan           │
-                    │  4. Initialize DB (.barca/metadata.db)│
-                    │  5. Spawn Python workers per phase    │
-                    │  6. Collect outputs, persist to DB    │
-                    └──────────────┬──────────────────────┘
-                                   │
-                    ┌──────────────▼──────────────────────┐
-                    │      Python worker (per phase)       │
-                    │                                      │
-                    │  - Loads modules via importlib        │
-                    │  - Executes steps in tier order       │
-                    │  - LRU cache for in-process results   │
-                    │  - Emits JSON lines to stdout         │
-                    └─────────────────────────────────────┘
-```
+`--fields a,b` keeps only those keys on each item of the JSON output. Every
+`barca <command> --help` ends with runnable examples.
 
-**Key design decisions:**
+## Partitions
 
-- **Static analysis only** -- Rust never imports your Python code. It parses source text and extracts decorator metadata from the AST.
-- **Phased execution** -- The planner decomposes the DAG into sequential phases. Within each phase, independent streams run in parallel workers.
-- **No framework lock-in** -- Decorators are identity functions. Your code runs standalone without barca installed.
-- **Single binary** -- One `pip install` gives you everything. No JVM, no Docker, no scheduler service.
-
-## Decorators
+Partitions run one asset once per key. Each key is cached on its own.
 
 ```python
-from barca import asset, sensor, task, sink, unsafe
-from barca import Always, Manual, Schedule
-from barca import partitions, partitions_from, collect, asset_ref
+from barca import asset, collect, partitions
+
+REGIONS = ["emea", "amer", "apac"]
+
+
+@asset(partitions={"region": partitions(REGIONS)})
+def sales(region: str) -> dict:
+    return {"region": region, "revenue": len(region) * 100}
+
+
+@asset(inputs={"all_sales": collect(sales)})    # every key's result, as one list
+def total(all_sales: list[dict]) -> dict:
+    return {"regions": len(all_sales), "revenue": sum(s["revenue"] for s in all_sales)}
 ```
 
-### `@asset`
+`barca get total pipeline.py` runs 4 steps, then 0 on a second run. After `"latam"` is
+added to `REGIONS` it runs 2: `sales` for `latam`, then `total`. On 0.18.0 that holds when
+the keys are in a module-level constant, as above; adding a key to a literal list written
+inside the decorator ran every key again. No single key can be targeted or refreshed, and
+`barca get sales` returns one key's value. In `barca sql` a partitioned asset is one view
+with a `partition` column (`region=emea`).
 
-Cached computation node. The workhorse.
+More: `barca docs partitions`.
 
-```python
-@asset()
-def prices() -> dict:
-    return {"AAPL": 150, "MSFT": 380}
+## Schedules and the server
 
-@asset(inputs={"data": prices})
-def report(data: dict) -> str:
-    return f"Tracked {len(data)} tickers"
-```
-
-### `@sensor`
-
-Observes external state. Returns `(update_detected, output)`.
-
-```python
-@sensor()
-def inbox_files() -> tuple[bool, list[str]]:
-    files = list(Path("inbox").glob("*.csv"))
-    return bool(files), [str(f) for f in files]
-```
-
-A sensor always runs, and its returned value is part of the run hash of every asset that reads
-it: a new value re-runs those assets and everything downstream, the same value serves them from
-cache. Use one in front of data that changes in place (return the blob's etag); see
-`barca docs cache`.
-
-### `@task`
-
-Workflow-management step — deploys, notifications, migrations, cache warming.
-Always re-runs (never cached). May appear anywhere in the graph and may depend
-on assets, sensors, or other tasks, but must **not** be an input to an asset or
-sensor (that would poison caching). Run a task with `barca run <task>`.
-
-```python
-# A task consuming an upstream asset (asset → task).
-@task(inputs={"report": report})
-def publish(report: str) -> None:
-    print(f"Publishing: {report}")
-
-```
-
-### Declared environment variables
-
-Assets that read environment variables declare them, so a changed value invalidates the cache:
-
-```python
-@asset(env=["SOURCE_CSV", "API_TOKEN"])
-def raw() -> dict:
-    return load(os.environ["SOURCE_CSV"])
-```
-
-The values are folded into the run hash at plan time (unset is its own value) and reported per
-step in `--agent` lines and the JSON result. Names ending in `_TOKEN`, `_SECRET`, `_KEY` or
-`_PASSWORD` are hashed but redacted. Undeclared variables are not tracked.
-
-### `@sink`
-
-Declares a sink output target (stacks on `@asset`; file writing coming soon).
-
-```python
-@asset()
-@sink("output/data.json", serializer="json")
-def my_data() -> dict:
-    return {"rows": 42}
-```
-
-### Freshness markers
-
-| Marker | Behavior |
-|--------|----------|
-| `Always` | Auto-materializes whenever stale (default for `@asset` and `@task`) |
-| `Manual` | Only runs on explicit refresh |
-| `Schedule("0 5 * * *")` | Cron expression (5-field, or 6-field for sub-minute) |
-
-### Partitions
-
-Fan a single asset definition into N independent materializations:
-
-```python
-@asset(partitions={"ticker": partitions(["AAPL", "MSFT", "GOOG"])})
-def prices(ticker: str) -> dict:
-    return {"ticker": ticker, "price": get_price(ticker)}
-```
-
-| Function | Purpose |
-|----------|---------|
-| `partitions(values)` | Static list of partition keys |
-| `partitions_from(source)` | Same keys as `source`; each key also receives that key's output of a partitioned `source` |
-| `collect(asset_fn)` | Aggregate all partitions of an upstream |
-| `asset_ref(ref_string)` | Canonical asset reference |
-
-## CLI
-
-```
-barca get [target] [file.py|dir/ ...]      Get asset(s) — cache-aware; `a,b` gets several
-barca run <task> [file.py|dir/ ...]        Run a task (always re-runs) and its cone; `a,b` runs
-                                           several
-  get/run: --refresh a,b                   re-run a, b and their downstream (--no-cascade: only a, b)
-  get/run: --refresh-all                   re-run every asset in the cone
-barca plan [file.py ...]                   Emit execution plan as JSON (experimental)
-barca list [file.py|dir/ ...] [--json|--pretty] [--limit N]  List all definitions with deps and env
-barca status [target] [file.py ...] [--json|--pretty]  Cache state, last run, artifact rows/columns per
-                                           node; `a,b` shows several cones
-barca sql "<query>" [file.py ...] [--json] Query cached results with DuckDB (experimental)
-barca history [--limit N] [--json|--pretty] Show recent run history
-barca stats <target> [file.py ...] [--json|--pretty]  Timing/cache stats for an asset
-barca serve [file.py ...] [--port N]       Run the HTTP API server + cron scheduler
-barca docs [topic] [--all] [--json]        Built-in manual: concepts, formats, examples
-barca --help                               Show help (every command ends with examples)
-```
-
-Files are optional everywhere: without them barca reads every `.py` file under the project root
-(the nearest `barca.toml`) that imports barca. See `barca docs discovery`.
-
-`barca docs` is the manual, compiled into the binary: topics for types and output formats,
-caching, tasks, partitions, scheduling, runnable examples, and conventions for scripts and AI
-agents (`barca docs agents`). AI agents: load [`SKILL.md`](SKILL.md) (also `barca docs skill`), a
-~1500-token [Agent Skill](https://barca.sh/reference/agent-skill/) with the commands, argument
-order, exit codes and guardrails. Results go to stdout: human-readable in a terminal, JSON when piped
-or captured (`--json` / `--pretty` or `BARCA_OUTPUT=json|pretty` override); progress and errors go
-to stderr. In JSON mode an error is one JSON line on stderr (`{"error", "code", "kind",
-"remediation"}`, plus `node`, `traceback` and `artifact_dir` when a step failed). Exit codes: `0`
-ok, `1` step failed, `2` usage error, `3` barca/infra failure, `130` cancelled.
-
-List output is bounded: `list` shows 100 nodes and `history` 10 runs unless you pass `--limit N`
-or `--all`, and their JSON reports `truncated` and `total`. `--fields a,b` keeps only those keys
-on each item of any JSON output (`barca list pipeline.py --fields id,inputs`).
-
-Shorthand: `barca pipeline.py` works as `barca get pipeline.py` (all assets and sensors; tasks are skipped, use `barca run`).
-
-The CLI surface is written down as a contract: every command, flag, environment variable, exit
-code, JSON output schema and `--agent` line, each marked stable or experimental, in
-[`crates/barca-cli/docs/contract.md`](crates/barca-cli/docs/contract.md) (also `barca docs
-contract`, and [online](https://barca.sh/reference/cli-contract/)). Snapshot tests fail CI on any
-change to it that the contract does not reflect. Before 1.0 a breaking change ships in a minor
-release with a "Breaking" line in the release notes; from 1.0 changes are additive only.
-
-## Scheduling
-
-Barca doubles as a plain **task scheduler**. Decorate a function with a cron
-`Schedule` and leave `barca serve` running — each job fires on its own tick. No
-external cron, no YAML, no daemon service to install.
+`barca serve` runs a cron scheduler, an HTTP API and a web UI. It binds to `127.0.0.1`
+with no authentication.
 
 ```python
 # job.py
 from barca import task, Schedule
 
-@task(freshness=Schedule("*/10 * * * *"))
+
+@task(freshness=Schedule("*/10 * * * *"))    # every 10 minutes; a 6-field cron starts with seconds
 def refresh() -> None:
-    ...  # hit an API, rebuild a file, send a report — a task always re-runs
-
-@task(freshness=Schedule("*/15 * * * * *"))   # 6-field cron → every 15 seconds
-def heartbeat() -> None:
-    ...
+    print("refreshing")
 ```
 
 ```bash
-barca serve job.py
+barca list job.py                        # shows each schedule and its next fire time
+barca serve job.py                       # port 8274; the web UI is at /ui/
+barca serve job.py --timezone utc        # evaluate cron in UTC (default: local time)
 ```
 
-Standard 5-field cron (`minute hour day-of-month month day-of-week`) and a 6-field
-form with a leading **seconds** field are both supported — the scheduler evaluates
-at 1-second resolution. It's timezone-aware, fires once on restart to catch up a
-missed tick, skips a tick if the previous run is still going, and exposes live
-status at `GET /schedule`. Inspect the schedule any time with `barca list job.py`.
+Schedules fire only while `barca serve` is running; `barca get` and `barca run` do not
+look at the clock. A scheduled task runs on every tick. A scheduled asset is brought up to
+date on every tick, which means it runs only if it is not cached: data from outside still
+has to come in through a sensor. A scheduled sensor's tick runs the sensor and does not
+trigger the assets that read it. The other freshness values, `Always` (the default) and
+`Manual`, are recorded and shown by `barca list` and have no effect at run time today.
 
-See the [Scheduling guide](https://barca.sh/scheduling/) for the full story
-(timezones, catch-up, keeping it alive under systemd). A minimal example lives in
-[`examples/scheduler`](examples/scheduler).
-
-## Server
-
-`barca serve` starts a long-running HTTP server that exposes the orchestrator as a
-JSON API — for triggering runs programmatically and polling status — and serves the
-web UI at `http://127.0.0.1:8274/ui/`. It also runs the built-in cron scheduler above.
-It binds to `127.0.0.1` by default (local only, no auth); to run it behind nginx, see
-[Deploying](https://barca.sh/deploying/).
+Runs started over HTTP are asynchronous: `POST` returns a `run_id`, and you poll
+`/status/<run_id>`.
 
 ```bash
-barca serve pipeline.py --port 8274      # default port 8274
-barca serve pipeline.py --watch          # dev mode: re-parse DAG on file change
-barca serve pipeline.py --no-schedule    # HTTP API only, don't fire scheduled jobs
-barca serve pipeline.py --timezone utc   # evaluate cron in UTC (default: local)
-barca serve pipeline.py --read-only      # inspect only: no runs, no scheduler, DB never written
+curl localhost:8274/health                  # {"read_only":false,"scheduler":true,"status":"ok","version":"0.18.0"}
+curl localhost:8274/schedule                # each schedule: last and next fire, last status
+curl -XPOST localhost:8274/run              # every asset and sensor (tasks are skipped) -> {"run_id":"..."}
+curl -XPOST localhost:8274/get/summary      # one asset and what it depends on
+curl -XPOST localhost:8274/run/publish      # one task; this recomputes every asset it depends on
+curl localhost:8274/status/<run_id>         # {"status":"complete","result":{...}}
+curl -XDELETE localhost:8274/run/<run_id>   # cancel a run in flight (409 if it already finished)
 ```
 
-Runs are async: `POST` returns a `run_id` immediately, then you poll `/status/{run_id}`.
-
-```bash
-curl localhost:8274/health                       # {"status":"ok","version":"0.18.0"}
-curl localhost:8274/assets                       # list assets + deps
-curl localhost:8274/plan                          # execution plan JSON
-curl -XPOST localhost:8274/run                    # → {"run_id":"…"}; poll /status/<id>
-curl -XPOST localhost:8274/get/summary            # run a single target
-curl localhost:8274/status/<run_id>               # poll run status + result
-curl -XDELETE localhost:8274/run/<run_id>         # cancel an in-flight run
-```
-
-See the [Server API reference](https://barca.sh/reference/server-api/) for the full endpoint reference.
+More: `barca docs scheduling`, the [server API reference](https://barca.sh/reference/server-api/),
+and [Deploying](https://barca.sh/deploying/) for running it behind nginx.
 
 ## Python API
 
 ```python
 import barca
 
-# Get all assets in a file (returns the last asset's value; tasks are not run)
-value = barca.get("pipeline.py")
-print(value)  # {"count": 3, "total": 6}
-
-# Get a specific asset's value (cache-aware)
-value = barca.get("summary", "pipeline.py")
-print(value)  # {"count": 3, "total": 6}
-
-# Inspect the execution plan
-plan = barca.plan("pipeline.py")
-print(plan["total_steps"])  # 2
+barca.get("pipeline.py")              # every asset; returns the last asset's value: {"count": 3, "total": 6}
+barca.get("summary", "pipeline.py")   # one asset, cache-aware: {"count": 3, "total": 6}
+barca.plan("pipeline.py")["total_steps"]   # 2
 ```
 
-All output formats work transparently: dicts, lists, sets, DataFrames, and arbitrary Python objects are serialized as JSON, pickle, or parquet and deserialized automatically. Every asset is **fully materialized** to an artifact file at step boundaries — that persistence is the cache checkpoint. Type annotations on parameters (e.g. `pl.DataFrame`) select the parquet reader; they do not skip materialization.
+The decorators return the function unchanged, so decorated functions can be called and
+unit tested as ordinary Python.
 
-### `barca plan` -- inspect without running
+## The manual
 
-```bash
-$ barca plan pipeline.py
-{
-  "total_steps": 2,
-  "phases": [
-    {
-      "reason": "Initial",
-      "streams": [
-        {
-          "stream_id": "p0-w0",
-          "steps": ["pipeline.py:raw_data", "pipeline.py:summary"]
-        }
-      ]
-    }
-  ]
-}
-```
-
-### `barca get` -- execute and get results
-
-Parses source, builds DAG, spawns workers, collects outputs, persists to `.barca/metadata.db`. With a target, only the target's subgraph runs. Without a target, every asset and sensor runs and tasks are skipped (previously tasks ran too); stderr names the skipped tasks. Run tasks with `barca run`.
-
-Output is a JSON summary:
-
-```json
-{
-  "status": "success",
-  "run_id": "...",
-  "elapsed_seconds": 0.27,
-  "steps_executed": 2,
-  "phases": 1,
-  "final_output": {"count": 3, "total": 6}
-}
-```
-
-Use `--refresh-all` to skip cache lookups and execute everything fresh (`--refresh a,b` for
-chosen assets and what is downstream of them).
-
-Diagnostics go to stderr:
-
-```
-[barca] 2/2 steps | done in 0.0s
-```
-
-## Benchmarks
-
-All benchmarks measured with [hyperfine](https://github.com/sharkdp/hyperfine) (3 warmup runs, 10 measured runs) on the same machine. Barca is compared against Dagster and Prefect running equivalent pipelines.
-
-### Trivial (1 asset, zero work)
-
-Measures pure framework overhead -- how long it takes to do nothing.
-
-| Framework | Mean | Relative |
-|-----------|------|----------|
-| **barca** | **38.0 ms** | **1.00x** |
-| dagster | 538.1 ms | 14.2x |
-| prefect | 3977.7 ms | 104.7x |
-
-Barca's total overhead (parse + plan + spawn + persist) is **38ms**. Dagster needs ~0.5s. Prefect needs ~4s.
-
-### Benchmark suite
-
-The `benchmarks/` directory covers a wide range of DAG topologies and workloads —
-overhead/scaling, DAG shapes, real workloads (ETL, ML pipelines), partitioned
-runs, and dynamic dispatch/resilience — each with equivalent Dagster and Prefect
-implementations for apples-to-apples comparison. See
-[`benchmarks/README.md`](benchmarks/README.md) for the full topology tables and
-[`benchmarks/RESULTS.md`](benchmarks/RESULTS.md) for current results.
-
-Run any benchmark:
-
-```bash
-cd benchmarks/trivial
-./bench.sh 10    # 10 measured runs
-```
-
-## Architecture
-
-```
-Cargo.toml                  Rust workspace root
-crates/
-  barca-core/               Engine: parser, DAG, planner, dispatch, DB, cache
-  barca-cli/                Thin CLI shell (clap → barca-core)
-python/barca/
-  __init__.py               Decorator stubs + API exports
-  api.py                    Python API (get/plan via subprocess)
-  _worker.py                Execution worker (invoked by Rust binary)
-  _artifacts.py             Artifact serialization (json/pickle/parquet)
-  py.typed                  PEP 561 marker
-pyproject.toml              Maturin build config
-```
-
-### Tech stack
-
-| Layer | Technology |
-|-------|-----------|
-| Parser | [ruff](https://github.com/astral-sh/ruff) Python AST (static, no import) |
-| DAG | [petgraph](https://github.com/petgraph/petgraph) |
-| Database | [Turso/libSQL](https://turso.tech/) (local SQLite) |
-| Serialization | [serde](https://serde.rs/) + serde_json |
-| Hashing | SHA-256 (content-addressed artifacts) |
-| Build | [maturin](https://www.maturin.rs/) (Rust binary + Python stubs in one wheel) |
-| Python runtime | Python >= 3.12 |
-
-### Node kinds
-
-| Kind | Decorator | Cached | Can be input to |
-|------|-----------|--------|-------------|
-| **asset** | `@asset()` | Yes | assets, sensors, tasks |
-| **sensor** | `@sensor()` | No | assets, sensors, tasks |
-| **task** | `@task()` | No | tasks only (not assets/sensors) |
+`barca docs` lists the topics and `barca docs <topic>` prints one. Start with `overview`.
+The site, [barca.sh](https://barca.sh), has the same material plus a guide and patterns.
 
 ## Development
 
 ```bash
 git clone https://github.com/barca-orc/barca.git
 cd barca
-
-# Build
-cargo build --release
-maturin develop --release
-
-# Test
+uv venv
+uv pip install maturin
+maturin develop --release --extras test   # builds the binary and installs it into .venv
 cargo test
-
-# Run
-barca get examples/basic_app/example_project/assets.py
-barca plan examples/basic_app/example_project/assets.py
 ```
 
-## Project status
-
-Barca is in active development. The core pipeline (parse -> DAG -> plan -> execute -> persist) is working and benchmarked. See the [guide](https://barca.sh/guide/) for a walkthrough.
+See [Architecture](https://barca.sh/architecture/) and
+[Contributing](https://barca.sh/contributing/development/). `benchmarks/` holds the same
+pipelines written for barca, Dagster and Prefect; [`benchmarks/RESULTS.md`](benchmarks/RESULTS.md)
+records measurements with their date and machine. Barca is pre-1.0: a breaking change to
+the CLI ships in a minor release with a "Breaking" line in the release notes.
 
 ## License
 

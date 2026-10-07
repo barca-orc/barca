@@ -1,659 +1,378 @@
 ---
 title: "Workflow: Parametrized Assets and Partitions"
-description: How one asset definition is materialized many times with different inputs — partitions as first-class asset coordinates.
+description: One asset definition run once per key, each key cached on its own. What runs when keys, code or a sensor change, how to look at the results, and the limits on 0.18.0.
 ---
 
-This document specifies how Barca should handle one asset definition being materialized many times with different inputs.
+A partitioned asset is one function that barca runs once per key. Each key is a step of its
+own: it has its own run hash, its own artifact, and it is cached separately. Keys run in
+parallel across worker processes.
 
-This is the workflow that should cover:
+An earlier version of this page was a design document (identity model, proposed
+`materialize()` and `list_partitions()` helpers, a `.barcafiles/` layout). This page
+describes what barca 0.18.0 does. Everything on it was run with 0.18.0; the reference is
+`barca docs partitions`.
 
-- "run the same asset 50 times with different inputs"
-- embarrassingly parallel fan-out
-- partitions as first-class asset coordinates
-- both static and asset-derived partition universes
+## Example
 
-This workflow assumes the Barca core constraints documented in [Core Constraints](/core-constraints/).
-
-## The concrete problem
-
-We want to support both of these styles.
-
-## Style 1: partitions from an iterable
+Three assets and a sensor: `prices` runs once per ticker and reads a sensor, `signal` runs
+once per ticker on that ticker's price, and `report` collects every `signal` into one list.
 
 ```python
-from barca import asset, partitions
+# pipeline.py
+from pathlib import Path
+
+from barca import asset, collect, partitions, partitions_from, sensor
 
 
-@asset(partitions={"ticker": partitions(["AAPL", "MSFT", "GOOG"])})
-def fetch_prices(ticker: str) -> dict[str, str]:
-    return {"ticker": ticker}
+@sensor()
+def feed_version() -> tuple[bool, str]:
+    # Stands in for the etag of the price feed.
+    return True, Path("feed_version.txt").read_text().strip()
+
+
+@asset(inputs={"version": feed_version},
+       partitions={"ticker": partitions(["AAPL", "MSFT", "GOOG"])})
+def prices(ticker: str, version: str) -> dict:
+    return {"ticker": ticker, "close": float(len(ticker) * 100 + ord(ticker[0])), "feed": version}
+
+
+@asset(partitions={"ticker": partitions_from(prices)})
+def signal(ticker: str, prices: dict) -> dict:
+    return {"ticker": ticker, "buy": prices["close"] > 470}
+
+
+@asset(inputs={"signals": collect(signal)})
+def report(signals: list[dict]) -> dict:
+    return {"tickers": len(signals), "buys": sorted(s["ticker"] for s in signals if s["buy"])}
 ```
 
-## Style 2: partitions derived from an asset
+- `partitions([...])` declares the keys. The key is passed as the parameter named in
+  `partitions={...}` (`ticker`).
+- `partitions_from(prices)` gives `signal` the same keys as `prices`. Each key receives that
+  key's output of `prices`, as the parameter named `prices`.
+- `collect(signal)` passes every key's output to `report` as one list.
+- An unpartitioned input, here the sensor, is passed whole to every key.
 
-```python
-from barca import asset, partitions_from
-
-
-@asset()
-def tickers() -> list[str]:
-    return ["AAPL", "MSFT", "GOOG"]
-
-
-@asset(partitions={"ticker": partitions_from(tickers)})
-def fetch_prices(ticker: str) -> dict[str, str]:
-    return {"ticker": ticker}
+```bash
+echo v1 > feed_version.txt
+barca list pipeline.py
+barca get report pipeline.py
 ```
 
-In both cases, Barca should understand that this is not one materialization but many:
+`barca list` shows one row per asset, not per key:
 
-- `fetch_prices[ticker=AAPL]`
-- `fetch_prices[ticker=MSFT]`
-- `fetch_prices[ticker=GOOG]`
-
-Those should be independent units for:
-
-- execution
-- caching
-- provenance
-- parallelization
-
-## Recommended API
-
-For the MVP, Barca should support this decorator shape:
-
-```python
-@asset(
-    name: str | None = None,
-    inputs: dict[str, AssetRefLike] | None = None,
-    partitions: dict[str, PartitionSpecLike] | None = None,
-    serializer: SerializerKind | None = None,
-    freshness: Freshness = Always,
-    description: str | None = None,
-    tags: dict[str, str] | None = None,
-)
+```
+NAME                      KIND    FRESHNESS  DEPS
+-------------------------------------------------
+pipeline.py:feed_version  sensor  manual     -
+pipeline.py:prices        asset   always     pipeline.py:feed_version
+pipeline.py:signal        asset   always     pipeline.py:prices
+pipeline.py:report        asset   always     pipeline.py:signal
 ```
 
-Where:
+The first run executes eight steps: the sensor, three keys of `prices`, three keys of
+`signal`, and `report`.
 
-```python
-AssetRefLike = AssetRef | Callable
-PartitionSpecLike = Partitions | PartitionsFrom
 ```
+[barca] 8/8 steps | done in 0.0s
+Run 5251655353a8 | got 'report' in 0.139s (8 steps, 3 phases)
 
-Both partition declaration forms should be supported.
-
-### Direct iterable partitions
-
-```python
-from barca import asset, partitions
-
-
-@asset(partitions={"ticker": partitions(["AAPL", "MSFT", "GOOG"])})
-def fetch_prices(ticker: str) -> dict[str, str]:
-    return {"ticker": ticker}
-```
-
-`partitions(...)` should accept an iterable of partition values:
-
-```python
-Partitions = Iterable[JsonScalar] | Iterable[dict[str, JsonScalar]]
-```
-
-### Asset-derived partitions
-
-```python
-from barca import asset, partitions_from
-
-
-@asset()
-def tickers() -> list[str]:
-    return ["AAPL", "MSFT", "GOOG"]
-
-
-@asset(partitions={"ticker": partitions_from(tickers)})
-def fetch_prices(ticker: str) -> dict[str, str]:
-    return {"ticker": ticker}
-```
-
-`partitions_from(...)` should accept the same ergonomic sugar as `inputs`:
-
-```python
-PartitionsFrom = AssetRef | Callable
-```
-
-## Internal model
-
-These are two user-facing ways to describe the same internal concept.
-
-Barca should canonicalize both into a partition source model:
-
-- `partitions([...])` becomes an inline partition source embedded in asset metadata
-- `partitions_from(tickers)` becomes an upstream asset-backed partition source
-
-The executor and cache model should not care which syntax the user chose after indexing.
-
-## Why `partitions` is the right concept
-
-This should not be modeled as "parallelism config".
-
-It should be modeled as "one logical asset definition expands into many partitioned asset instances, where the partition universe is itself data."
-
-That distinction matters:
-
-- partitions affect identity
-- partitions affect caching
-- partitions affect provenance
-- parallelism is just an execution consequence of independent partitions
-
-If Barca gets this right, users get parallelism without touching threads or multiprocessing.
-
-It also means users can drive orchestration from upstream data rather than from framework config.
-
-## What a partition means
-
-For Barca, a partition is a named coordinate on an asset definition.
-
-In the asset-derived example:
-
-- asset definition: `fetch_prices`
-- partition dimension: `ticker`
-- partition source asset: `tickers`
-- partition values at planning time: `AAPL`, `MSFT`, `GOOG`
-
-In the direct iterable example:
-
-- asset definition: `fetch_prices`
-- partition dimension: `ticker`
-- partition source kind: inline iterable
-- partition values at indexing time: `AAPL`, `MSFT`, `GOOG`
-
-The logical asset is still one thing:
-
-```text
-my_project/assets.py:fetch_prices
-```
-
-But materialization addresses are partition-specific:
-
-```text
-my_project/assets.py:fetch_prices[ticker=AAPL]
-my_project/assets.py:fetch_prices[ticker=MSFT]
-my_project/assets.py:fetch_prices[ticker=GOOG]
-```
-
-## Why this is better than a separate `@map` or `@parallel` API
-
-A tempting alternative is something like:
-
-```python
-map_asset(fetch_prices, ticker=["AAPL", "MSFT", "GOOG"])
-```
-
-That is attractive operationally, but it is the wrong center of gravity for Barca because:
-
-- it moves core asset identity into a job DSL
-- it weakens direct inspectability
-- it makes partition provenance less obvious
-- it risks turning "run 50 times" into a separate orchestration model
-
-Barca should instead say:
-
-- partitioning is asset metadata
-- partition values can come from inline iterables or upstream assets
-- execution engine decides how much parallelism to use
-
-## The user-facing behavior
-
-The function is still just a normal Python function:
-
-```python
-fetch_prices("AAPL")
-# {"ticker": "AAPL"}
-```
-
-Barca adds:
-
-- the ability to enumerate all declared partitions
-- the ability to materialize one partition or many
-- automatic parallel execution of independent partitions
-
-Example helper usage (proposed — `materialize()`/`list_partitions()` are not part of the shipped Python API; see [Tasks and Workflow Management](/workflows/10-tasks-and-workflow-management/) for the real `barca get`/`barca run` interface):
-
-```python
-from my_project.assets import fetch_prices
-from barca import materialize, list_partitions
-
-list_partitions(fetch_prices)
-# [{"ticker": "AAPL"}, {"ticker": "MSFT"}, {"ticker": "GOOG"}]
-
-materialize(fetch_prices, partition={"ticker": "AAPL"})
-materialize(fetch_prices)
-```
-
-The default `materialize(fetch_prices)` behavior for a partitioned asset should mean:
-
-- resolve the current partition universe from its partition source
-- materialize all resolved partitions
-
-Today, `barca get fetch_prices pipeline.py` (or `barca.api.get("fetch_prices", "pipeline.py")`) does the "materialize all resolved partitions" half of this — there is no CLI or API flag yet to target a single partition the way `partition={"ticker": "AAPL"}` implies.
-
-## Parallelization model
-
-Parallelization should not be configured with threads or multiprocessing APIs in user code.
-
-The right model is:
-
-- each partition materialization is an independent runnable unit
-- Barca schedules those units onto worker processes
-- the executor applies a global or per-job concurrency limit
-
-For this example, if there are 50 partitions, Barca should be able to run many of them concurrently with no special user code.
-
-The user should be able to provide only coarse execution hints, such as:
-
-```python
-@asset(
-    partitions={"ticker": partitions(["AAPL", "MSFT", "GOOG"])},
-    tags={"concurrency_group": "network"}
-)
-def fetch_prices(ticker: str) -> dict[str, str]:
-    ...
-```
-
-Or later:
-
-```python
-@job(max_concurrency=8)
-```
-
-But the asset API itself should not expose threading or multiprocessing knobs.
-
-## Identity model
-
-This workflow requires a three-level identity model.
-
-### Logical asset identity
-
-The stable user-facing asset:
-
-```text
-my_project/assets.py:fetch_prices
-```
-
-### Definition identity
-
-The code/config definition:
-
-```text
-definition_hash = hash(module_source + decorator_metadata + serializer + uv.lock + ...)
-```
-
-### Partitioned run identity
-
-Each partitioned materialization must include the partition key in identity:
-
-```text
-run_hash = hash(definition_hash + partition_key + runtime_params + upstream_materialization_ids)
-```
-
-For this simple example with no upstream dependencies:
-
-```text
-run_hash = hash(definition_hash + {"ticker": "AAPL"} + partition_source_identity)
-```
-
-That means:
-
-- changing code invalidates all partitions under that definition
-- changing the partition value creates a different materialization
-- changing the partition source can change the partition universe
-- one partition can be reused while another is recomputed
-
-Where `partition_source_identity` means:
-
-- for `partitions([...])`: a hash of the normalized iterable specification
-- for `partitions_from(...)`: the chosen partition source materialization ID
-
-## Filesystem layout
-
-For a partitioned asset, the layout should make partitions explicit.
-
-Recommended shape:
-
-```text
-.barcafiles/
-  my-project-assets-py-fetch-prices/
-    <definition-hash>/
-      partitions/
-        ticker=AAPL/
-          code.txt
-          metadata.json
-          value.json
-        ticker=MSFT/
-          code.txt
-          metadata.json
-          value.json
-        ticker=GOOG/
-          code.txt
-          metadata.json
-          value.json
-```
-
-This is slightly redundant because `code.txt` is repeated per partition, but it keeps each partition self-describing and easy to inspect.
-
-If that duplication becomes too expensive later, Barca can move shared definition files one level up.
-
-## Turso records
-
-This workflow needs explicit partition metadata.
-
-### `asset_partitions`
-
-- `definition_id`
-- `partition_name`
-- `partition_source_kind`
-- `partition_source_ref`
-
-### `materializations`
-
-Add:
-
-- `partition_key_json`
-- `partition_key_hash`
-- `partition_source_materialization_id`
-
-This lets Barca answer:
-
-- which partitions exist for an asset definition
-- which partitions are stale
-- which partitions already have successful materializations
-
-## Materialization flow
-
-When materializing all partitions for `fetch_prices`:
-
-1. Resolve the logical asset.
-2. Load the indexed definition.
-3. Recompute `definition_hash` as a preflight consistency check.
-4. Resolve the current partition universe:
-   - for `partitions([...])`, read the normalized inline iterable from metadata
-   - for `partitions_from(...)`, resolve and materialize the partition source asset, then read and validate its output
-5. Enumerate partition keys from the resolved universe.
-6. For each partition key:
-   - compute `run_hash`
-   - check for an existing successful materialization
-   - if missing or stale, enqueue a runnable unit
-7. Execute runnable units with Barca-managed concurrency.
-8. For each unit:
-   - launch `uv run`
-   - import the real user module
-   - call `fetch_prices(ticker=<partition value>)`
-   - serialize the output
-   - publish the artifact
-   - record the partition-specific materialization in Turso
-
-The important extra point is that partition resolution is part of planning, not just execution.
-
-That is true for both styles, but only `partitions_from(...)` introduces a planning dependency on another asset.
-
-## Planner dependency semantics
-
-For `partitions_from(...)`, the partition source asset is not just another runtime input.
-
-It is a planning dependency.
-
-That means Barca may need to materialize `tickers` before it can even know which runnable units exist for `fetch_prices`.
-
-This is a real distinction:
-
-- normal inputs are needed to execute one already-known step
-- partition sources are needed to discover the step set itself
-
-Barca should represent that explicitly in metadata and UI.
-
-## What happens when partitions disappear
-
-If `tickers` used to return:
-
-```python
-["AAPL", "MSFT", "GOOG"]
-```
-
-and later returns:
-
-```python
-["AAPL", "MSFT"]
-```
-
-Barca should not delete the old `GOOG` materializations.
-
-Instead:
-
-- `GOOG` remains in historical provenance
-- `GOOG` is no longer in the current partition universe for future full runs
-- UI/TUI can show it as historical or inactive for the current partition source materialization
-
-That preserves auditability and avoids destructive cache behavior.
-
-This is consistent with the broader Barca rule that historical definitions and materializations are append-only and should not be deleted during normal operation.
-
-## Dynamic partition resolution
-
-For `partitions_from(...)`, the partition set is resolved lazily at refresh/run time, not at index time. The partition-defining asset must be materialised before the partitioned asset can determine its partitions. Until then:
-
-- `barca plan` shows "partitions: pending" for the partitioned asset
-- the partitioned asset cannot be materialised until the partition-defining asset has a successful materialization
-
-## collect(asset)
-
-`collect(asset)` aggregates all partitions of a partitioned asset into a single list, allowing a non-partitioned downstream asset to consume all partition outputs at once. The planner schedules a `collect()`-consuming asset into a phase gated on the completion of every partition of its upstream (a `FanIn` phase) — it never runs before its inputs exist.
-
-```python
-from barca import asset, partitions_from, collect
-
-@asset()
-def tickers() -> list[str]:
-    return ["AAPL", "MSFT", "GOOG"]
-
-@asset(partitions={"ticker": partitions_from(tickers)})
-def fetch_prices(ticker: str) -> dict[str, str]:
-    return {"ticker": ticker, "price": str(len(ticker) * 100)}
-
-@asset(inputs={"reports": collect(fetch_prices)})
-def aggregate(reports: list[dict[str, str]]) -> dict:
-    return {"total": len(reports)}
-```
-
-Output type: `list[OutputType]` — one entry per partition, order not guaranteed to match declaration order. `collect()` does not expose partition keys to the downstream asset directly; if you need the key alongside the value, have the partitioned asset include it in its own return value (as `fetch_prices` does above by returning `{"ticker": ticker, ...}`).
-
-If any partition has failed, `collect` blocks entirely — the downstream asset does not run until all partitions succeed.
-
-## Recommended helper APIs
-
-This workflow implies a few useful helpers — proposed, not shipped. None of `list_partitions()`, `materialize()`, or `read_asset()` exist in `barca`'s Python package today; the shipped equivalent is the CLI/`barca.api` surface (`get`, `run`, `plan`, `history`, `stats`) described in [Tasks and Workflow Management](/workflows/10-tasks-and-workflow-management/):
-
-```python
-list_partitions(fetch_prices)
-materialize(fetch_prices, partition={"ticker": "AAPL"})
-materialize(fetch_prices)
-read_asset(fetch_prices, partition={"ticker": "AAPL"})
-```
-
-For the MVP, that is enough.
-
-Do not add a separate "parallel map" user API yet.
-
-`list_partitions(fetch_prices)` should resolve the current partition source and return the current partition universe, not a static decorator literal.
-
-## Downstream partitioned dependencies
-
-The natural next case is:
-
-```python
-@asset()
-def tickers() -> list[str]:
-    return ["AAPL", "MSFT", "GOOG"]
-
-
-@asset(partitions={"ticker": partitions_from(tickers)})
-def fetch_prices(ticker: str) -> dict[str, str]:
-    return {"ticker": ticker}
-
-
-@asset(
-    inputs={"price_blob": fetch_prices},
-    partitions={"ticker": partitions_from(tickers)}
-)
-def normalize_prices(price_blob: dict[str, str], ticker: str) -> dict[str, str]:
-    return {"ticker": ticker, "normalized": price_blob["ticker"].lower()}
-```
-
-This is correct but slightly repetitive.
-
-For the MVP, that repetition is acceptable because it is explicit.
-
-Barca can validate that:
-
-- both assets declare the same partition dimension
-- both assets derive that dimension from compatible partition sources
-- the downstream partition key selects the matching upstream partition
-
-Later, Barca can add ergonomic sugar for inherited partitions. It should not start there.
-
-## Why not auto-inherit partitions immediately
-
-It is tempting to let Barca infer:
-
-- that `normalize_prices` should inherit `ticker`
-- that `price_blob` should resolve to the matching upstream partition
-
-That magic is appealing, but it is risky for the first implementation because:
-
-- it hides identity rules
-- it makes multi-input partition alignment ambiguous
-- it creates more special cases in `load_inputs()`
-
-The MVP should prefer explicit partition declaration and explicit validation.
-
-## `load_inputs()` behavior for partitioned assets
-
-Proposed — `load_inputs()`/`load_call()` are not part of the shipped Python API (see the note under [Recommended helper APIs](#recommended-helper-apis) above).
-
-For a partitioned downstream asset:
-
-```python
-load_inputs(normalize_prices, partition={"ticker": "AAPL"})
-```
-
-should return:
-
-```python
+Value:
 {
-  "price_blob": {"ticker": "AAPL"}
+  "buys": [
+    "GOOG",
+    "MSFT"
+  ],
+  "tickers": 3
 }
 ```
 
-It should not automatically add the partition value as a hidden argument.
+The second run executes one step, the sensor. It returned the same value, so every key and
+the report are served from cache:
 
-If the function wants the partition value, it should accept it explicitly:
-
-```python
-def normalize_prices(price_blob: dict[str, str], ticker: str) -> dict[str, str]:
-    ...
+```
+[barca] 1/8 steps | done in 0.0s
+Run 52517c66a848 | got 'report' in 0.047s (1 step, 3 phases)
 ```
 
-And a broader helper can later exist:
+## Looking at the results
 
-```python
-load_call(normalize_prices, partition={"ticker": "AAPL"})
+`barca sql` exposes a partitioned asset as one view over every key, with a `partition`
+column:
+
+```bash
+barca sql "select * from prices order by ticker"
+barca sql "select partition, buy from signal where buy"
 ```
 
-which could return all call kwargs including partition-bound parameters.
+```
+partition    ticker  close  feed
+ticker=AAPL  AAPL    465.0  v1
+ticker=GOOG  GOOG    471.0  v1
+ticker=MSFT  MSFT    477.0  v1
+```
 
-For the MVP, `materialize(...)` can build those full call kwargs internally without exposing that extra API yet.
+```
+partition    buy
+ticker=GOOG  true
+ticker=MSFT  true
+```
 
-## Critical tradeoffs and holes
+`barca status` shows one row per asset. A partitioned asset is `cached` when every key is,
+and `partial` when some are (see "When a key fails" below). With `--json` the node carries
+counts: `"partitions": {"cached": 3, "missing": 0, "missing_keys": [], "total": 3}`.
 
-### Partition values are not the same as arbitrary runtime parameters
+```
+NAME          KIND    STATE        WHY           LAST RUN                           SHAPE          DEPS
+feed_version  sensor  always-runs  sensor        success 2026-10-07 18:22:28 0.00s  str            -
+prices        asset   cached       materialized  success 2026-10-07 18:22:28 0.00s  dict (3 keys)  feed_version
+signal        asset   cached       materialized  success 2026-10-07 18:22:28 0.00s  dict (2 keys)  prices
+report        asset   cached       materialized  success 2026-10-07 18:22:28 0.00s  dict (2 keys)  signal
+```
 
-Partitions should be durable, enumerable, and identity-bearing.
+SHAPE describes one key's artifact (a dict with three fields), not the number of partitions.
 
-If users want one-off runtime args, that should be a separate concept later.
+Each key has its own artifact directory, named `<file>--<asset>_<dimension>_<key>`:
 
-Do not collapse "partitions" and "ad hoc params" into one decorator field in the MVP.
+```
+.barca/artifacts/pipeline.py--prices_ticker_AAPL/607006b4….json
+.barca/artifacts/pipeline.py--prices_ticker_GOOG/a713b4f3….json
+.barca/artifacts/pipeline.py--prices_ticker_MSFT/e403d2f9….json
+.barca/artifacts/pipeline.py--signal_ticker_AAPL/c0260fbd….json
+...
+.barca/artifacts/pipeline.py--report/a7cdcfcb….json
+```
 
-### Partition-source outputs need a constrained shape
+You do not need to read these by hand; `barca sql` reads them.
 
-If partitions come from assets, Barca needs a narrow contract for what that asset can return.
+## A sensor change re-runs every key
 
-For the MVP, a partition source asset should return one of:
+Change what the sensor returns and every key of `prices` runs again, then every key of
+`signal`, then `report`:
 
-- `list[str]` for a single partition dimension
-- `list[int]` for a single partition dimension
-- `list[dict[str, JsonScalar]]` for explicit multi-dimension partition keys
+```bash
+echo v2 > feed_version.txt
+barca get report pipeline.py --agent
+```
 
-Barca should reject anything else with a clear validation error.
+```
+[barca] step:pipeline.py:feed_version completed 0.0s (1/8)
+[barca] step:pipeline.py:prices[ticker=AAPL] completed 0.0s (2/8)
+[barca] step:pipeline.py:prices[ticker=MSFT] completed 0.0s (3/8)
+[barca] step:pipeline.py:prices[ticker=GOOG] completed 0.0s (4/8)
+[barca] step:pipeline.py:signal[ticker=AAPL] completed 0.0s (5/8)
+[barca] step:pipeline.py:signal[ticker=MSFT] completed 0.0s (6/8)
+[barca] step:pipeline.py:signal[ticker=GOOG] completed 0.0s (7/8)
+[barca] step:pipeline.py:report completed 0.0s (8/8)
+[barca] 8/8 steps | done in 0.0s
+```
 
-That keeps partition planning deterministic and easy to inspect.
+A sensor's value is one value for the whole asset. There is no per-key sensor: if only one
+ticker's data changed, all keys still run. The same is true of any unpartitioned input.
 
-### Derived partitions create lifecycle questions
+`--dry-run` does not run the sensor. Before the run above it predicted from the sensor's last
+recorded value and reported everything as cached:
 
-Deriving partitions from upstream data is the right model, but it creates lifecycle questions:
+```
+STATUS    WHY                                                                     STEP
+will run  sensors always re-run                                                   pipeline.py:feed_version
+cached    3 keys; assumes sensor 'feed_version' returns the same value as its last run  pipeline.py:prices
+cached    3 keys cached                                                           pipeline.py:signal
+cached    -                                                                       pipeline.py:report
 
-- who defines the partition universe
-- when does it change
-- how do downstream assets react
-- how is staleness computed
+1 will run, 7 cached, 0 unknown
+```
 
-For `partitions_from(...)`, the MVP answer should be:
+More on sensors: [Sensors and External Observations](/workflows/06-sensors-and-external-observations/).
 
-- the partition source asset defines the universe
-- the universe changes when that asset's materialization changes
-- downstream partitioned assets use the current successful partition source materialization when planning
-- stale and new partition units are computed by diffing the old and new partition universes
-- removed partition keys become historical, not deleted
+## Adding and removing keys
 
-For `partitions([...])`, the universe changes when the decorator metadata changes, which means the asset definition changes.
+On 0.18.0, what runs when the set of keys changes depends on where the keys are written.
+`barca docs partitions` and `barca docs examples/partitions` say that adding a key runs only
+the new key; with a literal list that is not what 0.18.0 did.
 
-### Automatic parallelization needs backpressure
+### A literal list in the decorator: every key runs again
 
-"Run 50 partitions" is easy to say and easy to abuse.
+Add `"NVDA"` to the list in the example above:
 
-Barca should treat partition fan-out as schedulable work with concurrency limits, not as a fire-and-forget process explosion.
+```python
+partitions={"ticker": partitions(["AAPL", "MSFT", "GOOG", "NVDA"])}
+```
 
-### Partitioned assets are not 50 different logical assets
+```
+$ barca get report pipeline.py --dry-run
+...
+will run  4 keys; no cached result for this code and these inputs; assumes sensor 'feed_version' returns the same value as its last run  pipeline.py:prices
+will run  4 keys; no cached result for this code and these inputs                 pipeline.py:signal
+will run  no cached result for this code and these inputs                         pipeline.py:report
 
-They are one logical asset definition with 50 partitioned materializations.
+10 will run, 0 cached, 0 unknown
+```
 
-That distinction should be preserved in the UI, CLI, and metadata model.
+All four keys of `prices` and of `signal` ran (`10/10 steps`). Removing a key from the
+literal list did the same for the keys that remained. The same happened with the manual's
+own example, which has no sensor and no inputs.
 
-## Recommended implementation stance
+### A module-level constant: only the new key runs
 
-For the MVP:
+```python
+REGIONS = ["emea", "amer", "apac"]
 
-- add `partitions={...}` to `@asset`
-- support `partitions(iterable)`
-- support `partitions_from(...)`
-- treat each partition key as an independent runnable unit
-- key cache reuse by `definition_hash + partition_key + partition_source_identity + upstream materialization IDs`
-- keep parallelism in the executor, not in user code
-- require explicit partition declarations on downstream assets
-- treat partition resolution as a planning step backed by an upstream asset
-- defer partition inheritance sugar
 
-This is the narrowest design that still gives users a genuinely useful parallelization primitive.
+@asset(partitions={"region": partitions(REGIONS)})
+def sales(region: str) -> dict:
+    return {"region": region, "revenue": len(region) * 10}
 
-## Acceptance criteria
 
-- A user can declare a partitioned asset with `partitions(iterable)`.
-- A user can declare a partitioned asset with `partitions_from(...)`.
-- Barca indexes one logical asset definition and the appropriate partition source metadata.
-- Targeting a single partition (`materialize(fetch_prices, partition={"ticker": "AAPL"})` or equivalent) runs only one partition. Not yet available — `barca get fetch_prices pipeline.py` runs all partitions today.
-- `barca get fetch_prices pipeline.py` (or `materialize(fetch_prices)`) runs all partitions.
-- Independent partitions can execute concurrently with Barca-managed concurrency.
-- Successful materializations are cached per partition.
-- Changing code invalidates all partitions for that asset definition.
-- Changing the inline iterable changes the partition universe for future runs.
-- Changing the partition source asset updates the partition universe for future runs.
-- Changing one partition value does not invalidate or overwrite the others.
+@asset(inputs={"all_sales": collect(sales)})
+def summary(all_sales: list[dict]) -> dict:
+    return {"regions": len(all_sales), "total": sum(s["revenue"] for s in all_sales)}
+```
+
+After adding `"latam"` to `REGIONS`:
+
+```
+[barca] step:pipeline.py:sales[region=latam] completed 0.0s (1/5)
+[barca] step:pipeline.py:summary completed 0.0s (2/5)
+[barca] 2/5 steps | done in 0.0s
+```
+
+After removing `"amer"` from `REGIONS`, only `summary` ran (`1/4 steps`).
+
+Any expression that is not a literal list (a name, a comprehension, a function call) is
+evaluated by Python when barca plans the run.
+
+### Keys from an upstream asset: only the new key runs
+
+`partitions_from(upstream)` on an unpartitioned asset that returns a list uses the list's
+values as keys. Here the list comes from a file, through a sensor:
+
+```python
+@sensor()
+def region_list() -> tuple[bool, list]:
+    return True, Path("regions.txt").read_text().split()
+
+
+@asset(inputs={"names": region_list})
+def regions(names: list) -> list:
+    return names
+
+
+@asset(partitions={"region": partitions_from(regions)})
+def sales(region: str) -> dict:
+    return {"region": region, "revenue": len(region) * 10}
+```
+
+After appending `latam` to `regions.txt`:
+
+```
+[barca] step:pipeline.py:region_list completed 0.0s (1/4)
+[barca] step:pipeline.py:regions completed 0.0s (2/4)
+[barca] step:pipeline.py:sales[region=latam] completed 0.0s (3/7)
+[barca] step:pipeline.py:summary completed 0.0s (4/7)
+[barca] 4/7 steps | done in 0.0s
+```
+
+After removing `amer` from the file, `regions` and `summary` ran and no key of `sales` did.
+
+The keys are known only after `regions` has run. Before its first run, `--dry-run` and
+`barca status` report `sales` and everything below it as `unknown` ("partition keys come from
+the output of 'regions', which is not available until it runs"). The list itself is not
+passed to `sales`.
+
+### A removed key stays in `barca sql`
+
+A removed key's artifact is not deleted, and the `barca sql` view still includes it. After
+removing `amer` (in both of the last two examples):
+
+```
+$ barca sql "select * from sales"
+partition     region  revenue
+region=amer   amer    40
+region=apac   apac    40
+region=emea   emea    40
+region=latam  latam   50
+```
+
+`summary`, which uses `collect(sales)`, received the three current keys
+(`{'regions': 3, 'total': 130}`). To query only current keys, filter on `partition` yourself
+or query an asset built with `collect`.
+
+## Targets and `--refresh` work on the whole asset
+
+A key cannot be named on the command line:
+
+```
+$ barca get 'sales[region=emea]' pipeline.py
+Asset 'sales[region=emea]' not found. Available: pipeline.py:sales, pipeline.py:summary
+
+$ barca get summary pipeline.py --refresh 'sales[region=emea]'
+--refresh: no upstream asset named 'sales[region=emea]' in the cone of 'summary'.
+```
+
+- `barca get sales pipeline.py` brings every key up to date.
+- `--refresh sales` recomputes every key, and everything downstream.
+- `barca get sales pipeline.py` returns one key's value as `final_output`, not all of them. The Python call `barca.get("sales", "pipeline.py")`
+  does the same. To read every key, use `barca sql "select * from sales"` or target an asset
+  that uses `collect(sales)`.
+
+## When a key fails
+
+Keys are independent. With one key raising, the others complete and are cached, the fan-in
+does not run, and the command exits 1:
+
+```
+[barca] step:pipeline.py:sales[region=emea] completed 0.0s (1/4)
+[barca] step:pipeline.py:sales[region=apac] completed 0.0s (2/4)
+[barca] step:pipeline.py:sales[region=amer] failed: RuntimeError: amer feed not ready
+[barca] 2/4 steps | failed in 0.0s
+```
+
+```
+$ barca status pipeline.py
+NAME     KIND   STATE      WHY                                     LAST RUN                    SHAPE  DEPS
+sales    asset  partial    2 of 3 keys cached; partitions_missing  failed 2026-10-07 18:21:44  -      -
+summary  asset  never-run  no_record                               -                           -      sales
+```
+
+The next run executes only the failed key and the fan-in (`2/4 steps`).
+
+## With a remote store
+
+Partitions are cached per key across machines as well. With `BARCA_REMOTE_URI` set to a
+shared directory, a second copy of the project ran no key of `sales` after the first copy had
+computed them. The store holds one directory per key, laid out as it is locally.
+
+## A few thousand keys
+
+Measured once with barca 0.18.0 on an Apple M4 Max (16 cores) that was busy with other work
+(load average about 9), with `KEYS = [f"k{i:04d}" for i in range(2000)]`, a function that
+returns a small dict, and a `collect` fan-in. Wall-clock time of the whole command:
+
+| Command | Steps run | Time |
+|---|---|---|
+| `barca get total pipeline.py`, first run | 2,001 | 1.9 s |
+| `barca get total pipeline.py`, second run | 0 | 0.14 s |
+| `barca status pipeline.py` | - | 0.13 s |
+| `barca sql "select count(*), sum(n) from item"` | - | 0.8 s |
+| `barca get total pipeline.py` after adding one key | 2 | 0.34 s |
+
+`.barca/` was 14 MB afterwards. These are times for trivial steps; they show what barca adds
+per key, not what your functions cost.
+
+## Limits
+
+- **No single-key target or refresh** (above). `get` and `--refresh` address the whole asset.
+- **Editing a literal key list re-ran every key on 0.18.0** (above). With the keys in a
+  module-level constant or an upstream asset, only new keys ran.
+- **Any change to the function's code, or to an unpartitioned input or sensor it reads,
+  re-runs every key.**
+- **A removed key's results remain** on disk and in the `barca sql` view.
+- **`partitions_from(upstream)` on a partitioned upstream** must be the asset's only dimension
+  and must keep the upstream's dimension name; anything else is a usage error (exit 2).
+- **A partitioned asset in a plain `inputs=`** of an unpartitioned asset, without `collect()`,
+  is a usage error (exit 2).
+- **`barca get <partitioned asset>` returns one key's value.**
+- With `@sink`, each key writes its own file: `barca docs sinks`.
+- To fan work out at run time from inside a task, without caching, see
+  [Parallel Tasks](/patterns/04-parallel-tasks/).

@@ -1,311 +1,249 @@
 ---
 title: Architecture Decisions
-description: Key design decisions in barca's execution engine, alternatives tried, and why the current approach won.
+description: The main decisions in barca's execution engine, what was tried first, and what was rejected.
 ---
 
-This document records the key design decisions in barca's execution engine,
-what alternatives were tried, and why we settled on the current approach.
+This page records the main decisions in barca's execution engine: what the code does now, what
+was tried before, and what was rejected. [Architecture](/architecture/) describes the current
+code without the history.
+
+Performance figures from early development have been removed from this page because they were
+not tied to a version, a machine or a date. Current measurements are on the
+[framework comparison](/comparisons/framework-comparison/) page and in `benchmarks/RESULTS.md`
+in the repository.
 
 ## 1. Unix domain sockets for worker coordination
 
 ### The decision
 
-Workers communicate with the Rust coordinator via **length-prefixed JSON frames
-over Unix domain sockets (UDS)**. Each worker maintains a persistent connection
-for the duration of its lifetime.
+Workers talk to the Rust coordinator over a Unix domain socket, in JSON frames with a 4-byte
+length prefix. Each worker keeps one connection open for its lifetime.
 
 ### What we tried
 
-**v0.1.x: Stderr JSON protocol.** Workers wrote `BARCA:2:{json}` lines to stderr.
-Rust read them line-by-line. This was simple but one-directional — the coordinator
-could send work via batch files but couldn't communicate back to a running worker.
-This made `parallel()` impossible without a separate mechanism.
+**v0.1.x: JSON lines on stderr.** Workers wrote `BARCA:2:{json}` lines to stderr and Rust read
+them. The coordinator sent work in batch files and had no way to send anything to a running
+worker, so `parallel()` could not be built on it.
 
-**v0.2.0 first attempt: Per-worker sockets with round-robin polling.** Each worker
-had a dedicated UDS. The coordinator polled each connection with 1ms timeouts in a
-loop. At N workers, one scan took ~N milliseconds. This scaled to N=100 but hung at
-N>100 because the polling latency exceeded the rate workers completed tasks.
+**v0.2.0, first attempt: one socket per worker, polled in turn.** The coordinator polled each
+connection with a 1 ms timeout. One pass over N workers took about N milliseconds, and with
+more than about 100 workers the coordinator fell behind the rate at which workers finished and
+runs hung.
 
-**v0.2.0 final: Task-per-connection with mpsc channels.** Each UDS connection gets a
-dedicated tokio task that bridges the socket to an mpsc channel. The coordinator
-reads from a single channel receiver — O(1) per message regardless of pool size.
-Proven at 290K msg/s with 128 workers.
+**v0.2.0, final: one task per connection, one channel.** Each connection gets a tokio task
+that forwards its messages to a single mpsc channel. The coordinator reads from that channel,
+so the cost of receiving a message does not depend on the number of workers. This is the
+current design. `crates/barca-core/tests/socket_stress.rs` exercises many workers connecting
+to one listener at once.
 
-### Why UDS
+### Why a Unix socket
 
-- **Bidirectional**: Workers can send results AND receive new commands on the same
-  connection. Essential for the pull-based scheduling model and `parallel()`.
-- **Zero-copy on macOS/Linux**: UDS doesn't go through the network stack. Kernel
-  copies data directly between process address spaces.
-- **No serialization framework needed**: Length-prefixed JSON is simple to implement
-  in both Rust and Python, debuggable with standard tools.
-- **Per-message overhead ~7μs**: Measured via our socket-stress test. For any task
-  doing real work (>1ms), the protocol overhead is invisible.
+- It is bidirectional: a worker sends results and receives the next work on the same
+  connection. Pulling work and `parallel()` both need this.
+- It is local. Nothing goes through the network stack and no port is opened.
+- Length-prefixed JSON takes a few lines in both Rust and Python and can be read with
+  ordinary tools when debugging.
 
 ### What we rejected
 
-- **Shared memory / mmap**: Fast but complex. Would require a custom serialization
-  format and careful synchronization. Not worth it when UDS overhead is already <10μs.
-- **gRPC / HTTP**: Heavy for local IPC. Adds protobuf/HTTP framing overhead and
-  dependency complexity for no benefit over UDS.
-- **Named pipes (FIFOs)**: Unidirectional per pipe. Would need two pipes per worker,
-  doubling the file descriptor usage for no gain over UDS.
+- **Shared memory or mmap.** It needs a custom format and careful synchronisation. The socket
+  was not a measurable cost for steps that do real work.
+- **gRPC or HTTP.** More framing and more dependencies, with nothing gained for local
+  processes.
+- **Named pipes.** A pipe carries data one way, so each worker would need two.
 
----
-
-## 2. Stateless workers with a global ready queue
+## 2. Stateless workers and one ready queue
 
 ### The decision
 
-Workers are **stateless executors**. They finish a task, report back to Rust, and
-Rust assigns the next task from a global ready set. No task is pre-assigned to any
-worker.
+Workers hold no assignment of their own. Steps that are ready sit in one queue owned by the
+coordinator, and a worker that has nothing to do is given the next ones.
 
 ### What we tried
 
-**Pre-assigned per-worker queues.** The original coordinator had `Vec<VecDeque<ItemId>>`
-— one queue per worker. Items were distributed round-robin at load time. This created
-problems:
+**A queue per worker.** The first coordinator held one queue per worker and dealt steps out
+round-robin when a phase was loaded. Problems:
 
-- **Head-of-line blocking**: If worker 0's first task was slow, its queued tasks
-  starved even though workers 1-15 were idle.
-- **Reshuffling complexity**: When a worker called `parallel()` and got suspended,
-  its remaining queued tasks needed to be redistributed. This required deadlock
-  detection, temp worker spawning, and complex queue management.
-- **No scheduling intelligence**: Round-robin assignment couldn't account for cache
-  locality, task priority, or runtime estimates.
+- If a worker's first step was slow, the steps queued behind it waited while other workers
+  were idle.
+- When a worker called `parallel()` and was suspended, its queued steps had to be moved to
+  other workers. That needed deadlock detection and extra queue management.
+- Round-robin could not take step duration into account.
 
-### Why a global ready queue with Rust-driven assignment
+### Why one queue
 
-- **Zero waste**: No idle worker has an empty queue while another worker has a full one.
-  Every worker always executes the highest-priority available task.
-- **Natural backpressure**: If one task is slow, Rust assigns more tasks to idle workers.
-  No reshuffling needed.
-- **Simple parallel()**: When a worker calls `parallel()`, its children enter the
-  global ready set. Any idle worker picks them up. No redistribution.
-- **Future-proof**: The ready queue is the natural place to add scheduling heuristics
-  (cache locality, priority, estimated duration) without changing the worker model.
+- An idle worker always has work if any step is ready.
+- A slow step delays only itself.
+- Calls made through `parallel()` go on the same queue and any idle worker takes them.
+- The queue is the one place where ordering and batching decisions are made (see decision 6).
 
----
-
-## 3. SIGSTOP/SIGCONT for parallel()
+## 3. SIGSTOP and SIGCONT for `parallel()`
 
 ### The decision
 
-When a worker calls `parallel()`, the Rust coordinator:
+When a step calls `parallel()`, the coordinator:
 
-1. **SIGSTOP**s the worker process (freezes it, zero CPU, full state preserved)
-2. **Spawns a temp replacement** worker to maintain pool capacity
-3. Adds child items to the global ready queue
-4. When all children complete: kills the temp, **SIGCONT**s the original, sends results
+1. sends SIGSTOP to that worker, which freezes it with its state in memory;
+2. starts a temporary worker so the number of active workers stays the same;
+3. puts the calls on the ready queue;
+4. when all of them have finished, stops the temporary worker, sends SIGCONT to the original
+   worker and sends it the results.
 
 ### What we tried
 
-**Coordinator suspension model.** The original design had `suspended: HashMap<usize, GroupId>`
-tracking which workers were waiting for parallel groups. A `check_deadlock()` function
-detected when all workers were suspended and spawned temp workers. This was complex:
+**Suspension tracked in the coordinator.** The first design recorded which workers were
+waiting on a parallel group and ran a deadlock check that started temporary workers when every
+worker was suspended. The check had unclear cases (some workers suspended, not all), temporary
+workers needed queues of their own, and with per-worker queues a suspended worker's steps were
+stranded.
 
-- Deadlock detection had edge cases (what if only some workers are suspended?)
-- Temp workers needed their own queue slots
-- The `advance_worker` / `WakeWorker` / `ResumeWorker` action types added coordinator
-  complexity
-- With pre-assigned queues, a suspended worker's tasks were stranded
+**Running the calls in the calling worker.** With a pool of one, the worker ran its own
+parallel calls. That works and gives no parallelism.
 
-**Inline execution.** For pool_size=1, the worker could execute parallel children
-itself (no round-trip to Rust). This works but limits parallelism to one process.
+### Why signals
 
-### Why SIGSTOP/SIGCONT
-
-- **Zero CPU while frozen**: A SIGSTOP'd process uses zero CPU but retains all
-  state in memory. It resumes exactly where it left off.
-- **Maintains pool capacity**: By spawning a temp replacement, the active worker
-  count stays at `pool_size`. No throughput loss during parallel dispatch.
-- **Recursive nesting**: If a temp worker also calls `parallel()`, the same
-  mechanism applies recursively. Frozen processes stack; active pool always equals
-  `pool_size`.
-- **No coordinator complexity**: The coordinator doesn't need to know about
-  workers at all. It just tracks items and their states. The I/O loop handles
-  all process management.
-- **Clean resource accounting**: Frozen process count = nesting depth. Each
-  uses zero CPU. The operating system handles all the scheduling.
+- A stopped process uses no CPU and resumes where it was. No Python-side cooperation is
+  needed.
+- With a replacement started, the number of running workers stays at the pool size.
+- Nesting works the same way: a temporary worker that calls `parallel()` is stopped and
+  replaced in turn.
+- The coordinator's queue logic does not need to know about processes. The I/O layer
+  (`io_loop.rs`) handles them.
 
 ### Limitations
 
-- **Unix-only**: SIGSTOP/SIGCONT is a Unix signal. On Windows, this mechanism
-  would need a different implementation (e.g., SuspendThread/ResumeThread).
-- **Memory**: Frozen processes retain their full memory footprint. Deep nesting
-  with large in-memory datasets could use significant RAM.
+- Unix only. Barca does not run on Windows.
+- A stopped process keeps its memory. Deep nesting with large data in memory uses that much
+  RAM for as long as the calls run.
+- Calls made through `parallel()` are not steps of the plan: they are not counted in a run's
+  step totals and have no telemetry spans of their own.
 
----
-
-## 4. Type-safe plan-to-coordinator bridge
+## 4. The plan is loaded into the coordinator by type, not by name
 
 ### The decision
 
-The coordinator has a `load_phase(phase, provided_inputs)` method that consumes
-a planner `Phase` directly. Every `Item` carries a `StepId` — the planner's
-canonical identity. No intermediate string-based mapping.
+The coordinator's `load_phase(phase, provided_inputs)` takes a planner `Phase` directly. Every
+queue item carries the planner's `StepId`. There is no intermediate mapping by string.
 
-### The problem we solved
+### The problem this solved
 
-The original bridge used two runtime `HashMap<String, ItemId>` maps:
-
-```rust
-let mut item_node_ids: HashMap<ItemId, String> = HashMap::new();
-let mut node_to_item: HashMap<String, ItemId> = HashMap::new();
-```
-
-Dependencies were resolved by string lookup:
+The first bridge between planner and coordinator used two string maps, and resolved
+dependencies by looking names up in them:
 
 ```rust
-// Silent drop if upstream_id not in map!
+// A missing key dropped the dependency without an error.
 if let Some(&upstream_item) = node_to_item.get(upstream_id) {
     deps.push(...);
 }
 ```
 
-This caused real bugs:
-- **Missing outputs** (`final_output: null`) — output collection didn't match
-  because the coordinator's branch-suffixed node_ids didn't match the planner's
-  step_ids.
-- **Progress undercounting** — callbacks fired for some steps but not others.
-- **Failures not propagating** — failed items were recorded in the coordinator
-  but never checked by commands.rs, so the process exited with code 0.
+This caused three bugs, none of which raised an error:
 
-All of these were silent — no error, no panic, just wrong results.
+- **Missing outputs** (`final_output: null`). The coordinator's ids had a branch suffix that
+  the planner's ids did not, so outputs were not matched.
+- **Progress undercounted.** Callbacks fired for some steps only.
+- **Failures not reported.** A failed item was recorded in the coordinator and never checked,
+  so the process exited with code 0.
 
-### The step accounting invariant
+### The step count check
 
-Every step the system knows about **must** reach a terminal state (done, failed,
-or skipped). This is enforced at two levels:
+Every step must end as done, failed or skipped. Two checks enforce it:
 
-1. **Static steps** (from planner): `load_phase()` adds items and returns a count.
-   `commands.rs` asserts this count equals the plan's step count. Any mismatch is
-   a programming error — panic.
-
-2. **Dynamic steps** (from `parallel()`): The `ParallelGroup` tracks
-   `completed_count` which must equal `items.len()` before the group resolves.
-   The frozen parent is never SIGCONT'd until this condition is met.
-
----
+1. **Planned steps.** `load_phase()` returns the number of items it added. `commands.rs`
+   asserts that it equals the number of steps (or partition keys) in the phase. A mismatch is
+   a bug in barca and panics.
+2. **`parallel()` calls.** A parallel group counts completed items, and the stopped worker is
+   resumed only when the count equals the number of calls.
 
 ## 5. Rust for planning, Python for execution
 
 ### The decision
 
-Barca's Rust binary handles: parsing, DAG construction, execution planning, cache
-checking, worker lifecycle, and database persistence. Python workers handle: user
-function execution, data serialization, and parallel dispatch requests.
+The Rust binary does parsing, graph construction, planning, cache checks, worker management
+and the database. Python workers run your functions, read and write artifacts, and send
+`parallel()` requests.
 
-### Why not all-Python
+### Why not all Python
 
-The planning phase must be **invisible** — sub-100ms for typical workloads, including
-parsing, hashing, cache lookup, and plan generation. Python's interpreter startup
-alone is ~30ms. By doing planning in Rust:
+A command that has nothing to run should return without waiting for a Python interpreter and
+your imports. With planning in Rust, a fully cached `barca get` starts no worker at all, and
+a run that does execute pays for interpreter start-up once per worker, not once per step.
 
-- Parse 2002 assets in 21ms (ruff's parser)
-- Plan in <1ms
-- Per-step dispatch overhead: 0.4ms
+### Why not all Rust
 
-The Rust binary adds ~4ms of fixed overhead. Python adds ~18ms per worker process
-spawn. For a 100-step pipeline, the total orchestration overhead is ~22ms — less
-than a single Python import statement for most libraries.
+The code being run is Python. Embedding an interpreter in the binary would tie barca to one
+Python version and would not use your virtualenv. Barca starts ordinary Python processes
+instead:
 
-### Why not all-Rust
+- your virtualenv is used as it is (the `python` beside the `barca` executable, else
+  `python3` on `PATH`);
+- Python 3.12 and later are supported;
+- a worker that crashes does not take the coordinator down.
 
-User code is Python. Barca must execute it. Rather than embedding a Python
-interpreter (which would couple us to a specific Python version and break
-virtualenvs), we spawn standard Python processes. This means:
-
-- Users' existing virtualenvs work unchanged
-- Any Python version works (we test 3.12+)
-- No FFI boundary for user code
-- Workers are isolated processes — one crash doesn't take down the orchestrator
-
----
-
-## 6. Adaptive pull-queue executor (measured cost, not declared limits)
+## 6. Batch size from measured cost, not declared limits
 
 ### The decision
 
-Workers are a **persistent pool** (spawned once per run, kept warm across
-phases) that **pull leased batches** from the global ready queue. The batch
-size `K` per pull is computed from **measured per-task cost**, not from
-user-declared concurrency limits or code introspection:
+Workers are started once per run and kept for all its phases. A worker takes a batch of `K`
+steps from the ready queue at a time. `K` is computed from measured step time, not from
+concurrency limits written by the user:
 
 ```text
 K = clamp(
-      floor   = ceil(comm_cost / (per_task_cost × 1%)),   # amortize per-pull coordination
-      ceiling = max(1, remaining / (workers × 3)),        # keep every worker fed
+      floor   = ceil(comm_cost / (per_task_cost × 1%)),   # keep coordination under 1% of work
+      ceiling = max(1, remaining / (workers × 3)),        # leave enough batches for every worker
     )
 ```
 
-Workers self-time every task (CPU time, wall time, peak RSS) and the numbers
-ride back on the completion message — which therefore does triple duty:
-closes the lease, carries the output ref, and updates the cost estimator.
+Workers time every step (wall time, CPU time, peak memory) and send the numbers back with the
+result. The same message releases the step from the batch, carries the reference to the
+result and updates the estimate.
 
-Estimates use a three-tier prior: exact-node EWMA → node-level sibling-partition
-estimate → a **30s cold-start default**. The default is deliberately high
-because the errors are asymmetric: over-estimating cost yields `K = 1` and mild
-comm overhead (cheap); under-estimating over-batches secretly-heavy tasks onto
-one worker and tail-blocks the run (catastrophic). The EWMA rises fast and
-falls slowly (≤30% per observation) for the same reason. Run-end estimates
-persist to the `cost_estimates` table, so the cold-start probe is paid once
-ever per stable node, not once per run.
+The estimate for a step comes from, in order: its own history, the history of other
+partitions of the same node, and a default of 30 seconds for a node that has never run. The
+default is high on purpose. Guessing too high gives `K = 1` and a little extra coordination.
+Guessing too low puts several slow steps on one worker while others sit idle. For the same
+reason the estimate rises quickly and falls slowly (by at most 30% per observation).
+Estimates are saved in the `cost_estimates` table at the end of a run, so the default applies
+to a node only until it has run once.
 
-Leases make crash handling precise: `queued → leased → done`, with
-`failed / worker-died → requeued`. When a worker dies mid-batch, only its
-in-flight task consumes retry budget — the unstarted remainder returns to the
-queue front untouched (at-least-once delivery; pure assets make re-runs safe).
+A batch is a lease. If a worker dies, the step it was running uses up one of its attempts, and
+the steps it had not started go back to the front of the queue. A step can therefore start
+more than once.
 
 ### What we rejected
 
-- **User-declared concurrency limits** (Dagster/Prefect/Airflow tags, slots,
-  pools): a human guessing "max N of these" is the heuristics game we want out
-  of. Barca has a structural advantage — local OS processes plus persisted run
-  history — so it can measure instead of asking.
-- **Calibration pass**: no separate probe run. The first wave of a cold run
-  *is* the probe (the 30s default forces `K = 1`), productive and informative
-  at once.
-- **Payloads in the queue**: the queue carries artifact references; workers
-  fetch inputs from the content-addressed store themselves. Per-pull comm is
-  therefore fixed coordination cost — which batching can amortize — rather
-  than data movement, which scales with `K` and cannot be.
+- **Concurrency limits declared by the user** (tags, slots, pools). They ask a person to guess
+  a number that barca can measure, since it runs local processes and keeps run history.
+- **A separate calibration run.** The first batches of a run with no history serve that
+  purpose: the 30-second default makes them one step each.
+- **Sending data through the queue.** The queue carries references to artifact files and the
+  worker reads the files itself. The cost of handing out a batch is then fixed, which is what
+  lets batching reduce it.
 
-All adaptive machinery stays strictly on the performance side of the
-determinism boundary: the plan (phases, streams, the set of partitions) is
-deterministic; metering tunes only physical placement. Assets are pure, so
-placement never affects results.
+Batching changes only which worker runs a step and when. The plan (phases, the set of
+partitions) does not depend on measured times.
 
----
+## 7. Not built
 
-## 7. What we didn't build (yet)
+### Worker affinity
 
-### Backoff on retries
+A step goes to whichever worker is idle. Barca does not prefer a worker that already has the
+relevant modules imported or data in memory.
 
-The coordinator retries failed items immediately (push back to ready queue). The
-old `scheduler.rs` had exponential backoff (`retry_backoff_seconds * attempt`).
-We removed this for simplicity. For most use cases, immediate retry is fine. If
-backoff is needed, it can be added to the coordinator without changing the worker
-model.
+### Windows
 
-### Worker affinity / cache locality
-
-The global ready queue assigns tasks to the first idle worker. A smarter scheduler
-could prefer assigning tasks to workers that already have relevant modules imported
-or data cached in memory. This is a natural extension of the pull-based model —
-the ready queue becomes a priority queue with affinity scoring.
-
-### Windows support
-
-SIGSTOP/SIGCONT is Unix-only. Windows would need `SuspendThread`/`ResumeThread`
-or a cooperative suspension model (worker checks a flag between tasks). The UDS
-protocol would need to switch to named pipes or TCP localhost on Windows.
+SIGSTOP and SIGCONT and Unix domain sockets are both Unix features. Windows support would need
+a replacement for each.
 
 ### Distributed execution
 
-The current model is single-machine, multi-process. Distributing across machines
-would require replacing UDS with TCP sockets and adding a work-stealing protocol.
-The stateless worker model is already compatible — workers don't share state, so
-they could run on different machines with artifact storage on a shared filesystem
-or object store.
+A run uses the processes of one machine. Running steps on several machines would need a
+network transport in place of the Unix socket and a way to hand work between machines. A
+remote store shares results between machines today; it does not split one run across them.
+
+### What changed since this page was first written
+
+- Retries now wait `retry_backoff × attempt` seconds when `retry_backoff` is set. An earlier
+  version of this page said retries were immediate only.
+- Work is handed out in leased batches (decision 6). Earlier versions sent one step at a time.

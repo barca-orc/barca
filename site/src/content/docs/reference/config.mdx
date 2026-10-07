@@ -1,15 +1,16 @@
 ---
 title: Configuration
-description: barca.toml, environment variables, and environment separation via --env.
+description: Every barca.toml key and environment variable, their precedence, what is under .barca/, and how --env separates environments.
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-Barca reads configuration from three layers. Precedence for every value:
+Barca needs no configuration file. Settings come from command-line flags, environment
+variables and an optional `barca.toml`, in that order:
 
 **CLI flag > environment variable > `barca.toml` > built-in default**
 
-For example, here are three equivalent ways to select the `staging` environment:
+For example, three ways to select the `staging` environment:
 
 <Tabs>
 	<TabItem label="CLI flag">
@@ -31,83 +32,165 @@ For example, here are three equivalent ways to select the `staging` environment:
 	</TabItem>
 </Tabs>
 
+## Where things live
+
+Barca keeps its cache and run history in `.barca/`, in the project root. Results are always
+written there first. A remote store, when configured, is a shared copy of the same files.
+
+| Path | What it is | Safe to delete |
+|---|---|---|
+| `.barca/metadata.db` | Run history and the record of every cached result (a SQLite file). | Only to discard local history: every asset then recomputes on the next run, or, with shared history, the history is pulled again. Delete `metadata.db-wal` and `metadata.db-shm` with it, with no barca command running. |
+| `.barca/metadata.db-wal`, `.barca/metadata.db-shm` | SQLite's write-ahead log for `metadata.db`. | Not on their own: they belong to `metadata.db` and can hold rows not yet in it. |
+| `.barca/metadata.db.lock` | A lock file held briefly while a barca process reads or writes the database. | Yes, when no barca command is running. |
+| `.barca/artifacts/<node>/<run_hash>.<ext>` | One file per cached result: `.json`, `.pkl` or `.parquet`. A partitioned asset has one directory per key (`pipeline.py--sales_region_emea/`). | Yes. A result whose file is gone is computed again when a run needs to read it, or downloaded again if it is in a remote store. Prefer `--refresh <asset>` to force a recompute. |
+| `.barca/envs/<name>/` | The same `metadata.db` and `artifacts/` for a named environment (`--env <name>`). | As above, per environment. |
+| `.barca/metadata.db.base` | With shared history: a counter that changes each time the local database is replaced by a pull or uploaded. | Yes, when no barca command is running. |
+| `.barca/metadata.db.prev` | With shared history: the local database as it was before the last pull that changed it. One generation. barca never reads it. | Yes. |
+| `.barca/metadata.db.pull-<host>-<pid>-<n>`, `.push-<host>-<pid>-<n>`, `.prev.tmp` | With shared history: a download or upload in progress. Leftovers of a killed command are removed by a later pull. | Yes, when no barca command is running. |
+| `.barca/sql-cache/` | With remote storage: copies of remote results that `barca sql` downloaded, laid out by URI (`sql-cache/s3/<bucket>/...`), each with a `.version` file. Never removed by barca. | Yes, always. |
+| `.barca/staging/<pid>/` | Temporary files of a running worker writing to a remote `@sink` or fetching a remote input. Directories of dead workers are removed when a worker starts. | Yes, when no barca command is running. |
+| `.barca/.gitignore` | Written by barca, containing `*`, so git ignores everything under `.barca/`. | It is written again. |
+
+The table lists what 0.18.0 creates; the last five rows appear only in the situations named.
+For the shared-history files see `barca docs remote`; for a missing artifact see
+`barca docs cache`, "A cached result whose artifact is missing".
+
+Do not edit files under `.barca/`, and do not open `metadata.db` with another program while
+barca is running. To look at results use [`barca sql`](/reference/sql/) and
+[`barca status`](/reference/cli/#status).
+
+## Project root
+
+The nearest `barca.toml` at or above the directory you run barca from marks the project root.
+Barca changes into the root before doing anything, so `barca.toml`, `.barca/`, node ids and
+the working directory of every step are the same wherever in the project you run it. File
+arguments are read relative to where you typed them. Without a `barca.toml` above you, the
+current directory is the root.
+
+An empty `barca.toml` is enough to mark a root. When the root is not the current directory,
+barca prints `barca: project root: <path>` on stderr.
+
 ## barca.toml
 
-The nearest `barca.toml` at or above the directory you run barca from marks the
-**project root**. Barca changes into the root before doing anything, so the config,
-`.barca/`, node ids and the working directory of every step are the same wherever
-in the project you invoke it. File arguments are read relative to where you typed
-them. Without a `barca.toml` above you, the current directory is the root.
-
-An empty `barca.toml` is enough to anchor a project. When the root is not the
-current directory, barca prints `barca: project root: <path>` on stderr.
+Every key is optional.
 
 ```toml
-# The environment used when --env / BARCA_ENV are not given.
+# The environment used when neither --env nor BARCA_ENV is given.
 default_env = "dev"
 
+[discovery]
+# Which files a command with no file arguments reads. See the Discovery page.
+exclude = ["scratch/**", "notebooks/**"]   # skipped in addition to the built-in list
+include = ["pipelines/**/*.py"]            # only these files (replaces the walk)
+
 [remote]
-# Root URI for shared remote state. Setting this enables remote mode:
-# artifacts at {uri}/{env}/artifacts, shared metadata DB at
-# {uri}/{env}/state/metadata.db.
-uri = "abfss://cont@acct.dfs.core.windows.net/barca/my-project"
+# Root of the remote store. Setting it turns remote storage on:
+# artifacts at {uri}/{env}/artifacts, shared history at {uri}/{env}/state/metadata.db.
+# A plain directory (a shared mount) also works.
+uri = "s3://my-bucket/barca/my-project"
 
-# Optional overrides, taken literally (no {env} templating):
-# artifacts_uri = "abfss://.../custom-artifacts"
-# state_uri = "abfss://.../custom/state.db"
+# Optional overrides, used as written (the environment name is not added):
+# artifacts_uri = "s3://my-bucket/custom-artifacts"
+# state_uri = "s3://my-bucket/custom/state.db"
 
-# Metadata sharing:
-#   "optimistic" — pull at run start, etag/generation-conditional push at run
-#                  end, replay-on-conflict (default when a state uri resolves)
-#   "off"        — artifacts remote, metadata local
+# Shared history:
+#   "optimistic"  pull before a run, conditional upload after it, merge on conflict
+#                 (the default when a state location resolves)
+#   "off"         artifacts in the store, history local only
 state = "optimistic"
 
-# Conflict retry budget for the conditional state upload.
-push_retries = 5
+push_retries = 5            # conflict retries for the history upload
+transfer_concurrency = 4    # artifact uploads and downloads in flight at once (at least 1)
+transfer_timeout = 600      # seconds one transfer attempt may run (at least 1)
 
-# Concurrent background artifact uploads/downloads (see Remote Storage).
-transfer_concurrency = 4
-
-# Seconds one transfer attempt may run before it is failed as stalled.
-transfer_timeout = 600
-
-# Forwarded verbatim to fsspec.filesystem(protocol, ...) — keyed by protocol.
-[remote.storage_options.abfs]
-account_name = "acct"
+# Passed to fsspec.filesystem(protocol, ...), one table per protocol: s3, gcs, abfs.
+[remote.storage_options.s3]
+endpoint_url = "https://<account-id>.r2.cloudflarestorage.com"
 ```
 
-Unknown keys are hard errors (typo protection), as are malformed files.
+| Key | Default | Meaning |
+|---|---|---|
+| `default_env` | `default` | Environment name when `--env` and `BARCA_ENV` are absent. |
+| `[discovery].include` | none | Glob patterns; only matching files are discovered. See [Discovery](/reference/discovery/). |
+| `[discovery].exclude` | none | Glob patterns skipped in addition to the built-in list. |
+| `[remote].uri` | none | Root of the remote store. |
+| `[remote].artifacts_uri` | `{uri}/{env}/artifacts` | Artifact location, used as written. |
+| `[remote].state_uri` | `{uri}/{env}/state/metadata.db` | Shared history location, used as written. |
+| `[remote].state` | `optimistic` if a state location resolves, else `off` | `optimistic` or `off`. |
+| `[remote].push_retries` | 5 | Conflict retries for the history upload. |
+| `[remote].transfer_concurrency` | 4 | Transfers in flight at once. |
+| `[remote].transfer_timeout` | 600 | Seconds one transfer attempt may run. |
+| `[remote.storage_options.<protocol>]` | none | Options for the fsspec filesystem of that protocol. |
+
+An unknown key or a malformed file is a usage error (exit 2) that names the key and lists the
+valid ones:
+
+```
+invalid ./barca.toml: TOML parse error at line 1, column 1
+unknown field `defualt_env`, expected one of `default_env`, `remote`, `discovery`
+```
+
+Keep credentials out of `barca.toml`; they come from the environment.
 
 ## Environment variables
 
+Variables that override `barca.toml`:
+
 | Variable | Overrides | Notes |
 |---|---|---|
-| `BARCA_ENV` | `default_env` | Beaten by `--env` |
-| `BARCA_REMOTE_URI` | `[remote].uri` | |
-| `BARCA_ARTIFACT_URI` | artifacts location | 0.4.0 back-compat: literal, artifacts-only, bypasses env prefixing (warns when combined with a non-default env) |
-| `BARCA_STATE_URI` | `[remote].state_uri` | Literal |
-| `BARCA_STATE` | `[remote].state` | `optimistic` / `off` |
-| `BARCA_PUSH_RETRIES` | `[remote].push_retries` | |
-| `BARCA_TRANSFER_CONCURRENCY` | `[remote].transfer_concurrency` | Positive integer |
-| `BARCA_TRANSFER_TIMEOUT` | `[remote].transfer_timeout` | Positive integer seconds, per attempt |
-| `BARCA_STORAGE_OPTIONS` | storage options | JSON keyed by protocol; merged **over** the toml tables per key |
-| `FSSPEC_<PROTOCOL>_<OPTION>` | one storage option | fsspec's own convention (`FSSPEC_S3_ENDPOINT_URL`, `FSSPEC_GCS_PROJECT`); beaten by both of the above |
+| `BARCA_ENV` | `default_env` | Overridden by `--env`. |
+| `BARCA_REMOTE_URI` | `[remote].uri` | Enough on its own to turn remote storage on. |
+| `BARCA_STATE_URI` | `[remote].state_uri` | Used as written. |
+| `BARCA_STATE` | `[remote].state` | `optimistic` or `off`; any other value exits 2. |
+| `BARCA_PUSH_RETRIES` | `[remote].push_retries` | An integer; anything else exits 2. |
+| `BARCA_TRANSFER_CONCURRENCY` | `[remote].transfer_concurrency` | A positive integer. In 0.18.0 an invalid value exits 3, not 2. |
+| `BARCA_TRANSFER_TIMEOUT` | `[remote].transfer_timeout` | Positive integer seconds, per attempt. In 0.18.0 an invalid value exits 3, not 2. |
+| `BARCA_STORAGE_OPTIONS` | `[remote.storage_options.*]` | JSON keyed by protocol, merged over the toml tables key by key. |
+| `FSSPEC_<PROTOCOL>_<OPTION>` | one storage option | fsspec's own convention (`FSSPEC_S3_ENDPOINT_URL`, `FSSPEC_GCS_PROJECT`). Overridden by both of the above. |
+| `BARCA_ARTIFACT_URI` | the artifact location | Used as written, with no environment name added, and history stays local. Kept from 0.4.0. Warns when combined with a non-default environment. Prefer `BARCA_REMOTE_URI` with `BARCA_STATE=off`. |
 
-Remote storage needs no `barca.toml`: `BARCA_REMOTE_URI` plus your cloud's usual credential
-variables is a complete setup. See [Remote Storage](/reference/remote-storage/).
+An empty value counts as unset.
+
+Variables with no `barca.toml` key:
+
+| Variable | Effect |
+|---|---|
+| `BARCA_OUTPUT` | `json` or `pretty`: the output format when no flag is given. Any other value exits 2. |
+| `BARCA_PROGRESS_SECS` | Seconds between `still running` lines on stderr (default 15; `0` turns them off). |
+| `BARCA_POOL_SIZE` | Number of Python worker processes (default: the available cores). |
+| `BARCA_TRACE_TIMING` | When set, prints a timing breakdown on stderr. |
+| `BARCA_TELEMETRY` | `datadog` sends finished runs to Datadog. See [Telemetry](/reference/telemetry/) for it and the `DD_*` variables. |
+| `BARCA_COMM_COST_SECONDS` | The scheduler's estimate of the cost of dispatching one step. |
+
+The [CLI contract](/reference/cli-contract/#environment-variables) marks each variable stable or
+experimental. `BARCA_SOCKET`, `BARCA_WORKER` and `BARCA_WORKER_ID` are set by barca for its own
+worker processes; do not set them.
+
+Credentials are read by the storage libraries from their usual variables (`AWS_*`,
+`GOOGLE_APPLICATION_CREDENTIALS`, `AZURE_STORAGE_*`). `BARCA_REMOTE_URI` plus those is a
+complete remote setup with no `barca.toml`. See [Remote Storage](/reference/remote-storage/).
 
 ## Environments (`--env`)
 
-`barca get/run/plan/serve/history/stats --env <name>` separates all state per
-named environment, so dev/staging/prod never share cache or artifacts.
-Names match `[A-Za-z0-9._-]+`.
+`--env <name>` keeps a separate cache, history and remote location per name, so `dev` and
+`prod` never share results. `get`, `run`, `status`, `sql`, `history`, `stats` and `serve`
+accept it. `plan` and `list` read no state and do not. The name comes from `--env`, then
+`BARCA_ENV`, then `default_env`, then `default`, and may contain letters, digits, `.`, `_`
+and `-`; anything else exits 2.
 
 | | env = `default` | named env `<e>` |
 |---|---|---|
-| local DB | `.barca/metadata.db` | `.barca/envs/<e>/metadata.db` |
+| local history | `.barca/metadata.db` | `.barca/envs/<e>/metadata.db` |
 | local artifacts | `.barca/artifacts/` | `.barca/envs/<e>/artifacts/` |
 | remote artifacts | `{uri}/default/artifacts/` | `{uri}/<e>/artifacts/` |
-| remote state | `{uri}/default/state/metadata.db` | `{uri}/<e>/state/metadata.db` |
+| remote history | `{uri}/default/state/metadata.db` | `{uri}/<e>/state/metadata.db` |
 
-The default env keeps the pre-0.5.0 local layout, so existing projects need
-no migration.
+```bash
+barca get total --env dev
+barca status total --env dev     # what is cached in dev
+barca sql "select * from total" --env dev
+```
+
+An environment that has never been used has no results: `barca status --env <e>` reports every
+node as `never_run`, and `barca sql "show tables" --env <e>` lists nothing. Neither is an error,
+so a misspelled name is not reported.
