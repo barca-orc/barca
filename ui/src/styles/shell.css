@@ -142,7 +142,15 @@
   color: var(--text-faint);
   font-size: 12px;
   cursor: text;
+  /* Shrinks before it pushes the actions off-screen; the placeholder then
+     truncates on its one line instead of wrapping out of the box, and the
+     shortcut hint gives way once there is no room for both. */
+  min-width: 0;
+  overflow: hidden;
+  container-type: inline-size;
 }
+.barca-search svg, .barca-search kbd { flex: none; }
+.barca-search span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .barca-search kbd {
   margin-left: auto;
   font-family: var(--font-mono);
@@ -153,6 +161,7 @@
   border-radius: 3px;
   padding: 1px 5px;
 }
+@container (max-width: 110px) { .barca-search kbd { display: none; } }
 .barca-top-actions { margin-left: auto; display: flex; align-items: center; gap: 3px; }
 .barca-divider-v { width: 1px; height: 22px; background: var(--border-default); margin: 0 6px; }
 
@@ -420,7 +429,9 @@
   font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--status-failed);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.barca-table-empty { color: var(--text-muted); font-family: var(--font-mono); font-size: var(--text-sm); }
+/* The message carries its own top spacing: the scroll area has none (see
+   .barca-table-scroll). */
+.barca-table-empty { margin-top: var(--space-4); color: var(--text-muted); font-family: var(--font-mono); font-size: var(--text-sm); }
 
 /* sortable headers */
 .barca-sort {
