@@ -326,23 +326,24 @@ enum HelperFailed {
 /// [`crate::helper_proc::STOP_GRACE`]: the call does not return while the helper is alive.
 /// Dropping the call kills the helper.
 ///
-/// With `cancel`, Ctrl-C is the caller's to act on (see [`crate::helper_proc`]): the helper is
-/// started deaf to it. Without `cancel` nobody would stop a shielded helper, so it is left to
-/// die with the terminal's Ctrl-C like the command that started it.
+/// Like every helper it is started deaf to Ctrl-C, which is the coordinator's to act on, and
+/// with a lifeline, so that it exits by itself if this process is killed (see
+/// [`crate::helper_proc`]).
 async fn run_helper(
     mut cmd: Command,
     cancel: Option<&CancellationToken>,
     limit: Option<std::time::Duration>,
 ) -> Result<std::process::Output, HelperFailed> {
-    if cancel.is_some() {
-        crate::helper_proc::shield_from_ctrl_c(&mut cmd);
-    }
-    cmd.stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
+    crate::helper_proc::shield_from_ctrl_c(&mut cmd);
+    crate::helper_proc::give_lifeline(&mut cmd);
+    cmd.stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
-    let child = cmd.spawn().map_err(HelperFailed::Spawn)?;
+    let mut child = cmd.spawn().map_err(HelperFailed::Spawn)?;
     let pid = child.id();
+    // Held until the helper is done or told to stop: `wait_with_output` would close it at
+    // once.
+    let lifeline = child.stdin.take();
     let output = child.wait_with_output();
     tokio::pin!(output);
     let cancelled = async {
@@ -362,14 +363,15 @@ async fn run_helper(
         _ = cancelled => HelperFailed::Cancelled,
         _ = timed_out => HelperFailed::TimedOut(limit.expect("a limit that passed")),
     };
+    drop(lifeline);
     if let Some(pid) = pid {
+        let grace = crate::helper_proc::STOP_GRACE;
         crate::helper_proc::terminate(pid);
-        if tokio::time::timeout(crate::helper_proc::STOP_GRACE, &mut output)
-            .await
-            .is_err()
-        {
+        if tokio::time::timeout(grace, &mut output).await.is_err() {
             crate::helper_proc::kill(pid);
-            let _ = (&mut output).await;
+            // A killed process is gone at once. Its output could only stay open if it had
+            // handed its pipes to a child of its own; do not wait for that for ever.
+            let _ = tokio::time::timeout(grace, &mut output).await;
         }
     }
     Err(why)
@@ -535,6 +537,93 @@ error: RefreshError: Reauthentication is needed.\n";
         quick.arg("-c").arg("echo done");
         let out = run_helper(quick, None, Some(std::time::Duration::from_secs(30))).await;
         assert_eq!(out.ok().map(|o| o.stdout), Some(b"done\n".to_vec()));
+    }
+
+    /// A script that writes its pid to `pid_file` and then does `then`.
+    fn script(pid_file: &Path, then: &str) -> Command {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
+            .arg(format!("echo $$ > {}; {then}", pid_file.display()));
+        cmd
+    }
+
+    async fn pid_in(pid_file: &Path) -> i64 {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if let Ok(pid) = std::fs::read_to_string(pid_file)
+                .unwrap_or_default()
+                .trim()
+                .parse()
+            {
+                return pid;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the helper never started"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+
+    /// A cancelled command must not return while a helper it started is alive: nothing may be
+    /// left to finish a transfer, or to print, after the command has reported its outcome.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_cancelled_helper_is_gone_when_the_call_returns() {
+        let dir = tempfile::tempdir().unwrap();
+        for (name, then) in [
+            ("obeys", "exec sleep 30"),
+            // Ignores SIGTERM: killed once the grace period is over.
+            ("deaf", "trap '' TERM; while :; do sleep 0.05; done"),
+        ] {
+            let pid_file = dir.path().join(name);
+            let cancel = CancellationToken::new();
+            let (seen, stop) = (pid_file.clone(), cancel.clone());
+            let canceller = tokio::spawn(async move {
+                let pid = pid_in(&seen).await;
+                stop.cancel();
+                pid
+            });
+            let failed = run_helper(script(&pid_file, then), Some(&cancel), None).await;
+            assert!(matches!(failed, Err(HelperFailed::Cancelled)), "{name}");
+            let pid = canceller.await.unwrap();
+            assert!(
+                !crate::db::pid_alive(pid),
+                "{name}: alive after the call returned"
+            );
+        }
+    }
+
+    /// Helpers are deaf to Ctrl-C, so a coordinator that is killed cannot stop them. Each is
+    /// given a lifeline instead: its stdin is a pipe that closes with the coordinator.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_helper_is_started_deaf_to_sigint_and_with_a_lifeline() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("pid");
+        // Sends itself SIGINT (ignored), checks the lifeline variable, then becomes `cat`,
+        // which ends only when its stdin does: the pipe run_helper holds open.
+        let helper = script(
+            &pid_file,
+            "kill -INT $$; test \"$BARCA_LIFELINE\" = stdin && exec cat",
+        );
+        let cancel = CancellationToken::new();
+        let run = run_helper(helper, Some(&cancel), None);
+        tokio::pin!(run);
+        let pid = tokio::select! {
+            _ = &mut run => panic!("the helper ended although its lifeline is open"),
+            pid = pid_in(&pid_file) => pid,
+        };
+        // Still running a moment later: SIGINT did not end it, and stdin is not at its end.
+        let still = tokio::time::timeout(std::time::Duration::from_millis(300), &mut run).await;
+        assert!(
+            still.is_err(),
+            "the helper ended although its lifeline is open"
+        );
+        assert!(crate::db::pid_alive(pid));
+        cancel.cancel();
+        assert!(matches!(run.await, Err(HelperFailed::Cancelled)));
+        assert!(!crate::db::pid_alive(pid));
     }
 
     async fn open_and_count(db_path: &str, table: &str) -> u64 {

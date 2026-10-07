@@ -8,7 +8,8 @@
 //!
 //! So helpers are started deaf to SIGINT ([`shield_from_ctrl_c`]) and are stopped by the
 //! coordinator with SIGTERM ([`stop`]), which they answer by removing the temp files they
-//! were writing and exiting.
+//! were writing and exiting. A helper that nobody can interrupt must not outlive a
+//! coordinator that was killed, so each also gets a lifeline ([`give_lifeline`]).
 
 use std::time::Duration;
 use tokio::process::{Child, Command};
@@ -27,6 +28,18 @@ pub(crate) fn shield_from_ctrl_c(cmd: &mut Command) {
             Ok(())
         });
     }
+}
+
+/// Give `cmd` a lifeline: its stdin is a pipe whose other end only this process holds, and
+/// `BARCA_LIFELINE=stdin` tells the helper to watch it (`barca._lifeline`). When this process
+/// is gone, however it went (`kill -9` included), the pipe reaches end-of-file and the helper
+/// removes its temp files and exits. A helper deaf to Ctrl-C needs this: nobody else would
+/// stop it.
+///
+/// The caller must keep the child's stdin handle open for as long as the helper should live.
+pub(crate) fn give_lifeline(cmd: &mut Command) {
+    cmd.env("BARCA_LIFELINE", "stdin")
+        .stdin(std::process::Stdio::piped());
 }
 
 /// Ask the process `pid` to stop (SIGTERM). The caller keeps waiting on it.

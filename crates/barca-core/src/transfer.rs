@@ -171,10 +171,104 @@ struct Pending {
     rx: ReplyRx,
 }
 
+/// A transfer helper that has been started and has not connected yet.
+///
+/// The helper is started early, so that its start-up overlaps planning, and it connects on
+/// its own while the run does other things: the listening socket holds the connection until
+/// [`Self::connect`] takes it. Whatever happens in between, the helper does not outlive this
+/// value: [`Self::stop`] stops it and waits for it to be gone, and dropping the value kills it
+/// on the spot. So a command that fails or is cancelled before its helper was ever used
+/// leaves no process behind to find the socket gone.
+pub struct Launching {
+    child: Child,
+    /// The helper's lifeline (see [`crate::helper_proc::give_lifeline`]). Kept out of `child`,
+    /// whose `wait` would close it.
+    lifeline: Option<tokio::process::ChildStdin>,
+    listener: UnixListener,
+    socket_path: PathBuf,
+    layout: ArtifactLayout,
+}
+
+impl Launching {
+    fn start(
+        mut cmd: Command,
+        socket_path: PathBuf,
+        layout: ArtifactLayout,
+    ) -> Result<Self, BarcaError> {
+        std::fs::remove_file(&socket_path).ok();
+        let listener = UnixListener::bind(&socket_path)
+            .map_err(|e| BarcaError::Other(format!("transfer socket bind: {e}")))?;
+        crate::helper_proc::shield_from_ctrl_c(&mut cmd);
+        crate::helper_proc::give_lifeline(&mut cmd);
+        cmd.env("BARCA_SOCKET", &socket_path)
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .kill_on_drop(true);
+        let mut child = cmd.spawn().map_err(|e| {
+            std::fs::remove_file(&socket_path).ok();
+            BarcaError::Other(format!("failed to spawn transfer helper: {e}"))
+        })?;
+        Ok(Self {
+            lifeline: child.stdin.take(),
+            child,
+            listener,
+            socket_path,
+            layout,
+        })
+    }
+
+    /// Wait for the helper to connect (it has 10 seconds from this call).
+    pub async fn connect(mut self) -> Result<TransferClient, BarcaError> {
+        let accepted = tokio::select! {
+            accepted = tokio::time::timeout(Duration::from_secs(10), self.listener.accept()) => {
+                match accepted {
+                    Ok(Ok((stream, _))) => Ok(stream),
+                    Ok(Err(e)) => Err(format!("transfer helper accept: {e}")),
+                    Err(_) => Err("timeout waiting for transfer helper to connect".to_string()),
+                }
+            }
+            status = self.child.wait() => Err(format!(
+                "transfer helper exited before connecting ({}) — is barca installed \
+                 with the extras for this artifact store?",
+                status.map(|s| s.to_string()).unwrap_or_else(|e| e.to_string())
+            )),
+        };
+        let stream = match accepted {
+            Ok(stream) => stream,
+            Err(why) => {
+                self.stop().await;
+                return Err(BarcaError::Other(why));
+            }
+        };
+        let (req_tx, req_rx) = mpsc::unbounded_channel();
+        let io_task = tokio::spawn(io_task(stream, req_rx));
+        Ok(TransferClient {
+            layout: self.layout,
+            child: self.child,
+            _lifeline: self.lifeline,
+            req_tx,
+            io_task,
+            socket_path: self.socket_path,
+            next_id: 0,
+            uploads: VecDeque::new(),
+            settled: Vec::new(),
+            fetches: HashMap::new(),
+        })
+    }
+
+    /// Stop the helper, which may still be starting, and return once it is gone.
+    pub async fn stop(mut self) {
+        crate::helper_proc::stop(&mut self.child).await;
+        std::fs::remove_file(&self.socket_path).ok();
+    }
+}
+
 /// Handle to the transfer helper process.
 pub struct TransferClient {
     layout: ArtifactLayout,
     child: Child,
+    /// Open for as long as the helper should live (see [`Launching`]).
+    _lifeline: Option<tokio::process::ChildStdin>,
     req_tx: mpsc::UnboundedSender<(TransferRequest, ReplyTx)>,
     io_task: JoinHandle<()>,
     socket_path: PathBuf,
@@ -190,12 +284,13 @@ pub struct TransferClient {
 }
 
 impl TransferClient {
-    /// Spawn `python -m barca._transfer` for this run's artifact store.
-    pub async fn start(
+    /// Start `python -m barca._transfer` for this run's artifact store. The helper is running
+    /// when this returns; [`Launching::connect`] waits for it to be ready.
+    pub fn launch(
         python: &Path,
         cfg: &ResolvedConfig,
         run_id: &str,
-    ) -> Result<Self, BarcaError> {
+    ) -> Result<Launching, BarcaError> {
         std::fs::create_dir_all(&cfg.local_artifact_dir)?;
         let local_root = std::fs::canonicalize(&cfg.local_artifact_dir)?;
         let layout = ArtifactLayout::new(local_root, &cfg.artifact_root);
@@ -213,64 +308,21 @@ impl TransferClient {
         if let Some(ref opts) = cfg.storage_options_json {
             cmd.env("BARCA_STORAGE_OPTIONS", opts);
         }
-        Self::spawn(
+        Launching::start(
             cmd,
             crate::protocol::socket_path(run_id, "transfer"),
             layout,
         )
-        .await
     }
 
-    /// Spawn `cmd` as the helper (it receives `BARCA_SOCKET`) and wait for it
+    /// Start `cmd` as the helper (it receives `BARCA_SOCKET`) and wait for it
     /// to connect.
     pub async fn spawn(
-        mut cmd: Command,
+        cmd: Command,
         socket_path: PathBuf,
         layout: ArtifactLayout,
     ) -> Result<Self, BarcaError> {
-        std::fs::remove_file(&socket_path).ok();
-        let listener = UnixListener::bind(&socket_path)
-            .map_err(|e| BarcaError::Other(format!("transfer socket bind: {e}")))?;
-        crate::helper_proc::shield_from_ctrl_c(&mut cmd);
-        cmd.env("BARCA_SOCKET", &socket_path)
-            .stdin(Stdio::null())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .kill_on_drop(true);
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| BarcaError::Other(format!("failed to spawn transfer helper: {e}")))?;
-
-        let stream = tokio::select! {
-            accepted = tokio::time::timeout(Duration::from_secs(10), listener.accept()) => {
-                accepted
-                    .map_err(|_| BarcaError::Other("timeout waiting for transfer helper to connect".into()))?
-                    .map_err(|e| BarcaError::Other(format!("transfer helper accept: {e}")))?
-                    .0
-            }
-            status = child.wait() => {
-                std::fs::remove_file(&socket_path).ok();
-                return Err(BarcaError::Other(format!(
-                    "transfer helper exited before connecting ({}) — is barca installed \
-                     with the extras for this artifact store?",
-                    status.map(|s| s.to_string()).unwrap_or_else(|e| e.to_string())
-                )));
-            }
-        };
-
-        let (req_tx, req_rx) = mpsc::unbounded_channel();
-        let io_task = tokio::spawn(io_task(stream, req_rx));
-        Ok(Self {
-            layout,
-            child,
-            req_tx,
-            io_task,
-            socket_path,
-            next_id: 0,
-            uploads: VecDeque::new(),
-            settled: Vec::new(),
-            fetches: HashMap::new(),
-        })
+        Launching::start(cmd, socket_path, layout)?.connect().await
     }
 
     pub fn layout(&self) -> &ArtifactLayout {
@@ -934,6 +986,54 @@ for t in threads: t.join()
         let r = within(c.drain()).await;
         assert_eq!((r.transferred, r.bytes), (1, 2));
         within(c.shutdown()).await;
+    }
+
+    /// A helper that is started and never used must not outlive the launch: a command that
+    /// ended early would otherwise leave it to find the socket gone (#249).
+    #[tokio::test]
+    async fn a_helper_that_never_connected_is_gone_after_stop_and_after_drop() {
+        let fx = Fixture::new();
+        for stopped in [true, false] {
+            let pid_file = fx.local.join(format!("pid-{stopped}"));
+            let mut cmd = Command::new("python3");
+            cmd.args([
+                "-c",
+                "import os, sys, time; open(sys.argv[1], 'w').write(str(os.getpid())); \
+                 time.sleep(60)",
+            ])
+            .arg(&pid_file);
+            let sock = crate::protocol::socket_path(
+                &format!("xfer-test-idle-{}-{}", std::process::id(), rand_suffix()),
+                "transfer",
+            );
+            let launching = Launching::start(cmd, sock.clone(), fx.layout()).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let pid: i64 = loop {
+                if let Ok(pid) = std::fs::read_to_string(&pid_file)
+                    .unwrap_or_default()
+                    .parse()
+                {
+                    break pid;
+                }
+                assert!(Instant::now() < deadline, "the helper never started");
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            };
+            if stopped {
+                within(launching.stop()).await;
+                assert!(!crate::db::pid_alive(pid), "alive after stop() returned");
+                assert!(!sock.exists());
+            } else {
+                drop(launching);
+                // Killed on the spot; the runtime reaps it a moment later.
+                while crate::db::pid_alive(pid) {
+                    assert!(
+                        Instant::now() < deadline,
+                        "alive after its launch was dropped"
+                    );
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            }
+        }
     }
 
     #[tokio::test]

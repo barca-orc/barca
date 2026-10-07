@@ -341,7 +341,7 @@ class ProcessHelper:
     `hold` pauses it at a point of python/tests/hold/sitecustomize.py until `release()`.
     """
 
-    def __init__(self, tmp_path, hold: str | None = None):
+    def __init__(self, tmp_path, hold: str | None = None, lifeline: bool = False):
         # A Unix socket path is limited to about 100 bytes; pytest's tmp_path is longer.
         self._sockdir = tempfile.mkdtemp(prefix="bx", dir="/tmp")
         self.hold_dir = tmp_path / f"hold-{os.path.basename(self._sockdir)}"
@@ -356,8 +356,15 @@ class ProcessHelper:
             env["PYTHONPATH"] = HOLD_SHIM + os.pathsep + env.get("PYTHONPATH", "")
             env["BARCA_TEST_HOLD"] = f"{hold}:{self.hold_dir}"
         self.hold = hold
+        if lifeline:
+            # As the coordinator starts it: stdin is a pipe only the coordinator holds.
+            env["BARCA_LIFELINE"] = "stdin"
         self.proc = subprocess.Popen(
-            [sys.executable, "-m", "barca._transfer"], env=env, stderr=subprocess.PIPE, text=True
+            [sys.executable, "-m", "barca._transfer"],
+            env=env,
+            stdin=subprocess.PIPE if lifeline else None,
+            stderr=subprocess.PIPE,
+            text=True,
         )
         try:
             self.peer, _ = server.accept()
@@ -397,8 +404,8 @@ class ProcessHelper:
 def process_helper(tmp_path):
     helpers = []
 
-    def start(hold: str | None = None) -> ProcessHelper:
-        helpers.append(ProcessHelper(tmp_path, hold))
+    def start(hold: str | None = None, lifeline: bool = False) -> ProcessHelper:
+        helpers.append(ProcessHelper(tmp_path, hold, lifeline))
         return helpers[-1]
 
     yield start
@@ -468,6 +475,93 @@ class TestSignals:
         code, err = h.finish()
         assert code == 128 + signal.SIGTERM, err
         assert list(dest.parent.iterdir()) == []
+
+
+class TestCoordinatorGone:
+    """The helper is deaf to Ctrl-C, so it has to notice by itself that the coordinator is
+    gone, and then leave without a word and without a half-written file (#249)."""
+
+    def _run(self, tmp_path, **env) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, "-m", "barca._transfer"],
+            env={**os.environ, "BARCA_SOCKET": str(tmp_path / "no-such.sock"), **env},
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+    def test_no_socket_and_no_coordinator_is_a_silent_exit(self, tmp_path):
+        # What a helper finds when the command that started it has already ended: the socket
+        # is gone and so is the other end of its lifeline (here: stdin at end-of-file).
+        proc = self._run(tmp_path, BARCA_LIFELINE="stdin")
+        assert (proc.returncode, proc.stdout, proc.stderr) == (0, "", "")
+
+    def test_no_socket_with_the_coordinator_alive_is_one_line_not_a_traceback(self, tmp_path):
+        proc = self._run(tmp_path)
+        assert proc.returncode == 1
+        (line,) = proc.stderr.strip().splitlines()
+        assert line.startswith("[barca] transfer helper: cannot reach the coordinator at ")
+        assert "Error: " in line and "Traceback" not in proc.stderr
+
+    def test_the_helper_leaves_when_its_lifeline_closes_mid_download(
+        self, process_helper, tmp_path
+    ):
+        h = process_helper(hold="get", lifeline=True)
+        remote = _store_file(tmp_path, b'{"x": 1}')
+        local = tmp_path / "local" / "h.json"
+        h.request({"type": "get", "id": 1, "remote": str(remote), "local": str(local)})
+        h.wait_until_held()
+        assert [p.name.endswith(".tmp") for p in local.parent.iterdir()] == [True]
+
+        h.proc.stdin.close()  # the coordinator was killed
+        code, err = h.finish()
+        assert (code, err) == (0, "")
+        assert list(local.parent.iterdir()) == []
+
+    def test_the_helper_leaves_when_the_socket_closes_mid_download(self, process_helper, tmp_path):
+        h = process_helper(hold="get")
+        remote = _store_file(tmp_path, b'{"x": 1}')
+        local = tmp_path / "local" / "h.json"
+        h.request({"type": "get", "id": 1, "remote": str(remote), "local": str(local)})
+        h.wait_until_held()
+
+        h.peer.close()
+        code, err = h.finish()
+        assert (code, err) == (0, "")
+        assert list(local.parent.iterdir()) == []
+
+    def test_the_state_helper_leaves_when_its_lifeline_closes(self, tmp_path):
+        hold_dir = tmp_path / "hold"
+        hold_dir.mkdir()
+        db = tmp_path / "metadata.db"
+        db.write_bytes(b"not looked at")
+        env = {
+            **os.environ,
+            "BARCA_LIFELINE": "stdin",
+            "PYTHONPATH": HOLD_SHIM + os.pathsep + os.environ.get("PYTHONPATH", ""),
+            "BARCA_TEST_HOLD": f"push:{hold_dir}",
+        }
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "barca._state", "push", str(tmp_path / "s" / "m.db"), str(db)],
+            env=env,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            deadline = time.monotonic() + 30
+            while not (hold_dir / "push.started").exists():
+                assert proc.poll() is None and time.monotonic() < deadline
+                time.sleep(0.02)
+            proc.stdin.close()
+            out, err = proc.stdout.read(), proc.stderr.read()
+            assert proc.wait(timeout=30) == 0
+        finally:
+            proc.kill()
+        assert (out, err) == ("", "")
+        assert not (tmp_path / "s" / "m.db").exists()
 
 
 class TestCrossProcess:

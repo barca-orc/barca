@@ -45,7 +45,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from barca import _runtime, _storage
+from barca import _lifeline, _runtime, _storage
 
 _DEFAULT_CONCURRENCY = 4
 _DEFAULT_RETRIES = 3
@@ -338,7 +338,21 @@ def main() -> int:
     # coordinator that is still waiting on it, and print a KeyboardInterrupt traceback.
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     signal.signal(signal.SIGTERM, _stop)
-    sock = _runtime.connect()
+    # Deaf to Ctrl-C, so this process must notice by itself when the coordinator is gone.
+    _lifeline.watch()
+    try:
+        sock = _runtime.connect()
+    except OSError as exc:
+        # No socket to connect to. If the coordinator has gone (it failed, or was cancelled,
+        # before it ever used this helper) there is nobody to tell: exit without a word.
+        if _lifeline.coordinator_gone(wait=1.0):
+            return 0
+        print(
+            f"[barca] transfer helper: cannot reach the coordinator at "
+            f"{os.environ['BARCA_SOCKET']}: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return 1
     assert sock is not None
     serve(
         sock,
@@ -347,6 +361,9 @@ def main() -> int:
         timeout=_env_float("BARCA_TRANSFER_TIMEOUT", _DEFAULT_TIMEOUT),
     )
     _runtime.disconnect()
+    # Whatever was still in flight is abandoned (the coordinator disconnected, or an attempt
+    # timed out): leave no temp file of it.
+    _storage.discard_staged()
     # Exit without joining pool threads: a timed-out attempt may be stuck in
     # a network call that would otherwise keep the process alive.
     sys.stdout.flush()

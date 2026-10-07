@@ -2167,10 +2167,12 @@ async fn execute(
             Ok::<_, BarcaError>((pulled, started.elapsed()))
         })
     });
-    let transfer_start = cfg.remote_artifacts().then(|| {
-        let (python, cfg, run_id) = (python.to_path_buf(), cfg.clone(), run_id.clone());
-        Background::spawn(async move { TransferClient::start(&python, &cfg, &run_id).await })
-    });
+    // Not a task: the helper connects on its own while this function goes on, and the value
+    // stops it if this function returns before using it (see `transfer::Launching`).
+    let mut transfer_start = match cfg.remote_artifacts() {
+        true => Some(TransferClient::launch(python, cfg, &run_id)?),
+        false => None,
+    };
 
     let dag = build_dag(file_args, python).await?;
     trace_point!("dag_built");
@@ -2219,7 +2221,18 @@ async fn execute(
     // is a hard error — silently diverging local runs are worse than stopping.
     let mut state_token = match pull {
         Some(pull) => {
-            let (state_sync::Pulled { token, carried }, took) = pull.join().await??;
+            let pulled = match pull.join().await.and_then(|pulled| pulled) {
+                Ok(pulled) => pulled,
+                Err(e) => {
+                    // The command ends here (the pull failed, or Ctrl-C cancelled it). It
+                    // does not return before the transfer helper it started is gone.
+                    if let Some(start) = transfer_start.take() {
+                        start.stop().await;
+                    }
+                    return Err(e);
+                }
+            };
+            let (state_sync::Pulled { token, carried }, took) = pulled;
             if let Some(note) = carried.note() {
                 eprintln!("{note}");
             }
@@ -2362,7 +2375,7 @@ async fn execute(
     // artifact dir; the transfer helper uploads finished artifacts in the
     // background and fetches cache hits recorded by other machines.
     let mut store: Option<StoreSync> = if let Some(start) = transfer_start {
-        Some(StoreSync::new(start.join().await??, cancel.clone()))
+        Some(StoreSync::new(start.connect().await?, cancel.clone()))
     } else {
         None
     };
