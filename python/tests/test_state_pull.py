@@ -19,6 +19,7 @@ import os
 import signal
 import sqlite3
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -204,7 +205,7 @@ def shared_runs(state_uri: Path) -> dict[str, str]:
 
 def no_pull_leftovers(machine: Machine) -> None:
     names = sorted(p.name for p in machine.db.parent.iterdir())
-    assert [n for n in names if ".pull-" in n or n.endswith(".tmp")] == [], names
+    assert [n for n in names if ".pull-" in n or ".tmp" in n] == [], names
 
 
 def test_a_killed_run_is_resumed_and_other_machines_history_is_kept(machines, state_uri):
@@ -510,5 +511,149 @@ def test_a_local_history_that_cannot_be_opened_is_replaced_with_a_warning(machin
 
     out = a.barca("status", "a_one.py", "--json")
     assert out.returncode == 0, out.stderr
-    assert "warning: the local history could not be read" in out.stderr, out.stderr
+    assert "warning: the local history file is not a database" in out.stderr, out.stderr
+    assert a.local_runs() == {a_first, b_run}
+
+
+def pull_kind(out: subprocess.CompletedProcess) -> str:
+    """How a `barca get` run with BARCA_TRACE_TIMING=1 brought its local database up to date."""
+    (line,) = [ln for ln in out.stderr.splitlines() if "state_sync_pull (" in ln]
+    return line.split("state_sync_pull (")[1].rstrip(")")
+
+
+def test_a_pull_does_only_the_work_the_situation_needs(machines, state_uri):
+    a, b = machines("a"), machines("b")
+    trace = {"BARCA_TRACE_TIMING": "1"}
+    (a.root / "a_one.py").write_text(quick("a_one"))
+
+    def get() -> subprocess.CompletedProcess:
+        out = a.barca("get", "a_one.py", "--json", **trace)
+        assert out.returncode == 0, out.stderr
+        return out
+
+    assert pull_kind(get()) == "Absent"
+    # Nobody pushed since A did: nothing is downloaded, the local database is not touched.
+    out = get()
+    assert pull_kind(out) == "Unchanged"
+    assert "[barca] shared state unchanged" in out.stderr
+    assert a.states("a_one.py") == {"a_one": "cached"}
+    # B pushed, and A wrote nothing since its own push: the download takes the local
+    # database's place without either being read, however long the history is.
+    b.get("b_one")
+    assert pull_kind(get()) == "Replaced"
+    # A has a run that was never pushed. While the shared state stays as it is there is
+    # still nothing to pull; the run made here pushes the unpushed one along with itself.
+    unpushed = a.get("a_off", BARCA_STATE="off")
+    assert pull_kind(get()) == "Unchanged"
+    assert unpushed in shared_runs(state_uri)
+    # Unpushed rows and a shared state that moved: now the two are compared.
+    a.get("a_off_again", BARCA_STATE="off")
+    b.get("b_two")
+    out = get()
+    assert pull_kind(out) == "Merged"
+    assert "kept 1 run and 1 finished step" in out.stderr
+
+
+def test_what_a_pull_kept_is_said_once_until_it_is_pushed(machines, state_uri):
+    a, b = machines("a"), machines("b")
+    a.get("a_one")
+    killed = a.kill(a.start_slow())
+    b.get("b_one")
+
+    # The first command to pull says what it kept. Commands that only look cannot push it, and
+    # do not say it again: neither while the shared state stays as it is...
+    first = a.barca("status", "slow.py", "--json")
+    assert first.returncode == 0, first.stderr
+    assert KEPT_THE_KILLED_RUN in first.stderr, first.stderr
+    again = a.barca("status", "slow.py", "--json")
+    assert "kept" not in again.stderr, again.stderr
+    # ...nor after another machine pushed and the same rows had to be kept once more.
+    b_two = b.get("b_two")
+    for args in (("get", "slow.py", "--dry-run", "--json"), ("status", "slow.py", "--json")):
+        out = a.barca(*args)
+        assert out.returncode == 0, out.stderr
+        assert "kept" not in out.stderr, (args, out.stderr)
+    assert {killed, b_two} <= a.local_runs()
+    assert a.states() == {"first": "cached", "slow": "never_run"}
+    assert killed not in shared_runs(state_uri)
+
+    # The next run pushes it.
+    a.resume_slow()
+    assert shared_runs(state_uri)[killed] == "interrupted"
+
+
+def test_a_local_history_held_open_by_another_program_is_not_replaced(machines, state_uri):
+    a, b = machines("a"), machines("b")
+    a.get("a_one")
+    killed = a.kill(a.start_slow())
+    b.get("b_one")
+
+    # Another program has A's database open, in the middle of reading it.
+    holder = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import sqlite3, sys, time\n"
+            "cursor = sqlite3.connect(sys.argv[1]).execute('SELECT * FROM runs')\n"
+            "cursor.fetchone()\n"
+            "print('held', flush=True)\n"
+            "time.sleep(120)\n",
+            str(a.db),
+        ],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert holder.stdout.readline().strip() == "held"
+        out = a.barca("status", "slow.py", "--json")
+    finally:
+        holder.kill()
+        holder.wait(timeout=WAIT)
+        holder.stdout.close()
+    assert out.returncode == 3, (out.returncode, out.stderr)
+    assert "in use by another program" in out.stderr, out.stderr
+    assert "left as it was" in out.stderr, out.stderr
+    assert "replaced" not in out.stderr
+    no_pull_leftovers(a)
+
+    # Nothing was lost: once the other program lets go, the killed run resumes and is shared.
+    assert killed in a.local_runs()
+    out = a.resume_slow()
+    assert json.loads(out.stdout)["steps_executed"] == 1
+    assert shared_runs(state_uri)[killed] == "interrupted"
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can read a file without read permission")
+def test_a_local_history_that_cannot_be_read_is_not_replaced(machines, state_uri):
+    a, b = machines("a"), machines("b")
+    a.get("a_one")
+    killed = a.kill(a.start_slow())
+    b.get("b_one")
+
+    a.db.chmod(0o000)
+    try:
+        out = a.barca("get", "slow.py", "--dry-run", "--json")
+    finally:
+        a.db.chmod(0o644)
+    assert out.returncode == 3, (out.returncode, out.stderr)
+    assert "left as it was" in out.stderr, out.stderr
+    no_pull_leftovers(a)
+    assert killed in a.local_runs()
+    assert json.loads(a.resume_slow().stdout)["steps_executed"] == 1
+    assert shared_runs(state_uri)[killed] == "interrupted"
+
+
+def test_a_truncated_local_history_is_replaced_with_a_warning(machines, state_uri):
+    a, b = machines("a"), machines("b")
+    a_first = a.get("a_one")
+    b_run = b.get("b_one")
+    a.get("a_two", BARCA_STATE="off")  # a local write, so the file is looked at
+    whole = a.db.read_bytes()
+    a.db.write_bytes(whole[: len(whole) - 1000])
+    Path(f"{a.db}-wal").unlink(missing_ok=True)
+
+    out = a.barca("status", "a_one.py", "--json")
+    assert out.returncode == 0, out.stderr
+    assert "warning: the local history file is not a database" in out.stderr, out.stderr
+    assert "cut short" in out.stderr, out.stderr
     assert a.local_runs() == {a_first, b_run}

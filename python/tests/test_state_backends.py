@@ -262,6 +262,21 @@ def test_stale_token_conflicts(backend, tmp_path):
         push(uri, v3, tok1)  # stale precondition must be rejected
 
 
+def test_pull_unless_token_skips_an_unchanged_object(backend, tmp_path):
+    """A caller that already has the object named by a token is not sent it again."""
+    uri = backend.make_uri(tmp_path)
+    tok1 = push(uri, _write(tmp_path, "v1.db", b"state-one"), None)
+
+    dest = tmp_path / "pulled.db"
+    assert pull(uri, dest, unless_token=tok1) == tok1
+    assert not dest.exists()  # nothing downloaded
+
+    # Once the object changes, the same call downloads it and returns the new token.
+    tok2 = push(uri, _write(tmp_path, "v2.db", b"state-two"), tok1)
+    assert pull(uri, dest, unless_token=tok1) == tok2
+    assert dest.read_bytes() == b"state-two"
+
+
 # ─── through the CLI: what a pull does to the local database ─────────────────
 #
 # The same on every backend: the blob is downloaded next to the local database and swapped

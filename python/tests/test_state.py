@@ -110,6 +110,21 @@ class TestCliContract:
         out = json.loads(r.stdout)
         assert out == {"exists": False, "token": None}
 
+    def test_pull_unless_token_reports_unchanged_and_downloads_nothing(self, shared, tmp_path):
+        local = tmp_path / "local.db"
+        _write(local, b"v1")
+        token = json.loads(self._run("push", str(shared), str(local)).stdout)["token"]
+
+        dest = tmp_path / "b.db"
+        r = self._run("pull", str(shared), str(dest), "--unless-token", token)
+        assert r.returncode == 0, r.stderr
+        assert json.loads(r.stdout) == {"exists": True, "token": token, "unchanged": True}
+        assert not dest.exists()
+
+        r = self._run("pull", str(shared), str(dest), "--unless-token", "another-token")
+        assert json.loads(r.stdout) == {"exists": True, "token": token, "unchanged": False}
+        assert dest.read_bytes() == b"v1"
+
     def test_push_create_pull_and_conflict_exit_codes(self, shared, tmp_path):
         local = tmp_path / "local.db"
         _write(local, b"v1")
