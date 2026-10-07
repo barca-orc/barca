@@ -12,10 +12,9 @@ only the affected subgraph re-runs.
 ### What the definition covers
 
 The definition part of the hash is the function's source, its decorator arguments, and its
-**dependency cone**: every module-level function, constant and import the function uses, followed
-transitively. That includes **helper modules in your project**: `.py` files in the pipeline
-file's directory and its subdirectories (packages with or without `__init__.py`). Both import
-styles are followed, at the same precision:
+**dependency cone**: every module-level function, class, constant and import the function uses,
+followed transitively. That includes **helper modules in your project**. Both import styles are
+followed, at the same precision:
 
 ```python
 # helpers.py
@@ -41,43 +40,108 @@ def rows() -> list:
 Editing `clean` (or anything `clean` calls) changes `rows`' hash and it re-runs; editing `unused`
 does not. `from helpers import clean` + `clean(...)`, `import pkg.mod as m` + `m.f()`,
 `import pkg.mod` + `pkg.mod.f()` and `from pkg import mod` + `mod.f()` hash exactly the same
-way: only the definitions the step uses, never the whole module. Modules outside the project
-(the standard library, installed packages) are not hashed: after upgrading one, recompute with
-`--refresh-all` or `--refresh` (below).
+way: only the definitions the step uses, never the whole module.
 
 The pipeline file can be named any way on the command line: `barca get rows pipeline.py`,
 `./pipeline.py`, an absolute path, and `barca get rows project/pipeline.py` from the parent
 directory all compute the same run hash and the same node id, relative to the project root
 (`pipeline.py:rows`, or `project/pipeline.py:rows` when the root is the parent directory).
 
-Also followed:
+#### What counts as a use
 
-- **Classes** (`from helpers import Model`): the whole class is hashed, methods and
-  class-level code, and what they use. Editing `Model.predict` re-runs; editing another class in
-  the module does not. Classes defined in the pipeline file itself count the same way.
-- **Imports inside the function body** (`def rows(): from helpers import clean`), including in
-  nested blocks and methods: followed like a module-level import, at the same precision.
-- **A module used as a value** (`getattr(helpers, name)()`, or passing `helpers` around): which
-  attribute is read cannot be known statically, so the **whole module** is hashed, and so is
-  everything it uses. This is deliberately conservative: any edit to that module re-runs the
-  step.
-- **Modules above the pipeline file's directory**, up to the **project root** (the directory
-  barca runs in, see "Where things live"): a pipeline in `pipelines/p.py` using
-  `from shared.utils import f` follows `shared/utils.py` at the root, because the root is on the
-  worker's import path. A module in the pipeline file's own directory wins over a same-named one
-  at the root, as it does when Python imports it. The boundary is the root and what is below it:
-  `../shared/` outside the root, or a directory you add to `sys.path` yourself, is not followed.
+- **Functions and constants**: the definition's source, and what it uses in turn.
+- **Classes** (`from helpers import Model`, or a class in the pipeline file): the whole class is
+  hashed, its methods and class-level code, and what they use, including its base classes and
+  metaclass. Editing `Model.predict` or `Model`'s base class re-runs; editing another class in
+  the module does not.
+- **Aliases**: `from helpers import clean as c` and `import helpers as h` are followed exactly
+  like the unaliased forms.
+- **Imports inside a function or class body** (`def rows(): from helpers import clean`),
+  including in nested blocks and methods, with or without an alias: followed like a
+  module-level import, at the same precision.
+- **A module used as a value** (`getattr(helpers, name)()`, `run(helpers)`, `m = helpers`):
+  which attribute is read cannot be known statically, so the **whole module** is hashed, and
+  what its definitions use. This is deliberately conservative: any edit to that module re-runs
+  the step. It applies only when the name really is the module: a parameter, local variable,
+  loop or comprehension variable called `helpers` is not.
 
-Not followed (an edit there does not change the hash; recompute with `--refresh-all` or
-`--refresh`): modules outside the project root, imports built at run time
-(`importlib.import_module(name)`), and `import x` of a module that only a custom `sys.path`
-entry makes importable.
+For functions, classes, constants and `module.attr`, barca does not work out local scopes: a
+parameter called `rate` counts as a use of a module-level `rate`. That can only cause an extra
+re-run, never a stale result.
+
+#### Which file a module name means
+
+A module name is looked up exactly where the worker's `import` looks: for a pipeline file inside
+a package (every directory from the project root down to the file has an `__init__.py`), in the
+project root only; for any other pipeline file, in the file's own directory and then in the
+project root; and in the packages below those directories, with or without `__init__.py`.
+
+| Pipeline file | `from helpers import f` means | A sibling module is |
+|---|---|---|
+| `p.py` in the root | `helpers.py` in the root | `from helpers import f` |
+| `pipelines/p.py`, no `pipelines/__init__.py` | `pipelines/helpers.py` if it exists, else `helpers.py` in the root | `from helpers import f` |
+| `pkg/p.py`, with `pkg/__init__.py` | `helpers.py` in the root, never `pkg/helpers.py` | `from .helpers import f` or `from pkg.helpers import f` |
+
+So a pipeline in `pipelines/p.py` using `from shared.utils import f` follows `shared/utils.py` in
+the root, and a module beside the pipeline file shadows a same-named one in the root, as it does
+when Python imports it. The project root is the boundary (see "Where things live"): a module in
+`../shared/` outside it, or in a directory you add to `sys.path` or `PYTHONPATH` yourself, is not
+followed. As in Python, a package (`helpers/__init__.py`) wins over a module (`helpers.py`) in
+the same directory.
+
+Only files a step imports are read, each once per command. Barca never walks the project to
+look for helpers, and it never reads or hashes the standard library or installed packages,
+wherever the virtualenv is (`.venv/`, `venv/`, inside or outside the project): after upgrading
+a package, recompute with `--refresh-all` or `--refresh` (below).
+
+#### Not followed
+
+An edit in one of these does not change the hash; recompute with `--refresh-all` or `--refresh`:
+
+- modules outside the project root, and modules only a custom `sys.path` or `PYTHONPATH` entry
+  makes importable;
+- imports built at run time: `importlib.import_module(name)`, `__import__(name)`, and
+  `getattr` on anything but a module barca can see imported. Static analysis cannot follow
+  these, and barca does not run your code to plan;
+- `from helpers import *`, and names a module defines anywhere but at its top level (inside an
+  `if` or `try`, or assigned dynamically);
+- a module reached through another module's `import` (`from helpers import other` where
+  `helpers.py` does `import other`): import it directly;
+- what a helper refers to only in a decorator, a default argument value, an `except` clause's
+  exception type, a `match` pattern, a set literal (`{f()}`), an assignment target
+  (`table[key()] = ...`) or a loop's `else:` block. The helper's own text is hashed, but those
+  references are not followed;
+- helpers more than six project modules away along an import chain.
+
+Two pipeline directories that each have a `helpers.py` are hashed correctly, each against its
+own, but share one `sys.path` in a worker (`barca docs discovery`, "Node ids"): give such
+helpers distinct names.
+
+#### After upgrading to 0.18
+
+Barca 0.18 started following classes, imports inside function bodies, aliased `from` imports,
+modules used as values, and root modules imported from a subdirectory. A step that uses one of
+these has a new hash, so it **recomputes once** on the first run after upgrading; its downstream
+steps recompute with it. Specifically, a step recomputes once if its function, or a helper it
+reaches, uses:
+
+- a class defined in the project (in the pipeline file or imported);
+- a project module imported inside a function or class body;
+- `from module import name as alias`, where `module` is a project module;
+- a project module as a value (`getattr(helpers, name)`, passing `helpers` along);
+- from a pipeline in a subdirectory, a module that lives in the project root;
+- or if its pipeline file is inside a package (`pkg/__init__.py` next to it) and imports
+  project modules (`from .helpers import f`, `from pkg.helpers import f`): these now resolve
+  from the root, as they do when the step runs.
+
+Every other step keeps its hash and its cached results.
 
 Barca runs exactly the source it hashed. It never runs stale bytecode for your pipeline files or
-the modules they import from the same directory tree: their `__pycache__` .pyc files are checked against a
-hash of the source, not its mtime and size, so an edit that keeps both (a same-size edit within
-one second, or a tool that pins mtimes such as Nix, Bazel, `touch -t` or `rsync -t`) still runs
-the new code. Installed packages import as usual.
+the project modules they import, from the file's directory tree or from the project root: their
+`__pycache__` .pyc files are checked against a hash of the source, not its mtime and size, so an
+edit that keeps both (a same-size edit within one second, or a tool that pins mtimes such as
+Nix, Bazel, `touch -t` or `rsync -t`) still runs the new code. Installed packages import as
+usual.
 
 Environment variables a function reads **without** declaring them are not part of the hash:
 changing one does not invalidate anything. Declare them with `@asset(env=["NAME"])`

@@ -302,9 +302,9 @@ the tasks in `tasks.py`; run a task by name with `barca run <task> <files>`.
 ### Helper modules and the cache
 
 Plain helper modules don't need to be passed on the command line. An asset's run hash covers the
-helpers it uses from `.py` files in the pipeline file's directory and its subdirectories, so
-editing one re-runs exactly the assets that use it. Both import styles are followed, and both hash
-only the definitions the asset uses, not the whole module:
+helpers it uses from your project's `.py` files, so editing one re-runs exactly the assets that
+use it. Both import styles are followed, and both hash only the definitions the asset uses, not
+the whole module:
 
 ```python
 import helpers                    # helpers.clean(...)
@@ -315,12 +315,20 @@ from helpers import clean         # clean(...)
 Editing `clean` (or anything it calls) re-runs the assets that call it; editing another function
 in `helpers.py` re-runs nothing. The pipeline path can be spelled any way (`pipeline.py`,
 `./pipeline.py`, an absolute path, or `my_project/pipeline.py` from the parent directory): all
-compute the same run hash. Class bodies, imports inside a function body, and modules under the project root above the
-pipeline's directory are followed too. A module used as a value (`getattr(helpers, name)`) is
-hashed whole, so any edit to it re-runs. Standard-library and installed packages are never
-hashed, nor are modules outside the project root or built at run time. In those cases recompute with
+compute the same run hash.
+
+Classes (the whole class, with its base classes), aliased imports (`from helpers import clean as
+c`) and imports inside a function body are followed the same way. A module used as a value
+(`getattr(helpers, name)`) is hashed whole, so any edit to it re-runs.
+
+A module name means the file Python imports when the step runs: for a pipeline file inside a
+package, a module in the project root; for any other pipeline file, a module beside the file,
+then one in the project root. Only files a step imports are read. The standard library and
+installed packages are never hashed, nor are modules outside the project root or imports built
+at run time (`importlib.import_module(name)`). In those cases recompute with
 `barca get <asset> pipeline.py --refresh-all` (or `--refresh <asset>` on `get` or `run`).
-See `barca docs cache`.
+See `barca docs cache` for the full rules, the known gaps, and what recomputes once after
+upgrading to 0.18.
 
 ## 9. Freshness markers
 
