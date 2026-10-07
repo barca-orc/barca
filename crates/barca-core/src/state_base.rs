@@ -18,7 +18,7 @@
 //! again. Whatever the file says, every pull downloads, carries the local rows the download
 //! lacks, and swaps.
 //!
-//! Two fields:
+//! Three fields:
 //!
 //! - `seq`, incremented on every write, so that two states of the file are never equal (it
 //!   starts from the clock when there is no readable predecessor, so a file recreated after
@@ -26,6 +26,11 @@
 //! - `kept`, what the last pull carried over ([`crate::state_carry::Carried::digest`]), so
 //!   that the same rows are not announced again by every command until a run pushes them.
 //!   It only decides whether a line is printed.
+//! - `pulled`, which version of the shared state object the last swap put in place (its
+//!   token), so that pulling the same version again while local rows are still unpushed does
+//!   not count as a new generation for `<db>.prev` ([`crate::state_prev`]). It only decides
+//!   whether the kept file is replaced; a wrong value keeps an older or a newer generation,
+//!   both whole.
 
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -34,6 +39,9 @@ use std::fs;
 pub(crate) struct Base {
     pub seq: u64,
     pub kept: String,
+    /// Absent in records written before 0.18.
+    #[serde(default)]
+    pub pulled: String,
 }
 
 pub(crate) fn path(db_path: &str) -> String {
@@ -51,10 +59,24 @@ pub(crate) fn parse(raw: Option<&[u8]>) -> Option<Base> {
 }
 
 /// Write the next state of the file, atomically. The caller holds the database lock.
-/// `previous` is what [`read_raw`] returned under that lock.
-pub(crate) fn write(db_path: &str, previous: Option<&[u8]>, kept: &str) -> std::io::Result<()> {
+/// `previous` is what [`read_raw`] returned under that lock. `pulled` is the version of the
+/// shared state a swap has just put in place; `None` (no swap) keeps what the record says.
+pub(crate) fn write(
+    db_path: &str,
+    previous: Option<&[u8]>,
+    kept: &str,
+    pulled: Option<&str>,
+) -> std::io::Result<()> {
+    let before = parse(previous);
     let base = Base {
-        seq: match parse(previous) {
+        pulled: match pulled {
+            Some(version) => version.to_string(),
+            None => before
+                .as_ref()
+                .map(|b| b.pulled.clone())
+                .unwrap_or_default(),
+        },
+        seq: match before {
             Some(b) => b.seq.saturating_add(1),
             // No readable predecessor: start from the clock, which no earlier state used.
             None => std::time::SystemTime::now()
@@ -81,7 +103,7 @@ mod tests {
 
         let mut seen = vec![read_raw(&db)];
         for kept in ["", "", "1:2:0:0:r1", ""] {
-            write(&db, read_raw(&db).as_deref(), kept).unwrap();
+            write(&db, read_raw(&db).as_deref(), kept, None).unwrap();
             let now = read_raw(&db);
             assert!(!seen.contains(&now), "a state of the file repeated");
             assert_eq!(parse(now.as_deref()).unwrap().kept, kept);
@@ -98,7 +120,24 @@ mod tests {
         fs::write(path(&db), b"not json").unwrap();
         let garbage = read_raw(&db);
         assert_eq!(parse(garbage.as_deref()), None);
-        write(&db, garbage.as_deref(), "").unwrap();
+        write(&db, garbage.as_deref(), "", None).unwrap();
         assert_ne!(read_raw(&db), garbage);
+    }
+
+    #[test]
+    fn the_pulled_version_is_set_by_a_swap_and_kept_by_every_other_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("m.db").to_string_lossy().to_string();
+        let pulled = |db: &str| parse(read_raw(db).as_deref()).unwrap().pulled;
+        write(&db, None, "", None).unwrap();
+        assert_eq!(pulled(&db), "");
+        write(&db, read_raw(&db).as_deref(), "", Some("etag-1")).unwrap();
+        write(&db, read_raw(&db).as_deref(), "1:0:0:0:r", None).unwrap();
+        assert_eq!(pulled(&db), "etag-1");
+        write(&db, read_raw(&db).as_deref(), "", Some("etag-2")).unwrap();
+        assert_eq!(pulled(&db), "etag-2");
+        // A record from before the field existed says nothing.
+        fs::write(path(&db), br#"{"seq":7,"kept":""}"#).unwrap();
+        assert_eq!(pulled(&db), "");
     }
 }

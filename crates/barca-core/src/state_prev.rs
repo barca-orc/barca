@@ -28,8 +28,12 @@
 //! would leave `<db>.prev` following every later write to the live database.
 //!
 //! Not kept: a local file that held no barca history (absent, empty, not a database), and a
-//! pull that changes nothing (the download is byte-for-byte the local database), which would
-//! otherwise overwrite the one generation with a copy of what is already there.
+//! pull that brings nothing new, which would otherwise overwrite the one generation with a
+//! copy of what is already there. That is a download that is byte-for-byte the local database,
+//! and a download of the same version of the shared state object as the last swap put in
+//! place (the local database is then that version plus rows recorded only here, which are
+//! carried again). So `<db>.prev` is the local database as it was before the last pull that
+//! brought in a different version of the shared history.
 
 use std::fs;
 use std::io;

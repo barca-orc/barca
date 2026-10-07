@@ -222,6 +222,7 @@ async fn pull_into(
     let incoming = crate::db::Incoming {
         staged,
         base_at_start: base_raw.as_deref(),
+        version: Some(token),
     };
     let replaced = match held {
         Some(lock) => crate::db::replace_db_holding(lock, &cfg.db_path, incoming).await?,

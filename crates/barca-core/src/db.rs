@@ -219,6 +219,8 @@ pub(crate) struct Incoming<'a> {
     pub staged: &'a Path,
     /// The base record ([`crate::state_base::read_raw`]) as it was before the download began.
     pub base_at_start: Option<&'a [u8]>,
+    /// Which version of the shared state object this is (its token), when known.
+    pub version: Option<&'a str>,
 }
 
 /// What [`replace_db`] did.
@@ -405,8 +407,15 @@ async fn replace_locked(
     // Keep what the swap replaces (`<db>.prev`), when that is a barca history and the swap
     // changes it. The file gets its second name now and becomes `.prev` after the swap; if
     // the swap does not happen, dropping `prev` takes the name away again.
-    let changes = !unchanged || carried.wrote();
-    let prev = match carried.compared && changes {
+    //
+    // A download of the version the last swap put in place changes nothing either, however
+    // its bytes differ: the local database is that version plus rows of its own, which were
+    // carried again. Keeping it would replace the generation from before that version with
+    // a copy of what is here.
+    let same_version = incoming.version.is_some()
+        && base.as_ref().map(|b| b.pulled.as_str()) == incoming.version
+        && incoming.version != Some("");
+    let prev = match carried.compared && !unchanged && !same_version {
         true => Some(state_prev::Kept::stage(db_path).map_err(|e| {
             BarcaError::Db(format!(
                 "failed to keep the current local database as {} before replacing it: {e}. \
@@ -424,7 +433,7 @@ async fn replace_locked(
 
     // From here the local database is about to change: any download begun before this point
     // must not be swapped in after it, even if this process dies before the last line.
-    state_base::write(db_path, base_raw.as_deref(), "")
+    state_base::write(db_path, base_raw.as_deref(), "", None)
         .map_err(|e| io("write the base record", e))?;
     remove_sidecars(db_path)?;
     if stop_after == Some(ReplaceStage::SidecarsRemoved) {
@@ -461,6 +470,7 @@ async fn replace_locked(
         db_path,
         state_base::read_raw(db_path).as_deref(),
         &carried.digest(),
+        Some(incoming.version.unwrap_or_default()),
     )
     .ok();
     Ok(Replaced::Swapped(carried))
@@ -505,7 +515,7 @@ pub(crate) async fn record_pushed(db_path: &str, copy: &PushCopy) -> bool {
     };
     let base_raw = state_base::read_raw(db_path);
     let unchanged = base_raw == copy.base_raw && wal_is_clean(db_path);
-    state_base::write(db_path, base_raw.as_deref(), "").ok();
+    state_base::write(db_path, base_raw.as_deref(), "", None).ok();
     unchanged
 }
 
@@ -540,6 +550,7 @@ pub(crate) async fn pull_for_tests(db_path: &str, staged: &Path) -> crate::state
     let incoming = Incoming {
         staged,
         base_at_start: base.as_deref(),
+        version: None,
     };
     match replace_db(db_path, incoming).await.unwrap() {
         Replaced::Swapped(carried) => carried,
@@ -2168,6 +2179,7 @@ mod tests {
             let incoming = Incoming {
                 staged: Path::new(&staged),
                 base_at_start: None,
+                version: None,
             };
             replace_db_until(&local, incoming, Some(stop))
                 .await
@@ -2217,6 +2229,7 @@ mod tests {
         let incoming = Incoming {
             staged: &staged,
             base_at_start: None,
+            version: None,
         };
         let refused = replace_db(&local, incoming).await.unwrap();
         assert!(
@@ -2246,6 +2259,7 @@ mod tests {
         let incoming = Incoming {
             staged: Path::new(staged),
             base_at_start: base.as_deref(),
+            version: None,
         };
         replace_db(local, incoming).await
     }
@@ -2383,6 +2397,45 @@ mod tests {
         assert_eq!(rows_of_file(&dir, &prev).await, second);
     }
 
+    /// While rows recorded only here wait for a push, every pull finds a download that
+    /// differs from the local database (which has those rows) and swaps. Pulling the same
+    /// version of the shared state again must not push the generation from before it out
+    /// of `.prev`.
+    #[tokio::test]
+    async fn pulling_the_same_version_again_does_not_replace_the_kept_generation() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = local_db_with_an_unpushed_run(&dir).await;
+        let before = (runs(&local).await, steps(&local).await);
+        let prev = crate::state_prev::path(&local);
+        let pull = async |staged: String, version: &str| {
+            let base = crate::state_base::read_raw(&local);
+            let incoming = Incoming {
+                staged: Path::new(&staged),
+                base_at_start: base.as_deref(),
+                version: Some(version),
+            };
+            match replace_db(&local, incoming).await.unwrap() {
+                Replaced::Swapped(carried) => carried,
+                other => panic!("{other:?}"),
+            }
+        };
+
+        pull(pushed_db(&dir, "v1-a.db").await, "v1").await;
+        assert_eq!(rows_of_file(&dir, &prev).await, before);
+        for name in ["v1-b.db", "v1-c.db"] {
+            // The unpushed run is carried each time: the download is not the local database.
+            let carried = pull(pushed_db(&dir, name).await, "v1").await;
+            assert_eq!((carried.runs, carried.steps), (1, 2));
+            assert_eq!(rows_of_file(&dir, &prev).await, before, "{name}");
+        }
+        assert_eq!(runs(&local).await, ALL_RUNS);
+
+        // Another version is a new generation.
+        let second = (runs(&local).await, steps(&local).await);
+        pull(pushed_again_db(&dir, "v2.db").await, "v2").await;
+        assert_eq!(rows_of_file(&dir, &prev).await, second);
+    }
+
     #[tokio::test]
     async fn nothing_is_kept_when_there_was_no_history_to_replace() {
         // No local database at all.
@@ -2428,6 +2481,7 @@ mod tests {
             let incoming = Incoming {
                 staged: Path::new(&newer),
                 base_at_start: base.as_deref(),
+                version: None,
             };
             replace_db_until(&local, incoming, Some(stop))
                 .await
@@ -2613,6 +2667,7 @@ mod tests {
         let incoming = Incoming {
             staged: Path::new(&staged),
             base_at_start: None,
+            version: None,
         };
         let result = replace_db(&local, incoming).await;
         fs::set_permissions(&local, fs::Permissions::from_mode(0o644)).unwrap();
@@ -2667,6 +2722,7 @@ mod tests {
         let incoming = Incoming {
             staged: Path::new(&t0),
             base_at_start: status_base.as_deref(),
+            version: None,
         };
         match replace_db(&local, incoming).await.unwrap() {
             Replaced::Superseded => {}
@@ -2704,6 +2760,7 @@ mod tests {
         let incoming = Incoming {
             staged: Path::new(&t1),
             base_at_start: early_base.as_deref(),
+            version: None,
         };
         replace_db_until(&local, incoming, Some(ReplaceStage::Renamed))
             .await
@@ -2713,6 +2770,7 @@ mod tests {
         let incoming = Incoming {
             staged: Path::new(&t0),
             base_at_start: early_base.as_deref(),
+            version: None,
         };
         match replace_db(&local, incoming).await.unwrap() {
             Replaced::Superseded => {}
@@ -2795,6 +2853,7 @@ mod tests {
         let incoming = Incoming {
             staged: Path::new(&staged),
             base_at_start: None,
+            version: None,
         };
         let err = replace_db(&local, incoming).await.unwrap_err().to_string();
         assert!(err.contains("left as it was"), "{err}");
