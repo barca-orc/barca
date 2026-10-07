@@ -110,8 +110,12 @@ the local copy as it is.
 
 After a pull the local copy is the shared history plus what was recorded only on this machine:
 
-- **Nothing other machines uploaded is dropped**, whatever state the local copy was left in (a
-  killed run, a database created by `barca history` before the first run).
+- **Nothing other machines uploaded is dropped by a pull**, whatever state the local copy was
+  left in (a killed run, a database created by `barca history` before the first run), and
+  whichever barca commands run in the project at the same time: a download that another
+  command's pull or upload has overtaken is thrown away, never put in place of a newer copy.
+  A barca 0.17.0 or older running in the same project at the same moment does not take part
+  in this.
 - **What was recorded only here is kept.** A run that was killed (`kill -9`, out of memory, a
   lost machine) before it could upload, a run whose upload failed, and runs made with
   `BARCA_STATE=off` are still in the local copy after the pull, with their finished steps and
@@ -121,25 +125,51 @@ After a pull the local copy is the shared history plus what was recorded only on
   (`barca docs cache`, "While a run is going, and after one is killed").
 - **They are shared by the next upload.** When the next `barca get` or `barca run` on this
   machine ends, those runs and steps are in the shared history; a killed run shows there as
-  `interrupted`. `--dry-run` and `barca status` keep them locally and upload nothing.
+  `interrupted`. `--dry-run` and `barca status` keep them locally and upload nothing, and the
+  `kept` line is printed once, not by every command until then.
 - **Nothing is there twice.** A run is identified by its run id and a step by its run id and
   node, so a row both copies hold appears once, however many pulls happen before an upload.
-- **A step is kept only with its result.** A finished step whose result file is no longer on
-  this machine is left out (stderr: `left out 1 step whose result file is no longer here`) and
-  runs again; the run it belonged to is kept.
+- **A step of a run made here is kept only with its result.** If its result file is no longer on
+  this machine it is left out (stderr: `left out 1 step whose result file is no longer here`)
+  and runs again; the run it belonged to is kept.
+
+A pull does only what is needed. If nobody uploaded since this machine last pulled or uploaded,
+nothing is downloaded (`[barca] shared state unchanged`). If somebody did and nothing was written
+locally since, the download simply takes the local copy's place. Only when both changed are the
+two compared, which reads the list of runs on each side.
 
 A pull is safe while a run is going in the same project. `--dry-run`, `barca status` and a second
 `barca get` or `barca run` pull as usual; the running run's row and the steps it has finished stay
 in the local copy, so `barca status` shows its progress next to what other machines uploaded.
 Every run finishes and uploads; one that finds the shared history changed merges as described
-above.
+above. While a run uploads the history (normally well under a second) other barca commands in
+the project wait for it.
 
-The download goes to a file next to the database (`.barca/metadata.db.pull-<pid>-<n>`) and is
-moved into place once it is complete. If barca is killed during a pull, the local copy is either
-the old one, whole, or the new one, whole; a leftover download is removed by the next pull. A
-downloaded history that cannot be opened does not replace an existing local copy: the command
-fails (exit 3). A local copy that cannot be opened has nothing that can be kept: it is replaced,
-with a warning on stderr.
+Files next to the database: a download goes to `.barca/metadata.db.pull-<host>-<pid>-<n>` and is
+moved into place once complete (a leftover from a killed pull is removed by a later one), and
+`.barca/metadata.db.base` records which upload the local copy is based on. Both are local; delete
+them freely when no barca command is running. If barca is killed during a pull, the local copy
+is either the old one, whole, or the new one, whole.
+
+When something is wrong, the local copy is not replaced unless it is certainly not a database:
+
+- A downloaded history that is not a database does not replace an existing local copy: the
+  command fails (exit 3).
+- A local copy that another program holds open (a DB browser, a script using `sqlite3`), that
+  cannot be read (permissions, I/O), or that fails for any reason barca does not recognise is
+  left exactly as it was: barca waits up to 5 seconds for a lock, then the command fails (exit
+  3) and says what to close or check.
+- A local file that is certainly not a database (it does not start with a SQLite header, was
+  cut short, or is reported corrupt when read) has nothing that can be kept: it is replaced,
+  with a warning on stderr.
+
+**Resetting or rolling back the shared history.** If `state/metadata.db` is deleted or replaced
+by an older copy, a machine whose local copy was fully uploaded follows the shared history at
+its next pull. A machine that has anything unuploaded compares the two and keeps every run the
+shared history lacks, so those runs come back with its next upload. To reset on purpose, also
+delete the local copies on each machine while no barca command is running:
+`rm .barca/metadata.db .barca/metadata.db-wal .barca/metadata.db.base` (for a named environment
+the same three files under `.barca/envs/<env>/`). Result files are not affected.
 
 `barca get --json` reports a result as it does without a store: json values inline, parquet and
 pickle as a pointer (`{"_barca_artifact": {"path", ...}}`) to the copy in `.barca/artifacts/`.

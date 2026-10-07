@@ -20,7 +20,8 @@ description: 'barca.toml, env var/CLI precedence, --env separation, and the opti
 > main database file and leave the old write-ahead log beside it, which could drop other
 > machines' history at the next push; and since 0.17.0 a run records its finished steps
 > locally before its push. "Nothing is lost" now also covers local rows that were never
-> pushed, a killed run's included.
+> pushed, a killed run's included, and a download that a concurrent pull or push has
+> overtaken is never swapped in.
 
 ## 1. Summary
 
@@ -116,9 +117,11 @@ file, so the blob is always a complete, standalone SQLite file openable with sto
 
 **What a pull does to the local database.** A pull happens at the start of `barca get` and
 `barca run`, before `--dry-run` and `barca status` look, and on every push conflict. After
-it, the local database holds exactly: every row of the pulled blob, plus the *unpushed*
-local rows, each row once. Nothing else of the old local database survives, in particular
-not its write-ahead log.
+it, the local database holds: every row of a blob that was the shared state when the pull
+began or later (the one the returned token names), plus the *unpushed* local rows, each
+row once. Nothing else of the old local database survives, in particular not its
+write-ahead log. The local database is never replaced by a blob older than the one it is
+based on.
 
 A local row is *unpushed* when the pulled blob does not have it, decided from the two
 databases alone (there is no "pushed" marker to keep in step):
@@ -137,33 +140,79 @@ other case the blob's run row stands. Only runs the blob does not hold with such
 outcome are compared step by step: a run writes nothing after the push that carries its
 outcome.
 
+A run present on both sides is compared step by step only when the blob holds it as
+`running` or `interrupted` and its `(status, steps_executed)` differs from the local row
+(a run's `steps_executed` moves with every step it records).
+
 Not carried, by decision: a step row with no `run_id` (written before 0.17, which did not
-record it, so it cannot be told from a pushed row); a successful step whose artifact is
-not reachable from this machine (a local path that does not exist; a store URI is not
-checked), because it would be a cache hit with nothing behind it; cost estimates and
-scheduler state, which are not history.
+record it, so it cannot be told from a pushed row); a successful step of a run made on
+this host whose artifact is not reachable from this machine (a local path that does not
+exist; a store URI is not checked), because it would be a cache hit with nothing behind
+it (steps of other hosts' runs are never filtered: they came from the shared state); cost
+estimates and scheduler state, which are not history.
+
+**The base record.** `<db>.base` is a local file, never uploaded, written only under the
+database's cross-process lock: by a pull when it swaps (first with an empty token, "swap
+in progress", then with the pulled blob's token once the file is in place) and by a push
+after its upload. Every write increments a sequence number. Invariant: when its token is
+not empty, the local database holds every row of the blob with that token. It also holds
+the main file's size and modification time and whether the last pull carried rows. It is
+a guard and an optimisation, never the definition of unpushed; without it every pull
+downloads and compares. It gives three rules:
+
+- *Unchanged.* If the shared state's token equals the recorded one, nothing is downloaded
+  and the local database is not touched.
+- *Superseded.* A pull reads the record before downloading and again under the lock
+  before swapping. If it changed, another process replaced or pushed the local database
+  meanwhile and the download may be older: it is discarded. The command continues on the
+  local database with the recorded token (a later push is conditional on it, so a push by
+  another machine is still detected); if the token is empty (a swap was cut short) it
+  pulls again.
+- *Untouched.* If the record says no rows were carried, the write-ahead log is empty and
+  the main file's size and time are as recorded, nothing was written locally since: the
+  local database is exactly a shared blob, there is nothing to carry, and the download
+  takes its place without either file being opened.
+
+A push holds the same lock from its checkpoint to the write of the record, so the file it
+uploads is consistent and no pull can swap under it.
+
+**Reset and rollback.** Because unpushed means "absent from the pulled blob", a machine
+that has anything unpushed when the shared blob is deleted or replaced by an older one
+brings back every run it holds; an untouched machine follows the shared blob. Resetting on
+purpose means also deleting `metadata.db`, `metadata.db-wal` and `metadata.db.base` on
+each machine.
 
 Carried rows are local until the next push from that machine (the end of its next
 `get`/`run`); read-only commands carry them and push nothing. A killed run therefore
 resumes on its own machine at once and reaches other machines, as `interrupted`, with
 that next push.
 
-The sequence, all of it under the database's cross-process lock except the download:
+The sequence, when the shared state changed; all of it under the database's
+cross-process lock except the download:
 
-1. Download the blob to `<db>.pull-<pid>-<n>` next to the database.
-2. Carry: copy the unpushed rows from the local database onto the downloaded file, in one
-   transaction. The local database is only read.
-3. Fold: checkpoint both write-ahead logs into their main files and verify they are
+1. Read the base record, then download the blob to `<db>.pull-<host>-<pid>-<n>` next to
+   the database.
+2. Still current: re-read the base record; if it changed, stop (superseded).
+3. Carry (skipped when untouched): copy the unpushed rows from the local database onto
+   the downloaded file, in one transaction. The local database is only read.
+4. Fold: checkpoint both write-ahead logs into their main files and verify they are
    empty. Each database is now one self-contained file.
-4. Swap: remove the local sidecar files (empty by now), fsync the downloaded file when it
-   carries rows that exist nowhere else, and rename it over the local database.
+5. Swap: write the base record with an empty token, remove the local sidecar files
+   (empty by now), fsync the downloaded file when it carries rows that exist nowhere
+   else, rename it over the local database, and write the base record with its token.
 
 A process killed before the rename leaves the old local database whole, unpushed rows
 included; one killed after it leaves the new one whole. The next pull starts again from
-step 1, and because step 2 adds only rows the target lacks, repeating it adds nothing
-twice. A downloaded file that cannot be opened as a database fails the command (exit 3)
-and leaves an existing local database untouched. A local database that cannot be opened
-has nothing that can be carried: it is replaced, with a warning.
+step 1, and because step 3 adds only rows the target lacks, repeating it adds nothing
+twice.
+
+Failures never replace a local database that might hold rows. A downloaded file that is
+not a database fails the command (exit 3) and leaves the local database untouched. A
+local database that is held open by another program (after a wait of 5 seconds), cannot
+be read, or fails with any error not recognised as corruption also fails the command
+(exit 3) untouched. Only a local file that is positively not a database (no SQLite
+header, a length that is not a whole number of pages, or the engine's not-a-database or
+corrupt error) is replaced, with a warning: nothing could have been carried from it.
 
 Because a pull keeps unpushed rows, it needs no knowledge of whether a run is live in the
 project: a second `get`/`run`, `--dry-run` and `barca status` pull while a run is going,
