@@ -147,6 +147,20 @@ def test_a_tick_recomputes_only_what_changed_on_the_input_side(tmp_path):
     assert rows.get("tracked") == 2, f"tracked should run once per sensor value: {context}"
     assert rows.get("no_inputs") == 1, f"an asset with nothing changed was recomputed: {context}"
 
+    # A shape that does not share a run: `tracked` and `publish` are behind the same sensor, but
+    # `publish` also reads `model` and sits a step further down, so in one run each would wait
+    # for a step of the other's. Each keeps its own run (so the sensor is polled by both), and
+    # the server says why once.
+    db = sqlite3.connect(tmp_path / ".barca" / "metadata.db")
+    try:
+        shared = db.execute("select target from runs where target like '%,%'").fetchall()
+    finally:
+        db.close()
+    assert shared == [], f"jobs that should not share a run did: {shared}"
+    why = [line for line in err.splitlines() if "runs on its own" in line]
+    assert len(why) == 1, f"expected one explanation, got {why}"
+    assert "pipeline.py:tracked" in why[0] and "pipeline.py:publish" in why[0], why
+
 
 SHARED = """
 import time
