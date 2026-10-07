@@ -286,6 +286,42 @@ process waits more than 60 seconds for the lock you get an error that names the 
 an `... File is locked by another process` error means something outside barca (a DB browser, a
 backup tool, an older barca) has `.barca/metadata.db` open.
 
+## While a run is going, and after one is killed
+
+A run records each step in `.barca/metadata.db` as the step finishes, not only when the run
+ends. Finished steps are written in batches, at most twice a second, so a step is recorded
+within about half a second of finishing.
+
+```bash
+barca status pipeline.py        # from another terminal: steps the running get has finished are `cached`
+barca history --json            # the run is `running`; `steps_executed` is the steps recorded so far
+```
+
+- **Progress.** `barca status` in a second terminal shows what a running `barca get` or
+  `barca run` has finished: an asset is `cached`, a partitioned asset is `partial` with its
+  `cached` / `missing` counts. A step that is still running shows its previous state.
+- **A killed run keeps what it finished.** If the process is killed (`kill -9`, out of memory, a
+  lost machine), the next `barca get` serves the recorded steps from cache and computes the rest.
+  A step is recorded only after its artifact is completely written, so a recorded step always has
+  its file. A step that finished in the last half second before the kill may not be recorded: it
+  runs again.
+- **History says so.** `barca history` reports a run whose process no longer exists as
+  `interrupted`, with `finished_at` and `elapsed_seconds` `null` (nobody saw it end) and
+  `steps_executed` at what it had recorded. Ctrl-C is different: the run stops its workers,
+  records itself and is `cancelled`.
+
+Known limits:
+
+- With shared remote state (`barca docs remote`) these apply to the machine the run is on only,
+  and not reliably: see "Limitations" there.
+- With a remote artifact store, steps are not recorded as they finish: a row is written only
+  once the artifact's upload is confirmed, which happens when the run ends. Such a run shows no
+  progress in `barca status`, and a killed one records nothing.
+- `interrupted` is decided by looking for the run's process on this machine. A run started by an
+  older barca, or on another machine, stays `running`; so does a run whose process id has since
+  been reused by another program.
+- Failed steps are recorded when the run ends, so a killed run records its successes only.
+
 ## Environments
 
 `--env <name>` (or `BARCA_ENV`, or `default_env` in `barca.toml`, else `default`) fully
