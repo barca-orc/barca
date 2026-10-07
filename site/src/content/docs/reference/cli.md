@@ -220,6 +220,13 @@ When more runs exist than are shown, the JSON has `"truncated": true`, the `tota
 the table prints the same hint as one line on stderr. See [Bounded output](#bounded-output). Each
 run's `files` is an array of the `.py` files it was given.
 
+A run's `status` is `running`, `success`, `failed`, `cancelled` or `interrupted`. A run records
+each step as it finishes, so a `running` run already counts them in `steps_executed`, and
+`barca status` from another terminal shows them as `cached`. A run whose process was killed is
+`interrupted` (no `finished_at`); the next `barca get` reuses the steps it had recorded. See
+`barca docs cache`, "While a run is going, and after one is killed", and the shared-state
+[limitations](/reference/remote-storage/#limitations).
+
 ## stats
 
 Show aggregated execution statistics for a single asset: total materializations, timing
@@ -379,6 +386,9 @@ every node, and the JSON reports `total` and `truncated` (see [Bounded output](#
 With [shared remote state](/reference/remote-storage/), status first replaces the local copy of
 the history with the shared one, as a run does. It skips that while a `barca get` or `barca run`
 is in progress in the project, reads the local copy instead, and says so in one line on stderr.
+
+Status reads the metadata DB as it is at that moment: while a `barca get` is running, the steps it
+has finished already show as `cached` (a partitioned asset as `partial`).
 
 Status writes nothing: no `.barca` directory is created and no run is recorded. An unknown target
 is a usage error (exit 2). See `barca docs status`.

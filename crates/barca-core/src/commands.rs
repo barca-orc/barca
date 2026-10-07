@@ -2174,6 +2174,8 @@ async fn execute(
         storage_options_json: cfg.storage_options_json.clone(),
     };
     let mut pool = crate::io_loop::WorkerPool::start(io_config).map_err(BarcaError::Other)?;
+    // Finished steps are written to the local metadata DB while the run goes on (#214).
+    let recorder = StepRecorder::start(db_path.clone(), run_id.clone());
     {
         // A step that runs for a while must not look hung: report it periodically.
         let bar = pb.clone();
@@ -2400,8 +2402,21 @@ async fn execute(
         );
 
         // Progress callback — update bar as each step completes.
-        let on_step_cb: crate::io_loop::StepCallback<'_> =
-            Box::new(|node_id: &str, artifact: &serde_json::Value| {
+        let run_hashes = &decide_state.run_hashes;
+        let on_step_cb: crate::io_loop::StepCallback<'_> = Box::new(
+            |node_id: &str, artifact: &serde_json::Value, attempts: u32| {
+                // Hand the finished step to the recorder. The worker reports a step only after
+                // its artifact is in place (an atomic rename), so the row never points at a
+                // missing file. Steps without a run hash are parallel() children, which are
+                // never recorded. With a remote store nothing is recorded early: a row is
+                // written only once its upload is confirmed, which the end-of-run ledger does.
+                if store.is_none()
+                    && let Some(run_hash) = run_hashes.get(node_id)
+                {
+                    recorder.record(StepRow::from_artifact(
+                        node_id, run_hash, artifact, attempts,
+                    ));
+                }
                 // Sink failures never fail the asset — surface them prominently.
                 if let Some(sinks) = artifact.get("sinks").and_then(|v| v.as_array()) {
                     for s in sinks {
@@ -2469,7 +2484,8 @@ async fn execute(
                         env_suffix(&dag, node_id)
                     );
                 }
-            });
+            },
+        );
 
         // Event sink — buffer log lines for DB persistence, and forward every
         // event live to the caller's channel (the HTTP server) if present.
@@ -2742,6 +2758,12 @@ async fn execute(
     let steps_cached = cached_node_ids.len();
     let elapsed = t0.elapsed().as_secs_f64();
 
+    // Stop the step recorder before persistence: the ledger below writes whatever it had not
+    // written yet, and the state push checkpoints the WAL, which requires no other open handle
+    // on the file.
+    recorder.finish().await;
+    trace_point!("recorder_stopped");
+
     // Persist all executed outputs (including partial results on failure) —
     // held in a ledger so a state-push conflict can replay this run's rows
     // onto a freshly pulled database.
@@ -2966,6 +2988,202 @@ struct RunLedger<'a> {
     cost_snapshot: &'a [(String, crate::cost::NodeEstimate)],
 }
 
+/// One successful step as a `materializations` row. Built when the step finishes (for the
+/// [`StepRecorder`]) and again from the ledger at the end of the run.
+#[derive(Debug, Clone)]
+struct StepRow {
+    node_id: String,
+    run_hash: String,
+    path: String,
+    format: String,
+    size_bytes: u64,
+    elapsed_seconds: Option<f64>,
+    attempts: u32,
+    sinks_json: Option<String>,
+    cpu_seconds: Option<f64>,
+    max_rss_bytes: Option<u64>,
+    /// A sensor's output content hash; None for everything else.
+    output_hash: Option<String>,
+}
+
+impl StepRow {
+    /// From the artifact a worker reported for a finished step. Reads the same fields the
+    /// end-of-run ledger is built from, so both writers produce the same row.
+    fn from_artifact(
+        node_id: &str,
+        run_hash: &str,
+        artifact: &serde_json::Value,
+        attempts: u32,
+    ) -> Self {
+        let str_of = |key: &str| artifact.get(key).and_then(|v| v.as_str());
+        Self {
+            node_id: node_id.to_string(),
+            run_hash: run_hash.to_string(),
+            path: str_of("path").unwrap_or("").to_string(),
+            format: str_of("format").unwrap_or("json").to_string(),
+            size_bytes: artifact
+                .get("size_bytes")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0),
+            elapsed_seconds: artifact.get("elapsed_seconds").and_then(|v| v.as_f64()),
+            attempts,
+            sinks_json: artifact
+                .get("sinks")
+                .and_then(|v| v.as_array())
+                .filter(|sinks| !sinks.is_empty())
+                .map(|sinks| serde_json::Value::from(sinks.clone()).to_string()),
+            cpu_seconds: artifact.get("cpu_seconds").and_then(|v| v.as_f64()),
+            max_rss_bytes: artifact.get("max_rss_bytes").and_then(|v| v.as_u64()),
+            output_hash: str_of("content_hash").map(str::to_string),
+        }
+    }
+
+    async fn insert(&self, conn: &turso::Connection, run_id: &str) -> Result<(), turso::Error> {
+        let opt = |v: Option<String>| v.unwrap_or_default();
+        conn.execute(
+            "INSERT INTO materializations (node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, elapsed_seconds, status, attempts, sinks_json, cpu_seconds, max_rss_bytes, output_hash, run_id) VALUES (?1, ?2, ?3, ?4, ?5, NULLIF(?6, ''), 'success', ?7, NULLIF(?8, ''), NULLIF(?9, ''), NULLIF(?10, ''), NULLIF(?11, ''), ?12)",
+            [
+                self.node_id.clone(),
+                self.run_hash.clone(),
+                self.path.clone(),
+                self.format.clone(),
+                self.size_bytes.to_string(),
+                opt(self.elapsed_seconds.map(|e| e.to_string())),
+                self.attempts.to_string(),
+                opt(self.sinks_json.clone()),
+                opt(self.cpu_seconds.map(|c| c.to_string())),
+                opt(self.max_rss_bytes.map(|r| r.to_string())),
+                opt(self.output_hash.clone()),
+                run_id.to_string(),
+            ],
+        )
+        .await
+        .map(|_| ())
+    }
+}
+
+/// How often, at most, the recorder writes finished steps to the metadata DB. A finished step
+/// is recorded within about this long of finishing; a run shorter than this records everything
+/// in the one end-of-run write, exactly as before, so short runs pay nothing.
+const RECORD_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Writes finished steps to the local metadata DB while a run is still going (#214), so
+/// `barca status` in another process sees them and a killed run keeps them.
+///
+/// The run loop only sends rows down a channel; a background task batches whatever has
+/// arrived and writes it with a short-lived connection, at most once per [`RECORD_INTERVAL`].
+/// The loop therefore never waits on the database (another barca process may be holding it),
+/// and a phase of thousands of quick steps costs a few writes, not thousands.
+///
+/// It is an optimisation of *when* rows land, never the only writer: the end-of-run
+/// [`persist_run`] writes every row of the run that is not already there (rows carry the run
+/// id). So a write that fails here, rows still queued at [`StepRecorder::finish`], and rows
+/// lost because another process replaced the local DB with the shared state mid-run are all
+/// made good at the end.
+struct StepRecorder {
+    tx: tokio::sync::mpsc::UnboundedSender<StepRow>,
+    stop: CancellationToken,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl StepRecorder {
+    fn start(db_path: String, run_id: String) -> Self {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<StepRow>();
+        let stop = CancellationToken::new();
+        let stopped = stop.clone();
+        let task = tokio::spawn(async move {
+            let mut next_write = tokio::time::Instant::now() + RECORD_INTERVAL;
+            loop {
+                let first = tokio::select! {
+                    biased;
+                    _ = stopped.cancelled() => break,
+                    row = rx.recv() => match row {
+                        Some(row) => row,
+                        None => break,
+                    },
+                };
+                tokio::select! {
+                    biased;
+                    _ = stopped.cancelled() => break,
+                    _ = tokio::time::sleep_until(next_write) => {}
+                }
+                let mut batch = vec![first];
+                while let Ok(row) = rx.try_recv() {
+                    batch.push(row);
+                }
+                // Best effort: see the type's doc comment for why a failure is not an error.
+                record_steps(&db_path, &run_id, &batch).await.ok();
+                next_write = tokio::time::Instant::now() + RECORD_INTERVAL;
+            }
+        });
+        Self { tx, stop, task }
+    }
+
+    /// Queue a finished step. Never blocks.
+    fn record(&self, row: StepRow) {
+        self.tx.send(row).ok();
+    }
+
+    /// Stop the background task and wait for it, so no connection is left open. Rows it had
+    /// not written yet are left to [`persist_run`].
+    async fn finish(self) {
+        self.stop.cancel();
+        self.task.await.ok();
+    }
+}
+
+/// Append `rows` for a run that is still in progress, and advance its `steps_executed` so
+/// `barca history` shows how far it has got.
+async fn record_steps(db_path: &str, run_id: &str, rows: &[StepRow]) -> Result<(), BarcaError> {
+    let _g = db::db_guard().await;
+    let (_db, conn) = db::open_conn(db_path).await?;
+    // One transaction: one commit for the batch, and a reader sees all of it or none.
+    conn.execute("BEGIN", ())
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to begin: {e}")))?;
+    let mut written = 0usize;
+    for row in rows {
+        if row.insert(&conn, run_id).await.is_ok() {
+            written += 1;
+        }
+    }
+    conn.execute(
+        "UPDATE runs SET steps_executed = steps_executed + ?1 WHERE run_id = ?2 AND status = 'running'",
+        [written.to_string(), run_id.to_string()],
+    )
+    .await
+    .ok();
+    conn.execute("COMMIT", ())
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to commit: {e}")))?;
+    Ok(())
+}
+
+/// The steps of `run_id` that already have a row: what the [`StepRecorder`] wrote during the
+/// run, or, on a replay after a shared-state conflict, what the pulled database already holds
+/// (another process on this machine can have pushed this run's rows along with its own).
+async fn recorded_steps(
+    conn: &turso::Connection,
+    run_id: &str,
+) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    let Ok(mut rows) = conn
+        .query(
+            "SELECT node_id FROM materializations WHERE run_id = ?1",
+            [run_id.to_string()],
+        )
+        .await
+    else {
+        return out;
+    };
+    while let Ok(Some(row)) = rows.next().await {
+        if let Ok(node_id) = row.get::<String>(0) {
+            out.insert(node_id);
+        }
+    }
+    out
+}
+
 /// The exception a step failure carries, as (type, message, traceback). A worker reports a
 /// Python exception as the generic `WorkerError` whose text is `Type: message` followed by the
 /// traceback frames; the type is what groups errors in a telemetry backend.
@@ -3100,22 +3318,24 @@ fn telemetry_report(
     }
 }
 
-/// Write a run's ledger with a short-lived connection. Idempotent for the run
-/// row (INSERT OR IGNORE + terminal UPDATE) so replays don't duplicate it;
-/// materialization rows are append-only history and re-appended on replay
-/// only against a database that doesn't already contain them.
+/// Write a run's ledger with a short-lived connection. Idempotent, so it is safe after the
+/// [`StepRecorder`] has written some of the steps and on a replay: the run row is INSERT OR
+/// IGNORE + terminal UPDATE, and a step is appended only if this run has no row for it yet
+/// (a step has one outcome per run).
 async fn persist_run(db_path: &str, l: &RunLedger<'_>) -> Result<(), BarcaError> {
     let _g = db::db_guard().await;
     let (_db, conn) = db::open_conn(db_path).await?;
 
     conn.execute(
-            "INSERT OR IGNORE INTO runs (run_id, command, files, target, status, steps_total) VALUES (?1, ?2, ?3, ?4, 'running', ?5)",
+            "INSERT OR IGNORE INTO runs (run_id, command, files, target, status, steps_total, pid, host) VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6, ?7)",
             [
                 l.run_id.to_string(),
                 l.command.to_string(),
                 l.files.clone(),
                 l.target.unwrap_or("").to_string(),
                 l.steps_total.to_string(),
+                std::process::id().to_string(),
+                db::local_host(),
             ],
         )
         .await
@@ -3133,45 +3353,32 @@ async fn persist_run(db_path: &str, l: &RunLedger<'_>) -> Result<(), BarcaError>
         .await
         .map_err(|e| BarcaError::Db(format!("failed to finish run: {e}")))?;
 
+    let already = recorded_steps(&conn, l.run_id).await;
+
     for (node_id, oref) in l.all_outputs {
-        if l.cached_node_ids.contains(node_id) {
+        if l.cached_node_ids.contains(node_id) || already.contains(node_id) {
             continue;
         }
         let Some(run_h) = l.run_hashes.get(node_id) else {
             continue;
         };
-        let elapsed_str = oref
-            .elapsed_seconds
-            .map(|e| e.to_string())
-            .unwrap_or_default();
         let base = crate::StepId::parse(node_id).base_id().to_string();
-        let attempts = l.all_attempts.get(&base).copied().unwrap_or(1);
         let (cpu, rss) = l.all_timings.get(node_id).copied().unwrap_or((None, None));
-        conn.execute(
-                "INSERT INTO materializations (node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, elapsed_seconds, status, attempts, sinks_json, cpu_seconds, max_rss_bytes, output_hash) VALUES (?1, ?2, ?3, ?4, ?5, NULLIF(?6, ''), 'success', ?7, NULLIF(?8, ''), NULLIF(?9, ''), NULLIF(?10, ''), NULLIF(?11, ''))",
-                [
-                    node_id.clone(),
-                    run_h.clone(),
-                    l.store_paths
-                        .get(node_id)
-                        .unwrap_or(&oref.path)
-                        .clone(),
-                    oref.format.clone(),
-                    oref.size_bytes.to_string(),
-                    elapsed_str,
-                    attempts.to_string(),
-                    l.all_sinks.get(node_id).cloned().unwrap_or_default(),
-                    cpu.map(|c| c.to_string()).unwrap_or_default(),
-                    rss.map(|r| r.to_string()).unwrap_or_default(),
-                    l.output_hashes
-                        .get(node_id)
-                        .or(oref.content_hash.as_ref())
-                        .cloned()
-                        .unwrap_or_default(),
-                ],
-            )
-            .await
-            .ok();
+        let mut row = StepRow::from_artifact(node_id, run_h, &serde_json::Value::Null, 1);
+        row.path = l.store_paths.get(node_id).unwrap_or(&oref.path).clone();
+        row.format = oref.format.clone();
+        row.size_bytes = oref.size_bytes;
+        row.elapsed_seconds = oref.elapsed_seconds;
+        row.attempts = l.all_attempts.get(&base).copied().unwrap_or(1);
+        row.sinks_json = l.all_sinks.get(node_id).cloned();
+        row.cpu_seconds = cpu;
+        row.max_rss_bytes = rss;
+        row.output_hash = l
+            .output_hashes
+            .get(node_id)
+            .or(oref.content_hash.as_ref())
+            .cloned();
+        row.insert(&conn, l.run_id).await.ok();
     }
 
     // Persist the measured-cost EWMA so the next run starts pre-warmed and
@@ -3202,11 +3409,14 @@ async fn persist_run(db_path: &str, l: &RunLedger<'_>) -> Result<(), BarcaError>
     // columns NULL). Failed rows are never served as cache hits.
     for failure in l.all_failures {
         let node_id = &failure.node_id;
+        if already.contains(node_id) {
+            continue;
+        }
         let run_h = l.run_hashes.get(node_id).cloned().unwrap_or_default();
         // Each failure carries its own attempt count: dispatches for a worker
         // failure, transfer attempts for an upload failure.
         conn.execute(
-                "INSERT INTO materializations (node_id, run_hash, status, error_type, error_message, error_traceback, attempts) VALUES (?1, ?2, 'failed', ?3, ?4, ?5, ?6)",
+                "INSERT INTO materializations (node_id, run_hash, status, error_type, error_message, error_traceback, attempts, run_id) VALUES (?1, ?2, 'failed', ?3, ?4, ?5, ?6, ?7)",
                 [
                     node_id.clone(),
                     run_h,
@@ -3214,12 +3424,301 @@ async fn persist_run(db_path: &str, l: &RunLedger<'_>) -> Result<(), BarcaError>
                     failure.error.message.clone(),
                     failure.error.traceback.clone(),
                     failure.error.attempts.to_string(),
+                    l.run_id.to_string(),
                 ],
             )
             .await
             .ok();
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod persist_tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    /// A run that executed `a`, `part[k=1]` and `part[k=2]`, found `cached` in the cache, and
+    /// saw `bad` fail.
+    struct Fixture {
+        outputs: HashMap<String, OutputRef>,
+        failures: Vec<dispatch::StepFailure>,
+        cached: HashSet<String>,
+        run_hashes: HashMap<String, String>,
+        empty: HashMap<String, String>,
+        attempts: HashMap<String, u32>,
+        timings: HashMap<String, (Option<f64>, Option<u64>)>,
+    }
+
+    const EXECUTED: [&str; 3] = ["f.py:a", "f.py:part[k=1]", "f.py:part[k=2]"];
+
+    fn oref(node: &str) -> OutputRef {
+        OutputRef {
+            path: format!(".barca/artifacts/{node}/h.json"),
+            format: "json".to_string(),
+            size_bytes: 2,
+            elapsed_seconds: Some(0.5),
+            content_hash: None,
+        }
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            let mut outputs = HashMap::new();
+            let mut run_hashes = HashMap::new();
+            for node in EXECUTED.iter().chain(&["f.py:cached", "f.py:bad"]) {
+                run_hashes.insert(node.to_string(), format!("hash-{node}"));
+                if *node != "f.py:bad" {
+                    outputs.insert(node.to_string(), oref(node));
+                }
+            }
+            Self {
+                outputs,
+                failures: vec![dispatch::StepFailure {
+                    node_id: "f.py:bad".to_string(),
+                    error: dispatch::StepError {
+                        error_type: "WorkerError".to_string(),
+                        message: "boom".to_string(),
+                        traceback: String::new(),
+                        attempts: 1,
+                    },
+                }],
+                cached: HashSet::from(["f.py:cached".to_string()]),
+                run_hashes,
+                empty: HashMap::new(),
+                attempts: HashMap::new(),
+                timings: HashMap::new(),
+            }
+        }
+
+        fn ledger<'a>(&'a self, run_id: &'a str) -> RunLedger<'a> {
+            RunLedger {
+                run_id,
+                status: "failed",
+                command: "get",
+                files: db::encode_files(&["f.py".to_string()]),
+                target: None,
+                steps_total: 5,
+                steps_executed: 4,
+                steps_cached: 1,
+                elapsed: 1.5,
+                all_outputs: &self.outputs,
+                all_failures: &self.failures,
+                all_sinks: &self.empty,
+                all_attempts: &self.attempts,
+                all_timings: &self.timings,
+                cached_node_ids: &self.cached,
+                run_hashes: &self.run_hashes,
+                output_hashes: &self.empty,
+                store_paths: &self.empty,
+                cost_snapshot: &[],
+            }
+        }
+
+        /// The row the recorder would write for `node` when it finishes.
+        fn row(&self, node: &str) -> StepRow {
+            let artifact = serde_json::json!({
+                "path": self.outputs[node].path, "format": "json", "size_bytes": 2,
+                "elapsed_seconds": 0.5,
+            });
+            StepRow::from_artifact(node, &self.run_hashes[node], &artifact, 1)
+        }
+    }
+
+    async fn fresh_db(dir: &tempfile::TempDir, name: &str) -> String {
+        let db_path = dir.path().join(name).to_string_lossy().to_string();
+        db::init_db(&db_path).await.unwrap();
+        db_path
+    }
+
+    /// Every materialization row as `(run_id, node_id, status)`, sorted.
+    async fn rows(db_path: &str) -> Vec<(String, String, String)> {
+        let _g = db::db_guard().await;
+        let (_db, conn) = db::open_conn(db_path).await.unwrap();
+        let mut found = conn
+            .query(
+                "SELECT COALESCE(run_id, ''), node_id, status FROM materializations",
+                (),
+            )
+            .await
+            .unwrap();
+        let mut out = Vec::new();
+        while let Some(row) = found.next().await.unwrap() {
+            out.push((
+                row.get::<String>(0).unwrap(),
+                row.get::<String>(1).unwrap(),
+                row.get::<String>(2).unwrap(),
+            ));
+        }
+        out.sort();
+        out
+    }
+
+    /// What one complete write of the fixture's run looks like: each executed step once, the
+    /// failure once, and nothing for the cache hit.
+    fn complete(run_id: &str) -> Vec<(String, String, String)> {
+        let mut want: Vec<_> = EXECUTED
+            .iter()
+            .map(|n| (run_id.to_string(), n.to_string(), "success".to_string()))
+            .collect();
+        want.push((
+            run_id.to_string(),
+            "f.py:bad".to_string(),
+            "failed".to_string(),
+        ));
+        want.sort();
+        want
+    }
+
+    async fn run_record(db_path: &str, run_id: &str) -> db::RunRecord {
+        db::get_recent_runs(db_path, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|r| r.run_id == run_id)
+            .expect("run row")
+    }
+
+    #[tokio::test]
+    async fn the_ledger_adds_only_what_the_recorder_has_not_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = fresh_db(&dir, "m.db").await;
+        let fx = Fixture::new();
+        db::create_run(&db_path, "r1", "get", "[\"f.py\"]", None, Some(5))
+            .await
+            .unwrap();
+
+        // Mid-run: two steps recorded; the run is `running` and counts them.
+        record_steps(
+            &db_path,
+            "r1",
+            &[fx.row("f.py:a"), fx.row("f.py:part[k=1]")],
+        )
+        .await
+        .unwrap();
+        assert_eq!(rows(&db_path).await.len(), 2);
+        let mid = run_record(&db_path, "r1").await;
+        assert_eq!((mid.status.as_str(), mid.steps_executed), ("running", 2));
+        assert_eq!(mid.finished_at, None);
+
+        // End of run: the rest is added, nothing twice, and the counts are the final ones.
+        persist_run(&db_path, &fx.ledger("r1")).await.unwrap();
+        assert_eq!(rows(&db_path).await, complete("r1"));
+        let end = run_record(&db_path, "r1").await;
+        assert_eq!(
+            (end.status.as_str(), end.steps_executed, end.steps_cached),
+            ("failed", 4, 1)
+        );
+
+        // Writing the ledger again (a replay onto a database that already has it) is a no-op.
+        persist_run(&db_path, &fx.ledger("r1")).await.unwrap();
+        assert_eq!(rows(&db_path).await, complete("r1"));
+    }
+
+    #[tokio::test]
+    async fn a_replay_onto_a_freshly_pulled_db_carries_the_whole_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let fx = Fixture::new();
+
+        // The local DB, with steps recorded mid-run, is replaced by a pulled one that has
+        // never heard of this run: the replay must not assume the recorder's rows survived.
+        let local = fresh_db(&dir, "local.db").await;
+        db::create_run(&local, "r1", "get", "[\"f.py\"]", None, Some(5))
+            .await
+            .unwrap();
+        record_steps(&local, "r1", &[fx.row("f.py:a")])
+            .await
+            .unwrap();
+        let pulled = fresh_db(&dir, "pulled.db").await;
+        persist_run(&pulled, &fx.ledger("r1")).await.unwrap();
+        assert_eq!(rows(&pulled).await, complete("r1"));
+        let run = run_record(&pulled, "r1").await;
+        assert_eq!((run.status.as_str(), run.steps_executed), ("failed", 4));
+
+        // A pulled DB that already holds part of this run (another process on this machine
+        // pushed the shared local DB mid-run) gets the rest, and keeps another run's rows.
+        let partial = fresh_db(&dir, "partial.db").await;
+        record_steps(&partial, "other", &[fx.row("f.py:a")])
+            .await
+            .unwrap();
+        record_steps(
+            &partial,
+            "r1",
+            &[fx.row("f.py:a"), fx.row("f.py:part[k=2]")],
+        )
+        .await
+        .unwrap();
+        persist_run(&partial, &fx.ledger("r1")).await.unwrap();
+        let mut want = complete("r1");
+        want.push((
+            "other".to_string(),
+            "f.py:a".to_string(),
+            "success".to_string(),
+        ));
+        want.sort();
+        assert_eq!(rows(&partial).await, want);
+    }
+
+    #[tokio::test]
+    async fn the_recorder_and_the_ledger_write_the_same_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let fx = Fixture::new();
+        let columns = "node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, \
+                       elapsed_seconds, status, attempts, run_id";
+        let mut seen = Vec::new();
+        for (name, by_recorder) in [("recorder.db", true), ("ledger.db", false)] {
+            let db_path = fresh_db(&dir, name).await;
+            if by_recorder {
+                record_steps(&db_path, "r1", &[fx.row("f.py:a")])
+                    .await
+                    .unwrap();
+            } else {
+                persist_run(&db_path, &fx.ledger("r1")).await.unwrap();
+            }
+            let _g = db::db_guard().await;
+            let (_db, conn) = db::open_conn(&db_path).await.unwrap();
+            let mut found = conn
+                .query(
+                    &format!("SELECT {columns} FROM materializations WHERE node_id = 'f.py:a'"),
+                    (),
+                )
+                .await
+                .unwrap();
+            let row = found.next().await.unwrap().expect("a row for f.py:a");
+            seen.push(format!(
+                "{:?}",
+                (0..9)
+                    .map(|i| row.get_value(i).unwrap())
+                    .collect::<Vec<_>>()
+            ));
+        }
+        assert_eq!(seen[0], seen[1]);
+    }
+
+    #[tokio::test]
+    async fn the_recorder_writes_during_the_run_and_leaves_the_rest_to_the_ledger() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = fresh_db(&dir, "m.db").await;
+        let fx = Fixture::new();
+
+        let recorder = StepRecorder::start(db_path.clone(), "r1".to_string());
+        recorder.record(fx.row("f.py:a"));
+        recorder.record(fx.row("f.py:part[k=1]"));
+        let deadline = Instant::now() + std::time::Duration::from_secs(10);
+        while rows(&db_path).await.len() < 2 {
+            assert!(Instant::now() < deadline, "the recorder never wrote");
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        // Queued just before the run ends: finish() does not wait a full interval to write it.
+        recorder.record(fx.row("f.py:part[k=2]"));
+        let stopping = Instant::now();
+        recorder.finish().await;
+        assert!(stopping.elapsed() < RECORD_INTERVAL);
+
+        persist_run(&db_path, &fx.ledger("r1")).await.unwrap();
+        assert_eq!(rows(&db_path).await, complete("r1"));
+    }
 }
 
 // ─── plan ────────────────────────────────────────────────────────────────────

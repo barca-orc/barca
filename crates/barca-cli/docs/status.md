@@ -56,6 +56,11 @@ history with the shared one, as a run does, so it also shows what other machines
 skips that while a `barca get` or `barca run` is in progress in the project, reads the local copy
 instead, and says so in one line on stderr.
 
+Status reads the metadata DB as it is at that moment, and a run records each step as it
+finishes. So while a `barca get` is running, status in another terminal already shows the steps
+it has finished as `cached` (a partitioned asset as `partial`, with counts); see `barca docs
+cache`, "While a run is going, and after one is killed".
+
 Like `list`, status shows at most 100 nodes unless you pass `--limit N` or `--all`. The
 `summary` still counts every node, and the JSON adds `total` and `truncated` (with a `hint` when
 truncated). Each node also lists `env`, the environment variables it declares with `env=[...]`
