@@ -371,9 +371,9 @@ if __name__ == "__main__":
 
     from barca import _lifeline
 
-    # The coordinator starts this helper deaf to Ctrl-C, which is its own to act on, and
-    # stops it with SIGTERM (crates/barca-core/src/helper_proc.rs). Should the coordinator be
-    # killed, the lifeline ends this process.
+    # The coordinator starts this helper out of reach of the terminal's Ctrl-C, which is its
+    # own to act on, and stops it with SIGTERM (crates/barca-core/src/helper_proc.rs). Should
+    # the coordinator be killed, the lifeline ends this process.
     signal.signal(signal.SIGTERM, _stop)
     _lifeline.watch()
     try:

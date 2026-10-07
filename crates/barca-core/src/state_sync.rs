@@ -369,9 +369,9 @@ enum HelperFailed {
 /// [`crate::helper_proc::STOP_GRACE`]: the call does not return while the helper is alive.
 /// Dropping the call kills the helper.
 ///
-/// Like every helper it is started deaf to Ctrl-C, which is the coordinator's to act on, and
-/// with a lifeline, so that it exits by itself if this process is killed (see
-/// [`crate::helper_proc`]).
+/// Like every helper it is started out of reach of the terminal's Ctrl-C, which is the
+/// coordinator's to act on, and with a lifeline, so that it exits by itself if this process is
+/// killed (see [`crate::helper_proc`]).
 async fn run_helper(
     mut cmd: Command,
     cancel: Option<&CancellationToken>,
@@ -659,19 +659,17 @@ error: RefreshError: Reauthentication is needed.\n";
         }
     }
 
-    /// Helpers are deaf to Ctrl-C, so a coordinator that is killed cannot stop them. Each is
-    /// given a lifeline instead: its stdin is a pipe that closes with the coordinator.
+    /// The terminal's Ctrl-C does not reach helpers, and a coordinator that is killed cannot
+    /// stop them. Each is given a lifeline instead: its stdin is a pipe that closes with the
+    /// coordinator.
     #[cfg(unix)]
     #[tokio::test]
-    async fn a_helper_is_started_deaf_to_sigint_and_with_a_lifeline() {
+    async fn a_helper_is_started_in_its_own_group_and_with_a_lifeline() {
         let dir = tempfile::tempdir().unwrap();
         let pid_file = dir.path().join("pid");
-        // Sends itself SIGINT (ignored), checks the lifeline variable, then becomes `cat`,
-        // which ends only when its stdin does: the pipe run_helper holds open.
-        let helper = script(
-            &pid_file,
-            "kill -INT $$; test \"$BARCA_LIFELINE\" = stdin && exec cat",
-        );
+        // Checks the lifeline variable, then becomes `cat`, which ends only when its stdin
+        // does: the pipe run_helper holds open.
+        let helper = script(&pid_file, "test \"$BARCA_LIFELINE\" = stdin && exec cat");
         let cancel = CancellationToken::new();
         let run = run_helper(helper, Some(&cancel), None);
         tokio::pin!(run);
@@ -679,13 +677,18 @@ error: RefreshError: Reauthentication is needed.\n";
             _ = &mut run => panic!("the helper ended although its lifeline is open"),
             pid = pid_in(&pid_file) => pid,
         };
-        // Still running a moment later: SIGINT did not end it, and stdin is not at its end.
+        // Still running a moment later: its stdin is not at its end.
         let still = tokio::time::timeout(std::time::Duration::from_millis(300), &mut run).await;
         assert!(
             still.is_err(),
             "the helper ended although its lifeline is open"
         );
         assert!(crate::db::pid_alive(pid));
+        // In a group of its own (its pid), not the one the terminal's Ctrl-C goes to.
+        // SAFETY: plain syscalls.
+        let (group, ours) = unsafe { (libc::getpgid(pid as i32), libc::getpgrp()) };
+        assert_eq!(i64::from(group), pid);
+        assert_ne!(group, ours);
         cancel.cancel();
         assert!(matches!(run.await, Err(HelperFailed::Cancelled)));
         assert!(!crate::db::pid_alive(pid));

@@ -337,11 +337,16 @@ def main() -> int:
     if not os.environ.get("BARCA_SOCKET"):
         print("BARCA_SOCKET not set", file=sys.stderr)
         return 1
-    # Ctrl-C in a terminal reaches every process of the foreground job. What it means for the
-    # run is the coordinator's decision alone: it cancels the run and stops this helper
-    # (SIGTERM). Acting on the interrupt here as well would end the helper under a
-    # coordinator that is still waiting on it, and print a KeyboardInterrupt traceback.
+    # What Ctrl-C means for the run is the coordinator's decision alone: it cancels the run
+    # and stops this helper (SIGTERM). Acting on an interrupt here as well would end the
+    # helper under a coordinator that is still waiting on it, and print a KeyboardInterrupt
+    # traceback. The coordinator starts this process in a group of its own, which the
+    # terminal's Ctrl-C does not reach; a SIGINT sent to it directly is ignored too.
     signal.signal(signal.SIGINT, signal.SIG_IGN)
+    # Outside the terminal's foreground group, a write to the terminal (a warning on stderr)
+    # would stop the process if the terminal is set to `tostop`. Ignored, the write goes
+    # through.
+    signal.signal(signal.SIGTTOU, signal.SIG_IGN)
     signal.signal(signal.SIGTERM, _stop)
     # Deaf to Ctrl-C, so this process must notice by itself when the coordinator is gone.
     _lifeline.watch()

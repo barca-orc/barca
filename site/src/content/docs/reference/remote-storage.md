@@ -661,10 +661,11 @@ that arrives after the last step finished, while artifacts upload or the history
 therefore follows a `done` line; the exit code and the error still say `cancelled`.
 
 Barca's helper processes (the one that moves artifacts and the one that moves the history) do
-not act on Ctrl-C themselves: the terminal sends it to every process of the job, and the
-coordinator alone decides what it means and stops them. If barca itself is killed (`kill -9`,
-out of memory), nobody is left to stop them, so they watch for that: each exits on its own, at
-once and without output, and removes the temp file it was writing. A download of the history
+not act on Ctrl-C themselves. They are started outside the terminal's job (in a process group
+of their own), so the terminal's Ctrl-C reaches barca only, which decides what it means and
+stops them. If barca itself is killed (`kill -9`, out of memory), nobody is left to stop them,
+so they watch for that: each exits on its own, at once and without output, and removes the temp
+file it was writing. A download of the history
 that was cut this way can leave `.barca/metadata.db.pull-*`; the next pull removes it.
 
 ## A directory where an artifact belongs

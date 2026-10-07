@@ -1,4 +1,5 @@
-//! Starting and stopping barca's Python helper processes (`barca._transfer`, `barca._state`).
+//! Starting and stopping barca's child processes: the Python helpers (`barca._transfer`,
+//! `barca._state`) and everything else it runs.
 //!
 //! Ctrl-C in a terminal is delivered to every process of the foreground job, helpers
 //! included. What it means for a run is decided in one place, the coordinator: it cancels the
@@ -6,10 +7,11 @@
 //! exit under a coordinator that is still waiting on it (the wait would then be reported as a
 //! failed transfer, not as a cancellation) and would print a `KeyboardInterrupt` traceback.
 //!
-//! So helpers are started deaf to SIGINT ([`shield_from_ctrl_c`]) and are stopped by the
-//! coordinator with SIGTERM ([`stop`]), which they answer by removing the temp files they
-//! were writing and exiting. A helper that nobody can interrupt must not outlive a
-//! coordinator that was killed, so each also gets a lifeline ([`give_lifeline`]).
+//! So helpers are started where the terminal's Ctrl-C does not reach them
+//! ([`shield_from_ctrl_c`]) and are stopped by the coordinator with SIGTERM ([`stop`]), which
+//! they answer by removing the temp files they were writing and exiting. A helper that the
+//! terminal cannot interrupt must not outlive a coordinator that was killed, so each also gets
+//! a lifeline ([`give_lifeline`]).
 //!
 //! Every child process of barca, helpers and workers alike, is started through [`spawn`] or
 //! [`spawn_std`]: one at a time.
@@ -49,24 +51,24 @@ pub(crate) fn spawn_std(cmd: &mut std::process::Command) -> std::io::Result<std:
 /// How long a helper gets to clean up after SIGTERM before it is killed.
 pub(crate) const STOP_GRACE: Duration = Duration::from_secs(2);
 
-/// Start `cmd` with SIGINT ignored. An ignored signal stays ignored across `exec`, and Python
-/// leaves it that way, so there is no moment (not even while the interpreter starts) at which
-/// a Ctrl-C raises `KeyboardInterrupt` in the helper.
+/// Start `cmd` in a process group of its own. The terminal sends Ctrl-C to the foreground
+/// process group, which is the coordinator's, so the helper never sees it: not while the
+/// interpreter starts either, since the group is set when the process is created.
+///
+/// Why not an ignored SIGINT set before `exec` (what this did at first): that needs a
+/// `pre_exec` hook, which makes the standard library start the child with `fork` and wait on
+/// a pipe of its own to learn that `exec` happened, and that pipe can be inherited by a child
+/// started at the same instant just like the ones [`spawn`] describes. A process group is
+/// set by `posix_spawn` itself, with no hook and no pipe.
 pub(crate) fn shield_from_ctrl_c(cmd: &mut Command) {
-    // SAFETY: `signal` is async-signal-safe and the closure touches no memory of the parent.
-    unsafe {
-        cmd.pre_exec(|| {
-            libc::signal(libc::SIGINT, libc::SIG_IGN);
-            Ok(())
-        });
-    }
+    cmd.process_group(0);
 }
 
 /// Give `cmd` a lifeline: its stdin is a pipe whose other end only this process holds, and
 /// `BARCA_LIFELINE=stdin` tells the helper to watch it (`barca._lifeline`). When this process
 /// is gone, however it went (`kill -9` included), the pipe reaches end-of-file and the helper
-/// removes its temp files and exits. A helper deaf to Ctrl-C needs this: nobody else would
-/// stop it.
+/// removes its temp files and exits. A helper the terminal cannot interrupt needs this: nobody
+/// else would stop it.
 ///
 /// The caller must keep the child's stdin handle open for as long as the helper should live.
 pub(crate) fn give_lifeline(cmd: &mut Command) {
@@ -107,14 +109,12 @@ mod tests {
     use std::process::Stdio;
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 
-    /// A shell child that reports what it does with SIGINT and SIGTERM, then waits.
+    /// A shell child that prints its process group, then waits; `term` on SIGTERM.
     fn reporter() -> Command {
         let mut cmd = Command::new("sh");
         cmd.args([
             "-c",
-            // `trap` with no arguments lists the traps in force; an inherited "ignore" is not
-            // listed by every shell, so the child also sends itself the signal.
-            "trap 'echo term; exit 0' TERM; kill -INT $$; echo survived; \
+            "trap 'echo term; exit 0' TERM; ps -o pgid= -p $$; \
              while :; do sleep 0.05; done",
         ])
         .stdout(Stdio::piped())
@@ -122,15 +122,24 @@ mod tests {
         cmd
     }
 
+    fn own_group() -> i64 {
+        // SAFETY: plain syscall.
+        i64::from(unsafe { libc::getpgrp() })
+    }
+
     #[tokio::test]
-    async fn a_shielded_helper_ignores_sigint_and_stops_on_sigterm() {
+    async fn a_shielded_helper_is_outside_the_terminals_job_and_stops_on_sigterm() {
         let mut cmd = reporter();
         shield_from_ctrl_c(&mut cmd);
-        let mut child = cmd.spawn().unwrap();
+        let mut child = spawn(&mut cmd).unwrap();
+        let pid = i64::from(child.id().unwrap());
         let mut out = BufReader::new(child.stdout.take().unwrap());
         let mut line = String::new();
         out.read_line(&mut line).await.unwrap();
-        assert_eq!(line.trim(), "survived", "SIGINT must not end the helper");
+        let group: i64 = line.trim().parse().unwrap();
+        // A group of its own: a Ctrl-C sent to this process's group does not include it.
+        assert_eq!(group, pid);
+        assert_ne!(group, own_group());
 
         stop(&mut child).await;
         let mut rest = String::new();
@@ -144,29 +153,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_unshielded_child_is_ended_by_sigint() {
-        // The control: without the shield the same child never gets to say `survived`. The
-        // default action is set explicitly, because a test runner started in the background
-        // hands its children an ignored SIGINT.
-        let mut cmd = reporter();
-        // SAFETY: as in `shield_from_ctrl_c`.
-        unsafe {
-            cmd.pre_exec(|| {
-                libc::signal(libc::SIGINT, libc::SIG_DFL);
-                Ok(())
-            });
-        }
-        let mut child = cmd.spawn().unwrap();
-        let mut said = String::new();
-        child
-            .stdout
-            .take()
-            .unwrap()
-            .read_to_string(&mut said)
-            .await
-            .unwrap();
-        assert_eq!(said, "");
-        assert!(!child.wait().await.unwrap().success());
+    async fn an_unshielded_child_shares_the_coordinators_group() {
+        // The control: without the shield the child is in the group Ctrl-C is sent to.
+        let mut child = spawn(&mut reporter()).unwrap();
+        let mut out = BufReader::new(child.stdout.take().unwrap());
+        let mut line = String::new();
+        out.read_line(&mut line).await.unwrap();
+        assert_eq!(line.trim().parse::<i64>().unwrap(), own_group());
+        stop(&mut child).await;
     }
 
     /// A child whose output is read to the end, started while long-lived children are being
@@ -216,7 +210,7 @@ mod tests {
         ])
         .stdout(Stdio::piped())
         .kill_on_drop(true);
-        let mut child = cmd.spawn().unwrap();
+        let mut child = spawn(&mut cmd).unwrap();
         let mut out = BufReader::new(child.stdout.take().unwrap());
         let mut line = String::new();
         out.read_line(&mut line).await.unwrap();
