@@ -1,115 +1,156 @@
 ---
 title: Testing
-description: Test suites, fixture patterns, and state/output reference.
+description: The test suites in the barca repository, how to run each, and what CI runs.
 ---
 
-## Overview
+## The suites
 
-Barca's test suite spans three layers:
+| Suite | Where | Run with |
+|---|---|---|
+| Rust tests | inline `#[test]` modules in `crates/*/src/`, plus `crates/barca-core/tests/` and `crates/barca-server/tests/` | `cargo test` |
+| Python tests | `python/tests/` | `pytest python/tests -q` |
+| Storage backend tests | part of `python/tests/`, against local emulators | `pytest python/tests -q` with the emulators running |
+| Shell integration tests | `tests/integration/*.sh` | `bash tests/integration/<script>.sh` |
+| Web UI tests | `ui/` | `pnpm --dir ui test` |
+| Manual and contract tests | `cargo test -p barca`, `python/tests/test_docs_examples.py`, `python/tests/test_cli_contract.py` | see below |
 
-- **Rust unit + integration tests** — in `crates/barca-core/tests/` and
-  `crates/barca-server/tests/`, plus inline `#[test]` modules throughout `crates/*/src/`.
-  Run with `cargo test`.
-- **Python tests** — in `python/tests/`, covering the worker, runtime, and storage
-  backends. Run with `uv run pytest python/tests -q`.
-- **Shell integration tests** — in `tests/integration/`, run against the built wheel in CI.
+The Python and shell tests run the installed `barca` binary, so build it first
+(`maturin develop --release --extras test`, see [Development Setup](/contributing/development/)).
+
+## Rust
 
 ```bash
-cargo test
-uv run pytest python/tests -q
+cargo test                # every crate
+cargo test -p barca       # the CLI crate, including the manual and contract checks
 ```
 
-## Test suites
-
-### Rust (`crates/*/tests/`, `cargo test`)
-
-| Suite | File | What it covers |
-|-------|------|---------------|
-| Grammar spec | `crates/barca-core/tests/grammar_spec.rs` | Parsing edge cases for decorator syntax |
-| Socket stress | `crates/barca-core/tests/socket_stress.rs` | UDS coordination protocol under load |
-| Server API | `crates/barca-server/tests/api.rs` | HTTP endpoints exposed by `barca serve` |
-
-Most Rust coverage lives as `#[test]` functions inline in each module (parser, DAG,
-hashing, cache lookup, coordinator dispatch, scheduler, config, etc.) rather than in
-separate test files.
-
-### Python (`python/tests/`, `pytest`)
+Most Rust tests are inline in the module they test (parser, DAG, hashing, cache decisions,
+coordinator, scheduler, config). The separate test files are:
 
 | File | What it covers |
-|------|---------------|
-| `test_worker_artifacts.py` | Worker-side artifact writing |
-| `test_artifacts.py` | Serialization: json/pickle/parquet format detection + I/O |
-| `test_state_backends.py` | Shared remote state conformance (pull/push/conflict) |
-| `test_storage.py` | Local + remote (fsspec) artifact storage dispatch |
-| `test_state.py` | Local state handling |
-| `test_runtime.py` | Worker runtime / UDS client behavior |
-| `test_parallel.py` | `parallel()` / `parallel_map()` |
-| `test_timing.py` | Timing / elapsed-time reporting |
-| `test_client.py` | `barca.Client` (HTTP API client) |
-| `test_history.py` | `barca.history()` |
-| `test_api.py` | `barca.get()` / `barca.plan()` / `barca.run()` / `barca.stats()` |
-| `test_errors.py` | `BarcaError` surfacing |
-| `test_reliability.py` | Retry / timeout behavior |
-| `test_cross_file.py` | Cross-file dependency resolution |
-| `test_helper_tracking_194.py` | Helper edits re-run the step: classes, aliases, in-function imports, modules as values, and which file a module name means in each project layout |
-| `test_run_hash_golden.py` | Run hashes pinned from a released version: an upgrade must not recompute unchanged projects |
-| `test_adaptive_executor.py` | Worker pool sizing |
-| `test_artifact_lru.py` | The worker's in-memory artifact cache: isolation of cached values per type, size limits |
-| `test_retries.py` | `retries=` / `retry_backoff=` |
+|---|---|
+| `crates/barca-core/tests/grammar_spec.rs` | Parsing of decorator syntax |
+| `crates/barca-core/tests/socket_stress.rs` | The worker socket protocol under load |
+| `crates/barca-core/tests/unused_input_repo_sweep.rs` | The unused-input warning against the repository's own examples and docs |
+| `crates/barca-server/tests/api.rs` | The HTTP endpoints of `barca serve` |
 
-### Shell integration (`tests/integration/`, CI only)
+## Python
 
-`test_cli.sh`, `test_cache.sh`, `test_cache_gaps.sh`, `test_cache_fuzz.sh`, `test_env.sh`,
-`test_remote_state.sh` — exercised in `.depot/workflows/ci.yml` against a `maturin build
---release` wheel. A separate CI job (`backends`) runs the full Python suite, including the
-state-backend conformance tests, against local object-store emulators (MinIO, fake-gcs-server,
-Azurite) — no cloud credentials required.
-
-## Test patterns
-
-### Fixture projects
-
-Python tests create temporary project directories with decorated functions and a
-`barca.toml`, then shell out to the built `barca` binary (via `barca.api`) to exercise
-real CLI behavior end-to-end.
-
-## State & output reference
-
-### Materialization status values
-
-Each row in the `materializations` table is `success` or `failed` (a cache lookup filters
-on `status = 'success'`; failed rows are never served from cache). Server-mode runs
-(`barca serve`) track a separate, richer run status: `pending` → `running` → `complete` |
-`failed` | `cancelled`.
-
-### Artifact path
-
-Artifacts are content-addressed when a `run_hash` is available:
-
-```
-{artifact_dir}/{safe_node_id}/{run_hash}{ext}
+```bash
+pytest python/tests -q
+pytest python/tests/test_sql.py -q        # one file
 ```
 
-e.g. `.barca/artifacts/pipeline.py--summary/3f9a....json`. Without a `run_hash` (older
-coordinators, `parallel()` children, batch mode), artifacts fall back to a legacy
-node-id-keyed layout: `{artifact_dir}/{safe_node_id}{ext}`. Under the coordinator
-`artifact_dir` is always the local artifact directory — a remote store is synced by the
-transfer helper (`barca._transfer`, `crates/barca-core/src/transfer.rs`) — but batch mode
-and direct `BARCA_ARTIFACT_URI` use still accept a remote URI.
+Most tests in `python/tests/` create a temporary project with decorated functions, run the
+real `barca` binary on it, and check the output, exit code and files.
 
-### Hash identity
+## Storage backend tests and emulators
 
-`definition_hash` (SHA-256) is derived from: protocol version + function source +
-dependency cone source (helper/constant deps) + decorator metadata (freshness,
-partitions, inputs). Changing any input produces a new hash.
+Tests of remote storage and shared history (`test_state_backends.py`, `test_remote_faults.py`,
+`test_remote_env_config.py`, `test_remote_inspect.py` and others) run against local emulators
+and need no cloud account:
 
-`run_hash` (SHA-256) is derived from the definition hash + partition key (if any) +
-sorted upstream materialization IDs + ad-hoc params. A materialization is a cache hit
-when its `run_hash` matches an existing successful row.
+| Store | Emulator | Variable | Default |
+|---|---|---|---|
+| S3 and R2 | MinIO | `BARCA_TEST_S3_ENDPOINT` | `http://localhost:9100` |
+| GCS | fake-gcs-server | `BARCA_TEST_GCS_ENDPOINT` | `http://localhost:9200` |
+| Azure | Azurite | `BARCA_TEST_AZURITE_HOST` | `127.0.0.1:9210` |
 
-### API shapes
+`BARCA_TEST_S3_KEY` and `BARCA_TEST_S3_SECRET` default to `minioadmin`.
 
-See the [Server API](/reference/server-api/) reference.
+Without the variables set, a test whose emulator is not reachable at the default address is
+skipped, so the suite passes on a machine with no emulators. In `test_state_backends.py`, when a
+variable is set and its emulator is not reachable, the test fails instead of skipping. CI sets
+all three, so a broken emulator cannot make the backend job pass by skipping.
 
-`AssetSummary` includes `kind` (`"asset"`, `"sensor"`, `"task"`), `freshness`, and
-`inputs`.
+CI starts the emulators with Docker, at pinned versions:
+
+```bash
+docker run -d --name minio -p 9100:9000 \
+  -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
+  bitnamilegacy/minio:2025.5.24
+docker run -d --name fake-gcs -p 9200:4443 \
+  fsouza/fake-gcs-server:1.56.1 -scheme http -port 4443 \
+  -public-host localhost:9200 -external-url http://localhost:9200
+docker run -d --name azurite -p 9210:10000 \
+  mcr.microsoft.com/azure-storage/azurite:3.37.0 \
+  azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck
+```
+
+The MinIO version matters. A MinIO build from September 2025
+(`RELEASE.2025-09-06T17-38-46Z`) answers a create-only upload of a new object with "The
+specified key does not exist", which makes barca's first upload of the shared history fail with
+exit 3. Use the pinned image.
+
+## Shell integration tests
+
+```bash
+bash tests/integration/test_cli.sh
+```
+
+| Script | What it covers |
+|---|---|
+| `test_cli.sh` | Commands, flags and output |
+| `test_cache.sh`, `test_cache_gaps.sh`, `test_cache_fuzz.sh` | Cache hits and misses after code and input changes |
+| `test_env.sh` | `--env` separation |
+| `test_remote_state.sh` | Shared history between two project directories |
+| `test_partitions.sh` | Partitioned assets |
+| `test_run_refresh.sh` | `barca run` with `--refresh` |
+| `test_benchmark_examples.sh` | The benchmark pipelines run as smoke tests; expects the binary at `.venv/bin/barca` |
+| `test_reverse_proxy.sh` | `barca serve` behind nginx: path prefix, UI, live events |
+
+`python/tests/test_ci_coverage.py` fails if a script in `tests/integration/` is not run by the
+CI workflow.
+
+## Web UI
+
+```bash
+pnpm --dir ui install --frozen-lockfile
+pnpm --dir ui typecheck
+pnpm --dir ui lint
+pnpm --dir ui test       # vitest
+pnpm --dir ui build
+```
+
+## Manual, help and contract tests
+
+These keep the documentation and the command line in agreement.
+
+- `cargo test -p barca` parses every `barca ...` line in the `--help` examples and in the
+  manual topics against the real argument parser, and requires help text on every flag and
+  examples on every documented command.
+- `cargo test -p barca contract::` compares each command's `--help` with
+  `crates/barca-cli/snapshots/help/`, checks the generated tables in
+  `crates/barca-cli/docs/contract.md`, and checks that
+  `site/src/content/docs/reference/cli-contract.md` is that topic with site front matter.
+- `python/tests/test_cli_contract.py` compares the JSON output schemas and the error envelope
+  with `python/tests/snapshots/cli_contract/`.
+- `python/tests/test_docs_examples.py` runs the example pipelines in the manual and checks
+  what the text says about them.
+
+When one fails after a deliberate change, run `scripts/update-cli-snapshots.sh` and review the
+diff. The script builds barca, so it takes as long as a release build.
+
+No test compares the other site pages with the manual. `reference/sql.md`,
+`reference/telemetry.md` and `reference/discovery.md` are hand-kept copies of manual topics.
+
+## What CI runs
+
+`.depot/workflows/ci.yml` runs on every pull request into `main`, in two jobs:
+
+- **test**: `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test`, then builds
+  a wheel with `maturin build --release`, installs it, and runs the shell integration tests.
+- **backends**: starts the three emulators, checks and builds the web UI (typecheck, lint,
+  test, build), builds a wheel and installs it with the `test` extra, runs the whole Python
+  suite with the three `BARCA_TEST_*` endpoints set, then runs `test_reverse_proxy.sh`.
+
+## Reference for test authors
+
+**Materialization status.** A row in the `materializations` table is `success` or `failed`.
+Only `success` rows are cache hits. A run under `barca serve` has its own status: `pending`,
+`running`, `complete`, `failed` or `cancelled`. A run in `barca history` is `running`,
+`success`, `failed`, `cancelled` or `interrupted`.
+
+**Run hash.** `python/tests/test_run_hash_golden.py` pins run hashes from a released version,
+so a change that would recompute unchanged projects on upgrade fails a test. What the hash
+covers is in `barca docs cache`.

@@ -1,166 +1,95 @@
 ---
 title: Releases
-description: What shipped in each barca release, and what's scoped for the future.
+description: How a barca release is cut, what the release workflow builds and publishes, and where release notes are.
 ---
 
-This file scopes barca by release so the scope does not quietly expand.
+Merging to `main` publishes nothing. A release is published when a `v*` tag is pushed. This
+page describes the steps as they were done for 0.17.0, 0.17.1 and 0.18.0.
 
-## 0.1.x (shipped)
+## Version numbers
 
-The Rust rewrite. Replaced the pure-Python prototype with a hybrid Rust+Python
-architecture: Rust parses, plans, and dispatches; Python executes.
+Barca is pre-1.0 and stays on `0.x.y`.
 
-Shipped:
+- **Minor** (`0.x.0`): a new area of functionality, new public surface, or a breaking change.
+- **Patch** (`0.x.y`): fixes, performance work and refactors within what exists.
 
-- `@asset` with dependency tracking (`inputs=`), caching (`run_hash`), partitions
-- `@sensor` for external state observation
-- `@task` for side-effect operations (always re-runs, never cached)
-- `@sink` for writing outputs to disk
-- `partitions()`, `partitions_from()`, `collect()` for partition workflows
-- Static analysis via ruff (never imports user code)
-- Turso/libSQL for persistence (`.barca/metadata.db`)
-- CLI: `barca get`, `barca run`, `barca plan`, `barca history`, `barca stats`
-- `barca serve` HTTP API (axum)
-- Retries with backoff (`retries=`, `retry_backoff=`)
-- Benchmarks: 13-97x faster than Dagster/Prefect across all workloads
+The version is written in several files that must agree. `scripts/check-version-sync.sh`
+compares the three crate manifests, `pyproject.toml` and `python/barca/__init__.py`, and runs as
+a pre-commit hook.
 
-## 0.2.0 (shipped)
+## Cutting a release
 
-The execution engine rewrite. Replaced the old per-thread dispatch system with
-a stateless worker pool coordinated via Unix domain sockets.
+1. Branch `release/v<major>.<minor>.<patch>` off `main`. The `release/` prefix keeps the branch
+   name from colliding with the tag.
+2. Commit only the version bump. For 0.18.0 that was nine files:
 
-Shipped:
+   ```
+   Cargo.lock
+   README.md
+   crates/barca-cli/Cargo.toml
+   crates/barca-core/Cargo.toml
+   crates/barca-server/Cargo.toml
+   pyproject.toml
+   python/barca/__init__.py
+   site/src/content/docs/reference/server-api.md
+   uv.lock
+   ```
 
-- **UDS coordination protocol**: length-prefixed JSON over Unix domain sockets,
-  290K msg/s at 128 workers
-- **Stateless workers**: receive one task at a time from Rust via a global ready queue.
-  No pre-assigned queues, no head-of-line blocking.
-- **`parallel()` and `parallel_map()`**: dynamic fan-out at runtime via
-  SIGSTOP/SIGCONT. Scales to 1000+ items, nested parallel works recursively.
-- **Type-safe coordinator**: `load_phase()` consumes the planner's Phase directly.
-  StepId on every Item. Step accounting invariant (assert on count mismatch).
-- **orjson** optional dependency for faster Python serialization
-- **-4000 lines net**: removed executor.rs, scheduler.rs, work_plan.rs, old dispatch loop
+   `README.md` and `server-api.md` are there because they quote the version in example output.
+3. Open a pull request into `main` titled `release: v<x.y.z>`. Put the release notes in its
+   description: an "Upgrade notes" section, and a "Breaking" section naming each breaking
+   change and its replacement.
+4. When CI passes, squash-merge and delete the branch.
+5. Create an annotated tag `v<x.y.z>` on the merge commit and push it:
 
-Issues closed: [#70](https://github.com/ExSidius/barca/issues/70) (UDS communication),
-[#58](https://github.com/ExSidius/barca/issues/58) (asset vs task model)
+   ```bash
+   git tag -a v0.18.0 -m "v0.18.0" <merge-commit>
+   git push origin v0.18.0
+   ```
 
-## 0.3.0 (shipped)
+   Pushing the tag publishes to PyPI. It cannot be undone: a version number on PyPI cannot be
+   reused.
+6. When the workflow has created the GitHub Release, edit it by hand and put the "Upgrade
+   notes" and "Breaking" sections above the generated commit list.
 
-Goal: scheduling, remote I/O, observability.
+## What the release workflow does
 
-Delivered:
+`.github/workflows/release.yml` runs on a `v*` tag:
 
-- **Cron scheduling enforcement** — `barca serve` fires `Schedule("0 5 * * *")`
-  assets, sensors, and tasks on their cron tick
-  ([#54](https://github.com/ExSidius/barca/issues/54)). Includes:
-  - **Durable catch-up** — last-fire times persist; a job whose tick passed
-    during downtime fires once on restart.
-  - **Configurable timezone** — `--timezone local|utc|<IANA>`.
-  - **Parallel runs** — independent runs execute concurrently (bounded pool),
-    with DB writes serialized; a job never overlaps itself.
-  - **Observability** — `GET /schedule` and `barca list <files>` (next fire times);
-    live reload under `--watch`.
-- **Python server client** — `barca.Client` (stdlib-only) to trigger runs, poll
-  status, and inspect schedules over the HTTP API.
+1. **Builds the web UI** (`pnpm --dir ui install`, `test`, `build`) and passes `ui/dist` to the
+   later jobs, so the binary embeds it.
+2. **Builds wheels** with maturin for two targets: Linux x86_64 (manylinux) and macOS arm64.
+   Each wheel contains the `barca` binary and the Python package.
+3. **Packages a standalone binary** for the same two targets as `barca-linux-x86_64.tar.gz` and
+   `barca-macos-arm64.tar.gz`, after checking that the binary contains the web UI.
+4. **Builds an sdist** (`barca-<version>.tar.gz`), which carries the built UI so a source build
+   needs no Node.
+5. **Creates the GitHub Release** with those five files. The body is generated by
+   [git-cliff](https://git-cliff.org/) from the commits since the previous tag
+   (`git cliff --config cliff.toml --latest --strip header`), followed by an install line. A tag
+   containing `rc`, `alpha`, `beta` or `dev` is marked as a pre-release.
+6. **Publishes the wheels and the sdist to PyPI.**
 
-## 0.4.0 (shipped)
+There are no wheels for Windows, Linux arm64 or macOS x86_64. On those platforms `pip` builds
+from the sdist, which needs a Rust toolchain.
 
-Goal: remote artifact storage and execution reliability.
+The workflow also runs on a pull request that changes `release.yml`; it then builds everything
+and skips the release and the PyPI upload.
 
-Delivered:
+## Release notes and the changelog
 
-- **Remote artifact backends** — the artifact store and `@sink` destinations
-  accept object-store URIs via fsspec scheme dispatch: Azure ADLS Gen2
-  (`abfs://`/`abfss://`) first-class, S3 and GCS pluggable
-  ([#55](https://github.com/ExSidius/barca/issues/55)). Includes:
-  - **Optional extras** — `barca[azure]`, `barca[s3]`, `barca[gcs]`,
-    `barca[remote]`; the core install stays zero-dependency.
-  - **`BARCA_ARTIFACT_URI`** — points the primary artifact store at a remote
-    prefix; `BARCA_STORAGE_OPTIONS` passes per-protocol fsspec options.
-    Credentials use each backend's native default chain.
-  - **Staged writes** — serializer → local temp file → atomic rename (local)
-    or chunked upload (remote); large payloads are never buffered in memory
-    and a crash never leaves a partial artifact.
-  - v1 limitations (explicit errors): `partitions_from` and `parallel()`
-    result values require a local artifact store.
-- **`@sink` execution** — previously parsed but inert; sinks now write after
-  the parent asset materializes, with `serializer=` override, format
-  precedence (kwarg → extension → primary format), per-partition filename
-  suffixing, and error isolation (a sink failure never fails the asset;
-  outcomes are logged and persisted). Sinks and `@asset(serializer=)` now
-  participate in the definition hash — a one-time global cache invalidation
-  on upgrade.
-- **Error surfacing** — worker failures carry the exception type and a
-  barca-frame-filtered traceback all the way to `BarcaError` and the DB.
-- **Real retries** — backoff is actually applied (`retry_backoff * attempt`,
-  non-blocking), every attempt runs in a fresh worker process, and attempt
-  counts are recorded accurately; timeouts are reported as `TimeoutError`
-  instead of a worker disconnect.
+Release notes are on the
+[GitHub Releases page](https://github.com/barca-orc/barca/releases), one entry per tag. The
+commit list in each is grouped by commit type, which is why commits follow the
+[conventional commits](https://www.conventionalcommits.org/) form (`feat:`, `fix:`,
+`refactor:`, `polish:`, `doc:`, `test:`, `perf:`, `remove:`).
 
-Planned (carried forward):
+`CHANGELOG.md` in the repository is not updated by the release steps above. Its last change
+was in pull request #144, before 0.9.0, and it has no entries for 0.2.0 to 0.18.0. See
+[Changelog](/contributing/changelog/).
 
-- **Reproducible Docker benchmarks** — containerized cross-framework comparisons
-  with proper timeouts and resource constraints
-  ([#65](https://github.com/ExSidius/barca/issues/65))
-- **Backend abstraction** — pluggable DB + storage, enabling Docker and shared
-  deployments ([#56](https://github.com/ExSidius/barca/issues/56))
-- **APM integration** — Datadog + Sentry for observability
-  ([#59](https://github.com/ExSidius/barca/issues/59))
-- **Alerting hooks** — Slack webhooks, email notifications
-  ([#52](https://github.com/ExSidius/barca/issues/52))
+## Compatibility between releases
 
-## 0.6.0 (current)
-
-Goal: object storage on equal footing across clouds, held to one contract.
-
-- **First-class S3, GCS, and Cloudflare R2** — alongside Azure, the object
-  stores are now peers, all held to the same shared-state contract
-  (conditional create, cross-machine cache hit, concurrent-writer conflict →
-  replay). R2 rides on the S3 backend (`s3://` + an R2 endpoint in
-  `storage_options`); see [Remote Storage](/reference/remote-storage/).
-- **Backend conformance suite** — the identical pull/push/conflict/stale-token
-  assertions run against every backend on every PR, using local emulators
-  (MinIO for S3/R2, fake-gcs-server for GCS, Azurite for Azure) — no cloud
-  credentials. A stale-token guard makes a too-lenient emulator fail loud
-  instead of false-passing.
-- **Fixes surfaced by that suite:**
-  - Azure concurrent first-push races (`FileExistsError` from adlfs
-    create-only) are now classified as conflicts and replayed, not hard errors.
-  - GCS conditional overwrite (previously broken — the etag was fed to
-    `int(if_generation_match)`); GCS shared state now rides entirely on the
-    google-cloud-storage SDK, conditioning on the numeric generation.
-  - `barca[gcs]`/`barca[remote]` now declare `google-cloud-storage`, which the
-    state push path imports directly (gcsfs does not pull it in).
-
-## 0.5.0 (shipped)
-
-Goal: shared state across machines.
-
-- **Shared remote materialization state** — the metadata DB lives as a blob
-  (`{uri}/{env}/state/metadata.db`), pulled at run start and pushed with an
-  etag/generation-conditional upload at run end (conflict → pull + replay).
-  A run on one machine hits artifacts materialized by another.
-- **Content-addressed artifacts** — `{artifacts}/{node}/{run_hash}{ext}` in
-  every mode (local included): immutable objects, cross-machine cache hits.
-- **barca.toml** — first config file (`[remote]` section, `default_env`),
-  env vars override; see [Configuration](/reference/config/).
-- **`--env` environments** — dev/staging/prod fully separated state, local
-  and remote.
-
-Planned follow-ups: `barca serve` with shared state (currently gated to
-`state = "off"`), `barca gc` for content-addressed artifact garbage
-collection, partitioned cache checks.
-
-## Future (unscoped)
-
-Not yet assigned to a release:
-
-- Partition filtering on CLI (`--partition` flag)
-  ([#57](https://github.com/ExSidius/barca/issues/57))
-- File versioning for artifacts
-  ([#61](https://github.com/ExSidius/barca/issues/61))
-- Notebook integration
-- TUI
-- Distributed execution (multi-machine)
-- Web UI
+Before 1.0 a release may break the command line, with a minor bump and a "Breaking" line in
+the release notes. The [CLI contract](/reference/cli-contract/) lists what is stable and what
+is experimental, and the policy from 1.0 on.
