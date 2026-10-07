@@ -156,7 +156,7 @@ class TestPolarsIsolation:
     def test_mutating_a_cache_hit_does_not_change_the_cache(self, mutate):
         pytest.importorskip("polars")
         lru = _ArtifactLRU()
-        lru.put("/a.parquet", _polars_frame(), "polars")
+        lru.put("/a.parquet", _polars_frame(), "polars", size_bytes=1)
         hit = lru.get("/a.parquet", "polars")
         mutate(hit)
         assert _same_frame(lru.get("/a.parquet", "polars"), _polars_frame())
@@ -165,14 +165,14 @@ class TestPolarsIsolation:
         pytest.importorskip("polars")
         lru = _ArtifactLRU()
         produced = _polars_frame()
-        lru.put("/a.parquet", produced, "polars")
+        lru.put("/a.parquet", produced, "polars", size_bytes=1)
         mutate(produced)
         assert _same_frame(lru.get("/a.parquet", "polars"), _polars_frame())
 
     def test_one_consumer_does_not_see_anothers_mutation(self, mutate):
         pytest.importorskip("polars")
         lru = _ArtifactLRU()
-        lru.put("/a.parquet", _polars_frame(), "polars")
+        lru.put("/a.parquet", _polars_frame(), "polars", size_bytes=1)
         first = lru.get("/a.parquet", "polars")
         second = lru.get("/a.parquet", "polars")
         mutate(first)
@@ -185,7 +185,7 @@ def test_polars_copy_shares_the_column_buffers():
     np = pytest.importorskip("numpy")
     df = pl.DataFrame({"a": np.arange(100_000, dtype=np.int64)})
     lru = _ArtifactLRU()
-    lru.put("/a.parquet", df, "polars")
+    lru.put("/a.parquet", df, "polars", size_bytes=1)
     hit = lru.get("/a.parquet", "polars")
     assert hit is not df
     assert np.shares_memory(hit["a"].to_numpy(), df["a"].to_numpy())
@@ -243,7 +243,7 @@ class TestPandasIsolation:
     def test_mutating_a_cache_hit_does_not_change_the_cache(self, mutate):
         pytest.importorskip("pandas")
         lru = _ArtifactLRU()
-        lru.put("/a.parquet", _pandas_frame(), "pandas")
+        lru.put("/a.parquet", _pandas_frame(), "pandas", size_bytes=1)
         mutate(lru.get("/a.parquet", "pandas"))
         assert lru.get("/a.parquet", "pandas").equals(_pandas_frame())
 
@@ -251,7 +251,7 @@ class TestPandasIsolation:
         pytest.importorskip("pandas")
         lru = _ArtifactLRU()
         produced = _pandas_frame()
-        lru.put("/a.parquet", produced, "pandas")
+        lru.put("/a.parquet", produced, "pandas", size_bytes=1)
         mutate(produced)
         assert lru.get("/a.parquet", "pandas").equals(_pandas_frame())
 
@@ -262,11 +262,129 @@ def test_pandas_copy_does_not_share_memory():
     np = pytest.importorskip("numpy")
     df = _pandas_frame()
     lru = _ArtifactLRU()
-    lru.put("/a.parquet", df, "pandas")
+    lru.put("/a.parquet", df, "pandas", size_bytes=1)
     first = lru.get("/a.parquet", "pandas")
     second = lru.get("/a.parquet", "pandas")
     assert not np.shares_memory(first["a"].to_numpy(), df["a"].to_numpy())
     assert not np.shares_memory(first["a"].to_numpy(), second["a"].to_numpy())
+
+
+def _object_frame():
+    """A frame whose object-dtype columns hold mutable cells: a list, a dict, an array."""
+    import numpy as np
+    import pandas as pd
+
+    return pd.DataFrame(
+        {
+            "n": [1, 2],
+            "tags": pd.Series([["a"], ["b"]], dtype=object),
+            "meta": pd.Series([{"k": 1}, {"k": 2}], dtype=object),
+            "vec": pd.Series([np.zeros(2), np.ones(2)], dtype=object),
+        }
+    )
+
+
+def _object_cells(df) -> list:
+    return [
+        df["n"].tolist(),
+        df["tags"].tolist(),
+        df["meta"].tolist(),
+        [v.tolist() for v in df["vec"]],
+    ]
+
+
+def _pd_append_to_list_cell(df):
+    df["tags"].iloc[0].append("poison")
+
+
+def _pd_set_key_in_dict_cell(df):
+    df["meta"].iloc[1]["k"] = 99
+
+
+def _pd_write_into_array_cell(df):
+    df["vec"].iloc[0][0] = 99.0
+
+
+PANDAS_CELL_EDITS = [_pd_append_to_list_cell, _pd_set_key_in_dict_cell, _pd_write_into_array_cell]
+
+
+@pytest.mark.parametrize("mutate", PANDAS_CELL_EDITS, ids=lambda f: f.__name__)
+class TestPandasObjectCellIsolation:
+    """`DataFrame.copy(deep=True)` copies the arrays, not the objects an object column points
+    to, so the cache copies those cells itself."""
+
+    def test_the_mutation_is_in_place(self, mutate):
+        pytest.importorskip("pandas")
+        df = _object_frame()
+        mutate(df)
+        assert _object_cells(df) != _object_cells(_object_frame())
+
+    def test_editing_a_cell_of_a_cache_hit_does_not_change_the_cache(self, mutate):
+        pytest.importorskip("pandas")
+        lru = _ArtifactLRU()
+        lru.put("/a.parquet", _object_frame(), "pandas", size_bytes=1)
+        mutate(lru.get("/a.parquet", "pandas"))
+        assert _object_cells(lru.get("/a.parquet", "pandas")) == _object_cells(_object_frame())
+
+    def test_editing_a_cell_of_the_producers_frame_after_put_does_not_change_the_cache(
+        self, mutate
+    ):
+        pytest.importorskip("pandas")
+        lru = _ArtifactLRU()
+        produced = _object_frame()
+        lru.put("/a.parquet", produced, "pandas", size_bytes=1)
+        mutate(produced)
+        assert _object_cells(lru.get("/a.parquet", "pandas")) == _object_cells(_object_frame())
+
+
+def test_pandas_frame_read_from_parquet_has_isolated_list_and_struct_cells(tmp_path):
+    """What a step actually receives: parquet list and struct columns arrive as object columns
+    of arrays and dicts."""
+    pd = pytest.importorskip("pandas")
+    pa = pytest.importorskip("pyarrow")
+    import pyarrow.parquet as pq
+
+    path = tmp_path / "t.parquet"
+    pq.write_table(pa.table({"l": [[1, 2], [3]], "s": [{"a": 1}, {"a": 2}]}), path)
+    lru = _ArtifactLRU()
+    lru.put("/a.parquet", pd.read_parquet(path), "pandas", size_bytes=1)
+    hit = lru.get("/a.parquet", "pandas")
+    hit["l"].iloc[0][0] = 99
+    hit["s"].iloc[0]["a"] = 99
+    again = lru.get("/a.parquet", "pandas")
+    assert again["l"].iloc[0].tolist() == [1, 2]
+    assert again["s"].iloc[0] == {"a": 1}
+
+
+def test_pandas_object_columns_with_duplicate_names_are_each_copied():
+    pd = pytest.importorskip("pandas")
+    df = pd.DataFrame([[["a"], ["b"]]], columns=["x", "x"], dtype=object)
+    copied = _isolated_copy(df)
+    copied.iloc[0, 0].append("poison")
+    copied.iloc[0, 1].append("poison")
+    assert df.iloc[0, 0] == ["a"]
+    assert df.iloc[0, 1] == ["b"]
+    assert list(copied.columns) == ["x", "x"]
+
+
+def test_pandas_copy_keeps_one_object_shared_by_two_cells_shared():
+    pd = pytest.importorskip("pandas")
+    shared = ["a"]
+    df = pd.DataFrame({"x": pd.Series([shared, shared], dtype=object)})
+    copied = _isolated_copy(df)
+    assert copied["x"].iloc[0] is copied["x"].iloc[1]
+    assert copied["x"].iloc[0] is not shared
+
+
+def test_pandas_object_column_of_strings_is_not_copied_cell_by_cell():
+    """Strings can't be edited in place, so such a column costs a scan, not a copy per cell."""
+    pd = pytest.importorskip("pandas")
+    text = "".join(["not", " interned"])
+    df = pd.DataFrame({"s": pd.Series([text, None], dtype=object), "n": [1, 2]})
+    copied = _isolated_copy(df)
+    assert copied["s"].iloc[0] is text
+    assert copied.equals(df)
+    assert copied.dtypes.tolist() == df.dtypes.tolist()
 
 
 # ─── Isolation: pyarrow ───────────────────────────────────────────────────────
@@ -304,7 +422,7 @@ class TestArrowIsolation:
     def test_writing_through_a_cache_hit_does_not_change_the_cache(self, tmp_path):
         pytest.importorskip("pyarrow")
         lru = _ArtifactLRU()
-        lru.put("/a.parquet", _arrow_table(tmp_path), "pyarrow")
+        lru.put("/a.parquet", _arrow_table(tmp_path), "pyarrow", size_bytes=1)
         _arrow_write_through_buffer(lru.get("/a.parquet", "pyarrow"))
         assert lru.get("/a.parquet", "pyarrow").column("a")[0].as_py() == 0
 
@@ -314,7 +432,7 @@ class TestArrowIsolation:
         pytest.importorskip("pyarrow")
         lru = _ArtifactLRU()
         produced = _arrow_table(tmp_path)
-        lru.put("/a.parquet", produced, "pyarrow")
+        lru.put("/a.parquet", produced, "pyarrow", size_bytes=1)
         _arrow_write_through_buffer(produced)
         assert lru.get("/a.parquet", "pyarrow").column("a")[0].as_py() == 0
 
@@ -351,7 +469,7 @@ def test_frames_inside_containers_are_isolated(tmp_path):
 
     lru = _ArtifactLRU()
     produced = bundle()
-    lru.put("/a.pkl", produced)
+    lru.put("/a.pkl", produced, size_bytes=1)
     mutate(produced)
     assert unchanged(lru.get("/a.pkl"))
     mutate(lru.get("/a.pkl"))
@@ -506,6 +624,114 @@ class TestByteBudget:
         for i in range(40):
             lru.admit(f"/n/{i}.json", i, size_bytes=1)
         assert len(lru._entries) == _worker._LRU_MAX_ENTRIES
+
+
+class TestSizeAccounting:
+    """Every entry is counted: a size is required, and it can't be negative."""
+
+    def test_put_requires_a_size(self):
+        lru = _ArtifactLRU()
+        with pytest.raises(TypeError):
+            lru.put("/a", "a")
+        with pytest.raises(TypeError):
+            lru.put("/a", "a", None, 1)  # positional: the size must be named
+        assert len(lru._entries) == 0
+
+    @pytest.mark.parametrize("call", ["put", "admit"])
+    def test_negative_size_is_an_error_and_changes_nothing(self, call):
+        lru = _ArtifactLRU(max_total_bytes=100)
+        lru.put("/a", "a", size_bytes=10)
+        with pytest.raises(ValueError, match="negative"):
+            getattr(lru, call)("/b", "b", size_bytes=-5)
+        assert lru.get("/b") is None
+        assert lru.get("/a") == "a"
+        assert lru._total_bytes == 10
+
+    def test_admit_reports_whether_the_value_is_held(self):
+        class Uncopyable:
+            def __deepcopy__(self, memo):
+                raise RuntimeError("no copies")
+
+        lru = _ArtifactLRU(max_total_bytes=100)
+        assert lru.admit("/a", "a", size_bytes=10) is True
+        assert lru.admit("/b", Uncopyable(), size_bytes=10) is False
+        assert lru.admit("/c", "c", size_bytes=101) is False  # over the whole budget
+        assert lru._total_bytes == 10
+
+
+class TestNoStaleEntry:
+    """A key the cache was offered a new value for never answers with the old one."""
+
+    def test_rejected_oversized_value_drops_the_entry_it_would_have_replaced(self):
+        lru = _ArtifactLRU()
+        assert lru.admit("/n/k.json", "old", size_bytes=10)
+        assert not lru.admit("/n/k.json", "new", size_bytes=_LRU_MAX_ARTIFACT_BYTES + 1)
+        assert lru.get("/n/k.json") is None
+        assert lru._total_bytes == 0
+
+    def test_value_of_unknown_size_drops_the_entry_it_would_have_replaced(self, project):
+        lru = _ArtifactLRU()
+        missing = str(project / "missing.json")
+        lru.put(missing, "old", size_bytes=10)
+        assert not lru.admit(missing, "new")
+        assert lru.get(missing) is None
+        assert lru._total_bytes == 0
+
+    def test_value_that_cannot_be_copied_drops_the_entry_it_would_have_replaced(self):
+        class Uncopyable:
+            def __deepcopy__(self, memo):
+                raise RuntimeError("no copies")
+
+        lru = _ArtifactLRU()
+        lru.put("/k", "old", size_bytes=10)
+        assert lru.put("/k", Uncopyable(), size_bytes=10) is False
+        assert lru.get("/k") is None
+        assert lru._total_bytes == 0
+
+    def test_rejection_leaves_the_same_path_under_another_frame_type_alone(self):
+        lru = _ArtifactLRU()
+        lru.put("/k.parquet", "as pandas", "pandas", size_bytes=10)
+        lru.put("/k.parquet", "as polars", "polars", size_bytes=10)
+        assert not lru.admit("/k.parquet", "new", "polars", size_bytes=_LRU_MAX_ARTIFACT_BYTES + 1)
+        assert lru.get("/k.parquet", "polars") is None
+        assert lru.get("/k.parquet", "pandas") == "as pandas"
+        assert lru._total_bytes == 10
+
+
+# ─── Known limitations ────────────────────────────────────────────────────────
+#
+# What `_isolated_copy` documents as not covered. Each test states the isolation that does not
+# hold and is expected to fail; `strict` turns an unexpected pass into a failure, so closing
+# one of these gaps means deleting its test and the line in the docstring.
+
+
+@pytest.mark.xfail(strict=True, reason="polars does not copy a numpy array it is built over")
+def test_limitation_polars_frame_built_over_a_numpy_array_follows_that_array():
+    pl = pytest.importorskip("polars")
+    np = pytest.importorskip("numpy")
+    source = np.arange(3, dtype=np.int64)
+    lru = _ArtifactLRU()
+    lru.put("/a.parquet", pl.DataFrame({"a": source}), "polars", size_bytes=1)
+    source[0] = 99  # the producing step writes to its own array after returning the frame
+    assert lru.get("/a.parquet", "polars")["a"].to_list() == [0, 1, 2]
+
+
+@pytest.mark.xfail(strict=True, reason="deepcopy of a container does not copy a frame's cells")
+def test_limitation_pandas_frame_inside_a_container_shares_its_object_cells():
+    pytest.importorskip("pandas")
+    lru = _ArtifactLRU()
+    lru.put("/a.pkl", {"frame": _object_frame()}, size_bytes=1)
+    _pd_append_to_list_cell(lru.get("/a.pkl")["frame"])
+    assert lru.get("/a.pkl")["frame"]["tags"].tolist() == [["a"], ["b"]]
+
+
+@pytest.mark.xfail(strict=True, reason="deepcopy of a Series does not copy its object cells")
+def test_limitation_pandas_series_shares_its_object_cells():
+    pd = pytest.importorskip("pandas")
+    lru = _ArtifactLRU()
+    lru.put("/a.pkl", pd.Series([["a"], ["b"]], dtype=object), size_bytes=1)
+    lru.get("/a.pkl").iloc[0].append("poison")
+    assert lru.get("/a.pkl").tolist() == [["a"], ["b"]]
 
 
 # ─── Memory: a chain of large steps under a remote store ──────────────────────
