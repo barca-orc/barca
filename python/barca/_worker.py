@@ -156,64 +156,59 @@ _PANDAS_IMMUTABLE_CELL_KINDS = frozenset(
 )  # fmt: skip
 
 
-def _copy_pandas_frame(frame):
-    """A deep copy of a pandas DataFrame, including the Python objects in its cells.
+def _cacheable(value) -> bool:
+    """Whether the tier-1 cache can hand out isolated copies of `value` for less than a read.
 
-    `DataFrame.copy(deep=True)` (which is what `copy.deepcopy` of a frame does) copies the
-    arrays but not the objects an object-dtype column points to, so a list or dict cell would
-    be the same object in both frames. Those columns get their cells deep-copied. Columns of
-    any other dtype, and object columns of immutable values such as strings, cost one scan.
+    False for a pandas DataFrame with an object-dtype column of mutable cells (lists, dicts,
+    arrays: what parquet list and struct columns become). `DataFrame.copy(deep=True)` copies
+    the arrays but not the objects such a column points to, and copying them cell by cell
+    costs more than reading the file again, so the frame is left out and every consumer reads
+    its own. The check is one `infer_dtype` scan per object column, made once when a value is
+    offered to the cache; frames without object columns are not scanned at all.
     """
-    import copy
-
-    import numpy as np
+    if _frame_kind(value) != "pandas":
+        return True
     from pandas.api.types import infer_dtype, is_object_dtype
 
-    copied = frame.copy(deep=True)
-    memo: dict = {}
-    for position, dtype in enumerate(frame.dtypes):
+    for position, dtype in enumerate(value.dtypes):
         if not is_object_dtype(dtype):
             continue
-        cells = frame.iloc[:, position].to_numpy()
-        if infer_dtype(cells, skipna=True) in _PANDAS_IMMUTABLE_CELL_KINDS:
-            continue
-        fresh = np.empty(len(cells), dtype=object)
-        for row, cell in enumerate(cells):
-            fresh[row] = copy.deepcopy(cell, memo)
-        copied.isetitem(position, fresh)
-    return copied
+        cells = value.iloc[:, position].to_numpy()
+        if infer_dtype(cells, skipna=True) not in _PANDAS_IMMUTABLE_CELL_KINDS:
+            return False
+    return True
 
 
 def _isolated_copy(value):
-    """A copy of `value` for the tier-1 cache: an in-place edit of one does not reach the other.
+    """A copy of a cached value: an in-place edit of one does not reach the other.
 
-    The one place that decides how each type goes into and comes out of the cache:
+    The one place that decides how each type goes into and comes out of the tier-1 cache
+    (`_cacheable` decides which values go in at all):
 
     - polars DataFrame: `clone()`. Constant time and memory: columns are reference-counted and
       copied on write, so an in-place edit of either frame (`df[0, "a"] = x`, `insert_column`,
       `extend`, `drop_in_place`, ...) never reaches the other.
-    - pandas DataFrame: `_copy_pandas_frame`, a real copy of the arrays (a shallow copy shares
-      them) and of the Python objects in object-dtype columns.
-    - everything else: `copy.deepcopy`, a real copy. That includes containers and pyarrow
-      Tables: a Table has no mutating methods, but its buffers are writable through the buffer
-      protocol (`np.frombuffer(table.column(0).chunk(0).buffers()[1])`), so a shared one is
-      not isolated.
+    - everything else: `copy.deepcopy`, a real copy. That includes pandas frames (a shallow
+      copy shares its arrays), containers, and pyarrow Tables: a Table has no mutating
+      methods, but its buffers are writable through the buffer protocol
+      (`np.frombuffer(table.column(0).chunk(0).buffers()[1])`), so a shared one is not isolated.
 
-    Raises whatever the copy raises for a value that can't be copied.
+    Raises whatever `copy.deepcopy` raises for a value that can't be copied.
 
     Not covered (each has an expected-failure test in test_artifact_lru.py):
 
     - A polars frame built over a numpy array (`pl.DataFrame({"a": arr})` does not copy
       `arr`) still changes when the step that returned it writes to that array afterwards.
     - A pandas object that is not itself the value: a DataFrame inside a dict or list, or a
-      Series, goes through `copy.deepcopy`, which shares list and dict cells of object-dtype
+      Series, is cached, and `copy.deepcopy` shares list and dict cells of object-dtype
       columns between the copies.
+    - Arrow-backed pandas columns (`ArrowDtype`, and the default `str` dtype of pandas 3):
+      the copies share Arrow buffers. Edits made through pandas never write to them, but
+      converting to pyarrow (`pa.Table.from_pandas(df)`) and writing through
+      `np.frombuffer` on a column's buffer does.
     """
-    kind = _frame_kind(value)
-    if kind == "polars":
+    if _frame_kind(value) == "polars":
         return value.clone()
-    if kind == "pandas":
-        return _copy_pandas_frame(value)
     import copy
 
     return copy.deepcopy(value)
@@ -230,8 +225,9 @@ class _ArtifactLRU:
 
     Isolation: the cache keeps its own copy of every value and hands out a fresh
     copy on every hit (`_isolated_copy`), so a task mutating its input can never
-    poison a later task's view; if a value can't be copied, the entry is dropped
-    and the caller falls through to the store (tier 2).
+    poison a later task's view; a value that can't be copied, or whose copy would
+    cost more than reading its file (`_cacheable`), is not held and the caller
+    falls through to the store (tier 2).
 
     Bounds: `admit` takes an artifact only when its serialized size is known and at
     most `_LRU_MAX_ARTIFACT_BYTES`, wherever it is stored; the least recently used
@@ -281,8 +277,9 @@ class _ArtifactLRU:
         byte limit; return whether the cache now holds it.
 
         Applies only the cache-wide limits; `admit` is the entry point that also applies the
-        per-artifact one. Whatever the outcome, an older entry for the same key is gone: the
-        cache never answers for a key with a value it was not just given.
+        per-artifact one. A value that can't be isolated cheaply (`_cacheable`) or can't be
+        copied is declined. Whatever the outcome, an older entry for the same key is gone:
+        the cache never answers for a key with a value it was not just given.
         """
         if size_bytes < 0:
             raise ValueError(f"size_bytes must not be negative, got {size_bytes}")
@@ -291,6 +288,8 @@ class _ArtifactLRU:
         if size_bytes > self._max_total_bytes:
             return False  # can never fit: don't evict the others to find that out
         try:
+            if not _cacheable(value):
+                return False
             cached = _isolated_copy(value)
         except Exception:
             return False

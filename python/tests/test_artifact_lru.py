@@ -269,6 +269,13 @@ def test_pandas_copy_does_not_share_memory():
     assert not np.shares_memory(first["a"].to_numpy(), second["a"].to_numpy())
 
 
+# ─── pandas frames with mutable cells are not cached ───────────────────────────
+#
+# `DataFrame.copy(deep=True)` copies the arrays, not the objects an object column points to, and
+# copying those cell by cell costs more than reading the file again. Such a frame stays out of
+# the cache, so every consumer reads its own.
+
+
 def _object_frame():
     """A frame whose object-dtype columns hold mutable cells: a list, a dict, an array."""
     import numpy as np
@@ -309,82 +316,183 @@ PANDAS_CELL_EDITS = [_pd_append_to_list_cell, _pd_set_key_in_dict_cell, _pd_writ
 
 
 @pytest.mark.parametrize("mutate", PANDAS_CELL_EDITS, ids=lambda f: f.__name__)
-class TestPandasObjectCellIsolation:
-    """`DataFrame.copy(deep=True)` copies the arrays, not the objects an object column points
-    to, so the cache copies those cells itself."""
-
-    def test_the_mutation_is_in_place(self, mutate):
-        pytest.importorskip("pandas")
-        df = _object_frame()
-        mutate(df)
-        assert _object_cells(df) != _object_cells(_object_frame())
-
-    def test_editing_a_cell_of_a_cache_hit_does_not_change_the_cache(self, mutate):
-        pytest.importorskip("pandas")
-        lru = _ArtifactLRU()
-        lru.put("/a.parquet", _object_frame(), "pandas", size_bytes=1)
-        mutate(lru.get("/a.parquet", "pandas"))
-        assert _object_cells(lru.get("/a.parquet", "pandas")) == _object_cells(_object_frame())
-
-    def test_editing_a_cell_of_the_producers_frame_after_put_does_not_change_the_cache(
-        self, mutate
-    ):
-        pytest.importorskip("pandas")
-        lru = _ArtifactLRU()
-        produced = _object_frame()
-        lru.put("/a.parquet", produced, "pandas", size_bytes=1)
-        mutate(produced)
-        assert _object_cells(lru.get("/a.parquet", "pandas")) == _object_cells(_object_frame())
+def test_cells_of_an_object_column_can_be_edited_in_place(mutate):
+    pytest.importorskip("pandas")
+    df = _object_frame()
+    mutate(df)
+    assert _object_cells(df) != _object_cells(_object_frame())
 
 
-def test_pandas_frame_read_from_parquet_has_isolated_list_and_struct_cells(tmp_path):
-    """What a step actually receives: parquet list and struct columns arrive as object columns
-    of arrays and dicts."""
-    pd = pytest.importorskip("pandas")
-    pa = pytest.importorskip("pyarrow")
+@pytest.mark.parametrize("column", ["tags", "meta", "vec"])
+def test_frame_with_a_column_of_mutable_cells_is_not_cached(column):
+    pytest.importorskip("pandas")
+    lru = _ArtifactLRU()
+    frame = _object_frame()[["n", column]]
+    assert lru.put("/a.parquet", frame, "pandas", size_bytes=1) is False
+    assert lru.admit("/a.parquet", frame, "pandas", size_bytes=1) is False
+    assert lru.get("/a.parquet", "pandas") is None
+    assert lru._total_bytes == 0
+
+
+def test_declined_frame_drops_the_entry_it_would_have_replaced():
+    pytest.importorskip("pandas")
+    lru = _ArtifactLRU()
+    lru.put("/a.parquet", _pandas_frame(), "pandas", size_bytes=10)
+    assert lru.put("/a.parquet", _object_frame(), "pandas", size_bytes=10) is False
+    assert lru.get("/a.parquet", "pandas") is None
+    assert lru._total_bytes == 0
+
+
+def _list_and_struct_parquet(path) -> str:
+    """Parquet list and struct columns: pandas reads them as object columns of arrays and
+    dicts, so this is how a frame of mutable cells reaches a step."""
+    import pyarrow as pa
     import pyarrow.parquet as pq
 
-    path = tmp_path / "t.parquet"
     pq.write_table(pa.table({"l": [[1, 2], [3]], "s": [{"a": 1}, {"a": 2}]}), path)
+    return str(path)
+
+
+def test_two_loads_of_a_frame_with_list_and_struct_columns_are_independent(tmp_path):
+    pytest.importorskip("pandas")
+    pytest.importorskip("pyarrow")
+    path = _list_and_struct_parquet(tmp_path / "t.parquet")
     lru = _ArtifactLRU()
-    lru.put("/a.parquet", pd.read_parquet(path), "pandas", size_bytes=1)
-    hit = lru.get("/a.parquet", "pandas")
-    hit["l"].iloc[0][0] = 99
-    hit["s"].iloc[0]["a"] = 99
-    again = lru.get("/a.parquet", "pandas")
-    assert again["l"].iloc[0].tolist() == [1, 2]
-    assert again["s"].iloc[0] == {"a": 1}
+    first = _load_artifact(path, lru, frame_type="pandas")
+    assert lru.get(path, "pandas") is None  # declined: the next load reads the file
+    first["s"].iloc[0]["a"] = 99  # the list cells arrive as read-only arrays
+    second = _load_artifact(path, lru, frame_type="pandas")
+    assert second["l"].iloc[0].tolist() == [1, 2]
+    assert second["s"].iloc[0] == {"a": 1}
+    assert second["l"].iloc[0] is not first["l"].iloc[0]
 
 
-def test_pandas_object_columns_with_duplicate_names_are_each_copied():
+def test_step_result_with_mutable_cells_reaches_the_next_step_from_its_file(project, monkeypatch):
+    """The producer's frame is not kept, so nothing the producer or a consumer does to its
+    cells afterwards can reach another consumer: each one deserializes the artifact."""
+    pytest.importorskip("pandas")
+    pytest.importorskip("pyarrow")
+    lru = _ArtifactLRU()
+    path = _run_step(
+        project,
+        monkeypatch,
+        """
+        import pandas as pd
+
+        def produce():
+            return pd.DataFrame({"n": [1, 2], "tags": [["a"], ["b"]], "meta": [{"k": 1}, {"k": 2}]})
+        """,
+        "produce",
+        str(project / "arts"),
+        lru,
+    )
+    assert lru.get(path, "pandas") is None
+    first = _load_artifact(path, lru, frame_type="pandas")
+    first["meta"].iloc[1]["k"] = 99
+    second = _load_artifact(path, lru, frame_type="pandas")
+    assert second["meta"].tolist() == [{"k": 1}, {"k": 2}]
+    assert [list(tags) for tags in second["tags"]] == [["a"], ["b"]]
+
+
+def test_duplicate_column_names_do_not_hide_a_column_of_mutable_cells():
     pd = pytest.importorskip("pandas")
-    df = pd.DataFrame([[["a"], ["b"]]], columns=["x", "x"], dtype=object)
-    copied = _isolated_copy(df)
-    copied.iloc[0, 0].append("poison")
-    copied.iloc[0, 1].append("poison")
-    assert df.iloc[0, 0] == ["a"]
-    assert df.iloc[0, 1] == ["b"]
-    assert list(copied.columns) == ["x", "x"]
+    lru = _ArtifactLRU()
+    safe = pd.DataFrame([["a", "b"]], columns=["x", "x"], dtype=object)
+    assert lru.put("/safe", safe, "pandas", size_bytes=1) is True
+    for cells in ([["a"], "b"], ["a", ["b"]]):
+        frame = pd.DataFrame([cells], columns=["x", "x"], dtype=object)
+        assert lru.put("/dup", frame, "pandas", size_bytes=1) is False
 
 
-def test_pandas_copy_keeps_one_object_shared_by_two_cells_shared():
+def test_one_mutable_object_shared_by_two_cells_is_not_cached():
     pd = pytest.importorskip("pandas")
     shared = ["a"]
-    df = pd.DataFrame({"x": pd.Series([shared, shared], dtype=object)})
-    copied = _isolated_copy(df)
-    assert copied["x"].iloc[0] is copied["x"].iloc[1]
-    assert copied["x"].iloc[0] is not shared
+    frame = pd.DataFrame({"x": pd.Series([shared, shared], dtype=object)})
+    assert _ArtifactLRU().put("/a", frame, "pandas", size_bytes=1) is False
 
 
-def test_pandas_object_column_of_strings_is_not_copied_cell_by_cell():
-    """Strings can't be edited in place, so such a column costs a scan, not a copy per cell."""
+def test_mutable_cells_among_missing_values_are_still_seen():
     pd = pytest.importorskip("pandas")
-    text = "".join(["not", " interned"])
-    df = pd.DataFrame({"s": pd.Series([text, None], dtype=object), "n": [1, 2]})
-    copied = _isolated_copy(df)
-    assert copied["s"].iloc[0] is text
-    assert copied.equals(df)
-    assert copied.dtypes.tolist() == df.dtypes.tolist()
+    frame = pd.DataFrame({"x": pd.Series([None, None, ["a"]], dtype=object)})
+    assert _ArtifactLRU().put("/a", frame, "pandas", size_bytes=1) is False
+
+
+def test_object_columns_of_immutable_values_are_cached():
+    """Strings, numbers, dates and missing values can't be edited in place: such a frame is
+    cached and copied like any other."""
+    import datetime
+    import decimal
+
+    pd = pytest.importorskip("pandas")
+    frame = pd.DataFrame(
+        {
+            "s": pd.Series(["x", None], dtype=object),
+            "b": pd.Series([b"x", b"y"], dtype=object),
+            "i": pd.Series([1, 2], dtype=object),
+            "d": pd.Series([decimal.Decimal("1.5"), None], dtype=object),
+            "t": pd.Series([datetime.date(2026, 1, 1), None], dtype=object),
+            "none": pd.Series([None, None], dtype=object),
+            "n": [1.0, 2.0],
+        }
+    )
+    lru = _ArtifactLRU()
+    assert lru.put("/a.parquet", frame, "pandas", size_bytes=1) is True
+    hit = lru.get("/a.parquet", "pandas")
+    assert hit.equals(frame)
+    hit.iloc[0, 0] = "poison"
+    assert lru.get("/a.parquet", "pandas").equals(frame)
+
+
+class TestCellScanCost:
+    """The scan that classifies object columns runs once, when a value is offered, and only
+    over object columns."""
+
+    @pytest.fixture
+    def scans(self, monkeypatch):
+        pd = pytest.importorskip("pandas")
+        seen = []
+        real = pd.api.types.infer_dtype
+
+        def counting(values, *args, **kwargs):
+            seen.append(len(values))
+            return real(values, *args, **kwargs)
+
+        monkeypatch.setattr(pd.api.types, "infer_dtype", counting)
+        return seen
+
+    def test_frame_without_object_columns_is_not_scanned(self, scans):
+        lru = _ArtifactLRU()
+        assert lru.put("/a.parquet", _pandas_frame(), "pandas", size_bytes=1)
+        lru.get("/a.parquet", "pandas")
+        assert scans == []
+
+    def test_object_columns_are_scanned_once_on_put_and_never_on_a_hit(self, scans):
+        import pandas as pd
+
+        frame = pd.DataFrame(
+            {
+                "s": pd.Series(["x", "y", "z"], dtype=object),
+                "t": pd.Series(["p", "q", "r"], dtype=object),
+                "n": [1, 2, 3],
+            }
+        )
+        lru = _ArtifactLRU()
+        assert lru.put("/a.parquet", frame, "pandas", size_bytes=1)
+        assert scans == [3, 3]
+        for _ in range(3):
+            assert lru.get("/a.parquet", "pandas") is not None
+        assert scans == [3, 3]
+
+    def test_scan_stops_at_the_first_column_of_mutable_cells(self, scans):
+        lru = _ArtifactLRU()
+        assert not lru.put("/a.parquet", _object_frame(), "pandas", size_bytes=1)
+        assert scans == [2]
+
+    def test_values_that_are_not_pandas_frames_are_not_scanned(self, scans):
+        lru = _ArtifactLRU()
+        lru.put("/a.json", {"rows": [[1], [2]]}, size_bytes=1)
+        assert lru.get("/a.json") == {"rows": [[1], [2]]}
+        assert scans == []
 
 
 # ─── Isolation: pyarrow ───────────────────────────────────────────────────────
@@ -732,6 +840,55 @@ def test_limitation_pandas_series_shares_its_object_cells():
     lru.put("/a.pkl", pd.Series([["a"], ["b"]], dtype=object), size_bytes=1)
     lru.get("/a.pkl").iloc[0].append("poison")
     assert lru.get("/a.pkl").tolist() == [["a"], ["b"]]
+
+
+def _write_through_arrow(df, column):
+    """Flip a bit of a pandas column's Arrow buffer, reached by converting the frame to pyarrow."""
+    import numpy as np
+    import pyarrow as pa
+
+    chunk = pa.Table.from_pandas(df, preserve_index=False).column(column).chunk(0)
+    data = [buffer for buffer in chunk.buffers() if buffer is not None][-1]
+    np.frombuffer(data, dtype=np.uint8)[0] ^= 0x02
+
+
+@pytest.mark.xfail(strict=True, reason="pandas copies share the buffers of Arrow-backed columns")
+@pytest.mark.parametrize("dtype", ["arrow_int", "str"])
+def test_limitation_arrow_backed_pandas_column_can_be_written_through_pyarrow(dtype):
+    pd = pytest.importorskip("pandas")
+    pa = pytest.importorskip("pyarrow")
+
+    def frame():
+        if dtype == "arrow_int":
+            return pd.DataFrame({"c": pd.array([1, 2, 3], dtype=pd.ArrowDtype(pa.int64()))})
+        return pd.DataFrame({"c": pd.array(["abc", "def"], dtype=pd.StringDtype("pyarrow"))})
+
+    lru = _ArtifactLRU()
+    lru.put("/a.parquet", frame(), "pandas", size_bytes=1)
+    _write_through_arrow(lru.get("/a.parquet", "pandas"), "c")
+    assert lru.get("/a.parquet", "pandas")["c"].tolist() == frame()["c"].tolist()
+
+
+def test_arrow_backed_pandas_column_is_isolated_from_edits_made_through_pandas():
+    """The other half of the limitation above: pandas itself never writes to shared buffers."""
+    pd = pytest.importorskip("pandas")
+    pa = pytest.importorskip("pyarrow")
+
+    def frame():
+        return pd.DataFrame(
+            {
+                "i": pd.array([1, 2, 3], dtype=pd.ArrowDtype(pa.int64())),
+                "s": pd.array(["abc", "def", "ghi"], dtype=pd.StringDtype("pyarrow")),
+            }
+        )
+
+    lru = _ArtifactLRU()
+    lru.put("/a.parquet", frame(), "pandas", size_bytes=1)
+    hit = lru.get("/a.parquet", "pandas")
+    hit.iloc[0, 0] = 99
+    hit.iloc[0, 1] = "zzz"
+    hit["s"] = hit["s"].str.upper()
+    assert lru.get("/a.parquet", "pandas").equals(frame())
 
 
 # ─── Memory: a chain of large steps under a remote store ──────────────────────
