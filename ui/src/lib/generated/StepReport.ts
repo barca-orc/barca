@@ -19,7 +19,7 @@ action?: string | null,
 status?: string | null,
 /**
  * Why the step runs: `task`, `sensor`, `refresh`, `refresh_cascade`, `refresh_all`,
- * `not_materialized`, `partitions_unknown` or `sensor_output_unknown`.
+ * `not_materialized`, `artifact_missing`, `partitions_unknown` or `sensor_output_unknown`.
  */
 reason?: string | null,
 /**

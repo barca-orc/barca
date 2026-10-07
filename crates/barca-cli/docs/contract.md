@@ -373,8 +373,10 @@ the set of `kind` values grows additively.
   (with no target, the last asset's), or `null` for a task that returned nothing.
 - `steps[]`: `status` is `ran`, `cached`, `partial` or `failed`; `reason` (why it ran) is one of
   `task`, `sensor`, `refresh`, `refresh_cascade`, `refresh_all`, `not_materialized`,
-  `partitions_unknown`, `sensor_output_unknown`, with `detail` in words. (`no_cache` is gone:
-  `--no-cache` now reports `refresh_all`.)
+  `artifact_missing`, `partitions_unknown`, `sensor_output_unknown`, with `detail` in words.
+  `artifact_missing` is a step that has a cached result whose artifact file is gone
+  and is needed (`barca docs cache`). (`no_cache` is gone: `--no-cache` now reports
+  `refresh_all`.)
 - `get` and `run` share one refresh vocabulary: `--refresh a,b` (cascading downstream),
   `--no-cascade`, `--refresh-all`. `artifact` appears on cached steps, `run_hash`
   on unpartitioned steps, `warning` on a cached step whose upstream was refreshed without
@@ -767,8 +769,9 @@ counts every node even when `nodes` is truncated.
 
 - `cache.state` is `cached`, `stale`, `never_run`, `partial`, `unknown` or `always_runs`: the
   same snake_case spelling as the `summary` keys (the human table prints `never-run`);
-  `cache.reason` is `materialized`, `changed`, `upstream_stale`, `failed`, `no_record`,
-  `partitions_missing`, `partitions_unknown`, `sensor_output_unknown`, `task` or `sensor`.
+  `cache.reason` is `materialized`, `changed`, `upstream_stale`, `failed`, `artifact_missing`,
+  `no_record`, `partitions_missing`, `partitions_unknown`,
+  `sensor_output_unknown`, `task` or `sensor`.
   `cache.run_hash` and `cache.artifact` appear when known (`artifact` only when cached).
 - `partitions` appears only on partitioned nodes. `last_materialization` is `null` when the node
   never ran; in it `partition` appears for a partitioned node and `error` for a failed run.
@@ -969,7 +972,7 @@ placeholders:
 | Line | When | Stability |
 |---|---|---|
 | `[barca] step:<id> completed <secs>s (<n>/<total>)[ env NAME=VALUE ...]` | a step finished; `<id>` includes `[key=value]` for a partition | stable |
-| `[barca] step:<id> cached[ env NAME=VALUE ...]` | a step was served from cache | stable |
+| `[barca] step:<id> cached[ env NAME=VALUE ...]` | a step was served from cache. Printed when the step is decided, or, when its artifact is not on disk, at the end of the run once it is settled that nothing needed it (if something did, the step prints `completed` or `failed` instead, never both). Exception: a result in a remote artifact store whose object proves to be deleted when it is fetched has already printed `cached`; a `[barca] warning: <id>: the artifact of its cached result is missing ...` line and then `completed` or `failed` for the same step follow | stable |
 | `[barca] step:<id> failed: <first line of the error>` | a step raised | stable |
 | `[barca] run failed: step '<id>' failed (exit <code>)` | just before the error envelope of a failed step (every mode) | stable |
 | `[barca] <n>/<total> steps \| done in <secs>s` | end of a run that executed steps, with or without `--agent`; `failed in` when a step failed, `cancelled after` on Ctrl-C (never `done` then) | stable |

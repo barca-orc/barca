@@ -74,7 +74,7 @@ two cannot disagree. In JSON the states are snake_case, spelled exactly like the
 | state | meaning | `reason` |
 |---|---|---|
 | `cached` | a successful result matches this code and these inputs; `get` serves it | `materialized` |
-| `stale` | it ran before, but `get` would run it again | `changed`, `upstream_stale`, `failed` |
+| `stale` | it ran before, but `get` would run it again | `changed`, `upstream_stale`, `failed`, `artifact_missing` |
 | `never_run` | no successful materialization is recorded | `no_record`, `failed` |
 | `partial` | a partitioned asset with some keys cached | `partitions_missing` |
 | `unknown` | dynamic partitions (`partitions_from`) whose source has not run yet, or an asset reading a sensor with no recorded output (and what depends on either) | `partitions_unknown`, `sensor_output_unknown` |
@@ -91,6 +91,13 @@ two cannot disagree. In JSON the states are snake_case, spelled exactly like the
   `detail` names the input.
 - `failed`: the last attempt at exactly this code and these inputs raised; `detail` carries the
   message.
+- `artifact_missing`: the result is recorded and its run hash is unchanged, but the artifact file
+  is gone and a run over these nodes would have to read it (a step that runs takes it as an
+  input, or it is the output the run returns: a target, or with no target the last asset), so
+  it would be computed again. A missing
+  artifact that nothing would read does not make a node stale: it stays `cached`, and
+  `cache.artifact` then names a file that is not there (`barca docs cache`, "A cached result
+  whose artifact is missing").
 
 `cache.run_hash` is the cache key for the current code and inputs; `cache.artifact` is the file a
 `get` would serve (only when `cached`).

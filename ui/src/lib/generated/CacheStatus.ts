@@ -7,10 +7,10 @@ export type CacheStatus = {
 state: "cached" | "stale" | "never_run" | "partial" | "unknown" | "always_runs",
 /**
  * Machine-readable reason: `materialized`, `changed`, `upstream_stale`, `failed`,
- * `no_record`, `partitions_missing`, `partitions_unknown`, `sensor_output_unknown`, `task`
- * or `sensor`.
+ * `artifact_missing`, `no_record`, `partitions_missing`, `partitions_unknown`,
+ * `sensor_output_unknown`, `task` or `sensor`.
  */
-reason: "materialized" | "changed" | "upstream_stale" | "failed" | "no_record" | "partitions_missing" | "partitions_unknown" | "sensor_output_unknown" | "task" | "sensor",
+reason: "materialized" | "changed" | "upstream_stale" | "failed" | "artifact_missing" | "no_record" | "partitions_missing" | "partitions_unknown" | "sensor_output_unknown" | "task" | "sensor",
 /**
  * The reason in words.
  */

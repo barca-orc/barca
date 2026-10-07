@@ -68,12 +68,12 @@ pub struct CacheStatus {
     )]
     pub state: String,
     /// Machine-readable reason: `materialized`, `changed`, `upstream_stale`, `failed`,
-    /// `no_record`, `partitions_missing`, `partitions_unknown`, `sensor_output_unknown`, `task`
-    /// or `sensor`.
+    /// `artifact_missing`, `no_record`, `partitions_missing`, `partitions_unknown`,
+    /// `sensor_output_unknown`, `task` or `sensor`.
     #[cfg_attr(
         feature = "ts",
         ts(
-            type = "\"materialized\" | \"changed\" | \"upstream_stale\" | \"failed\" | \"no_record\" | \"partitions_missing\" | \"partitions_unknown\" | \"sensor_output_unknown\" | \"task\" | \"sensor\""
+            type = "\"materialized\" | \"changed\" | \"upstream_stale\" | \"failed\" | \"artifact_missing\" | \"no_record\" | \"partitions_missing\" | \"partitions_unknown\" | \"sensor_output_unknown\" | \"task\" | \"sensor\""
         )
     )]
     pub reason: String,
@@ -282,6 +282,12 @@ fn cache_status(
             "cached",
             "materialized",
             "a successful materialization matches this code and these inputs",
+        ),
+        // The result is recorded, but its artifact is gone and a run would have to read it.
+        ("run", Some("artifact_missing")) => cache(
+            "stale",
+            "artifact_missing",
+            r.detail.clone().unwrap_or_default(),
         ),
         ("partial", _) => {
             let (cached, total) = r
@@ -509,6 +515,16 @@ mod tests {
             &h,
         );
         assert_eq!((c.state.as_str(), c.reason.as_str()), ("stale", "changed"));
+
+        // Its result is recorded and its run hash is unchanged, but the artifact is gone and a
+        // run needs it: that is not "changed" (#252).
+        let mut missing = report("run", Some("artifact_missing"));
+        missing.detail = Some("the artifact file is missing".into());
+        let c = cache_status(Some(&missing), &[], &none, &h);
+        assert_eq!(
+            (c.state.as_str(), c.reason.as_str(), c.detail.as_str()),
+            ("stale", "artifact_missing", "the artifact file is missing")
+        );
 
         let up: HashMap<String, String> = [("p.py:u".to_string(), "stale".to_string())].into();
         let c = cache_status(
