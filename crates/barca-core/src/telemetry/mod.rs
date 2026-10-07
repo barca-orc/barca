@@ -157,19 +157,45 @@ fn warn_once(message: String) {
 }
 
 /// Send `run` to every integration, each bounded by [`EXPORT_TIMEOUT`].
+///
+/// A delivery failure is reported when it starts and when it ends, not on every run:
+/// `barca serve` exports a run per tick, and a backend that is down for a day should not
+/// write a line every few minutes.
 pub async fn export(integrations: &[(String, Box<dyn Integration>)], run: &RunReport) {
     for (name, integration) in integrations {
         let outcome = tokio::time::timeout(EXPORT_TIMEOUT, integration.export(run)).await;
         let problem = match outcome {
-            Ok(Ok(())) => continue,
+            Ok(Ok(())) => {
+                if failing()
+                    .lock()
+                    .map(|mut f| f.remove(name))
+                    .unwrap_or(false)
+                {
+                    eprintln!("[barca] telemetry '{name}' is receiving runs again");
+                }
+                continue;
+            }
             Ok(Err(e)) => e,
             Err(_) => format!("no reply within {}s", EXPORT_TIMEOUT.as_secs()),
         };
-        eprintln!(
-            "[barca] warning: telemetry '{name}' did not receive run {}: {problem}",
-            run.run_id
-        );
+        if failing()
+            .lock()
+            .map(|mut f| f.insert(name.clone()))
+            .unwrap_or(true)
+        {
+            eprintln!(
+                "[barca] warning: telemetry '{name}' did not receive run {}: {problem}",
+                run.run_id
+            );
+        }
     }
+}
+
+/// Integrations whose last delivery in this process failed.
+fn failing() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static FAILING: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    FAILING.get_or_init(Default::default)
 }
 
 #[cfg(test)]

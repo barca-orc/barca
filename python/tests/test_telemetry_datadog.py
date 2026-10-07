@@ -274,7 +274,7 @@ def test_scheduled_runs_under_serve_are_reported(tmp_path, agent):
     assert all(r["service"] == "scheduler" and r["resource"].startswith("run ") for r in roots)
 
 
-@pytest.mark.parametrize("value", ["false", "False", "0"])
+@pytest.mark.parametrize("value", ["false", "False", "0", "", "no", "off"])
 def test_dd_trace_enabled_false_switches_datadog_off_silently(project, agent, value):
     proc = cli(project, "run", "publish", "--json", **datadog(agent, DD_TRACE_ENABLED=value))
     assert proc.returncode == 0, proc.stderr
@@ -286,3 +286,46 @@ def test_dd_trace_enabled_true_sends(project, agent):
     proc = cli(project, "run", "publish", "--json", **datadog(agent, DD_TRACE_ENABLED="true"))
     assert proc.returncode == 0, proc.stderr
     assert len(agent.requests) == 1
+
+
+def test_under_serve_a_delivery_failure_is_reported_once_until_it_recovers(tmp_path):
+    import signal
+    import socket
+
+    (tmp_path / "pipeline.py").write_text(
+        "from barca import task, Schedule\n\n\n"
+        '@task(freshness=Schedule("* * * * * *"))\n'
+        "def heartbeat() -> None:\n"
+        "    pass\n"
+    )
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        agent_port = s.getsockname()[1]
+    base = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
+    serve = subprocess.Popen(
+        [_find_binary(), "serve", "pipeline.py", "--port", str(port)],
+        cwd=tmp_path,
+        env={
+            **base,
+            "BARCA_TELEMETRY": "datadog",
+            "DD_TRACE_AGENT_URL": f"http://127.0.0.1:{agent_port}",
+        },
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        time.sleep(5)
+    finally:
+        serve.send_signal(signal.SIGTERM)
+        try:
+            _, err = serve.communicate(timeout=30)
+        except subprocess.TimeoutExpired:
+            serve.kill()
+            _, err = serve.communicate()
+
+    assert err.count("scheduled run") >= 3, err
+    assert err.count("telemetry 'datadog' did not receive run") == 1, err

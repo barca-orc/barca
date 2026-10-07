@@ -10,8 +10,9 @@
 //! - `DD_TRACE_AGENT_URL` (`http://host:port` or `unix:///path/to/apm.socket`),
 //!   else `DD_AGENT_HOST` (default `localhost`) and `DD_TRACE_AGENT_PORT`
 //!   (default `8126`);
-//! - `DD_TRACE_ENABLED`: `false` or `0` switches this integration off, as it does for
-//!   Datadog's own tracers, so one environment file can turn tracing off for a whole stack;
+//! - `DD_TRACE_ENABLED`: when set to anything other than `true` or `1`, this integration is
+//!   off, as with Python's `ddtrace`, so one environment file can turn tracing off for a
+//!   whole stack;
 //! - `DD_SERVICE` (default `barca`), `DD_ENV`, `DD_VERSION`;
 //! - `DD_TAGS` (`key:value` pairs separated by commas or spaces), added to every span.
 
@@ -155,15 +156,19 @@ fn span_id(parts: &[&str]) -> u64 {
     (u64::from_be_bytes(bytes) >> 1).max(1)
 }
 
-/// `DD_TRACE_ENABLED`: off only for `false` or `0` (any case), as in Datadog's tracers.
+/// `DD_TRACE_ENABLED`: on when unset, and when set only for `true` or `1` (any case). This is
+/// what Python's `ddtrace` does, so `false`, `0`, `no`, `off` and an empty value all silence
+/// barca together with the services around it.
 fn tracing_enabled(raw: Option<&str>) -> bool {
-    !raw.is_some_and(|v| v.eq_ignore_ascii_case("false") || v == "0")
+    raw.is_none_or(|v| v.eq_ignore_ascii_case("true") || v == "1")
 }
 
 impl Datadog {
     /// `Ok(None)` when `DD_TRACE_ENABLED` switches tracing off.
     pub fn from_env() -> Result<Option<Self>, String> {
-        if !tracing_enabled(env_var("DD_TRACE_ENABLED").as_deref()) {
+        // Read raw: an empty value is a setting too, and it means off.
+        let enabled = std::env::var("DD_TRACE_ENABLED").ok();
+        if !tracing_enabled(enabled.as_deref().map(str::trim)) {
             return Ok(None);
         }
         Ok(Some(Self {
@@ -456,12 +461,12 @@ mod tests {
     }
 
     #[test]
-    fn dd_trace_enabled_switches_off_only_for_false_or_zero() {
-        for off in ["false", "FALSE", "False", "0"] {
-            assert!(!tracing_enabled(Some(off)), "{off}");
+    fn dd_trace_enabled_is_on_when_unset_and_otherwise_only_for_true_or_one() {
+        for off in ["false", "FALSE", "False", "0", "", "no", "off", "\"false\""] {
+            assert!(!tracing_enabled(Some(off)), "{off:?}");
         }
-        for on in ["true", "1", "yes", "no", ""] {
-            assert!(tracing_enabled(Some(on)), "{on}");
+        for on in ["true", "TRUE", "True", "1"] {
+            assert!(tracing_enabled(Some(on)), "{on:?}");
         }
         assert!(tracing_enabled(None));
     }
