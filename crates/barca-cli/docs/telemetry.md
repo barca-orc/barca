@@ -20,7 +20,15 @@ have and stderr gets one line:
 ```
 
 An unknown name in `BARCA_TELEMETRY`, or an integration whose settings are wrong, is a warning
-too, printed once per process. Each integration has 3 seconds to deliver a run.
+too, printed once per process. Settings are not checked while the integration is switched off.
+Each integration has 3 seconds to deliver a run.
+
+Under `barca serve` a delivery failure is reported when it starts, not on every run, and a
+line says when delivery resumes:
+
+```
+[barca] telemetry 'datadog' is receiving runs again
+```
 
 ## Datadog
 
@@ -32,12 +40,14 @@ sends to). No Datadog library is needed, only a reachable Agent.
 - Each step is a child span, `barca.step`, with the node id as its resource
   (`pipeline.py:orders`, or `pipeline.py:weekly[week=w1]` for a partition).
 
-Settings are Datadog's own environment variables:
+Settings are Datadog's own environment variables, so a stack that already configures `ddtrace`
+services needs only `BARCA_TELEMETRY=datadog` (and usually its own `DD_SERVICE`):
 
 | Variable | Meaning | Default |
 |---|---|---|
 | `DD_TRACE_AGENT_URL` | `http://host:port` or `unix:///path/to/apm.socket` | unset |
 | `DD_AGENT_HOST`, `DD_TRACE_AGENT_PORT` | Agent address when `DD_TRACE_AGENT_URL` is unset | `localhost`, `8126` |
+| `DD_TRACE_ENABLED` | when set to anything but `true` or `1`, the Datadog integration is off, silently (as with Python's `ddtrace`) | on |
 | `DD_SERVICE` | service name on every span | `barca` |
 | `DD_ENV`, `DD_VERSION` | `env` and `version` tags | unset |
 | `DD_TAGS` | `key:value` pairs, separated by commas or spaces, added to every span | unset |

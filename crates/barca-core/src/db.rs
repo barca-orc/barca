@@ -309,10 +309,20 @@ pub async fn init_db(db_path: &str) -> Result<(), BarcaError> {
         // Content hash of a sensor's output (#183): folded into its consumers' run hashes, and
         // what `--dry-run` / `barca status` assume the sensor returns next.
         "ALTER TABLE materializations ADD COLUMN output_hash TEXT",
+        // The run that wrote the row (#214). Steps are recorded as they finish and again in the
+        // end-of-run ledger (and its replay after a shared-state conflict); this is how the
+        // later writes recognise what is already there. NULL on rows from older versions.
+        "ALTER TABLE materializations ADD COLUMN run_id TEXT",
         "ALTER TABLE materializations ADD COLUMN error_type TEXT",
     ] {
         conn.execute(col, ()).await.ok();
     }
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mat_run ON materializations(run_id)",
+        (),
+    )
+    .await
+    .map_err(|e| BarcaError::Db(format!("failed to create index: {e}")))?;
 
     // Per-node cost estimates: the persisted EWMA that seeds the next run's
     // batch sizing, so the 30s cold-start probe is paid once ever per stable
@@ -353,6 +363,14 @@ pub async fn init_db(db_path: &str) -> Result<(), BarcaError> {
     )
     .await
     .map_err(|e| BarcaError::Db(format!("failed to create runs table: {e}")))?;
+    // Who is executing a `running` run (#214): the coordinator's pid and host, so a run whose
+    // process died without recording an outcome can be told from one still in progress.
+    for col in [
+        "ALTER TABLE runs ADD COLUMN pid INTEGER",
+        "ALTER TABLE runs ADD COLUMN host TEXT",
+    ] {
+        conn.execute(col, ()).await.ok();
+    }
 
     // Scheduler durability: the last time each scheduled node was fired, as
     // unix epoch seconds. Lets `barca serve` catch up a single missed tick
@@ -750,18 +768,93 @@ pub async fn create_run(
     let _g = db_guard().await;
     let (_db, conn) = open_conn(db_path).await?;
     conn.execute(
-        "INSERT INTO runs (run_id, command, files, target, status, steps_total) VALUES (?1, ?2, ?3, ?4, 'running', ?5)",
+        "INSERT INTO runs (run_id, command, files, target, status, steps_total, pid, host) VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6, ?7)",
         [
             run_id.to_string(),
             command.to_string(),
             files.to_string(),
             target.unwrap_or("").to_string(),
             steps_total.map(|n| n.to_string()).unwrap_or_default(),
+            std::process::id().to_string(),
+            local_host(),
         ],
     )
     .await
     .ok();
+    mark_interrupted_runs(&conn).await;
     Ok(())
+}
+
+/// This machine's host name ("" when it cannot be read). Stored on a run row next to the pid:
+/// with shared remote state the database also holds other machines' runs, whose pids mean
+/// nothing here.
+pub fn local_host() -> String {
+    let mut buf = [0u8; 256];
+    // SAFETY: gethostname writes at most `buf.len()` bytes into `buf`.
+    let rc = unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) };
+    if rc != 0 {
+        return String::new();
+    }
+    let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    String::from_utf8_lossy(&buf[..len]).into_owned()
+}
+
+/// True unless the process is known to be gone. (A pid reused by an unrelated process reads as
+/// alive: the run then stays `running`, which is what it was before pids were recorded.)
+fn pid_alive(pid: i64) -> bool {
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
+        return true;
+    };
+    if pid <= 0 {
+        return true;
+    }
+    // SAFETY: signal 0 sends nothing; it only checks that the pid exists.
+    let rc = unsafe { libc::kill(pid, 0) };
+    rc == 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+}
+
+/// The `running` runs started on this host whose process no longer exists (killed, out of
+/// memory, power loss): they will never record an outcome themselves. Runs from other hosts,
+/// and from versions that did not record a pid, are never listed. Best effort: empty when the
+/// host name or the columns cannot be read.
+async fn interrupted_runs(conn: &turso::Connection) -> Vec<String> {
+    let mut dead: Vec<String> = Vec::new();
+    let host = local_host();
+    if host.is_empty() {
+        return dead;
+    }
+    let Ok(mut rows) = conn
+        .query(
+            "SELECT run_id, pid FROM runs WHERE status = 'running' AND host = ?1 AND pid IS NOT NULL",
+            [host],
+        )
+        .await
+    else {
+        return dead;
+    };
+    while let Ok(Some(row)) = rows.next().await {
+        if let (Ok(run_id), Ok(pid)) = (row.get::<String>(0), row.get::<i64>(1))
+            && !pid_alive(pid)
+        {
+            dead.push(run_id);
+        }
+    }
+    dead
+}
+
+/// Record [`interrupted_runs`] as `interrupted`. Their `finished_at` and `elapsed_seconds`
+/// stay NULL, since nobody saw them end. Only a run does this (it writes anyway, and with
+/// shared state pushes what it wrote); reading history reports the same status without
+/// writing it (see [`get_recent_runs`]).
+async fn mark_interrupted_runs(conn: &turso::Connection) {
+    for run_id in interrupted_runs(conn).await {
+        conn.execute(
+            "UPDATE runs SET status = 'interrupted' WHERE run_id = ?1 AND status = 'running'",
+            [run_id],
+        )
+        .await
+        .ok();
+    }
 }
 
 /// Finalize a run record with status and stats.
@@ -794,6 +887,9 @@ pub async fn finish_run(
 pub async fn get_recent_runs(db_path: &str, limit: usize) -> Result<Vec<RunRecord>, BarcaError> {
     let _g = db_guard().await;
     let (_db, conn) = open_conn(db_path).await?;
+    // A run whose process died is reported as `interrupted`, not as still `running`. Reported,
+    // not written: reading history must not change the database (the next run records it).
+    let interrupted = interrupted_runs(&conn).await;
     let mut rows = conn
         .query(
             "SELECT run_id, command, files, target, status, steps_total, steps_executed, steps_cached, started_at, finished_at, elapsed_seconds FROM runs ORDER BY id DESC LIMIT ?1",
@@ -807,15 +903,21 @@ pub async fn get_recent_runs(db_path: &str, limit: usize) -> Result<Vec<RunRecor
         .await
         .map_err(|e| BarcaError::Db(format!("failed to read row: {e}")))?
     {
+        let run_id = row.get::<String>(0).unwrap_or_default();
+        let status = if interrupted.contains(&run_id) {
+            "interrupted".to_string()
+        } else {
+            row.get::<String>(4).unwrap_or_default()
+        };
         records.push(RunRecord {
-            run_id: row.get::<String>(0).unwrap_or_default(),
+            run_id,
             command: row.get::<String>(1).unwrap_or_default(),
             files: decode_files(&row.get::<String>(2).unwrap_or_default()),
             target: {
                 let t = row.get::<String>(3).unwrap_or_default();
                 if t.is_empty() { None } else { Some(t) }
             },
-            status: row.get::<String>(4).unwrap_or_default(),
+            status,
             steps_total: row.get::<i64>(5).ok(),
             steps_executed: row.get::<i64>(6).unwrap_or(0),
             steps_cached: row.get::<i64>(7).unwrap_or(0),
@@ -1353,6 +1455,88 @@ mod tests {
         }
         assert!(columns.contains(&"cpu_seconds".to_string()));
         assert!(columns.contains(&"max_rss_bytes".to_string()));
+    }
+
+    #[tokio::test]
+    async fn a_running_run_whose_process_is_gone_is_reported_as_interrupted() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db").to_string_lossy().to_string();
+        init_db(&db_path).await.unwrap();
+
+        // A pid that existed and is certainly gone: a child that has been reaped.
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let dead_pid = child.id();
+        child.wait().unwrap();
+
+        // Ours, still going (create_run records this process and host).
+        create_run(&db_path, "alive", "get", "f.py", None, Some(1))
+            .await
+            .unwrap();
+        {
+            let _g = db_guard().await;
+            let (_db, conn) = open_conn(&db_path).await.unwrap();
+            let host = local_host();
+            for (run_id, pid, host, status) in [
+                ("dead", Some(dead_pid), host.as_str(), "running"),
+                ("elsewhere", Some(dead_pid), "another-machine", "running"),
+                ("done", Some(dead_pid), host.as_str(), "success"),
+                ("old-version", None, "", "running"),
+            ] {
+                conn.execute(
+                    "INSERT INTO runs (run_id, command, files, status, pid, host) VALUES (?1, 'get', 'f.py', ?2, NULLIF(?3, ''), NULLIF(?4, ''))",
+                    [
+                        run_id.to_string(),
+                        status.to_string(),
+                        pid.map(|p| p.to_string()).unwrap_or_default(),
+                        host.to_string(),
+                    ],
+                )
+                .await
+                .unwrap();
+            }
+        }
+
+        let status_of: HashMap<String, RunRecord> = get_recent_runs(&db_path, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.run_id.clone(), r))
+            .collect();
+        assert_eq!(status_of["dead"].status, "interrupted");
+        // Nobody saw it end, so it has no finish time.
+        assert_eq!(status_of["dead"].finished_at, None);
+        assert_eq!(status_of["dead"].elapsed_seconds, None);
+        assert_eq!(status_of["alive"].status, "running");
+        // Another machine's pid means nothing here; neither does a row with no pid.
+        assert_eq!(status_of["elsewhere"].status, "running");
+        assert_eq!(status_of["old-version"].status, "running");
+        assert_eq!(status_of["done"].status, "success");
+
+        // Reading history reported it without writing; the next run to start records it.
+        let stored = |run_id: &'static str| {
+            let db_path = db_path.clone();
+            async move {
+                let _g = db_guard().await;
+                let (_db, conn) = open_conn(&db_path).await.unwrap();
+                let mut rows = conn
+                    .query("SELECT status FROM runs WHERE run_id = ?1", [run_id])
+                    .await
+                    .unwrap();
+                rows.next()
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .get::<String>(0)
+                    .unwrap()
+            }
+        };
+        assert_eq!(stored("dead").await, "running");
+        create_run(&db_path, "next", "get", "f.py", None, Some(1))
+            .await
+            .unwrap();
+        assert_eq!(stored("dead").await, "interrupted");
+        assert_eq!(stored("elsewhere").await, "running");
+        assert_eq!(stored("alive").await, "running");
     }
 
     #[tokio::test(flavor = "multi_thread")]
