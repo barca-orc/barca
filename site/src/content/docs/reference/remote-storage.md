@@ -206,7 +206,10 @@ same fsspec backends and credentials as everything else:
 - **Fetch** — a cache hit recorded by another machine is downloaded to its
   local path just before the first step that reads it eagerly runs. Cached
   intermediates that nothing in the run reads are never downloaded — a fully
-  cached `barca get` fetches only the final output. A parquet result that
+  cached `barca get` fetches only the final output. A needed artifact that is
+  neither on disk nor in the store (the object was deleted) has its step
+  computed again and uploaded, reported with `reason: "artifact_missing"`;
+  any other fetch failure (permissions, an unreachable store) exits 3. A parquet result that
   every reader in a phase takes as `duckdb.DuckDBPyRelation` or `pl.LazyFrame`
   is not downloaded either: those steps read it in place (see "How steps read
   inputs from the store" above).

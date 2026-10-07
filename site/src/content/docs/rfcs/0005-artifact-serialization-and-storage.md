@@ -117,6 +117,21 @@ artifact file if another task consumes it).
   nothing; its local rows are discarded by the next pull and those steps recompute
   (ties into [RFC-0006](/rfcs/0006-configuration-and-remote-state/)'s shared-state
   contract).
+- A cache row whose artifact is gone (#252). The row stays a cache hit; whether the
+  artifact can be read is decided only when something needs to read it — a step that is
+  going to run takes it as an input, a `partitions_from` step is expanded from it, or it is
+  an output the command returns (its targets; with no target, every planned asset no other
+  planned step reads). A needed artifact that is neither on this machine's disk nor
+  fetchable from the artifact store has its producing step run again in the same run, with
+  reason `artifact_missing`; the run hash is unchanged, so the artifact lands at the same
+  path and no downstream row is invalidated. For a store-backed row the readable copy is
+  the local mirror: the recorded store location is never stat'ed, and the store is asked
+  only when the mirror is absent. "Not fetchable" means the store answered that the object
+  does not exist; any other fetch failure (permissions, unreachable store, timeout) still
+  fails the run with exit 3. An artifact nothing reads is never checked, so pruned
+  intermediates are not recomputed. `--dry-run` and `barca status` apply the same rule to
+  what is on disk; they do not contact a remote store. Implemented in
+  `crates/barca-core/src/recover.rs`.
 - A `@sink` failure (missing extra, bad credentials, unreachable endpoint) never fails
   the parent asset — logged as `[barca] SINK FAILED: ...` and recorded in run metadata.
 

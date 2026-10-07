@@ -183,14 +183,22 @@ exceeds `transfer_timeout` fails as stalled and is not retried.
 - **Upload failed**: the run exits 3 and names the step. The step gets a `failed` row with
   `error_type = 'UploadError'`, no artifact path, and the attempt count; it recomputes on
   the next run. `barca stats target pipeline.py` shows the failure.
-- **Cached artifact missing from the store** (deleted, or a different bucket): the run exits
-  3 with `could not fetch ... cached artifact(s)`. Recompute with
-  `barca get target pipeline.py --refresh-all`.
+- **Cached artifact missing from the store** (the object was deleted, and there is no copy in
+  `.barca/artifacts/` either): if something needs to read it, its step is computed again and
+  uploaded, with `reason: "artifact_missing"` and a warning on stderr; the run does not fail.
+  If nothing reads it, it stays cached and is not recomputed (`barca docs cache`, "A cached
+  result whose artifact is missing"). A local copy is enough: a store that is unavailable does
+  not lose a cache hit whose file is in `.barca/artifacts/`.
+- **Cached artifact that cannot be fetched** for any other reason (permission or
+  authentication errors, a store that cannot be reached, a stalled transfer): the run exits 3
+  with `could not fetch ... cached artifact(s)`, naming each one and the store's error. Fix
+  the access, or recompute with `barca get target pipeline.py --refresh-all`.
 - **Stalled store**: lower `transfer_timeout` to fail faster; raise it if single artifacts
   legitimately take longer than 10 minutes to move.
 
 `.barca/artifacts/` doubles as a local cache of the store and is never pruned automatically;
-deleting it is safe (anything needed later is downloaded again).
+deleting it is safe (anything needed later is downloaded again, or computed again if it is no
+longer in the store).
 
 Using a GCS emulator (e.g. fake-gcs-server) with gcsfs 2026.10 or later: set
 `GCSFS_EXPERIMENTAL_ZB_HNS_SUPPORT=false`. gcsfs's experimental mode calls a gRPC API the

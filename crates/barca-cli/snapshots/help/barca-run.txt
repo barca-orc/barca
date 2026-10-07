@@ -74,6 +74,9 @@ so fresh data reaches the task. --no-cascade re-runs only the named assets; cach
 downstream of them then do not reflect the refresh, and barca warns. A name that is not an
 upstream asset is an error. --no-cache is a deprecated spelling of --refresh-all: it still works
 and warns on stderr.
+An upstream asset that is cached but whose artifact file is gone is computed again before the task
+reads it (reason `artifact_missing`, a warning on stderr), so a deleted artifact does not fail the
+run (barca docs cache).
 The target must be a task; use `barca get` for assets. The target comes before the files:
 `barca run pipeline.py deploy` exits 2 and prints `barca run deploy pipeline.py`. Every usage
 error exits 2 and ends by pointing at `barca list` (with the files you gave, if any).

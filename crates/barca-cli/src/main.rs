@@ -93,6 +93,9 @@ Refresh: the same vocabulary as `barca run`. --refresh takes ONE comma-separated
 the cone (the target itself may be named) and also re-runs everything downstream of them;
 --no-cascade re-runs only the named ones. --refresh-all re-runs every asset in the cone.
 --no-cache is a deprecated spelling of --refresh-all: it still works and warns on stderr.
+A cached step whose artifact file is gone is computed again when something needs to read it (a
+step that runs takes it as an input, or it is a target), with reason `artifact_missing` and a
+warning on stderr. A missing artifact that nothing reads is left alone (barca docs cache).
 Targets must be assets; use `barca run` for tasks. With no target, get materializes every asset and
 sensor and skips tasks (previously it ran tasks too); stderr names the skipped tasks and the
 `barca run` command. A file with only tasks gets nothing: exit 0, empty `steps`.
@@ -130,6 +133,9 @@ so fresh data reaches the task. --no-cascade re-runs only the named assets; cach
 downstream of them then do not reflect the refresh, and barca warns. A name that is not an
 upstream asset is an error. --no-cache is a deprecated spelling of --refresh-all: it still works
 and warns on stderr.
+An upstream asset that is cached but whose artifact file is gone is computed again before the task
+reads it (reason `artifact_missing`, a warning on stderr), so a deleted artifact does not fail the
+run (barca docs cache).
 The target must be a task; use `barca get` for assets. The target comes before the files:
 `barca run pipeline.py deploy` exits 2 and prints `barca run deploy pipeline.py`. Every usage
 error exits 2 and ends by pointing at `barca list` (with the files you gave, if any).
@@ -226,7 +232,8 @@ Examples:
   barca status total pipeline.py --json --sample 5   # add up to 5 sample rows per json/parquet artifact
   barca status pipeline.py --env dev       # state recorded in another environment
 
-Cache state per node: cached, stale (ran before; code or inputs changed), never_run, partial
+Cache state per node: cached, stale (ran before; code or inputs changed, or its artifact file is
+gone and a run would read it: reason `artifact_missing`), never_run, partial
 (some partition keys cached), unknown (dynamic partitions not yet known) or always_runs (tasks,
 sensors), with a reason. JSON spells the states in snake_case, the same as the `summary` keys
 (the table prints never-run, always-runs). It is the same decision `--dry-run` makes.
