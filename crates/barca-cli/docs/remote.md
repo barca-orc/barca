@@ -284,13 +284,12 @@ as `cancelled`. What is left behind is always consistent:
   written to a temp file beside its destination and renamed when whole; the temp file is
   removed when the run is cancelled. An object store shows an object only once its upload has
   completed, so an interrupted upload leaves the previous object, or none.
-- Interrupted while the shared history is pushed, the run's artifacts are in the store but the
-  shared history does not have the run. Its steps are recorded on this machine only, and the
-  next run starts from the shared history as every run does: if one exists, those steps are
-  computed again (and their objects overwritten); if none existed yet, they are cache hits and
-  that run pushes them.
+- Interrupted while the shared history is pushed, the run's artifacts are in the store and its
+  steps are recorded on this machine, but the shared history does not have them yet. A pull
+  keeps what was recorded only here (see "The local copy of the history"), so the next
+  `barca get` or `barca run` on this machine serves those steps from cache and uploads them.
 - Interrupted while the shared history is still being pulled, before anything ran, the command
-  exits 130 and no run is recorded.
+  exits 130, no run is recorded and the local copy is as it was.
 
 The end-of-run line (`[barca] <n>/<total> steps | done in <secs>s`) is about the steps. A Ctrl-C
 that arrives after the last step finished, while artifacts upload or the history is pushed,

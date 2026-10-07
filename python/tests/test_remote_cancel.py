@@ -130,7 +130,10 @@ def recorded(root: Path) -> dict[str, str]:
 
 
 def temp_files(*roots: Path) -> list[str]:
-    return sorted(str(p) for root in roots for p in root.rglob("*.tmp"))
+    """Files a transfer in flight leaves if it is not cleaned up: staged artifacts (`*.tmp`)
+    and the staged copies of the metadata DB (`metadata.db.pull-*`, `metadata.db.push-*`)."""
+    patterns = ("*.tmp", "metadata.db.pull-*", "metadata.db.push-*")
+    return sorted(str(p) for root in roots for pat in patterns for p in root.rglob(pat))
 
 
 def cancelled_cleanly(run: Interrupted, root: Path, store: Path) -> None:
@@ -222,9 +225,10 @@ def test_ctrl_c_during_the_state_push(project, whole_group):
     assert history(root, store)[0]["status"] == "success"
 
 
-def test_a_cancelled_push_leaves_the_shared_history_as_it_was(project):
-    """With a shared history in place, a push cut short changes nothing in it: the next run
-    starts from it, as every run does, and computes the unshared steps again."""
+def test_a_cancelled_push_changes_nothing_shared_and_the_next_run_shares_the_steps(project):
+    """With a shared history in place, a push cut short leaves it exactly as it was. The
+    steps the run finished stay on this machine (a pull keeps what was recorded only here),
+    so the next run serves them from cache and uploads them for everyone."""
     store, make = project
     root = make("pusher")
     assert cli(root, store, "get", "numbers", "--json").returncode == 0
@@ -235,12 +239,20 @@ def test_a_cancelled_push_leaves_the_shared_history_as_it_was(project):
 
     cancelled_cleanly(run, root, store)
     assert (store / "default" / "state" / "metadata.db").read_bytes() == shared
+    assert sorted(recorded(root)) == ["numbers", "total"]
+
+    def statuses(proc: subprocess.CompletedProcess) -> dict[str, str]:
+        assert proc.returncode == 0, proc.stderr
+        doc = json.loads(proc.stdout)
+        assert doc["final_output"] == {"sum": 6}
+        return {s["id"].rsplit(":", 1)[1]: s["status"] for s in doc["steps"]}
+
     again = cli(root, store, "get", "total", "--json")
-    assert again.returncode == 0, again.stderr
-    doc = json.loads(again.stdout)
-    assert doc["final_output"] == {"sum": 6}
-    status = {s["id"].rsplit(":", 1)[1]: s["status"] for s in doc["steps"]}
-    assert status == {"numbers": "cached", "total": "ran"}
+    assert statuses(again) == {"numbers": "cached", "total": "cached"}
+    assert "recorded only on this machine" in again.stderr, again.stderr
+    # That run pushed: another machine now has `total` as a cache hit.
+    other = cli(make("other"), store, "get", "total", "--json")
+    assert statuses(other) == {"numbers": "cached", "total": "cached"}
 
 
 @GROUP
