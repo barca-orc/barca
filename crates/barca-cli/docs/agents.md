@@ -215,8 +215,9 @@ before the first step line), and the `warnings` array in the JSON on stdout, alw
 Read the array, not stderr. `unused_input` is the only kind so far: the step declares an input its
 function never uses, which is still loaded and still part of its cache key. The fix is in the
 message: use the input, remove it from `inputs=`, or rename the parameter with a leading `_` when
-it is there for ordering only. A `_` input is never flagged, and that is the only way to silence
-the warning. The list is the same on every run of the same command, cached or not, and never
+it is there for ordering only. Any of the three makes the warning go away; there is no flag or
+configuration key that turns it off. A name that appears inside a string in the body (SQL, a
+pandas `query` expression) counts as used. The list is the same on every run of the same command, cached or not, and never
 changes the exit code (`barca docs assets`, "Unused inputs"; `barca docs contract`).
 
 ## Environment variables

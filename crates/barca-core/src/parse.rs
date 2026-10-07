@@ -217,7 +217,11 @@ fn try_extract_function(
     let (param_types, return_type) = extract_type_annotations(func);
     let unused_inputs =
         crate::unused_inputs::unused_inputs(func, &inputs, &param_types, &|local| {
-            names.from_imports.get(local).map(|(_, name)| name.as_str())
+            use crate::unused_inputs::Imported;
+            if let Some((module, name)) = names.from_imports.get(local) {
+                return Some(Imported::Name { module, name });
+            }
+            names.modules.get(local).map(|m| Imported::Module(m))
         });
 
     let start = func.range().start().to_usize();

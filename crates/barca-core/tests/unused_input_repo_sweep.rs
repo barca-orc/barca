@@ -33,6 +33,29 @@ const DELIBERATE: &[(&str, &str, &str)] = &[
     // The CLI contract fixture: one unused input, so the schemas show a filled `warnings`.
     ("python/tests/test_cli_contract.py", "report", "rows"),
     // The tests of the warning itself.
+    // ... including the four that mention the input only where it does not count (docstring,
+    // comment, a longer identifier, another name), next to the SQL-in-a-string steps that
+    // must stay silent.
+    (
+        "python/tests/test_unused_input_warning.py",
+        "docstring_only",
+        "orders",
+    ),
+    (
+        "python/tests/test_unused_input_warning.py",
+        "comment_only",
+        "orders",
+    ),
+    (
+        "python/tests/test_unused_input_warning.py",
+        "longer_name",
+        "orders",
+    ),
+    (
+        "python/tests/test_unused_input_warning.py",
+        "another_name",
+        "orders",
+    ),
     (
         "python/tests/test_unused_input_warning.py",
         "report",

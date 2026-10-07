@@ -142,10 +142,18 @@ def report(raw: list) -> int:      # `raw` is never used
 ```
 
 **The rule.** An input is reported when its parameter name does not start with `_` and the
-function body never mentions the name, or mentions it only as `del name`. Any other mention
-counts as a use, anywhere in the body: reading it, passing it to a helper, a nested function, a
-comprehension, an f-string, assigning to it. The check is deliberately conservative, so a
-warning means the input really is unused; when barca cannot tell, it says nothing.
+function body never mentions the name, or mentions it only as `del name`. A mention is the name
+in code, anywhere in the body (reading it, passing it to a helper, a nested function, a
+comprehension, an f-string, assigning to it), or the name as a whole word inside any string in
+the body: `duckdb.sql("select * from orders")`, `pl.sql("... from orders")` and
+`df.query("amount > @threshold")` read variables by name, so `orders` and `threshold` are used
+there. The check is deliberately conservative, so a warning means the input really is unused;
+when barca cannot tell, it says nothing.
+
+The string match is on whole identifiers and is case-sensitive: `orders` is not found in
+`reorders`, `orders_v2` or `Orders`. Every string and bytes literal in the body counts,
+multi-line, concatenated and the text of f-strings included, except a string that is a statement
+on its own: a docstring that describes an input does not use it. Comments never count.
 
 **Never reported:**
 
@@ -159,9 +167,16 @@ warning means the input really is unused; when barca cannot tell, it says nothin
   reach a parameter without naming it, as a bare name or as an attribute
   (`builtins.locals()`, `inspect.currentframe().f_locals`, `sys._getframe()`, `**locals()`).
   Then no input of that function is reported.
-  Dynamic access names: `locals`, `vars`, `eval`, `exec`, `currentframe`, `_getframe`, `f_locals`, `getargvalues`.
-- an input annotated `duckdb.DuckDBPyRelation`: it is also bound as a view named after the
-  parameter, so SQL text anywhere can read it (`barca docs types`);
+  Dynamic access names: `locals`, `vars`, `eval`, `exec`, `currentframe`, `_getframe`, `f_locals`, `f_back`, `getargvalues`, `inspect.stack`.
+- a function that passes a query barca cannot read to a call that resolves names from text:
+  the query is a variable, a module constant, an f-string or a concatenation rather than one
+  plain string (`duckdb.sql(QUERY)`, `con.execute(q)`, `pl.sql(q)`, `pl.SQLContext(frames)`,
+  `df.query(expr)`; `df.eval(expr)` is covered by `eval` above). Then no input of that function
+  is reported. The first argument is the query; the call is recognised by its name alone.
+  Query entry points: `sql`, `execute`, `executemany`, `query`, `from_query`, `read_sql`, `read_sql_query`, `SQLContext`.
+- an input annotated `duckdb.DuckDBPyRelation`: barca binds it as a view named after the
+  parameter, so SQL in a helper function, which this check does not read, can use it without
+  the step's body naming it at all (`barca docs types`);
 - an input that comes from a `@sensor`: depending on a sensor without reading its value is how
   a step is made to re-run when outside state changes (`barca docs cache`).
 
@@ -184,12 +199,24 @@ changes the exit code or the cache.
 For an input annotated `pl.LazyFrame` the message says, instead of "loaded in full", that a
 parquet artifact is opened but not read.
 
-**Limitations.** The check works on names, in one function body. It does not follow the value: an
-input that is only assigned to (`raw = None`) or only passed to a helper that ignores it is not
-reported. A function that reaches its parameters through an alias the list above cannot see
-(`grab = locals` at module level, then `grab()` in the body) is reported although it uses the
-input; mention the input by name, or `_`-prefix it, to say otherwise. There is no flag or
-configuration key that turns the warning off.
+**Limitations.** The check works on names, in one function body, and prefers silence to a wrong
+warning. That costs missed warnings:
+
+- It does not follow the value. An input that is only assigned to (`raw = None`) or only passed
+  to a helper that ignores it is not reported.
+- A string that happens to contain the input's name counts as a use, whatever the string is
+  for: `return {"orders": 1}` or a log message naming `orders` hides an unused `orders`.
+- Any call named like a query entry point with a non-literal first argument silences the whole
+  function, SQL or not (`client.query(params)`, `cursor.execute(statement)`), and so does any
+  mention of a dynamic access name.
+- An unused `duckdb.DuckDBPyRelation` input and an unused sensor input are never reported.
+
+And one wrong warning it cannot avoid: a function whose input is read only from somewhere this
+check does not look. That is a helper function that inspects its caller's frame, DuckDB with
+`python_scan_all_frames` reading a caller's variable from SQL inside a helper, or an alias made
+outside the body (`grab = locals` at module level, then `grab()`). Mention the input by name
+in the body, or `_`-prefix it, to say otherwise. There is no flag or configuration key that
+turns the warning off.
 
 ## Sensors
 
