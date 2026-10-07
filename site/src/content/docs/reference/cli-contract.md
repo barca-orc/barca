@@ -908,7 +908,12 @@ contract.
 stderr carries progress, warnings, your steps' own `print` output and errors. Only the error
 envelope and the `--agent` lines below are contract. Other `[barca] ...` lines, such as
 `[barca] pulled state ...` and the `[barca] kept ...` line a pull prints when it keeps history
-recorded only on this machine (`barca docs remote`), are informational and not contract.
+recorded only on this machine (`barca docs remote`), and the warning a pull prints when it
+could not keep the database it replaced as `metadata.db.prev`, are informational and not
+contract. The
+same goes for the wording of an error: a shared history that fails its check on download is
+exit 3 with `kind` `infra` like any other failure of the store, and the text that names the
+object and says how to repair it is for people.
 
 ### Error envelope (stable)
 
