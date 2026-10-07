@@ -233,7 +233,26 @@ async fn pull_into(
             carried,
         }),
         crate::db::Replaced::Superseded => None,
+        crate::db::Replaced::Invalid(why) => {
+            return Err(invalid_shared_state(uri, &cfg.db_path, &why));
+        }
     })
+}
+
+/// The error for a shared state object that is not a database this version of barca can use
+/// ([`crate::state_validate`]). It is not a connection or credentials problem and retrying
+/// does not help, so it says what the object is, that nothing was changed, and how to put a
+/// good history back.
+fn invalid_shared_state(uri: &str, db_path: &str, why: &str) -> BarcaError {
+    BarcaError::Other(format!(
+        "the shared history {uri} is not a database barca can use: {why}.\n\
+         The local history {db_path} was left as it was, and nothing was uploaded.\n\
+         To repair it, put back an earlier copy of that object (a bucket version or a backup), \
+         or remove the object and run `barca get` on the machine whose local history is the \
+         most complete: that run uploads its history as the new shared history. See `barca \
+         docs remote`, \"If the shared history is damaged\". Until then, BARCA_STATE=off runs \
+         with local history only."
+    ))
 }
 
 /// The reason a state helper failed: its last `error: ...` line (what `python -m barca._state`
