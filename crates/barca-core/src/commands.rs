@@ -13,10 +13,12 @@ use crate::dispatch;
 use crate::dispatch::OutputRef;
 use crate::parse::extract_nodes;
 use crate::planner::{self, ExecutionPlan, Phase, ResourceConfig};
+use crate::recover::{self, Work};
 use crate::state_sync;
 use crate::transfer::{ArtifactLayout, TransferClient};
+use crate::warnings::PlanWarning;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -140,7 +142,7 @@ fn resolve_targets(
 /// shared by several targets appears (and runs) once. No targets means everything the command
 /// covers: for `get`, every asset and sensor (tasks are skipped: get is for assets, run is for
 /// tasks); for anything else (`status`), the whole DAG.
-fn plan_for_targets(
+pub(crate) fn plan_for_targets(
     dag: &Dag,
     target_ids: &[&str],
     config: &ResourceConfig,
@@ -272,7 +274,7 @@ fn target_outcomes(
 
 /// Why a step runs instead of being served from cache.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum RunReason {
+pub(crate) enum RunReason {
     Task,
     Sensor,
     NoCache,
@@ -283,10 +285,13 @@ enum RunReason {
     },
     RefreshAll,
     NotMaterialized,
+    /// It has a cached result, but the artifact is gone and something needs to read it
+    /// (see [`crate::recover`]).
+    ArtifactMissing,
 }
 
 impl RunReason {
-    fn code(&self) -> &'static str {
+    pub(crate) fn code(&self) -> &'static str {
         match self {
             RunReason::Task => "task",
             RunReason::Sensor => "sensor",
@@ -295,10 +300,11 @@ impl RunReason {
             RunReason::RefreshCascade { .. } => "refresh_cascade",
             RunReason::RefreshAll => "refresh_all",
             RunReason::NotMaterialized => "not_materialized",
+            RunReason::ArtifactMissing => "artifact_missing",
         }
     }
 
-    fn detail(&self) -> String {
+    pub(crate) fn detail(&self) -> String {
         match self {
             RunReason::Task => "tasks always re-run".to_string(),
             RunReason::Sensor => "sensors always re-run".to_string(),
@@ -310,6 +316,11 @@ impl RunReason {
             RunReason::RefreshAll => "--refresh-all".to_string(),
             RunReason::NotMaterialized => {
                 "no cached result for this code and these inputs".to_string()
+            }
+            RunReason::ArtifactMissing => {
+                "its cached result is still valid, but the artifact file is missing and \
+                 something needs to read it"
+                    .to_string()
             }
         }
     }
@@ -768,6 +779,15 @@ fn end_of_run_line(completed: usize, total: usize, secs: f64, outcome: RunOutcom
     format!("[barca] {completed}/{total} steps | {how} {secs:.1}s")
 }
 
+/// The `--agent` line for a step served from cache: `[barca] step:<id> cached`, with its declared
+/// env.
+fn cached_step_line(dag: &Dag, display_id: &str) -> String {
+    format!(
+        "[barca] step:{display_id} cached{}",
+        env_suffix(dag, display_id)
+    )
+}
+
 /// The `--agent` line for a step that raised: `[barca] step:<id> failed: <first line of the
 /// error>`, beside the `completed` and `cached` lines.
 fn failed_step_line(node_id: &str, error: &str) -> String {
@@ -852,7 +872,9 @@ fn validate_refresh_names(
     Ok(())
 }
 
-/// The most recent successful materialization of `node_id` with this run hash, if any.
+/// The most recent successful materialization of `node_id` with this run hash, if any. The row
+/// is the cache hit; whether its artifact can still be read is settled only when something
+/// needs to read it (see [`crate::recover`]).
 async fn lookup_cached(
     cache: &db::CacheReader,
     node_id: &str,
@@ -920,43 +942,37 @@ enum CacheHit {
         local: dispatch::OutputRef,
         store: String,
     },
-    /// Not reachable here (recorded against a different store, or a local
-    /// path that is not on this disk) — treat as a miss and recompute.
-    Miss,
 }
 
 /// Resolve a cache row against this run's artifact store (`layout` is Some
-/// when the store is separate from the local artifact dir).
+/// when the store is separate from the local artifact dir). This only says
+/// where the artifact is read from; whether it is there is checked when
+/// something needs to read it (see [`crate::recover`]).
 fn resolve_cache_hit(oref: dispatch::OutputRef, layout: Option<&ArtifactLayout>) -> CacheHit {
-    let Some(layout) = layout else {
-        return CacheHit::Local(oref);
-    };
-    if let Some(local) = layout.local_for(&oref.path) {
-        let store = oref.path.clone();
-        return CacheHit::Store {
-            local: dispatch::OutputRef {
-                path: local.to_string_lossy().into_owned(),
-                ..oref
-            },
-            store,
-        };
-    }
-    if std::path::Path::new(&oref.path).exists() {
-        CacheHit::Local(oref)
-    } else {
-        CacheHit::Miss
+    match layout.and_then(|l| l.local_for(&oref.path)) {
+        Some(local) => {
+            let store = oref.path.clone();
+            CacheHit::Store {
+                local: dispatch::OutputRef {
+                    path: local.to_string_lossy().into_owned(),
+                    ..oref
+                },
+                store,
+            }
+        }
+        None => CacheHit::Local(oref),
     }
 }
 
-/// Apply this run's artifact store to a cache row: the output to use, or None
-/// to treat the row as a miss.
+/// Apply this run's artifact store to a cache row: the output to read, with
+/// a store-backed row registered for fetching.
 fn accept_cache_hit(
     store: &mut Option<StoreSync>,
     node_id: &str,
     oref: dispatch::OutputRef,
-) -> Option<dispatch::OutputRef> {
+) -> dispatch::OutputRef {
     match resolve_cache_hit(oref, store.as_ref().map(|s| &s.layout)) {
-        CacheHit::Local(o) => Some(o),
+        CacheHit::Local(o) => o,
         CacheHit::Store { local, store: at } => {
             if let Some(s) = store.as_mut() {
                 s.fetchable.insert(
@@ -964,55 +980,69 @@ fn accept_cache_hit(
                     (node_id.to_string(), at, local.content_hash.clone()),
                 );
             }
-            Some(local)
+            local
         }
-        CacheHit::Miss => None,
     }
 }
 
 /// Apply this run's artifact store to a cache decision: cached outputs point
-/// at their local mirror, and rows not reachable here become runs.
+/// at their local mirror.
 fn localize_decision(
     decision: Decision,
     step: &crate::planner::StreamStep,
     store: &mut Option<StoreSync>,
 ) -> Decision {
     match decision {
-        Decision::Cached { oref, stale_root } => {
-            let id = step.step_id.display();
-            match accept_cache_hit(store, &id, oref) {
-                Some(oref) => Decision::Cached { oref, stale_root },
-                None => Decision::Run(RunReason::NotMaterialized),
-            }
-        }
-        Decision::Partitioned {
-            cached,
-            mut missing,
-        } => {
-            let mut kept = Vec::with_capacity(cached.len());
-            for (pdisplay, oref) in cached {
-                match accept_cache_hit(store, &pdisplay, oref) {
-                    Some(oref) => kept.push((pdisplay, oref)),
-                    None => missing.extend(
-                        step.partition_keys
-                            .iter()
-                            .find(|pk| pk.display_id(&step.step_id.base) == pdisplay)
-                            .cloned(),
-                    ),
-                }
-            }
-            Decision::Partitioned {
-                cached: kept,
-                missing,
-            }
-        }
+        Decision::Cached { oref, stale_root } => Decision::Cached {
+            oref: accept_cache_hit(store, &step.step_id.display(), oref),
+            stale_root,
+        },
+        Decision::Partitioned { cached, missing } => Decision::Partitioned {
+            cached: cached
+                .into_iter()
+                .map(|(pdisplay, oref)| {
+                    let oref = accept_cache_hit(store, &pdisplay, oref);
+                    (pdisplay, oref)
+                })
+                .collect(),
+            missing,
+        },
         run => run,
     }
 }
 
+/// The output a run returns as `final_output`: the target's when there is exactly one (for a
+/// partitioned target, the first partition by key), none when there are several (each target
+/// reports its own), and with no target the last planned asset's (a sensor's only when the plan
+/// has no asset).
+fn final_output_of(
+    exec_plan: &ExecutionPlan,
+    target_ids: &[&str],
+    several_targets: bool,
+    all_outputs: &HashMap<String, OutputRef>,
+) -> Option<OutputRef> {
+    if let [tid] = target_ids {
+        return output_for(tid, all_outputs);
+    }
+    if several_targets {
+        return None;
+    }
+    let last_planned_id = recover::returned_step(exec_plan)
+        .map(|s| s.step_id.display())
+        .unwrap_or_default();
+    all_outputs.get(&last_planned_id).cloned().or_else(|| {
+        let mut matches: Vec<_> = all_outputs
+            .iter()
+            .filter(|(k, _)| k.starts_with(&last_planned_id))
+            .collect();
+        matches.sort_by_key(|(k, _)| (*k).clone());
+        matches.first().map(|(_, v)| (*v).clone())
+    })
+}
+
 /// This run's link to a separate artifact store: the transfer helper plus
 /// the cache hits whose artifacts still live only in the store.
-struct StoreSync {
+pub(crate) struct StoreSync {
     client: TransferClient,
     layout: ArtifactLayout,
     /// Local mirror path → (node id, store location, recorded SHA-256), for
@@ -1023,9 +1053,83 @@ struct StoreSync {
     /// Base step id -> the warning for its store copy that differs from the recorded hash.
     /// Reported on the step and on the steps that read it (`StepReport::artifact_mismatch`).
     mismatched: HashMap<String, String>,
+    /// Local mirror paths of fetches the store answered with "no such object",
+    /// until [`Self::take_missing`] collects them.
+    missing: Vec<String>,
+    /// Whether the store itself is there, once it has been asked (see
+    /// [`Self::confirm_present`]).
+    present: Option<Result<(), String>>,
 }
 
 impl StoreSync {
+    fn new(client: TransferClient) -> Self {
+        Self {
+            layout: client.layout().clone(),
+            client,
+            fetchable: HashMap::new(),
+            mismatched: HashMap::new(),
+            missing: Vec::new(),
+            present: None,
+        }
+    }
+
+    /// Whether `path` is the local mirror of a cache hit that has not been
+    /// fetched in this run: its artifact is read from the store if it is not
+    /// here.
+    pub(crate) fn holds(&self, path: &str) -> bool {
+        self.fetchable.contains_key(path)
+    }
+
+    /// The local mirror paths of the artifacts [`Self::ensure_local`] found
+    /// to be absent from the store since this was last called.
+    pub(crate) fn take_missing(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.missing)
+    }
+
+    /// Whether a cache hit whose artifact is not on this disk is known to be
+    /// absent, without asking a remote store: a local row, or a directory
+    /// store, is a stat away. Unknown (false) for a result in a remote store.
+    fn known_absent(store: Option<&Self>, path: &str) -> bool {
+        match store.and_then(|s| s.fetchable.get(path)) {
+            Some((_, at, _)) => {
+                !std::path::Path::new(path).exists()
+                    && crate::transfer::local_path(at).is_some_and(|stored| !stored.exists())
+            }
+            None => !recover::on_disk(path, store.is_some()),
+        }
+    }
+
+    /// Make sure the store itself is there before the cached results `lost`
+    /// are computed again on the strength of "not in the store": its bucket,
+    /// container or root directory must answer a listing. Asked once per run.
+    ///
+    /// An object that is absent from a store that is there is a missing
+    /// artifact. A store that is gone, misnamed or unreachable answers the
+    /// same way for every object, and recomputing then would turn an outage or
+    /// a bad setting into a full recompute written to the wrong place.
+    pub(crate) async fn confirm_present(&mut self, lost: &[String]) -> Result<(), String> {
+        if self.present.is_none() {
+            self.present = Some(self.client.probe().await);
+        }
+        let Some(Err(why)) = &self.present else {
+            return Ok(());
+        };
+        let shown: Vec<String> = lost.iter().take(10).map(|id| format!("  {id}")).collect();
+        let more = match lost.len().saturating_sub(shown.len()) {
+            0 => String::new(),
+            n => format!("\n  ... and {n} more"),
+        };
+        Err(format!(
+            "could not fetch {} cached artifact(s) from the artifact store: the store at {} \
+             is not there or cannot be listed ({why}).\n{}{more}\n\
+             Nothing was recomputed. Check the store location and credentials, or re-run with \
+             --refresh-all to recompute them.",
+            lost.len(),
+            self.layout.store_root(),
+            shown.join("\n")
+        ))
+    }
+
     /// Point lazily read parquet inputs that are not on this disk at the store,
     /// so the step's reader fetches only the byte ranges its query uses. They
     /// stay fetchable: a later eager reader still downloads the whole artifact.
@@ -1052,9 +1156,13 @@ impl StoreSync {
     }
 
     /// Make the store-backed artifacts among `paths` local, reporting any
-    /// fetch on stderr (through the progress bar when one is live). Errors
-    /// name what could not be fetched.
-    async fn ensure_local<'a>(
+    /// fetch on stderr (through the progress bar when one is live). A fetch
+    /// the store answers with "no such object" is not an error: its local
+    /// path is kept for [`Self::take_missing`], and the caller decides
+    /// whether to compute that result again. Any other failure (permissions,
+    /// a store that cannot be reached) is an error naming what could not be
+    /// fetched.
+    pub(crate) async fn ensure_local<'a>(
         &mut self,
         paths: impl IntoIterator<Item = &'a str>,
         pb: Option<&indicatif::ProgressBar>,
@@ -1118,18 +1226,24 @@ impl StoreSync {
                 ),
             );
         }
-        if report.failures.is_empty() {
+        let (missing, failed): (Vec<_>, Vec<_>) = report.failures.iter().partition(|f| f.missing);
+        if failed.is_empty() {
+            self.missing.extend(
+                missing
+                    .iter()
+                    .filter_map(|f| self.layout.local_for(&f.store))
+                    .map(|local| local.to_string_lossy().into_owned()),
+            );
             return Ok(());
         }
-        let detail: Vec<String> = report
-            .failures
+        let detail: Vec<String> = failed
             .iter()
             .map(|f| format!("  {} ({}): {}", f.key, f.store, f.message))
             .collect();
         Err(format!(
             "could not fetch {} cached artifact(s) from the artifact store:\n{}\n\
              Re-run with --refresh-all to recompute them.",
-            report.failures.len(),
+            failed.len(),
             detail.join("\n")
         ))
     }
@@ -1182,6 +1296,9 @@ pub struct GetResult {
     /// What happened to each planned step in this run (ran / cached / partial, and why).
     #[serde(default)]
     pub steps: Vec<StepReport>,
+    /// Plan-time warnings for the steps this run planned (`[]` when there are none).
+    #[serde(default)]
+    pub warnings: Vec<PlanWarning>,
 }
 
 /// The result of `barca get|run a,b` (several targets): one run over the union of the targets'
@@ -1194,6 +1311,8 @@ pub struct MultiResult {
     pub phases: usize,
     /// What happened to each planned step (shared upstream steps appear once).
     pub steps: Vec<StepReport>,
+    /// Plan-time warnings for the steps this run planned (`[]` when there are none).
+    pub warnings: Vec<PlanWarning>,
     /// Each target by the name it was given, in the order given (serialized as a map).
     #[serde(serialize_with = "serialize_targets")]
     pub targets: Vec<(String, TargetOutcome)>,
@@ -1244,7 +1363,7 @@ pub struct StepReport {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
     /// Why the step runs: `task`, `sensor`, `refresh`, `refresh_cascade`, `refresh_all`,
-    /// `not_materialized`, `partitions_unknown` or `sensor_output_unknown`.
+    /// `not_materialized`, `artifact_missing`, `partitions_unknown` or `sensor_output_unknown`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     /// The reason in words.
@@ -1295,6 +1414,8 @@ pub struct ExplainResult {
     pub targets: Vec<(String, TargetPrediction)>,
     pub steps: Vec<StepReport>,
     pub summary: ExplainSummary,
+    /// Plan-time warnings for the steps the command would plan: the list the real run reports.
+    pub warnings: Vec<PlanWarning>,
 }
 
 /// One target of a multi-target dry run.
@@ -1325,7 +1446,7 @@ impl Serialize for ExplainResult {
                 s.collect_map(self.0.iter().map(|(k, v)| (k, v)))
             }
         }
-        let mut s = serializer.serialize_struct("ExplainResult", 5)?;
+        let mut s = serializer.serialize_struct("ExplainResult", 6)?;
         s.serialize_field("dry_run", &self.dry_run)?;
         s.serialize_field("command", &self.command)?;
         if self.targets.len() > 1 {
@@ -1335,6 +1456,7 @@ impl Serialize for ExplainResult {
         }
         s.serialize_field("steps", &self.steps)?;
         s.serialize_field("summary", &self.summary)?;
+        s.serialize_field("warnings", &self.warnings)?;
         s.end()
     }
 }
@@ -1367,6 +1489,9 @@ pub struct ExplainSummary {
 pub struct PlanResult {
     pub total_steps: usize,
     pub phases: Vec<PlanPhase>,
+    /// Plan-time warnings for the planned steps (`[]` when there are none).
+    #[serde(default)]
+    pub warnings: Vec<PlanWarning>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1647,6 +1772,7 @@ impl Executed {
                     steps_executed: r.steps_executed,
                     phases: r.phases,
                     steps: r.steps,
+                    warnings: r.warnings,
                 }));
                 Err(BarcaError::WorkerFailed(Box::new(failed)))
             }
@@ -1662,6 +1788,7 @@ impl Executed {
             steps_executed: r.steps_executed,
             phases: r.phases,
             steps: r.steps,
+            warnings: r.warnings,
             targets: self.targets,
         }
     }
@@ -1692,7 +1819,7 @@ pub async fn explain(
     {
         eprintln!("{note}");
     }
-    explain_dag(
+    let result = explain_dag(
         &dag,
         cfg,
         target_names,
@@ -1701,7 +1828,9 @@ pub async fn explain(
         no_cache,
         command_label,
     )
-    .await
+    .await?;
+    crate::warnings::print(&result.warnings);
+    Ok(result)
 }
 
 /// [`explain`] on an already-built DAG (`barca status` reuses its DAG for the node listing).
@@ -1725,6 +1854,7 @@ pub(crate) async fn explain_dag(
     if let CachePolicy::RefreshSelective { names, .. } = &policy {
         validate_refresh_names(dag, &target_ids, names, command_label == "get")?;
     }
+    let warnings = crate::warnings::for_plan(dag, &exec_plan);
 
     // Shared remote state: pull it like a real run, so the cache check sees every machine's
     // materializations.
@@ -1754,6 +1884,13 @@ pub(crate) async fn explain_dag(
         state.sensor_outputs = db::last_output_hashes(cache, &sensors).await?;
     }
     let mut all_outputs: HashMap<String, OutputRef> = HashMap::new();
+    // What a run would compute again because an artifact it needs is missing (#252): the same
+    // rule as `execute`, predicted from what is on this disk.
+    let layout = cfg
+        .remote_artifacts()
+        .then(|| ArtifactLayout::new(&cfg.local_artifact_dir, &cfg.artifact_root));
+    let mut cached_steps = recover::CachedSteps::default();
+    let requested = recover::requested(&exec_plan, &target_ids);
     // Steps reported as unknown, by base id, with the reason code their dependents inherit.
     let mut unknown_ids: HashMap<String, &'static str> = HashMap::new();
     // Steps whose run hash cannot be predicted because a sensor upstream of them has no
@@ -1772,6 +1909,21 @@ pub(crate) async fn explain_dag(
     };
 
     for phase in &exec_plan.phases {
+        // A `partitions_from` source is read to expand its consumers: if its artifact is
+        // missing it runs again first, and its keys are not known until it has.
+        let sources = dispatch::partition_sources(phase, &all_outputs)
+            .into_iter()
+            .map(|o| o.path.clone())
+            .collect();
+        recover::predict_recomputes(
+            sources,
+            &mut cached_steps,
+            &mut all_outputs,
+            layout.as_ref(),
+            &mut steps,
+            &mut summary,
+        );
+
         // Dynamic partitions need their source's output to know their keys. If the source is
         // not available (it would have to run first) the step cannot be expanded.
         let mut ready = phase.clone();
@@ -1805,6 +1957,8 @@ pub(crate) async fn explain_dag(
 
         let expanded = dispatch::expand_pending_partitions(&ready, &all_outputs, pool_size);
         let phase_ref = expanded.as_ref().unwrap_or(&ready);
+        // The steps of this phase that would execute: what they read has to be there.
+        let mut to_run: Vec<crate::planner::StreamStep> = Vec::new();
 
         for stream in &phase_ref.streams {
             for step in &stream.steps {
@@ -1893,23 +2047,68 @@ pub(crate) async fn explain_dag(
                 }
                 steps.push(report);
                 match decision {
-                    Decision::Run(_) => summary.will_run += step.partition_keys.len().max(1),
+                    Decision::Run(_) => {
+                        summary.will_run += step.partition_keys.len().max(1);
+                        to_run.push(step);
+                    }
                     Decision::Cached { oref, .. } => {
                         summary.cached += 1;
                         all_outputs.insert(step.step_id.display(), oref);
+                        cached_steps.remember(step);
                     }
                     Decision::Partitioned { cached, missing } => {
                         summary.cached += cached.len();
                         summary.will_run += missing.len();
+                        let any_cached = !cached.is_empty();
                         for (pdisplay, oref) in cached {
                             all_outputs.insert(pdisplay, oref);
+                        }
+                        if !missing.is_empty() {
+                            let mut partial = step.clone();
+                            partial.partition_keys = missing;
+                            to_run.push(partial);
+                        }
+                        if any_cached {
+                            cached_steps.remember(step);
                         }
                     }
                 }
             }
         }
+
+        let running = Phase {
+            reason: phase_ref.reason.clone(),
+            streams: vec![crate::planner::WorkerStream {
+                stream_id: "dry-run".to_string(),
+                steps: to_run,
+            }],
+        };
+        let inputs = recover::input_paths(&dispatch::build_provided_inputs(&running, &all_outputs));
+        recover::predict_recomputes(
+            inputs,
+            &mut cached_steps,
+            &mut all_outputs,
+            layout.as_ref(),
+            &mut steps,
+            &mut summary,
+        );
     }
     drop(cache);
+
+    // The outputs the command was asked for are read by whoever ran it.
+    let returned = all_outputs
+        .iter()
+        .filter(|(id, _)| requested.contains(recover::base_of(id)))
+        .map(|(_, o)| o.path.clone())
+        .collect();
+    recover::predict_recomputes(
+        returned,
+        &mut cached_steps,
+        &mut all_outputs,
+        layout.as_ref(),
+        &mut steps,
+        &mut summary,
+    );
 
     let steps = merge_partition_reports(steps);
     // Per-target predictions: the same step lines, counted over each target's cone.
@@ -1938,6 +2137,7 @@ pub(crate) async fn explain_dag(
         targets: per_target,
         steps,
         summary,
+        warnings,
     })
 }
 
@@ -2029,6 +2229,9 @@ async fn execute(
     if let CachePolicy::RefreshSelective { names, .. } = &policy {
         validate_refresh_names(&dag, &target_ids, names, command_label == "get")?;
     }
+    // Plan-time warnings for the steps this command planned, before anything runs.
+    let plan_warnings = crate::warnings::for_plan(&dag, &exec_plan);
+    crate::warnings::print(&plan_warnings);
 
     db::ensure_env_dirs(&cfg.env)?;
     let db_path = cfg.db_path.clone();
@@ -2178,14 +2381,7 @@ async fn execute(
     // artifact dir; the transfer helper uploads finished artifacts in the
     // background and fetches cache hits recorded by other machines.
     let mut store: Option<StoreSync> = if let Some(start) = transfer_start {
-        let client = start.join().await??;
-        let layout = client.layout().clone();
-        Some(StoreSync {
-            client,
-            layout,
-            fetchable: HashMap::new(),
-            mismatched: HashMap::new(),
-        })
+        Some(StoreSync::new(start.join().await??))
     } else {
         None
     };
@@ -2210,6 +2406,8 @@ async fn execute(
         storage_options_json: cfg.storage_options_json.clone(),
     };
     let mut pool = crate::io_loop::WorkerPool::start(io_config).map_err(BarcaError::Other)?;
+    // Finished steps are written to the local metadata DB while the run goes on (#214).
+    let recorder = StepRecorder::start(db_path.clone(), run_id.clone());
     {
         // A step that runs for a while must not look hung: report it periodically.
         let bar = pb.clone();
@@ -2228,7 +2426,21 @@ async fn execute(
     }
     trace_point!("pool_started");
 
-    for (phase_idx, phase) in exec_plan.phases.iter().enumerate() {
+    // Steps served from cache, kept so that one can be run again if its artifact turns out to
+    // be missing when something needs to read it (#252, see `recover`).
+    let mut cached_steps = recover::CachedSteps::default();
+    let requested = recover::requested(&exec_plan, &target_ids);
+    // The plan's phases in order, then the outputs this command returns. When an artifact that
+    // is needed is missing, the steps to compute again go in front of whatever needs them.
+    let mut queue: VecDeque<Work<'_>> = exec_plan.phases.iter().map(Work::Planned).collect();
+    queue.push_back(Work::Returned);
+    let mut next_idx = 0usize;
+    // `--agent`: cached steps whose `cached` line is held back because their artifact is known
+    // to be absent. Each is announced once, with what became of it: `completed` if something
+    // needed it and it was computed again, `cached` at the end of the run if nothing did.
+    let mut held_cached_lines: Vec<String> = Vec::new();
+
+    loop {
         // Stop scheduling new phases once cancelled; partial results from
         // completed phases are persisted below.
         if cancel.is_cancelled() {
@@ -2237,184 +2449,323 @@ async fn execute(
             }
             break;
         }
+        let Some(work) = queue.pop_front() else {
+            break;
+        };
+        let phase_idx = next_idx;
+        next_idx += 1;
         trace_point!("phase{phase_idx}_start");
 
-        // Multi-target run after a failure: drop the steps that depend on a failed step; the
-        // rest of the phase still runs.
-        let unblocked_phase;
-        let phase = if keep_going && !failed_bases.is_empty() {
-            let mut p = phase.clone();
-            for stream in &mut p.streams {
-                stream.steps.retain(|st| {
-                    let base = st.step_id.base_id();
-                    let Some(up) = blocking_failure(&dag, base, &failed_bases) else {
-                        return true;
-                    };
-                    step_reports.push(StepReport {
-                        id: base.to_string(),
-                        kind: kind_str(dag.get_node(base).map(|n| n.kind())),
-                        status: Some("skipped".to_string()),
-                        reason: Some("upstream_failed".to_string()),
-                        detail: Some(format!("depends on '{}', which failed", short_name(up))),
-                        ..Default::default()
-                    });
-                    skipped_bases.insert(base.to_string());
-                    false
-                });
-            }
-            p.streams.retain(|s| !s.steps.is_empty());
-            unblocked_phase = p;
-            &unblocked_phase
-        } else {
-            phase
-        };
-
-        // `partitions_from` sources are read from disk during expansion.
-        if let Some(s) = store.as_mut() {
-            let sources: Vec<String> = dispatch::partition_sources(phase, &all_outputs)
-                .into_iter()
-                .map(|o| o.path.clone())
-                .collect();
-            if let Err(e) = s
-                .ensure_local(sources.iter().map(String::as_str), pb.as_ref())
-                .await
-            {
-                transfer_error = Some(e);
-                break;
-            }
-        }
-
-        let expanded_phase = dispatch::expand_pending_partitions(phase, &all_outputs, pool_size);
-        let phase_ref = expanded_phase.as_ref().unwrap_or(phase);
-
-        // Dynamic partitions (`partitions_from`) are a single placeholder step
-        // in the plan-time count but expand to their real per-key count here —
-        // reconcile `total_steps` so the ETA math below can't underflow and
-        // the printed summary reflects what actually ran.
-        if expanded_phase.is_some() {
-            let expanded_count = phase_step_count(phase_ref);
-            let planned_count = phase_step_count(phase);
-            if expanded_count > planned_count {
-                total_steps += expanded_count - planned_count;
-                if let Some(ref bar) = pb {
-                    bar.set_length(total_steps as u64);
+        // The steps to dispatch next, and whether they are cached steps being computed again.
+        let (mut filtered_phase, recompute) = match work {
+            Work::Ready(phase) => (phase, false),
+            Work::Recompute(mut ids) => {
+                // One of them may have been computed again since this was queued.
+                ids.retain(|id| cached_node_ids.contains(id));
+                match cached_steps.phase_for(&ids) {
+                    Some(phase) => (phase, true),
+                    None => continue,
                 }
             }
-        }
-
-        let mut uncached_streams: Vec<crate::planner::WorkerStream> = Vec::new();
-
-        // Open the DB only for this phase's cache lookups and release it before any step
-        // runs, so other barca processes can use the metadata DB while Python executes.
-        let cache = db::CacheReader::open(&db_path).await?;
-
-        for stream in &phase_ref.streams {
-            let mut uncached_steps: Vec<crate::planner::StreamStep> = Vec::new();
-
-            for step in &stream.steps {
-                let (step, decision) = decide_step(
-                    &dag,
-                    &policy,
-                    no_cache,
-                    Some(&cache),
-                    &mut decide_state,
-                    step,
+            Work::Returned => {
+                // The output this command hands back is read by whoever ran it: what it
+                // prints is made local, and every part of it must be on disk or in the store.
+                let returned: Vec<String> =
+                    final_output_of(&exec_plan, &target_ids, keep_going, &all_outputs)
+                        .iter()
+                        .chain(
+                            target_outcomes(&dag, &targets, &all_outputs, &all_failures)
+                                .iter()
+                                .filter_map(|(_, o)| o.final_output.as_ref()),
+                        )
+                        .map(|o| o.path.clone())
+                        .collect();
+                let check: Vec<String> = cached_node_ids
+                    .iter()
+                    .filter(|id| requested.contains(recover::base_of(id)))
+                    .filter_map(|id| all_outputs.get(id))
+                    .map(|o| o.path.clone())
+                    .chain(returned.iter().cloned())
+                    .collect();
+                let lost = recover::lost(
+                    &mut store,
+                    &check,
+                    &returned,
+                    pb.as_ref(),
+                    &all_outputs,
+                    &cached_node_ids,
+                    &mut cached_steps,
                 )
                 .await;
-                let decision = localize_decision(decision, &step, &mut store);
-                step_reports.push(report_for(&dag, &step, &decision, false));
-                let display_id = step.step_id.display();
-                match decision {
-                    Decision::Run(_) => uncached_steps.push(step),
-                    Decision::Cached { oref, stale_root } => {
-                        if let Some(root) = stale_root {
-                            note(
-                                &pb,
-                                &format!(
-                                    "[barca] warning: {}",
-                                    stale_warning(&display_id, &root, false)
-                                ),
-                            );
-                        }
-                        if agent_mode {
-                            eprintln!(
-                                "[barca] step:{display_id} cached{}",
-                                env_suffix(&dag, &display_id)
-                            );
-                        }
-                        all_outputs.insert(display_id.clone(), oref);
-                        cached_node_ids.insert(display_id);
+                match lost {
+                    Ok(lost) if lost.is_empty() => {}
+                    Ok(lost) => {
+                        queue.push_front(Work::Returned);
+                        queue.push_front(Work::Recompute(cached_steps.first_layer(&lost)));
                     }
-                    Decision::Partitioned { cached, missing } => {
-                        for (pdisplay, oref) in cached {
-                            all_outputs.insert(pdisplay.clone(), oref);
-                            cached_node_ids.insert(pdisplay);
-                        }
-                        if !missing.is_empty() {
-                            let mut partial = step.clone();
-                            partial.partition_keys = missing;
-                            uncached_steps.push(partial);
+                    Err(e) => {
+                        transfer_error = Some(e);
+                        break;
+                    }
+                }
+                continue;
+            }
+            Work::Planned(phase) => {
+                // `partitions_from` sources are read from disk during expansion.
+                let sources: Vec<String> = dispatch::partition_sources(phase, &all_outputs)
+                    .into_iter()
+                    .map(|o| o.path.clone())
+                    .collect();
+                let lost = recover::lost(
+                    &mut store,
+                    &sources,
+                    &sources,
+                    pb.as_ref(),
+                    &all_outputs,
+                    &cached_node_ids,
+                    &mut cached_steps,
+                )
+                .await;
+                match lost {
+                    Ok(lost) if lost.is_empty() => {}
+                    Ok(lost) => {
+                        queue.push_front(Work::Planned(phase));
+                        queue.push_front(Work::Recompute(cached_steps.first_layer(&lost)));
+                        continue;
+                    }
+                    Err(e) => {
+                        transfer_error = Some(e);
+                        break;
+                    }
+                }
+
+                // Multi-target run after a failure: drop the steps that depend on a failed
+                // step before they are decided; the rest of the phase still runs.
+                let unblocked_phase;
+                let phase = if keep_going && !failed_bases.is_empty() {
+                    let mut p = phase.clone();
+                    recover::drop_blocked(
+                        &mut p,
+                        |base| blocking_failure(&dag, base, &failed_bases),
+                        |st, up| {
+                            let base = st.step_id.base_id();
+                            step_reports.push(StepReport {
+                                id: base.to_string(),
+                                kind: kind_str(dag.get_node(base).map(|n| n.kind())),
+                                status: Some("skipped".to_string()),
+                                reason: Some("upstream_failed".to_string()),
+                                detail: Some(format!(
+                                    "depends on '{}', which failed",
+                                    short_name(up)
+                                )),
+                                ..Default::default()
+                            });
+                            skipped_bases.insert(base.to_string());
+                        },
+                    );
+                    unblocked_phase = p;
+                    &unblocked_phase
+                } else {
+                    phase
+                };
+
+                let expanded_phase =
+                    dispatch::expand_pending_partitions(phase, &all_outputs, pool_size);
+                let phase_ref = expanded_phase.as_ref().unwrap_or(phase);
+
+                // Dynamic partitions (`partitions_from`) are a single placeholder step
+                // in the plan-time count but expand to their real per-key count here —
+                // reconcile `total_steps` so the ETA math below can't underflow and
+                // the printed summary reflects what actually ran.
+                if expanded_phase.is_some() {
+                    let expanded_count = phase_step_count(phase_ref);
+                    let planned_count = phase_step_count(phase);
+                    if expanded_count > planned_count {
+                        total_steps += expanded_count - planned_count;
+                        if let Some(ref bar) = pb {
+                            bar.set_length(total_steps as u64);
                         }
                     }
                 }
+
+                let mut uncached_streams: Vec<crate::planner::WorkerStream> = Vec::new();
+
+                // Open the DB only for this phase's cache lookups and release it before any
+                // step runs, so other barca processes can use the metadata DB while Python
+                // executes.
+                let cache = db::CacheReader::open(&db_path).await?;
+
+                for stream in &phase_ref.streams {
+                    let mut uncached_steps: Vec<crate::planner::StreamStep> = Vec::new();
+
+                    for step in &stream.steps {
+                        let (step, decision) = decide_step(
+                            &dag,
+                            &policy,
+                            no_cache,
+                            Some(&cache),
+                            &mut decide_state,
+                            step,
+                        )
+                        .await;
+                        let decision = localize_decision(decision, &step, &mut store);
+                        step_reports.push(report_for(&dag, &step, &decision, false));
+                        let display_id = step.step_id.display();
+                        match decision {
+                            Decision::Run(_) => uncached_steps.push(step),
+                            Decision::Cached { oref, stale_root } => {
+                                if let Some(root) = stale_root {
+                                    note(
+                                        &pb,
+                                        &format!(
+                                            "[barca] warning: {}",
+                                            stale_warning(&display_id, &root, false)
+                                        ),
+                                    );
+                                }
+                                if agent_mode {
+                                    // Announce a step once, with its true outcome: when its
+                                    // artifact is known to be gone it may yet be computed
+                                    // again, so its line waits until that is settled.
+                                    if StoreSync::known_absent(store.as_ref(), &oref.path) {
+                                        held_cached_lines.push(display_id.clone());
+                                    } else {
+                                        eprintln!("{}", cached_step_line(&dag, &display_id));
+                                    }
+                                }
+                                all_outputs.insert(display_id.clone(), oref);
+                                cached_node_ids.insert(display_id);
+                                cached_steps.remember(step);
+                            }
+                            Decision::Partitioned { cached, missing } => {
+                                let any_cached = !cached.is_empty();
+                                for (pdisplay, oref) in cached {
+                                    all_outputs.insert(pdisplay.clone(), oref);
+                                    cached_node_ids.insert(pdisplay);
+                                }
+                                if !missing.is_empty() {
+                                    let mut partial = step.clone();
+                                    partial.partition_keys = missing;
+                                    uncached_steps.push(partial);
+                                }
+                                if any_cached {
+                                    cached_steps.remember(step);
+                                }
+                            }
+                        }
+                    }
+
+                    if !uncached_steps.is_empty() {
+                        uncached_streams.push(crate::planner::WorkerStream {
+                            stream_id: stream.stream_id.clone(),
+                            steps: uncached_steps,
+                        });
+                    }
+                }
+
+                drop(cache);
+                trace_point!("phase{phase_idx}_cache_check_done");
+
+                if uncached_streams.is_empty() {
+                    continue;
+                }
+                let decided = Phase {
+                    reason: phase_ref.reason.clone(),
+                    streams: uncached_streams,
+                };
+                (decided, false)
             }
-
-            if !uncached_steps.is_empty() {
-                uncached_streams.push(crate::planner::WorkerStream {
-                    stream_id: stream.stream_id.clone(),
-                    steps: uncached_steps,
-                });
-            }
-        }
-
-        drop(cache);
-        trace_point!("phase{phase_idx}_cache_check_done");
-
-        if uncached_streams.is_empty() {
-            continue;
-        }
-
-        let filtered_phase = Phase {
-            reason: phase_ref.reason.clone(),
-            streams: uncached_streams,
         };
 
-        steps_executed += filtered_phase
-            .streams
-            .iter()
-            .flat_map(|s| &s.steps)
-            .map(|st| {
-                if st.partition_keys.is_empty() {
-                    1
-                } else {
-                    st.partition_keys.len()
-                }
-            })
-            .sum::<usize>();
+        // A phase that waited for a recompute may since have lost an upstream to a failure
+        // (several targets keep going around one): its blocked steps do not run.
+        if keep_going && !failed_bases.is_empty() {
+            recover::drop_blocked(
+                &mut filtered_phase,
+                |base| blocking_failure(&dag, base, &failed_bases),
+                |st, _| {
+                    skipped_bases.insert(st.step_id.base_id().to_string());
+                    if recompute {
+                        // Its artifact is still missing and it cannot be computed: it is no
+                        // longer an output of this run.
+                        for id in recover::output_ids(st) {
+                            recover::mark_recomputed(&mut step_reports, &id, false);
+                            cached_node_ids.remove(&id);
+                            all_outputs.remove(&id);
+                        }
+                    }
+                },
+            );
+            if filtered_phase.streams.is_empty() {
+                continue;
+            }
+        }
 
+        // Make this phase's inputs available: exactly the artifacts its steps were provided.
+        // Cache hits recorded by other machines are fetched (less the parquet inputs every
+        // reader in the phase scans lazily, which are read in place). An input that is
+        // neither on disk nor in the store has its step computed again first.
         let mut provided = dispatch::build_provided_inputs(&filtered_phase, &all_outputs);
-
-        // Cache hits recorded by other machines are fetched before the steps
-        // that read them run — exactly the inputs this phase was provided,
-        // less the parquet inputs every reader in the phase scans lazily.
-        if let Some(s) = store.as_mut() {
+        let check = recover::input_paths(&provided);
+        if let Some(s) = store.as_ref() {
             s.read_in_place(
                 &mut provided,
                 &dispatch::lazily_read_inputs(&filtered_phase),
             );
-            let paths = provided.values().flat_map(|p| match p {
-                dispatch::ProvidedInput::Single(o) => std::slice::from_ref(o),
-                dispatch::ProvidedInput::Collected(v) => v.as_slice(),
-            });
-            if let Err(e) = s
-                .ensure_local(paths.map(|o| o.path.as_str()), pb.as_ref())
-                .await
-            {
+        }
+        let fetch = recover::input_paths(&provided);
+        let lost = recover::lost(
+            &mut store,
+            &check,
+            &fetch,
+            pb.as_ref(),
+            &all_outputs,
+            &cached_node_ids,
+            &mut cached_steps,
+        )
+        .await;
+        trace_point!("phase{phase_idx}_inputs_local");
+        let lost = match lost {
+            Ok(lost) => lost,
+            Err(e) => {
+                if !recompute {
+                    // Decided to run, but never dispatched: say so (see below the loop).
+                    queue.push_front(Work::Ready(filtered_phase));
+                }
                 transfer_error = Some(e);
                 break;
             }
-            trace_point!("phase{phase_idx}_inputs_local");
+        };
+        if !lost.is_empty() {
+            queue.push_front(if recompute {
+                let steps = filtered_phase.streams.iter().flat_map(|s| &s.steps);
+                Work::Recompute(steps.flat_map(recover::output_ids).collect())
+            } else {
+                Work::Ready(filtered_phase)
+            });
+            queue.push_front(Work::Recompute(cached_steps.first_layer(&lost)));
+            continue;
         }
+
+        if recompute {
+            // These are no longer served from cache: they run, and are recorded, like any
+            // other step of this run.
+            let mut lost: Vec<(String, String)> = Vec::new();
+            for step in filtered_phase.streams.iter().flat_map(|s| &s.steps) {
+                for id in recover::output_ids(step) {
+                    recover::mark_recomputed(&mut step_reports, &id, false);
+                    cached_node_ids.remove(&id);
+                    if let Some(oref) = all_outputs.remove(&id) {
+                        lost.push((id, oref.path));
+                    }
+                }
+            }
+            for line in recover::recompute_warnings(&lost) {
+                note(&pb, &line);
+            }
+        }
+
+        steps_executed += phase_step_count(&filtered_phase);
 
         let mut coord = crate::coordinator::Coordinator::new();
         let loaded = coord.load_phase(&filtered_phase, &provided);
@@ -2436,8 +2787,21 @@ async fn execute(
         );
 
         // Progress callback — update bar as each step completes.
-        let on_step_cb: crate::io_loop::StepCallback<'_> =
-            Box::new(|node_id: &str, artifact: &serde_json::Value| {
+        let run_hashes = &decide_state.run_hashes;
+        let on_step_cb: crate::io_loop::StepCallback<'_> = Box::new(
+            |node_id: &str, artifact: &serde_json::Value, attempts: u32| {
+                // Hand the finished step to the recorder. The worker reports a step only after
+                // its artifact is in place (an atomic rename), so the row never points at a
+                // missing file. Steps without a run hash are parallel() children, which are
+                // never recorded. With a remote store nothing is recorded early: a row is
+                // written only once its upload is confirmed, which the end-of-run ledger does.
+                if store.is_none()
+                    && let Some(run_hash) = run_hashes.get(node_id)
+                {
+                    recorder.record(StepRow::from_artifact(
+                        node_id, run_hash, artifact, attempts,
+                    ));
+                }
                 // Sink failures never fail the asset — surface them prominently.
                 if let Some(sinks) = artifact.get("sinks").and_then(|v| v.as_array()) {
                     for s in sinks {
@@ -2505,7 +2869,8 @@ async fn execute(
                         env_suffix(&dag, node_id)
                     );
                 }
-            });
+            },
+        );
 
         // Event sink — buffer log lines for DB persistence, and forward every
         // event live to the caller's channel (the HTTP server) if present.
@@ -2612,11 +2977,25 @@ async fn execute(
         // Collect failures — parallel branch failures (group members) are
         // contained within the group and surfaced as ParallelError to the parent,
         // so they should NOT abort the entire phase.
+        //
+        // A Ctrl-C in a terminal reaches the workers as well as this process, and a worker
+        // may report its step's KeyboardInterrupt before the cancellation is seen here. That
+        // step was interrupted, not failed: it gets no `failed` line and no failed row. When
+        // such a report came first, give this process's own signal a moment to arrive.
+        let interrupted = |message: &str| message.starts_with("KeyboardInterrupt");
+        if !cancel.is_cancelled() && coord.failed_items().iter().any(|(_, m)| interrupted(m)) {
+            let grace = std::time::Duration::from_millis(250);
+            let _ = tokio::time::timeout(grace, cancel.cancelled()).await;
+        }
+        let cancelled = cancel.is_cancelled();
         let mut first_non_group_failure: Option<(String, String)> = None;
         for (item_id, error_msg) in coord.failed_items() {
             let item = coord.item(item_id);
             if item.group.is_some() {
                 // Parallel branch failure — handled by the group/parent, not a phase error.
+                continue;
+            }
+            if cancelled && interrupted(error_msg) {
                 continue;
             }
             let node_id = item.step_id.display();
@@ -2669,6 +3048,25 @@ async fn execute(
         // and there is only one target (several targets keep going around the failure).
         if phase_error.is_some() || (step_failure.is_some() && !keep_going) {
             break;
+        }
+    }
+
+    // Whatever is still queued when the loop ends was never dispatched, whatever ended it (a
+    // failed step, a failed recompute, cancellation, an infrastructure error). A step that had
+    // been decided to run and was waiting for an input must not be reported as having run: it
+    // is skipped, like a step the coordinator never started.
+    for work in queue.drain(..) {
+        if let Work::Ready(phase) = work {
+            for step in phase.streams.iter().flat_map(|s| &s.steps) {
+                skipped_bases.insert(step.step_id.base_id().to_string());
+            }
+        }
+    }
+    // A cached step whose `cached` line was held back and that was not computed again after
+    // all is announced now.
+    for id in held_cached_lines {
+        if cached_node_ids.contains(&id) {
+            eprintln!("{}", cached_step_line(&dag, &id));
         }
     }
 
@@ -2777,6 +3175,12 @@ async fn execute(
 
     let steps_cached = cached_node_ids.len();
     let elapsed = t0.elapsed().as_secs_f64();
+
+    // Stop the step recorder before persistence: the ledger below writes whatever it had not
+    // written yet, and the state push checkpoints the WAL, which requires no other open handle
+    // on the file.
+    recorder.finish().await;
+    trace_point!("recorder_stopped");
 
     // Persist all executed outputs (including partial results on failure) —
     // held in a ledger so a state-push conflict can replay this run's rows
@@ -2896,44 +3300,11 @@ async fn execute(
 
     let outcomes = target_outcomes(&dag, &targets, &all_outputs, &all_failures);
 
-    // Determine final_output: the target's output when there is exactly one, otherwise the last
-    // planned step's (no target). Several targets report theirs in `outcomes`.
-    let final_output = if let [tid] = target_ids.as_slice() {
-        // For partitioned targets, the first partition by key (deterministic).
-        output_for(tid, &all_outputs)
-    } else if keep_going {
-        None
-    } else {
-        // No target: return the last planned asset's output (a sensor's only when the plan
-        // has no asset).
-        let planned: Vec<&planner::StreamStep> = exec_plan
-            .phases
-            .iter()
-            .flat_map(|p| &p.streams)
-            .flat_map(|s| &s.steps)
-            .collect();
-        let last_planned_id = planned
-            .iter()
-            .rev()
-            .find(|st| {
-                dag.get_node(st.step_id.base_id())
-                    .is_some_and(|n| n.kind() == crate::NodeKind::Asset)
-            })
-            .or(planned.last())
-            .map(|s| s.step_id.display())
-            .unwrap_or_default();
-        all_outputs.get(&last_planned_id).cloned().or_else(|| {
-            let mut matches: Vec<_> = all_outputs
-                .iter()
-                .filter(|(k, _)| k.starts_with(&last_planned_id))
-                .collect();
-            matches.sort_by_key(|(k, _)| (*k).clone());
-            matches.first().map(|(_, v)| (*v).clone())
-        })
-    };
+    let final_output = final_output_of(&exec_plan, &target_ids, keep_going, &all_outputs);
 
-    // Make the outputs this command returns readable here: a cache hit recorded by another
-    // machine is still only in the store. Then stop the transfer helper.
+    // The outputs this command returns were made readable here when the last phase finished
+    // (`Work::Returned`). A run that stopped at a failed step did not get that far and may still
+    // return an earlier output, so make sure of it. Then stop the transfer helper.
     if let Some(mut s) = store.take() {
         let paths: Vec<String> = final_output
             .iter()
@@ -2956,6 +3327,7 @@ async fn execute(
             phases: exec_plan.phases.len(),
             final_output,
             steps: step_reports,
+            warnings: plan_warnings,
         },
         targets: outcomes,
         step_failure: step_failure.map(|(node, message)| crate::FailedStep {
@@ -3001,6 +3373,202 @@ struct RunLedger<'a> {
     store_paths: &'a HashMap<String, String>,
     /// Run-end snapshot of the measured-cost EWMA, seeding the next run.
     cost_snapshot: &'a [(String, crate::cost::NodeEstimate)],
+}
+
+/// One successful step as a `materializations` row. Built when the step finishes (for the
+/// [`StepRecorder`]) and again from the ledger at the end of the run.
+#[derive(Debug, Clone)]
+struct StepRow {
+    node_id: String,
+    run_hash: String,
+    path: String,
+    format: String,
+    size_bytes: u64,
+    elapsed_seconds: Option<f64>,
+    attempts: u32,
+    sinks_json: Option<String>,
+    cpu_seconds: Option<f64>,
+    max_rss_bytes: Option<u64>,
+    /// A sensor's output content hash; None for everything else.
+    output_hash: Option<String>,
+}
+
+impl StepRow {
+    /// From the artifact a worker reported for a finished step. Reads the same fields the
+    /// end-of-run ledger is built from, so both writers produce the same row.
+    fn from_artifact(
+        node_id: &str,
+        run_hash: &str,
+        artifact: &serde_json::Value,
+        attempts: u32,
+    ) -> Self {
+        let str_of = |key: &str| artifact.get(key).and_then(|v| v.as_str());
+        Self {
+            node_id: node_id.to_string(),
+            run_hash: run_hash.to_string(),
+            path: str_of("path").unwrap_or("").to_string(),
+            format: str_of("format").unwrap_or("json").to_string(),
+            size_bytes: artifact
+                .get("size_bytes")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0),
+            elapsed_seconds: artifact.get("elapsed_seconds").and_then(|v| v.as_f64()),
+            attempts,
+            sinks_json: artifact
+                .get("sinks")
+                .and_then(|v| v.as_array())
+                .filter(|sinks| !sinks.is_empty())
+                .map(|sinks| serde_json::Value::from(sinks.clone()).to_string()),
+            cpu_seconds: artifact.get("cpu_seconds").and_then(|v| v.as_f64()),
+            max_rss_bytes: artifact.get("max_rss_bytes").and_then(|v| v.as_u64()),
+            output_hash: str_of("content_hash").map(str::to_string),
+        }
+    }
+
+    async fn insert(&self, conn: &turso::Connection, run_id: &str) -> Result<(), turso::Error> {
+        let opt = |v: Option<String>| v.unwrap_or_default();
+        conn.execute(
+            "INSERT INTO materializations (node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, elapsed_seconds, status, attempts, sinks_json, cpu_seconds, max_rss_bytes, output_hash, run_id) VALUES (?1, ?2, ?3, ?4, ?5, NULLIF(?6, ''), 'success', ?7, NULLIF(?8, ''), NULLIF(?9, ''), NULLIF(?10, ''), NULLIF(?11, ''), ?12)",
+            [
+                self.node_id.clone(),
+                self.run_hash.clone(),
+                self.path.clone(),
+                self.format.clone(),
+                self.size_bytes.to_string(),
+                opt(self.elapsed_seconds.map(|e| e.to_string())),
+                self.attempts.to_string(),
+                opt(self.sinks_json.clone()),
+                opt(self.cpu_seconds.map(|c| c.to_string())),
+                opt(self.max_rss_bytes.map(|r| r.to_string())),
+                opt(self.output_hash.clone()),
+                run_id.to_string(),
+            ],
+        )
+        .await
+        .map(|_| ())
+    }
+}
+
+/// How often, at most, the recorder writes finished steps to the metadata DB. A finished step
+/// is recorded within about this long of finishing; a run shorter than this records everything
+/// in the one end-of-run write, exactly as before, so short runs pay nothing.
+const RECORD_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Writes finished steps to the local metadata DB while a run is still going (#214), so
+/// `barca status` in another process sees them and a killed run keeps them.
+///
+/// The run loop only sends rows down a channel; a background task batches whatever has
+/// arrived and writes it with a short-lived connection, at most once per [`RECORD_INTERVAL`].
+/// The loop therefore never waits on the database (another barca process may be holding it),
+/// and a phase of thousands of quick steps costs a few writes, not thousands.
+///
+/// It is an optimisation of *when* rows land, never the only writer: the end-of-run
+/// [`persist_run`] writes every row of the run that is not already there (rows carry the run
+/// id). So a write that fails here, rows still queued at [`StepRecorder::finish`], and rows
+/// lost because another process replaced the local DB with the shared state mid-run are all
+/// made good at the end.
+struct StepRecorder {
+    tx: tokio::sync::mpsc::UnboundedSender<StepRow>,
+    stop: CancellationToken,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl StepRecorder {
+    fn start(db_path: String, run_id: String) -> Self {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<StepRow>();
+        let stop = CancellationToken::new();
+        let stopped = stop.clone();
+        let task = tokio::spawn(async move {
+            let mut next_write = tokio::time::Instant::now() + RECORD_INTERVAL;
+            loop {
+                let first = tokio::select! {
+                    biased;
+                    _ = stopped.cancelled() => break,
+                    row = rx.recv() => match row {
+                        Some(row) => row,
+                        None => break,
+                    },
+                };
+                tokio::select! {
+                    biased;
+                    _ = stopped.cancelled() => break,
+                    _ = tokio::time::sleep_until(next_write) => {}
+                }
+                let mut batch = vec![first];
+                while let Ok(row) = rx.try_recv() {
+                    batch.push(row);
+                }
+                // Best effort: see the type's doc comment for why a failure is not an error.
+                record_steps(&db_path, &run_id, &batch).await.ok();
+                next_write = tokio::time::Instant::now() + RECORD_INTERVAL;
+            }
+        });
+        Self { tx, stop, task }
+    }
+
+    /// Queue a finished step. Never blocks.
+    fn record(&self, row: StepRow) {
+        self.tx.send(row).ok();
+    }
+
+    /// Stop the background task and wait for it, so no connection is left open. Rows it had
+    /// not written yet are left to [`persist_run`].
+    async fn finish(self) {
+        self.stop.cancel();
+        self.task.await.ok();
+    }
+}
+
+/// Append `rows` for a run that is still in progress, and advance its `steps_executed` so
+/// `barca history` shows how far it has got.
+async fn record_steps(db_path: &str, run_id: &str, rows: &[StepRow]) -> Result<(), BarcaError> {
+    let _g = db::db_guard().await;
+    let (_db, conn) = db::open_conn(db_path).await?;
+    // One transaction: one commit for the batch, and a reader sees all of it or none.
+    conn.execute("BEGIN", ())
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to begin: {e}")))?;
+    let mut written = 0usize;
+    for row in rows {
+        if row.insert(&conn, run_id).await.is_ok() {
+            written += 1;
+        }
+    }
+    conn.execute(
+        "UPDATE runs SET steps_executed = steps_executed + ?1 WHERE run_id = ?2 AND status = 'running'",
+        [written.to_string(), run_id.to_string()],
+    )
+    .await
+    .ok();
+    conn.execute("COMMIT", ())
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to commit: {e}")))?;
+    Ok(())
+}
+
+/// The steps of `run_id` that already have a row: what the [`StepRecorder`] wrote during the
+/// run, or, on a replay after a shared-state conflict, what the pulled database already holds
+/// (another process on this machine can have pushed this run's rows along with its own).
+async fn recorded_steps(
+    conn: &turso::Connection,
+    run_id: &str,
+) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    let Ok(mut rows) = conn
+        .query(
+            "SELECT node_id FROM materializations WHERE run_id = ?1",
+            [run_id.to_string()],
+        )
+        .await
+    else {
+        return out;
+    };
+    while let Ok(Some(row)) = rows.next().await {
+        if let Ok(node_id) = row.get::<String>(0) {
+            out.insert(node_id);
+        }
+    }
+    out
 }
 
 /// The exception a step failure carries, as (type, message, traceback). A worker reports a
@@ -3137,22 +3705,24 @@ fn telemetry_report(
     }
 }
 
-/// Write a run's ledger with a short-lived connection. Idempotent for the run
-/// row (INSERT OR IGNORE + terminal UPDATE) so replays don't duplicate it;
-/// materialization rows are append-only history and re-appended on replay
-/// only against a database that doesn't already contain them.
+/// Write a run's ledger with a short-lived connection. Idempotent, so it is safe after the
+/// [`StepRecorder`] has written some of the steps and on a replay: the run row is INSERT OR
+/// IGNORE + terminal UPDATE, and a step is appended only if this run has no row for it yet
+/// (a step has one outcome per run).
 async fn persist_run(db_path: &str, l: &RunLedger<'_>) -> Result<(), BarcaError> {
     let _g = db::db_guard().await;
     let (_db, conn) = db::open_conn(db_path).await?;
 
     conn.execute(
-            "INSERT OR IGNORE INTO runs (run_id, command, files, target, status, steps_total) VALUES (?1, ?2, ?3, ?4, 'running', ?5)",
+            "INSERT OR IGNORE INTO runs (run_id, command, files, target, status, steps_total, pid, host) VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6, ?7)",
             [
                 l.run_id.to_string(),
                 l.command.to_string(),
                 l.files.clone(),
                 l.target.unwrap_or("").to_string(),
                 l.steps_total.to_string(),
+                std::process::id().to_string(),
+                db::local_host(),
             ],
         )
         .await
@@ -3170,45 +3740,32 @@ async fn persist_run(db_path: &str, l: &RunLedger<'_>) -> Result<(), BarcaError>
         .await
         .map_err(|e| BarcaError::Db(format!("failed to finish run: {e}")))?;
 
+    let already = recorded_steps(&conn, l.run_id).await;
+
     for (node_id, oref) in l.all_outputs {
-        if l.cached_node_ids.contains(node_id) {
+        if l.cached_node_ids.contains(node_id) || already.contains(node_id) {
             continue;
         }
         let Some(run_h) = l.run_hashes.get(node_id) else {
             continue;
         };
-        let elapsed_str = oref
-            .elapsed_seconds
-            .map(|e| e.to_string())
-            .unwrap_or_default();
         let base = crate::StepId::parse(node_id).base_id().to_string();
-        let attempts = l.all_attempts.get(&base).copied().unwrap_or(1);
         let (cpu, rss) = l.all_timings.get(node_id).copied().unwrap_or((None, None));
-        conn.execute(
-                "INSERT INTO materializations (node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, elapsed_seconds, status, attempts, sinks_json, cpu_seconds, max_rss_bytes, output_hash) VALUES (?1, ?2, ?3, ?4, ?5, NULLIF(?6, ''), 'success', ?7, NULLIF(?8, ''), NULLIF(?9, ''), NULLIF(?10, ''), NULLIF(?11, ''))",
-                [
-                    node_id.clone(),
-                    run_h.clone(),
-                    l.store_paths
-                        .get(node_id)
-                        .unwrap_or(&oref.path)
-                        .clone(),
-                    oref.format.clone(),
-                    oref.size_bytes.to_string(),
-                    elapsed_str,
-                    attempts.to_string(),
-                    l.all_sinks.get(node_id).cloned().unwrap_or_default(),
-                    cpu.map(|c| c.to_string()).unwrap_or_default(),
-                    rss.map(|r| r.to_string()).unwrap_or_default(),
-                    l.output_hashes
-                        .get(node_id)
-                        .or(oref.content_hash.as_ref())
-                        .cloned()
-                        .unwrap_or_default(),
-                ],
-            )
-            .await
-            .ok();
+        let mut row = StepRow::from_artifact(node_id, run_h, &serde_json::Value::Null, 1);
+        row.path = l.store_paths.get(node_id).unwrap_or(&oref.path).clone();
+        row.format = oref.format.clone();
+        row.size_bytes = oref.size_bytes;
+        row.elapsed_seconds = oref.elapsed_seconds;
+        row.attempts = l.all_attempts.get(&base).copied().unwrap_or(1);
+        row.sinks_json = l.all_sinks.get(node_id).cloned();
+        row.cpu_seconds = cpu;
+        row.max_rss_bytes = rss;
+        row.output_hash = l
+            .output_hashes
+            .get(node_id)
+            .or(oref.content_hash.as_ref())
+            .cloned();
+        row.insert(&conn, l.run_id).await.ok();
     }
 
     // Persist the measured-cost EWMA so the next run starts pre-warmed and
@@ -3239,11 +3796,14 @@ async fn persist_run(db_path: &str, l: &RunLedger<'_>) -> Result<(), BarcaError>
     // columns NULL). Failed rows are never served as cache hits.
     for failure in l.all_failures {
         let node_id = &failure.node_id;
+        if already.contains(node_id) {
+            continue;
+        }
         let run_h = l.run_hashes.get(node_id).cloned().unwrap_or_default();
         // Each failure carries its own attempt count: dispatches for a worker
         // failure, transfer attempts for an upload failure.
         conn.execute(
-                "INSERT INTO materializations (node_id, run_hash, status, error_type, error_message, error_traceback, attempts) VALUES (?1, ?2, 'failed', ?3, ?4, ?5, ?6)",
+                "INSERT INTO materializations (node_id, run_hash, status, error_type, error_message, error_traceback, attempts, run_id) VALUES (?1, ?2, 'failed', ?3, ?4, ?5, ?6, ?7)",
                 [
                     node_id.clone(),
                     run_h,
@@ -3251,12 +3811,301 @@ async fn persist_run(db_path: &str, l: &RunLedger<'_>) -> Result<(), BarcaError>
                     failure.error.message.clone(),
                     failure.error.traceback.clone(),
                     failure.error.attempts.to_string(),
+                    l.run_id.to_string(),
                 ],
             )
             .await
             .ok();
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod persist_tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    /// A run that executed `a`, `part[k=1]` and `part[k=2]`, found `cached` in the cache, and
+    /// saw `bad` fail.
+    struct Fixture {
+        outputs: HashMap<String, OutputRef>,
+        failures: Vec<dispatch::StepFailure>,
+        cached: HashSet<String>,
+        run_hashes: HashMap<String, String>,
+        empty: HashMap<String, String>,
+        attempts: HashMap<String, u32>,
+        timings: HashMap<String, (Option<f64>, Option<u64>)>,
+    }
+
+    const EXECUTED: [&str; 3] = ["f.py:a", "f.py:part[k=1]", "f.py:part[k=2]"];
+
+    fn oref(node: &str) -> OutputRef {
+        OutputRef {
+            path: format!(".barca/artifacts/{node}/h.json"),
+            format: "json".to_string(),
+            size_bytes: 2,
+            elapsed_seconds: Some(0.5),
+            content_hash: None,
+        }
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            let mut outputs = HashMap::new();
+            let mut run_hashes = HashMap::new();
+            for node in EXECUTED.iter().chain(&["f.py:cached", "f.py:bad"]) {
+                run_hashes.insert(node.to_string(), format!("hash-{node}"));
+                if *node != "f.py:bad" {
+                    outputs.insert(node.to_string(), oref(node));
+                }
+            }
+            Self {
+                outputs,
+                failures: vec![dispatch::StepFailure {
+                    node_id: "f.py:bad".to_string(),
+                    error: dispatch::StepError {
+                        error_type: "WorkerError".to_string(),
+                        message: "boom".to_string(),
+                        traceback: String::new(),
+                        attempts: 1,
+                    },
+                }],
+                cached: HashSet::from(["f.py:cached".to_string()]),
+                run_hashes,
+                empty: HashMap::new(),
+                attempts: HashMap::new(),
+                timings: HashMap::new(),
+            }
+        }
+
+        fn ledger<'a>(&'a self, run_id: &'a str) -> RunLedger<'a> {
+            RunLedger {
+                run_id,
+                status: "failed",
+                command: "get",
+                files: db::encode_files(&["f.py".to_string()]),
+                target: None,
+                steps_total: 5,
+                steps_executed: 4,
+                steps_cached: 1,
+                elapsed: 1.5,
+                all_outputs: &self.outputs,
+                all_failures: &self.failures,
+                all_sinks: &self.empty,
+                all_attempts: &self.attempts,
+                all_timings: &self.timings,
+                cached_node_ids: &self.cached,
+                run_hashes: &self.run_hashes,
+                output_hashes: &self.empty,
+                store_paths: &self.empty,
+                cost_snapshot: &[],
+            }
+        }
+
+        /// The row the recorder would write for `node` when it finishes.
+        fn row(&self, node: &str) -> StepRow {
+            let artifact = serde_json::json!({
+                "path": self.outputs[node].path, "format": "json", "size_bytes": 2,
+                "elapsed_seconds": 0.5,
+            });
+            StepRow::from_artifact(node, &self.run_hashes[node], &artifact, 1)
+        }
+    }
+
+    async fn fresh_db(dir: &tempfile::TempDir, name: &str) -> String {
+        let db_path = dir.path().join(name).to_string_lossy().to_string();
+        db::init_db(&db_path).await.unwrap();
+        db_path
+    }
+
+    /// Every materialization row as `(run_id, node_id, status)`, sorted.
+    async fn rows(db_path: &str) -> Vec<(String, String, String)> {
+        let _g = db::db_guard().await;
+        let (_db, conn) = db::open_conn(db_path).await.unwrap();
+        let mut found = conn
+            .query(
+                "SELECT COALESCE(run_id, ''), node_id, status FROM materializations",
+                (),
+            )
+            .await
+            .unwrap();
+        let mut out = Vec::new();
+        while let Some(row) = found.next().await.unwrap() {
+            out.push((
+                row.get::<String>(0).unwrap(),
+                row.get::<String>(1).unwrap(),
+                row.get::<String>(2).unwrap(),
+            ));
+        }
+        out.sort();
+        out
+    }
+
+    /// What one complete write of the fixture's run looks like: each executed step once, the
+    /// failure once, and nothing for the cache hit.
+    fn complete(run_id: &str) -> Vec<(String, String, String)> {
+        let mut want: Vec<_> = EXECUTED
+            .iter()
+            .map(|n| (run_id.to_string(), n.to_string(), "success".to_string()))
+            .collect();
+        want.push((
+            run_id.to_string(),
+            "f.py:bad".to_string(),
+            "failed".to_string(),
+        ));
+        want.sort();
+        want
+    }
+
+    async fn run_record(db_path: &str, run_id: &str) -> db::RunRecord {
+        db::get_recent_runs(db_path, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|r| r.run_id == run_id)
+            .expect("run row")
+    }
+
+    #[tokio::test]
+    async fn the_ledger_adds_only_what_the_recorder_has_not_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = fresh_db(&dir, "m.db").await;
+        let fx = Fixture::new();
+        db::create_run(&db_path, "r1", "get", "[\"f.py\"]", None, Some(5))
+            .await
+            .unwrap();
+
+        // Mid-run: two steps recorded; the run is `running` and counts them.
+        record_steps(
+            &db_path,
+            "r1",
+            &[fx.row("f.py:a"), fx.row("f.py:part[k=1]")],
+        )
+        .await
+        .unwrap();
+        assert_eq!(rows(&db_path).await.len(), 2);
+        let mid = run_record(&db_path, "r1").await;
+        assert_eq!((mid.status.as_str(), mid.steps_executed), ("running", 2));
+        assert_eq!(mid.finished_at, None);
+
+        // End of run: the rest is added, nothing twice, and the counts are the final ones.
+        persist_run(&db_path, &fx.ledger("r1")).await.unwrap();
+        assert_eq!(rows(&db_path).await, complete("r1"));
+        let end = run_record(&db_path, "r1").await;
+        assert_eq!(
+            (end.status.as_str(), end.steps_executed, end.steps_cached),
+            ("failed", 4, 1)
+        );
+
+        // Writing the ledger again (a replay onto a database that already has it) is a no-op.
+        persist_run(&db_path, &fx.ledger("r1")).await.unwrap();
+        assert_eq!(rows(&db_path).await, complete("r1"));
+    }
+
+    #[tokio::test]
+    async fn a_replay_onto_a_freshly_pulled_db_carries_the_whole_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let fx = Fixture::new();
+
+        // The local DB, with steps recorded mid-run, is replaced by a pulled one that has
+        // never heard of this run: the replay must not assume the recorder's rows survived.
+        let local = fresh_db(&dir, "local.db").await;
+        db::create_run(&local, "r1", "get", "[\"f.py\"]", None, Some(5))
+            .await
+            .unwrap();
+        record_steps(&local, "r1", &[fx.row("f.py:a")])
+            .await
+            .unwrap();
+        let pulled = fresh_db(&dir, "pulled.db").await;
+        persist_run(&pulled, &fx.ledger("r1")).await.unwrap();
+        assert_eq!(rows(&pulled).await, complete("r1"));
+        let run = run_record(&pulled, "r1").await;
+        assert_eq!((run.status.as_str(), run.steps_executed), ("failed", 4));
+
+        // A pulled DB that already holds part of this run (another process on this machine
+        // pushed the shared local DB mid-run) gets the rest, and keeps another run's rows.
+        let partial = fresh_db(&dir, "partial.db").await;
+        record_steps(&partial, "other", &[fx.row("f.py:a")])
+            .await
+            .unwrap();
+        record_steps(
+            &partial,
+            "r1",
+            &[fx.row("f.py:a"), fx.row("f.py:part[k=2]")],
+        )
+        .await
+        .unwrap();
+        persist_run(&partial, &fx.ledger("r1")).await.unwrap();
+        let mut want = complete("r1");
+        want.push((
+            "other".to_string(),
+            "f.py:a".to_string(),
+            "success".to_string(),
+        ));
+        want.sort();
+        assert_eq!(rows(&partial).await, want);
+    }
+
+    #[tokio::test]
+    async fn the_recorder_and_the_ledger_write_the_same_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let fx = Fixture::new();
+        let columns = "node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, \
+                       elapsed_seconds, status, attempts, run_id";
+        let mut seen = Vec::new();
+        for (name, by_recorder) in [("recorder.db", true), ("ledger.db", false)] {
+            let db_path = fresh_db(&dir, name).await;
+            if by_recorder {
+                record_steps(&db_path, "r1", &[fx.row("f.py:a")])
+                    .await
+                    .unwrap();
+            } else {
+                persist_run(&db_path, &fx.ledger("r1")).await.unwrap();
+            }
+            let _g = db::db_guard().await;
+            let (_db, conn) = db::open_conn(&db_path).await.unwrap();
+            let mut found = conn
+                .query(
+                    &format!("SELECT {columns} FROM materializations WHERE node_id = 'f.py:a'"),
+                    (),
+                )
+                .await
+                .unwrap();
+            let row = found.next().await.unwrap().expect("a row for f.py:a");
+            seen.push(format!(
+                "{:?}",
+                (0..9)
+                    .map(|i| row.get_value(i).unwrap())
+                    .collect::<Vec<_>>()
+            ));
+        }
+        assert_eq!(seen[0], seen[1]);
+    }
+
+    #[tokio::test]
+    async fn the_recorder_writes_during_the_run_and_leaves_the_rest_to_the_ledger() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = fresh_db(&dir, "m.db").await;
+        let fx = Fixture::new();
+
+        let recorder = StepRecorder::start(db_path.clone(), "r1".to_string());
+        recorder.record(fx.row("f.py:a"));
+        recorder.record(fx.row("f.py:part[k=1]"));
+        let deadline = Instant::now() + std::time::Duration::from_secs(10);
+        while rows(&db_path).await.len() < 2 {
+            assert!(Instant::now() < deadline, "the recorder never wrote");
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        // Queued just before the run ends: finish() does not wait a full interval to write it.
+        recorder.record(fx.row("f.py:part[k=2]"));
+        let stopping = Instant::now();
+        recorder.finish().await;
+        assert!(stopping.elapsed() < RECORD_INTERVAL);
+
+        persist_run(&db_path, &fx.ledger("r1")).await.unwrap();
+        assert_eq!(rows(&db_path).await, complete("r1"));
+    }
 }
 
 // ─── plan ────────────────────────────────────────────────────────────────────
@@ -3272,7 +4121,10 @@ pub async fn plan(
     };
     let plan = planner::plan_from_dag(&dag, &config);
 
+    let warnings = crate::warnings::for_plan(&dag, &plan);
+    crate::warnings::print(&warnings);
     Ok(PlanResult {
+        warnings,
         total_steps: plan.total_steps,
         phases: plan
             .phases
@@ -3442,171 +4294,41 @@ pub(crate) fn build_dag_blocking(
     file_args: &[String],
     python: &std::path::Path,
 ) -> Result<Dag, BarcaError> {
-    let paths: Vec<PathBuf> = file_args.iter().map(PathBuf::from).collect();
-
-    // Parse every file once. Files are grouped by directory because that directory is what the
-    // worker puts on sys.path, so it is what a bare `import helpers` in the file refers to: two
-    // `helpers.py` (or two `assets.py`) in different directories must never share hashing state.
-    struct ParsedFile {
-        index: usize,
-        stem: String,
-        source: String,
-        nodes: Vec<crate::model::ExtractedNode>,
-    }
-    let mut by_dir: std::collections::BTreeMap<PathBuf, Vec<ParsedFile>> =
-        std::collections::BTreeMap::new();
-    for (index, path) in paths.iter().enumerate() {
-        let source = fs::read_to_string(path)
+    // Parse every file once.
+    let mut sources: Vec<(PathBuf, std::rc::Rc<str>)> = Vec::with_capacity(file_args.len());
+    let mut nodes_by_file: Vec<Vec<crate::model::ExtractedNode>> = Vec::new();
+    for arg in file_args {
+        let path = PathBuf::from(arg);
+        let source = fs::read_to_string(&path)
             .map_err(|e| BarcaError::Usage(format!("{}: {e}", path.display())))?;
-        let file_str = path.to_string_lossy().to_string();
-        let nodes =
-            extract_nodes(&source, &file_str).map_err(|e| BarcaError::Parse(e.to_string()))?;
-        let stem = path
-            .file_stem()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
-        by_dir
-            .entry(source_dir(path))
-            .or_default()
-            .push(ParsedFile {
-                index,
-                stem,
-                source,
-                nodes,
-            });
+        nodes_by_file
+            .push(extract_nodes(&source, arg).map_err(|e| BarcaError::Parse(e.to_string()))?);
+        sources.push((path, source.into()));
     }
 
-    // Nodes per file, in command-line order (the last asset is `get file.py`'s final value).
-    let mut per_file: Vec<Vec<crate::model::ExtractedNode>> = vec![Vec::new(); paths.len()];
-    for (dir, files) in &by_dir {
-        // Module name -> source for everything an import in this directory can reach:
-        // the directory's own files first, then packages and modules below it, then siblings,
-        // then (as before 0.13) the other files on the command line.
-        let mut file_sources: HashMap<String, String> = HashMap::new();
-        // Dotted module names in `file_sources` that are `__init__.py` packages,
-        // as opposed to regular submodules — needed to resolve relative imports.
-        let mut packages: std::collections::HashSet<String> = std::collections::HashSet::new();
-        for f in files {
-            file_sources.insert(f.stem.clone(), f.source.clone());
-        }
-        // Subdirectories first — packages (__init__.py) take precedence over same-named
-        // sibling .py files, matching Python's import semantics.
-        scan_subdirectories(dir, dir, &mut file_sources, &mut packages);
-        if let Ok(entries) = std::fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let ep = entry.path();
-                if ep.extension().map(|e| e == "py").unwrap_or(false) {
-                    let estem = ep
-                        .file_stem()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .to_string();
-                    if let std::collections::hash_map::Entry::Vacant(e) = file_sources.entry(estem)
-                        && let Ok(content) = fs::read_to_string(&ep)
-                    {
-                        e.insert(content);
-                    }
-                }
-            }
-        }
-        for (other_dir, others) in &by_dir {
-            if other_dir != dir {
-                for f in others {
-                    file_sources
-                        .entry(f.stem.clone())
-                        .or_insert_with(|| f.source.clone());
-                }
-            }
-        }
-
-        // Each file's own definitions are parsed once, then shared by its nodes.
-        for f in files {
-            let defs = crate::cone::collect_module_definitions(&f.source);
-            for node in &f.nodes {
-                let mut node = node.clone();
-                node.cone_hash = crate::cone::cone_hash_from_defs(
-                    &defs,
-                    &node.function_name,
-                    &file_sources,
-                    &packages,
-                );
-                per_file[f.index].push(node);
-            }
+    // Dependency cones. The project root is the working directory (the CLI changes into it),
+    // and the workers' too, so it is where their imports resolve from. Helper modules are read
+    // only when a step's cone reaches them, each at most once (`project_modules`).
+    let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let mut cones = crate::project_modules::ProjectCones::new(
+        &root,
+        sources
+            .iter()
+            .map(|(path, source)| (path.as_path(), source.clone())),
+    );
+    // Nodes in command-line order (the last asset is `get file.py`'s final value).
+    let mut all_nodes: Vec<crate::model::ExtractedNode> = Vec::new();
+    for (index, nodes) in nodes_by_file.into_iter().enumerate() {
+        let pipeline = cones.pipeline(index);
+        for mut node in nodes {
+            node.cone_hash = pipeline.hash(&node.function_name);
+            all_nodes.push(node);
         }
     }
-    drop(by_dir);
-    let mut all_nodes: Vec<crate::model::ExtractedNode> = per_file.into_iter().flatten().collect();
 
     resolve_dynamic_partitions(&mut all_nodes, python);
 
     Ok(Dag::build(&all_nodes)?)
-}
-
-/// Recursively scan subdirectories for Python modules.
-/// Stores dotted module paths as keys: `utils/math.py` → `"utils.math"`.
-/// Handles `__init__.py`: `mylib/__init__.py` → `"mylib"`.
-fn scan_subdirectories(
-    dir: &std::path::Path,
-    root: &std::path::Path,
-    file_sources: &mut HashMap<String, String>,
-    packages: &mut std::collections::HashSet<String>,
-) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let ep = entry.path();
-        if ep.is_dir() {
-            let dir_name = ep
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
-            // Skip hidden dirs, __pycache__, .venv, etc.
-            if dir_name.starts_with('.')
-                || dir_name == "__pycache__"
-                || dir_name == ".venv"
-                || dir_name == "node_modules"
-            {
-                continue;
-            }
-            // Check if this is a Python package (has __init__.py).
-            let init_path = ep.join("__init__.py");
-            if init_path.exists()
-                && let Ok(content) = fs::read_to_string(&init_path)
-            {
-                let module_path = ep
-                    .strip_prefix(root)
-                    .unwrap_or(&ep)
-                    .to_string_lossy()
-                    .replace(['/', '\\'], ".");
-                packages.insert(module_path.clone());
-                file_sources.entry(module_path).or_insert_with(|| content);
-            }
-            // Scan .py files in the subdirectory.
-            if let Ok(sub_entries) = std::fs::read_dir(&ep) {
-                for sub_entry in sub_entries.flatten() {
-                    let sp = sub_entry.path();
-                    if sp.extension().map(|e| e == "py").unwrap_or(false)
-                        && sp.file_name().map(|n| n != "__init__.py").unwrap_or(true)
-                        && let Ok(content) = fs::read_to_string(&sp)
-                    {
-                        // Build dotted module path relative to root.
-                        let rel = sp.strip_prefix(root).unwrap_or(&sp);
-                        let module_path = rel
-                            .to_string_lossy()
-                            .replace(['/', '\\'], ".")
-                            .trim_end_matches(".py")
-                            .to_string();
-                        file_sources.entry(module_path).or_insert_with(|| content);
-                    }
-                }
-            }
-            // Recurse into deeper subdirectories.
-            scan_subdirectories(&ep, root, file_sources, packages);
-        }
-    }
 }
 
 fn resolve_dynamic_partitions(nodes: &mut [crate::model::ExtractedNode], python: &std::path::Path) {
@@ -4063,6 +4785,7 @@ def lone() -> int:
             targets: Vec::new(),
             steps: Vec::new(),
             summary: ExplainSummary::default(),
+            warnings: Vec::new(),
         };
         let one = serde_json::to_value(&r).unwrap();
         assert_eq!(one["target"], "a");
@@ -4102,6 +4825,7 @@ def lone() -> int:
             steps_executed: 0,
             phases: 0,
             steps: Vec::new(),
+            warnings: Vec::new(),
             targets: vec![
                 ("zeta".to_string(), outcome("success")),
                 ("alpha".to_string(), outcome("failed")),
@@ -4225,17 +4949,16 @@ mod store_tests {
     }
 
     #[test]
-    fn row_outside_the_store_and_not_on_disk_is_a_miss() {
+    fn a_row_outside_the_store_is_a_hit_whatever_is_on_disk() {
         let layout = ArtifactLayout::new("/w/a", "s3://b/p");
-        // e.g. recorded against a different store, or another machine's local path
-        assert!(matches!(
-            resolve_cache_hit(oref("s3://other/p/n/h.json"), Some(&layout)),
-            CacheHit::Miss
-        ));
-        assert!(matches!(
-            resolve_cache_hit(oref("/elsewhere/n/h.json"), Some(&layout)),
-            CacheHit::Miss
-        ));
+        // e.g. recorded against a different store, or another machine's local path. It is still
+        // the cached result: it is computed again only if something has to read it (#252).
+        for path in ["s3://other/p/n/h.json", "/elsewhere/n/h.json"] {
+            match resolve_cache_hit(oref(path), Some(&layout)) {
+                CacheHit::Local(o) => assert_eq!(o.path, path),
+                _ => panic!("expected Local"),
+            }
+        }
     }
 
     #[tokio::test]

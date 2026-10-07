@@ -49,7 +49,8 @@ Examples:
   barca status total pipeline.py --json --sample 5   # add up to 5 sample rows per json/parquet artifact
   barca status pipeline.py --env dev       # state recorded in another environment
 
-Cache state per node: cached, stale (ran before; code or inputs changed), never_run, partial
+Cache state per node: cached, stale (ran before; code or inputs changed, or its artifact file is
+gone and a run would read it: reason `artifact_missing`), never_run, partial
 (some partition keys cached), unknown (dynamic partitions not yet known) or always_runs (tasks,
 sensors), with a reason. JSON spells the states in snake_case, the same as the `summary` keys
 (the table prints never-run, always-runs). It is the same decision `--dry-run` makes.

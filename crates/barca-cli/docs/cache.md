@@ -12,10 +12,9 @@ only the affected subgraph re-runs.
 ### What the definition covers
 
 The definition part of the hash is the function's source, its decorator arguments, and its
-**dependency cone**: every module-level function, constant and import the function uses, followed
-transitively. That includes **helper modules in your project**: `.py` files in the pipeline
-file's directory and its subdirectories (packages with or without `__init__.py`). Both import
-styles are followed, at the same precision:
+**dependency cone**: every module-level function, class, constant and import the function uses,
+followed transitively. That includes **helper modules in your project**. Both import styles are
+followed, at the same precision:
 
 ```python
 # helpers.py
@@ -41,28 +40,127 @@ def rows() -> list:
 Editing `clean` (or anything `clean` calls) changes `rows`' hash and it re-runs; editing `unused`
 does not. `from helpers import clean` + `clean(...)`, `import pkg.mod as m` + `m.f()`,
 `import pkg.mod` + `pkg.mod.f()` and `from pkg import mod` + `mod.f()` hash exactly the same
-way: only the definitions the step uses, never the whole module. Modules outside the project
-(the standard library, installed packages) are not hashed: after upgrading one, recompute with
-`--refresh-all` or `--refresh` (below).
+way: only the definitions the step uses, never the whole module.
 
 The pipeline file can be named any way on the command line: `barca get rows pipeline.py`,
 `./pipeline.py`, an absolute path, and `barca get rows project/pipeline.py` from the parent
 directory all compute the same run hash and the same node id, relative to the project root
 (`pipeline.py:rows`, or `project/pipeline.py:rows` when the root is the parent directory).
 
-Not followed yet (an edit there does not change the hash; recompute with `--refresh-all` or
-`--refresh`):
+#### What counts as a use
 
-- classes (`from helpers import Model`): the import is recorded, but not the class body;
-- imports inside the function body (`def rows(): from helpers import clean`);
-- a module used as a value rather than through an attribute (`getattr(helpers, name)`);
-- modules above the pipeline file's directory.
+- **Functions and constants**: the definition's source, and what it uses in turn.
+- **Classes** (`from helpers import Model`, or a class in the pipeline file): the whole class is
+  hashed, its methods and class-level code, and what they use, including its base classes and
+  metaclass. Editing `Model.predict` or `Model`'s base class re-runs; editing another class in
+  the module does not.
+- **Aliases**: `from helpers import clean as c` and `import helpers as h` are followed exactly
+  like the unaliased forms.
+- **Imports inside a function or class body** (`def rows(): from helpers import clean`),
+  including in nested blocks and methods, with or without an alias: followed like a
+  module-level import, at the same precision.
+- **A module used as a value** (`getattr(helpers, name)()`, `run(helpers)`, `m = helpers`):
+  which attribute is read cannot be known statically, so the **whole module** is hashed, and
+  what its definitions use. This is deliberately conservative: any edit to that module re-runs
+  the step. It applies only when the name really is the module: a parameter, local variable,
+  loop or comprehension variable called `helpers` is not.
+
+For functions, classes, constants and `module.attr`, barca does not work out local scopes: a
+parameter called `rate` counts as a use of a module-level `rate`. That can only cause an extra
+re-run, never a stale result.
+
+#### Which file a module name means
+
+A module name is looked up exactly where the worker's `import` looks: for a pipeline file inside
+a package (every directory from the project root down to the file has an `__init__.py`), in the
+project root only; for any other pipeline file, in the file's own directory and then in the
+project root; and in the packages below those directories, with or without `__init__.py`.
+
+| Pipeline file | `from helpers import f` means | A sibling module is |
+|---|---|---|
+| `p.py` in the root | `helpers.py` in the root | `from helpers import f` |
+| `pipelines/p.py`, no `pipelines/__init__.py` | `pipelines/helpers.py` if it exists, else `helpers.py` in the root | `from helpers import f` |
+| `pkg/p.py`, with `pkg/__init__.py` | `helpers.py` in the root, never `pkg/helpers.py` | `from .helpers import f` or `from pkg.helpers import f` |
+
+So a pipeline in `pipelines/p.py` using `from shared.utils import f` follows `shared/utils.py` in
+the root, and a module beside the pipeline file shadows a same-named one in the root, as it does
+when Python imports it. The project root is the boundary (see "Where things live"): a module in
+`../shared/` outside it, or in a directory you add to `sys.path` or `PYTHONPATH` yourself, is not
+followed. As in Python, a package (`helpers/__init__.py`) wins over a module (`helpers.py`) in
+the same directory.
+
+A pipeline file can also be imported by its file name from a pipeline file in another directory
+(`a/p.py` does `from shared import f`, and `b/shared.py` is a pipeline file), because a worker
+keeps the directory of every pipeline file it has loaded on its import path. Barca follows it:
+`b/shared.py` is hashed when nothing on `a/p.py`'s own import path is a module called `shared`,
+and **as well as** that module when something is, since which of the two a worker runs depends
+on what it has loaded before. A pipeline file is never a package: `shared.sub` always means
+`sub.py` inside a `shared/` directory. Avoid the ambiguity by giving helper modules and pipeline
+files distinct names (`barca docs discovery`, "Node ids").
+
+Only files a step imports are read, each once per command. Barca never walks the project to
+look for helpers, and it never reads or hashes the standard library or installed packages,
+wherever the virtualenv is (`.venv/`, `venv/`, inside or outside the project): after upgrading
+a package, recompute with `--refresh-all` or `--refresh` (below).
+
+#### Not followed
+
+An edit in one of these does not change the hash; recompute with `--refresh-all` or `--refresh`:
+
+- modules outside the project root, and modules only a custom `sys.path` or `PYTHONPATH` entry
+  makes importable;
+- imports built at run time: `importlib.import_module(name)`, `__import__(name)`, and
+  `getattr` on anything but a module barca can see imported. Static analysis cannot follow
+  these, and barca does not run your code to plan;
+- `from helpers import *`, and names a module defines anywhere but at its top level (inside an
+  `if` or `try`, or assigned dynamically);
+- module-level constants bound by tuple unpacking (`A, B = 1, 2`), and augmented assignments to
+  a module-level name (`A += 1`): only a plain `A = ...` or `A: int = ...` is a definition;
+- a module reached through another module's `import` (`from helpers import other` where
+  `helpers.py` does `import other`): import it directly;
+- what a helper refers to only in a decorator, a default argument value, an `except` clause's
+  exception type, a `match` pattern, a set literal (`{f()}`), an assignment target
+  (`table[key()] = ...`) or a loop's `else:` block. The helper's own text is hashed, but those
+  references are not followed;
+- helpers more than six project modules away along an import chain.
+
+Two pipeline directories that each have a `helpers.py` are hashed correctly, each against its
+own, but share one `sys.path` in a worker (`barca docs discovery`, "Node ids"): give such
+helpers distinct names.
+
+#### After upgrading to 0.18
+
+Barca 0.18 started following classes, imports inside function bodies, aliased `from` imports,
+modules used as values, and root modules imported from a subdirectory. A step that uses one of
+these has a new hash, so it **recomputes once** on the first run after upgrading; its downstream
+steps recompute with it. Specifically, a step recomputes once if its function, or a helper it
+reaches, uses:
+
+- a class defined in the project (in the pipeline file or imported);
+- a project module imported inside a function or class body;
+- `from module import name as alias`, where `module` is a project module;
+- a project module as a value (`getattr(helpers, name)`, passing `helpers` along);
+- from a pipeline in a subdirectory, a module that lives in the project root;
+- a helper module with the same name as a pipeline file in another directory (both are hashed
+  now);
+- or if its pipeline file is inside a package (`pkg/__init__.py` next to it) and imports
+  project modules (`from .helpers import f`, `from pkg.helpers import f`): these now resolve
+  from the root, as they do when the step runs.
+
+One more case can recompute once: a step whose helpers import the **same name from two
+different modules outside the project** (one helper does `from numpy import array`, another
+`from jax.numpy import array`). Before 0.18 such a step had two possible hashes, picked at random
+on every run, so it missed its cache about half the time; it now has one, and recomputes once
+if its last result was recorded under the other.
+
+Every other step keeps its hash and its cached results.
 
 Barca runs exactly the source it hashed. It never runs stale bytecode for your pipeline files or
-the modules they import from the same directory tree: their `__pycache__` .pyc files are checked against a
-hash of the source, not its mtime and size, so an edit that keeps both (a same-size edit within
-one second, or a tool that pins mtimes such as Nix, Bazel, `touch -t` or `rsync -t`) still runs
-the new code. Installed packages import as usual.
+the project modules they import, from the file's directory tree or from the project root: their
+`__pycache__` .pyc files are checked against a hash of the source, not its mtime and size, so an
+edit that keeps both (a same-size edit within one second, or a tool that pins mtimes such as
+Nix, Bazel, `touch -t` or `rsync -t`) still runs the new code. Installed packages import as
+usual.
 
 Environment variables a function reads **without** declaring them are not part of the hash:
 changing one does not invalidate anything. Declare them with `@asset(env=["NAME"])`
@@ -180,6 +278,65 @@ Put an empty `barca.toml` at the top of a project to anchor it.
 Never delete files under `.barca/` to force a recompute: use `--refresh <asset>` (below), which
 also keeps the metadata DB consistent. To look at a cached result, use `barca sql` (`barca docs sql`).
 
+## A cached result whose artifact is missing
+
+A cached result is a row in `.barca/metadata.db`; its artifact is a file. The file can go
+missing while the row stays: a disk cleanup, a container restarted without a volume for
+`.barca/artifacts/`, or someone deleting the directory. Barca then computes the result again
+when, and only when, something needs to read it:
+
+```bash
+barca run publish pipeline.py                    # model ran, publish ran
+rm .barca/artifacts/pipeline.py--model/*.json
+barca run publish pipeline.py --dry-run --json   # model: "action": "run", "reason": "artifact_missing"
+barca run publish pipeline.py                    # model runs again, then publish; exit 0
+barca run publish pipeline.py                    # model is cached again
+```
+
+- **Needed** means one of: a step that is going to run takes the artifact as an input; a
+  `partitions_from` step is expanded from it; or it is the output the command returns: the
+  targets you named, or with no target the one asset whose value is `final_output` (the last
+  asset). A partitioned asset is returned as a whole, so every one of its partitions is
+  checked (one file lookup per key, a few milliseconds at 5,000 keys). Every other asset at the
+  end of a pipeline is treated like an intermediate and is not looked at.
+- **Missing** means not on this machine's disk and, with an artifact store, not in the store
+  either (`barca docs remote`). The store has to be there for that to count: if its bucket,
+  container or directory is gone, misnamed or unreachable, the run fails with exit 3 and
+  computes nothing, because then nothing is known about the artifact.
+- The step runs with `reason: "artifact_missing"` and a warning on stderr names the file:
+  `[barca] warning: pipeline.py:model: the artifact of its cached result is missing: <path>.
+  Computing it again.` Its run hash does not change, so the artifact lands at the same path and
+  nothing downstream is invalidated. If the recomputed step reads an input that is missing too,
+  that one is computed first, by the same rule. For a partitioned asset only the keys whose
+  artifact is missing run.
+- **An artifact nothing reads is not looked at.** With `model` deleted and `report` (which
+  reads it) cached, `barca get report pipeline.py` executes 0 steps and `model` stays `cached`:
+  you can prune large intermediates and keep the final outputs. `model` is computed again the
+  first time something needs it.
+- `--dry-run` and `barca status` predict the same thing: `model` is `run` / `stale` with reason
+  `artifact_missing` under `barca run publish`, and `cached` under `barca get report`.
+- Under `barca serve` a scheduled task whose input was deleted recomputes the input once, on its
+  next tick, and keeps succeeding.
+
+Known limits:
+
+- Only existence is checked. A file that is there but truncated or edited is read as it is (with
+  an artifact store, a copy that does not match its recorded hash is replaced: `barca docs
+  remote`). A directory at the artifact's path counts as present.
+- `--agent` announces each step once, with its outcome. A cached step whose artifact is not on
+  disk waits: it prints `step:<id> completed` if it is computed again, or `step:<id> cached` at
+  the end of the run if nothing needed it. The one exception is a result in a remote store
+  whose object turns out to be deleted when it is fetched: its `cached` line was already
+  printed, and the warning and a `completed` line for the same step follow
+  (`barca docs contract`).
+- A function that is not deterministic may return a different value when it is computed again;
+  cached steps downstream of it keep the results they were computed with (as after
+  `--refresh --no-cascade`).
+- A dry run does not contact a remote artifact store. A result recorded in one is predicted as
+  `cached` even if the object has since been deleted from the bucket; the real run finds out
+  when it fetches it, and computes it again. A store that is a directory is checked, and if
+  the directory itself is gone the dry run predicts `cached` where the run exits 3.
+
 ## Controlling the cache
 
 | Goal | Command |
@@ -256,9 +413,11 @@ Each step has an `action`:
 | `unknown` | Cannot be known without running: a dynamic partition (`partitions_from`) whose source has to run first to produce its keys (`reason: "partitions_unknown"`), or an asset reading a sensor with no recorded output (`reason: "sensor_output_unknown"`), and anything that depends on either. |
 
 `reason` is one of `task` and `sensor` (always run), `refresh` (named in `--refresh`),
-`refresh_cascade` (downstream of an asset named in `--refresh`), `refresh_all` (`--refresh-all`), or
+`refresh_cascade` (downstream of an asset named in `--refresh`), `refresh_all` (`--refresh-all`),
 `not_materialized` (no cached result for this code and these inputs: never run, or the code, an
-upstream or a sensor's output changed). Under `--no-cascade`, a cached step downstream of a
+upstream or a sensor's output changed), or `artifact_missing` (the result is cached, but its
+artifact is gone and something needs to read it: see "A cached result whose artifact is missing"
+above). Under `--no-cascade`, a cached step downstream of a
 refreshed asset carries a `warning` (see the refresh notes above). A step that reads a sensor is
 predicted from the sensor's last recorded output, and its `detail` says so. `summary` counts
 steps, one per partition key.
@@ -285,6 +444,42 @@ writes, and releases it while your Python runs. Processes queue instead of faili
 process waits more than 60 seconds for the lock you get an error that names the lock file;
 an `... File is locked by another process` error means something outside barca (a DB browser, a
 backup tool, an older barca) has `.barca/metadata.db` open.
+
+## While a run is going, and after one is killed
+
+A run records each step in `.barca/metadata.db` as the step finishes, not only when the run
+ends. Finished steps are written in batches, at most twice a second, so a step is recorded
+within about half a second of finishing.
+
+```bash
+barca status pipeline.py        # from another terminal: steps the running get has finished are `cached`
+barca history --json            # the run is `running`; `steps_executed` is the steps recorded so far
+```
+
+- **Progress.** `barca status` in a second terminal shows what a running `barca get` or
+  `barca run` has finished: an asset is `cached`, a partitioned asset is `partial` with its
+  `cached` / `missing` counts. A step that is still running shows its previous state.
+- **A killed run keeps what it finished.** If the process is killed (`kill -9`, out of memory, a
+  lost machine), the next `barca get` serves the recorded steps from cache and computes the rest.
+  A step is recorded only after its artifact is completely written, so a recorded step always has
+  its file. A step that finished in the last half second before the kill may not be recorded: it
+  runs again.
+- **History says so.** `barca history` reports a run whose process no longer exists as
+  `interrupted`, with `finished_at` and `elapsed_seconds` `null` (nobody saw it end) and
+  `steps_executed` at what it had recorded. Ctrl-C is different: the run stops its workers,
+  records itself and is `cancelled`.
+
+Known limits:
+
+- With shared remote state (`barca docs remote`) these apply to the machine the run is on only,
+  and not reliably: see "Limitations" there.
+- With a remote artifact store, steps are not recorded as they finish: a row is written only
+  once the artifact's upload is confirmed, which happens when the run ends. Such a run shows no
+  progress in `barca status`, and a killed one records nothing.
+- `interrupted` is decided by looking for the run's process on this machine. A run started by an
+  older barca, or on another machine, stays `running`; so does a run whose process id has since
+  been reused by another program.
+- Failed steps are recorded when the run ends, so a killed run records its successes only.
 
 ## Environments
 

@@ -83,7 +83,11 @@ Output format: --json / --pretty / -o, else BARCA_OUTPUT=json|pretty, else the t
 (TTY -> pretty, piped -> JSON). JSON is one line on stdout with status (\"success\"), run_id,
 steps_executed (0 = all cached), phases, final_output, and `steps`: what happened to each step
 (ran or cached, and why; `env` holds the values of variables the node declares with env=[...],
-secrets redacted). For parquet/pickle assets final_output is a pointer,
+secrets redacted). `warnings` is always an array: plan-time warnings for the steps this command
+planned, [] when there are none; each is {kind, node, param, message} and is also one
+`[barca] warning: ...` line on stderr. The only kind is unused_input: a step declares an input its
+function never uses (barca docs assets, \"Unused inputs\"). Warnings never change the exit code.
+--dry-run reports the same list. For parquet/pickle assets final_output is a pointer,
 {\"_barca_artifact\": {\"path\", \"format\", \"size_bytes\"}}; the Python API (barca.get)
 loads the value for you.
 Several targets (`a,b`, comma-separated, no spaces): final_output is replaced by `targets`, keyed by
@@ -93,6 +97,9 @@ Refresh: the same vocabulary as `barca run`. --refresh takes ONE comma-separated
 the cone (the target itself may be named) and also re-runs everything downstream of them;
 --no-cascade re-runs only the named ones. --refresh-all re-runs every asset in the cone.
 --no-cache is a deprecated spelling of --refresh-all: it still works and warns on stderr.
+A cached step whose artifact file is gone is computed again when something needs to read it (a
+step that runs takes it as an input, or it is a target), with reason `artifact_missing` and a
+warning on stderr. A missing artifact that nothing reads is left alone (barca docs cache).
 Targets must be assets; use `barca run` for tasks. With no target, get materializes every asset and
 sensor and skips tasks (previously it ran tasks too); stderr names the skipped tasks and the
 `barca run` command. A file with only tasks gets nothing: exit 0, empty `steps`.
@@ -123,6 +130,8 @@ Examples:
 Several targets: comma-separated, no spaces. Every target runs even if another fails (a failure
 skips only what depends on it); exit 1 if any failed. JSON output then carries `targets`, keyed by
 target, instead of `final_output` (see barca get --help, barca docs agents).
+`warnings` is always an array, as on `barca get`: plan-time warnings for the steps in the cone, such
+as an input a step never uses (barca docs assets); [] when there are none.
 
 --refresh takes ONE comma-separated list (`--refresh a,b`), never `--refresh a b`. It re-runs the
 assets you name and every asset downstream of them in the task's cone (reason `refresh_cascade`),
@@ -130,6 +139,9 @@ so fresh data reaches the task. --no-cascade re-runs only the named assets; cach
 downstream of them then do not reflect the refresh, and barca warns. A name that is not an
 upstream asset is an error. --no-cache is a deprecated spelling of --refresh-all: it still works
 and warns on stderr.
+An upstream asset that is cached but whose artifact file is gone is computed again before the task
+reads it (reason `artifact_missing`, a warning on stderr), so a deleted artifact does not fail the
+run (barca docs cache).
 The target must be a task; use `barca get` for assets. The target comes before the files:
 `barca run pipeline.py deploy` exits 2 and prints `barca run deploy pipeline.py`. Every usage
 error exits 2 and ends by pointing at `barca list` (with the files you gave, if any).
@@ -146,7 +158,10 @@ Examples:
   barca plan pipeline.py              # phases and steps that would run; nothing executes
   barca plan pipeline.py other.py     # several files form one DAG
 
-Output: always pretty-printed JSON {total_steps, phases: [{reason, streams: [{stream_id, steps}]}]}.
+Output: always pretty-printed JSON {total_steps, phases: [{reason, streams: [{stream_id, steps}]}],
+warnings}. `warnings` is always an array ([] when there are none) of {kind, node, param, message}:
+plan-time warnings such as an input a step never uses, each also one `[barca] warning: ...` line on
+stderr (barca docs assets, \"Unused inputs\").
 `reason` is an object: {\"type\": \"initial\"} or {\"type\": \"fan_in\", \"node_id\": ...}.
 Planning is static analysis: it never imports your code or reads state, so it takes no --env.
 Experimental: the layout may change between releases (barca docs contract).
@@ -226,7 +241,8 @@ Examples:
   barca status total pipeline.py --json --sample 5   # add up to 5 sample rows per json/parquet artifact
   barca status pipeline.py --env dev       # state recorded in another environment
 
-Cache state per node: cached, stale (ran before; code or inputs changed), never_run, partial
+Cache state per node: cached, stale (ran before; code or inputs changed, or its artifact file is
+gone and a run would read it: reason `artifact_missing`), never_run, partial
 (some partition keys cached), unknown (dynamic partitions not yet known) or always_runs (tasks,
 sensors), with a reason. JSON spells the states in snake_case, the same as the `summary` keys
 (the table prints never-run, always-runs). It is the same decision `--dry-run` makes.
@@ -1052,6 +1068,7 @@ fn print_failed_run(err: &barca_core::BarcaError, mode: OutputMode) {
             "failed_node": f.node,
             "error": f.summary(),
             "steps": &run.steps,
+            "warnings": &run.warnings,
         })
     );
 }
@@ -1357,6 +1374,7 @@ async fn get_cmd(
                 "phases": result.phases,
                 "final_output": final_output,
                 "steps": &result.steps,
+                "warnings": &result.warnings,
             });
             bounded::project_key(&mut out, "steps", fields);
             println!("{out}");
@@ -1446,6 +1464,7 @@ async fn run_cmd(
                 "phases": result.phases,
                 "final_output": final_output,
                 "steps": &result.steps,
+                "warnings": &result.warnings,
             });
             bounded::project_key(&mut out, "steps", fields);
             println!("{out}");
@@ -1597,6 +1616,7 @@ fn print_multi(
                 "steps_executed": result.steps_executed,
                 "phases": result.phases,
                 "steps": &result.steps,
+                "warnings": &result.warnings,
             });
             bounded::project_key(&mut run, "steps", fields);
             let run = run.to_string();
@@ -2175,17 +2195,17 @@ async fn history_cmd(
     }
     // Table header.
     println!(
-        "{:<14} {:<7} {:<9} {:>5} {:>6} {:>6} {:<20}",
+        "{:<14} {:<7} {:<11} {:>5} {:>6} {:>6} {:<20}",
         "RUN_ID", "CMD", "STATUS", "STEPS", "CACHED", "TIME", "STARTED"
     );
-    println!("{}", "-".repeat(75));
+    println!("{}", "-".repeat(77));
     for r in &runs {
         let elapsed_str = r
             .elapsed_seconds
             .map(|e| format!("{:.1}s", e))
             .unwrap_or_else(|| "-".to_string());
         println!(
-            "{:<14} {:<7} {:<9} {:>5} {:>6} {:>6} {:<20}",
+            "{:<14} {:<7} {:<11} {:>5} {:>6} {:>6} {:<20}",
             r.run_id,
             r.command,
             r.status,

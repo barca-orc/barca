@@ -85,15 +85,18 @@ pub trait Integration: Send + Sync {
 }
 
 /// The table of integrations: `"name" => constructor`. A constructor reads its own settings
-/// from the environment and returns `Err` with what is missing or malformed.
+/// from the environment. It returns `Ok(None)` when those settings switch the integration
+/// off, and `Err` with what is missing or malformed.
 macro_rules! integrations {
     ($($name:literal => $ctor:path),+ $(,)?) => {
         /// Names accepted in `BARCA_TELEMETRY`.
         pub const KNOWN: &[&str] = &[$($name),+];
 
-        fn build(name: &str) -> Option<Result<Box<dyn Integration>, String>> {
+        fn build(name: &str) -> Option<Result<Option<Box<dyn Integration>>, String>> {
             match name {
-                $($name => Some($ctor().map(|i| Box::new(i) as Box<dyn Integration>)),)+
+                $($name => Some(
+                    $ctor().map(|on| on.map(|i| Box::new(i) as Box<dyn Integration>)),
+                ),)+
                 _ => None,
             }
         }
@@ -125,46 +128,63 @@ pub fn configured() -> Vec<(String, Box<dyn Integration>)> {
     let mut out = Vec::new();
     for name in parse_names(&raw) {
         match build(&name) {
-            Some(Ok(integration)) => out.push((name, integration)),
-            Some(Err(e)) => warn_once(format!("telemetry '{name}' is off: {e}")),
-            None => warn_once(format!(
-                "unknown telemetry integration '{name}' in BARCA_TELEMETRY (known: {})",
-                KNOWN.join(", ")
-            )),
+            Some(Ok(Some(integration))) => out.push((name, integration)),
+            // Switched off by its own settings: nothing to send, nothing to say.
+            Some(Ok(None)) => {}
+            Some(Err(e)) => {
+                crate::warnings::warn_once(&format!("telemetry '{name}' is off: {e}"));
+            }
+            None => {
+                crate::warnings::warn_once(&format!(
+                    "unknown telemetry integration '{name}' in BARCA_TELEMETRY (known: {})",
+                    KNOWN.join(", ")
+                ));
+            }
         }
     }
     out
 }
 
-/// A configuration warning, printed once per process: `barca serve` configures telemetry
-/// for every run it starts, and a bad setting should not be repeated on every tick.
-fn warn_once(message: String) {
-    static SEEN: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
-        std::sync::OnceLock::new();
-    let seen = SEEN.get_or_init(Default::default);
-    if seen
-        .lock()
-        .map(|mut s| s.insert(message.clone()))
-        .unwrap_or(true)
-    {
-        eprintln!("[barca] warning: {message}");
-    }
-}
-
 /// Send `run` to every integration, each bounded by [`EXPORT_TIMEOUT`].
+///
+/// A delivery failure is reported when it starts and when it ends, not on every run:
+/// `barca serve` exports a run per tick, and a backend that is down for a day should not
+/// write a line every few minutes.
 pub async fn export(integrations: &[(String, Box<dyn Integration>)], run: &RunReport) {
     for (name, integration) in integrations {
         let outcome = tokio::time::timeout(EXPORT_TIMEOUT, integration.export(run)).await;
         let problem = match outcome {
-            Ok(Ok(())) => continue,
+            Ok(Ok(())) => {
+                if failing()
+                    .lock()
+                    .map(|mut f| f.remove(name))
+                    .unwrap_or(false)
+                {
+                    eprintln!("[barca] telemetry '{name}' is receiving runs again");
+                }
+                continue;
+            }
             Ok(Err(e)) => e,
             Err(_) => format!("no reply within {}s", EXPORT_TIMEOUT.as_secs()),
         };
-        eprintln!(
-            "[barca] warning: telemetry '{name}' did not receive run {}: {problem}",
-            run.run_id
-        );
+        if failing()
+            .lock()
+            .map(|mut f| f.insert(name.clone()))
+            .unwrap_or(true)
+        {
+            eprintln!(
+                "[barca] warning: telemetry '{name}' did not receive run {}: {problem}",
+                run.run_id
+            );
+        }
     }
+}
+
+/// Integrations whose last delivery in this process failed.
+fn failing() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static FAILING: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    FAILING.get_or_init(Default::default)
 }
 
 #[cfg(test)]

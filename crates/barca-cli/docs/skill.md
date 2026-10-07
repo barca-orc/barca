@@ -66,7 +66,9 @@ barca get total pipeline.py --refresh-all         # recompute an asset's whole c
 - **stdout** is the result: JSON whenever stdout is not a terminal; pass `--json` in scripts
   anyway. `get`/`run` print one line: `status` (`success`/`failed`), `run_id`,
   `steps_executed`, `steps` (each `ran`/`cached` and why), `final_output` (for parquet/pickle a
-  pointer, `{"_barca_artifact": {"path", "format", "size_bytes"}}`).
+  pointer, `{"_barca_artifact": {"path", "format", "size_bytes"}}`), and `warnings`: always an
+  array, `[]` or plan-time warnings such as an input a step never uses (also one
+  `[barca] warning: ...` line each on stderr; fix them, they cost load time).
 - Your steps' own `print` output goes to stderr, so stdout is only the result.
 - **stderr** has progress and errors. In JSON mode its **last line** is the error envelope
   `{"error", "code", "kind", "remediation"}`, plus `node`, `traceback`, `artifact_dir` for a
@@ -80,7 +82,8 @@ barca get total pipeline.py --refresh-all         # recompute an asset's whole c
 | 3    | `infra`       | barca or its environment (DB, workers, I/O)     | retry                |
 | 130  | `cancelled`   | interrupted                                     | re-run               |
 
-Steps that finished before a failure or cancel stay cached: re-running resumes.
+Steps that finished before a failure, a cancel or a kill stay cached: re-running resumes.
+While a run is going, `barca status` from another process shows the steps it has finished.
 
 ## Agent flags and jq
 

@@ -68,6 +68,13 @@ collapsed. If the project configures logging, nothing from `logging` is collapse
 warnings included; `print` output, other log levels and errors are never collapsed
 (`barca docs agents`, "Repeated warnings").
 
+`plan`, `get`, `run` and `--dry-run` also report plan-time warnings about the steps they plan: one
+`[barca] warning: ...` line each on stderr, and a `warnings` array in their JSON output (`[]` when
+there are none). The one warning so far is `unused_input`: a step declares an input its function
+never uses, which is still loaded and still part of the cache key. Use the input, remove it, or
+rename it with a leading `_` (ordering only, never flagged). Warnings do not change the exit code
+(`barca docs assets`, "Unused inputs"; `barca docs contract`, "Plan warnings").
+
 > **Behavior change:** `get` and `run` used to print JSON by default even in a terminal.
 > They now print the human summary there; scripts and agents that capture stdout still get JSON.
 > The Python API (`barca.get`, `barca.history`, ...) always requests JSON.
@@ -220,6 +227,13 @@ When more runs exist than are shown, the JSON has `"truncated": true`, the `tota
 the table prints the same hint as one line on stderr. See [Bounded output](#bounded-output). Each
 run's `files` is an array of the `.py` files it was given.
 
+A run's `status` is `running`, `success`, `failed`, `cancelled` or `interrupted`. A run records
+each step as it finishes, so a `running` run already counts them in `steps_executed`, and
+`barca status` from another terminal shows them as `cached`. A run whose process was killed is
+`interrupted` (no `finished_at`); the next `barca get` reuses the steps it had recorded. See
+`barca docs cache`, "While a run is going, and after one is killed", and the shared-state
+[limitations](/reference/remote-storage/#limitations).
+
 ## stats
 
 Show aggregated execution statistics for a single asset: total materializations, timing
@@ -341,7 +355,7 @@ spells it in snake_case, exactly like the `summary` keys; the table prints `neve
 | state | meaning | reasons |
 |---|---|---|
 | `cached` | a successful result matches this code and these inputs | `materialized` |
-| `stale` | ran before, but would run again | `changed`, `upstream_stale`, `failed` |
+| `stale` | ran before, but would run again | `changed`, `upstream_stale`, `failed`, `artifact_missing` |
 | `never_run` | no successful materialization recorded | `no_record`, `failed` |
 | `partial` | partitioned, some keys cached | `partitions_missing` |
 | `unknown` | dynamic partitions whose source has not run | `partitions_unknown` |
@@ -349,6 +363,9 @@ spells it in snake_case, exactly like the `summary` keys; the table prints `neve
 
 `changed` means the run hash differs from the last materialization: this function's code or its
 upstream outputs changed. barca stores only the combined hash, so it cannot say which.
+`artifact_missing` means the result is recorded but its artifact file is gone and a run would
+have to read it, so it would be computed again; a missing artifact that nothing reads leaves the
+node `cached` (`barca docs cache`, "A cached result whose artifact is missing").
 
 **Last materialization** is the most recent execution recorded in the metadata DB (success or
 failure): `status`, `created_at` (UTC), `elapsed_seconds`, `run_hash`, `artifact`, `format`,
@@ -375,6 +392,9 @@ missing_keys}` (up to 20 keys). `last_materialization` is the most recently run 
 Each node also lists `env`, the environment variables it declares with `env=[...]`. Like `list`,
 status shows at most 100 nodes unless you pass `--limit N` or `--all`; the `summary` still counts
 every node, and the JSON reports `total` and `truncated` (see [Bounded output](#bounded-output)).
+
+Status reads the metadata DB as it is at that moment: while a `barca get` is running, the steps it
+has finished already show as `cached` (a partitioned asset as `partial`).
 
 Status writes nothing: no `.barca` directory is created and no run is recorded. An unknown target
 is a usage error (exit 2). See `barca docs status`.

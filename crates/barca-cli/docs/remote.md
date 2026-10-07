@@ -93,8 +93,9 @@ reference: https://barca.sh/reference/config/
 ```
 
 `<env>` is `default` unless you pass `--env` (`barca docs cache`). Barca reads and writes objects
-and reads their metadata; it never deletes or lists. In practice that is `s3:GetObject`,
-`s3:PutObject` and `s3:ListBucket` on S3, the Storage Object User role on GCS (replacing the
+and reads their metadata; it never deletes, and it lists the bucket only once, before it
+recomputes a result whose artifact is missing (see "Failures"). In practice that is
+`s3:GetObject`, `s3:PutObject` and `s3:ListBucket` on S3, the Storage Object User role on GCS (replacing the
 history object needs delete permission there), and Storage Blob Data Contributor on Azure.
 
 Two machines finishing runs at the same time do not lose history: the second detects the
@@ -186,14 +187,40 @@ exceeds `transfer_timeout` fails as stalled and is not retried.
 - **Upload failed**: the run exits 3 and names the step. The step gets a `failed` row with
   `error_type = 'UploadError'`, no artifact path, and the attempt count; it recomputes on
   the next run. `barca stats target pipeline.py` shows the failure.
-- **Cached artifact missing from the store** (deleted, or a different bucket): the run exits
-  3 with `could not fetch ... cached artifact(s)`. Recompute with
-  `barca get target pipeline.py --refresh-all`.
+- **Cached artifact missing from the store** (the object was deleted, and there is no copy in
+  `.barca/artifacts/` either): if something needs to read it, its step is computed again and
+  uploaded, with `reason: "artifact_missing"` and a warning on stderr; the run does not fail.
+  If nothing reads it, it stays cached and is not recomputed (`barca docs cache`, "A cached
+  result whose artifact is missing"). A local copy is enough: a store that is unavailable does
+  not lose a cache hit whose file is in `.barca/artifacts/`.
+- **The store itself is gone** (the bucket or container was deleted, its name is misspelled,
+  the directory is not mounted, or the endpoint answers "not found" to everything): every
+  object then looks missing, so before computing anything again barca lists the bucket,
+  container or store directory, once per run. If that fails the run exits 3 with
+  `could not fetch N cached artifact(s) from the artifact store: the store at <uri> is not
+  there or cannot be listed`. Nothing is recomputed, nothing is uploaded, and no bucket,
+  container or directory is created.
+- **Credentials that can read and write but not list**: that listing is refused, and the same
+  error says so instead of "not found": `listing '<bucket>' is not permitted ... barca needs
+  s3:ListBucket on the bucket` (on GCS `storage.objects.list`, on Azure the Storage Blob Data
+  Reader or Contributor role). Exit 3; grant the permission, or recompute with `--refresh-all`.
+- **Cached artifact that cannot be fetched** for any other reason (permission or
+  authentication errors, a store that cannot be reached, a stalled transfer): the run exits 3
+  with `could not fetch ... cached artifact(s)`, naming each one and the store's error. Fix
+  the access, or recompute with `barca get target pipeline.py --refresh-all`.
+- **How long an unreachable store takes to fail.** A refused or dropped connection counts as
+  transient, so a transfer gets up to 4 attempts, and inside each attempt the cloud SDK
+  retries on its own first: measured with default settings, about 12 seconds per attempt for
+  S3, 90 seconds for Azure and 4 minutes for GCS. An attempt that reaches `transfer_timeout`
+  (default 600 seconds) is abandoned and not retried. So the wait is at most 4 times the
+  smaller of those two, and never unbounded; with `transfer_timeout = 5` an unreachable store
+  fails a run in about 5 seconds on every backend. Lower it where a fast failure matters.
 - **Stalled store**: lower `transfer_timeout` to fail faster; raise it if single artifacts
   legitimately take longer than 10 minutes to move.
 
 `.barca/artifacts/` doubles as a local cache of the store and is never pruned automatically;
-deleting it is safe (anything needed later is downloaded again).
+deleting it is safe (anything needed later is downloaded again, or computed again if it is no
+longer in the store).
 
 Using a GCS emulator (e.g. fake-gcs-server) with gcsfs 2026.10 or later: set
 `GCSFS_EXPERIMENTAL_ZB_HNS_SUPPORT=false`. gcsfs's experimental mode calls a gRPC API the
@@ -216,6 +243,19 @@ the copies while the objects are unchanged (`barca docs sql`).
 ## Limitations
 
 - `barca serve` does not share history yet; set `BARCA_STATE=off` for it.
+- The shared history is updated once, when a run ends. A run records each finished step in the
+  local copy as it goes (`barca docs cache`, "While a run is going, and after one is killed"), but
+  other machines see none of it until the run ends, and never see a run that was killed. With a
+  remote artifact store a run records nothing early: a step is recorded once its upload is
+  confirmed, when the run ends.
+- On the machine a run is on, `barca status` during the run and resuming after `kill -9` can be
+  relied on only while no other machine updates the shared history in the meantime:
+  every `barca get`, `barca run`, `--dry-run` and `barca status` starts by replacing the local
+  copy with the shared one. After a run is killed, the next run on that machine can also
+  overwrite history other machines added in the meantime (result files are not touched;
+  those steps run again). If a run was killed and other machines are active, delete
+  `.barca/metadata.db` and `.barca/metadata.db-wal` on that machine before the next run: it
+  then starts from the shared history alone, and recomputes what the killed run had finished.
 - `barca status` does not describe a remote json or pickle result larger than 16 MB, and
   `barca sql` downloads a whole artifact before querying it.
 - `.barca/artifacts/` has no size cap (see Failures).

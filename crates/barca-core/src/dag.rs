@@ -722,6 +722,7 @@ mod tests {
             return_type: None,
             parallel_calls: Vec::new(),
             env: Vec::new(),
+            unused_inputs: Vec::new(),
         }
     }
 

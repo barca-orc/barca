@@ -336,7 +336,10 @@ pub fn build_provided_inputs(
 /// (`duckdb.DuckDBPyRelation`, `pl.LazyFrame`). One eager consumer needs the
 /// whole artifact, so its upstream is left out.
 pub fn lazily_read_inputs(phase: &Phase) -> HashSet<String> {
-    let base = |id: &str| id.split_once('[').map_or(id.to_string(), |(b, _)| b.to_string());
+    let base = |id: &str| {
+        id.split_once('[')
+            .map_or(id.to_string(), |(b, _)| b.to_string())
+    };
     let mut lazy = HashSet::new();
     let mut eager = HashSet::new();
     for step in phase.streams.iter().flat_map(|s| &s.steps) {

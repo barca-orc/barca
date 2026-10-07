@@ -22,3 +22,9 @@ targets.<name>.summary : object
 targets.<name>.summary.cached : integer
 targets.<name>.summary.unknown : integer
 targets.<name>.summary.will_run : integer
+warnings : array
+warnings[] : object
+warnings[].kind : string
+warnings[].message : string
+warnings[].node : string
+warnings[].param : string

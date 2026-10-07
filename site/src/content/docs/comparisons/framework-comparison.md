@@ -159,7 +159,7 @@ Barca's approach means you can look at ANY function in isolation and know its in
 ```python
 @asset(inputs={"f0": feat_0, "f1": feat_1, "f2": feat_2, "f3": feat_3, "f4": feat_4})
 def merge(f0, f1, f2, f3, f4):
-    return {"combined": f0["features"] + f1["features"] + ...}
+    return {"combined": [x for f in (f0, f1, f2, f3, f4) for x in f["features"]]}
 ```
 No special fan-in syntax. Dependencies are dependencies.
 

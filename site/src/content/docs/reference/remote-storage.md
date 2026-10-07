@@ -144,6 +144,19 @@ the copies while the objects are unchanged (`barca docs sql`).
 ## Limitations
 
 - `barca serve` does not share history yet; set `BARCA_STATE=off` for it.
+- The shared history is updated once, when a run ends. A run records each finished step in the
+  local copy as it goes (`barca docs cache`, "While a run is going, and after one is killed"), but
+  other machines see none of it until the run ends, and never see a run that was killed. With a
+  remote artifact store a run records nothing early: a step is recorded once its upload is
+  confirmed, when the run ends.
+- On the machine a run is on, `barca status` during the run and resuming after `kill -9` can be
+  relied on only while no other machine updates the shared history in the meantime:
+  every `barca get`, `barca run`, `--dry-run` and `barca status` starts by replacing the local
+  copy with the shared one. After a run is killed, the next run on that machine can also
+  overwrite history other machines added in the meantime (result files are not touched;
+  those steps run again). If a run was killed and other machines are active, delete
+  `.barca/metadata.db` and `.barca/metadata.db-wal` on that machine before the next run: it
+  then starts from the shared history alone, and recomputes what the killed run had finished.
 - `barca status` does not describe a remote json or pickle result larger than 16 MB, and
   `barca sql` downloads a whole artifact before querying it.
 - The local artifact directory has no size cap (see "Local-first artifacts" below).
@@ -193,7 +206,14 @@ same fsspec backends and credentials as everything else:
 - **Fetch** — a cache hit recorded by another machine is downloaded to its
   local path just before the first step that reads it eagerly runs. Cached
   intermediates that nothing in the run reads are never downloaded — a fully
-  cached `barca get` fetches only the final output. A parquet result that
+  cached `barca get` fetches only the final output. A needed artifact that is
+  neither on disk nor in the store (the object was deleted) has its step
+  computed again and uploaded, reported with `reason: "artifact_missing"`.
+  That requires the store itself to be there: barca lists the bucket,
+  container or store directory once before recomputing anything, and a store
+  that is gone, misnamed or unreachable exits 3 with nothing recomputed or
+  created. Any other fetch failure (permissions, a stalled transfer) exits 3
+  as well. A parquet result that
   every reader in a phase takes as `duckdb.DuckDBPyRelation` or `pl.LazyFrame`
   is not downloaded either: those steps read it in place (see "How steps read
   inputs from the store" above).

@@ -342,12 +342,47 @@ class TestErrors:
         r = helper.reply()
         assert r["type"] == "error" and r["id"] == 1
         assert "FileNotFoundError" in r["message"]
+        # Said to be missing, so the coordinator recomputes the step instead of failing (#252).
+        assert r["missing"] is True
         assert not (tmp_path / "x").exists()
 
         src = tmp_path / "ok.bin"
         src.write_bytes(b"ok")
         helper.request({"type": "put", "id": 2, "local": str(src), "remote": "memory://ok/x"})
         assert _sized(helper.reply()) == {"type": "done", "id": 2, "size_bytes": 2}
+
+    def test_a_probe_succeeds_only_when_the_store_is_there(self, helper, tmp_path):
+        """What lets the coordinator tell a missing object from a store that is gone (#252)."""
+        store = tmp_path / "store"
+        (store / "default" / "artifacts").mkdir(parents=True)
+        helper.request({"type": "probe", "id": 1, "root": str(store / "default" / "artifacts")})
+        assert helper.reply() == {
+            "type": "done",
+            "id": 1,
+            "size_bytes": 0,
+            "fetched": False,
+            "mismatch": False,
+        }
+
+        gone = tmp_path / "unmounted" / "default" / "artifacts"
+        helper.request({"type": "probe", "id": 2, "root": str(gone)})
+        r = helper.reply()
+        assert r["type"] == "error" and r["id"] == 2
+        assert "FileNotFoundError" in r["message"]
+        assert not gone.exists() and not gone.parent.exists(), "a probe must create nothing"
+
+    def test_a_probe_of_an_object_store_lists_its_bucket(self, helper, tmp_path):
+        import fsspec
+
+        fs = fsspec.filesystem("memory")
+        fs.pipe("/probe-bucket/proj/artifacts/n/h.json", b"1")
+        # The bucket is there, even though this root prefix holds nothing.
+        helper.request({"type": "probe", "id": 1, "root": "memory://probe-bucket/other/artifacts"})
+        assert helper.reply()["type"] == "done"
+        helper.request({"type": "probe", "id": 2, "root": "memory://no-such-bucket/proj/artifacts"})
+        r = helper.reply()
+        assert r["type"] == "error" and "FileNotFoundError" in r["message"]
+        assert not fs.exists("/no-such-bucket"), "a probe must create nothing"
 
     def test_missing_local_put_errors(self, helper, tmp_path):
         helper.request(
@@ -393,6 +428,7 @@ class TestErrors:
                 "id": 5,
                 "message": "ConnectionError: unreachable",
                 "attempts": 3,
+                "missing": False,
             }
         finally:
             h.close()
@@ -412,6 +448,8 @@ class TestErrors:
             h.request({"type": "put", "id": 1, "local": str(src), "remote": "memory://r/a"})
             r = h.reply()
             assert r["type"] == "error" and r["attempts"] == 1
+            # Denied is not "missing": the object may well be there.
+            assert r["missing"] is False
             assert calls == [1]
         finally:
             h.close()
@@ -504,6 +542,21 @@ class TestHttpStatusClassification:
     )
     def test_client_errors_are_permanent(self, tmp_path, monkeypatch, exc):
         assert self._attempts(tmp_path, monkeypatch, exc) == 1
+
+    @pytest.mark.parametrize(
+        ("exc", "missing"),
+        [
+            (FileNotFoundError("no such key"), True),  # what s3fs, adlfs and gcsfs raise
+            (_HttpError("not found", code=404), True),
+            (_HttpError("AuthenticationFailed", status_code=403), False),
+            (PermissionError("denied"), False),
+            (ConnectionError("unreachable"), False),
+            (_HttpError("busy", status_code=503), False),
+        ],
+        ids=["file-not-found", "http-404", "http-403", "permission", "connection", "http-503"],
+    )
+    def test_only_an_object_that_does_not_exist_is_missing(self, exc, missing):
+        assert _transfer._is_missing(exc) is missing
 
     @pytest.mark.parametrize(
         "exc",

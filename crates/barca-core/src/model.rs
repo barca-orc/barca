@@ -430,6 +430,10 @@ pub struct ExtractedNode {
     /// Their values are read at plan time and folded into the run hash; see [`crate::envdeps`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub env: Vec<String>,
+    /// Data inputs the function body never uses, found by static analysis while parsing
+    /// (see [`crate::unused_inputs`]). Reported as plan warnings; not part of any hash.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unused_inputs: Vec<String>,
 }
 
 impl ExtractedNode {
