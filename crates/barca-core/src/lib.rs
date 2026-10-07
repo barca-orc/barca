@@ -15,6 +15,7 @@ pub mod io_loop;
 pub mod model;
 pub mod parse;
 pub mod planner;
+pub mod project_modules;
 pub mod protocol;
 mod recover;
 pub mod sql;
