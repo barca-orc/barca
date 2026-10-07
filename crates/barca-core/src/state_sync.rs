@@ -264,12 +264,19 @@ async fn pull_into(
             )),
         })?;
     if !out.status.success() {
-        return Err(BarcaError::Other(format!(
-            "shared state pull from {uri} failed: {}\n\
-             Fix the connection or credentials (barca docs remote), or set BARCA_STATE=off to \
-             run with local history only.",
-            helper_cause(&out.stderr)
-        )));
+        let cause = helper_cause(&out.stderr);
+        return Err(BarcaError::Other(match not_a_file(uri, &cause) {
+            Some(what) => format!(
+                "shared state pull from {uri} failed: {what}\n\
+                 Remove or rename that directory in the store (barca does not change it), or \
+                 set BARCA_STATE=off to run with local history only."
+            ),
+            None => format!(
+                "shared state pull from {uri} failed: {cause}\n\
+                 Fix the connection or credentials (barca docs remote), or set \
+                 BARCA_STATE=off to run with local history only."
+            ),
+        }));
     }
     let parsed: serde_json::Value = serde_json::from_slice(&out.stdout)
         .map_err(|e| BarcaError::Other(format!("state pull: bad helper output: {e}")))?;
@@ -416,6 +423,15 @@ async fn run_helper(
     Err(why)
 }
 
+/// When a state helper failed because a directory sits where the shared history file belongs
+/// (`cause` is its error), what to say instead of the cause: it is neither a connection nor a
+/// credentials problem.
+fn not_a_file(uri: &str, cause: &str) -> Option<String> {
+    cause
+        .starts_with("IsADirectoryError")
+        .then(|| format!("{uri} is a directory, not the shared history file ({cause})."))
+}
+
 /// The reason a state helper failed: its last `error: ...` line (what `python -m barca._state`
 /// prints), else its last non-empty line. Library warnings printed before it (google-auth's
 /// quota-project notice, deprecation warnings) are dropped so they never reach the error.
@@ -492,12 +508,20 @@ async fn upload(
         return Ok(None);
     }
     if !out.status.success() {
-        return Err(BarcaError::Other(format!(
-            "shared state push to {uri} failed: {}\n\
-             Results were computed but the shared history was not updated: re-run, or set \
-             BARCA_STATE=off (barca docs remote).",
-            helper_cause(&out.stderr)
-        )));
+        let cause = helper_cause(&out.stderr);
+        return Err(BarcaError::Other(match not_a_file(uri, &cause) {
+            Some(what) => format!(
+                "shared state push to {uri} failed: {what}\n\
+                 Results were computed but the shared history was not updated. Remove or \
+                 rename that directory in the store (barca does not change it) and re-run, \
+                 or set BARCA_STATE=off (barca docs remote)."
+            ),
+            None => format!(
+                "shared state push to {uri} failed: {cause}\n\
+                 Results were computed but the shared history was not updated: re-run, or \
+                 set BARCA_STATE=off (barca docs remote)."
+            ),
+        }));
     }
     let parsed: serde_json::Value = serde_json::from_slice(&out.stdout)
         .map_err(|e| BarcaError::Other(format!("state push: bad helper output: {e}")))?;

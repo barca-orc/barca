@@ -591,9 +591,14 @@ exceeds `transfer_timeout` fails as stalled and is not retried.
 
 - **A directory where a local copy belongs**: not a store problem and not an error. The store's
   copy is fetched and the directory is moved aside, never deleted (`barca docs cache`, "A
-  directory at an artifact's path"). A directory at an object's path inside a store that is a
-  shared directory is different: barca changes nothing in the store except its own objects, so
-  the transfer fails with exit 3 (`IsADirectoryError`, naming the path) until it is removed.
+  directory at an artifact's path"). If barca may not rename it (no write permission on the
+  directory that holds it), the run exits 3 and says so, naming the path.
+- **A directory at an object's path in the store** (a store that is a shared directory): barca
+  changes nothing in a store but its own objects, so the fetch or the upload fails with exit
+  3 (`IsADirectoryError`, naming the path) and the error says what works: remove or rename the
+  directory there. Recomputing with `--refresh-all` does not help; the upload meets the same
+  directory. The same goes for a directory at `state/metadata.db`: the pull fails with
+  `<uri> is a directory, not the shared history file`.
 
 `.barca/artifacts/` doubles as a local cache of the store and is never pruned automatically;
 deleting it is safe (anything needed later is downloaded again, or computed again if it is no

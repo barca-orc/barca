@@ -671,12 +671,16 @@ An artifact is one file. A directory at an artifact's path under `.barca/artifac
 store problem and not an error: the result is treated as missing, the store's copy is fetched
 (or the step is computed again), and the directory is moved aside to
 `<run_hash>.<ext>.moved-aside`, with its contents, never deleted. An empty directory is removed;
-a symlink is replaced without touching its target. `barca docs cache`, "A directory at an
-artifact's path", has the full rule.
+a symlink is replaced without touching its target. If barca may not rename the directory (no
+write permission on the directory that holds it), the run exits 3 and says so, naming the path.
+`barca docs cache`, "A directory at an artifact's path", has the full rule.
 
 A directory at an object's path inside a store that is a shared directory is different: barca
-changes nothing in the store except its own objects, so the transfer fails with exit 3
-(`IsADirectoryError`, naming the path) until it is removed.
+changes nothing in a store but its own objects, so the fetch or the upload fails with exit 3
+(`IsADirectoryError`, naming the path), and the error says what works: remove or rename the
+directory there. Recomputing with `--refresh-all` does not help; the upload meets the same
+directory. A directory at `state/metadata.db` fails the pull with `<uri> is a directory, not
+the shared history file`.
 
 ## Remote sinks
 

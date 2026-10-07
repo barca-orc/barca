@@ -352,7 +352,8 @@ nothing anywhere else:
 - a directory at a `@sink` path fails that sink (`[barca] SINK FAILED: ... IsADirectoryError`)
   and is left as it is; the asset itself still succeeds (`barca docs sinks`);
 - a directory at an object's path in an artifact store that is a shared directory fails the
-  transfer with exit 3, naming the path, and is left as it is (`barca docs remote`).
+  fetch or the upload with exit 3, naming the path, and is left as it is. The error says to
+  remove or rename it there; `--refresh-all` does not help (`barca docs remote`).
 
 Known limits:
 

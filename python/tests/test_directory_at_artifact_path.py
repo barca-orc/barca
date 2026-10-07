@@ -271,5 +271,52 @@ def test_a_directory_in_the_store_is_an_infra_error_and_is_left_alone(shared):
     assert envelope["kind"] == "infra"
     assert "could not fetch 1 cached artifact" in envelope["error"], envelope
     assert str(stored) in json.dumps(envelope), envelope
+    # The remedy that works: recomputing would meet the same directory on upload.
+    assert "Remove or rename it there" in envelope["remediation"], envelope
+    assert "--refresh-all" not in json.dumps(envelope), envelope
     assert (stored / "theirs").is_dir()
     assert sorted(p.name for p in stored.parent.iterdir()) == [stored.name]
+
+
+def test_a_directory_in_the_store_fails_the_upload_the_same_way(shared, tmp_path):
+    """The upload side: the object of a result that is about to be stored is a directory."""
+    store, reader = shared
+    (stored,) = store.glob("default/artifacts/*--numbers/*.json")
+    stored.unlink()
+    (stored / "theirs").mkdir(parents=True)
+
+    proc = cli(reader, "get", "numbers", "--refresh", "numbers", "--json", store=store)
+
+    assert proc.returncode == 3, proc.stderr
+    envelope = json.loads(proc.stderr.strip().splitlines()[-1])
+    assert envelope["kind"] == "infra"
+    text = json.dumps(envelope)
+    assert "1 artifact upload(s) failed" in text and str(stored) in text, envelope
+    assert "IsADirectoryError" in text and "Remove or rename it there" in text, envelope
+    assert (stored / "theirs").is_dir()
+    assert sorted(p.name for p in stored.parent.iterdir()) == [stored.name]
+    # Removed there, the same command stores the result.
+    (stored / "theirs").rmdir()
+    stored.rmdir()
+    ok(cli(reader, "get", "numbers", "--refresh", "numbers", "--json", store=store))
+    assert json.loads(stored.read_text()) == [3, 4]
+
+
+def test_a_directory_where_the_shared_history_belongs_says_so(tmp_path):
+    """Not "fix the connection or credentials": the object is a directory."""
+    store = tmp_path / "store"
+    state = store / "default" / "state" / "metadata.db"
+    (state / "theirs").mkdir(parents=True)
+    root = tmp_path / "project"
+    root.mkdir()
+    (root / "pipeline.py").write_text(PIPELINE)
+
+    proc = cli(root, "get", "numbers", "--json", store=store)
+
+    assert proc.returncode == 3, proc.stderr
+    envelope = json.loads(proc.stderr.strip().splitlines()[-1])
+    assert envelope["kind"] == "infra"
+    assert f"{state} is a directory, not the shared history file" in envelope["error"], envelope
+    assert "Remove or rename that directory in the store" in envelope["remediation"], envelope
+    assert "credentials" not in json.dumps(envelope), envelope
+    assert (state / "theirs").is_dir()

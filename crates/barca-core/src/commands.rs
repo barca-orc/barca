@@ -1210,14 +1210,43 @@ impl StoreSync {
             .iter()
             .map(|f| format!("  {} ({}): {}", f.key, f.store, f.message))
             .collect();
+        let messages: Vec<&str> = failed.iter().map(|f| f.message.as_str()).collect();
         Err(format!(
-            "could not fetch {} cached artifact(s) from the artifact store:\n{}\n\
-             Re-run with --refresh-all to recompute them.",
+            "could not fetch {} cached artifact(s) from the artifact store:\n{}\n{}",
             failed.len(),
-            detail.join("\n")
+            detail.join("\n"),
+            transfer_remedy(&messages, "Re-run with --refresh-all to recompute them.")
         ))
     }
 }
+
+/// What to do about failed transfers, given the helper's error messages; `otherwise` when
+/// nothing more specific is known.
+///
+/// A directory at an object's path in a store that is a shared directory is not fixed by
+/// recomputing: the upload would meet the same directory. Barca changes nothing in a store
+/// but its own objects, so the directory has to be removed there. A local directory that
+/// could not be moved aside says what to do in its own message.
+fn transfer_remedy(messages: &[&str], otherwise: &str) -> String {
+    if messages.iter().any(|m| m.starts_with("IsADirectoryError")) {
+        "A directory sits where the artifact's object belongs in the store. Remove or rename \
+         it there (barca changes nothing in a store but its own objects), then run the \
+         command again."
+            .to_string()
+    } else if messages
+        .iter()
+        .any(|m| m.starts_with(BLOCKED_ARTIFACT_PATH))
+    {
+        "Then run the command again.".to_string()
+    } else {
+        otherwise.to_string()
+    }
+}
+
+/// How an error starts when a directory at an artifact path could not be moved aside
+/// (`barca._storage.ArtifactPathError`): the state of barca's own artifact directory, not a
+/// fault of the step that was writing there.
+const BLOCKED_ARTIFACT_PATH: &str = "ArtifactPathError";
 
 fn fmt_bytes(n: u64) -> String {
     const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
@@ -3175,11 +3204,16 @@ async fn execute(
                 });
                 detail.push(format!("  {} ({}): {}", f.key, f.store, f.message));
             }
+            let messages: Vec<&str> = report.failures.iter().map(|f| f.message.as_str()).collect();
             transfer_error.get_or_insert(format!(
                 "{} artifact upload(s) failed — those steps were not recorded and \
-                 will recompute next run:\n{}",
+                 will recompute next run:\n{}{}",
                 report.failures.len(),
-                detail.join("\n")
+                detail.join("\n"),
+                match transfer_remedy(&messages, "") {
+                    remedy if remedy.is_empty() => remedy,
+                    remedy => format!("\n{remedy}"),
+                }
             ));
         }
     }
