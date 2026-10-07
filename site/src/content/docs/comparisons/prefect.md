@@ -3,7 +3,7 @@ title: "Barca vs Prefect"
 description: Install size, steps to a first result, run output, error output and caching for the same pipeline, measured on 2026-06-10 with barca 0.2.0 and Prefect 3.7.4.
 ---
 
-Last measured: 2026-06-10, with barca 0.2.0 and Prefect 3.7.4, on macOS (Apple Silicon), Python 3.14, both installed from PyPI with `uv`. Not re-run since; the current barca release is 0.18.0. Re-run tracked in [#277](https://github.com/barca-orc/barca/issues/277).
+Last measured: 2026-06-10, with barca 0.2.0 and Prefect 3.7.4, on macOS (Apple Silicon), Python 3.14, both installed from PyPI with `uv`. Not re-run since. Re-run tracked in [#277](https://github.com/barca-orc/barca/issues/277).
 
 Everything on this page describes those two versions on that date unless a note says otherwise.
 Prefect has had releases since, and so has barca: where barca's behavior has changed, a note
