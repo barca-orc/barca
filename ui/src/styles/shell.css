@@ -142,7 +142,15 @@
   color: var(--text-faint);
   font-size: 12px;
   cursor: text;
+  /* Shrinks before it pushes the actions off-screen; the placeholder then
+     truncates on its one line instead of wrapping out of the box, and the
+     shortcut hint gives way once there is no room for both. */
+  min-width: 0;
+  overflow: hidden;
+  container-type: inline-size;
 }
+.barca-search svg, .barca-search kbd { flex: none; }
+.barca-search span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .barca-search kbd {
   margin-left: auto;
   font-family: var(--font-mono);
@@ -153,6 +161,7 @@
   border-radius: 3px;
   padding: 1px 5px;
 }
+@container (max-width: 110px) { .barca-search kbd { display: none; } }
 .barca-top-actions { margin-left: auto; display: flex; align-items: center; gap: 3px; }
 .barca-divider-v { width: 1px; height: 22px; background: var(--border-default); margin: 0 6px; }
 
@@ -375,17 +384,20 @@
   color: var(--text-muted);
 }
 .barca-table-tools { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding-bottom: 12px; }
-.barca-search {
+/* The table's search box. One focus ring, on the box: the input inside would
+   otherwise get the global :focus-visible glow as well. */
+.barca-table-search {
   display: inline-flex; align-items: center; gap: 7px;
   height: 30px; padding: 0 10px; min-width: 260px;
   border: 1px solid var(--border-default); border-radius: var(--radius-sm);
   background: var(--bg-inset); color: var(--text-muted);
 }
-.barca-search:focus-within { border-color: var(--signal); }
-.barca-search input {
+.barca-table-search:focus-within { border-color: var(--signal); box-shadow: var(--focus-glow); }
+.barca-table-search input {
   flex: 1; border: 0; outline: 0; background: transparent;
   color: var(--text-default); font-family: var(--font-mono); font-size: var(--text-sm);
 }
+.barca-table-search input:focus-visible { box-shadow: none; }
 .barca-chips { display: flex; gap: 6px; flex-wrap: wrap; }
 .barca-chips button {
   display: inline-flex; align-items: center; gap: 6px;
@@ -417,7 +429,9 @@
   font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--status-failed);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.barca-table-empty { color: var(--text-muted); font-family: var(--font-mono); font-size: var(--text-sm); }
+/* The message carries its own top spacing: the scroll area has none (see
+   .barca-table-scroll). */
+.barca-table-empty { margin-top: var(--space-4); color: var(--text-muted); font-family: var(--font-mono); font-size: var(--text-sm); }
 
 /* sortable headers */
 .barca-sort {
@@ -500,3 +514,7 @@
   margin: 0 8px 2px 0; padding: 0; border: 0; background: none; cursor: pointer;
   font-family: var(--font-mono); font-size: var(--text-xs); color: var(--signal); text-decoration: underline dotted;
 }
+
+/* A table's scroll area starts flush with its sticky header: any top padding
+   leaves a strip above the pinned header where scrolled rows show through. */
+.barca-table-scroll { padding-top: 0; }
