@@ -63,6 +63,8 @@ _PERMANENT = (
     ValueError,
     TypeError,
     ImportError,
+    # A local directory in the way that cannot be moved: retrying changes nothing.
+    _storage.ArtifactPathError,
 )
 
 
@@ -112,6 +114,9 @@ def _staged_get(remote: str, local: str, expected: str | None) -> dict:
     out of the way, never deleted (`_storage.make_way`).
     """
     dest = Path(local)
+    # Before anything is staged beside it: if the directory cannot be moved, that is the
+    # error to report, not a temp file that could not be created next to it.
+    _storage.make_way(dest)
     with _storage.staged_beside(dest) as tmp:
         _storage.get_file(remote, tmp)
         digest = _sha256(tmp)

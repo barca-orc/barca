@@ -180,6 +180,105 @@ def test_a_symlink_to_a_directory_is_replaced_and_its_target_is_untouched(projec
     assert (elsewhere / "precious").read_text() == "keep"
 
 
+def test_each_directory_found_there_gets_a_name_of_its_own(project):
+    """`.moved-aside`, then `-2`, `-3`: an earlier one is never overwritten or merged into."""
+    path = artifact(project, "numbers")
+    for n, marker in enumerate(["first", "second", "third"], start=1):
+        path.unlink()
+        path.mkdir()
+        (path / marker).write_text(marker)
+        assert ok(cli(project, "get", "numbers", "--json"))["final_output"] == [3, 4]
+        suffix = ".moved-aside" + ("" if n == 1 else f"-{n}")
+        assert (path.with_name(path.name + suffix) / marker).read_text() == marker
+    assert siblings(path) == [
+        path.name,
+        path.name + ".moved-aside",
+        path.name + ".moved-aside-2",
+        path.name + ".moved-aside-3",
+    ]
+    assert (moved_aside(path) / "first").read_text() == "first"
+
+
+def test_a_dangling_symlink_is_replaced_by_the_artifact(project, tmp_path):
+    path = artifact(project, "numbers")
+    path.unlink()
+    path.symlink_to(tmp_path / "nowhere.json")
+    doc = ok(cli(project, "get", "numbers", "--json"))
+    assert steps(doc) == {"numbers": ("ran", "artifact_missing")}
+    assert path.is_file() and not path.is_symlink()
+    assert not (tmp_path / "nowhere.json").exists()
+
+
+def test_a_symlink_to_a_file_is_read_as_the_artifact_and_a_refresh_replaces_the_link(
+    project, tmp_path
+):
+    """A link to a file is a file: it is read like any artifact that is there (only whether
+    it is a file is checked). Writing the artifact replaces the link, never its target."""
+    path = artifact(project, "numbers")
+    target = tmp_path / "elsewhere.json"
+    target.write_text("[5, 5]")
+    path.unlink()
+    path.symlink_to(target)
+
+    doc = ok(cli(project, "get", "numbers", "--json"))
+    assert steps(doc) == {"numbers": ("cached", None)} and doc["final_output"] == [5, 5]
+    assert path.is_symlink()
+
+    doc = ok(cli(project, "get", "numbers", "--refresh", "numbers", "--json"))
+    assert doc["final_output"] == [3, 4]
+    assert path.is_file() and not path.is_symlink()
+    assert target.read_text() == "[5, 5]"
+
+
+def test_concurrent_runs_meeting_the_same_directory_all_succeed(project):
+    """Four runs at once, each needing the artifact a directory sits on. One moves it; none
+    moves a file another has just written; the directory's contents are kept once."""
+    path = artifact(project, "numbers")
+    put_directory(path)
+    env = {k: v for k, v in os.environ.items() if not k.startswith("BARCA_")}
+    procs = [
+        subprocess.Popen(
+            [_find_binary(), "get", "numbers", "--json"],
+            cwd=project,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for _ in range(4)
+    ]
+    results = [p.communicate(timeout=300) for p in procs]
+    assert [p.returncode for p in procs] == [0] * 4, [err for _, err in results]
+    assert all(json.loads(out)["final_output"] == [3, 4] for out, _ in results)
+    assert path.is_file() and json.loads(path.read_text()) == [3, 4]
+    aside = [p for p in path.parent.iterdir() if ".moved-aside" in p.name]
+    assert [p.name for p in aside] == [moved_aside(path).name]
+    assert aside[0].is_dir() and (aside[0] / "inner" / "x").read_text() == "mine"
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root may rename in any directory")
+def test_a_directory_barca_may_not_move_is_an_infrastructure_error_not_a_failed_step(project):
+    path = artifact(project, "numbers")
+    put_directory(path)
+    path.parent.chmod(0o555)
+    try:
+        proc = cli(project, "get", "numbers", "--json")
+    finally:
+        path.parent.chmod(0o755)
+
+    assert proc.returncode == 3, proc.stderr
+    envelope = json.loads(proc.stderr.strip().splitlines()[-1])
+    assert envelope["kind"] == "infra" and envelope["code"] == 3, envelope
+    text = envelope["error"] + " " + (envelope["remediation"] or "")
+    assert "pipeline.py:numbers" in text and str(path.name) in text, envelope
+    assert "PermissionError" in text and "write permission on" in text, envelope
+    assert "Nothing was deleted" in text and "Fix the error in" not in text, envelope
+    assert "traceback" not in envelope
+    assert (path / "inner" / "x").read_text() == "mine"
+    # With the permission back, the same command succeeds.
+    assert ok(cli(project, "get", "numbers", "--json"))["final_output"] == [3, 4]
+
+
 SINK_PIPELINE = """
 from barca import asset, sink
 
@@ -320,3 +419,23 @@ def test_a_directory_where_the_shared_history_belongs_says_so(tmp_path):
     assert "Remove or rename that directory in the store" in envelope["remediation"], envelope
     assert "credentials" not in json.dumps(envelope), envelope
     assert (state / "theirs").is_dir()
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root may rename in any directory")
+def test_a_local_directory_barca_may_not_move_fails_the_fetch_with_the_same_advice(shared):
+    store, reader = shared
+    path = artifact(reader, "numbers")
+    put_directory(path)
+    path.parent.chmod(0o555)
+    try:
+        proc = cli(reader, "get", "numbers", "--json", store=store)
+    finally:
+        path.parent.chmod(0o755)
+
+    assert proc.returncode == 3, proc.stderr
+    envelope = json.loads(proc.stderr.strip().splitlines()[-1])
+    text = envelope["error"] + " " + (envelope["remediation"] or "")
+    assert envelope["kind"] == "infra" and str(path) in text, envelope
+    assert "could not be moved aside (PermissionError" in text, envelope
+    assert "write permission on" in text and "--refresh-all" not in text, envelope
+    assert (path / "inner" / "x").read_text() == "mine"

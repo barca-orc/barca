@@ -602,7 +602,9 @@ exceeds `transfer_timeout` fails as stalled and is not retried.
 
 `.barca/artifacts/` doubles as a local cache of the store and is never pruned automatically;
 deleting it is safe (anything needed later is downloaded again, or computed again if it is no
-longer in the store).
+longer in the store). Directories barca moved out of an artifact's way
+(`*.moved-aside*`, see `barca docs cache`) are in there too and go with it; barca never deletes
+them itself.
 
 Using a GCS emulator (e.g. fake-gcs-server) with gcsfs 2026.10 or later: set
 `GCSFS_EXPERIMENTAL_ZB_HNS_SUPPORT=false`. gcsfs's experimental mode calls a gRPC API the

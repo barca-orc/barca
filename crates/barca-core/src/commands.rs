@@ -3025,6 +3025,19 @@ async fn execute(
                 continue;
             }
             let node_id = item.step_id.display();
+            if error_msg.starts_with(BLOCKED_ARTIFACT_PATH) {
+                // The step ran; its result could not be written because barca's artifact
+                // directory is in a state barca cannot repair. Infrastructure (exit 3), not a
+                // failed step: there is nothing in the step to fix.
+                let why = error_msg
+                    .strip_prefix(BLOCKED_ARTIFACT_PATH)
+                    .map_or(error_msg, |m| m.trim_start_matches([':', ' ']));
+                transfer_error.get_or_insert(format!(
+                    "the result of {node_id} could not be written: {why}"
+                ));
+                failed_bases.insert(item.step_id.base_id().to_string());
+                continue;
+            }
             if agent_mode {
                 eprintln!("{}", failed_step_line(&node_id, error_msg));
             }
@@ -3072,7 +3085,10 @@ async fn execute(
 
         // Stop after collecting partial results if the pool itself failed, or if a step failed
         // and there is only one target (several targets keep going around the failure).
-        if phase_error.is_some() || (step_failure.is_some() && !keep_going) {
+        if phase_error.is_some()
+            || transfer_error.is_some()
+            || (step_failure.is_some() && !keep_going)
+        {
             break;
         }
     }

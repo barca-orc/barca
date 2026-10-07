@@ -18,6 +18,7 @@ into the filesystem constructor as an escape hatch.
 """
 
 import datetime
+import errno
 import json
 import os
 import shutil
@@ -170,6 +171,15 @@ def discard_staged() -> None:
 MOVED_ASIDE_SUFFIX = ".moved-aside"
 
 
+class ArtifactPathError(OSError):
+    """A directory sits where an artifact file belongs and could not be moved out of the way.
+
+    Not an error of the step that was writing its result: barca's own artifact directory is
+    in a state barca cannot repair (the coordinator reports it as an infrastructure failure,
+    exit 3). The message names the path, the reason and what to do.
+    """
+
+
 def make_way(dest: "str | Path") -> "Path | None":
     """Clear a directory that sits where barca is about to put the artifact file ``dest``.
 
@@ -181,9 +191,18 @@ def make_way(dest: "str | Path") -> "Path | None":
     - any other directory is renamed to a sibling, ``<name>.moved-aside`` (``-2``, ``-3``,
       ... if that exists), with everything in it, and a warning on stderr names both paths.
 
+    Only a directory is ever moved. Another process may be installing the same artifact at
+    this moment (two runs, or the transfer helper and a worker), so what is at ``dest`` can
+    change between looking and acting: both operations used here refuse anything that is not
+    a directory at the moment they act (``rmdir``, and a rename of ``dest/``, which the
+    kernel resolves only if it is a directory). A regular file, the artifact another process
+    just put there, is never renamed.
+
     A symlink is left alone, whatever it points to: the rename that installs the artifact
-    replaces the link itself and never reaches its target. Returns where a directory was
-    moved to, or None.
+    replaces the link itself and never reaches its target. (It is told apart before acting;
+    barca's own processes never create one, so only a third party making a symlink there in
+    that instant could have it followed.) Returns where a directory was
+    moved to, or None. Raises ArtifactPathError when a directory is there and cannot be moved.
     """
     dest = Path(dest)
     if dest.is_symlink() or not dest.is_dir():
@@ -191,18 +210,22 @@ def make_way(dest: "str | Path") -> "Path | None":
     try:
         dest.rmdir()
         return None
-    except FileNotFoundError:
-        return None  # another process cleared it first
-    except OSError:
-        pass  # not empty
+    except (FileNotFoundError, NotADirectoryError):
+        return None  # another process cleared it, or put the artifact there, first
+    except OSError as exc:
+        if exc.errno not in (errno.ENOTEMPTY, errno.EEXIST):
+            raise _blocked(dest, exc) from exc
     for n in range(1, 1000):
         aside = dest.with_name(dest.name + MOVED_ASIDE_SUFFIX + ("" if n == 1 else f"-{n}"))
         if os.path.lexists(aside):
             continue
         try:
-            os.rename(dest, aside)
-        except FileNotFoundError:
-            return None  # another process moved it first
+            # The trailing separator makes this a rename of a directory or nothing.
+            os.rename(f"{dest}{os.sep}", aside)
+        except (FileNotFoundError, NotADirectoryError):
+            return None  # another process moved it, or put the artifact there, first
+        except OSError as exc:
+            raise _blocked(dest, exc) from exc
         print(
             f"[barca] warning: {dest} is a directory, not an artifact. Moved it, with its "
             f"contents, to {aside}; barca does not use it, delete it if you do not need it.",
@@ -210,7 +233,17 @@ def make_way(dest: "str | Path") -> "Path | None":
             flush=True,
         )
         return aside
-    raise FileExistsError(f"{dest} is a directory and could not be moved aside")
+    raise _blocked(dest, FileExistsError("every .moved-aside name beside it is taken"))
+
+
+def _blocked(dest: Path, exc: OSError) -> ArtifactPathError:
+    return ArtifactPathError(
+        f"a directory sits where the artifact {dest} belongs and could not be moved aside "
+        f"({type(exc).__name__}: {exc}).\n"
+        f"Barca renames such a directory to {dest.name}{MOVED_ASIDE_SUFFIX} and needs write "
+        f"permission on {dest.parent} for that. Grant it, or move or remove the directory "
+        "yourself, then run the command again. Nothing was deleted."
+    )
 
 
 def _copy_local(src: "str | Path", dst: "str | Path") -> None:

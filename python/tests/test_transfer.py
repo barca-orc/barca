@@ -334,6 +334,97 @@ class TestMakeWay:
         assert not d.exists()
         assert (tmp_path / "h.parquet.moved-aside" / "part-0").is_dir()
 
+    def test_a_file_is_never_moved_even_if_it_looked_like_a_directory(self, tmp_path, monkeypatch):
+        # Another process installed the artifact after this one looked: the check said
+        # "directory", the thing there now is the artifact.
+        dest = tmp_path / "h.json"
+        dest.write_text("the artifact")
+        monkeypatch.setattr(type(dest), "is_dir", lambda self: True)
+        assert _storage.make_way(dest) is None
+        assert dest.read_text() == "the artifact"
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["h.json"]
+
+    def test_an_artifact_installed_between_the_look_and_the_rename_is_left_alone(
+        self, tmp_path, monkeypatch, capfd
+    ):
+        dest = tmp_path / "h.json"
+        (dest / "inner").mkdir(parents=True)
+        real = os.path.lexists
+
+        def another_process_gets_there_first(path):
+            # Runs just before the rename: the directory is moved away and the artifact
+            # installed, as a concurrent `make_way` and install would do.
+            if dest.is_dir():
+                dest.rename(tmp_path / "moved-by-the-other")
+                dest.write_text("the artifact")
+            return real(path)
+
+        monkeypatch.setattr(os.path, "lexists", another_process_gets_there_first)
+        assert _storage.make_way(dest) is None
+        assert dest.read_text() == "the artifact"
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["h.json", "moved-by-the-other"]
+        assert "is a directory" not in capfd.readouterr().err
+
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root may rename in any directory")
+    def test_a_directory_that_cannot_be_moved_is_an_error_that_says_what_to_do(self, tmp_path):
+        parent = tmp_path / "node"
+        dest = parent / "h.json"
+        (dest / "inner").mkdir(parents=True)
+        parent.chmod(0o555)
+        try:
+            with pytest.raises(_storage.ArtifactPathError) as raised:
+                _storage.make_way(dest)
+        finally:
+            parent.chmod(0o755)
+        message = str(raised.value)
+        assert str(dest) in message and "PermissionError" in message
+        assert f"write permission on {parent}" in message and "Nothing was deleted" in message
+        assert (dest / "inner").is_dir()
+
+    def test_processes_racing_to_install_one_artifact_never_move_a_file(self, tmp_path):
+        """Six processes, each making way and installing the artifact 50 times while a
+        seventh keeps putting a directory back. Whatever the interleaving: nothing that was
+        moved aside is a file, and no directory's contents are lost."""
+        dest = tmp_path / "node" / "h.json"
+        dest.parent.mkdir()
+        code = (
+            "import os, sys\n"
+            "from pathlib import Path\n"
+            "from barca import _storage\n"
+            "dest = Path(sys.argv[1])\n"
+            "for i in range(50):\n"
+            "    _storage.make_way(dest)\n"
+            "    with _storage.staged_beside(dest) as tmp:\n"
+            "        tmp.write_text('artifact')\n"
+            "        try:\n"
+            "            os.replace(tmp, dest)\n"
+            "        except (IsADirectoryError, PermissionError):\n"
+            "            pass  # a directory came back in between: the next round moves it\n"
+        )
+        spoil = (
+            "import sys\n"
+            "from pathlib import Path\n"
+            "dest = Path(sys.argv[1])\n"
+            "for i in range(40):\n"
+            "    try:\n"
+            "        dest.unlink()\n"
+            "        (dest / f'made-{i}').mkdir(parents=True)\n"
+            "    except OSError:\n"
+            "        pass\n"
+        )
+        procs = [
+            subprocess.Popen([sys.executable, "-c", code, str(dest)], stderr=subprocess.PIPE)
+            for _ in range(6)
+        ]
+        procs.append(subprocess.Popen([sys.executable, "-c", spoil, str(dest)]))
+        errors = [p.communicate(timeout=120)[1] for p in procs]
+        assert [p.returncode for p in procs] == [0] * 7, errors
+        aside = [p for p in dest.parent.iterdir() if ".moved-aside" in p.name]
+        assert all(p.is_dir() for p in aside), [p.name for p in aside if not p.is_dir()]
+        # Every warning names a directory that was really moved.
+        warned = b"".join(e for e in errors if e).count(b"is a directory, not an artifact")
+        assert warned == len(aside)
+
 
 class ProcessHelper:
     """`python -m barca._transfer` as its own process, as the coordinator runs it.

@@ -343,11 +343,29 @@ Barca then has to put a file where the directory is. It never deletes what it fi
 - a **symlink** is replaced by the artifact file. Only the link goes; what it pointed to is not
   touched.
 
-The run goes on and exits 0. Barca never reads a `.moved-aside` directory again; deleting it is
-up to you.
+The run goes on and exits 0. Only a directory is ever moved: an artifact file that another
+barca process wrote in the same instant is never renamed.
 
-This applies only inside barca's own artifact directory (`.barca/artifacts/`). Barca moves
-nothing anywhere else:
+**Where they are, and getting rid of them.** A moved-aside directory stays beside the artifact,
+in `.barca/artifacts/<node>/` (under `.barca/envs/<env>/artifacts/` for a named environment).
+Barca never reads one again, never lists them in `barca status` or any other command, and never
+deletes one: they are yours, and they take disk space until you remove them. To see them all:
+
+```
+find .barca -name '*.moved-aside*'
+```
+
+Delete the ones you do not need. Deleting the whole of `.barca/artifacts/` to reclaim disk
+removes them with everything else (results are computed again, or downloaded again from an
+artifact store, when something needs them).
+
+**If barca may not move it.** Renaming needs write permission on the directory that holds the
+artifact. Without it the run exits 3 (an infrastructure error, not a failed step) and names the
+path and the permission; nothing is deleted. Grant the permission, or move or remove the
+directory yourself, and run the command again.
+
+This applies only inside barca's own artifact directory (`.barca/artifacts/`). Barca moves,
+renames and replaces nothing anywhere else:
 
 - a directory at a `@sink` path fails that sink (`[barca] SINK FAILED: ... IsADirectoryError`)
   and is left as it is; the asset itself still succeeds (`barca docs sinks`);
@@ -359,7 +377,8 @@ Known limits:
 
 - Only whether the artifact is a file is checked. A file that is there but truncated or edited
   is read as it is (with an artifact store, a copy that does not match its recorded hash is
-  replaced: `barca docs remote`).
+  replaced: `barca docs remote`). A symlink to a file counts as that file and is read; writing
+  the artifact again replaces the link.
 - `--agent` announces each step once, with its outcome. A cached step whose artifact is not on
   disk waits: it prints `step:<id> completed` if it is computed again, or `step:<id> cached` at
   the end of the run if nothing needed it. The one exception is a result in a remote store
