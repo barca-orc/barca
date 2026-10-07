@@ -232,12 +232,17 @@ replaced. The download must be all of these:
 If any of these fails, the command stops before any step runs:
 
 ```
-the shared history s3://my-bucket/barca/my-project/default/state/metadata.db is not a database barca can use: its integrity check failed: ...
+the shared history s3://my-bucket/barca/my-project/default/state/metadata.db is not a database barca can use: its integrity check found 12 problems, the first: Page 17: never used.
 The local history .barca/metadata.db was left as it was, and nothing was uploaded.
+To repair it, follow `barca docs remote`, section "If the shared history is damaged": ...
+What the integrity check found:
+  Page 17: never used
+  ...
 ```
 
 It exits 3 (in JSON mode the first line is the envelope's `error` and the rest its
-`remediation`). The local copy, with everything recorded only on this machine, is exactly as
+`remediation`). The first line always says what is wrong in one line; when an integrity check
+found several problems, up to 20 of them are listed after the instructions. The local copy, with everything recorded only on this machine, is exactly as
 it was; nothing was written to the bucket; and every command that pulls (`barca get`,
 `barca run`, `--dry-run`, `barca status`) fails the same way on every machine until the object
 is repaired. Nothing repairs it automatically. `BARCA_STATE=off` runs with local history only in
@@ -247,8 +252,12 @@ To repair it, either put back an earlier version of the object (bucket versionin
 backup), after which each machine adds what that version lacks with its next run; or rebuild it
 from a machine's local copy:
 
-1. Find the machine whose local history is the most complete. `barca history --all` reads the
-   local copy and pulls nothing, so it works while the shared history is damaged.
+1. Find the machine whose local history is the most complete and intact. `barca history --all`
+   reads the local copy and pulls nothing, so it works while the shared history is damaged.
+   Check that copy before you upload it, because the upload is not checked:
+   `sqlite3 .barca/metadata.db "PRAGMA integrity_check"` must print `ok`. If it does not, the
+   local copy is damaged too; follow "Upgrading a project whose shared history was damaged by
+   0.17.1 or earlier" below, which also applies to damage from any other cause.
 2. With no barca command running anywhere, remove the damaged object from the bucket (or move
    it aside), with your cloud's own tool. For example:
 
@@ -282,8 +291,10 @@ cp .barca/metadata.db.prev .barca/metadata.db
 rm -f .barca/metadata.db-wal .barca/metadata.db-shm
 ```
 
-The second line matters: the `-wal` file belongs to the database you are replacing. After
-this:
+The second line matters: the `-wal` file belongs to the database you are replacing. Going
+back loses what this machine recorded after that pull and has not uploaded since (runs made
+with `BARCA_STATE=off`, a killed run, a run whose upload failed): those rows are only in the
+file you overwrite, so copy it somewhere first if you may want them. After this:
 
 - with `BARCA_STATE=off`, barca works on that history alone;
 - with shared history on, the next pull downloads the shared history again and keeps what
@@ -292,6 +303,90 @@ this:
   run `barca get`: the run uploads the restored history. Other machines still hold the runs
   they pulled or made, and add them back with their next run; to drop those for good, reset
   those machines as described under "Resetting or rolling back the shared history".
+
+**Upgrading a project whose shared history was damaged by 0.17.1 or earlier.** Up to 0.17.1 a
+pull could leave the previous database's `-wal` file beside the one it downloaded, and the two
+were then read as one database. A project where runs were killed, or where several machines
+ran close together, can have been left with a damaged history, shared and local alike. Those
+versions kept running on it (with errors such as `short read on page 33` now and then). From
+0.18.0 a pull checks what it downloads, so on such a project every `barca get`, `barca run`,
+`--dry-run` and `barca status` exits 3 with one of:
+
+```
+... is not a database barca can use: its integrity check found 4 problems, the first: Page 17: never used.
+... is not a database barca can use: its integrity check found 12 problems, the first: Page 17: never used.
+... is not a database barca can use: it cannot be read as a database: I/O error: short read on page 33: expected 4096 bytes, got 0.
+```
+
+(the second lists `row 29 missing from index idx_mat_run` among its problems).
+
+One machine may not get the message: the one that uploaded last holds the same bytes as the
+shared history, so its pull changes nothing and is let through. Its copy is damaged all the
+same, and step 1 finds it. In what we reproduced with 0.17.1 the local copies were damaged in
+the same way as the shared history, so rebuilding the shared history from a local copy as
+described above uploads the damage again. Either salvage the copies or start the history again.
+Both keep every result file. Do this with no barca command running on any machine.
+
+*Salvage what can be read.* This needs the `sqlite3` command, version 3.29 or later, built
+with `.recover` (the one shipped with macOS and with current Linux distributions is).
+
+1. On each machine, in the project directory, check the local copy:
+
+   ```
+   sqlite3 .barca/metadata.db "PRAGMA integrity_check"
+   ```
+
+   A single line `ok` means this copy is intact: leave it. Anything else, an error included,
+   means it is damaged.
+2. On each machine with a damaged copy, recover what can be read into a new database and put
+   it in place (the damaged file is kept as `metadata.db.damaged`):
+
+   ```
+   sqlite3 .barca/metadata.db ".recover" | sqlite3 .barca/metadata.recovered.db
+   sqlite3 .barca/metadata.recovered.db <<'SQL'
+   DROP TABLE IF EXISTS lost_and_found;
+   INSERT OR IGNORE INTO "__turso_internal_seq___turso_internal_autoincrement_runs" VALUES (1,0,1,1,1,9223372036854775807,0);
+   INSERT OR IGNORE INTO "__turso_internal_seq___turso_internal_autoincrement_materializations" VALUES (1,0,1,1,1,9223372036854775807,0);
+   INSERT OR IGNORE INTO "__turso_internal_seq___turso_internal_autoincrement_logs" VALUES (1,0,1,1,1,9223372036854775807,0);
+   PRAGMA integrity_check;
+   SQL
+   mv .barca/metadata.db .barca/metadata.db.damaged
+   rm -f .barca/metadata.db-wal .barca/metadata.db-shm .barca/metadata.db.base
+   mv .barca/metadata.recovered.db .barca/metadata.db
+   BARCA_STATE=off barca history --all
+   ```
+
+   The second command must end with `ok`, and the last must list the machine's runs. (The three
+   `INSERT` lines put back a bookkeeping row the database engine needs, in case it was on a
+   page that could not be read; they do nothing when it is there.) If either fails, this copy
+   cannot be salvaged: remove it with the command under "Start the history again" and go on;
+   the machine then takes the history from the others.
+3. Remove the damaged shared object from the bucket, or move it aside, with your cloud's tool.
+4. On the machine whose salvaged history lists the most runs, run any `barca get`. It reports
+   `no shared state yet — this run will create it` and uploads its history as the shared one.
+5. On every other machine, carry on: its next command pulls the new shared history and keeps
+   what only its own copy has, and its next `barca get` or `barca run` uploads that.
+
+What can be lost: rows that were on pages that could not be read. A step whose row is lost
+runs once more; a run whose row is lost is missing from `barca history`. Where the damage was
+only pages that nothing refers to or an index that disagreed with its table, nothing is lost.
+
+*Start the history again.* When there is no `sqlite3`, or the salvage fails, or the history is
+not worth keeping: remove the shared object from the bucket and, on each machine,
+
+```
+rm -f .barca/metadata.db .barca/metadata.db-wal .barca/metadata.db-shm .barca/metadata.db.base
+```
+
+(for a named environment, the same files under `.barca/envs/<env>/`). The next `barca get`
+creates a new shared history. What is lost: all of `barca history` and `barca stats`, and every
+record of what is cached, so each step runs once more on the first run that needs it (its
+result file is then written again; the old files are not deleted).
+
+*Without shared history.* A local `.barca/metadata.db` that was damaged on its own (the same
+check as step 1 says so; barca may fail with `short read on page`, `database disk image is
+malformed`, or stop with an internal error of the database engine) is repaired the same way:
+step 2 alone, or the `rm -f` line to start again.
 
 `barca get --json` reports a result as it does without a store: json values inline, parquet and
 pickle as a pointer (`{"_barca_artifact": {"path", ...}}`) to the copy in `.barca/artifacts/`.

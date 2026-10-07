@@ -230,12 +230,16 @@ anything is written to it:
    it belongs to this rule.
 
 An invalid blob is an error of the shared state, not of the connection: the command exits
-3 with a message that names the object, says which rule failed and how to put a good
-history back, and nothing is changed: not the local database, its log or its unpushed
+3 with a message whose first line names the object and says which rule failed (for an
+integrity check: how many problems, and the first), followed by where the repair is
+described and then the list of problems, and nothing is changed: not the local database, its log or its unpushed
 rows, not `<db>.prev`, not the base record, not the blob. No command repairs or
 overwrites an invalid blob on its own; the repair is manual (restore an earlier version
 of the object, or remove it and run on the machine with the most complete local database,
-which then creates it by the bootstrap rule). A failure of the machine while checking
+which then creates it by the bootstrap rule; an upload is not validated, so that database
+must be intact itself. Histories damaged by 0.17.1 and earlier, where the local copies are
+damaged too, are salvaged with SQLite's `.recover` or started again: `barca docs remote`
+has both procedures). A failure of the machine while checking
 (disk full, a file that cannot be written) is reported as that, not as an invalid blob.
 
 After the carry and the fold, the file about to be swapped in is checked again to be a
@@ -255,7 +259,8 @@ name is published after the swap, not before, because until the swap the two nam
 one file: published earlier, a pull that then failed would leave `<db>.prev` following
 every later write to the live database. A pull killed between the swap and that last
 rename has replaced the database without updating `<db>.prev` (it holds the generation
-before); the leftover `.prev.tmp` is removed by the next pull.
+before); the leftover `.prev.tmp` is removed by the next pull. If that last rename fails,
+the swap stands and a warning on stderr says the replaced database was not kept.
 
 `<db>.prev` is replaced only when the swap brings in something new. Not when there was no
 barca history to replace (no local database, an empty file, a file that is not a

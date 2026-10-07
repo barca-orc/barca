@@ -11,6 +11,7 @@ object itself are exactly as they were. "Valid" is defined in
 """
 
 import json
+import os
 import shutil
 import sqlite3
 import subprocess
@@ -492,3 +493,279 @@ def test_an_upload_is_a_valid_shared_history_and_keeps_nothing(machines, state_u
     assert out.returncode == 0, out.stderr
     assert NOT_USABLE not in out.stderr
     assert b.local_runs() == runs
+
+
+# ─── a history that barca 0.17.1 or earlier damaged ──────────────────────────
+#
+# Up to 0.17.1 a pull could leave the old write-ahead log beside the pulled file (#221). The
+# databases that came out of that, shared and local alike, look like one of these two (seen in
+# histories produced with the 0.17.1 wheel by killing runs between other machines' runs):
+#
+# - pages that belong to no table ("Page 17: never used"), sometimes with indexes that no
+#   longer match their table; every row can still be read;
+# - a table that points at pages past the end of the file ("invalid page number 33", "short
+#   read on page 33"); part of it cannot be read.
+#
+# Both are made here from a real history, deterministically, rather than by replaying the race.
+
+
+def with_orphan_pages(db: bytes) -> bytes:
+    """`db` with two pages nothing refers to, counted in its header."""
+    pages = len(db) // PAGE + 2
+    return db[:28] + pages.to_bytes(4, "big") + db[32:] + bytes(2 * PAGE)
+
+
+def with_lost_tail(db: bytes) -> bytes:
+    """`db` without its last three pages, its header agreeing with the shorter length."""
+    pages = len(db) // PAGE - 3
+    return db[:28] + pages.to_bytes(4, "big") + db[32 : pages * PAGE]
+
+
+DAMAGE = {"pages nothing refers to": with_orphan_pages, "pages past the end": with_lost_tail}
+
+# `barca docs remote`, "Upgrading a project whose shared history was damaged by 0.17.1 or
+# earlier": the commands of step 2, run in the project directory.
+SALVAGE = [
+    'sqlite3 .barca/metadata.db ".recover" | sqlite3 .barca/metadata.recovered.db',
+    """sqlite3 .barca/metadata.recovered.db <<'SQL'
+DROP TABLE IF EXISTS lost_and_found;
+INSERT OR IGNORE INTO "__turso_internal_seq___turso_internal_autoincrement_runs" VALUES (1,0,1,1,1,9223372036854775807,0);
+INSERT OR IGNORE INTO "__turso_internal_seq___turso_internal_autoincrement_materializations" VALUES (1,0,1,1,1,9223372036854775807,0);
+INSERT OR IGNORE INTO "__turso_internal_seq___turso_internal_autoincrement_logs" VALUES (1,0,1,1,1,9223372036854775807,0);
+PRAGMA integrity_check;
+SQL""",
+    "mv .barca/metadata.db .barca/metadata.db.damaged",
+    "rm -f .barca/metadata.db-wal .barca/metadata.db-shm .barca/metadata.db.base",
+    "mv .barca/metadata.recovered.db .barca/metadata.db",
+    "BARCA_STATE=off barca history --all --json",
+]
+# The same section, "Start the history again": the command for each machine.
+START_AGAIN = (
+    "rm -f .barca/metadata.db .barca/metadata.db-wal .barca/metadata.db-shm .barca/metadata.db.base"
+)
+
+
+def sqlite3_can_recover() -> bool:
+    if shutil.which("sqlite3") is None:
+        return False
+    out = subprocess.run(
+        ["sqlite3", ":memory:", ".recover"], capture_output=True, text=True, timeout=30
+    )
+    return out.returncode == 0 and "BEGIN" in out.stdout
+
+
+needs_sqlite3 = pytest.mark.skipif(
+    not sqlite3_can_recover(), reason="the sqlite3 command with .recover is not installed"
+)
+
+
+def manual(machine: Machine, *commands: str) -> str:
+    """Run the manual's commands in a project directory, with this build's `barca` first on
+    PATH; the output of the last one."""
+    path = f"{Path(_find_binary()).parent}{os.pathsep}{os.environ['PATH']}"
+    out = ""
+    for command in commands:
+        done = subprocess.run(
+            command,
+            shell=True,
+            cwd=machine.root,
+            capture_output=True,
+            text=True,
+            env={**machine.env, "PATH": path},
+        )
+        assert done.returncode == 0, (command, done.stderr)
+        out = done.stdout
+    return out
+
+
+def looks_damaged(machine: Machine) -> bool:
+    """Step 1 of the manual: anything but a single `ok` (an error included) means damaged."""
+    done = subprocess.run(
+        'sqlite3 .barca/metadata.db "PRAGMA integrity_check"',
+        shell=True,
+        cwd=machine.root,
+        capture_output=True,
+        text=True,
+    )
+    return done.stdout.strip() != "ok"
+
+
+def fold_log(db: Path) -> None:
+    """Fold the database's write-ahead log into its main file, which is then all of it."""
+    with sqlite3.connect(db) as conn:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    conn.close()
+    for sidecar in ("-wal", "-shm"):
+        Path(f"{db}{sidecar}").unlink(missing_ok=True)
+
+
+def damaged_project(machines, state_uri: Path, damage) -> tuple[Machine, Machine, set[str]]:
+    """Two machines and a shared history, all three damaged the same way."""
+    a, b = machines("a"), machines("b")
+    runs = set()
+    for i in range(4):
+        runs.add(a.get(f"a_{i}"))
+        runs.add(b.get(f"b_{i}"))
+    assert a.barca("status", "a_0.py", "--json").returncode == 0
+    for path in (a.db, b.db, state_uri):
+        fold_log(path)
+        path.write_bytes(damage(path.read_bytes()))
+    return a, b, runs
+
+
+def integrity(db: Path) -> list[str]:
+    with sqlite3.connect(f"file:{db}?mode=ro", uri=True) as conn:
+        try:
+            lines = [
+                line
+                for (row,) in conn.execute("PRAGMA integrity_check")
+                for line in row.splitlines()
+            ]
+        except sqlite3.DatabaseError as exc:
+            lines = [str(exc)]
+    conn.close()
+    return lines
+
+
+@pytest.mark.parametrize("kind", DAMAGE)
+def test_a_history_damaged_by_an_older_barca_is_refused_with_a_one_line_reason_first(
+    kind, machines, state_uri
+):
+    a, b, _ = damaged_project(machines, state_uri, DAMAGE[kind])
+    assert integrity(state_uri) != ["ok"]
+    new = machines("new")
+    (new.root / "a_0.py").write_text(quick("a_0"))
+    out = new.barca("status", "a_0.py", "--json")
+    refused(out, state_uri)
+    envelope = json.loads(out.stderr.strip().splitlines()[-1])
+    # What is wrong, in the one line of `error`: no banner, no list.
+    assert "\n" not in envelope["error"] and "***" not in envelope["error"], envelope["error"]
+    if kind == "pages nothing refers to":
+        assert "its integrity check found 2 problems, the first: Page " in envelope["error"]
+        # The instructions come before the list of everything found.
+        remediation = envelope["remediation"]
+        assert remediation.index("barca docs remote") < remediation.index(
+            "What the integrity check found:"
+        )
+        assert remediation.count("never used") == 2, remediation
+    assert (
+        'section "Upgrading a project whose shared history was damaged by 0.17.1 or earlier"'
+        in (envelope["remediation"])
+    )
+    # The machine that uploaded last holds the same bytes as the shared history, so its pull
+    # changes nothing and is not refused: it has to be checked by hand, as the manual says.
+    for machine in (a, b):
+        assert integrity(machine.db) != ["ok"]
+
+
+@needs_sqlite3
+@pytest.mark.parametrize("kind", DAMAGE)
+def test_salvaging_a_damaged_project_as_documented(kind, machines, state_uri):
+    a, b, runs = damaged_project(machines, state_uri, DAMAGE[kind])
+
+    # Step 1: how to tell, on each machine. Step 2: salvage each damaged local copy.
+    for machine in (a, b):
+        assert looks_damaged(machine)
+        assert manual(machine, *SALVAGE[:2]).strip().splitlines()[-1] == "ok"
+        # The last command is barca reading the salvaged copy: it must list runs.
+        assert json.loads(manual(machine, *SALVAGE[2:]))["runs"]
+        assert not looks_damaged(machine)
+    recovered = {m.root.name: m.local_runs() for m in (a, b)}
+    if kind == "pages nothing refers to":
+        # Every row was readable: nothing is lost.
+        assert recovered["a"] == recovered["b"] == runs
+    else:
+        assert recovered["a"] <= runs and recovered["b"] <= runs
+
+    # Step 3: remove the damaged object. Step 4: run on the machine that recovered the most.
+    state_uri.rename(state_uri.with_name("metadata.db.damaged"))
+    first, second = sorted((a, b), key=lambda m: -len(recovered[m.root.name]))
+    out = first.barca("get", "a_0.py", "--json")
+    assert out.returncode == 0, out.stderr
+    assert "no shared state yet" in out.stderr, out.stderr
+    new_runs = {json.loads(out.stdout)["run_id"]}
+    if kind == "pages nothing refers to":
+        # The result recorded before the damage is still a cache hit.
+        assert json.loads(out.stdout)["steps_executed"] == 0, out.stdout
+    # Step 5: every other machine carries on, and adds what only its copy recovered.
+    new_runs.add(second.get("b_0"))
+    everything = recovered["a"] | recovered["b"] | new_runs
+    assert set(shared_runs(state_uri)) == everything  # also: integrity_check is ok
+    assert first.barca("status", "a_0.py", "--json").returncode == 0
+    assert first.local_runs() == second.local_runs() == everything
+    # A machine that joins now pulls it without complaint.
+    new = machines("new")
+    (new.root / "a_0.py").write_text(quick("a_0"))
+    assert new.barca("status", "a_0.py", "--json").returncode == 0
+    assert new.local_runs() == everything
+
+
+@pytest.mark.parametrize("kind", DAMAGE)
+def test_starting_the_history_again_as_documented(kind, machines, state_uri):
+    a, b, runs = damaged_project(machines, state_uri, DAMAGE[kind])
+    state_uri.unlink()
+    for machine in (a, b):
+        manual(machine, START_AGAIN)
+
+    # The history is gone, the result files are not; each step runs once more.
+    out = a.barca("get", "a_0.py", "--json")
+    assert out.returncode == 0, out.stderr
+    assert json.loads(out.stdout)["steps_executed"] == 1, out.stdout
+    a_new = json.loads(out.stdout)["run_id"]
+    (b.root / "a_0.py").write_text(quick("a_0"))
+    out = b.barca("get", "a_0.py", "--json")
+    assert out.returncode == 0, out.stderr
+    # Without a result store B has no copy of the file A wrote, so it computes it too.
+    assert json.loads(out.stdout)["steps_executed"] == 1
+    b_new = json.loads(out.stdout)["run_id"]
+    assert set(shared_runs(state_uri)) == {a_new, b_new}
+    assert not (set(shared_runs(state_uri)) & runs)
+    for machine in (a, b):
+        assert machine.barca("status", "a_0.py", "--json").returncode == 0
+        fold_log(machine.db)
+        assert integrity(machine.db) == ["ok"]
+
+
+@needs_sqlite3
+def test_salvaging_a_damaged_local_history_without_shared_history(tmp_path):
+    """The single-machine case: no shared history, and the local database alone is damaged."""
+    solo = Machine(tmp_path / "solo", tmp_path / "unused")
+    for name in ("BARCA_STATE_URI",):
+        solo.env.pop(name)
+    runs = {solo.get(f"s_{i}") for i in range(8)}
+    fold_log(solo.db)
+    solo.db.write_bytes(with_lost_tail(solo.db.read_bytes()))
+    assert looks_damaged(solo)
+
+    assert manual(solo, *SALVAGE[:2]).strip().splitlines()[-1] == "ok"
+    assert json.loads(manual(solo, *SALVAGE[2:]))["runs"]
+    assert not looks_damaged(solo)
+    assert solo.local_runs() <= runs
+    out = solo.barca("get", "s_0.py", "--json")
+    assert out.returncode == 0, out.stderr
+    assert json.loads(out.stdout)["run_id"] in solo.local_runs()
+
+    # Or start again: every step runs once more.
+    manual(solo, START_AGAIN)
+    out = solo.barca("get", "s_0.py", "--json")
+    assert out.returncode == 0, out.stderr
+    assert json.loads(out.stdout)["steps_executed"] == 1
+    assert len(solo.local_runs()) == 1
+
+
+def test_a_kept_database_that_cannot_be_named_prev_is_a_warning_not_a_failure(machines, state_uri):
+    a, b = machines("a"), machines("b")
+    a_first = a.get("a_one")
+    # Something is in the way of `.prev`: a directory that is not empty cannot be replaced.
+    blocked = Path(f"{a.db}.prev")
+    blocked.mkdir()
+    (blocked / "in-the-way").write_text("")
+    b_run = b.get("b_one")
+
+    out = a.barca("status", "a_one.py", "--json")
+    assert out.returncode == 0, out.stderr
+    assert "warning: the local history was replaced, but the one it replaced could not be kept" in (
+        out.stderr
+    )
+    assert str(Path(".barca") / "metadata.db.prev") in out.stderr, out.stderr
+    assert a.local_runs() == {a_first, b_run}
