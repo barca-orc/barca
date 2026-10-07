@@ -1563,13 +1563,14 @@ fn print_multi(
     verb: &str,
     fields: Option<&[String]>,
 ) -> Result<(), barca_core::BarcaError> {
+    use barca_core::commands::TargetStatus;
     let per_target: Vec<(String, serde_json::Value)> = result
         .targets
         .iter()
         .map(|(name, t)| {
             let mut obj = serde_json::Map::new();
-            obj.insert("status".into(), t.status.clone().into());
-            if t.status == "success" {
+            obj.insert("status".into(), t.status.as_str().into());
+            if t.status == TargetStatus::Success {
                 let value = t
                     .final_output
                     .as_ref()
@@ -1618,7 +1619,7 @@ fn print_multi(
             println!("{}", serde_json::to_string_pretty(&values).unwrap());
         }
         OutputMode::Pretty => {
-            let failed = result.targets.iter().filter(|(_, t)| t.status != "success");
+            let failed = result.failed_targets();
             println!(
                 "Run {} | {verb} {} targets in {:.3}s ({} step{}, {} phase{}, {} failed)",
                 result.run_id,
@@ -1646,10 +1647,7 @@ fn print_multi(
     let _ = std::io::stdout().flush();
 
     if result.any_failed() {
-        for (name, t) in &result.targets {
-            if t.status == "success" {
-                continue;
-            }
+        for (name, t) in result.failed_targets() {
             let at = t
                 .failed_node
                 .as_deref()
@@ -1661,10 +1659,10 @@ fn print_multi(
             );
         }
         // The first failed target becomes the run's error: exit 1 with the error envelope.
-        if let Some((name, t)) = result.targets.iter().find(|(_, t)| t.status != "success") {
+        if let Some((name, t)) = result.failed_targets().next() {
             return Err(barca_core::BarcaError::WorkerFailed(Box::new(
                 barca_core::FailedStep {
-                    node: t.failed_node.clone().unwrap_or_else(|| name.clone()),
+                    node: t.failed_node.clone().unwrap_or_else(|| name.to_string()),
                     message: t.error.clone().unwrap_or_else(|| "unknown error".into()),
                     artifact_dir: None,
                     run: None,

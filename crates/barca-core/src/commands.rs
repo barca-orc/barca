@@ -14,6 +14,7 @@ use crate::dispatch::OutputRef;
 use crate::parse::extract_nodes;
 use crate::planner::{self, ExecutionPlan, Phase, ResourceConfig};
 use crate::state_sync;
+use crate::targets::TargetProgress;
 use crate::transfer::{ArtifactLayout, TransferClient};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -140,7 +141,7 @@ fn resolve_targets(
 /// shared by several targets appears (and runs) once. No targets means everything the command
 /// covers: for `get`, every asset and sensor (tasks are skipped: get is for assets, run is for
 /// tasks); for anything else (`status`), the whole DAG.
-fn plan_for_targets(
+pub(crate) fn plan_for_targets(
     dag: &Dag,
     target_ids: &[&str],
     config: &ResourceConfig,
@@ -159,6 +160,30 @@ fn plan_for_targets(
         filter_plan_to_subgraph(full_plan, &gettable)
     } else {
         full_plan
+    }
+}
+
+/// The command a run over both assets and tasks is recorded under (`runs.command`, the
+/// telemetry attribute `barca.command`). No CLI command takes such a mix: `get` is for assets
+/// and sensors, `run` is for tasks. Only `barca serve` starts one, for the nodes its scheduler
+/// fires together.
+pub const MIXED_COMMAND: &str = "serve";
+
+/// The command to record a run under. `get` and `run` are recorded as given. A run started with
+/// [`MIXED_COMMAND`] accepts targets of any kind and is recorded as what they amount to: `run`
+/// when every target is a task and `get` when none is (exactly what `barca run a,b` and
+/// `barca get a,b` record), and [`MIXED_COMMAND`] only when it has both.
+fn recorded_command(dag: &Dag, command_label: &'static str, target_ids: &[&str]) -> &'static str {
+    if command_label != MIXED_COMMAND || target_ids.is_empty() {
+        return command_label;
+    }
+    let tasks = target_ids.iter().filter(|id| is_task(dag, id)).count();
+    if tasks == target_ids.len() {
+        "run"
+    } else if tasks == 0 {
+        "get"
+    } else {
+        MIXED_COMMAND
     }
 }
 
@@ -242,19 +267,19 @@ fn target_outcomes(
             });
             let outcome = match (failure, output_for(tid, all_outputs)) {
                 (Some(f), _) => TargetOutcome {
-                    status: "failed".to_string(),
+                    status: TargetStatus::Failed,
                     final_output: None,
                     error: Some(f.error.message.clone()),
                     failed_node: Some(f.node_id.clone()),
                 },
                 (None, Some(out)) => TargetOutcome {
-                    status: "success".to_string(),
+                    status: TargetStatus::Success,
                     final_output: Some(out),
                     error: None,
                     failed_node: None,
                 },
                 (None, None) => TargetOutcome {
-                    status: "failed".to_string(),
+                    status: TargetStatus::Failed,
                     final_output: None,
                     error: Some("did not run".to_string()),
                     failed_node: None,
@@ -1138,9 +1163,11 @@ pub struct GetResult {
     pub steps: Vec<StepReport>,
 }
 
-/// The result of `barca get|run a,b` (several targets): one run over the union of the targets'
-/// cones, with each target's outcome. A failed target does not stop the others.
+/// The result of a run over several targets (`barca get|run a,b`, or the nodes `barca serve`
+/// fires at one cron tick): one run over the union of the targets' cones, with each target's
+/// outcome. A failed target does not stop the others.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct MultiResult {
     pub run_id: String,
     pub elapsed_seconds: f64,
@@ -1150,6 +1177,7 @@ pub struct MultiResult {
     pub steps: Vec<StepReport>,
     /// Each target by the name it was given, in the order given (serialized as a map).
     #[serde(serialize_with = "serialize_targets")]
+    #[cfg_attr(feature = "ts", ts(as = "HashMap<String, TargetOutcome>"))]
     pub targets: Vec<(String, TargetOutcome)>,
 }
 
@@ -1161,26 +1189,63 @@ fn serialize_targets<S: serde::Serializer>(
 }
 
 impl MultiResult {
+    /// The targets that failed, by the name each was given, in the order given.
+    pub fn failed_targets(&self) -> impl Iterator<Item = (&str, &TargetOutcome)> {
+        self.targets
+            .iter()
+            .filter(|(_, t)| t.status == TargetStatus::Failed)
+            .map(|(name, t)| (name.as_str(), t))
+    }
+
     /// True when any target failed.
     pub fn any_failed(&self) -> bool {
-        self.targets.iter().any(|(_, t)| t.status != "success")
+        self.failed_targets().next().is_some()
+    }
+
+    /// How the target given as `name` ended, if it was one of this run's targets.
+    pub fn target(&self, name: &str) -> Option<&TargetOutcome> {
+        self.targets.iter().find(|(n, _)| n == name).map(|(_, t)| t)
     }
 }
 
-/// How one target of a multi-target run ended.
+/// How one target of a multi-target run ended (`success` or `failed` in JSON).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[serde(rename_all = "snake_case")]
+pub enum TargetStatus {
+    /// The target's own step and everything upstream of it succeeded or was cached.
+    Success,
+    /// The target's step failed, or did not run because a step upstream of it failed.
+    Failed,
+}
+
+impl TargetStatus {
+    /// The JSON spelling: `success` or `failed`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TargetStatus::Success => "success",
+            TargetStatus::Failed => "failed",
+        }
+    }
+}
+
+/// One target of a multi-target run: how it ended, and its output or its failure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct TargetOutcome {
-    /// `success` or `failed`.
-    pub status: String,
+    pub status: TargetStatus,
     /// The target's output, when it succeeded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub final_output: Option<OutputRef>,
     /// The error of the step that failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub error: Option<String>,
     /// The step that failed: the target itself, or a step upstream of it (`failed_node`, the
     /// same key a failed single-target run uses).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub failed_node: Option<String>,
 }
 
@@ -1395,7 +1460,7 @@ pub fn find_python() -> PathBuf {
 /// positive integer. Lets benchmark harnesses (and anyone else) pin the pool
 /// to a fixed core count instead of whatever `available_parallelism()` reports
 /// on the current machine.
-fn default_pool_size() -> usize {
+pub(crate) fn default_pool_size() -> usize {
     if let Some(n) = env::var("BARCA_POOL_SIZE")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
@@ -1580,6 +1645,8 @@ pub async fn run_many(
 /// This is what `barca serve` runs for the nodes due at one cron tick. Like [`get_many`], every
 /// target is attempted and a failure is reported in that target's outcome, not as an `Err`.
 /// A task always runs; assets follow `policy`.
+///
+/// The run is recorded under the command its targets amount to (see [`recorded_command`]).
 #[allow(clippy::too_many_arguments)]
 pub async fn run_mixed_streaming(
     cfg: &crate::config::ResolvedConfig,
@@ -1591,7 +1658,6 @@ pub async fn run_mixed_streaming(
     cancel: CancellationToken,
     event_tx: Option<UnboundedSender<crate::RunEvent>>,
 ) -> Result<MultiResult, BarcaError> {
-    // Any label other than "get"/"run" accepts both kinds of target.
     execute(
         cfg,
         target_names,
@@ -1600,7 +1666,7 @@ pub async fn run_mixed_streaming(
         false,
         agent_mode,
         policy,
-        "serve",
+        MIXED_COMMAND,
         cancel,
         event_tx,
     )
@@ -1932,7 +1998,7 @@ async fn execute(
     no_cache: bool,
     agent_mode: bool,
     policy: CachePolicy,
-    command_label: &str,
+    command_label: &'static str,
     cancel: CancellationToken,
     event_tx: Option<UnboundedSender<crate::RunEvent>>,
 ) -> Result<Executed, BarcaError> {
@@ -1981,6 +2047,7 @@ async fn execute(
 
     let targets = resolve_targets(&dag, target_names, command_label)?;
     let target_ids: Vec<&str> = targets.iter().map(|(_, id)| id.as_str()).collect();
+    let command_label = recorded_command(&dag, command_label, &target_ids);
     if command_label == "get"
         && target_ids.is_empty()
         && let Some(note) = skipped_tasks_note(&dag, file_args)
@@ -2007,6 +2074,8 @@ async fn execute(
     };
     let exec_plan = plan_for_targets(&dag, &target_ids, &config, command_label);
     trace_point!("planned");
+    // When each target's own steps have ended, reported to `event_tx` while the run goes on.
+    let mut progress = TargetProgress::new(&target_ids, &exec_plan);
 
     if let CachePolicy::RefreshSelective { names, .. } = &policy {
         validate_refresh_names(&dag, &target_ids, names, command_label == "get")?;
@@ -2192,7 +2261,7 @@ async fn execute(
     };
     let mut pool = crate::io_loop::WorkerPool::start(io_config).map_err(BarcaError::Other)?;
     // Finished steps are written to the local metadata DB while the run goes on (#214).
-    let recorder = StepRecorder::start(db_path.clone(), run_id.clone());
+    let recorder = StepRecorder::start(db_path.clone(), run_id.clone(), store.is_none());
     {
         // A step that runs for a while must not look hung: report it periodically.
         let bar = pb.clone();
@@ -2242,6 +2311,7 @@ async fn execute(
                         ..Default::default()
                     });
                     skipped_bases.insert(base.to_string());
+                    progress.blocked(base);
                     false
                 });
             }
@@ -2353,14 +2423,17 @@ async fn execute(
         drop(cache);
         trace_point!("phase{phase_idx}_cache_check_done");
 
-        if uncached_streams.is_empty() {
-            continue;
-        }
-
         let filtered_phase = Phase {
             reason: phase_ref.reason.clone(),
             streams: uncached_streams,
         };
+        // A target whose steps in this phase were all cached (or dropped) is finished now.
+        progress.dispatched(&filtered_phase);
+        announce_finished_targets(&mut progress, phase_idx, &recorder, event_tx.as_ref());
+
+        if filtered_phase.streams.is_empty() {
+            continue;
+        }
 
         steps_executed += filtered_phase
             .streams
@@ -2522,6 +2595,17 @@ async fn execute(
                 }
             });
 
+        // A target is finished when its last step ends, which can be long before the phase
+        // does: say so then.
+        let progress_ref = &mut progress;
+        let recorder_ref = &recorder;
+        let target_tx = event_tx.as_ref();
+        let on_end_cb: crate::io_loop::EndCallback<'_> =
+            Box::new(move |node_id: &str, completed: bool| {
+                progress_ref.step_ended(node_id, completed);
+                announce_finished_targets(progress_ref, phase_idx, recorder_ref, target_tx);
+            });
+
         // Drive this phase against the persistent pool. The cost model both
         // sizes the batch pulls and absorbs the timings coming back.
         let phase_err = pool
@@ -2530,6 +2614,7 @@ async fn execute(
                 &mut cost_model,
                 Some(on_step_cb),
                 Some(on_event_cb),
+                Some(on_end_cb),
                 &cancel,
             )
             .await;
@@ -2778,7 +2863,7 @@ async fn execute(
     // Stop the step recorder before persistence: the ledger below writes whatever it had not
     // written yet, and the state push checkpoints the WAL, which requires no other open handle
     // on the file.
-    recorder.finish().await;
+    let unannounced = recorder.finish().await;
     trace_point!("recorder_stopped");
 
     // Persist all executed outputs (including partial results on failure) —
@@ -2820,6 +2905,9 @@ async fn execute(
     // regardless of how the run was triggered (CLI or server).
     db::insert_logs(&db_path, &run_id, &logs_buffer).await?;
     trace_point!("persist_run_done");
+    // Everything the run did is recorded now: say which targets finished, if the recorder
+    // could not say so while the run was going.
+    unannounced.into_iter().for_each(|announce| announce());
 
     if !telemetry.is_empty() {
         let report = telemetry_report(&ledger, &dag, run_started, &step_clocks);
@@ -2973,6 +3061,24 @@ async fn execute(
     })
 }
 
+/// Queue a `TargetFinished` event for each target whose steps have all ended, now that the
+/// phases up to `decided_phase` are decided. Each target is announced once, and only after its
+/// steps are recorded: the event goes out through the recorder, behind the rows queued so far.
+fn announce_finished_targets(
+    progress: &mut TargetProgress,
+    decided_phase: usize,
+    recorder: &StepRecorder,
+    event_tx: Option<&UnboundedSender<crate::RunEvent>>,
+) {
+    for (node_id, ok) in progress.take_finished(decided_phase) {
+        if let Some(tx) = event_tx.cloned() {
+            recorder.after_recorded(Box::new(move || {
+                let _ = tx.send(crate::RunEvent::TargetFinished { node_id, ok });
+            }));
+        }
+    }
+}
+
 // ─── run persistence ──────────────────────────────────────────────────────────
 
 /// Everything one run wants written to the metadata DB, held in memory so a
@@ -3084,6 +3190,17 @@ impl StepRow {
 /// in the one end-of-run write, exactly as before, so short runs pay nothing.
 const RECORD_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
 
+/// Something to do once every step queued before it is in the metadata DB.
+type AfterRecorded = Box<dyn FnOnce() + Send>;
+
+/// What the run loop hands the [`StepRecorder`], in order.
+enum Recorded {
+    /// A finished step to write.
+    Step(StepRow),
+    /// See [`StepRecorder::after_recorded`].
+    After(AfterRecorded),
+}
+
 /// Writes finished steps to the local metadata DB while a run is still going (#214), so
 /// `barca status` in another process sees them and a killed run keeps them.
 ///
@@ -3097,27 +3214,50 @@ const RECORD_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50
 /// id). So a write that fails here, rows still queued at [`StepRecorder::finish`], and rows
 /// lost because another process replaced the local DB with the shared state mid-run are all
 /// made good at the end.
+///
+/// It also orders announcements after the rows they depend on
+/// ([`StepRecorder::after_recorded`]): telling a caller "this target is finished" before its
+/// steps are in the DB would let the caller start a run that does not find them cached.
 struct StepRecorder {
-    tx: tokio::sync::mpsc::UnboundedSender<StepRow>,
+    tx: tokio::sync::mpsc::UnboundedSender<Recorded>,
     stop: CancellationToken,
-    task: tokio::task::JoinHandle<()>,
+    task: tokio::task::JoinHandle<Vec<AfterRecorded>>,
 }
 
 impl StepRecorder {
-    fn start(db_path: String, run_id: String) -> Self {
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<StepRow>();
+    /// `records_during_run` is false when steps are only recorded at the end of the run (with
+    /// a remote artifact store, a row is written once its upload is confirmed): then nothing
+    /// queued with [`StepRecorder::after_recorded`] runs before [`StepRecorder::finish`].
+    fn start(db_path: String, run_id: String, records_during_run: bool) -> Self {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Recorded>();
         let stop = CancellationToken::new();
         let stopped = stop.clone();
         let task = tokio::spawn(async move {
+            // Callbacks that could not be run here: `finish` hands them back.
+            let mut held: Vec<AfterRecorded> = Vec::new();
+            // False once a step may be missing from the DB: every later callback is held.
+            let mut all_recorded = records_during_run;
             let mut next_write = tokio::time::Instant::now() + RECORD_INTERVAL;
             loop {
                 let first = tokio::select! {
                     biased;
                     _ = stopped.cancelled() => break,
-                    row = rx.recv() => match row {
-                        Some(row) => row,
+                    msg = rx.recv() => match msg {
+                        Some(msg) => msg,
                         None => break,
                     },
+                };
+                let first = match first {
+                    Recorded::Step(row) => row,
+                    // Nothing is waiting to be written: every step sent before this is in.
+                    Recorded::After(then) if all_recorded => {
+                        then();
+                        continue;
+                    }
+                    Recorded::After(then) => {
+                        held.push(then);
+                        continue;
+                    }
                 };
                 tokio::select! {
                     biased;
@@ -3125,33 +3265,60 @@ impl StepRecorder {
                     _ = tokio::time::sleep_until(next_write) => {}
                 }
                 let mut batch = vec![first];
-                while let Ok(row) = rx.try_recv() {
-                    batch.push(row);
+                let mut after: Vec<AfterRecorded> = Vec::new();
+                while let Ok(msg) = rx.try_recv() {
+                    match msg {
+                        Recorded::Step(row) => batch.push(row),
+                        Recorded::After(then) => after.push(then),
+                    }
                 }
                 // Best effort: see the type's doc comment for why a failure is not an error.
-                record_steps(&db_path, &run_id, &batch).await.ok();
+                let written = record_steps(&db_path, &run_id, &batch).await;
+                all_recorded &= written.is_ok_and(|n| n == batch.len());
+                if all_recorded {
+                    after.into_iter().for_each(|then| then());
+                } else {
+                    held.extend(after);
+                }
                 next_write = tokio::time::Instant::now() + RECORD_INTERVAL;
             }
+            // Stopped: whatever is still queued goes back to the caller with the rest.
+            rx.close();
+            while let Ok(msg) = rx.try_recv() {
+                if let Recorded::After(then) = msg {
+                    held.push(then);
+                }
+            }
+            held
         });
         Self { tx, stop, task }
     }
 
     /// Queue a finished step. Never blocks.
     fn record(&self, row: StepRow) {
-        self.tx.send(row).ok();
+        self.tx.send(Recorded::Step(row)).ok();
+    }
+
+    /// Run `then` once every step queued before this call is in the metadata DB. If that
+    /// cannot be had during the run (steps are not recorded during it, a write failed, or the
+    /// run ended first), `then` is returned by [`StepRecorder::finish`] instead. Never blocks.
+    fn after_recorded(&self, then: AfterRecorded) {
+        self.tx.send(Recorded::After(then)).ok();
     }
 
     /// Stop the background task and wait for it, so no connection is left open. Rows it had
-    /// not written yet are left to [`persist_run`].
-    async fn finish(self) {
+    /// not written yet are left to [`persist_run`]. Returns the [`StepRecorder::after_recorded`]
+    /// callbacks that have not run, in order: the caller runs them once `persist_run` has
+    /// written the run.
+    async fn finish(self) -> Vec<AfterRecorded> {
         self.stop.cancel();
-        self.task.await.ok();
+        self.task.await.unwrap_or_default()
     }
 }
 
 /// Append `rows` for a run that is still in progress, and advance its `steps_executed` so
-/// `barca history` shows how far it has got.
-async fn record_steps(db_path: &str, run_id: &str, rows: &[StepRow]) -> Result<(), BarcaError> {
+/// `barca history` shows how far it has got. Returns how many of the rows were written.
+async fn record_steps(db_path: &str, run_id: &str, rows: &[StepRow]) -> Result<usize, BarcaError> {
     let _g = db::db_guard().await;
     let (_db, conn) = db::open_conn(db_path).await?;
     // One transaction: one commit for the batch, and a reader sees all of it or none.
@@ -3173,7 +3340,7 @@ async fn record_steps(db_path: &str, run_id: &str, rows: &[StepRow]) -> Result<(
     conn.execute("COMMIT", ())
         .await
         .map_err(|e| BarcaError::Db(format!("failed to commit: {e}")))?;
-    Ok(())
+    Ok(written)
 }
 
 /// The steps of `run_id` that already have a row: what the [`StepRecorder`] wrote during the
@@ -3718,7 +3885,7 @@ mod persist_tests {
         let db_path = fresh_db(&dir, "m.db").await;
         let fx = Fixture::new();
 
-        let recorder = StepRecorder::start(db_path.clone(), "r1".to_string());
+        let recorder = StepRecorder::start(db_path.clone(), "r1".to_string(), true);
         recorder.record(fx.row("f.py:a"));
         recorder.record(fx.row("f.py:part[k=1]"));
         let deadline = Instant::now() + std::time::Duration::from_secs(10);
@@ -3735,6 +3902,90 @@ mod persist_tests {
 
         persist_run(&db_path, &fx.ledger("r1")).await.unwrap();
         assert_eq!(rows(&db_path).await, complete("r1"));
+    }
+
+    /// A callback for `after_recorded` that sends how many rows the DB holds when it runs.
+    fn count_rows_then_send(db_path: &str, seen: &std::sync::mpsc::Sender<usize>) -> AfterRecorded {
+        let (db_path, seen) = (db_path.to_string(), seen.clone());
+        Box::new(move || {
+            // The callback is synchronous: count from a thread of its own.
+            let counted = std::thread::spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                rt.block_on(rows(&db_path)).len()
+            });
+            seen.send(counted.join().unwrap()).ok();
+        })
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn after_recorded_runs_once_the_steps_before_it_are_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = fresh_db(&dir, "m.db").await;
+        let fx = Fixture::new();
+        let (seen, was_seen) = std::sync::mpsc::channel();
+
+        let recorder = StepRecorder::start(db_path.clone(), "r1".to_string(), true);
+        // With nothing waiting to be written, it runs without waiting for a write.
+        recorder.after_recorded(count_rows_then_send(&db_path, &seen));
+        // Queued behind two steps, it runs when both are in the DB, not before.
+        recorder.record(fx.row("f.py:a"));
+        recorder.record(fx.row("f.py:part[k=1]"));
+        recorder.after_recorded(count_rows_then_send(&db_path, &seen));
+
+        let wait = std::time::Duration::from_secs(30);
+        assert_eq!(was_seen.recv_timeout(wait), Ok(0));
+        assert_eq!(
+            was_seen.recv_timeout(wait),
+            Ok(2),
+            "both rows were written first"
+        );
+        assert!(recorder.finish().await.is_empty(), "nothing left to run");
+    }
+
+    #[tokio::test]
+    async fn after_recorded_is_handed_back_when_steps_are_not_recorded_during_the_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = fresh_db(&dir, "m.db").await;
+        let (seen, was_seen) = std::sync::mpsc::channel::<&str>();
+
+        // A remote artifact store: nothing is recorded until the run ends.
+        let recorder = StepRecorder::start(db_path.clone(), "r1".to_string(), false);
+        for name in ["first", "second"] {
+            let seen = seen.clone();
+            recorder.after_recorded(Box::new(move || {
+                seen.send(name).ok();
+            }));
+        }
+        let unrun = recorder.finish().await;
+        assert!(was_seen.try_recv().is_err(), "nothing ran during the run");
+        assert_eq!(unrun.len(), 2);
+        unrun.into_iter().for_each(|then| then());
+        assert_eq!(was_seen.try_iter().collect::<Vec<_>>(), ["first", "second"]);
+    }
+
+    #[tokio::test]
+    async fn after_recorded_is_handed_back_when_the_run_ends_before_the_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = fresh_db(&dir, "m.db").await;
+        let fx = Fixture::new();
+        let (seen, was_seen) = std::sync::mpsc::channel::<()>();
+
+        let recorder = StepRecorder::start(db_path.clone(), "r1".to_string(), true);
+        // A step, then the callback, then the run ends inside the first write interval.
+        recorder.record(fx.row("f.py:a"));
+        recorder.after_recorded(Box::new(move || {
+            seen.send(()).ok();
+        }));
+        let unrun = recorder.finish().await;
+        assert!(was_seen.try_recv().is_err(), "its step is not written yet");
+        assert_eq!(
+            unrun.len(),
+            1,
+            "handed back to run after the ledger is written"
+        );
     }
 }
 
@@ -4321,13 +4572,39 @@ def lone() -> int:
         }
     }
 
-    fn outcome(status: &str) -> TargetOutcome {
+    fn outcome(status: TargetStatus) -> TargetOutcome {
         TargetOutcome {
-            status: status.to_string(),
+            status,
             final_output: None,
             error: None,
             failed_node: None,
         }
+    }
+
+    #[test]
+    fn a_mixed_run_is_recorded_as_what_its_targets_amount_to() {
+        let dag = dag();
+        // The CLI commands are recorded as given, whatever the targets.
+        assert_eq!(recorded_command(&dag, "get", &["p.py:lone"]), "get");
+        assert_eq!(recorded_command(&dag, "run", &["p.py:check_a"]), "run");
+        assert_eq!(recorded_command(&dag, "get", &[]), "get");
+        // A run that accepts any kind: all tasks is `run a,b`, no task is `get a,b`.
+        let tasks = ["p.py:check_a", "p.py:check_b"];
+        assert_eq!(recorded_command(&dag, MIXED_COMMAND, &tasks), "run");
+        let assets = ["p.py:lone", "p.py:left"];
+        assert_eq!(recorded_command(&dag, MIXED_COMMAND, &assets), "get");
+        // Both kinds: the one case no CLI command expresses.
+        let mixed = ["p.py:lone", "p.py:check_a"];
+        assert_eq!(recorded_command(&dag, MIXED_COMMAND, &mixed), "serve");
+    }
+
+    #[test]
+    fn a_mixed_run_accepts_targets_of_any_kind() {
+        let dag = dag();
+        let got = resolve_targets(&dag, &names(&["lone", "check_a"]), MIXED_COMMAND).unwrap();
+        assert_eq!(got.len(), 2, "an asset and a task in one run");
+        assert!(resolve_targets(&dag, &names(&["lone", "check_a"]), "get").is_err());
+        assert!(resolve_targets(&dag, &names(&["lone", "check_a"]), "run").is_err());
     }
 
     #[test]
@@ -4462,12 +4739,12 @@ def lone() -> int:
         let failures = vec![failure("p.py:left", "boom")];
         let out = target_outcomes(&dag, &targets, &outputs, &failures);
         assert_eq!(out[0].0, "check_a");
-        assert_eq!(out[0].1.status, "success");
+        assert_eq!(out[0].1.status, TargetStatus::Success);
         assert_eq!(out[0].1.final_output.as_ref().unwrap().path, "a.json");
-        assert_eq!(out[1].1.status, "failed");
+        assert_eq!(out[1].1.status, TargetStatus::Failed);
         assert_eq!(out[1].1.failed_node.as_deref(), Some("p.py:left"));
         assert_eq!(out[1].1.error.as_deref(), Some("boom"));
-        assert_eq!(out[2].1.status, "failed");
+        assert_eq!(out[2].1.status, TargetStatus::Failed);
         assert_eq!(out[2].1.error.as_deref(), Some("did not run"));
     }
 
@@ -4582,8 +4859,8 @@ def lone() -> int:
             phases: 0,
             steps: Vec::new(),
             targets: vec![
-                ("zeta".to_string(), outcome("success")),
-                ("alpha".to_string(), outcome("failed")),
+                ("zeta".to_string(), outcome(TargetStatus::Success)),
+                ("alpha".to_string(), outcome(TargetStatus::Failed)),
             ],
         };
         let s = serde_json::to_string(&r).unwrap();

@@ -16,9 +16,11 @@ pub mod model;
 pub mod parse;
 pub mod planner;
 pub mod protocol;
+pub mod share;
 pub mod sql;
 pub mod state_sync;
 pub mod status;
+mod targets;
 pub mod telemetry;
 pub mod transfer;
 

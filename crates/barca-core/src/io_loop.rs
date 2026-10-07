@@ -60,6 +60,12 @@ pub type StepCallback<'a> = Box<dyn FnMut(&str, &serde_json::Value, u32) + Send 
 /// Callback invoked with each live [`RunEvent`] as a run progresses.
 pub type EventCallback<'a> = Box<dyn FnMut(RunEvent) + Send + 'a>;
 
+/// Callback invoked when a step has ended for good, with `(node_id, completed)`: `completed` is
+/// false when it failed after its last attempt or was skipped because a step it depends on
+/// failed. Unlike a `StepFinished` event, a failed attempt that will be retried is not reported.
+/// `parallel()` children are not steps of the plan and are not reported.
+pub type EndCallback<'a> = Box<dyn FnMut(&str, bool) + Send + 'a>;
+
 /// Called periodically while steps are running, with `(node_id, seconds running)` for each
 /// step that has been in flight longer than the progress interval.
 pub type RunningHook = Box<dyn FnMut(&[(String, f64)]) + Send + 'static>;
@@ -268,6 +274,7 @@ impl WorkerPool {
         cost: &mut CostModel,
         mut on_step: Option<StepCallback<'_>>,
         mut on_event: Option<EventCallback<'_>>,
+        mut on_end: Option<EndCallback<'_>>,
         cancel: &CancellationToken,
     ) -> Result<(), String> {
         if cancel.is_cancelled() {
@@ -285,6 +292,16 @@ impl WorkerPool {
         };
 
         loop {
+            // Every pass through the loop follows one event, so this reports each step as soon
+            // as the event that ended it (or ended the step it was waiting for) is handled.
+            for (item_id, completed) in coord.take_ended() {
+                let item = coord.item(item_id);
+                if item.group.is_none()
+                    && let Some(ref mut cb) = on_end
+                {
+                    cb(&item.step_id.display(), completed);
+                }
+            }
             if coord.is_finished() {
                 break;
             }

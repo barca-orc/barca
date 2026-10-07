@@ -26,7 +26,13 @@ pub enum RunEvent {
         #[cfg_attr(feature = "ts", ts(optional))]
         error: Option<String>,
     },
-    /// The run finished (emitted by the server once execution completes).
+    /// One of the run's targets is finished: every step of the node `node_id` has ended, though
+    /// the run may go on for its other targets. `ok` is false when one of its steps failed or
+    /// did not run because something upstream of it failed. Emitted once per named target (a
+    /// run with no target, such as `POST /run`, has none).
+    TargetFinished { node_id: String, ok: bool },
+    /// The run finished (emitted by the server once execution completes). `ok` is false when
+    /// the run failed, was cancelled, or any of its targets failed.
     RunFinished { run_id: String, ok: bool },
 }
 
@@ -83,6 +89,18 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&failed).unwrap(),
             json!({"type": "step_finished", "node_id": "a.py:load", "ok": false, "error": "boom"})
+        );
+    }
+
+    #[test]
+    fn target_finished_shape() {
+        let ev = RunEvent::TargetFinished {
+            node_id: "a.py:load".into(),
+            ok: false,
+        };
+        assert_eq!(
+            serde_json::to_value(&ev).unwrap(),
+            json!({"type": "target_finished", "node_id": "a.py:load", "ok": false})
         );
     }
 

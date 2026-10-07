@@ -149,6 +149,9 @@ pub struct Coordinator {
     waiting_retry: HashSet<ItemId>,
     /// Output artifacts from completed items.
     outputs: HashMap<ItemId, serde_json::Value>,
+    /// Items that reached a terminal state since the last [`Coordinator::take_ended`], in
+    /// order, with whether they completed (`false`: failed for good, or skipped).
+    ended: Vec<(ItemId, bool)>,
     /// Parallel groups.
     groups: HashMap<GroupId, ParallelGroup>,
     /// ID generators.
@@ -177,6 +180,7 @@ impl Coordinator {
             skipped: HashSet::new(),
             waiting_retry: HashSet::new(),
             outputs: HashMap::new(),
+            ended: Vec::new(),
             groups: HashMap::new(),
             next_item_id: 0,
             next_group_id: 0,
@@ -250,7 +254,7 @@ impl Coordinator {
                     && (self.failed.contains_key(&d.upstream) || self.skipped.contains(&d.upstream))
             });
             if should_skip {
-                self.skipped.insert(id);
+                self.skip(id);
             } else {
                 self.ready.push_back(id);
             }
@@ -312,6 +316,7 @@ impl Coordinator {
     pub fn on_item_completed(&mut self, item_id: ItemId) {
         self.executing.remove(&item_id);
         self.done.insert(item_id);
+        self.ended.push((item_id, true));
 
         // Check if item belongs to a parallel group
         if let Some(group_id) = self.items[&item_id].group {
@@ -342,6 +347,7 @@ impl Coordinator {
         } else {
             // Permanent failure
             self.failed.insert(item_id, error);
+            self.ended.push((item_id, false));
 
             if let Some(group_id) = self.items[&item_id].group {
                 let group = self.groups.get_mut(&group_id).unwrap();
@@ -694,7 +700,21 @@ impl Coordinator {
         &self.outputs
     }
 
+    /// The items that reached a terminal state since the last call, in order, with whether
+    /// each completed (`false`: it failed after its last attempt, or was skipped because a step
+    /// it depends on failed). An item waiting for a retry has not ended.
+    pub fn take_ended(&mut self) -> Vec<(ItemId, bool)> {
+        std::mem::take(&mut self.ended)
+    }
+
     // ─── Internal helpers ─────────────────────────────────────────────────
+
+    /// Mark an item skipped: a step it depends on failed, so it will not run.
+    fn skip(&mut self, id: ItemId) {
+        if self.skipped.insert(id) {
+            self.ended.push((id, false));
+        }
+    }
 
     /// Cascade a failure through data-dependency edges.
     fn cascade_failure(&mut self, item_id: ItemId) {
@@ -716,7 +736,7 @@ impl Coordinator {
 
             match dep_kind {
                 Some(DepKind::Data) => {
-                    self.skipped.insert(dep_id);
+                    self.skip(dep_id);
                     self.pending.remove(&dep_id);
                     self.ready.retain(|id| *id != dep_id);
                     self.cascade_failure(dep_id);
@@ -732,7 +752,7 @@ impl Coordinator {
                                         || self.skipped.contains(&d.upstream))
                             });
                             if should_skip {
-                                self.skipped.insert(dep_id);
+                                self.skip(dep_id);
                                 self.cascade_failure(dep_id);
                             } else {
                                 self.ready.push_back(dep_id);
@@ -767,7 +787,7 @@ impl Coordinator {
                                 || self.skipped.contains(&d.upstream))
                     });
                     if should_skip {
-                        self.skipped.insert(dep_id);
+                        self.skip(dep_id);
                         self.cascade_failure(dep_id);
                     } else {
                         self.ready.push_back(dep_id);
@@ -917,6 +937,49 @@ mod tests {
         c.on_item_failed(a, "boom".into());
         assert!(c.is_finished()); // b is skipped
         assert_eq!(c.skipped_items().len(), 1);
+    }
+
+    #[test]
+    fn take_ended_reports_each_terminal_item_once() {
+        let mut c = Coordinator::new();
+        let a = c.add_item(dummy_step_id("a"), spec("a"), vec![]);
+        let b = c.add_item(
+            dummy_step_id("b"),
+            spec("b"),
+            vec![Dep {
+                upstream: a,
+                kind: DepKind::Data,
+            }],
+        );
+        let ok = c.add_item(dummy_step_id("ok"), spec("ok"), vec![]);
+        assert!(c.take_ended().is_empty(), "nothing has ended yet");
+
+        c.next_ready(); // pop a
+        c.next_ready(); // pop ok
+        c.on_item_completed(ok);
+        assert_eq!(c.take_ended(), vec![(ok, true)]);
+
+        // `a` fails for good, which also ends `b`: it is skipped.
+        c.on_item_failed(a, "boom".into());
+        assert_eq!(c.take_ended(), vec![(a, false), (b, false)]);
+        assert!(c.take_ended().is_empty(), "each item is reported once");
+    }
+
+    #[test]
+    fn a_failure_that_will_be_retried_has_not_ended() {
+        let mut c = Coordinator::new();
+        let mut s = spec("a");
+        s.retries = 2;
+        let a = c.add_item(dummy_step_id("a"), s, vec![]);
+        c.next_ready();
+        assert_eq!(
+            c.on_item_failed(a, "fail 1".into()),
+            FailureAction::RetryNow
+        );
+        assert!(c.take_ended().is_empty(), "a retry is still to come");
+        c.next_ready();
+        assert_eq!(c.on_item_failed(a, "fail 2".into()), FailureAction::Failed);
+        assert_eq!(c.take_ended(), vec![(a, false)]);
     }
 
     #[test]
