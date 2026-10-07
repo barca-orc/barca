@@ -56,6 +56,28 @@ pub(crate) fn on_disk(path: &str, separate_store: bool) -> bool {
     }
 }
 
+/// `test` of every item, in order. A handful is done in place; many are spread over a few
+/// threads, because each test is a file lookup and a partitioned asset has one per key.
+pub(crate) fn flags<T: Sync>(items: &[T], test: impl Fn(&T) -> bool + Sync) -> Vec<bool> {
+    const SERIAL_BELOW: usize = 512;
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get().min(8));
+    if items.len() < SERIAL_BELOW || threads < 2 {
+        return items.iter().map(test).collect();
+    }
+    let chunk = items.len().div_ceil(threads);
+    let test = &test;
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = items
+            .chunks(chunk)
+            .map(|part| scope.spawn(move || part.iter().map(test).collect::<Vec<bool>>()))
+            .collect();
+        workers
+            .into_iter()
+            .flat_map(|w| w.join().expect("a file lookup does not panic"))
+            .collect()
+    })
+}
+
 /// The base node id of a step or output id (`p.py:a[k=1]` -> `p.py:a`).
 pub(crate) fn base_of(id: &str) -> &str {
     id.split('[').next().unwrap_or(id)
@@ -315,10 +337,17 @@ pub(crate) async fn lost(
 ) -> Result<Vec<String>, String> {
     let separate_store = store.is_some();
     let in_store = |path: &str| store.as_ref().is_some_and(|s| s.holds(path));
-    let mut gone: HashSet<&str> = check
+    let local: Vec<&str> = check
         .iter()
         .map(String::as_str)
-        .filter(|path| !in_store(path) && !on_disk(path, separate_store))
+        .filter(|path| !in_store(path))
+        .collect();
+    let here = flags(&local, |path| on_disk(path, separate_store));
+    let mut gone: HashSet<&str> = local
+        .into_iter()
+        .zip(here)
+        .filter(|(_, here)| !here)
+        .map(|(path, _)| path)
         .collect();
     let missing_from_store = match store.as_mut() {
         Some(s) => {
@@ -399,7 +428,7 @@ pub(crate) fn predict_recomputes(
     steps: &mut [StepReport],
     summary: &mut ExplainSummary,
 ) {
-    let gone = |oref: &OutputRef| predicted_gone(oref, layout);
+    let gone = |oref: &&OutputRef| predicted_gone(oref, layout);
     for id in predict_lost(cached_steps, all_outputs, &needed, gone) {
         if mark_recomputed(steps, &id, true) {
             summary.cached = summary.cached.saturating_sub(1);
@@ -416,15 +445,20 @@ pub(crate) fn predict_lost(
     cached: &mut CachedSteps,
     outputs: &mut HashMap<String, OutputRef>,
     needed: &[String],
-    gone: impl Fn(&OutputRef) -> bool,
+    gone: impl Fn(&&OutputRef) -> bool + Sync,
 ) -> Vec<String> {
     let mut lost: Vec<String> = Vec::new();
     let mut needed: HashSet<String> = needed.iter().cloned().collect();
     loop {
-        let gone_paths: HashSet<&str> = outputs
+        let read: Vec<&OutputRef> = outputs
             .values()
-            .filter(|o| needed.contains(&o.path) && gone(o))
-            .map(|o| o.path.as_str())
+            .filter(|o| needed.contains(&o.path))
+            .collect();
+        let gone_paths: HashSet<&str> = read
+            .iter()
+            .zip(flags(&read, &gone))
+            .filter(|(_, gone)| *gone)
+            .map(|(o, _)| o.path.as_str())
             .collect();
         let layer = outputs_at(&gone_paths, outputs, |_| true);
         if layer.is_empty() {
@@ -838,6 +872,15 @@ mod tests {
             took < std::time::Duration::from_secs(5),
             "recovering {KEYS} keys took {took:?}"
         );
+    }
+
+    #[test]
+    fn flags_keep_the_order_of_their_items_few_or_many() {
+        for n in [0usize, 3, 511, 512, 5_000] {
+            let items: Vec<usize> = (0..n).collect();
+            let expected: Vec<bool> = items.iter().map(|i| i % 3 == 0).collect();
+            assert_eq!(flags(&items, |i| i % 3 == 0), expected, "{n} items");
+        }
     }
 
     #[test]

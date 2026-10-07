@@ -2904,11 +2904,25 @@ async fn execute(
         // Collect failures — parallel branch failures (group members) are
         // contained within the group and surfaced as ParallelError to the parent,
         // so they should NOT abort the entire phase.
+        //
+        // A Ctrl-C in a terminal reaches the workers as well as this process, and a worker
+        // may report its step's KeyboardInterrupt before the cancellation is seen here. That
+        // step was interrupted, not failed: it gets no `failed` line and no failed row. When
+        // such a report came first, give this process's own signal a moment to arrive.
+        let interrupted = |message: &str| message.starts_with("KeyboardInterrupt");
+        if !cancel.is_cancelled() && coord.failed_items().iter().any(|(_, m)| interrupted(m)) {
+            let grace = std::time::Duration::from_millis(250);
+            let _ = tokio::time::timeout(grace, cancel.cancelled()).await;
+        }
+        let cancelled = cancel.is_cancelled();
         let mut first_non_group_failure: Option<(String, String)> = None;
         for (item_id, error_msg) in coord.failed_items() {
             let item = coord.item(item_id);
             if item.group.is_some() {
                 // Parallel branch failure — handled by the group/parent, not a phase error.
+                continue;
+            }
+            if cancelled && interrupted(error_msg) {
                 continue;
             }
             let node_id = item.step_id.display();

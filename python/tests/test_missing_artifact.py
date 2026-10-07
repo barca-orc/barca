@@ -431,27 +431,97 @@ def wait_for_file(path: Path, timeout: float = 60) -> None:
         time.sleep(0.05)
 
 
+def cancelled_cleanly(root: Path, proc: subprocess.Popen, err: str) -> None:
+    """The one correct outcome of interrupting a recompute of `b`: the run is cancelled, and
+    `b` is neither finished nor failed (it was interrupted), so nothing is recorded for it."""
+    assert proc.returncode == 130, err
+    assert agent_steps(err, "b") == [], err
+    assert agent_steps(err, "publish") == [], err
+    assert history(root)[0]["status"] == "cancelled"
+    assert rows(root, "b") == [("success", 1)]
+    assert rows(root, "publish") == [("success", 1)]
+    assert artifacts(root, "b") == []
+
+
 def test_ctrl_c_during_a_recompute_cancels_the_run_and_the_next_one_recovers(tmp_path):
+    """Ctrl-C as a terminal delivers it: SIGINT to barca and to its workers at once."""
     root = recovery_project(tmp_path)
     (root / "hold-b").write_text("")
 
-    proc = start(root, "run", "publish", "--json", "--agent")
+    proc = subprocess.Popen(
+        [_find_binary(), "run", "publish", "--json", "--agent"],
+        cwd=root,
+        env=clean_env(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,  # its own process group, like a foreground job
+    )
     wait_for_file(root / "b.started")
-    proc.send_signal(signal.SIGINT)
+    os.killpg(proc.pid, signal.SIGINT)
     _, err = proc.communicate(timeout=60)
-    assert proc.returncode == 130, err
-    # Nothing claims `publish` ran or `b` finished, and the run is recorded as cancelled.
-    assert agent_steps(err, "publish") == []
-    assert "completed" not in agent_steps(err, "b")
-    assert history(root)[0]["status"] == "cancelled"
-    assert rows(root, "publish") == [("success", 1)]
-    assert [status for status, _ in rows(root, "b")].count("success") == 1
-    assert artifacts(root, "b") == []
+    cancelled_cleanly(root, proc, err)
 
     (root / "hold-b").unlink()
     doc = result(cli(root, "run", "publish", "--json"))
     assert by_name(doc, "status") == {"a": "cached", "b": "ran", "publish": "ran"}
     assert by_name(doc, "reason")["b"] == "artifact_missing"
+
+
+INTERRUPTED = """
+import os
+import time
+from pathlib import Path
+
+from barca import asset, task
+
+
+@asset()
+def b() -> dict:
+    Path("b.pid").write_text(str(os.getpid()))
+    while Path("hold-b").exists():
+        time.sleep(0.05)
+    return {"v": 2}
+
+
+@asset()
+def c() -> dict:
+    Path("c.started").write_text("x")
+    while Path("hold-c").exists():
+        time.sleep(0.05)
+    return {"v": 3}
+
+
+@task(inputs={"b": b, "c": c})
+def publish(b: dict, c: dict) -> None:
+    print("publish", b["v"] + c["v"])
+"""
+
+
+def test_a_step_interrupted_before_the_cancellation_is_seen_is_not_recorded_as_failed(tmp_path):
+    """The worker's KeyboardInterrupt can reach the coordinator before its own SIGINT does.
+
+    Forced here: the worker running `b` is interrupted first, while `c` keeps the phase
+    going, and barca is interrupted afterwards. `b` was interrupted, not failed.
+    """
+    root = project(tmp_path, INTERRUPTED)
+    assert result(cli(root, "run", "publish", "--json"))["steps_executed"] == 3
+    drop(root, "b")
+    drop(root, "c")
+    for name in ("b.pid", "c.started"):
+        (root / name).unlink()
+    (root / "hold-b").write_text("")
+    (root / "hold-c").write_text("")
+
+    proc = start(root, "run", "publish", "--json", "--agent")
+    wait_for_file(root / "b.pid")
+    wait_for_file(root / "c.started")
+    os.kill(int((root / "b.pid").read_text()), signal.SIGINT)
+    time.sleep(1.0)  # the worker's report is in; the run goes on with `c`
+    assert proc.poll() is None
+    proc.send_signal(signal.SIGINT)
+    _, err = proc.communicate(timeout=60)
+    cancelled_cleanly(root, proc, err)
 
 
 def test_a_run_killed_during_a_recompute_is_interrupted_and_the_next_one_recovers(tmp_path):
