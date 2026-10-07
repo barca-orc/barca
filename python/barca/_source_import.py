@@ -5,12 +5,12 @@ whenever the source's mtime (whole seconds) and size match, so an edit that keep
 edit within the same second, or a tool that pins mtimes: Nix, Bazel, `touch -t`,
 `rsync -t`) would run the old bytecode under the new run hash (#176).
 
-User modules (the pipeline file and every module imported from its directory tree) load
-through `SourceHashLoader`, which validates cached bytecode against a hash of the source
-bytes (PEP 552 checked hash-based pycs) instead of mtime and size. Their `__file__`,
-`__spec__`, `sys.modules` registration, packages and relative imports behave as with the
-default loader. The stdlib, site-packages and anything outside the project directories
-import exactly as before.
+User modules (the pipeline file and every module imported from its directory tree or from
+the project root) load through `SourceHashLoader`, which validates cached bytecode against a
+hash of the source bytes (PEP 552 checked hash-based pycs) instead of mtime and size. Their
+`__file__`, `__spec__`, `sys.modules` registration, packages and relative imports behave as
+with the default loader. The stdlib, site-packages and anything outside the project
+directories import exactly as before.
 
 Stdlib only, and cheap to import: the planner's dynamic-partition evaluation uses it too.
 """
@@ -136,17 +136,33 @@ def _claim(root: str) -> None:
             del sys.path_importer_cache[entry]
 
 
+_project_root_claimed = False
+
+
+def _claim_project_root() -> None:
+    """Claim the cwd the process started its first step in: the project root. Once, so a
+    step that changes directory does not get that directory claimed by the next load."""
+    global _project_root_claimed
+    if not _project_root_claimed:
+        _project_root_claimed = True
+        _claim(os.path.realpath(os.getcwd()))
+
+
 def load_source_module(source_file: str, mod_name: str) -> ModuleType:
     """Import `source_file` as `mod_name` via SourceHashLoader, registered in sys.modules.
 
     The file's directory goes on sys.path (so sibling imports work) and is claimed, so
-    those imports are validated against their source too.
+    those imports are validated against their source too. So is the cwd, the project root:
+    it is already on sys.path behind the file's directory, and the modules a step imports
+    from it are part of the step's hash (crates/barca-core/src/project_modules.rs mirrors
+    this search order: the file's directory, then the root).
     """
     path = os.path.realpath(source_file)
     module_dir = os.path.dirname(path)
     if module_dir not in sys.path:
         sys.path.insert(0, module_dir)
     _claim(module_dir)
+    _claim_project_root()
     loader = SourceHashLoader(mod_name, path)
     spec = importlib.util.spec_from_file_location(mod_name, path, loader=loader)
     if spec is None:

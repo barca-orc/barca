@@ -51,6 +51,8 @@ separate test files.
 | `test_errors.py` | `BarcaError` surfacing |
 | `test_reliability.py` | Retry / timeout behavior |
 | `test_cross_file.py` | Cross-file dependency resolution |
+| `test_helper_tracking_194.py` | Helper edits re-run the step: classes, aliases, in-function imports, modules as values, and which file a module name means in each project layout |
+| `test_run_hash_golden.py` | Run hashes pinned from a released version: an upgrade must not recompute unchanged projects |
 | `test_adaptive_executor.py` | Worker pool sizing |
 | `test_artifact_lru.py` | The worker's in-memory artifact cache: isolation of cached values per type, size limits |
 | `test_retries.py` | `retries=` / `retry_backoff=` |
