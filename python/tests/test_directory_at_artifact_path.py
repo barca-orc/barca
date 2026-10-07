@@ -306,6 +306,42 @@ def test_a_directory_at_a_sink_path_fails_the_sink_and_is_never_moved(tmp_path):
     assert (out / "inner" / "x").read_text() == "mine"
 
 
+def test_a_symlink_at_a_sink_path_is_written_through_and_stays_a_link(tmp_path):
+    """A sink path is the user's: the file it names is written, nothing else changes."""
+    root = tmp_path / "sinks"
+    (root / "exports").mkdir(parents=True)
+    target = tmp_path / "shared" / "real.json"
+    target.parent.mkdir()
+    target.write_text('"old"')
+    link = root / "exports" / "out.json"
+    link.symlink_to(target)
+    (root / "pipeline.py").write_text(SINK_PIPELINE)
+
+    proc = cli(root, "get", "exported", "--json")
+
+    assert ok(proc)["final_output"] == {"v": 1}
+    assert "SINK FAILED" not in proc.stderr, proc.stderr
+    assert link.is_symlink() and os.readlink(link) == str(target)
+    assert json.loads(target.read_text()) == {"v": 1}
+    assert sorted(p.name for p in target.parent.iterdir()) == ["real.json"]
+
+
+def test_a_symlink_to_a_directory_at_a_sink_path_fails_the_sink_and_stays(tmp_path):
+    root = tmp_path / "sinks"
+    (root / "exports").mkdir(parents=True)
+    target = tmp_path / "shared"
+    (target / "theirs").mkdir(parents=True)
+    link = root / "exports" / "out.json"
+    link.symlink_to(target, target_is_directory=True)
+    (root / "pipeline.py").write_text(SINK_PIPELINE)
+
+    proc = cli(root, "get", "exported", "--json")
+
+    assert ok(proc)["final_output"] == {"v": 1}
+    assert "[barca] SINK FAILED: pipeline.py:exported" in proc.stderr, proc.stderr
+    assert link.is_symlink() and sorted(p.name for p in target.iterdir()) == ["theirs"]
+
+
 # ─── with an artifact store ──────────────────────────────────────────────────
 
 

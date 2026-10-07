@@ -574,6 +574,21 @@ def _sink_dest(path: str, node_id: str) -> str:
     return path + part
 
 
+def _through_symlink(dest: str) -> str:
+    """Where a sink is really written when its path is a symlink.
+
+    A sink path is the user's: barca writes the file there and changes nothing else.
+    `serialize` installs a file by renaming a temp file over its path, which would replace a
+    symlink by a regular file. So the link is followed first: the file it points to is
+    written (as `open(path, "w")` would do) and the link stays. A link to a directory then
+    fails the sink like a directory does.
+    """
+    local = _storage.local_path_of(dest)
+    if local is not None and os.path.islink(local):
+        return os.path.realpath(local)
+    return dest
+
+
 def _write_sinks(result, step, node_id, primary_fmt):
     """Write each @sink declared on the step. Error-isolated: a sink failure
     never fails the parent asset — it is logged and reported in the outcome."""
@@ -595,7 +610,7 @@ def _write_sinks(result, step, node_id, primary_fmt):
                     "Arrow table or DuckDB relation, or sink it as json or pickle"
                 )
             dest = _sink_dest(dest, node_id)
-            size = serialize(result, dest, fmt)
+            size = serialize(result, _through_symlink(dest), fmt)
             outcomes.append({"path": str(dest), "status": "ok", "size_bytes": size})
         except Exception as exc:
             print(
