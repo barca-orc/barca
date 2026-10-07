@@ -155,19 +155,40 @@ history. A machine uses that hash to decide whether its own copy is current:
   match (edited by hand, or left from before another machine refreshed the result), it is
   replaced by the store's copy and reported as a fetch.
 - A downloaded artifact is hashed too. If the store's copy does not match the recorded hash,
-  the run still uses it and prints a warning naming the step. This is not an error: an
+  the run still uses it and prints a warning naming the step:
+  `[barca] warning: pipeline.py:total: the copy at <location> is not the one this result was
+  recorded with (another run overwrote it, or it was changed). Using it. Recompute with
+  --refresh pipeline.py:total.` This is not an error and the exit code does not change: an
   artifact's path is `<node>/<run_hash>`, which identifies the computation and not the bytes,
   so a `--refresh`, or two machines computing the same step at once, overwrites the object.
-  The warning names the step. With `--json`, the same finding is on the step entries:
-  `steps[].artifact_mismatch` is `true` (and `steps[].warning` has the text) on the step the
-  artifact belongs to and on each step that ran against it in this run, so a caller need not
-  parse stderr. `--refresh <file.py:name>` recomputes it, which clears the
-  warning for every machine that shares this history. Until then, machines can hold
-  different copies of that one result: a machine whose copy matches the recorded hash keeps
-  it, and the others use the store's.
+  `--refresh <file.py:name>` recomputes the step, uploads the new bytes over the object and
+  records their hash, which clears the warning for every machine that shares this history.
+  Until then, machines can hold different copies of that one result: a machine whose copy
+  matches the recorded hash keeps it, and the others use the store's.
+
+The JSON result carries the same finding, so a script or agent does not have to read stderr:
+
+```bash
+barca get total --json --fields id,status,artifact_mismatch
+```
+
+```json
+{"steps": [{"id": "pipeline.py:numbers", "status": "cached", "artifact_mismatch": true},
+           {"id": "pipeline.py:total", "status": "ran", "artifact_mismatch": true}], "...": "..."}
+```
+
+`steps[].artifact_mismatch` is `true` on the step the artifact belongs to and on every step that
+read it as an input in this run; on every other step the key is absent. `steps[].warning` has
+the text. It is reported per step and not in the top-level `warnings` array, which holds plan
+warnings only (`barca docs contract`).
+
+A mismatch and a missing object are different findings and never stand in for each other: a
+copy with other bytes is used and flagged, as above; an object that is not in the store at all
+is computed again with `reason: "artifact_missing"` (see "Failures").
 
 Only artifacts a run reads are hashed, once per run. Not checked: a parquet input that is read
-in place (only byte ranges are fetched), and results recorded before barca stored a hash.
+in place (only byte ranges are fetched), and results recorded before barca stored a hash. A
+`--dry-run` does not contact the store, so it never reports a mismatch.
 
 ## Settings
 

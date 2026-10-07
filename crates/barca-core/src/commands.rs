@@ -599,42 +599,6 @@ fn merge_partition_reports(reports: Vec<StepReport>) -> Vec<StepReport> {
     out
 }
 
-/// Put each store-copy mismatch (base step id -> warning) on the step it belongs to and on the
-/// steps that ran against it in this run, with the stable `artifact_mismatch` marker.
-fn mark_artifact_mismatches(
-    dag: &Dag,
-    reports: &mut [StepReport],
-    mismatched: &HashMap<String, String>,
-) {
-    if mismatched.is_empty() {
-        return;
-    }
-    for r in reports {
-        let base = r.id.split('[').next().unwrap_or(&r.id).to_string();
-        let ran = matches!(r.status.as_deref(), Some("ran" | "partial"));
-        let mut notes: Vec<String> = Vec::new();
-        if let Some(w) = mismatched.get(&base) {
-            notes.push(w.clone());
-        }
-        if ran {
-            for up in dag.upstream(&base) {
-                if let Some(w) = mismatched.get(up) {
-                    notes.push(format!("input {}: {w}", short_name(up)));
-                }
-            }
-        }
-        if notes.is_empty() {
-            continue;
-        }
-        r.artifact_mismatch = Some(true);
-        let joined = notes.join(" ");
-        r.warning = Some(match r.warning.take() {
-            Some(w) => format!("{w} {joined}"),
-            None => joined,
-        });
-    }
-}
-
 fn stale_warning(display_id: &str, root: &str, dry: bool) -> String {
     let id = short_name(display_id);
     let (served, reflect) = if dry {
@@ -815,7 +779,7 @@ pub(crate) fn refresh_name_matches(node_id: &str, name: &str) -> bool {
 }
 
 /// The function name of a node id (`pipeline.py:src` -> `src`, `pipeline.py:p[k=v]` -> `p`).
-fn short_name(node_id: &str) -> &str {
+pub(crate) fn short_name(node_id: &str) -> &str {
     let base = node_id.split('[').next().unwrap_or(node_id);
     base.rsplit(':').next().unwrap_or(base)
 }
@@ -1050,8 +1014,8 @@ pub(crate) struct StoreSync {
     /// intermediates a run never reads are never downloaded. With a recorded
     /// hash, a copy already on disk is checked against it on first use too.
     fetchable: HashMap<String, (String, String, Option<String>)>,
-    /// Base step id -> the warning for its store copy that differs from the recorded hash.
-    /// Reported on the step and on the steps that read it (`StepReport::artifact_mismatch`).
+    /// Base step id -> what was found, for each store copy fetched in this run that does not
+    /// have its recorded hash. Put on the step reports when the run ends ([`crate::mismatch`]).
     mismatched: HashMap<String, String>,
     /// Local mirror paths of fetches the store answered with "no such object",
     /// until [`Self::take_missing`] collects them.
@@ -1205,26 +1169,14 @@ impl StoreSync {
             }
         }
         for (base, at, count) in differing {
-            let others = match count - 1 {
-                0 => String::new(),
-                n => format!(" (and {n} more of its partitions)"),
-            };
-            let msg = format!(
-                "[barca] warning: {base}: the copy at {at}{others} is not the one this result \
-                 was recorded with (another run overwrote it, or it was changed). Using it. \
-                 Recompute with --refresh {base}."
-            );
+            // The same words on stderr and, at the end of the run, in the JSON step entries.
+            let finding = crate::mismatch::describe(&base, at, count - 1);
+            let msg = format!("[barca] warning: {base}: {finding}");
             match pb {
                 Some(bar) if !bar.is_hidden() => bar.println(&msg),
                 _ => eprintln!("{msg}"),
             }
-            self.mismatched.insert(
-                base.clone(),
-                format!(
-                    "the copy at {at}{others} is not the one this result was recorded with. \
-                     Using it. Recompute with --refresh {base}."
-                ),
-            );
+            self.mismatched.insert(base, finding);
         }
         let (missing, failed): (Vec<_>, Vec<_>) = report.failures.iter().partition(|f| f.missing);
         if failed.is_empty() {
@@ -1374,12 +1326,13 @@ pub struct StepReport {
     /// The cached artifact, when the step is served from cache.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifact: Option<String>,
-    /// Set when a cached step depends on an asset refreshed in the same run.
+    /// Something to know about the step, in words: it was served from cache although an asset
+    /// it depends on was refreshed in the same run, or `artifact_mismatch` is set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub warning: Option<String>,
-    /// `true` when the artifact store's copy of this step's result (or of an input it read in
-    /// this run) is not the one recorded for it. The store's copy was used; recompute with
-    /// `--refresh`. Absent otherwise.
+    /// `true` when the artifact store's copy of this step's result, or of an input the step
+    /// read in this run, does not have the hash recorded for it. The store's copy was used,
+    /// and `warning` says which and how to recompute it. Absent otherwise (never `false`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifact_mismatch: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3316,7 +3269,7 @@ async fn execute(
         if let Err(e) = fetched {
             return Err(BarcaError::Other(e));
         }
-        mark_artifact_mismatches(&dag, &mut step_reports, &s.mismatched);
+        crate::mismatch::mark(&dag, &mut step_reports, &s.mismatched);
     }
 
     Ok(Executed {

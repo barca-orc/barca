@@ -12,6 +12,7 @@ pub mod envdeps;
 pub mod events;
 pub mod hash;
 pub mod io_loop;
+mod mismatch;
 pub mod model;
 pub mod parse;
 pub mod planner;

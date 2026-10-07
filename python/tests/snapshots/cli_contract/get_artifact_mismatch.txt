@@ -1,0 +1,19 @@
+# barca get summary pipeline.py --refresh total --json  (stdout, exit 0)
+elapsed_seconds : number
+final_output : <user value>
+phases : integer
+run_id : string
+status : string
+steps : array
+steps[] : object
+steps[].artifact : string  (optional)
+steps[].artifact_mismatch : boolean  (optional)
+steps[].detail : string  (optional)
+steps[].id : string
+steps[].kind : string
+steps[].reason : string  (optional)
+steps[].run_hash : string
+steps[].status : string
+steps[].warning : string  (optional)
+steps_executed : integer
+warnings : array

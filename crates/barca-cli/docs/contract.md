@@ -380,9 +380,8 @@ the set of `kind` values grows additively.
 - `get` and `run` share one refresh vocabulary: `--refresh a,b` (cascading downstream),
   `--no-cascade`, `--refresh-all`. `artifact` appears on cached steps, `run_hash`
   on unpartitioned steps, `warning` on a cached step whose upstream was refreshed without
-  cascading, `artifact_mismatch: true` (with the reason in `warning`) on a step whose artifact
-  the store holds with other bytes than were recorded for it, and on the steps that ran against
-  it (`barca docs remote`), `env` on nodes that declare `env=[...]` (`null` for an unset variable,
+  cascading and on a step with `artifact_mismatch` (see "A store copy that differs from its
+  recorded hash" below), `env` on nodes that declare `env=[...]` (`null` for an unset variable,
   `"<redacted>"` for secret-looking names).
 
 For a parquet or pickle artifact, `final_output` is a pointer instead of the value:
@@ -498,6 +497,59 @@ envelope goes to stderr:
 | `steps_executed` | integer | always |
 | `warnings` | array | always |
 <!-- END GENERATED schema run_failed -->
+
+### get and run: a store copy that differs from its recorded hash
+
+With an artifact store, an artifact fetched from the store is checked against the SHA-256
+recorded when it was written (`barca docs remote`, "Checking a local copy against the store"). A copy with
+other bytes is still used, the exit code does not change, and the result says so on the step
+entries:
+
+<!-- BEGIN GENERATED schema get_artifact_mismatch -->
+| Key | Type | Present |
+|---|---|---|
+| `elapsed_seconds` | number | always |
+| `final_output` | `<user value>` | always |
+| `phases` | integer | always |
+| `run_id` | string | always |
+| `status` | string | always |
+| `steps` | array | always |
+| `steps[]` | object | always |
+| `steps[].artifact` | string | sometimes |
+| `steps[].artifact_mismatch` | boolean | sometimes |
+| `steps[].detail` | string | sometimes |
+| `steps[].id` | string | always |
+| `steps[].kind` | string | always |
+| `steps[].reason` | string | sometimes |
+| `steps[].run_hash` | string | always |
+| `steps[].status` | string | always |
+| `steps[].warning` | string | sometimes |
+| `steps_executed` | integer | always |
+| `warnings` | array | always |
+<!-- END GENERATED schema get_artifact_mismatch -->
+
+- `steps[].artifact_mismatch` is the boolean `true`, or the key is absent. It is never `false`
+  and never `null`: test for the key. It is on the step the artifact belongs to, whatever that
+  step's `status`, and on every step that read the artifact as an input in this run (`status`
+  `ran`, `partial` or `failed`). A step that only depends on such a reader does not have it.
+- `steps[].warning` on the same entries is the finding in words: the store location, and the
+  `--refresh` that recomputes the step. The wording is not contract; `artifact_mismatch` is.
+- The key appears on `get` and `run`, with one target or several, in a failed run's result
+  line, with `--agent`, and in `result.steps` of `barca serve`'s `GET /status/{run_id}`.
+  `--fields` accepts it (`--fields id,status,artifact_mismatch`). It never appears with
+  `--dry-run`, which does not contact the store, nor in `status`, `history` or `stats`, which
+  describe recorded results and do not fetch.
+- It is not an item of the top-level `warnings` array. That array is the plan warnings (see
+  "Plan warnings"): a function of the source files and the targets, the same in a dry run and
+  whatever is cached. A mismatch is found only when a run fetches an artifact, so it is
+  reported where the other facts about what happened to a step are.
+- stderr has the same finding in every output mode, `--agent` included, as
+  `[barca] warning: <id>: the copy at <location> is not the one this result was recorded
+  with ...`. Like every `[barca] warning:` line its wording is experimental: read the key.
+
+In the fixture run above, the store's copy of one asset was overwritten after it was recorded;
+that asset and the step recomputed from it carry the key, and the two other steps do not.
+Stability: stable.
 
 ### get and run: several targets
 

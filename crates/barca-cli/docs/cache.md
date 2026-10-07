@@ -433,7 +433,10 @@ A real `barca get` / `barca run` returns the same per-step information in a `ste
 cached step also prints `[barca] step:<id> cached` on stderr, so a log shows what was served from
 cache as well as what ran. A step whose node declares `env=[...]` also carries `env`, the values
 it was hashed with (`null` when unset, `<redacted>` for secret-looking names), in both the JSON
-`steps` entry and the `--agent` line (`... env SOURCE_CSV=b.csv`). `barca history --json` and `barca stats` show the same over time.
+`steps` entry and the `--agent` line (`... env SOURCE_CSV=b.csv`). With an artifact store, a step
+whose stored result (or an input it read) is not the copy that was recorded carries
+`artifact_mismatch: true` and a `warning` (`barca docs remote`). `barca history --json` and
+`barca stats` show runs and timings over time.
 
 ## Concurrent runs
 
