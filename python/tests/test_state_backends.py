@@ -80,6 +80,7 @@ def _hostport(url: str) -> "tuple[str, int]":
 
 class FileBackend:
     id = "file"
+    endpoint_var = None
 
     def available(self):
         return True
@@ -95,6 +96,7 @@ class FileBackend:
 
 class S3Backend:
     id = "s3"
+    endpoint_var = "BARCA_TEST_S3_ENDPOINT"
 
     def available(self):
         return _reachable(*_hostport(S3_ENDPOINT))
@@ -127,6 +129,7 @@ class S3Backend:
 
 class GcsBackend:
     id = "gcs"
+    endpoint_var = "BARCA_TEST_GCS_ENDPOINT"
 
     def available(self):
         return _reachable(*_hostport(GCS_ENDPOINT))
@@ -158,6 +161,7 @@ class GcsBackend:
 
 class AzureBackend:
     id = "abfs"
+    endpoint_var = "BARCA_TEST_AZURITE_HOST"
 
     def available(self):
         return _reachable(*_hostport("http://" + AZURITE_HOST))
@@ -179,11 +183,36 @@ class AzureBackend:
 ALL_BACKENDS = [FileBackend(), S3Backend(), GcsBackend(), AzureBackend()]
 
 
+def emulator_unreachable(be) -> None:
+    """What a test does when its backend's emulator cannot be reached: skip, unless the
+    environment names that emulator. The CI job that runs the conformance tests sets the
+    `BARCA_TEST_*` endpoint variables and starts the emulators; there an unreachable one is a
+    failure, so the job cannot go green by silently skipping what it exists to run. Without
+    the variable (a laptop with no emulators) the test is skipped."""
+    if be.endpoint_var and os.environ.get(be.endpoint_var):
+        pytest.fail(
+            f"{be.id} emulator not reachable, but {be.endpoint_var}="
+            f"{os.environ[be.endpoint_var]} says it should be"
+        )
+    pytest.skip(f"{be.id} emulator not reachable")
+
+
+def test_the_emulators_the_environment_names_are_reachable():
+    """Under CI's `backends` job all three variables are set: every backend must be up, and
+    this test says so by name rather than leaving it to a count of skips."""
+    named = [be for be in ALL_BACKENDS if be.endpoint_var and os.environ.get(be.endpoint_var)]
+    if not named:
+        pytest.skip("no BARCA_TEST_* endpoint variable is set")
+    down = [f"{be.id} ({be.endpoint_var}={os.environ[be.endpoint_var]})" for be in named]
+    down = [d for d, be in zip(down, named) if not be.available()]
+    assert not down, f"emulators named by the environment are not reachable: {down}"
+
+
 @pytest.fixture(params=ALL_BACKENDS, ids=lambda b: b.id)
 def backend(request, tmp_path, monkeypatch):
     be = request.param
     if not be.available():
-        pytest.skip(f"{be.id} emulator not reachable")
+        emulator_unreachable(be)
     # Apply the env a real pull/push child process would receive, and clear the
     # per-protocol fs cache so each backend's options take effect.
     for k, v in be.env().items():
