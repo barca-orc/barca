@@ -32,12 +32,14 @@ sends to). No Datadog library is needed, only a reachable Agent.
 - Each step is a child span, `barca.step`, with the node id as its resource
   (`pipeline.py:orders`, or `pipeline.py:weekly[week=w1]` for a partition).
 
-Settings are Datadog's own environment variables:
+Settings are Datadog's own environment variables, so a stack that already configures `ddtrace`
+services needs only `BARCA_TELEMETRY=datadog` (and usually its own `DD_SERVICE`):
 
 | Variable | Meaning | Default |
 |---|---|---|
 | `DD_TRACE_AGENT_URL` | `http://host:port` or `unix:///path/to/apm.socket` | unset |
 | `DD_AGENT_HOST`, `DD_TRACE_AGENT_PORT` | Agent address when `DD_TRACE_AGENT_URL` is unset | `localhost`, `8126` |
+| `DD_TRACE_ENABLED` | `false` or `0` switches the Datadog integration off, silently | on |
 | `DD_SERVICE` | service name on every span | `barca` |
 | `DD_ENV`, `DD_VERSION` | `env` and `version` tags | unset |
 | `DD_TAGS` | `key:value` pairs, separated by commas or spaces, added to every span | unset |

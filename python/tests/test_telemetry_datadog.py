@@ -272,3 +272,17 @@ def test_scheduled_runs_under_serve_are_reported(tmp_path, agent):
     roots = [s for r in agent.requests for s in r["body"][0] if s["name"] == "barca.run"]
     assert len({r["trace_id"] for r in roots}) == len(roots)
     assert all(r["service"] == "scheduler" and r["resource"].startswith("run ") for r in roots)
+
+
+@pytest.mark.parametrize("value", ["false", "False", "0"])
+def test_dd_trace_enabled_false_switches_datadog_off_silently(project, agent, value):
+    proc = cli(project, "run", "publish", "--json", **datadog(agent, DD_TRACE_ENABLED=value))
+    assert proc.returncode == 0, proc.stderr
+    assert agent.requests == []
+    assert "telemetry" not in proc.stderr, proc.stderr
+
+
+def test_dd_trace_enabled_true_sends(project, agent):
+    proc = cli(project, "run", "publish", "--json", **datadog(agent, DD_TRACE_ENABLED="true"))
+    assert proc.returncode == 0, proc.stderr
+    assert len(agent.requests) == 1

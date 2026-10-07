@@ -10,6 +10,8 @@
 //! - `DD_TRACE_AGENT_URL` (`http://host:port` or `unix:///path/to/apm.socket`),
 //!   else `DD_AGENT_HOST` (default `localhost`) and `DD_TRACE_AGENT_PORT`
 //!   (default `8126`);
+//! - `DD_TRACE_ENABLED`: `false` or `0` switches this integration off, as it does for
+//!   Datadog's own tracers, so one environment file can turn tracing off for a whole stack;
 //! - `DD_SERVICE` (default `barca`), `DD_ENV`, `DD_VERSION`;
 //! - `DD_TAGS` (`key:value` pairs separated by commas or spaces), added to every span.
 
@@ -153,9 +155,18 @@ fn span_id(parts: &[&str]) -> u64 {
     (u64::from_be_bytes(bytes) >> 1).max(1)
 }
 
+/// `DD_TRACE_ENABLED`: off only for `false` or `0` (any case), as in Datadog's tracers.
+fn tracing_enabled(raw: Option<&str>) -> bool {
+    !raw.is_some_and(|v| v.eq_ignore_ascii_case("false") || v == "0")
+}
+
 impl Datadog {
-    pub fn from_env() -> Result<Self, String> {
-        Ok(Self {
+    /// `Ok(None)` when `DD_TRACE_ENABLED` switches tracing off.
+    pub fn from_env() -> Result<Option<Self>, String> {
+        if !tracing_enabled(env_var("DD_TRACE_ENABLED").as_deref()) {
+            return Ok(None);
+        }
+        Ok(Some(Self {
             agent: agent_from(
                 env_var("DD_TRACE_AGENT_URL").as_deref(),
                 env_var("DD_AGENT_HOST").as_deref(),
@@ -167,7 +178,7 @@ impl Datadog {
             tags: env_var("DD_TAGS")
                 .map(|raw| parse_tags(&raw))
                 .unwrap_or_default(),
-        })
+        }))
     }
 
     /// Tags every span of the trace carries.
@@ -442,6 +453,17 @@ mod tests {
         assert!(!with_password.unwrap_err().contains("secret"));
         assert!(agent_from(Some("https://agent:8126"), None, None).is_err());
         assert!(agent_from(None, None, Some("many")).is_err());
+    }
+
+    #[test]
+    fn dd_trace_enabled_switches_off_only_for_false_or_zero() {
+        for off in ["false", "FALSE", "False", "0"] {
+            assert!(!tracing_enabled(Some(off)), "{off}");
+        }
+        for on in ["true", "1", "yes", "no", ""] {
+            assert!(tracing_enabled(Some(on)), "{on}");
+        }
+        assert!(tracing_enabled(None));
     }
 
     #[test]
