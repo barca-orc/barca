@@ -217,7 +217,7 @@ def _isolated_copy(value):
 class _ArtifactLRU:
     """Tier-1 read-through cache: deserialized artifacts hot in this process.
 
-    Keyed by (path, frame_type) — paths are content-addressed
+    Keyed by (path, frame_type) — paths are named by run hash
     ({node}/{run_hash}{ext}), so a path uniquely identifies content and
     invalidation is automatic (changed input → changed hash → new path → miss).
     Frame type is part of the key so a polars consumer never hits a cached pandas
@@ -642,7 +642,7 @@ def _materialize(result, node_id, art_dir, step, elapsed, elapsed_in_artifact=Fa
     """
     explicit_fmt = step.get("serializer")
     fmt = resolve_format(result, detect_format(result, explicit=explicit_fmt))
-    # Content-addressed layout when the coordinator supplies a run hash.
+    # Run-hash layout when the coordinator supplies a run hash.
     # Batch mode's legacy partitioned loop reuses the step-level hash only for
     # unpartitioned steps (a per-step hash is wrong per-partition; the daemon
     # path gets a per-item hash from Rust and batch mode is test-only).

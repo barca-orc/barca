@@ -1,4 +1,4 @@
-Barca runs Python asset graphs with content-addressed caching.
+Barca runs Python asset graphs with caching by run hash.
 Every asset output is fully materialized to an artifact file at step boundaries (json, pickle, or parquet) — that persistence is the cache checkpoint. pandas/polars DataFrames, pyarrow Tables and duckdb relations are written as parquet; parameter type annotations choose how downstream steps read it back (pandas by default, or polars, pyarrow, duckdb) but do not skip materialization. Start with `barca list` (run inside the project) to discover a project's assets and tasks; run `barca docs` for the manual.
 
 Usage: barca <COMMAND>

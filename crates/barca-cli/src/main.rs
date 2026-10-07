@@ -295,7 +295,7 @@ Topics are compiled into the binary: offline, and always matching this version."
 #[command(
     name = "barca",
     about = "Invisible asset orchestrator. Discover a project's assets and tasks with `barca list <file.py>`",
-    long_about = "Barca runs Python asset graphs with content-addressed caching.\n\
+    long_about = "Barca runs Python asset graphs with caching by run hash.\n\
                   Every asset output is fully materialized to an artifact file at step \
                   boundaries (json, pickle, or parquet) — that persistence is the cache \
                   checkpoint. pandas/polars DataFrames, pyarrow Tables and duckdb relations \
