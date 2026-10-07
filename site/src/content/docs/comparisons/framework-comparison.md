@@ -1,15 +1,19 @@
 ---
-title: "Framework Comparison: Aesthetics, Transparency, and Overhead"
-description: How much does each orchestrator get in the way? Barca vs Dagster, Prefect, and Airflow.
+title: "Framework Comparison: Code, Features and Overhead"
+description: The same small pipelines written for barca, Dagster, Prefect and Airflow, a feature list, and run times measured on 2026-06-05 with barca 0.1.5.
 ---
 
-How much does each framework get in the way? Evaluated on: **minimal code**, **easy to understand**, **doesn't mask its behavior**.
+Last measured: 2026-06-05, with barca 0.1.5 and Dagster (version not recorded), Prefect (version not recorded) and Airflow 3.2.2, on an Apple Silicon (M-series) Mac. Not re-run since; the current barca release is 0.18.0. Re-run tracked in [#277](https://github.com/barca-orc/barca/issues/277).
 
-## The Trivial Case
+The Dagster and Prefect versions were whatever PyPI served as latest on that date, under Python
+3.12; barca ran under Python 3.14. The code samples for the other tools are the benchmark sources
+as written then. Statements about Dagster, Prefect and Airflow on this page were recorded on
+2026-06-05 and have not been checked against their current documentation, except where a note
+says so. Notes dated 2026-10-07 say where barca itself has changed.
 
-"Return a dict. That's it."
+## One function that returns a dict
 
-**Barca** (4 lines):
+**Barca:**
 ```python
 from barca import asset
 
@@ -18,7 +22,7 @@ def single_asset() -> dict:
     return {"status": "ok"}
 ```
 
-**Dagster** (4 lines of asset code + 8 lines of runner):
+**Dagster:**
 ```python
 from dagster import asset, materialize
 
@@ -26,11 +30,11 @@ from dagster import asset, materialize
 def single_asset():
     return {"status": "ok"}
 
-# To actually run it:
+# To run it:
 result = materialize([single_asset])
 ```
 
-**Prefect** (6 lines + runner):
+**Prefect:**
 ```python
 from prefect import flow, task
 
@@ -43,7 +47,7 @@ def bench_flow():
     return single_asset()
 ```
 
-**Airflow** (10 lines):
+**Airflow:**
 ```python
 from datetime import datetime
 from airflow.decorators import dag, task
@@ -59,24 +63,20 @@ def trivial_dag():
 trivial_dag()
 ```
 
-### Verdict
+| Framework | What the sample needs besides the function |
+|-----------|--------------------------|
+| Barca | the `@asset()` decorator; run with `barca get file.py` |
+| Dagster | the `@asset` decorator and a `materialize([...])` call |
+| Prefect | the `@task` decorator and a `@flow` function that calls it |
+| Airflow | the `@task` decorator, a `@dag(dag_id=..., start_date=..., schedule=..., catchup=...)` function, and a call to it |
 
-| Framework | Lines for "return a dict" | Ceremony | Runs standalone? |
-|-----------|--------------------------|----------|-----------------|
-| **Barca** | 4 | `@asset()` decorator only | Yes (`python file.py` works, decorator is a no-op) |
-| **Dagster** | 4 + `materialize()` call | Need `materialize([...])` to execute | No (needs dagster runner) |
-| **Prefect** | 4 + `@flow` wrapper | Every task needs a wrapping `@flow` | No (needs prefect runner) |
-| **Airflow** | 10 | `@dag(dag_id=..., start_date=..., schedule=..., catchup=...)` | No (needs airflow CLI + DB) |
+Barca's decorators return the function unchanged, so `python file.py` and a direct call to
+`single_asset()` run it as ordinary Python (the `barca` package has to be importable). Nothing
+is cached or recorded that way.
 
-Barca is the only one where the user code runs standalone without the framework installed.
+## Declaring that B depends on A
 
----
-
-## Dependencies: How You Wire Things Together
-
-"Asset B depends on asset A."
-
-**Barca** — explicit `inputs={}` dict:
+**Barca** (an `inputs={}` dict on the decorator):
 ```python
 @asset()
 def a():
@@ -87,24 +87,24 @@ def b(data):
     return {"value": data["value"] + 1}
 ```
 
-**Dagster** — parameter name matching + `AssetIn`:
+**Dagster** (a parameter named after the upstream asset, or `AssetIn`):
 ```python
 @asset
 def a():
     return {"value": 1}
 
-# Option 1: implicit (param name must match asset name)
+# Option 1: the parameter name matches the asset name
 @asset
 def b(a):
     return {"value": a["value"] + 1}
 
-# Option 2: explicit (when param name differs)
+# Option 2: explicit, when the parameter name differs
 @asset(ins={"data": AssetIn(key="a")})
 def b(data):
     return {"value": data["value"] + 1}
 ```
 
-**Prefect** — call-site wiring inside `@flow`:
+**Prefect** (calls inside a `@flow`):
 ```python
 @task
 def a():
@@ -120,7 +120,7 @@ def pipeline():
     return b(result_a)  # wired here, not at definition
 ```
 
-**Airflow** — call-site wiring inside `@dag`:
+**Airflow** (calls inside a `@dag`):
 ```python
 @task
 def a():
@@ -138,40 +138,36 @@ def pipeline():
 pipeline()
 ```
 
-### Verdict
+| Framework | Where the dependency is written |
+|-----------|---------------------------|
+| Barca | on the consuming function's decorator (`inputs={}`) |
+| Dagster | on the consuming function: its parameter name, or `AssetIn` |
+| Prefect | in the body of the `@flow` function |
+| Airflow | in the body of the `@dag` function |
 
-| Framework | Where dependencies declared | Transparent? |
-|-----------|---------------------------|-------------|
-| **Barca** | At definition (`inputs={}`) | Yes — you see the DAG from decorators alone, no runner code needed |
-| **Dagster** | At definition (`AssetIn`) or implicit | Mostly — implicit name matching is magic; explicit `AssetIn` is clear |
-| **Prefect** | At call site (inside `@flow`) | Yes — but you must read the flow function to understand the DAG |
-| **Airflow** | At call site (inside `@dag`) | Yes — same as Prefect, DAG is in the orchestration function |
+Checked 2026-10-07: Dagster's
+[passing data between assets](https://dagster.io/docs/guides/build/assets/passing-data-between-assets)
+guide still describes option 1, a parameter named after the upstream asset.
 
-Barca's approach means you can look at ANY function in isolation and know its inputs without reading any orchestration code. The DAG is fully declared in decorators.
+## Fan-out and fan-in
 
----
+Five sources, five transforms, one merge. The merge step in each:
 
-## The Diamond Pattern (Fan-out + Fan-in)
-
-5 parallel sources → 5 parallel transforms → merge → post-process. This is where frameworks diverge most.
-
-**Barca** — just more `inputs={}`:
+**Barca:**
 ```python
 @asset(inputs={"f0": feat_0, "f1": feat_1, "f2": feat_2, "f3": feat_3, "f4": feat_4})
 def merge(f0, f1, f2, f3, f4):
     return {"combined": [x for f in (f0, f1, f2, f3, f4) for x in f["features"]]}
 ```
-No special fan-in syntax. Dependencies are dependencies.
 
-**Dagster** — same `AssetIn` pattern:
+**Dagster:**
 ```python
 @asset(ins={"f0": AssetIn(key="feat_0"), "f1": AssetIn(key="feat_1"), ...})
 def merge(f0, f1, f2, f3, f4):
     ...
 ```
-Verbose but explicit. `AssetIn` for every input.
 
-**Prefect** — call-site wiring:
+**Prefect:**
 ```python
 @flow(task_runner=ConcurrentTaskRunner())
 def pipeline():
@@ -181,9 +177,15 @@ def pipeline():
     m = merge(f[0], f[1], f[2], f[3], f[4])
     ...
 ```
-The parallelism is visible but you need `ConcurrentTaskRunner()` to actually run in parallel. Without it, everything is sequential.
 
-**Airflow** — same call-site pattern:
+Checked 2026-10-07: Prefect's current
+[task runners](https://docs.prefect.io/v3/concepts/task-runners) page names the default runner
+`ThreadPoolTaskRunner` and does not mention `ConcurrentTaskRunner`. It also says a task called
+directly, as in this sample, runs in the main thread and blocks until it completes; concurrent
+execution needs `.submit()` or `.map()`. The sample above therefore ran its tasks one after
+another, which affects the Prefect times at the end of this page.
+
+**Airflow:**
 ```python
 @dag(...)
 def deep_diamond_dag():
@@ -194,134 +196,94 @@ def deep_diamond_dag():
     t = transform(m)
     output(t)
 ```
-Clean! Airflow's `@task` decorator with the TaskFlow API is actually pleasant. But you pay for it with `@dag(dag_id=..., start_date=..., schedule=..., catchup=...)` on every DAG.
 
----
+Independent barca steps run in parallel worker processes.
 
-## What Each Framework Hides From You
+## What barca does when you run it
 
-| Framework | What's hidden | How it surprises you |
-|-----------|--------------|---------------------|
-| **Barca** | Worker process spawning, artifact serialization | Almost nothing — it's a binary that runs your code. `.barca/` appears but it's just a cache. |
-| **Dagster** | I/O managers, run storage, event log, asset catalog | A lot. Default I/O manager pickles everything. Logs go to a structured event store. `materialize()` does way more than it looks. |
-| **Prefect** | Task state machine, result persistence, API server, flow run tracking | Prefect tracks every task state transition (Pending→Running→Completed). By default it phones home to Prefect Cloud or needs a local server. `ConcurrentTaskRunner` vs default is a silent behavior change. |
-| **Airflow** | Scheduler, executor, metadata DB, XCom serialization, DAG parsing interval | The most hidden behavior. Your DAG file is parsed every 30s by the scheduler. XCom (data passing between tasks) has a 48KB default limit. The executor (Sequential/Local/Celery/Kubernetes) fundamentally changes behavior with no code change. |
+`barca get file.py` starts the Rust binary. It parses the source without importing it, builds
+the dependency graph, starts Python worker processes, and collects the results. `barca plan
+file.py` prints the execution plan as JSON without running anything. Each result is a file under
+`.barca/artifacts/<node>/<run_hash>.<ext>`, and run history is in `.barca/metadata.db`.
 
----
+This section used to describe the internals of the other three tools as well. Those descriptions
+were written from memory and could not be verified, so they have been removed. One of them, a
+48 KB default size limit on Airflow XComs, does not appear in Airflow's current
+[XComs](https://airflow.apache.org/docs/apache-airflow/stable/core-concepts/xcoms.html) page.
 
-## Boilerplate per Asset
+## Features
 
-How much framework code do you write per asset function?
+The barca column was updated on 2026-10-07 for barca 0.18.0. The other three columns are as
+recorded on 2026-06-05 and have not been re-checked; treat them as a starting point and read
+each project's documentation.
 
-| Framework | Decorator | Extra imports | Config objects | Orchestration wrapper |
-|-----------|-----------|--------------|----------------|----------------------|
-| **Barca** | `@asset()` | `from barca import asset` | None | None |
-| **Dagster** | `@asset` | `from dagster import asset, AssetIn` | `AssetIn(key=...)` per input | `materialize([...])` |
-| **Prefect** | `@task` | `from prefect import task, flow` | `ConcurrentTaskRunner()` for parallelism | `@flow` wrapper function |
-| **Airflow** | `@task` | `from airflow.decorators import dag, task` | `@dag(dag_id=..., start_date=..., schedule=..., catchup=...)` | `@dag` wrapper function + `dag()` call |
+| Feature | Dagster (2026-06-05) | Prefect (2026-06-05) | Airflow (2026-06-05) | Barca 0.18.0 |
+|---------|---------|---------|---------|-------|
+| Web UI | Yes (`dagster dev`) | Yes (Prefect Cloud or server) | Yes (webserver) | Yes, served by `barca serve` at `/ui/` ([Server API](/reference/server-api/)) |
+| Run history | Event log, asset catalog | Flow run and task run tracking | DagRun and TaskInstance records | Rows in a local database: `barca history`, `barca stats`, `barca status` ([#50]) |
+| Retry on failure | Per-op retries | Per-task retries | Retries | `retries=N, retry_backoff=...` on the decorator, linear backoff ([#51]) |
+| Alerting | Sensors and hooks | Automations | Email and other notifiers | No ([#52] is open) |
+| Scheduling | Cron schedules and sensors | Deployments | Scheduler | Cron in `barca serve`, 5 or 6 fields, 1-second resolution, one catch-up fire after downtime ([Scheduling](/scheduling/), [#54]) |
+| Server mode | `dagster dev` | `prefect server` | Webserver and scheduler | `barca serve`: HTTP API, scheduler and web UI; binds 127.0.0.1, no authentication ([#53]) |
+| Remote storage | I/O managers | Result storage | XCom backends | Artifacts on S3, S3-compatible stores, GCS or Azure through fsspec, and a shared history database ([Remote storage](/reference/remote-storage/), [#55]) |
+| Containers | Kubernetes executor | Docker infrastructure | Celery and Kubernetes executors | No executor of its own; `barca serve` can run as a container's foreground process ([Scheduling](/scheduling/#keeping-it-running)) |
+| Multi-user access control | Yes | Yes | Yes | No |
+| Backfills | Partitioned backfills | Via deployments | `dags backfill` | `barca get` runs the partition keys that have no cached result. There is no flag to select keys ([#57] is open) |
+| Dynamic fan-out | Dynamic partitions | `.map()` | Dynamic task mapping | `partitions([...])`, an expression evaluated at plan time, or `partitions_from(asset)` |
+| Task workflows | Jobs and ops | `@task` and `@flow` | `@task` | `@task`, which always runs and may sit anywhere in the graph except upstream of an asset |
+| Tracing | OpenTelemetry | OpenTelemetry | StatsD | Datadog traces, one per run with a span per step ([Telemetry](/reference/telemetry/)); OTLP in [#59] is open |
+| Data quality checks | Asset checks | Not built in | Not built in | Not built in. A step that raises fails the run and nothing downstream of it runs |
+| Integrations | Yes | Yes | Yes (providers) | None |
 
----
+[#50]: https://github.com/barca-orc/barca/issues/50
+[#51]: https://github.com/barca-orc/barca/issues/51
+[#52]: https://github.com/barca-orc/barca/issues/52
+[#53]: https://github.com/barca-orc/barca/issues/53
+[#54]: https://github.com/barca-orc/barca/issues/54
+[#55]: https://github.com/barca-orc/barca/issues/55
+[#57]: https://github.com/barca-orc/barca/issues/57
+[#59]: https://github.com/barca-orc/barca/issues/59
 
-## Execution Model Transparency
+Barca is pre-1.0 and runs on one machine at a time: it has no remote executor, no access
+control and no integrations library. If you need those, the other three tools have them.
 
-"What actually happens when I run this?"
+## Run times, single run, nothing cached
 
-**Barca**: `barca get file.py` → Rust binary parses source (no import), builds DAG, spawns Python workers, collects results. You can see exactly what happened: `barca plan file.py` shows the execution plan as JSON. Artifacts are plain files in `.barca/artifacts/`. No hidden state machines.
-
-**Dagster**: `materialize([assets])` → loads assets into a "repository", builds a job, creates a "run", executes steps through an I/O manager that pickles results, logs events to a structured store. `dagster dev` launches a full web UI. Much of this is invisible from the code.
-
-**Prefect**: `flow()` → creates a "flow run", each task becomes a "task run" with state transitions tracked by Prefect's API. Default behavior phones home to Prefect Cloud. Local mode uses SQLite. Result persistence is configurable but defaults are opaque.
-
-**Airflow**: `airflow dags test` → parses all DAG files, initializes metadata DB, creates DagRun + TaskInstance records, passes data via XCom (stored in DB, 48KB default limit), logs to filesystem. Production mode requires scheduler + executor + message broker + DB.
-
----
-
-## What You Give Up With Barca
-
-Minimalism is a tradeoff. Here's what the other frameworks have that barca doesn't:
-
-| Feature | Dagster | Prefect | Airflow | Barca | Roadmap |
-|---------|---------|---------|---------|-------|---------|
-| **Web UI / dashboard** | Yes (dagster dev) | Yes (Prefect Cloud / server) | Yes (webserver) | No | `barca serve` ships an HTTP API only, no UI planned |
-| **Run history / lineage** | Full event log, asset catalog | Flow run tracking, task states | DagRun/TaskInstance records | Basic: rows in SQLite, no UI | Planned — just more DB rows ([#50]) |
-| **Retry on failure** | Built-in per-op retries | Built-in per-task retries | Built-in retries + SLAs | Yes — `@asset(retries=N, retry_backoff=...)`, linear backoff, applied by the Rust coordinator | Shipped ([#51]) |
-| **Alerting / notifications** | Sensors + hooks | Automations, Slack/email | Email, Slack, PagerDuty | No | Planned — Slack + Resend hooks via `barca.toml` ([#52]) |
-| **Scheduling** | Built-in cron + sensors | Built-in via deployments | Core feature (scheduler daemon) | Cron enforcement in `barca serve`: 5-field + 6-field sub-minute (1s resolution), timezone-aware, durable catch-up, parallel runs, `GET /schedule` (see [vs. cron](/comparisons/cron/)) | Shipped ([#54]); per-tick replay of long outages not supported |
-| **Server mode** | Built-in (dagster dev) | Built-in (prefect server) | Built-in (webserver + scheduler) | Yes — `barca serve` (HTTP API + cron scheduler; binds 127.0.0.1, no auth) | Shipped ([#53]) |
-| **Remote storage** | Pluggable I/O managers (S3, GCS, etc.) | Result storage backends | XCom + external storage hooks | Yes — Azure ADLS Gen2, S3, GCS, and Cloudflare R2 via fsspec scheme dispatch, plus a shared metadata DB pulled/pushed as a blob | Shipped ([#55]); pluggable DB engine beyond Turso/libSQL still planned ([#56]) |
-| **Docker / containers** | Supported via Kubernetes executor | Supported via Docker infra | Celery/Kubernetes executors | Not built-in | Artifact storage is already pluggable; trivial once the DB backend is too ([#56]) |
-| **Multi-user / team** | Workspace permissions, code locations | Workspace RBAC, service accounts | DAG-level permissions, RBAC | Single-user only | Not planned — deliberate decision for simplicity |
-| **Backfills** | Built-in partitioned backfills | Via deployments | `dags backfill` (v2) | Supported — `barca get` re-runs subgraphs; needs partition filter on CLI | CLI flag: `--partition region=us` ([#57]) |
-| **Dynamic pipelines** | Dynamic partitions, graph DSL | Dynamic tasks via `.map()` | Dynamic task mapping | Supported — static, dynamic (eval at plan time), derived (`partitions_from`) | — |
-| **Task-based workflows** | Jobs + ops (separate from assets) | `@task` + `@flow` (native) | `@task` (native) | `@task` for side-effects; can appear anywhere in graph | Implemented in v0.2.0 |
-| **APM / observability** | Via OpenTelemetry | Via OpenTelemetry | Via StatsD / Prometheus | Not built-in | Planned — Datadog (P1) + Sentry (P2) ([#59]) |
-| **Data quality / expectations** | Asset checks, freshness policies | Not built-in (use Great Expectations) | Not built-in | Not built-in — use pydantic/pandera/asserts in your functions; failures block downstream naturally | Syntactic sugar at best; not urgent |
-| **Plugin ecosystem** | Large (200+ integrations) | Growing (collections) | Massive (providers) | None | Hooks system ([#52]) is the starting point |
-
-[#50]: https://github.com/ExSidius/barca/issues/50
-[#51]: https://github.com/ExSidius/barca/issues/51
-[#52]: https://github.com/ExSidius/barca/issues/52
-[#53]: https://github.com/ExSidius/barca/issues/53
-[#54]: https://github.com/ExSidius/barca/issues/54
-[#55]: https://github.com/ExSidius/barca/issues/55
-[#56]: https://github.com/ExSidius/barca/issues/56
-[#57]: https://github.com/ExSidius/barca/issues/57
-[#58]: https://github.com/ExSidius/barca/issues/58
-[#59]: https://github.com/ExSidius/barca/issues/59
-
-Barca is fast and minimal **because** it doesn't do most of this yet. But the roadmap is deliberate: each feature is designed to add capability without adding framework complexity. Run history is just more DB rows. Retries are extra attempts the Rust coordinator dispatches to workers, not a new service. Scheduling is a cron check in the server. None of these require new services, config languages, or architectural overhead.
-
-The bet is that for many workloads — especially agent-driven pipelines, local data processing, and development iteration — you want to start minimal and add what you need, rather than pay for everything upfront.
-
-### Where the other frameworks genuinely shine
-
-**Dagster** is the most thoughtful about data assets as first-class citizens. Its I/O manager abstraction means you can swap storage backends without changing business logic. Asset lineage and the software-defined asset model are genuinely good ideas that barca's `@asset` decorator is inspired by. If you need a production data platform with a team, Dagster is the right choice.
-
-**Prefect** is the most Pythonic. The `@task` / `@flow` model feels natural. `ConcurrentTaskRunner` and `.map()` for dynamic parallelism are elegant. If you want an orchestrator that feels like writing normal Python with superpowers, Prefect is excellent.
-
-**Airflow** has the largest ecosystem and the most battle-tested production deployment story. If you need 50 different provider integrations, a scheduler that runs 24/7, and an operations team that already knows Airflow, nothing else compares. The TaskFlow API in Airflow 2+ is a genuine improvement over the old operator model.
-
-### Barca's honest positioning
-
-Barca is not a replacement for any of these in production data platform scenarios. It's for a different use case: **you want to write Python functions, have them run fast, cache correctly, and get out of the way.** No server, no config, no framework to learn. The cost is that you're on your own for everything beyond execution and caching.
-
----
-
-## Summary Scorecard
-
-| Criteria | Barca | Dagster | Prefect | Airflow |
-|----------|-------|---------|---------|---------|
-| **Minimal code** | Best | Good | OK | Verbose |
-| **Dependency clarity** | Best (decorators only) | Good (AssetIn is explicit) | OK (read flow function) | OK (read dag function) |
-| **Behavior transparency** | Best (binary + files) | Mixed (I/O managers hidden) | Mixed (state machine hidden) | Low (scheduler/executor hidden) |
-| **Runs standalone** | Yes | No | No | No |
-| **Feature richness** | Low | High | High | Highest |
-| **Production readiness** | Early (pre-1.0) | Mature | Mature | Very mature |
-| **Team / multi-user** | No | Yes | Yes | Yes |
-| **Remote execution** | No | Yes | Yes | Yes |
-
----
-
-## Performance (Single Run, No Caching)
+Measured 2026-06-05 with barca 0.1.5.
 
 | Benchmark | Barca | Dagster | Prefect | Airflow |
 |-----------|-------|---------|---------|---------|
-| Trivial (1 asset) | **25ms** | 378ms (15x) | 3.8s (153x) | 2.2s (87x) |
-| Chain 100 | **77ms** | 887ms (12x) | 3.6s (46x) | 79.5s (1,033x) |
-| Deep diamond (18) | **66ms** | 453ms (7x) | 3.6s (54x) | 15.6s (237x) |
-| Fan-out 500×50ms | **2.4s** | 29.7s (12x) | 30.7s (13x) | 417s (171x) |
+| Trivial (1 asset) | 25ms | 378ms | 3.8s | 2.2s |
+| Chain 100 | 77ms | 887ms | 3.6s | 79.5s |
+| Deep diamond (18) | 66ms | 453ms | 3.6s | 15.6s |
+| Fan-out 500×50ms | 2.4s | 29.7s | 30.7s | 417s |
 
-The speed gap is real but context matters. In a 10-minute ETL pipeline, 400ms of framework overhead (Dagster) is noise. The gap matters most for: fast iteration loops, agent-driven pipelines that run many small DAGs, and workloads where framework overhead dominates actual compute.
+How to read these:
 
-### Partitioned Workloads (10 steps × 1000 partitions = 10,000 steps)
+- The pipelines do almost no work, so the times are close to each tool's fixed cost per run and
+  per step. For a pipeline whose steps take minutes, a difference of a few hundred milliseconds
+  is small.
+- The benchmark harness was changed after these numbers were taken. `benchmarks/RESULTS.md` in
+  the repository records, on 2026-07-16, that worker counts were not matched between tools in
+  this run and that most Prefect scripts called tasks directly instead of through `.submit()`,
+  so the Prefect numbers here are a worst case on the parallel benchmarks (fan-out, deep
+  diamond). It also records why Dagster ran its steps sequentially in process. Later passes
+  under the corrected harness are in
+  [`benchmarks/RESULTS.md`](https://github.com/barca-orc/barca/blob/main/benchmarks/RESULTS.md);
+  they ran on different hardware and are not comparable with this table.
+- According to the results file of that week, Airflow ran through `airflow dags test`.
 
-Each framework uses its idiomatic partition/map pattern — no strawmen.
+### Partitioned workload: 10 steps × 1000 partitions = 10,000 steps
 
 | Benchmark | Barca | Dagster | Prefect | Airflow |
 |-----------|-------|---------|---------|---------|
-| 10k partitioned steps | **0.7s** | 95s (136x) | >9min (killed) | >22min (killed) |
+| 10k partitioned steps | 0.7s | 95s | >9min (killed) | >22min (killed) |
 | Pattern used | `partitions()` | `StaticPartitionsDefinition` | `task.map()` | `expand()` + PostgreSQL |
 
-Barca's late partition expansion creates 10 StreamSteps (one per node), not 10,000. Workers expand partitions internally. The other frameworks create per-partition objects in their registries/DBs, which doesn't scale.
+The Prefect and Airflow runs were stopped before they finished. In barca 0.1.5 the plan for this
+workload had 10 entries, one per node, and the workers expanded the partitions. In the same
+session barca ran 200,000 steps (100,000 partitions × 2 steps) in 14s; the other tools were not
+run at that size.
 
-At 200k steps (100k partitions × 2 steps), barca completes in 14s. The other frameworks are not viable at this scale.
+Note, 2026-10-07: partition handling has changed since 0.1.5; barca 0.18.0 caches each partition
+key on its own (`barca docs partitions`). The barca times above were not re-measured on 0.18.0.
