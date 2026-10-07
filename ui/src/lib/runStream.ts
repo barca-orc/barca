@@ -56,6 +56,9 @@ export function reduceRunEvent(state: RunStreamState, event: RunEvent): RunStrea
           ? { ...state.errors, [ev.node_id]: ev.error }
           : state.errors,
     }))
+    // One of the run's targets is done while the run goes on. The steps' own
+    // `step_finished` events already carry what the node table shows.
+    .with({ type: 'target_finished' }, () => state)
     .with({ type: 'run_finished' }, (ev) => ({
       ...state,
       running: false,

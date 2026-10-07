@@ -62,6 +62,16 @@ describe('reduceRunEvent', () => {
     expect(state.running).toBe(false)
   })
 
+  it('a finished target changes nothing the step events have not already said', () => {
+    const steps: RunEvent[] = [
+      { type: 'run_started', run_id: 'r5' },
+      { type: 'step_finished', node_id: NODE, ok: true, elapsed_seconds: 0.1 },
+    ]
+    const state = play([...steps, { type: 'target_finished', node_id: NODE, ok: true }])
+    expect(state).toEqual(play(steps))
+    expect(state.running).toBe(true)
+  })
+
   it('is pure — does not mutate the input state', () => {
     const before = EMPTY_RUN_STATE
     const after = reduceRunEvent(before, { type: 'log', node_id: NODE, line: 'x' })

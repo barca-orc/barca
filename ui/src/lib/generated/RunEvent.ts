@@ -3,4 +3,4 @@
 /**
  * A single event in a run's lifecycle. Serialized as the SSE payload.
  */
-export type RunEvent = { "type": "run_started", run_id: string, } | { "type": "log", node_id: string, line: string, } | { "type": "step_finished", node_id: string, ok: boolean, elapsed_seconds?: number, error?: string, } | { "type": "run_finished", run_id: string, ok: boolean, };
+export type RunEvent = { "type": "run_started", run_id: string, } | { "type": "log", node_id: string, line: string, } | { "type": "step_finished", node_id: string, ok: boolean, elapsed_seconds?: number, error?: string, } | { "type": "target_finished", node_id: string, ok: boolean, } | { "type": "run_finished", run_id: string, ok: boolean, };
