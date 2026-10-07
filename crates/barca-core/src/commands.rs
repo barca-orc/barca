@@ -1581,7 +1581,7 @@ pub async fn get(
     python: &std::path::Path,
     policy: CachePolicy,
     agent_mode: bool,
-    cancel: CancellationToken,
+    cancel: impl Into<crate::interrupt::Interrupt>,
 ) -> Result<GetResult, BarcaError> {
     let names: Vec<String> = target_name.map(str::to_string).into_iter().collect();
     execute(
@@ -1600,7 +1600,7 @@ pub async fn run(
     python: &std::path::Path,
     policy: CachePolicy,
     agent_mode: bool,
-    cancel: CancellationToken,
+    cancel: impl Into<crate::interrupt::Interrupt>,
 ) -> Result<GetResult, BarcaError> {
     execute(
         cfg,
@@ -1677,7 +1677,7 @@ pub async fn get_many(
     python: &std::path::Path,
     policy: CachePolicy,
     agent_mode: bool,
-    cancel: CancellationToken,
+    cancel: impl Into<crate::interrupt::Interrupt>,
 ) -> Result<MultiResult, BarcaError> {
     execute(
         cfg,
@@ -1704,7 +1704,7 @@ pub async fn run_many(
     python: &std::path::Path,
     policy: CachePolicy,
     agent_mode: bool,
-    cancel: CancellationToken,
+    cancel: impl Into<crate::interrupt::Interrupt>,
 ) -> Result<MultiResult, BarcaError> {
     execute(
         cfg,
@@ -1832,7 +1832,7 @@ pub(crate) async fn explain_dag(
     // while a run is going in the same project: what that run has recorded so far is still
     // there afterwards, next to what other machines pushed.
     if cfg.state == crate::config::StateMode::Optimistic && cfg.state_uri.is_some() {
-        let pulled = state_sync::pull_state(python, cfg, None).await?;
+        let pulled = state_sync::pull_state(python, cfg, state_sync::Until::done()).await?;
         if let Some(note) = pulled.carried.note() {
             eprintln!("{note}");
         }
@@ -2127,9 +2127,11 @@ async fn execute(
     agent_mode: bool,
     policy: CachePolicy,
     command_label: &str,
-    cancel: CancellationToken,
+    interrupt: impl Into<crate::interrupt::Interrupt>,
     event_tx: Option<UnboundedSender<crate::RunEvent>>,
 ) -> Result<Executed, BarcaError> {
+    let interrupt = interrupt.into();
+    let cancel = interrupt.cancel.clone();
     let t0 = Instant::now();
     // BARCA_TRACE_TIMING=1: emit a millisecond-resolution waterfall of every
     // major checkpoint in this run to stderr (DAG parse, planning, DB setup,
@@ -2163,7 +2165,8 @@ async fn execute(
             let started = Instant::now();
             // Ctrl-C while the shared state is still being pulled ends the command here:
             // nothing has run and no run has been created yet.
-            let pulled = state_sync::pull_state(&python, &cfg, Some(&cancel)).await?;
+            let until = state_sync::Until::cancelled(&cancel);
+            let pulled = state_sync::pull_state(&python, &cfg, until).await?;
             Ok::<_, BarcaError>((pulled, started.elapsed()))
         })
     });
@@ -3197,7 +3200,7 @@ async fn execute(
         .snapshot()
         .map(|(node_id, est)| (node_id.clone(), *est))
         .collect();
-    let ledger = RunLedger {
+    let mut ledger = RunLedger {
         run_id: &run_id,
         status: if was_cancelled {
             "cancelled"
@@ -3236,81 +3239,83 @@ async fn execute(
         trace_point!("telemetry_exported");
     }
 
-    // Shared remote state: fold the WAL into the main file and conditionally
-    // upload it (`push_state` does both under the database lock). On conflict (another machine pushed first): pull the fresh
-    // database, replay this run's ledger onto it, retry.
+    // Shared remote state: upload the local history (`push_state` folds the WAL in and copies
+    // it under the database lock). See `SharedPush::run` for conflicts.
     if state_sync_on {
-        let mut attempt = 0u32;
-        let mut pushed_again = false;
+        let mut push = SharedPush {
+            python,
+            cfg,
+            db_path: &db_path,
+            run_id: &run_id,
+            logs: &logs_buffer,
+            token: state_token.take().expect("pulled when state sync is on"),
+        };
         let t_push = Instant::now();
-        loop {
-            // A run cancelled earlier still pushes what it finished, and that push is not
-            // interruptible (the one Ctrl-C has been spent). Otherwise Ctrl-C stops the push:
-            // the run's results stay in this machine's history only, and the run is recorded
-            // as cancelled.
-            let interruptible = (!was_cancelled).then_some(&cancel);
-            let token = state_token.as_ref().unwrap();
-            let outcome = match state_sync::push_state(python, cfg, token, interruptible).await {
+        let mut pushed: Option<u32> = None;
+        if !was_cancelled {
+            // Ctrl-C stops the push. The run's work is done and recorded, but the command is
+            // cancelled before its record was shared, so the record says `cancelled`; the
+            // wrap-up below then tries to share that.
+            match push
+                .run(&ledger, state_sync::Until::cancelled(&cancel))
+                .await
+            {
+                Ok(retries) => pushed = Some(retries),
                 Err(BarcaError::Cancelled) => {
+                    // The ledger too, so that a replay after a conflict keeps the mark.
+                    ledger.status = "cancelled";
                     cancel_recorded_run(&db_path, &ledger).await?;
-                    return Err(BarcaError::Cancelled);
+                    was_cancelled = true;
                 }
-                other => other?,
-            };
-            let again = match outcome {
-                state_sync::PushOutcome::Pushed {
-                    local_unchanged: true,
-                    ..
-                } => false,
-                // Uploaded, but another process wrote to the local database (or replaced
-                // it) while the upload was on its way. Treated like a conflict, once: pull
-                // what was just uploaded, which keeps those rows, and push again. Only once,
-                // because a run going in the same project writes during every upload, and
-                // chasing it would cost a pull and an upload each time for rows that run
-                // pushes itself when it ends. The upload stands either way; rows written
-                // after it go with the next push from this machine.
-                state_sync::PushOutcome::Pushed { .. } => {
-                    !std::mem::replace(&mut pushed_again, true) && attempt < cfg.push_retries
-                }
-                state_sync::PushOutcome::Conflict => {
-                    if attempt >= cfg.push_retries {
-                        return Err(BarcaError::Other(format!(
-                            "shared state push conflicted {attempt} times — results were \
-                             computed but the shared state was not updated; re-run to retry"
-                        )));
-                    }
-                    true
-                }
-            };
-            if !again {
-                eprintln!(
-                    "[barca] pushed state ({}) in {:.2}s{}",
-                    fmt_bytes(std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0)),
-                    t_push.elapsed().as_secs_f64(),
-                    match attempt {
-                        0 => String::new(),
-                        1 => " after 1 conflict retry".to_string(),
-                        n => format!(" after {n} conflict retries"),
-                    }
-                );
-                trace_point!("state_sync_pushed (attempts={})", attempt + 1);
-                break;
+                Err(e) => return Err(e),
             }
-            attempt += 1;
-            // The pull carries this run's rows over with the rest of the local database; the
-            // ledger then adds whatever is still missing (both are idempotent), so the run
-            // is whole however much of it made the trip.
-            state_token = match state_sync::pull_state(python, cfg, interruptible).await {
-                Err(BarcaError::Cancelled) => {
-                    // The pull keeps this run's rows, so its record is there to be marked.
-                    cancel_recorded_run(&db_path, &ledger).await.ok();
-                    return Err(BarcaError::Cancelled);
-                }
-                pulled => Some(pulled?.token),
+        }
+        if was_cancelled && pushed.is_none() {
+            // Wrap-up of a cancelled run: what it finished is worth sharing, so that other
+            // machines do not compute it again, but nobody who pressed Ctrl-C should wait on
+            // a slow store. The push gets `WRAP_UP_LIMIT`, and a second Ctrl-C ends it at
+            // once. Nothing is lost when it does not finish: the record is in the local
+            // history, a pull keeps what was recorded only here, and the next run on this
+            // machine uploads it.
+            let limit = crate::interrupt::WRAP_UP_LIMIT;
+            let until = state_sync::Until {
+                cancel: Some(&interrupt.abandon),
+                deadline: Some(Instant::now() + limit),
             };
-            db::init_db(&db_path).await?;
-            persist_run(&db_path, &ledger).await?;
-            db::insert_logs(&db_path, &run_id, &logs_buffer).await?;
+            let why = match push.run(&ledger, until).await {
+                Ok(retries) => {
+                    pushed = Some(retries);
+                    None
+                }
+                Err(BarcaError::Cancelled) if interrupt.abandon.is_cancelled() => {
+                    Some("stopped by a second Ctrl-C".to_string())
+                }
+                Err(BarcaError::Cancelled) => Some(format!(
+                    "the upload did not finish within {}s",
+                    limit.as_secs()
+                )),
+                // The run is cancelled whatever became of the push: say why, do not fail.
+                Err(e) => Some(e.to_string().lines().next().unwrap_or_default().to_string()),
+            };
+            if let Some(why) = why {
+                eprintln!(
+                    "[barca] the shared history was not updated ({why}). This run is recorded \
+                     on this machine; the next barca get or barca run here uploads it."
+                );
+            }
+        }
+        if let Some(retries) = pushed {
+            eprintln!(
+                "[barca] pushed state ({}) in {:.2}s{}",
+                fmt_bytes(std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0)),
+                t_push.elapsed().as_secs_f64(),
+                match retries {
+                    0 => String::new(),
+                    1 => " after 1 conflict retry".to_string(),
+                    n => format!(" after {n} conflict retries"),
+                }
+            );
+            trace_point!("state_sync_pushed (attempts={})", retries + 1);
         }
     }
 
@@ -3359,10 +3364,10 @@ async fn execute(
             .collect();
         let fetched = s.ensure_local(paths.iter().map(String::as_str), None).await;
         if fetched.is_err() && cancel.is_cancelled() {
-            // Ctrl-C while the returned output was being fetched: the run finished and is
-            // recorded, but the command gives up, so it is recorded as cancelled.
+            // Ctrl-C while the returned output was being fetched. The run itself is over:
+            // its record is written and, with shared history, uploaded, and it stays as it
+            // is, the same on every machine. Only the command is cancelled.
             s.client.abort().await;
-            cancel_recorded_run(&db_path, &ledger).await?;
             return Err(BarcaError::Cancelled);
         }
         s.client.shutdown().await;
@@ -3398,9 +3403,73 @@ async fn execute(
 
 // ─── run persistence ──────────────────────────────────────────────────────────
 
+/// The upload of one run's record to the shared history.
+struct SharedPush<'a> {
+    python: &'a std::path::Path,
+    cfg: &'a crate::config::ResolvedConfig,
+    db_path: &'a str,
+    run_id: &'a str,
+    logs: &'a [(String, String)],
+    /// The token of the shared history the local one was last brought up to.
+    token: state_sync::StateToken,
+}
+
+impl SharedPush<'_> {
+    /// Upload the local history. On conflict (another machine pushed first): pull the fresh
+    /// history, replay this run's ledger onto it, and upload again, up to `push_retries`
+    /// times. Returns the number of retries. `Err(BarcaError::Cancelled)` when `until` stopped
+    /// it; the shared history is then the old one or the new one, never part of one.
+    async fn run(
+        &mut self,
+        ledger: &RunLedger<'_>,
+        until: state_sync::Until<'_>,
+    ) -> Result<u32, BarcaError> {
+        let (python, cfg) = (self.python, self.cfg);
+        let mut attempt = 0u32;
+        let mut pushed_again = false;
+        loop {
+            let again = match state_sync::push_state(python, cfg, &self.token, until).await? {
+                state_sync::PushOutcome::Pushed {
+                    local_unchanged: true,
+                    ..
+                } => false,
+                // Uploaded, but another process wrote to the local database (or replaced
+                // it) while the upload was on its way. Treated like a conflict, once: pull
+                // what was just uploaded, which keeps those rows, and push again. Only once,
+                // because a run going in the same project writes during every upload, and
+                // chasing it would cost a pull and an upload each time for rows that run
+                // pushes itself when it ends. The upload stands either way; rows written
+                // after it go with the next push from this machine.
+                state_sync::PushOutcome::Pushed { .. } => {
+                    !std::mem::replace(&mut pushed_again, true) && attempt < cfg.push_retries
+                }
+                state_sync::PushOutcome::Conflict => {
+                    if attempt >= cfg.push_retries {
+                        return Err(BarcaError::Other(format!(
+                            "shared state push conflicted {attempt} times — results were \
+                             computed but the shared state was not updated; re-run to retry"
+                        )));
+                    }
+                    true
+                }
+            };
+            if !again {
+                return Ok(attempt);
+            }
+            attempt += 1;
+            // The pull carries this run's rows over with the rest of the local database; the
+            // ledger then adds whatever is still missing (both are idempotent), so the run
+            // is whole however much of it made the trip.
+            self.token = state_sync::pull_state(python, cfg, until).await?.token;
+            db::init_db(self.db_path).await?;
+            persist_run(self.db_path, ledger).await?;
+            db::insert_logs(self.db_path, self.run_id, self.logs).await?;
+        }
+    }
+}
+
 /// Record as `cancelled` a run that was already recorded with its outcome, because Ctrl-C
-/// arrived afterwards (while its shared state was pushed or its output fetched). The steps it
-/// recorded stay: they finished.
+/// arrived while its record was being shared. The steps it recorded stay: they finished.
 async fn cancel_recorded_run(db_path: &str, l: &RunLedger<'_>) -> Result<(), BarcaError> {
     db::finish_run(
         db_path,

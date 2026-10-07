@@ -298,7 +298,9 @@ names no definition, a cycle, a partitioned asset in an unpartitioned asset's `i
 barca or its environment failed (metadata DB, workers, remote state, I/O); retrying may help.
 `cancelled`: interrupted with Ctrl-C, at any point of a `get` or `run`: while steps run, and
 with an artifact store also while artifacts upload or download or the shared history is pulled
-or pushed (`barca docs remote`, "Ctrl-C").
+or pushed. The exit code is 130 whatever the store does: a cancelled run spends at most 10
+seconds sharing its record, a second Ctrl-C ends that at once, and a push that fails then is a
+line on stderr, not exit 3 (`barca docs remote`, "Ctrl-C").
 
 ## JSON output schemas
 

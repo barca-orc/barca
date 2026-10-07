@@ -476,30 +476,69 @@ in place (only byte ranges are fetched), and results recorded before barca store
 
 ## Ctrl-C
 
-Ctrl-C cancels a run at any point, including while barca is uploading, downloading or pushing
-the shared history: the command exits 130 with the `cancelled` error, and the run is recorded
-as `cancelled`. What is left behind is always consistent:
+Ctrl-C cancels a `barca get` or `barca run` at any point: while steps run, and while barca is
+uploading, downloading, or pulling or pushing the shared history. The command exits 130 with the
+`cancelled` error. It makes no difference whether the terminal sent the signal to every process
+of the job or something sent SIGINT to barca alone, and no process prints a traceback.
+
+1. **The first Ctrl-C cancels the run.** Steps and transfers in flight are stopped, what
+   finished is recorded in this machine's history, the run as `cancelled`, and the run wraps
+   up: it pushes that record to the shared history, so that other machines do not compute the
+   finished steps again.
+2. **The wrap-up takes at most 10 seconds.** With a store that answers it takes a fraction of
+   a second. If the push has not finished by then (a slow, stalled or unreachable store) it is
+   stopped, and stderr says so:
+   `[barca] the shared history was not updated (the upload did not finish within 10s). This run
+   is recorded on this machine; the next barca get or barca run here uploads it.`
+3. **A second Ctrl-C abandons the wrap-up at once** (the same line, with `stopped by a second
+   Ctrl-C`). A third changes nothing.
+
+Stopping a helper process can take up to 2 seconds, so the command ends within a few seconds of
+the last of these. The exit code is 130 in every case, never 3: a push that fails during the
+wrap-up is reported in that stderr line, not as an error.
+
+What is left behind is always consistent:
 
 - A step is recorded only once its artifact is confirmed in the store. A step whose upload
   was still in flight is not recorded, and runs again next time.
 - No partial file is left. A download, and an upload into a store that is a directory, is
   written to a temp file beside its destination and renamed when whole; the temp file is
-  removed when the run is cancelled. An object store shows an object only once its upload has
-  completed, so an interrupted upload leaves the previous object, or none.
-- Interrupted while the shared history is pushed, the run's artifacts are in the store and its
-  steps are recorded on this machine, but the shared history does not have them yet. A pull
-  keeps what was recorded only here (see "The local copy of the history"), so the next
-  `barca get` or `barca run` on this machine serves those steps from cache and uploads them.
+  removed when the transfer is stopped. An object store shows an object only once its upload
+  has completed, so an interrupted upload leaves the previous object, or none. The shared
+  history is replaced in one step, so it is the old one or the new one.
+- Nothing is lost when the wrap-up does not finish. The record is in this machine's history, a
+  pull keeps what was recorded only here (see "The local copy of the history"), and the next
+  `barca get` or `barca run` on this machine serves the finished steps from cache and uploads
+  them with its own.
 - Interrupted while the shared history is still being pulled, before anything ran, the command
   exits 130, no run is recorded and the local copy is as it was.
+
+**What the run's record says.** `cancelled`, whenever the interrupt arrived before the record
+was shared. That includes a Ctrl-C during the final push, when every step had finished: the
+steps are recorded as finished, the run as `cancelled`, and that is what the wrap-up shares, so
+every machine sees the same. A Ctrl-C that arrives once the push has completed is too late
+to cancel anything: the run is `success` and the command exits 0.
+
+Two narrow cases, stated exactly:
+
+- A run with a failed step is recorded and shared as `failed`, and may then still download an
+  earlier output to return. Interrupted during that download, the command exits 130 and the
+  record stays `failed`, the same on every machine.
+- If the interrupt arrives in the instant in which the push completes in the store but barca
+  has not yet heard so, the shared history has the run as `success` and this machine marks it
+  `cancelled`. The wrap-up then pushes again, which puts `cancelled` in the shared history too.
+  Only if that wrap-up does not finish either do the two differ.
 
 The end-of-run line (`[barca] <n>/<total> steps | done in <secs>s`) is about the steps. A Ctrl-C
 that arrives after the last step finished, while artifacts upload or the history is pushed,
 therefore follows a `done` line; the exit code and the error still say `cancelled`.
 
-Barca's helper processes do not act on Ctrl-C themselves: the terminal sends it to every process
-of the job, and the coordinator alone decides what it means and stops the helpers. They print
-no `KeyboardInterrupt` traceback.
+Barca's helper processes (the one that moves artifacts and the one that moves the history) do
+not act on Ctrl-C themselves: the terminal sends it to every process of the job, and the
+coordinator alone decides what it means and stops them. If barca itself is killed (`kill -9`,
+out of memory), nobody is left to stop them, so they watch for that: each exits on its own, at
+once and without output, and removes the temp file it was writing. A download of the history
+that was cut this way can leave `.barca/metadata.db.pull-*`; the next pull removes it.
 
 ## Settings
 

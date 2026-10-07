@@ -1073,17 +1073,24 @@ fn print_failed_run(err: &barca_core::BarcaError, mode: OutputMode) {
     );
 }
 
-/// A token that cancels on Ctrl-C, so an interrupted run terminates its
-/// workers and is recorded as `cancelled` instead of lingering as `running`.
-fn cancel_on_ctrl_c() -> barca_core::CancellationToken {
-    let cancel = barca_core::CancellationToken::new();
-    let c = cancel.clone();
+/// The run's stop signals, driven by Ctrl-C. The first one cancels the run: its workers and
+/// transfers are stopped and it is recorded as `cancelled` instead of lingering as `running`,
+/// then it wraps up (it shares its record, for a bounded time). A second one abandons the
+/// wrap-up. Every Ctrl-C counts, whether the terminal sent it to the whole job or something
+/// sent SIGINT to barca alone.
+fn cancel_on_ctrl_c() -> barca_core::interrupt::Interrupt {
+    let interrupt = barca_core::interrupt::Interrupt::new();
+    let seen = interrupt.clone();
     tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
-            c.cancel();
+        use tokio::signal::unix::{SignalKind, signal};
+        let Ok(mut sigint) = signal(SignalKind::interrupt()) else {
+            return;
+        };
+        while sigint.recv().await.is_some() {
+            seen.interrupt();
         }
     });
-    cancel
+    interrupt
 }
 
 #[allow(clippy::result_large_err)] // cold path: one CliError per process, right before exiting

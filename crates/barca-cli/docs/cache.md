@@ -507,7 +507,8 @@ barca history --json            # the run is `running`; `steps_executed` is the 
   `interrupted`, with `finished_at` and `elapsed_seconds` `null` (nobody saw it end) and
   `steps_executed` at what it had recorded. Ctrl-C is different: the run stops its workers,
   records itself and is `cancelled` (exit 130). With an artifact store that also holds while
-  artifacts upload, download or the shared history is pushed (`barca docs remote`, "Ctrl-C").
+  artifacts upload, download or the shared history is pushed, and the cancelled run then shares
+  its record for at most 10 seconds; a second Ctrl-C ends that (`barca docs remote`, "Ctrl-C").
 
 Known limits:
 

@@ -42,6 +42,34 @@ pub enum PushOutcome {
 
 const EXIT_CONFLICT: i32 = 3;
 
+/// When a pull or a push gives up: `cancel` fires, or `deadline` passes. Either way the
+/// helper is stopped and the result is [`BarcaError::Cancelled`].
+#[derive(Clone, Copy, Default)]
+pub struct Until<'a> {
+    pub cancel: Option<&'a CancellationToken>,
+    pub deadline: Option<std::time::Instant>,
+}
+
+impl<'a> Until<'a> {
+    /// Never: the transfer runs to its end.
+    pub fn done() -> Self {
+        Self::default()
+    }
+
+    pub fn cancelled(cancel: &'a CancellationToken) -> Self {
+        Self {
+            cancel: Some(cancel),
+            deadline: None,
+        }
+    }
+
+    /// The time left, when there is a deadline (zero once it has passed).
+    fn remaining(&self) -> Option<std::time::Duration> {
+        self.deadline
+            .map(|d| d.saturating_duration_since(std::time::Instant::now()))
+    }
+}
+
 fn state_cmd(python: &Path, cfg: &ResolvedConfig) -> Command {
     let mut cmd = Command::new(python);
     cmd.arg("-m").arg("barca._state");
@@ -159,13 +187,13 @@ const UNLOCKED_ATTEMPTS: u32 = 2;
 /// nothing can overtake it. Afterwards the local database holds every row of the blob the
 /// returned token names, plus the local rows that were never pushed.
 ///
-/// `cancel`, when given, stops the download (`Err(BarcaError::Cancelled)`). The local database
-/// is then as it was: a download is swapped in only once it is whole, and the staged file of
-/// the one that was cut short is removed.
+/// `until` can stop the download (`Err(BarcaError::Cancelled)`). The local database is then
+/// as it was: a download is swapped in only once it is whole, and the staged file of the one
+/// that was cut short is removed.
 pub async fn pull_state(
     python: &Path,
     cfg: &ResolvedConfig,
-    cancel: Option<&CancellationToken>,
+    until: Until<'_>,
 ) -> Result<Pulled, BarcaError> {
     let uri = cfg
         .state_uri
@@ -180,7 +208,7 @@ pub async fn pull_state(
         };
         let staged = staged_path(&cfg.db_path, "pull");
         let limit = lock.is_some().then_some(LOCKED_DOWNLOAD_LIMIT);
-        let result = pull_into(python, cfg, uri, &staged, lock.as_ref(), limit, cancel).await;
+        let result = pull_into(python, cfg, uri, &staged, lock.as_ref(), limit, until).await;
         // Gone already when it was swapped in; left behind when the pull failed part-way or
         // the download was discarded.
         let _ = std::fs::remove_file(&staged);
@@ -203,17 +231,25 @@ async fn pull_into(
     staged: &Path,
     held: Option<&crate::db::DbLock>,
     limit: Option<std::time::Duration>,
-    cancel: Option<&CancellationToken>,
+    until: Until<'_>,
 ) -> Result<Option<Pulled>, BarcaError> {
     // Read before the download begins: a change by the time of the swap means the download
     // may be older than the local database.
     let base_raw = crate::state_base::read_raw(&cfg.db_path);
     let mut download = state_cmd(python, cfg);
     download.arg("pull").arg(uri).arg(staged);
-    let out = run_helper(download, cancel, limit)
+    // The shorter of the lock's limit and the caller's deadline; when the deadline is the one
+    // that passes, the pull was given up, not failed.
+    let (limit, given_up) = match (limit, until.remaining()) {
+        (Some(lock_limit), Some(left)) if left < lock_limit => (Some(left), true),
+        (None, Some(left)) => (Some(left), true),
+        (limit, _) => (limit, false),
+    };
+    let out = run_helper(download, until.cancel, limit)
         .await
         .map_err(|e| match e {
             HelperFailed::Cancelled => BarcaError::Cancelled,
+            HelperFailed::TimedOut(_) if given_up => BarcaError::Cancelled,
             HelperFailed::Spawn(e) => {
                 BarcaError::Other(format!("failed to spawn state helper: {e}"))
             }
@@ -359,6 +395,9 @@ async fn run_helper(
         }
     };
     let why = tokio::select! {
+        // A helper that has finished is never reported as stopped: if the interrupt and the
+        // end of an upload arrive together, the upload happened.
+        biased;
         out = &mut output => return out.map_err(HelperFailed::Spawn),
         _ = cancelled => HelperFailed::Cancelled,
         _ = timed_out => HelperFailed::TimedOut(limit.expect("a limit that passed")),
@@ -403,21 +442,20 @@ fn helper_cause(stderr: &[u8]) -> String {
 /// slow one keeps no other barca command waiting. [`PushOutcome::Pushed`] says whether the
 /// local database is still what was uploaded.
 ///
-/// `cancel`, when given, stops the upload (`Err(BarcaError::Cancelled)`). The shared state is
-/// then either the old one or the new one, never a partial object: every backend replaces it
-/// in one step.
+/// `until` can stop the upload (`Err(BarcaError::Cancelled)`). The shared state is then either
+/// the old one or the new one, never a partial object: every backend replaces it in one step.
 pub async fn push_state(
     python: &Path,
     cfg: &ResolvedConfig,
     token: &StateToken,
-    cancel: Option<&CancellationToken>,
+    until: Until<'_>,
 ) -> Result<PushOutcome, BarcaError> {
     let uri = cfg
         .state_uri
         .as_deref()
         .ok_or_else(|| BarcaError::Other("push_state called without a state uri".into()))?;
     let copy = crate::db::copy_for_push(&cfg.db_path, staged_path(&cfg.db_path, "push")).await?;
-    let uploaded = upload(python, cfg, uri, &copy.path, token, cancel).await;
+    let uploaded = upload(python, cfg, uri, &copy.path, token, until).await;
     let _ = std::fs::remove_file(&copy.path);
     Ok(match uploaded? {
         Some(token) => PushOutcome::Pushed {
@@ -435,18 +473,21 @@ async fn upload(
     uri: &str,
     file: &Path,
     token: &StateToken,
-    cancel: Option<&CancellationToken>,
+    until: Until<'_>,
 ) -> Result<Option<String>, BarcaError> {
     let mut cmd = state_cmd(python, cfg);
     cmd.arg("push").arg(uri).arg(file);
     if let Some(ref t) = token.0 {
         cmd.arg("--token").arg(t);
     }
-    let out = run_helper(cmd, cancel, None).await.map_err(|e| match e {
-        HelperFailed::Cancelled => BarcaError::Cancelled,
-        HelperFailed::Spawn(e) => BarcaError::Other(format!("failed to spawn state helper: {e}")),
-        HelperFailed::TimedOut(_) => unreachable!("no limit was given"),
-    })?;
+    let out = run_helper(cmd, until.cancel, until.remaining())
+        .await
+        .map_err(|e| match e {
+            HelperFailed::Cancelled | HelperFailed::TimedOut(_) => BarcaError::Cancelled,
+            HelperFailed::Spawn(e) => {
+                BarcaError::Other(format!("failed to spawn state helper: {e}"))
+            }
+        })?;
     if out.status.code() == Some(EXIT_CONFLICT) {
         return Ok(None);
     }
