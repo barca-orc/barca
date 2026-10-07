@@ -74,7 +74,7 @@ export function SchedulesPage() {
         )}
       </div>
 
-      <div className="barca-view-body">
+      <div className="barca-view-body barca-table-scroll">
         {isError ? (
           <p className="barca-table-empty">
             Can't load schedules: barca serve is not reachable.

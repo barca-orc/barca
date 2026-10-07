@@ -135,7 +135,14 @@ export function buildRows(nodes: NodeState[], nowMs: number): AssetRow[] {
         kind: n.kind,
         partitioned: n.partitioned,
         severity,
-        stateLabel: severity === 'failed' ? `failed · ${label}` : label,
+        // A failed task or sensor is just failed ("always runs" adds nothing);
+        // an asset keeps its cache state, since a good cached result may remain.
+        stateLabel:
+          severity !== 'failed'
+            ? label
+            : n.cache.state === 'always_runs'
+              ? 'failed'
+              : `failed · ${label}`,
         stateHint:
           severity === 'failed' ? `The latest attempt failed. ${n.cache.detail}` : n.cache.detail,
         last: last
