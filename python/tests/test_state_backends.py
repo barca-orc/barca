@@ -196,6 +196,21 @@ def backend(request, tmp_path, monkeypatch):
 # ─── the shared contract ─────────────────────────────────────────────────────
 
 
+def sqlite_bytes(tag: str) -> bytes:
+    """A small, valid SQLite database: a pull rejects anything else."""
+    import sqlite3
+    from pathlib import Path
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        db = sqlite3.connect(f"{d}/x.db")
+        db.execute("create table t (v text)")
+        db.execute("insert into t values (?)", (tag,))
+        db.commit()
+        db.close()
+        return Path(f"{d}/x.db").read_bytes()
+
+
 def _write(tmp_path, name, data: bytes):
     p = tmp_path / name
     p.write_bytes(data)
@@ -211,7 +226,7 @@ def test_pull_absent_returns_none(backend, tmp_path):
 
 def test_create_pull_roundtrip(backend, tmp_path):
     uri = backend.make_uri(tmp_path)
-    src = _write(tmp_path, "src.db", b"barca-state-v1")
+    src = _write(tmp_path, "src.db", sqlite_bytes("v1"))
 
     token = push(uri, src, None)
     assert token, "create-only push must return a token"
@@ -219,7 +234,7 @@ def test_create_pull_roundtrip(backend, tmp_path):
     dest = tmp_path / "pulled.db"
     pulled_token = pull(uri, dest)
     assert pulled_token == token
-    assert dest.read_bytes() == b"barca-state-v1"
+    assert dest.read_bytes() == sqlite_bytes("v1")
 
 
 def test_concurrent_create_conflicts(backend, tmp_path):
@@ -235,16 +250,16 @@ def test_concurrent_create_conflicts(backend, tmp_path):
 
 def test_conditional_overwrite_advances(backend, tmp_path):
     uri = backend.make_uri(tmp_path)
-    v1 = _write(tmp_path, "v1.db", b"state-one")
+    v1 = _write(tmp_path, "v1.db", sqlite_bytes("one"))
     tok1 = push(uri, v1, None)
 
-    v2 = _write(tmp_path, "v2.db", b"state-two-longer")
+    v2 = _write(tmp_path, "v2.db", sqlite_bytes("two-longer"))
     tok2 = push(uri, v2, tok1)
     assert tok2 != tok1
 
     dest = tmp_path / "final.db"
     assert pull(uri, dest) == tok2
-    assert dest.read_bytes() == b"state-two-longer"
+    assert dest.read_bytes() == sqlite_bytes("two-longer")
 
 
 def test_stale_token_conflicts(backend, tmp_path):

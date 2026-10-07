@@ -13,13 +13,27 @@ from pathlib import Path
 
 import pytest
 
-from barca._state import ConflictError, _is_conflict, _remote_token, pull, push
+from barca._state import ConflictError, StateCorruptError, _is_conflict, _remote_token, pull, push
 
 
 @pytest.fixture
 def shared(tmp_path):
     """A 'remote' state location on the local filesystem."""
     return tmp_path / "shared" / "state" / "metadata.db"
+
+
+def sqlite_bytes(tag: str) -> bytes:
+    """A small, valid SQLite database: a pull rejects anything else."""
+    import sqlite3
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        db = sqlite3.connect(f"{d}/x.db")
+        db.execute("create table t (v text)")
+        db.execute("insert into t values (?)", (tag,))
+        db.commit()
+        db.close()
+        return Path(f"{d}/x.db").read_bytes()
 
 
 def _write(p: Path, data: bytes):
@@ -38,15 +52,15 @@ class TestFileBackend:
 
     def test_create_then_pull_round_trip(self, shared, tmp_path):
         local = tmp_path / "local.db"
-        _write(local, b"v1-bytes")
+        _write(local, sqlite_bytes("v1"))
 
         token = push(str(shared), local, None)  # create-only
-        assert shared.read_bytes() == b"v1-bytes"
+        assert shared.read_bytes() == local.read_bytes()
 
         other = tmp_path / "machine-b.db"
         pulled = pull(str(shared), other)
         assert pulled == token
-        assert other.read_bytes() == b"v1-bytes"
+        assert other.read_bytes() == local.read_bytes()
 
     def test_create_only_conflicts_when_exists(self, shared, tmp_path):
         _write(shared, b"already-there")
@@ -80,14 +94,14 @@ class TestFileBackend:
     def test_plain_path_without_scheme(self, shared, tmp_path):
         """A plain path (no file://) uses the same backend."""
         local = tmp_path / "local.db"
-        _write(local, b"data")
+        _write(local, sqlite_bytes("data"))
         token = push(str(shared), local, None)
         assert token is not None
         assert pull(str(shared), tmp_path / "b.db") == token
 
     def test_file_uri_scheme(self, shared, tmp_path):
         local = tmp_path / "local.db"
-        _write(local, b"data")
+        _write(local, sqlite_bytes("data"))
         token = push(f"file://{shared}", local, None)
         assert pull(f"file://{shared}", tmp_path / "b.db") == token
 
@@ -112,7 +126,7 @@ class TestCliContract:
 
     def test_push_create_pull_and_conflict_exit_codes(self, shared, tmp_path):
         local = tmp_path / "local.db"
-        _write(local, b"v1")
+        _write(local, sqlite_bytes("v1"))
 
         r = self._run("push", str(shared), str(local))
         assert r.returncode == 0, r.stderr
@@ -235,3 +249,49 @@ class TestConflictClassification:
         blob — a concurrent first-push race, which must classify as a conflict
         so the coordinator re-pulls and replays instead of hard-failing."""
         assert _is_conflict(FileExistsError("barca-state/metadata.db"))
+
+
+# ─── validate before replacing ───────────────────────────────────────────────
+
+
+class TestPullValidation:
+    def test_garbage_never_replaces_the_local_database(self, shared, tmp_path):
+        good = tmp_path / "local.db"
+        _write(good, sqlite_bytes("mine"))
+        before = good.read_bytes()
+        _write(shared, b"garbage")
+
+        with pytest.raises(StateCorruptError) as err:
+            pull(str(shared), good)
+        assert str(shared) in str(err.value)
+        assert good.read_bytes() == before
+        assert not list(tmp_path.glob(".state.*"))  # no temp left behind
+
+    def test_truncated_database_is_rejected(self, shared, tmp_path):
+        data = sqlite_bytes("x" * 20000)
+        _write(shared, data[: len(data) // 2])
+        local = tmp_path / "local.db"
+        _write(local, sqlite_bytes("mine"))
+        with pytest.raises(StateCorruptError):
+            pull(str(shared), local)
+        assert local.read_bytes() == sqlite_bytes("mine")
+
+    def test_a_pull_keeps_the_previous_database(self, shared, tmp_path):
+        local = tmp_path / "local.db"
+        _write(local, sqlite_bytes("old"))
+        old = local.read_bytes()
+        _write(shared, sqlite_bytes("new"))
+        pull(str(shared), local)
+        assert local.read_bytes() == shared.read_bytes()
+        assert (tmp_path / "local.db.prev").read_bytes() == old
+
+    def test_cli_exits_nonzero_naming_the_object(self, shared, tmp_path):
+        _write(shared, b"garbage")
+        r = subprocess.run(
+            [sys.executable, "-m", "barca._state", "pull", str(shared), str(tmp_path / "l.db")],
+            capture_output=True,
+            text=True,
+        )
+        assert r.returncode == 1
+        assert str(shared) in r.stderr and "not a valid database" in r.stderr
+        assert not (tmp_path / "l.db").exists()
