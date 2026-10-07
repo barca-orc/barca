@@ -144,6 +144,19 @@ the copies while the objects are unchanged (`barca docs sql`).
 ## Limitations
 
 - `barca serve` does not share history yet; set `BARCA_STATE=off` for it.
+- The shared history is updated once, when a run ends. A run records each finished step in the
+  local copy as it goes (`barca docs cache`, "While a run is going, and after one is killed"), but
+  other machines see none of it until the run ends, and never see a run that was killed. With a
+  remote artifact store a run records nothing early: a step is recorded once its upload is
+  confirmed, when the run ends.
+- On the machine a run is on, `barca status` during the run and resuming after `kill -9` can be
+  relied on only while no other machine updates the shared history in the meantime:
+  every `barca get`, `barca run`, `--dry-run` and `barca status` starts by replacing the local
+  copy with the shared one. After a run is killed, the next run on that machine can also
+  overwrite history other machines added in the meantime (result files are not touched;
+  those steps run again). If a run was killed and other machines are active, delete
+  `.barca/metadata.db` and `.barca/metadata.db-wal` on that machine before the next run: it
+  then starts from the shared history alone, and recomputes what the killed run had finished.
 - `barca status` does not describe a remote json or pickle result larger than 16 MB, and
   `barca sql` downloads a whole artifact before querying it.
 - The local artifact directory has no size cap (see "Local-first artifacts" below).

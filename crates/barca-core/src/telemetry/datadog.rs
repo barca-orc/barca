@@ -10,6 +10,9 @@
 //! - `DD_TRACE_AGENT_URL` (`http://host:port` or `unix:///path/to/apm.socket`),
 //!   else `DD_AGENT_HOST` (default `localhost`) and `DD_TRACE_AGENT_PORT`
 //!   (default `8126`);
+//! - `DD_TRACE_ENABLED`: when set to anything other than `true` or `1`, this integration is
+//!   off, as with Python's `ddtrace`, so one environment file can turn tracing off for a
+//!   whole stack;
 //! - `DD_SERVICE` (default `barca`), `DD_ENV`, `DD_VERSION`;
 //! - `DD_TAGS` (`key:value` pairs separated by commas or spaces), added to every span.
 
@@ -153,9 +156,22 @@ fn span_id(parts: &[&str]) -> u64 {
     (u64::from_be_bytes(bytes) >> 1).max(1)
 }
 
+/// `DD_TRACE_ENABLED`: on when unset, and when set only for `true` or `1` (any case). This is
+/// what Python's `ddtrace` does, so `false`, `0`, `no`, `off` and an empty value all silence
+/// barca together with the services around it.
+fn tracing_enabled(raw: Option<&str>) -> bool {
+    raw.is_none_or(|v| v.eq_ignore_ascii_case("true") || v == "1")
+}
+
 impl Datadog {
-    pub fn from_env() -> Result<Self, String> {
-        Ok(Self {
+    /// `Ok(None)` when `DD_TRACE_ENABLED` switches tracing off.
+    pub fn from_env() -> Result<Option<Self>, String> {
+        // Read raw: an empty value is a setting too, and it means off.
+        let enabled = std::env::var("DD_TRACE_ENABLED").ok();
+        if !tracing_enabled(enabled.as_deref().map(str::trim)) {
+            return Ok(None);
+        }
+        Ok(Some(Self {
             agent: agent_from(
                 env_var("DD_TRACE_AGENT_URL").as_deref(),
                 env_var("DD_AGENT_HOST").as_deref(),
@@ -167,7 +183,7 @@ impl Datadog {
             tags: env_var("DD_TAGS")
                 .map(|raw| parse_tags(&raw))
                 .unwrap_or_default(),
-        })
+        }))
     }
 
     /// Tags every span of the trace carries.
@@ -442,6 +458,17 @@ mod tests {
         assert!(!with_password.unwrap_err().contains("secret"));
         assert!(agent_from(Some("https://agent:8126"), None, None).is_err());
         assert!(agent_from(None, None, Some("many")).is_err());
+    }
+
+    #[test]
+    fn dd_trace_enabled_is_on_when_unset_and_otherwise_only_for_true_or_one() {
+        for off in ["false", "FALSE", "False", "0", "", "no", "off", "\"false\""] {
+            assert!(!tracing_enabled(Some(off)), "{off:?}");
+        }
+        for on in ["true", "TRUE", "True", "1"] {
+            assert!(tracing_enabled(Some(on)), "{on:?}");
+        }
+        assert!(tracing_enabled(None));
     }
 
     #[test]
