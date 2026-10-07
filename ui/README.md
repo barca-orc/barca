@@ -21,6 +21,8 @@ production, where the UI lives at `<prefix>/ui/` and finds the API at `<prefix>/
 pnpm --dir ui typecheck && pnpm --dir ui lint && pnpm --dir ui test
 pnpm --dir ui gen:types             # after changing a Rust type the UI uses
 cargo build -p barca && pnpm --dir ui test:e2e   # Playwright; starts barca serve + vite on e2e/fixture
+                                                  # BARCA_BIN=<path> uses another barca binary
+pnpm --dir ui dev                   # then /ui/#/kit lists every component in each state
 ```
 
 ## Build into barca

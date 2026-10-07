@@ -1,4 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
+import { seedRuns } from './helpers/seed'
+
+const inspector = (page: Page) => page.getByRole('complementary', { name: /inspector$/ })
 
 test.describe('graph page', () => {
   test('inspector `run` on a task streams its output', async ({ page }) => {
@@ -6,16 +9,16 @@ test.describe('graph page', () => {
     await page.getByText('say_hello').first().click()
 
     const started = page.waitForRequest((r) => r.method() === 'POST' && r.url().includes('/run/'))
-    await page.locator('.barca-inspector').getByRole('button', { name: 'run' }).click()
+    await inspector(page).getByRole('button', { name: 'run' }).click()
     await started
 
-    await expect(page.locator('.barca-inspector')).toContainText('hello from e2e 6', { timeout: 30_000 })
-    await expect(page.locator('.barca-inspector')).not.toContainText('could not start')
+    await expect(inspector(page)).toContainText('hello from e2e 6', { timeout: 30_000 })
+    await expect(inspector(page)).not.toContainText('could not start')
   })
 })
 
 test.describe('topbar Run', () => {
-  const topbarRun = (page: Page) => page.locator('.barca-topbar').getByRole('button', { name: 'Run' })
+  const topbarRun = (page: Page) => page.getByRole('banner').getByRole('button', { name: 'Run' })
 
   test('is disabled until a node is selected', async ({ page }) => {
     await page.goto('/ui/#/graph')
@@ -33,7 +36,7 @@ test.describe('topbar Run', () => {
     await started
 
     await expect(page).toHaveURL(/#\/graph/) // stays on the graph; no navigation
-    await expect(page.locator('.barca-inspector')).toContainText('hello from e2e 6', { timeout: 30_000 })
+    await expect(inspector(page)).toContainText('hello from e2e 6', { timeout: 30_000 })
   })
 
   test('gets the selected asset', async ({ page }) => {
@@ -47,7 +50,7 @@ test.describe('topbar Run', () => {
 
   test('is absent on pages with nothing to run', async ({ page }) => {
     await page.goto('/ui/#/assets')
-    await expect(page.locator('.barca-topbar')).toBeVisible()
+    await expect(page.getByRole('banner')).toBeVisible()
     await expect(topbarRun(page)).toHaveCount(0)
   })
 })
@@ -55,25 +58,18 @@ test.describe('topbar Run', () => {
 test.describe('node panel', () => {
   test('shows the distribution of run durations next to "took"', async ({ page, request }) => {
     // Build a history with a spread of durations.
-    for (let i = 0; i < 8; i++) {
-      const res = await request.post('http://127.0.0.1:8274/run/say_hello')
-      const { run_id } = await res.json()
-      await expect
-        .poll(async () => (await (await request.get(`http://127.0.0.1:8274/status/${run_id}`)).json()).status, {
-          timeout: 30_000,
-        })
-        .not.toMatch(/running|queued|pending/)
-    }
+    await seedRuns(request, 'say_hello', 8)
 
     await page.goto('/ui/#/assets')
     await page.getByRole('row', { name: /say_hello/ }).click()
 
     const hist = page.locator('.barca-hist')
     await expect(hist).toBeVisible()
-    expect(await hist.locator('.barca-hist-bars span').count()).toBeGreaterThan(1)
+    // The slot is there from the start (a skeleton); the bars arrive with the run history.
+    await expect.poll(() => hist.locator('.barca-hist-bars span').count()).toBeGreaterThan(1)
     await expect(hist.locator('.is-last')).toHaveCount(1)
     // A task never uses the cache, so the panel has no cache-hit stat for it.
-    await expect(page.locator('.barca-stats')).not.toContainText('cache hits')
+    await expect(page.getByRole('complementary', { name: /details$/ }).locator('.barca-stats')).not.toContainText('cache hits')
     await hist.scrollIntoViewIfNeeded()
     await page.screenshot({ path: 'test-results/duration-histogram.png' })
   })

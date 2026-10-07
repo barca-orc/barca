@@ -61,7 +61,7 @@ export function SchedulesPage() {
           </div>
         </div>
         {health && !health.scheduler && rows.length > 0 && (
-          <p className="barca-panel-note">
+          <p className="barca-note">
             This server doesn't fire schedules (
             {health.read_only ? "--read-only" : "--no-schedule"}
             ). "Next run" is when each cron next matches — it happens only where

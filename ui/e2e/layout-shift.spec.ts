@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { seedRuns } from './helpers/seed'
 import { describeShifts, slowApi, takeShifts, trackLayoutShift } from './helpers/layoutShift'
 
 // Pages must not move while their data loads. Each flow is measured with the API held back
@@ -10,6 +11,11 @@ async function expectStable(page: Page, what: string) {
   const { total, shifts } = await takeShifts(page, 1500)
   expect(total, `${what} shifted:\n${describeShifts(shifts)}`).toBeLessThanOrEqual(BUDGET)
 }
+
+// A node with history is the case that matters: the panel has stats, a histogram and a run list.
+test.beforeAll(async ({ request }) => {
+  await seedRuns(request, 'say_hello', 6)
+})
 
 test.beforeEach(async ({ page }) => {
   await trackLayoutShift(page)
@@ -32,7 +38,7 @@ test('assets page: opening a node panel', async ({ page }) => {
 test('assets page: switching the node in the panel', async ({ page }) => {
   await page.goto('/ui/#/assets')
   await page.getByRole('row', { name: /say_hello/ }).click()
-  await expect(page.locator('.barca-panel')).toContainText('median')
+  await expect(page.getByRole('complementary', { name: /details$/ })).toContainText('median')
   await takeShifts(page)
   await page.getByRole('row', { name: /numbers/ }).click()
   await expectStable(page, 'switching the panel to another node')

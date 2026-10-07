@@ -6,7 +6,8 @@ const fixture = fileURLToPath(new URL('./e2e/fixture', import.meta.url))
 
 // Two servers, as in development: `barca serve` on the fixture project (API on
 // :8274, which vite.config.ts proxies to) and the Vite dev server at /ui/.
-// Build the binary first: `cargo build -p barca`.
+// Build the binary first (`cargo build -p barca`), or point BARCA_BIN at one.
+const barca = process.env.BARCA_BIN ?? `${root}/target/debug/barca`
 export default defineConfig({
   testDir: './e2e',
   fullyParallel: false,
@@ -15,7 +16,7 @@ export default defineConfig({
   use: { baseURL: 'http://localhost:5173', trace: 'retain-on-failure' },
   webServer: [
     {
-      command: `${root}/target/debug/barca serve --no-schedule`,
+      command: `${barca} serve --no-schedule`,
       cwd: fixture,
       env: { PYTHONPATH: `${root}/python`, PATH: process.env.PATH ?? '' },
       url: 'http://127.0.0.1:8274/state',

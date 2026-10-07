@@ -4,6 +4,7 @@ import { GraphPage } from '@/pages/GraphPage'
 import { AssetsPage } from '@/pages/AssetsPage'
 import { SchedulesPage } from '@/pages/SchedulesPage'
 import { RunsPage, DocsPage } from '@/pages/placeholders'
+import { KitPage } from '@/pages/KitPage'
 
 // Hash routing: the page itself is always `<prefix>/ui/`, so relative asset URLs
 // and the API base (see lib/apiBase.ts) work under any reverse-proxy prefix,
@@ -19,6 +20,8 @@ export const router = createHashRouter([
       { path: 'assets', element: <AssetsPage /> },
       { path: 'schedules', element: <SchedulesPage /> },
       { path: 'docs', element: <DocsPage /> },
+      // Every component in every state: development only, not in the built UI.
+      ...(import.meta.env.DEV ? [{ path: 'kit', element: <KitPage /> }] : []),
     ],
   },
 ])

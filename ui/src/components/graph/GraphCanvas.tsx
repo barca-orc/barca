@@ -106,9 +106,9 @@ export function GraphCanvas({
         nodesConnectable={false}
         proOptions={{ hideAttribution: true }}
       >
-        <Background variant={BackgroundVariant.Dots} gap={22} size={1} color="rgba(63,209,129,0.10)" />
+        <Background variant={BackgroundVariant.Dots} gap={22} size={1} color="var(--graph-grid)" />
         <Controls showInteractive={false} />
-        <MiniMap pannable zoomable maskColor="rgba(8,11,10,0.72)" nodeStrokeWidth={0} />
+        <MiniMap pannable zoomable maskColor="var(--graph-mask)" nodeStrokeWidth={0} />
         <FitController dir={dir} handleRef={handleRef} />
       </ReactFlow>
     </ReactFlowProvider>

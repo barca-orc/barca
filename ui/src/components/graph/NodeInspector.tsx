@@ -1,6 +1,6 @@
 import { X, Download, Play, Terminal, CircleAlert } from 'lucide-react'
 import { match } from 'ts-pattern'
-import { Button, IconButton, StatusBadge, Tag, StatusDot, LogViewer } from '@/components'
+import { Button, IconButton, KeyValue, SidePanel, StatusBadge, Tag, StatusDot, LogViewer } from '@/components'
 import { freshnessLabel } from '@/lib/status'
 import { shortName } from '@/lib/graph'
 import { runFeedback } from '@/lib/runFeedback'
@@ -86,17 +86,17 @@ export function NodeInspector({
     .exhaustive()
 
   return (
-    <div className="barca-inspector">
-      <div className="barca-insp-head">
-        <div className="barca-insp-title">
-          <StatusDot status={status} size={8} />
-          <span>{name}</span>
-        </div>
+    <SidePanel
+      label={`${name} inspector`}
+      width={316}
+      title={name}
+      badge={<StatusDot status={status} size={8} />}
+      actions={
         <IconButton label="Close" size="sm" onClick={onClose}>
           <X size={14} />
         </IconButton>
-      </div>
-
+      }
+    >
       <div className="barca-insp-body">
         <div className="barca-tagrow">
           <Tag tone="signal" dot>
@@ -105,23 +105,11 @@ export function NodeInspector({
           <StatusBadge status={status} size="sm" />
         </div>
 
-        <div className="barca-insp-kv">
-          <div className="barca-insp-kv-row">
-            <span>id</span>
-            <span>{asset.id}</span>
-          </div>
-          <div className="barca-insp-kv-row">
-            <span>kind</span>
-            <span>{asset.kind}</span>
-          </div>
-          <div className="barca-insp-kv-row">
-            <span>freshness</span>
-            <span>{freshnessLabel(asset.freshness)}</span>
-          </div>
-          <div className="barca-insp-kv-row">
-            <span>inputs</span>
-            <span>{asset.inputs.length}</span>
-          </div>
+        <div>
+          <KeyValue label="id">{asset.id}</KeyValue>
+          <KeyValue label="kind">{asset.kind}</KeyValue>
+          <KeyValue label="freshness">{freshnessLabel(asset.freshness)}</KeyValue>
+          <KeyValue label="inputs">{asset.inputs.length}</KeyValue>
         </div>
 
         {asset.inputs.length > 0 && (
@@ -159,6 +147,6 @@ export function NodeInspector({
           <ErrorPanel title={`could not start ${verb}`} message={triggerError.message} />
         )}
       </div>
-    </div>
+    </SidePanel>
   )
 }

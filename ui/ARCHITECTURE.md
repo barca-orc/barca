@@ -88,6 +88,32 @@ The two pure steps are covered by `runStream.test.ts` and `runFeedback.test.ts`,
 including the worker-failure path (`"No module named 'sklearn'"` → node `failed` + error
 surfaced). No browser, no server, no mocks.
 
+## Design core
+
+The look of the UI is defined in three places, in this order:
+
+1. **Tokens** (`styles/tokens/`): colors, type scale, spacing, radius, elevation, motion, and
+   the light theme. The only place a color or a size is written as a value.
+2. **Primitives** (`components/`): `Button`, `IconButton`, `Tag`, `Chip`/`ChipGroup`, `Select`,
+   `SearchInput`, `StatusDot`/`StatusBadge`, `Skeleton`, `ConnectionBadge`, and `SidePanel` with
+   `Section` and `KeyValue`. Their CSS is inline (tokens as `var(--…)`) or, where it needs
+   pseudo-classes, in `styles/components.css`.
+3. **Pages** (`pages/`, `layouts/`): compose primitives; `styles/shell.css` holds page layout
+   only.
+
+Rules:
+
+- A page does not write a `<button>`, `<select>` or `<input>` for something a primitive covers,
+  and does not restyle a primitive. If it needs a variant, the primitive gets it.
+- A second use of a pattern is the cue to make the primitive; the first use stays in its page.
+- A new or changed primitive is added to the kit page (`pages/KitPage.tsx`, at `/ui/#/kit`
+  under `pnpm dev`) in every state it has. The kit page is not in the built UI.
+- `styles/tokens.test.ts` fails on a raw color or an off-scale font size outside
+  `styles/tokens/`. Add a token instead of an exception.
+
+Not primitives yet, by that second-use rule: the sortable table, the run list, the log viewer's
+frame. They are the next candidates when a second view needs them.
+
 ## Layout stability
 
 A page must not move when its data arrives. The rules:
