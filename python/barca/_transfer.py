@@ -37,10 +37,8 @@ behave exactly as they do for workers and the state helper.
 
 import hashlib
 import os
-import shutil
 import socket
 import sys
-import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -109,26 +107,19 @@ def _staged_get(remote: str, local: str, expected: str | None) -> dict:
 
     Returns the reply fields. The store's copy is used even when it does not have the
     `expected` hash; the caller is told so it can warn. A local file that already holds the
-    store's bytes is left untouched.
+    store's bytes is left untouched. A directory at `local` is not an artifact: it is moved
+    out of the way, never deleted (`_storage.make_way`).
     """
     dest = Path(local)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=dest.parent, prefix=f".{dest.name}.", suffix=".tmp")
-    os.close(fd)
-    try:
+    with _storage.staged_beside(dest) as tmp:
         _storage.get_file(remote, tmp)
         digest = _sha256(tmp)
         mismatch = expected is not None and digest != expected
         fetched = not (mismatch and _local_sha256(dest) == digest)
         if fetched:
-            if dest.is_dir() and not dest.is_symlink():
-                # Something other than a file sits where the artifact belongs; it is not
-                # the store's fault, and nothing else uses that path.
-                shutil.rmtree(dest)
+            _storage.make_way(dest)
             os.replace(tmp, dest)
         return {"sha256": digest, "fetched": fetched, "mismatch": mismatch}
-    finally:
-        Path(tmp).unlink(missing_ok=True)
 
 
 def _transfer(msg: dict) -> dict:

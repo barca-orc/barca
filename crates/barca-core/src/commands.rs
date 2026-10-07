@@ -1056,7 +1056,7 @@ impl StoreSync {
     fn known_absent(store: Option<&Self>, path: &str) -> bool {
         match store.and_then(|s| s.fetchable.get(path)) {
             Some((_, at, _)) => {
-                !std::path::Path::new(path).exists()
+                !std::path::Path::new(path).is_file()
                     && crate::transfer::local_path(at).is_some_and(|stored| !stored.exists())
             }
             None => !recover::on_disk(path, store.is_some()),
@@ -1110,7 +1110,7 @@ impl StoreSync {
             let dispatch::ProvidedInput::Single(oref) = input else {
                 continue;
             };
-            if oref.format != "parquet" || std::path::Path::new(&oref.path).exists() {
+            if oref.format != "parquet" || std::path::Path::new(&oref.path).is_file() {
                 continue;
             }
             if let Some((_, at, _)) = self.fetchable.get(&oref.path) {

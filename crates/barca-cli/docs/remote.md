@@ -239,6 +239,12 @@ exceeds `transfer_timeout` fails as stalled and is not retried.
 - **Stalled store**: lower `transfer_timeout` to fail faster; raise it if single artifacts
   legitimately take longer than 10 minutes to move.
 
+- **A directory where a local copy belongs**: not a store problem and not an error. The store's
+  copy is fetched and the directory is moved aside, never deleted (`barca docs cache`, "A
+  directory at an artifact's path"). A directory at an object's path inside a store that is a
+  shared directory is different: barca changes nothing in the store except its own objects, so
+  the transfer fails with exit 3 (`IsADirectoryError`, naming the path) until it is removed.
+
 `.barca/artifacts/` doubles as a local cache of the store and is never pruned automatically;
 deleting it is safe (anything needed later is downloaded again, or computed again if it is no
 longer in the store).

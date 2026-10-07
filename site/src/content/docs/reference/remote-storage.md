@@ -310,6 +310,19 @@ Only artifacts a run reads are hashed, once per run. Not checked: a parquet inpu
 in place (only byte ranges are fetched), and results recorded before barca stored a hash. A
 `--dry-run` does not contact the store, so it never reports a mismatch.
 
+## A directory where an artifact belongs
+
+An artifact is one file. A directory at an artifact's path under `.barca/artifacts/` is not a
+store problem and not an error: the result is treated as missing, the store's copy is fetched
+(or the step is computed again), and the directory is moved aside to
+`<run_hash>.<ext>.moved-aside`, with its contents, never deleted. An empty directory is removed;
+a symlink is replaced without touching its target. `barca docs cache`, "A directory at an
+artifact's path", has the full rule.
+
+A directory at an object's path inside a store that is a shared directory is different: barca
+changes nothing in the store except its own objects, so the transfer fails with exit 3
+(`IsADirectoryError`, naming the path) until it is removed.
+
 ## Remote sinks
 
 `@sink` paths accept the same URIs, independent of where the artifact store

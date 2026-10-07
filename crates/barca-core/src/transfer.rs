@@ -314,7 +314,7 @@ impl TransferClient {
     /// it is.
     pub fn fetch(&mut self, key: &str, store: &str, sha256: Option<&str>) -> Option<PathBuf> {
         let local = self.layout.local_for(store)?;
-        if (sha256.is_none() && local.exists()) || self.fetches.contains_key(&local) {
+        if (sha256.is_none() && local.is_file()) || self.fetches.contains_key(&local) {
             return Some(local);
         }
         let rx = self.send(|id| TransferRequest::Get {

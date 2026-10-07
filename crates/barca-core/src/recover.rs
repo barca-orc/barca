@@ -47,11 +47,12 @@ pub(crate) enum Work<'p> {
 /// so a URI that is not in that store is out of reach; without one, the worker reads the URI
 /// itself and reports what it finds, so it is taken as readable.
 ///
-/// A directory at the path counts as present: whether that is a valid artifact is not decided
-/// here.
+/// An artifact is one file. A directory at the path, or a symlink that leads to one or to
+/// nothing, is not an artifact and counts as missing: the step is computed again, and whoever
+/// writes the file moves the directory out of the way first (`barca._storage.make_way`).
 pub(crate) fn on_disk(path: &str, separate_store: bool) -> bool {
     match crate::transfer::local_path(path) {
-        Some(file) => file.exists(),
+        Some(file) => file.is_file(),
         None => !separate_store,
     }
 }
@@ -408,7 +409,7 @@ fn predicted_gone(oref: &OutputRef, layout: Option<&ArtifactLayout>) -> bool {
     match layout.and_then(|l| l.local_for(&oref.path).map(|mirror| (l, mirror))) {
         // Recorded in the store: read from its local mirror, or fetched from the store.
         Some((layout, mirror)) => {
-            !mirror.exists()
+            !mirror.is_file()
                 && crate::transfer::local_path(&oref.path).is_some_and(|stored| !stored.exists())
                 && crate::transfer::local_path(layout.store_root())
                     .is_some_and(|root| root.is_dir())
@@ -624,10 +625,28 @@ mod tests {
         assert!(!on_disk("s3://other/p/n/h.json", true));
     }
 
+    /// An artifact is one file (#249). Until 0.18 a directory at the path counted as present,
+    /// and the step that read it then failed with `IsADirectoryError`.
     #[test]
-    fn a_directory_at_the_path_counts_as_present() {
+    fn only_a_file_is_an_artifact_a_directory_or_a_dangling_link_is_missing() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(on_disk(dir.path().to_str().unwrap(), false));
+        let file = dir.path().join("h.json");
+        std::fs::write(&file, "1").unwrap();
+        let sub = dir.path().join("d.json");
+        std::fs::create_dir(&sub).unwrap();
+        let to_file = dir.path().join("to-file.json");
+        let to_dir = dir.path().join("to-dir.json");
+        let dangling = dir.path().join("dangling.json");
+        std::os::unix::fs::symlink(&file, &to_file).unwrap();
+        std::os::unix::fs::symlink(&sub, &to_dir).unwrap();
+        std::os::unix::fs::symlink(dir.path().join("nowhere"), &dangling).unwrap();
+        for separate_store in [false, true] {
+            assert!(on_disk(file.to_str().unwrap(), separate_store));
+            assert!(on_disk(to_file.to_str().unwrap(), separate_store));
+            assert!(!on_disk(sub.to_str().unwrap(), separate_store));
+            assert!(!on_disk(to_dir.to_str().unwrap(), separate_store));
+            assert!(!on_disk(dangling.to_str().unwrap(), separate_store));
+        }
     }
 
     fn plan(steps: Vec<StreamStep>) -> ExecutionPlan {

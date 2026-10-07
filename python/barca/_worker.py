@@ -633,6 +633,12 @@ def _materialize(result, node_id, art_dir, step, elapsed, elapsed_in_artifact=Fa
     # path gets a per-item hash from Rust and batch mode is test-only).
     run_hash = step.get("run_hash") if node_id == step.get("node_id") else None
     path = artifact_path(art_dir, node_id, fmt, run_hash)
+    # A directory where the artifact file belongs is not an artifact: it is moved out of the
+    # way (never deleted) so the step's result can be written. Sinks are the user's paths and
+    # never get this treatment.
+    local = _storage.local_path_of(path)
+    if local is not None:
+        _storage.make_way(local)
     _ser_wall0 = time.perf_counter()
     _ser_cpu0 = time.process_time()
     # A sensor's output is hashed: the coordinator folds the hash into the run hash of every

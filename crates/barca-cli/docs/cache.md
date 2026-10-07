@@ -318,11 +318,41 @@ barca run publish pipeline.py                    # model is cached again
 - Under `barca serve` a scheduled task whose input was deleted recomputes the input once, on its
   next tick, and keeps succeeding.
 
+### A directory at an artifact's path
+
+An artifact is one file. If a **directory** sits at an artifact's path (made by hand, by a tool
+that unpacked something there, or by a mistaken `mkdir -p`), it is not an artifact, and barca
+treats the result exactly as if the file were missing: it is fetched from the artifact store, or
+computed again with `reason: "artifact_missing"`, when something needs to read it, and it is not
+looked at otherwise. The same holds for a symlink there that leads to a directory or to nothing.
+
+Barca then has to put a file where the directory is. It never deletes what it finds:
+
+- an **empty** directory is removed;
+- a directory **with anything in it** is renamed, contents and all, to
+  `<run_hash>.<ext>.moved-aside` beside it (`.moved-aside-2`, `-3`, ... if that name is taken),
+  and stderr says so:
+  `[barca] warning: <path> is a directory, not an artifact. Moved it, with its contents, to
+  <path>.moved-aside; barca does not use it, delete it if you do not need it.`
+- a **symlink** is replaced by the artifact file. Only the link goes; what it pointed to is not
+  touched.
+
+The run goes on and exits 0. Barca never reads a `.moved-aside` directory again; deleting it is
+up to you.
+
+This applies only inside barca's own artifact directory (`.barca/artifacts/`). Barca moves
+nothing anywhere else:
+
+- a directory at a `@sink` path fails that sink (`[barca] SINK FAILED: ... IsADirectoryError`)
+  and is left as it is; the asset itself still succeeds (`barca docs sinks`);
+- a directory at an object's path in an artifact store that is a shared directory fails the
+  transfer with exit 3, naming the path, and is left as it is (`barca docs remote`).
+
 Known limits:
 
-- Only existence is checked. A file that is there but truncated or edited is read as it is (with
-  an artifact store, a copy that does not match its recorded hash is replaced: `barca docs
-  remote`). A directory at the artifact's path counts as present.
+- Only whether the artifact is a file is checked. A file that is there but truncated or edited
+  is read as it is (with an artifact store, a copy that does not match its recorded hash is
+  replaced: `barca docs remote`).
 - `--agent` announces each step once, with its outcome. A cached step whose artifact is not on
   disk waits: it prints `step:<id> completed` if it is computed again, or `step:<id> cached` at
   the end of the run if nothing needed it. The one exception is a result in a remote store

@@ -212,23 +212,122 @@ class TestChecksums:
         assert (reply["type"], reply["fetched"]) == ("done", True)
         assert reply["sha256"] == hashlib.sha256(b'{"x": 2}').hexdigest()
 
-    def test_a_directory_where_the_artifact_belongs_is_replaced(self, helper, tmp_path):
-        # A local problem, not the store's: it must not fail the fetch (os.replace would
-        # raise IsADirectoryError) nor be reported as a store error.
-        local = tmp_path / "h.json"
-        (local / "inner").mkdir(parents=True)
-        (local / "inner" / "x").write_text("junk")
-        reply = self._get(helper, self._store(), local)
-        assert (reply["type"], reply["fetched"], reply["mismatch"]) == ("done", True, False)
-        assert local.is_file() and local.read_bytes() == self.BODY
-        assert sorted(p.name for p in tmp_path.iterdir()) == ["h.json"]
 
-    def test_a_directory_is_replaced_without_a_recorded_hash_too(self, helper, tmp_path):
+class TestDirectoryAtTheArtifactPath:
+    """An artifact is one file. A directory where it belongs is moved aside, never deleted
+    (`_storage.make_way`, `barca docs cache`)."""
+
+    BODY = TestChecksums.BODY
+    SHA = TestChecksums.SHA
+
+    def _get(self, helper, local, sha256=SHA) -> dict:
+        store = local.parent / "store"
+        store.mkdir(exist_ok=True)
+        (store / "h.json").write_bytes(self.BODY)
+        msg = {"type": "get", "id": 1, "remote": str(store / "h.json"), "local": str(local)}
+        if sha256 is not None:
+            msg["sha256"] = sha256
+        helper.request(msg)
+        return helper.reply()
+
+    def _names(self, directory) -> list[str]:
+        return sorted(p.name for p in directory.iterdir() if p.name != "store")
+
+    def test_an_empty_directory_is_removed(self, helper, tmp_path, capfd):
         local = tmp_path / "h.json"
         local.mkdir()
-        reply = self._get(helper, self._store(), local, sha256=None)
-        assert reply["type"] == "done"
+        reply = self._get(helper, local)
+        assert (reply["type"], reply["fetched"], reply["mismatch"]) == ("done", True, False)
+        assert local.is_file() and local.read_bytes() == self.BODY
+        assert self._names(tmp_path) == ["h.json"]
+        assert "warning" not in capfd.readouterr().err  # nothing was there to lose
+
+    def test_a_directory_with_contents_is_moved_aside_intact(self, helper, tmp_path, capfd):
+        local = tmp_path / "h.json"
+        (local / "inner").mkdir(parents=True)
+        (local / "inner" / "x").write_text("mine")
+        (local / "top").write_text("also mine")
+        reply = self._get(helper, local)
+        assert (reply["type"], reply["fetched"], reply["mismatch"]) == ("done", True, False)
+        assert local.is_file() and local.read_bytes() == self.BODY
+        aside = tmp_path / "h.json.moved-aside"
+        assert self._names(tmp_path) == ["h.json", "h.json.moved-aside"]
+        assert (aside / "inner" / "x").read_text() == "mine"
+        assert (aside / "top").read_text() == "also mine"
+        err = capfd.readouterr().err
+        assert f"[barca] warning: {local} is a directory, not an artifact" in err, err
+        assert str(aside) in err, err
+
+    def test_an_earlier_moved_aside_directory_is_never_overwritten(self, helper, tmp_path):
+        local = tmp_path / "h.json"
+        earlier = tmp_path / "h.json.moved-aside"
+        earlier.mkdir()
+        (earlier / "old").write_text("first")
+        local.mkdir()
+        (local / "new").write_text("second")
+        assert self._get(helper, local)["type"] == "done"
+        assert (earlier / "old").read_text() == "first"
+        assert (tmp_path / "h.json.moved-aside-2" / "new").read_text() == "second"
         assert local.read_bytes() == self.BODY
+
+    def test_a_directory_is_moved_aside_without_a_recorded_hash_too(self, helper, tmp_path):
+        local = tmp_path / "h.json"
+        local.mkdir()
+        (local / "x").write_text("mine")
+        assert self._get(helper, local, sha256=None)["type"] == "done"
+        assert local.read_bytes() == self.BODY
+        assert (tmp_path / "h.json.moved-aside" / "x").read_text() == "mine"
+
+    def test_a_symlink_to_a_directory_is_replaced_and_its_target_is_untouched(
+        self, helper, tmp_path
+    ):
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        (elsewhere / "precious").write_text("keep")
+        local = tmp_path / "h.json"
+        local.symlink_to(elsewhere, target_is_directory=True)
+        assert self._get(helper, local)["type"] == "done"
+        assert local.is_file() and not local.is_symlink()
+        assert local.read_bytes() == self.BODY
+        assert self._names(elsewhere) == ["precious"]
+        assert (elsewhere / "precious").read_text() == "keep"
+        assert self._names(tmp_path) == ["elsewhere", "h.json"]
+
+    def test_a_symlink_to_a_file_is_replaced_and_its_target_is_untouched(self, helper, tmp_path):
+        target = tmp_path / "target.json"
+        target.write_text("other bytes")
+        local = tmp_path / "h.json"
+        local.symlink_to(target)
+        assert self._get(helper, local)["type"] == "done"
+        assert not local.is_symlink() and local.read_bytes() == self.BODY
+        assert target.read_text() == "other bytes"
+
+    def test_a_directory_in_the_store_is_an_error_and_is_left_alone(self, helper, tmp_path):
+        # The store is shared: barca moves nothing there.
+        src = tmp_path / "a.json"
+        src.write_bytes(self.BODY)
+        dest = tmp_path / "store" / "n" / "h.json"
+        (dest / "theirs").mkdir(parents=True)
+        helper.request({"type": "put", "id": 1, "local": str(src), "remote": str(dest)})
+        reply = helper.reply()
+        assert reply["type"] == "error" and "IsADirectoryError" in reply["message"], reply
+        assert (dest / "theirs").is_dir()
+        assert sorted(p.name for p in dest.parent.iterdir()) == ["h.json"]
+
+
+class TestMakeWay:
+    def test_a_file_or_nothing_at_the_path_is_left_alone(self, tmp_path):
+        assert _storage.make_way(tmp_path / "absent.json") is None
+        (tmp_path / "f.json").write_text("x")
+        assert _storage.make_way(tmp_path / "f.json") is None
+        assert (tmp_path / "f.json").read_text() == "x"
+
+    def test_it_returns_where_the_directory_went(self, tmp_path):
+        d = tmp_path / "h.parquet"
+        (d / "part-0").mkdir(parents=True)
+        assert _storage.make_way(d) == tmp_path / "h.parquet.moved-aside"
+        assert not d.exists()
+        assert (tmp_path / "h.parquet.moved-aside" / "part-0").is_dir()
 
 
 def _fetch_in_process(remote: str, local: str, sha: str, barrier) -> None:
