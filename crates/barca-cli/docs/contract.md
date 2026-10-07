@@ -903,7 +903,7 @@ placeholders:
 | Line | When | Stability |
 |---|---|---|
 | `[barca] step:<id> completed <secs>s (<n>/<total>)[ env NAME=VALUE ...]` | a step finished; `<id>` includes `[key=value]` for a partition | stable |
-| `[barca] step:<id> cached[ env NAME=VALUE ...]` | a step has a cached result. If its artifact then turns out to be missing when something reads it, a `[barca] warning: <id>: the artifact of its cached result is missing ...` line and a `completed` (or `failed`) line for the same step follow | stable |
+| `[barca] step:<id> cached[ env NAME=VALUE ...]` | a step was served from cache. Printed when the step is decided, or, when its artifact is not on disk, at the end of the run once it is settled that nothing needed it (if something did, the step prints `completed` or `failed` instead, never both). Exception: a result in a remote artifact store whose object proves to be deleted when it is fetched has already printed `cached`; a `[barca] warning: <id>: the artifact of its cached result is missing ...` line and then `completed` or `failed` for the same step follow | stable |
 | `[barca] step:<id> failed: <first line of the error>` | a step raised | stable |
 | `[barca] run failed: step '<id>' failed (exit <code>)` | just before the error envelope of a failed step (every mode) | stable |
 | `[barca] <n>/<total> steps \| done in <secs>s` | end of a run that executed steps, with or without `--agent`; `failed in` when a step failed, `cancelled after` on Ctrl-C (never `done` then) | stable |

@@ -189,10 +189,24 @@ exceeds `transfer_timeout` fails as stalled and is not retried.
   If nothing reads it, it stays cached and is not recomputed (`barca docs cache`, "A cached
   result whose artifact is missing"). A local copy is enough: a store that is unavailable does
   not lose a cache hit whose file is in `.barca/artifacts/`.
+- **The store itself is gone** (the bucket or container was deleted, its name is misspelled,
+  the directory is not mounted, or the endpoint answers "not found" to everything): every
+  object then looks missing, so before computing anything again barca lists the bucket,
+  container or store directory, once per run. If that fails the run exits 3 with
+  `could not fetch N cached artifact(s) from the artifact store: the store at <uri> is not
+  there or cannot be listed`. Nothing is recomputed, nothing is uploaded, and no bucket,
+  container or directory is created.
 - **Cached artifact that cannot be fetched** for any other reason (permission or
   authentication errors, a store that cannot be reached, a stalled transfer): the run exits 3
   with `could not fetch ... cached artifact(s)`, naming each one and the store's error. Fix
   the access, or recompute with `barca get target pipeline.py --refresh-all`.
+- **How long an unreachable store takes to fail.** A refused or dropped connection counts as
+  transient, so a transfer gets up to 4 attempts, and inside each attempt the cloud SDK
+  retries on its own first: measured with default settings, about 12 seconds per attempt for
+  S3, 90 seconds for Azure and 4 minutes for GCS. An attempt that reaches `transfer_timeout`
+  (default 600 seconds) is abandoned and not retried. So the wait is at most 4 times the
+  smaller of those two, and never unbounded; with `transfer_timeout = 5` an unreachable store
+  fails a run in about 5 seconds on every backend. Lower it where a fast failure matters.
 - **Stalled store**: lower `transfer_timeout` to fail faster; raise it if single artifacts
   legitimately take longer than 10 minutes to move.
 

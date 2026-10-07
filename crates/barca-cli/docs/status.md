@@ -89,7 +89,8 @@ two cannot disagree. In JSON the states are snake_case, spelled exactly like the
   message.
 - `artifact_missing`: the result is recorded and its run hash is unchanged, but the artifact file
   is gone and a run over these nodes would have to read it (a step that runs takes it as an
-  input, or it is a target or an end of the pipeline), so it would be computed again. A missing
+  input, or it is the output the run returns: a target, or with no target the last asset), so
+  it would be computed again. A missing
   artifact that nothing would read does not make a node stale: it stays `cached`, and
   `cache.artifact` then names a file that is not there (`barca docs cache`, "A cached result
   whose artifact is missing").

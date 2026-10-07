@@ -196,11 +196,13 @@ barca run publish pipeline.py                    # model is cached again
 ```
 
 - **Needed** means one of: a step that is going to run takes the artifact as an input; a
-  `partitions_from` step is expanded from it; or it is an output the command was asked for (its
-  targets, or with no target every asset that no other planned step reads, the ends of the
-  pipeline).
+  `partitions_from` step is expanded from it; or it is the output the command returns: the
+  targets you named, or with no target the one asset whose value is `final_output` (the last
+  asset). Every other asset at the end of a pipeline is treated like an intermediate.
 - **Missing** means not on this machine's disk and, with an artifact store, not in the store
-  either (`barca docs remote`).
+  either (`barca docs remote`). The store has to be there for that to count: if its bucket,
+  container or directory is gone, misnamed or unreachable, the run fails with exit 3 and
+  computes nothing, because then nothing is known about the artifact.
 - The step runs with `reason: "artifact_missing"` and a warning on stderr names the file:
   `[barca] warning: pipeline.py:model: the artifact of its cached result is missing: <path>.
   Computing it again.` Its run hash does not change, so the artifact lands at the same path and
@@ -221,14 +223,19 @@ Known limits:
 - Only existence is checked. A file that is there but truncated or edited is read as it is (with
   an artifact store, a copy that does not match its recorded hash is replaced: `barca docs
   remote`). A directory at the artifact's path counts as present.
-- A cached step whose artifact is recomputed has already printed `[barca] step:<id> cached` in
-  `--agent` mode; the warning and a `step:<id> completed` line for the same step follow.
+- `--agent` announces each step once, with its outcome. A cached step whose artifact is not on
+  disk waits: it prints `step:<id> completed` if it is computed again, or `step:<id> cached` at
+  the end of the run if nothing needed it. The one exception is a result in a remote store
+  whose object turns out to be deleted when it is fetched: its `cached` line was already
+  printed, and the warning and a `completed` line for the same step follow
+  (`barca docs contract`).
 - A function that is not deterministic may return a different value when it is computed again;
   cached steps downstream of it keep the results they were computed with (as after
   `--refresh --no-cascade`).
 - A dry run does not contact a remote artifact store. A result recorded in one is predicted as
   `cached` even if the object has since been deleted from the bucket; the real run finds out
-  when it fetches it, and computes it again. A store that is a directory is checked.
+  when it fetches it, and computes it again. A store that is a directory is checked, and if
+  the directory itself is gone the dry run predicts `cached` where the run exits 3.
 
 ## Controlling the cache
 
