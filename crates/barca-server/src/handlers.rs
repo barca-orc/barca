@@ -5,21 +5,20 @@
 //! workers are terminated and the run is marked cancelled/failed.
 
 use crate::error::ApiError;
-use crate::state::{AppState, Durations, NodeState, RunChannel, RunState, RunStatus, now_ts};
+use crate::state::{
+    AppState, Durations, NodeState, RunChannel, RunResult, RunState, RunStatus, now_ts,
+};
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::response::Sse;
 use axum::response::sse::{Event, KeepAlive};
-use barca_core::commands::{self, GetResult};
+use barca_core::commands;
 use barca_core::{BarcaError, RunEvent, db};
 use futures::stream::{self, Stream, StreamExt};
 use serde_json::{Value, json};
 use std::convert::Infallible;
 use std::time::Duration;
 use tokio_stream::wrappers::BroadcastStream;
-
-/// Default timeout for a single run (10 minutes).
-const RUN_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// `GET /health` — liveness, version, whether this server is read-only, and
 /// whether it runs the scheduler.
@@ -323,13 +322,6 @@ pub async fn schedule(State(state): State<AppState>) -> Json<Value> {
                 .ok()
                 .and_then(|c| c.find_next_occurrence(&now, false).ok())
                 .map(|t| t.timestamp());
-            // A run shared by nodes due at the same tick reports each node's own outcome.
-            let last_status = j.last_handle.as_ref().and_then(|h| {
-                state.runs.get(h).map(|r| match r.node_status.get(&j.id) {
-                    Some(s) if s != "success" => RunStatus::Failed,
-                    _ => r.status,
-                })
-            });
             json!({
                 "id": j.id,
                 "cron": j.cron,
@@ -337,7 +329,7 @@ pub async fn schedule(State(state): State<AppState>) -> Json<Value> {
                 "next_fire": next_fire,
                 "last_fired": j.last_fired,
                 "last_run": j.last_handle,
-                "last_status": last_status,
+                "last_status": j.last_status,
             })
         })
         .collect();
@@ -415,7 +407,7 @@ pub async fn logs(
     let db_run_id = state
         .runs
         .get(&run_id)
-        .and_then(|r| r.result.as_ref().map(|res| res.run_id.clone()))
+        .and_then(|r| r.result.as_ref().map(|res| res.run_id().to_string()))
         .unwrap_or(run_id);
 
     let entries = if state.config.read_only {
@@ -439,8 +431,18 @@ enum RunKind {
     Get(Option<String>),
     /// `commands::run` for a task target, with how its upstream assets are treated.
     Task(String, commands::CachePolicy),
-    /// `commands::run_mixed_streaming`: the nodes due at one cron tick, as one run.
+    /// `commands::run_mixed_streaming`: several scheduled nodes of any kind, as one run.
     Batch(Vec<String>),
+}
+
+impl RunKind {
+    /// How many targets the run has, for its time limit. A run with no target counts as one.
+    fn targets(&self) -> u32 {
+        match self {
+            RunKind::Get(_) | RunKind::Task(..) => 1,
+            RunKind::Batch(targets) => targets.len().max(1) as u32,
+        }
+    }
 }
 
 /// Insert a `Pending` run, spawn the background execution task, and return the
@@ -458,10 +460,11 @@ pub(crate) fn start_run_task(state: AppState, target: String) -> String {
     )
 }
 
-/// The nodes due at one cron tick (assets, sensors and tasks) as a single run over the union of
-/// their cones, so an upstream they share is computed once. Cache-aware, like each node's own
-/// tick. A failure in one node stops only the nodes downstream of it; `GET /schedule` reports
-/// each node's own outcome.
+/// Several scheduled nodes (assets, sensors and tasks) as a single run over the union of their
+/// cones, so an upstream they share is computed once. Cache-aware, like each node's own tick.
+/// A failure in one node stops only the nodes downstream of it. The run is `failed` when any
+/// node failed, with each node's outcome in `result.targets`, and its time limit is the
+/// per-target limit times the number of nodes.
 pub(crate) fn start_scheduled_batch(state: AppState, targets: Vec<String>) -> String {
     spawn_run(state, RunKind::Batch(targets))
 }
@@ -474,6 +477,54 @@ pub(crate) fn start_scheduled_task(state: AppState, target: String) -> String {
         state,
         RunKind::Task(target, commands::CachePolicy::CacheAware),
     )
+}
+
+/// How a run ended, as `/status/{run_id}` reports it.
+#[derive(Debug)]
+struct Conclusion {
+    status: RunStatus,
+    result: Option<RunResult>,
+    error: Option<String>,
+}
+
+/// Turn what the core command returned into the run's final status. `timed_out` is the limit
+/// the run exceeded, when that is why it was stopped.
+///
+/// A run that returns a result is `complete`, unless the result says some of its targets
+/// failed: then it is `failed`, as `barca get a,b` exits 1 when one of them fails, and keeps
+/// the result so each target's outcome can be read.
+fn conclude(outcome: Result<RunResult, BarcaError>, timed_out: Option<Duration>) -> Conclusion {
+    match outcome {
+        Ok(result) => {
+            let error = result.failure();
+            Conclusion {
+                status: if error.is_some() {
+                    RunStatus::Failed
+                } else {
+                    RunStatus::Complete
+                },
+                result: Some(result),
+                error,
+            }
+        }
+        Err(BarcaError::Cancelled) => match timed_out {
+            Some(limit) => Conclusion {
+                status: RunStatus::Failed,
+                result: None,
+                error: Some(format!("run timed out after {}s", limit.as_secs())),
+            },
+            None => Conclusion {
+                status: RunStatus::Cancelled,
+                result: None,
+                error: Some("run cancelled".to_string()),
+            },
+        },
+        Err(e) => Conclusion {
+            status: RunStatus::Failed,
+            result: None,
+            error: Some(e.to_string()),
+        },
+    }
 }
 
 fn spawn_run(state: AppState, kind: RunKind) -> String {
@@ -491,7 +542,6 @@ fn spawn_run(state: AppState, kind: RunKind) -> String {
             started_at: now_ts(),
             finished_at: None,
             cancel: cancel.clone(),
-            node_status: std::collections::HashMap::new(),
         },
     );
     let channel = RunChannel::new();
@@ -537,25 +587,26 @@ fn spawn_run(state: AppState, kind: RunKind) -> String {
         let files = st.config.files.clone();
         let python = st.config.python.clone();
         let cfg = st.config.resolved.clone();
+        // Each target gets the per-target limit: nodes that used to have a run each, and a
+        // limit each, share this run's worker pool.
+        let time_limit = st.run_timeout * kind.targets();
 
-        let mut timed_out = false;
-        let mut node_status = std::collections::HashMap::new();
-        let outcome: Result<GetResult, BarcaError> = {
+        let mut timed_out = None;
+        let outcome: Result<RunResult, BarcaError> = {
             let fut = async {
                 match &kind {
-                    RunKind::Get(target) => {
-                        commands::get_streaming(
-                            &cfg,
-                            target.as_deref(),
-                            &files,
-                            &python,
-                            commands::CachePolicy::CacheAware,
-                            true,
-                            cancel.clone(),
-                            Some(event_tx),
-                        )
-                        .await
-                    }
+                    RunKind::Get(target) => commands::get_streaming(
+                        &cfg,
+                        target.as_deref(),
+                        &files,
+                        &python,
+                        commands::CachePolicy::CacheAware,
+                        true,
+                        cancel.clone(),
+                        Some(event_tx),
+                    )
+                    .await
+                    .map(RunResult::Single),
                     RunKind::Batch(targets) => commands::run_mixed_streaming(
                         &cfg,
                         targets,
@@ -567,34 +618,19 @@ fn spawn_run(state: AppState, kind: RunKind) -> String {
                         Some(event_tx),
                     )
                     .await
-                    .map(|m| {
-                        node_status = m
-                            .targets
-                            .iter()
-                            .map(|(name, t)| (name.clone(), t.status.clone()))
-                            .collect();
-                        GetResult {
-                            run_id: m.run_id,
-                            elapsed_seconds: m.elapsed_seconds,
-                            steps_executed: m.steps_executed,
-                            phases: m.phases,
-                            final_output: None,
-                            steps: m.steps,
-                        }
-                    }),
-                    RunKind::Task(target, policy) => {
-                        commands::run_streaming(
-                            &cfg,
-                            target,
-                            &files,
-                            &python,
-                            policy.clone(),
-                            true,
-                            cancel.clone(),
-                            Some(event_tx),
-                        )
-                        .await
-                    }
+                    .map(RunResult::Multi),
+                    RunKind::Task(target, policy) => commands::run_streaming(
+                        &cfg,
+                        target,
+                        &files,
+                        &python,
+                        policy.clone(),
+                        true,
+                        cancel.clone(),
+                        Some(event_tx),
+                    )
+                    .await
+                    .map(RunResult::Single),
                 }
             };
             tokio::pin!(fut);
@@ -604,10 +640,12 @@ fn spawn_run(state: AppState, kind: RunKind) -> String {
             // returns — nothing is left running in the background.
             tokio::select! {
                 res = &mut fut => res,
-                _ = tokio::time::sleep(RUN_TIMEOUT) => {
+                _ = tokio::time::sleep(time_limit) => {
                     // An operator cancel that is still unwinding when the deadline
                     // hits stays classified as cancelled, not as a timeout.
-                    timed_out = !cancel.is_cancelled();
+                    if !cancel.is_cancelled() {
+                        timed_out = Some(time_limit);
+                    }
                     cancel.cancel();
                     fut.await
                 }
@@ -618,29 +656,16 @@ fn spawn_run(state: AppState, kind: RunKind) -> String {
         // The run has returned and its event sender is gone — await the drain
         // so trailing logs land before RunFinished.
         drain.await.ok();
-        let ok = outcome.is_ok();
+        let end = conclude(outcome, timed_out);
+        let ok = end.status == RunStatus::Complete;
 
+        // The status is in place before `RunFinished` goes out, so whoever reacts to the
+        // event reads the final state.
         if let Some(mut r) = st.runs.get_mut(&h) {
             r.finished_at = Some(now_ts());
-            r.node_status = node_status;
-            match outcome {
-                Ok(result) => {
-                    r.status = RunStatus::Complete;
-                    r.result = Some(result);
-                }
-                Err(BarcaError::Cancelled) if timed_out => {
-                    r.status = RunStatus::Failed;
-                    r.error = Some(format!("run timed out after {}s", RUN_TIMEOUT.as_secs()));
-                }
-                Err(BarcaError::Cancelled) => {
-                    r.status = RunStatus::Cancelled;
-                    r.error = Some("run cancelled".to_string());
-                }
-                Err(e) => {
-                    r.status = RunStatus::Failed;
-                    r.error = Some(e.to_string());
-                }
-            }
+            r.status = end.status;
+            r.result = end.result;
+            r.error = end.error;
         }
         channel.emit(RunEvent::RunFinished {
             run_id: h.clone(),
@@ -713,5 +738,117 @@ mod duration_tests {
         );
         assert_eq!(d["p.py:f"].samples, 2, "partitions fold into the base node");
         assert!(!d.contains_key("p.py:missing"));
+    }
+}
+
+#[cfg(test)]
+mod conclude_tests {
+    use super::*;
+    use barca_core::commands::{GetResult, MultiResult, TargetOutcome, TargetStatus};
+
+    fn target(name: &str, status: TargetStatus) -> (String, TargetOutcome) {
+        (
+            name.to_string(),
+            TargetOutcome {
+                status,
+                final_output: None,
+                error: (status == TargetStatus::Failed).then(|| "boom".to_string()),
+                failed_node: (status == TargetStatus::Failed).then(|| name.to_string()),
+            },
+        )
+    }
+
+    fn multi(targets: Vec<(String, TargetOutcome)>) -> RunResult {
+        RunResult::Multi(MultiResult {
+            run_id: "r1".to_string(),
+            elapsed_seconds: 0.1,
+            steps_executed: targets.len(),
+            phases: 1,
+            steps: Vec::new(),
+            targets,
+        })
+    }
+
+    #[test]
+    fn a_run_whose_targets_all_succeeded_is_complete() {
+        let end = conclude(
+            Ok(multi(vec![
+                target("p.py:a", TargetStatus::Success),
+                target("p.py:b", TargetStatus::Success),
+            ])),
+            None,
+        );
+        assert_eq!(end.status, RunStatus::Complete);
+        assert_eq!(end.error, None);
+        assert!(end.result.is_some());
+    }
+
+    #[test]
+    fn a_run_with_a_failed_target_is_failed_and_keeps_every_outcome() {
+        let end = conclude(
+            Ok(multi(vec![
+                target("p.py:a", TargetStatus::Success),
+                target("p.py:broken", TargetStatus::Failed),
+                target("p.py:c", TargetStatus::Success),
+            ])),
+            None,
+        );
+        assert_eq!(end.status, RunStatus::Failed);
+        assert_eq!(
+            end.error.as_deref(),
+            Some("1 of 3 targets failed: p.py:broken")
+        );
+        let payload = serde_json::to_value(end.result.expect("result kept")).unwrap();
+        assert_eq!(payload["run_id"], "r1");
+        assert_eq!(payload["targets"]["p.py:a"]["status"], "success");
+        assert_eq!(payload["targets"]["p.py:broken"]["status"], "failed");
+        assert_eq!(payload["targets"]["p.py:broken"]["error"], "boom");
+        assert!(
+            payload.get("final_output").is_none(),
+            "a multi-target result has `targets` in place of `final_output`: {payload}"
+        );
+    }
+
+    #[test]
+    fn a_single_target_result_keeps_its_shape() {
+        let end = conclude(
+            Ok(RunResult::Single(GetResult {
+                run_id: "r2".to_string(),
+                elapsed_seconds: 0.1,
+                steps_executed: 1,
+                phases: 1,
+                final_output: None,
+                steps: Vec::new(),
+            })),
+            None,
+        );
+        assert_eq!(end.status, RunStatus::Complete);
+        let payload = serde_json::to_value(end.result.unwrap()).unwrap();
+        assert!(payload.get("final_output").is_some());
+        assert!(payload.get("targets").is_none());
+    }
+
+    #[test]
+    fn a_stopped_run_is_cancelled_unless_it_ran_out_of_time() {
+        let cancelled = conclude(Err(BarcaError::Cancelled), None);
+        assert_eq!(cancelled.status, RunStatus::Cancelled);
+        assert_eq!(cancelled.error.as_deref(), Some("run cancelled"));
+
+        let timed_out = conclude(Err(BarcaError::Cancelled), Some(Duration::from_secs(1200)));
+        assert_eq!(timed_out.status, RunStatus::Failed);
+        assert_eq!(
+            timed_out.error.as_deref(),
+            Some("run timed out after 1200s")
+        );
+    }
+
+    #[test]
+    fn a_batch_gets_the_time_limit_once_per_target() {
+        assert_eq!(RunKind::Get(None).targets(), 1);
+        assert_eq!(RunKind::Get(Some("a".into())).targets(), 1);
+        let task = RunKind::Task("t".into(), commands::CachePolicy::CacheAware);
+        assert_eq!(task.targets(), 1);
+        let batch = RunKind::Batch(vec!["a".into(), "b".into(), "c".into()]);
+        assert_eq!(batch.targets(), 3);
     }
 }

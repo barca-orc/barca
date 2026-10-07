@@ -13,17 +13,26 @@
 //! was down (catch-up), then fires on each live cron match. Last-fired times are
 //! persisted so catch-up survives restarts; runs execute through the bounded run
 //! pool and are visible via `GET /schedule`.
+//!
+//! Jobs that fire together (due at the same tick, or caught up together at startup) and have a
+//! step in common share one run over the union of their cones, so that step is computed once
+//! (`barca_core::share` decides who shares). Sharing a run does not tie the jobs to each
+//! other: each job is followed through the run's events ([`follow_run`]), and "its previous
+//! run is still going" means its own step has not ended, whatever the rest of the run is doing.
 
 use crate::handlers;
-use crate::state::{AppState, JobStatus, RunStatus};
+use crate::state::{AppState, JobStatus, RunResult, RunState, RunStatus};
+use barca_core::commands::TargetStatus;
 use barca_core::commands::{self, AssetSummary};
-use barca_core::{CronExpr, Freshness, NodeKind, db};
+use barca_core::{CronExpr, Freshness, NodeKind, RunEvent, db};
 use chrono::{DateTime, FixedOffset, Local, TimeZone, Timelike, Utc};
 use croner::Cron;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::sync::broadcast::error::RecvError;
 
 /// Static description of one scheduled job, for `barca schedule` (no server).
 #[derive(Debug, Clone, Serialize)]
@@ -199,26 +208,41 @@ enum TickAction<'a> {
     },
 }
 
-/// Decide, for a tick at `now`, which due jobs to fire and which to skip. Pure:
-/// takes the last handle issued per job and a predicate reporting whether a
-/// handle is still running, so the overlap-skip logic is testable without a
-/// live server or wall clock.
+/// Decide, for a tick at `now`, which due jobs to fire and which to skip. The jobs one tick
+/// fires ([`fired`]) are due together whatever their cron expressions: `0 5 * * *` and
+/// `*/5 * * * *` coincide at 05:00, and can share a run there.
+///
+/// Pure: `running` reports, for a job id, the handle of that job's previous run when the job
+/// itself is still going in it, so the overlap-skip logic is testable without a live server or
+/// wall clock. A job is judged on its own: a job that shared its previous run with one that is
+/// still running fires again once its own step has ended.
 fn plan_tick<'a, Tz: TimeZone>(
     now: &DateTime<Tz>,
     jobs: &'a [ScheduledJob],
-    last_handle: &HashMap<String, String>,
-    in_flight: impl Fn(&str) -> bool,
+    running: impl Fn(&str) -> Option<String>,
 ) -> Vec<TickAction<'a>> {
     due_jobs(now, jobs)
         .into_iter()
-        .map(|job| match last_handle.get(&job.id) {
-            Some(h) if in_flight(h) => TickAction::Skip {
-                job,
-                handle: h.clone(),
-            },
-            _ => TickAction::Fire(job),
+        .map(|job| match running(&job.id) {
+            Some(handle) => TickAction::Skip { job, handle },
+            None => TickAction::Fire(job),
         })
         .collect()
+}
+
+/// The jobs a tick's plan fires: the ones due together, which share runs where they can.
+fn fired<'a>(plan: &[TickAction<'a>]) -> Vec<&'a ScheduledJob> {
+    plan.iter()
+        .filter_map(|action| match action {
+            TickAction::Fire(job) => Some(*job),
+            TickAction::Skip { .. } => None,
+        })
+        .collect()
+}
+
+/// Whether a run is still pending or running.
+fn still_going(status: RunStatus) -> bool {
+    matches!(status, RunStatus::Pending | RunStatus::Running)
 }
 
 /// Whether a previously-issued run handle is still pending or running.
@@ -226,34 +250,55 @@ fn is_in_flight(state: &AppState, handle: &str) -> bool {
     state
         .runs
         .get(handle)
-        .is_some_and(|r| matches!(r.status, RunStatus::Pending | RunStatus::Running))
+        .is_some_and(|r| still_going(r.status))
 }
 
-/// Trigger a run for a due job, routed by node kind: assets and sensors go
-/// through the `get` path, tasks through the `run` path. Returns the handle.
+/// Trigger one run for jobs that share it (or for a job on its own) and return its handle.
 ///
-/// A tick brings the node up to date, it does not force it: sensors upstream
+/// A job firing alone takes the path for its kind: assets and sensors go through `get`, tasks
+/// through `run`. Several jobs share one run over the union of their cones, so an upstream they
+/// share is computed once.
+///
+/// A tick brings a node up to date, it does not force it: sensors upstream
 /// are polled, anything whose inputs changed is recomputed, and an asset whose
 /// inputs did not change is served from cache. A task itself always runs.
-fn trigger(state: &AppState, job: &ScheduledJob) -> String {
-    match job.kind {
-        NodeKind::Task => handlers::start_scheduled_task(state.clone(), job.id.clone()),
-        NodeKind::Asset | NodeKind::Sensor => {
-            handlers::start_run(state.clone(), Some(job.id.clone()))
-        }
-    }
-}
-
-/// Trigger one run for every job due at the same tick. A single job takes its own path
-/// ([`trigger`]); several share one run over the union of their cones.
-fn trigger_tick(state: &AppState, due: &[&ScheduledJob]) -> String {
+fn trigger(state: &AppState, due: &[&ScheduledJob]) -> String {
     match due {
-        [one] => trigger(state, one),
+        [job] => match job.kind {
+            NodeKind::Task => handlers::start_scheduled_task(state.clone(), job.id.clone()),
+            NodeKind::Asset | NodeKind::Sensor => {
+                handlers::start_run(state.clone(), Some(job.id.clone()))
+            }
+        },
         many => handlers::start_scheduled_batch(
             state.clone(),
             many.iter().map(|j| j.id.clone()).collect(),
         ),
     }
+}
+
+/// Split the jobs that are due together into runs, given the groups of job ids that can share
+/// one (`None`: nothing is shared, every job gets its own run, as before runs were shared).
+/// A job no group names gets its own run too.
+fn runs_for<'a>(
+    due: &[&'a ScheduledJob],
+    groups: Option<&[Vec<String>]>,
+) -> Vec<Vec<&'a ScheduledJob>> {
+    let alone = |job: &&'a ScheduledJob| vec![*job];
+    let Some(groups) = groups else {
+        return due.iter().map(alone).collect();
+    };
+    let mut runs: Vec<Vec<&ScheduledJob>> = groups
+        .iter()
+        .map(|group| {
+            let in_group = |job: &&&ScheduledJob| group.contains(&job.id);
+            due.iter().filter(in_group).copied().collect()
+        })
+        .filter(|run: &Vec<&ScheduledJob>| !run.is_empty())
+        .collect();
+    let grouped = |job: &&&ScheduledJob| groups.iter().any(|g| g.contains(&job.id));
+    runs.extend(due.iter().filter(|job| !grouped(job)).map(alone));
+    runs
 }
 
 /// Whether a scheduled tick elapsed between `last_fired` and `now` — i.e. the
@@ -267,6 +312,35 @@ fn needs_catchup<Tz: TimeZone>(cron: &Cron, last_fired: &DateTime<Tz>, now: &Dat
     }
 }
 
+/// What to do with each job at startup.
+struct CatchUp<'a> {
+    /// Jobs that missed a tick while the server was down. They fire once, together, exactly as
+    /// jobs due at the same tick do.
+    fire: Vec<&'a ScheduledJob>,
+    /// Jobs never seen before: anchored to now, not fired (no first-launch stampede).
+    anchor: Vec<&'a ScheduledJob>,
+}
+
+/// Decide the startup catch-up. Pure: `last_fired` gives a job's persisted last fire time.
+fn plan_catchup<'a, Tz: TimeZone>(
+    now: &DateTime<Tz>,
+    jobs: &'a [ScheduledJob],
+    last_fired: impl Fn(&str) -> Option<DateTime<Tz>>,
+) -> CatchUp<'a> {
+    let mut plan = CatchUp {
+        fire: Vec::new(),
+        anchor: Vec::new(),
+    };
+    for job in jobs {
+        match last_fired(&job.id) {
+            Some(last) if needs_catchup(&job.cron, &last, now) => plan.fire.push(job),
+            Some(_) => {}
+            None => plan.anchor.push(job),
+        }
+    }
+    plan
+}
+
 /// Record that `node_id` fired at `epoch` seconds. Best-effort durability.
 async fn persist_fired(db_path: &str, node_id: &str, epoch: i64) {
     if let Err(e) = db::upsert_schedule_state(db_path, node_id, epoch).await {
@@ -274,33 +348,179 @@ async fn persist_fired(db_path: &str, node_id: &str, epoch: i64) {
     }
 }
 
-/// Publish the current job set + last-fired/last-handle bookkeeping into shared
-/// state for `GET /schedule` to read.
-fn publish_registry(
-    state: &AppState,
-    jobs: &[ScheduledJob],
-    last_handle: &HashMap<String, String>,
-    last_fired: &HashMap<String, i64>,
-) {
-    let snapshot: Vec<JobStatus> = jobs
-        .iter()
-        .map(|j| JobStatus {
-            id: j.id.clone(),
-            cron: j.cron_str.clone(),
-            kind: j.kind,
-            last_fired: last_fired.get(&j.id).copied(),
-            last_handle: last_handle.get(&j.id).cloned(),
+/// A job's most recent scheduled run, and how the job itself is doing in it.
+#[derive(Clone, Debug, PartialEq)]
+struct JobRun {
+    /// The run's handle. Jobs fired together have the same one.
+    handle: String,
+    /// `Pending` or `Running` until the job's own step has ended, then how the job ended.
+    status: RunStatus,
+}
+
+/// What the scheduler remembers about one job between ticks.
+#[derive(Clone, Debug, Default)]
+struct JobRecord {
+    last_fired: Option<i64>,
+    last_run: Option<JobRun>,
+}
+
+/// The scheduler's memory, by job id. Shared with the tasks that follow each run. Entries for
+/// jobs removed on reload are harmless.
+#[derive(Clone, Default)]
+struct Ledger(Arc<Mutex<HashMap<String, JobRecord>>>);
+
+impl Ledger {
+    fn get(&self, job_id: &str) -> JobRecord {
+        let records = self.0.lock().unwrap();
+        records.get(job_id).cloned().unwrap_or_default()
+    }
+
+    fn set_fired(&self, job_id: &str, epoch: i64) {
+        let mut records = self.0.lock().unwrap();
+        records.entry(job_id.to_string()).or_default().last_fired = Some(epoch);
+    }
+
+    /// `job_id` was just fired into the run `handle`, which has not started yet.
+    fn set_run(&self, job_id: &str, handle: &str) {
+        let mut records = self.0.lock().unwrap();
+        records.entry(job_id.to_string()).or_default().last_run = Some(JobRun {
+            handle: handle.to_string(),
+            status: RunStatus::Pending,
+        });
+    }
+
+    /// Change how `job_id` is doing in the run `handle`, through `change(current status)`.
+    /// Does nothing when the job's most recent run is a newer one. Returns the new status when
+    /// it changed.
+    fn update(
+        &self,
+        job_id: &str,
+        handle: &str,
+        change: impl FnOnce(RunStatus) -> RunStatus,
+    ) -> Option<RunStatus> {
+        let mut records = self.0.lock().unwrap();
+        let run = records.get_mut(job_id)?.last_run.as_mut()?;
+        if run.handle != handle {
+            return None;
+        }
+        let next = change(run.status);
+        (next != run.status).then(|| {
+            run.status = next;
+            next
         })
-        .collect();
-    if let Ok(mut w) = state.schedule.write() {
-        *w = snapshot;
     }
 }
 
-/// Re-run static analysis to enumerate scheduled jobs. The parse itself runs
-/// on the blocking pool inside `commands::list_assets`.
-async fn reload_jobs(state: &AppState) -> Vec<ScheduledJob> {
-    collect_jobs(&state.config.files, &state.config.python).await
+/// How a job ended in a run that has finished.
+///
+/// A run over several jobs that ran to its end says how each one ended. Otherwise the run has
+/// one status: it is the job's too, when the job had the run to itself or its own step had not
+/// ended (the run was cancelled, timed out or failed before it could). A job whose step had
+/// ended keeps how that went: stopping the run afterwards does not undo it.
+fn job_outcome(run: &RunState, job_id: &str, so_far: RunStatus, alone: bool) -> RunStatus {
+    if let Some(RunResult::Multi(result)) = &run.result
+        && let Some(target) = result.target(job_id)
+    {
+        return match target.status {
+            TargetStatus::Success => RunStatus::Complete,
+            TargetStatus::Failed => RunStatus::Failed,
+        };
+    }
+    if alone || still_going(so_far) {
+        run.status
+    } else {
+        so_far
+    }
+}
+
+/// Apply one event of the run `handle` to the jobs fired into it. Returns true once the run
+/// has finished. Applying an event twice changes nothing, so a replay is safe.
+fn apply_event(
+    state: &AppState,
+    ledger: &Ledger,
+    handle: &str,
+    jobs: &[String],
+    event: &RunEvent,
+) -> bool {
+    let set = |job_id: &str, change: &dyn Fn(RunStatus) -> RunStatus| {
+        if let Some(status) = ledger.update(job_id, handle, change) {
+            publish_status(state, job_id, handle, status);
+        }
+    };
+    match event {
+        RunEvent::RunStarted { .. } => {
+            for job_id in jobs {
+                set(job_id, &|so_far| match so_far {
+                    RunStatus::Pending => RunStatus::Running,
+                    other => other,
+                });
+            }
+            false
+        }
+        // The job's own step has ended: from here on the job is not "still running", even
+        // though the run goes on for the jobs it was fired with.
+        RunEvent::TargetFinished { node_id, ok } if jobs.contains(node_id) => {
+            let ended = if *ok {
+                RunStatus::Complete
+            } else {
+                RunStatus::Failed
+            };
+            set(node_id, &|_| ended);
+            false
+        }
+        RunEvent::RunFinished { .. } => {
+            // The run's final state is in place before `RunFinished` is emitted.
+            if let Some(run) = state.runs.get(handle) {
+                for job_id in jobs {
+                    set(job_id, &|so_far| {
+                        job_outcome(&run, job_id, so_far, jobs.len() == 1)
+                    });
+                }
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Follow the run `handle` to its end, keeping the status of each job fired into it up to date
+/// in the ledger and in the published `GET /schedule` view.
+///
+/// This is how the scheduler knows when a job's own step has ended inside a run it shares with
+/// other jobs: the run reports each target as it finishes ([`RunEvent::TargetFinished`]). The
+/// scheduler is an ordinary subscriber of the run's event channel, the one `GET /events` reads.
+async fn follow_run(state: AppState, ledger: Ledger, handle: String, jobs: Vec<String>) {
+    let Some(channel) = state.events.get(&handle).map(|c| c.clone()) else {
+        return;
+    };
+    // Events emitted before this task started are in the backlog.
+    let (mut pending, mut live) = channel.snapshot_and_subscribe();
+    loop {
+        for event in pending.drain(..) {
+            if apply_event(&state, &ledger, &handle, &jobs, &event) {
+                return;
+            }
+        }
+        match live.recv().await {
+            Ok(event) => pending.push(event),
+            // A chatty run outpaced this subscriber: start over from the backlog, which holds
+            // every event.
+            Err(RecvError::Lagged(_)) => (pending, live) = channel.snapshot_and_subscribe(),
+            Err(RecvError::Closed) => return,
+        }
+    }
+}
+
+/// Set one job's status in the published `GET /schedule` view, if that view still shows the
+/// run `handle` for it.
+fn publish_status(state: &AppState, job_id: &str, handle: &str, status: RunStatus) {
+    if let Ok(mut published) = state.schedule.write()
+        && let Some(job) = published
+            .iter_mut()
+            .find(|j| j.id == job_id && j.last_handle.as_deref() == Some(handle))
+    {
+        job.last_status = Some(status);
+    }
 }
 
 /// Log the current schedule and each job's next fire time.
@@ -325,117 +545,215 @@ fn log_schedule(jobs: &[ScheduledJob], zone: &Zone) {
     }
 }
 
-/// The scheduler background task. Spawned from `serve_async` when scheduling is
-/// enabled; runs for the lifetime of the server.
-pub async fn run_scheduler(state: AppState) {
-    let zone = Zone::parse(&state.config.timezone);
+/// The scheduler: the job set, what it remembers about each job, and where it persists fire
+/// times. `run_scheduler` drives it from the wall clock; tests call [`Scheduler::catch_up`] and
+/// [`Scheduler::tick`] with a time of their choosing.
+struct Scheduler {
+    state: AppState,
+    zone: Zone,
+    jobs: Vec<ScheduledJob>,
+    /// The metadata DB that holds each job's last fire time. `None`: durability is disabled,
+    /// so there is no catch-up.
+    db_path: Option<String>,
+    ledger: Ledger,
+}
 
-    let mut jobs = reload_jobs(&state).await;
-
-    if jobs.is_empty() && !state.config.watch {
-        eprintln!("[barca] no scheduled assets — scheduler idle");
-        return;
+impl Scheduler {
+    /// Read the job set from source and open the metadata DB (same `.barca` a CLI run uses).
+    async fn load(state: AppState) -> Self {
+        let zone = Zone::parse(&state.config.timezone);
+        let jobs = collect_jobs(&state.config.files, &state.config.python).await;
+        let db_path = match db::ensure_env_dirs(&state.config.resolved.env) {
+            Ok(_) => {
+                let path = state.config.resolved.db_path.clone();
+                let _ = db::init_db(&path).await;
+                Some(path)
+            }
+            Err(_) => {
+                eprintln!("[barca] scheduler: durability disabled (no metadata db)");
+                None
+            }
+        };
+        Self {
+            state,
+            zone,
+            jobs,
+            db_path,
+            ledger: Ledger::default(),
+        }
     }
-    log_schedule(&jobs, &zone);
 
-    // Resolve the metadata DB path (same `.barca` a CLI run uses) and ensure the
-    // schedule_state table exists. `None` → durability disabled, live-match only.
-    let db_path = match db::ensure_env_dirs(&state.config.resolved.env) {
-        Ok(_) => {
-            let path = state.config.resolved.db_path.clone();
-            let _ = db::init_db(&path).await;
-            Some(path)
+    /// `--watch`: re-read the job set after a source file changed. The parse itself runs on
+    /// the blocking pool inside `commands::list_assets`.
+    async fn reload(&mut self) {
+        self.jobs = collect_jobs(&self.state.config.files, &self.state.config.python).await;
+        eprintln!("[barca] schedule reloaded: {} job(s)", self.jobs.len());
+        log_schedule(&self.jobs, &self.zone);
+        self.publish();
+    }
+
+    /// The handle of `job_id`'s previous run, when the job itself is still going in it: its own
+    /// step has not ended and the run is still pending or running.
+    fn running(&self, job_id: &str) -> Option<String> {
+        self.ledger
+            .get(job_id)
+            .last_run
+            .filter(|run| still_going(run.status) && is_in_flight(&self.state, &run.handle))
+            .map(|run| run.handle)
+    }
+
+    /// Startup: fire once, together, the jobs whose scheduled tick elapsed while the server
+    /// was down, and anchor jobs with no prior record to `now`. Requires durability; does
+    /// nothing if the DB is unavailable.
+    async fn catch_up(&self, now: DateTime<FixedOffset>) {
+        let Some(db_path) = &self.db_path else {
+            return;
+        };
+        let saved = db::get_schedule_state(db_path).await.unwrap_or_default();
+        for (job_id, epoch) in &saved {
+            self.ledger.set_fired(job_id, *epoch);
         }
-        Err(_) => {
-            eprintln!("[barca] scheduler: durability disabled (no metadata db)");
-            None
+        let plan = plan_catchup(&now, &self.jobs, |job_id| {
+            saved.get(job_id).map(|epoch| self.zone.timestamp(*epoch))
+        });
+        for job in &plan.anchor {
+            self.ledger.set_fired(&job.id, now.timestamp());
+            persist_fired(db_path, &job.id, now.timestamp()).await;
         }
-    };
+        self.fire(&plan.fire, now.timestamp(), "catch-up run").await;
+    }
 
-    // Handle issued and last-fired epoch per job. `last_handle` powers the
-    // overlap skip ("passes do not overlap"); `last_fired` powers durability and
-    // the `/schedule` view. Entries for jobs removed on reload are harmless.
-    let mut last_handle: HashMap<String, String> = HashMap::new();
-    let mut last_fired: HashMap<String, i64> = HashMap::new();
+    /// One tick at `now`: fire, together, every due job that is not still going in its
+    /// previous run.
+    async fn tick(&self, now: DateTime<FixedOffset>) {
+        let plan = plan_tick(&now, &self.jobs, |job_id| self.running(job_id));
+        for action in &plan {
+            if let TickAction::Skip { job, handle } = action {
+                eprintln!(
+                    "[barca] scheduled run {} skipped — previous run {handle} still in flight",
+                    job.id
+                );
+            }
+        }
+        self.fire(&fired(&plan), now.timestamp(), "scheduled run")
+            .await;
+    }
 
-    // Catch-up: fire once per job whose scheduled tick elapsed while the daemon
-    // was down. Jobs with no prior record are anchored to now (no first-launch
-    // stampede). Requires durability; skipped entirely if the DB is unavailable.
-    if let Some(dbp) = &db_path {
-        let saved = db::get_schedule_state(dbp).await.unwrap_or_default();
-        last_fired = saved.clone();
-        let now = zone.now();
-        for job in &jobs {
-            match saved.get(&job.id) {
-                Some(&last_epoch) => {
-                    let last = zone.timestamp(last_epoch);
-                    if needs_catchup(&job.cron, &last, &now) {
-                        let handle = trigger(&state, job);
-                        eprintln!("[barca] catch-up run {} → {handle}", job.id);
-                        last_handle.insert(job.id.clone(), handle);
-                        last_fired.insert(job.id.clone(), now.timestamp());
-                        persist_fired(dbp, &job.id, now.timestamp()).await;
-                    }
-                }
-                None => {
-                    last_fired.insert(job.id.clone(), now.timestamp());
-                    persist_fired(dbp, &job.id, now.timestamp()).await;
-                }
+    /// Fire the jobs that are due together, sharing runs where [`Scheduler::groups`] says to.
+    async fn fire(&self, due: &[&ScheduledJob], fired_at: i64, what: &str) {
+        let groups = self.groups(due).await;
+        for jobs in runs_for(due, groups.as_deref()) {
+            self.start_run(&jobs, fired_at, what).await;
+        }
+    }
+
+    /// Which of the jobs due together share a run: the ones with a step in common that
+    /// sharing holds none of back (`barca_core::share`). Jobs with nothing in common gain
+    /// nothing from one run, and would only be tied to each other's timing, failures and
+    /// cancellation, so they stay apart. `None`: every job gets its own run.
+    ///
+    /// Nothing is shared when artifacts go to a remote store. There a step is recorded only
+    /// when its run ends (once its upload is confirmed), so a job could not be told apart from
+    /// the run it is in: it would wait for the slowest job it fired with before its next tick
+    /// could fire. Keeping every job's ticks independent comes first, so such a server keeps
+    /// one run per job (and a step upstream of two jobs due together may be computed by both).
+    async fn groups(&self, due: &[&ScheduledJob]) -> Option<Vec<Vec<String>>> {
+        let config = &self.state.config;
+        if due.len() < 2 || config.resolved.remote_artifacts() {
+            return None;
+        }
+        let ids: Vec<String> = due.iter().map(|job| job.id.clone()).collect();
+        match barca_core::share::shared_run_groups_in(&config.files, &config.python, &ids).await {
+            Ok(groups) => Some(groups),
+            Err(e) => {
+                eprintln!("[barca] scheduler: running each due job on its own: {e}");
+                None
             }
         }
     }
-    publish_registry(&state, &jobs, &last_handle, &last_fired);
+
+    /// Start one run for `jobs`, record it for each of them, and follow it.
+    ///
+    /// NOTE: benchmarks/scheduler_overhead/barca/run.sh's CI smoke greps stderr for
+    /// "scheduled run.*:probe" to count ticks independent of worker execution — keep
+    /// that substring ("scheduled run", plus the job id) if this wording changes.
+    async fn start_run(&self, jobs: &[&ScheduledJob], fired_at: i64, what: &str) {
+        let handle = trigger(&self.state, jobs);
+        for job in jobs {
+            eprintln!("[barca] {what} {} → {handle}", job.id);
+            self.ledger.set_fired(&job.id, fired_at);
+            self.ledger.set_run(&job.id, &handle);
+            if let Some(db_path) = &self.db_path {
+                persist_fired(db_path, &job.id, fired_at).await;
+            }
+        }
+        self.publish();
+        tokio::spawn(follow_run(
+            self.state.clone(),
+            self.ledger.clone(),
+            handle,
+            jobs.iter().map(|job| job.id.clone()).collect(),
+        ));
+    }
+
+    /// Publish the current job set and what is remembered about each job into shared state,
+    /// for `GET /schedule` to read.
+    fn publish(&self) {
+        // The view is locked before the ledger is read, so a status a follower sets in between
+        // is not overwritten by an older one.
+        let Ok(mut published) = self.state.schedule.write() else {
+            return;
+        };
+        *published = self
+            .jobs
+            .iter()
+            .map(|j| {
+                let record = self.ledger.get(&j.id);
+                JobStatus {
+                    id: j.id.clone(),
+                    cron: j.cron_str.clone(),
+                    kind: j.kind,
+                    last_fired: record.last_fired,
+                    last_handle: record.last_run.as_ref().map(|run| run.handle.clone()),
+                    last_status: record.last_run.as_ref().map(|run| run.status),
+                }
+            })
+            .collect();
+    }
+}
+
+/// The scheduler background task. Spawned from `serve_async` when scheduling is
+/// enabled; runs for the lifetime of the server.
+pub async fn run_scheduler(state: AppState) {
+    let mut scheduler = Scheduler::load(state.clone()).await;
+
+    if scheduler.jobs.is_empty() && !state.config.watch {
+        eprintln!("[barca] no scheduled assets — scheduler idle");
+        return;
+    }
+    log_schedule(&scheduler.jobs, &scheduler.zone);
+
+    scheduler.catch_up(scheduler.zone.now()).await;
+    scheduler.publish();
 
     let mut seen_gen = state.dag_generation.load(Ordering::Relaxed);
 
     loop {
-        sleep_to_next_second(&zone).await;
+        sleep_to_next_second(&scheduler.zone).await;
 
         // `--watch`: re-read the job set when a source file changed.
         let current_gen = state.dag_generation.load(Ordering::Relaxed);
         if current_gen != seen_gen {
             seen_gen = current_gen;
-            let fresh = reload_jobs(&state).await;
-            eprintln!("[barca] schedule reloaded: {} job(s)", fresh.len());
-            jobs = fresh;
-            log_schedule(&jobs, &zone);
-            publish_registry(&state, &jobs, &last_handle, &last_fired);
+            scheduler.reload().await;
         }
 
-        let now = zone.now();
-        let mut fired_any = false;
-        // NOTE: benchmarks/scheduler_overhead/barca/run.sh's CI smoke greps stderr for
-        // "scheduled run.*:probe" to count ticks independent of worker execution — keep
-        // that substring ("scheduled run", plus the job id) if this wording changes.
-        let mut due: Vec<&ScheduledJob> = Vec::new();
-        for action in plan_tick(&now, &jobs, &last_handle, |h| is_in_flight(&state, h)) {
-            match action {
-                TickAction::Skip { job, handle } => eprintln!(
-                    "[barca] scheduled run {} skipped — previous run {handle} still in flight",
-                    job.id
-                ),
-                TickAction::Fire(job) => due.push(job),
-            }
-        }
-        // Everything due at this tick is one run, so an upstream shared by two of them is
-        // computed once.
-        if !due.is_empty() {
-            let handle = trigger_tick(&state, &due);
-            for job in due {
-                eprintln!("[barca] scheduled run {} → {handle}", job.id);
-                last_handle.insert(job.id.clone(), handle.clone());
-                last_fired.insert(job.id.clone(), now.timestamp());
-                if let Some(dbp) = &db_path {
-                    persist_fired(dbp, &job.id, now.timestamp()).await;
-                }
-            }
-            fired_any = true;
-        }
-        if fired_any {
-            publish_registry(&state, &jobs, &last_handle, &last_fired);
-        }
+        scheduler.tick(scheduler.zone.now()).await;
     }
 }
+
+#[cfg(all(test, unix))]
+mod batch_tests;
 
 #[cfg(test)]
 mod tests {
@@ -503,7 +821,6 @@ mod tests {
                 started_at: 0.0,
                 finished_at: None,
                 cancel: barca_core::CancellationToken::new(),
-                node_status: HashMap::new(),
             },
         );
     }
@@ -707,12 +1024,16 @@ mod tests {
     // ─── per-tick planning (the overlap-skip guard) ────────────────────────
 
     fn fired_ids(plan: &[TickAction]) -> Vec<String> {
-        plan.iter()
-            .filter_map(|a| match a {
-                TickAction::Fire(j) => Some(j.id.clone()),
-                _ => None,
-            })
-            .collect()
+        fired(plan).iter().map(|j| j.id.clone()).collect()
+    }
+
+    /// A `running` predicate for [`plan_tick`]: these jobs are still going, each in its run.
+    fn running(jobs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
+        let jobs: HashMap<String, String> = jobs
+            .iter()
+            .map(|(id, handle)| (id.to_string(), handle.to_string()))
+            .collect();
+        move |job_id| jobs.get(job_id).cloned()
     }
 
     fn skipped_ids(plan: &[TickAction]) -> Vec<String> {
@@ -727,15 +1048,14 @@ mod tests {
     #[test]
     fn plan_tick_fires_when_no_prior_run() {
         let jobs = vec![job("f.py:daily", NodeKind::Asset, "0 5 * * *")];
-        let plan = plan_tick(&at(5, 0), &jobs, &HashMap::new(), |_| false);
+        let plan = plan_tick(&at(5, 0), &jobs, |_| None);
         assert_eq!(fired_ids(&plan), vec!["f.py:daily"]);
     }
 
     #[test]
     fn plan_tick_skips_when_prior_run_in_flight() {
         let jobs = vec![job("f.py:daily", NodeKind::Asset, "0 5 * * *")];
-        let last = HashMap::from([("f.py:daily".to_string(), "h1".to_string())]);
-        let plan = plan_tick(&at(5, 0), &jobs, &last, |h| h == "h1");
+        let plan = plan_tick(&at(5, 0), &jobs, running(&[("f.py:daily", "h1")]));
         assert!(fired_ids(&plan).is_empty());
         assert_eq!(skipped_ids(&plan), vec!["f.py:daily"]);
         // The skip carries the offending handle for the log line.
@@ -748,16 +1068,15 @@ mod tests {
     #[test]
     fn plan_tick_fires_again_once_prior_run_finished() {
         let jobs = vec![job("f.py:daily", NodeKind::Asset, "0 5 * * *")];
-        let last = HashMap::from([("f.py:daily".to_string(), "h1".to_string())]);
-        // Same handle recorded, but it is no longer in flight (completed/evicted).
-        let plan = plan_tick(&at(5, 0), &jobs, &last, |_| false);
+        // A run was recorded for the job, but it is no longer in flight (completed/evicted).
+        let plan = plan_tick(&at(5, 0), &jobs, |_| None);
         assert_eq!(fired_ids(&plan), vec!["f.py:daily"]);
     }
 
     #[test]
     fn plan_tick_ignores_jobs_not_due_this_minute() {
         let jobs = vec![job("f.py:daily", NodeKind::Asset, "0 5 * * *")];
-        let plan = plan_tick(&at(6, 0), &jobs, &HashMap::new(), |_| false);
+        let plan = plan_tick(&at(6, 0), &jobs, |_| None);
         assert!(plan.is_empty(), "06:00 is not the job's minute");
     }
 
@@ -768,10 +1087,372 @@ mod tests {
             job("f.py:b", NodeKind::Task, "0 5 * * *"),
         ];
         // `a` has a run still going; `b` has never run.
-        let last = HashMap::from([("f.py:a".to_string(), "ha".to_string())]);
-        let plan = plan_tick(&at(5, 0), &jobs, &last, |h| h == "ha");
+        let plan = plan_tick(&at(5, 0), &jobs, running(&[("f.py:a", "ha")]));
         assert_eq!(skipped_ids(&plan), vec!["f.py:a"]);
         assert_eq!(fired_ids(&plan), vec!["f.py:b"]);
+    }
+
+    // ─── jobs that fire together ───────────────────────────────────────────
+
+    #[test]
+    fn jobs_due_at_the_same_tick_fire_together() {
+        let jobs = vec![
+            job("f.py:a", NodeKind::Asset, "0 5 * * *"),
+            job("f.py:t", NodeKind::Task, "0 5 * * *"),
+            job("f.py:s", NodeKind::Sensor, "0 5 * * *"),
+        ];
+        let plan = plan_tick(&at(5, 0), &jobs, |_| None);
+        // Due together, whatever their kind.
+        assert_eq!(fired_ids(&plan), vec!["f.py:a", "f.py:t", "f.py:s"]);
+        assert!(skipped_ids(&plan).is_empty());
+    }
+
+    #[test]
+    fn differing_crons_fire_together_only_when_they_coincide() {
+        let jobs = vec![
+            job("f.py:daily", NodeKind::Asset, "0 5 * * *"),
+            job("f.py:poll", NodeKind::Task, "*/5 * * * *"),
+            job("f.py:seconds", NodeKind::Task, "*/30 * * * * *"),
+        ];
+        // 05:00:00 matches all three expressions.
+        let together = plan_tick(&at(5, 0), &jobs, |_| None);
+        assert_eq!(
+            fired_ids(&together),
+            vec!["f.py:daily", "f.py:poll", "f.py:seconds"]
+        );
+        // 05:05:00: the daily job is not due.
+        let later = plan_tick(&at(5, 5), &jobs, |_| None);
+        assert_eq!(fired_ids(&later), vec!["f.py:poll", "f.py:seconds"]);
+        // 05:05:30: only the seconds-granular job.
+        let half = plan_tick(&at_s(5, 5, 30), &jobs, |_| None);
+        assert_eq!(fired_ids(&half), vec!["f.py:seconds"]);
+    }
+
+    #[test]
+    fn a_job_still_running_is_left_out_and_the_rest_fire_together() {
+        let jobs = vec![
+            job("f.py:fast", NodeKind::Task, "* * * * * *"),
+            job("f.py:slow", NodeKind::Task, "* * * * * *"),
+            job("f.py:other", NodeKind::Asset, "* * * * * *"),
+        ];
+        // All three shared run `h1`; only `slow` is still going in it.
+        let plan = plan_tick(&at_s(5, 0, 1), &jobs, running(&[("f.py:slow", "h1")]));
+        assert_eq!(fired_ids(&plan), vec!["f.py:fast", "f.py:other"]);
+        assert_eq!(skipped_ids(&plan), vec!["f.py:slow"]);
+    }
+
+    #[test]
+    fn due_jobs_are_split_into_runs_by_the_groups_that_can_share_one() {
+        let jobs = [
+            job("f.py:a", NodeKind::Asset, "0 5 * * *"),
+            job("f.py:t", NodeKind::Task, "0 5 * * *"),
+            job("f.py:other", NodeKind::Task, "0 5 * * *"),
+        ];
+        let due: Vec<&ScheduledJob> = jobs.iter().collect();
+        let ids = |runs: Vec<Vec<&ScheduledJob>>| -> Vec<Vec<String>> {
+            runs.iter()
+                .map(|run| run.iter().map(|j| j.id.clone()).collect())
+                .collect()
+        };
+        let group = |ids: &[&str]| ids.iter().map(|id| id.to_string()).collect::<Vec<_>>();
+
+        // `a` and `t` have a step in common; `other` has nothing in common with them.
+        let groups = [group(&["f.py:a", "f.py:t"]), group(&["f.py:other"])];
+        assert_eq!(
+            ids(runs_for(&due, Some(&groups))),
+            vec![vec!["f.py:a", "f.py:t"], vec!["f.py:other"]]
+        );
+        // Nothing can be shared: one run per job, as before runs were shared.
+        assert_eq!(
+            ids(runs_for(&due, None)),
+            vec![vec!["f.py:a"], vec!["f.py:t"], vec!["f.py:other"]]
+        );
+        // A job the grouping does not mention still runs, on its own.
+        let partial = [group(&["f.py:a", "f.py:t"])];
+        assert_eq!(
+            ids(runs_for(&due, Some(&partial))),
+            vec![vec!["f.py:a", "f.py:t"], vec!["f.py:other"]]
+        );
+        assert!(runs_for(&[], Some(&groups)).is_empty(), "nothing due");
+    }
+
+    #[tokio::test]
+    async fn nothing_is_shared_with_a_remote_artifact_store() {
+        let mut st = app_state();
+        let mut config = (*st.config).clone();
+        // A store that is not the local artifact dir.
+        config.resolved.artifact_root = "/nonexistent-barca-test-store".to_string();
+        assert!(config.resolved.remote_artifacts());
+        st.config = std::sync::Arc::new(config);
+        let sched = scheduler(
+            &st,
+            vec![
+                job("f.py:a", NodeKind::Asset, "* * * * * *"),
+                job("f.py:t", NodeKind::Task, "* * * * * *"),
+            ],
+        );
+        let due: Vec<&ScheduledJob> = sched.jobs.iter().collect();
+        assert_eq!(sched.groups(&due).await, None, "one run per job");
+    }
+
+    #[tokio::test]
+    async fn one_due_job_needs_no_grouping() {
+        let st = app_state();
+        let sched = scheduler(&st, vec![job("f.py:a", NodeKind::Asset, "* * * * * *")]);
+        let due: Vec<&ScheduledJob> = sched.jobs.iter().collect();
+        // No DAG is read for a job that is due alone (the source file does not even exist).
+        assert_eq!(sched.groups(&due).await, None);
+    }
+
+    // ─── startup catch-up ──────────────────────────────────────────────────
+
+    #[test]
+    fn catch_up_fires_together_the_jobs_that_missed_a_tick() {
+        let jobs = vec![
+            job("f.py:a", NodeKind::Asset, "0 5 * * *"),
+            job("f.py:t", NodeKind::Task, "0 5 * * *"),
+            job("f.py:current", NodeKind::Task, "0 5 * * *"),
+            job("f.py:new", NodeKind::Asset, "0 5 * * *"),
+        ];
+        let yesterday = at(5, 0) - chrono::Duration::days(1);
+        let plan = plan_catchup(&at(6, 0), &jobs, |job_id| match job_id {
+            // Fired yesterday at 05:00: today's 05:00 was missed.
+            "f.py:a" | "f.py:t" => Some(yesterday),
+            // Fired today at 05:00: nothing missed.
+            "f.py:current" => Some(at(5, 0)),
+            // Never seen before.
+            _ => None,
+        });
+        let ids = |jobs: &[&ScheduledJob]| jobs.iter().map(|j| j.id.clone()).collect::<Vec<_>>();
+        assert_eq!(
+            ids(&plan.fire),
+            vec!["f.py:a", "f.py:t"],
+            "the two that missed a tick are fired together"
+        );
+        assert_eq!(ids(&plan.anchor), vec!["f.py:new"], "anchored, not fired");
+    }
+
+    #[test]
+    fn catch_up_fires_nothing_when_no_tick_was_missed() {
+        let jobs = vec![job("f.py:a", NodeKind::Asset, "0 5 * * *")];
+        let plan = plan_catchup(&at(5, 30), &jobs, |_| Some(at(5, 0)));
+        assert!(plan.fire.is_empty());
+        assert!(plan.anchor.is_empty());
+    }
+
+    // ─── each job's own status in a shared run ─────────────────────────────
+
+    fn run_state(status: RunStatus, result: Option<RunResult>) -> RunState {
+        RunState {
+            handle: "h1".to_string(),
+            status,
+            result,
+            error: None,
+            started_at: 0.0,
+            finished_at: Some(1.0),
+            cancel: barca_core::CancellationToken::new(),
+        }
+    }
+
+    fn multi_result(targets: &[(&str, TargetStatus)]) -> RunResult {
+        RunResult::Multi(barca_core::commands::MultiResult {
+            run_id: "r1".to_string(),
+            elapsed_seconds: 0.0,
+            steps_executed: 0,
+            phases: 1,
+            steps: Vec::new(),
+            targets: targets
+                .iter()
+                .map(|(name, status)| {
+                    (
+                        name.to_string(),
+                        barca_core::commands::TargetOutcome {
+                            status: *status,
+                            final_output: None,
+                            error: None,
+                            failed_node: None,
+                        },
+                    )
+                })
+                .collect(),
+        })
+    }
+
+    #[test]
+    fn a_finished_shared_run_gives_each_job_its_own_outcome() {
+        let result = multi_result(&[
+            ("f.py:ok", TargetStatus::Success),
+            ("f.py:broken", TargetStatus::Failed),
+        ]);
+        // The run is `failed` because one of its jobs failed; the other job is not.
+        let run = run_state(RunStatus::Failed, Some(result));
+        assert_eq!(
+            job_outcome(&run, "f.py:ok", RunStatus::Complete, false),
+            RunStatus::Complete
+        );
+        assert_eq!(
+            job_outcome(&run, "f.py:broken", RunStatus::Running, false),
+            RunStatus::Failed
+        );
+    }
+
+    #[test]
+    fn a_stopped_shared_run_only_changes_jobs_that_had_not_ended() {
+        for stopped in [RunStatus::Cancelled, RunStatus::Failed] {
+            let run = run_state(stopped, None);
+            assert_eq!(
+                job_outcome(&run, "f.py:done", RunStatus::Complete, false),
+                RunStatus::Complete,
+                "its step had ended: stopping the run does not undo it"
+            );
+            assert_eq!(
+                job_outcome(&run, "f.py:slow", RunStatus::Running, false),
+                stopped
+            );
+        }
+    }
+
+    #[test]
+    fn a_job_alone_in_its_run_ends_as_the_run_does() {
+        let run = run_state(RunStatus::Failed, None);
+        assert_eq!(
+            job_outcome(&run, "f.py:a", RunStatus::Complete, true),
+            RunStatus::Failed
+        );
+        let run = run_state(RunStatus::Complete, None);
+        assert_eq!(
+            job_outcome(&run, "f.py:a", RunStatus::Running, true),
+            RunStatus::Complete
+        );
+    }
+
+    /// A scheduler over `jobs` with no source files behind it and no DB.
+    fn scheduler(state: &AppState, jobs: Vec<ScheduledJob>) -> Scheduler {
+        Scheduler {
+            state: state.clone(),
+            zone: Zone::Local,
+            jobs,
+            db_path: None,
+            ledger: Ledger::default(),
+        }
+    }
+
+    fn target_finished(node_id: &str, ok: bool) -> RunEvent {
+        RunEvent::TargetFinished {
+            node_id: node_id.to_string(),
+            ok,
+        }
+    }
+
+    #[test]
+    fn a_job_stops_running_when_its_own_step_ends_not_when_the_shared_run_does() {
+        let st = app_state();
+        let sched = scheduler(
+            &st,
+            vec![
+                job("f.py:fast", NodeKind::Task, "* * * * * *"),
+                job("f.py:broken", NodeKind::Asset, "* * * * * *"),
+                job("f.py:slow", NodeKind::Task, "* * * * * *"),
+            ],
+        );
+        let ids: Vec<String> = sched.jobs.iter().map(|j| j.id.clone()).collect();
+        insert_run(&st, "h1", RunStatus::Running);
+        for id in &ids {
+            sched.ledger.set_run(id, "h1");
+        }
+        sched.publish();
+        let apply = |event: RunEvent| apply_event(&st, &sched.ledger, "h1", &ids, &event);
+
+        assert!(!apply(RunEvent::RunStarted {
+            run_id: "h1".into()
+        }));
+        for id in &ids {
+            assert_eq!(sched.running(id).as_deref(), Some("h1"), "{id}");
+        }
+
+        // `fast` finishes and `broken` fails while `slow` is still running.
+        assert!(!apply(target_finished("f.py:fast", true)));
+        assert!(!apply(target_finished("f.py:broken", false)));
+        assert_eq!(sched.running("f.py:fast"), None);
+        assert_eq!(sched.running("f.py:broken"), None);
+        assert_eq!(sched.running("f.py:slow").as_deref(), Some("h1"));
+
+        // So the next tick fires the two that ended and skips only `slow`.
+        let plan = plan_tick(&at_s(5, 0, 1), &sched.jobs, |id| sched.running(id));
+        assert_eq!(fired_ids(&plan), vec!["f.py:fast", "f.py:broken"]);
+        assert_eq!(skipped_ids(&plan), vec!["f.py:slow"]);
+
+        // `GET /schedule` reads the same per-job status.
+        let published = st.schedule.read().unwrap().clone();
+        let status = |id: &str| {
+            let job = published.iter().find(|j| j.id == id).unwrap();
+            (job.last_handle.clone(), job.last_status)
+        };
+        let h1 = Some("h1".to_string());
+        assert_eq!(status("f.py:fast"), (h1.clone(), Some(RunStatus::Complete)));
+        assert_eq!(status("f.py:broken"), (h1.clone(), Some(RunStatus::Failed)));
+        assert_eq!(status("f.py:slow"), (h1, Some(RunStatus::Running)));
+    }
+
+    #[test]
+    fn events_of_an_older_run_do_not_touch_a_job_that_has_fired_again() {
+        let st = app_state();
+        let sched = scheduler(&st, vec![job("f.py:fast", NodeKind::Task, "* * * * * *")]);
+        let ids = vec!["f.py:fast".to_string()];
+        insert_run(&st, "h1", RunStatus::Failed);
+        insert_run(&st, "h2", RunStatus::Running);
+        // The job fired into `h1`, ended there, and has since fired again into `h2`.
+        sched.ledger.set_run("f.py:fast", "h2");
+        let finished = RunEvent::RunFinished {
+            run_id: "h1".into(),
+            ok: false,
+        };
+        assert!(apply_event(&st, &sched.ledger, "h1", &ids, &finished));
+        assert_eq!(
+            sched.ledger.get("f.py:fast").last_run,
+            Some(JobRun {
+                handle: "h2".to_string(),
+                status: RunStatus::Pending
+            }),
+            "the newer run's status is untouched"
+        );
+    }
+
+    #[test]
+    fn replaying_a_runs_events_changes_nothing() {
+        let st = app_state();
+        let sched = scheduler(&st, vec![job("f.py:fast", NodeKind::Task, "* * * * * *")]);
+        let ids = vec!["f.py:fast".to_string()];
+        insert_run(&st, "h1", RunStatus::Running);
+        sched.ledger.set_run("f.py:fast", "h1");
+        let events = [
+            RunEvent::RunStarted {
+                run_id: "h1".into(),
+            },
+            target_finished("f.py:fast", true),
+        ];
+        // A subscriber that fell behind starts over from the first event.
+        for event in events.iter().chain(events.iter()) {
+            apply_event(&st, &sched.ledger, "h1", &ids, event);
+        }
+        assert_eq!(
+            sched.ledger.get("f.py:fast").last_run.unwrap().status,
+            RunStatus::Complete,
+            "a replayed `run_started` does not put an ended job back to running"
+        );
+    }
+
+    #[test]
+    fn a_job_is_not_running_once_its_run_is_over_even_if_no_event_said_so() {
+        let st = app_state();
+        let sched = scheduler(&st, vec![job("f.py:a", NodeKind::Asset, "* * * * * *")]);
+        insert_run(&st, "h1", RunStatus::Complete);
+        sched.ledger.set_run("f.py:a", "h1");
+        // The ledger still says `Pending` (the follower has not caught up), but the run is over.
+        assert_eq!(sched.running("f.py:a"), None);
+        // A run evicted from memory is over too.
+        sched.ledger.set_run("f.py:a", "evicted");
+        assert_eq!(sched.running("f.py:a"), None);
     }
 
     // ─── kind-based dispatch ───────────────────────────────────────────────
@@ -783,8 +1464,8 @@ mod tests {
         let task = job("f.py:t", NodeKind::Task, "* * * * *");
         // Both kinds must produce a handle that is registered in the runs map,
         // proving each routes into a real run-trigger path (get vs run).
-        let ha = trigger(&st, &asset);
-        let ht = trigger(&st, &task);
+        let ha = trigger(&st, &[&asset]);
+        let ht = trigger(&st, &[&task]);
         assert!(st.runs.contains_key(&ha));
         assert!(st.runs.contains_key(&ht));
         assert_ne!(ha, ht);

@@ -2,13 +2,14 @@
 
 use barca_core::CancellationToken;
 use barca_core::RunEvent;
-use barca_core::commands::{AssetSummary, GetResult, PlanResult};
+use barca_core::commands::{AssetSummary, GetResult, MultiResult, PlanResult};
 use dashmap::DashMap;
 use serde::Serialize;
 use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::Duration;
 use tokio::sync::{Semaphore, broadcast};
 
 /// How many runs may execute concurrently by default (one per available core).
@@ -65,6 +66,52 @@ pub enum RunStatus {
     Cancelled,
 }
 
+/// How long one target of a run may take (10 minutes). A run over several targets (the
+/// scheduled nodes due at one tick) gets this much per target: see [`AppState::run_timeout`].
+pub const DEFAULT_RUN_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// What a run that ran to its end produced.
+///
+/// A run with one target, or none (`POST /run`), carries `final_output`. A run over several
+/// targets (the scheduled nodes due at one tick) carries `targets` in its place: each target's
+/// `status`, with its `final_output` or its `error` and `failed_node`, keyed by node id. This is
+/// the shape `barca get a,b --json` prints. The two are told apart by which key is present.
+#[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[serde(untagged)]
+pub enum RunResult {
+    Single(GetResult),
+    Multi(MultiResult),
+}
+
+impl RunResult {
+    /// The persisted database run id (the row `barca history` shows).
+    pub fn run_id(&self) -> &str {
+        match self {
+            RunResult::Single(r) => &r.run_id,
+            RunResult::Multi(r) => &r.run_id,
+        }
+    }
+
+    /// Why this result makes its run `failed`, if it does: some of its targets failed. A
+    /// single-target run that fails has no result at all (it ends in an error), so only a
+    /// multi-target result can say this.
+    pub fn failure(&self) -> Option<String> {
+        let RunResult::Multi(multi) = self else {
+            return None;
+        };
+        let failed: Vec<&str> = multi.failed_targets().map(|(name, _)| name).collect();
+        (!failed.is_empty()).then(|| {
+            format!(
+                "{} of {} targets failed: {}",
+                failed.len(),
+                multi.targets.len(),
+                failed.join(", ")
+            )
+        })
+    }
+}
+
 /// In-memory record of a single run. The server-side `handle` is the polling id
 /// returned by `POST /run`; the real DB run id lives inside `result` once complete.
 #[derive(Clone, Debug, Serialize)]
@@ -73,9 +120,11 @@ pub struct RunState {
     /// Server-side polling handle (see `/status/{run_id}`).
     pub handle: String,
     pub status: RunStatus,
-    /// Populated when `status == Complete`. Carries the DB run id, timing, output.
-    pub result: Option<GetResult>,
-    /// Populated when `status == Failed`.
+    /// Populated when `status == Complete`: the DB run id, timing, output. A run over several
+    /// targets also has it when `status == Failed` because some of its targets failed, so each
+    /// target's outcome can be read from `result.targets`.
+    pub result: Option<RunResult>,
+    /// Populated when `status == Failed` or `Cancelled`.
     pub error: Option<String>,
     /// Unix epoch seconds when the run was accepted.
     pub started_at: f64,
@@ -86,10 +135,6 @@ pub struct RunState {
     /// cancelled. Not part of the JSON status payload.
     #[serde(skip)]
     pub cancel: CancellationToken,
-    /// For a run shared by several scheduled nodes (all due at one tick): how each node ended
-    /// (`success` or `failed`). Empty for an ordinary run. Read by `GET /schedule`.
-    #[serde(skip)]
-    pub node_status: std::collections::HashMap<String, String>,
 }
 
 /// Cached static-analysis results, invalidated by the file watcher in `--watch`
@@ -182,8 +227,12 @@ pub struct JobStatus {
     pub kind: barca_core::NodeKind,
     /// Last time the scheduler fired this job (unix epoch seconds), if ever.
     pub last_fired: Option<i64>,
-    /// Handle of the most recent run the scheduler triggered for this job.
+    /// Handle of the most recent run the scheduler triggered for this job. Jobs fired
+    /// together share one run, and so one handle.
     pub last_handle: Option<String>,
+    /// How this job is doing in that run: `Pending` or `Running` until its own step has ended,
+    /// then how it ended, whatever the rest of the run is still doing. `None` if it never fired.
+    pub last_status: Option<RunStatus>,
 }
 
 /// Cloneable application state shared across all axum handlers.
@@ -209,6 +258,9 @@ pub struct AppState {
     /// Bumped by the `--watch` file watcher on every DAG invalidation, so the
     /// scheduler can re-read its job set without a restart.
     pub dag_generation: Arc<AtomicU64>,
+    /// The time limit of a run, per target: a run over `n` targets is stopped and reported
+    /// `failed` after `n` times this. [`DEFAULT_RUN_TIMEOUT`] unless a test shortens it.
+    pub run_timeout: Duration,
 }
 
 impl AppState {
@@ -224,6 +276,7 @@ impl AppState {
             shutdown: CancellationToken::new(),
             schedule: Arc::new(RwLock::new(Vec::new())),
             dag_generation: Arc::new(AtomicU64::new(0)),
+            run_timeout: DEFAULT_RUN_TIMEOUT,
         }
     }
 }
