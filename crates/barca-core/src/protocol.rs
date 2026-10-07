@@ -169,6 +169,10 @@ pub enum TransferReply {
         /// Attempts the helper made (retries plus the first try).
         #[serde(default = "one")]
         attempts: u32,
+        /// True when the transfer failed because its source does not exist (for a `Get`, the
+        /// object is not in the store), as opposed to a store that could not be reached.
+        #[serde(default)]
+        missing: bool,
     },
 }
 
@@ -766,10 +770,13 @@ mod tests {
                 id,
                 message,
                 attempts,
+                missing,
             } => {
                 assert_eq!(id, 4);
                 assert_eq!(message, "PermissionError: no");
                 assert_eq!(attempts, 3);
+                // Not said to be missing: the object may well be there.
+                assert!(!missing);
             }
             _ => panic!("expected Error"),
         }
@@ -777,6 +784,11 @@ mod tests {
         let bare: TransferReply =
             serde_json::from_str(r#"{"type":"error","id":5,"message":"x"}"#).unwrap();
         assert!(matches!(bare, TransferReply::Error { attempts: 1, .. }));
+        let gone: TransferReply = serde_json::from_str(
+            r#"{"type":"error","id":6,"message":"FileNotFoundError: x","attempts":1,"missing":true}"#,
+        )
+        .unwrap();
+        assert!(matches!(gone, TransferReply::Error { missing: true, .. }));
     }
 
     #[tokio::test]

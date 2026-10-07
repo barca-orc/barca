@@ -87,6 +87,16 @@ impl ArtifactLayout {
     }
 }
 
+/// The file a recorded artifact path names on this machine: a plain path or a
+/// `file://` URI. None for a remote URI. The same rule as
+/// `barca._storage.local_path_of`, which is what a worker applies to the path.
+pub fn local_path(recorded: &str) -> Option<&Path> {
+    if let Some(file) = recorded.strip_prefix("file://") {
+        return Some(Path::new(file));
+    }
+    (!recorded.contains("://")).then(|| Path::new(recorded))
+}
+
 // ─── Client ──────────────────────────────────────────────────────────────────
 
 /// A transfer that did not complete. `key` is the caller's label (node id).
@@ -98,6 +108,9 @@ pub struct TransferFailure {
     /// Attempts made before giving up (0 if the request never reached a
     /// running helper).
     pub attempts: u32,
+    /// The source of the transfer does not exist: for a fetch, the object is
+    /// not in the store (rather than the store being unreachable).
+    pub missing: bool,
 }
 
 /// Outcome of [`TransferClient::drain`] / [`TransferClient::await_fetches`].
@@ -124,8 +137,28 @@ pub struct Transferred {
     pub mismatch: bool,
 }
 
-/// The finished transfer, or the error message and attempts made.
-type Outcome = Result<Transferred, (String, u32)>;
+/// Why a transfer did not complete.
+#[derive(Debug, Clone)]
+struct Failed {
+    message: String,
+    attempts: u32,
+    /// See [`TransferFailure::missing`].
+    missing: bool,
+}
+
+impl Failed {
+    /// The helper is gone, so nothing is known about the store.
+    fn helper_exited() -> Self {
+        Self {
+            message: "transfer helper exited".to_string(),
+            attempts: 1,
+            missing: false,
+        }
+    }
+}
+
+/// The finished transfer, or why it failed.
+type Outcome = Result<Transferred, Failed>;
 type ReplyRx = oneshot::Receiver<Outcome>;
 type ReplyTx = oneshot::Sender<Outcome>;
 
@@ -239,7 +272,11 @@ impl TransferClient {
         self.next_id += 1;
         let (tx, rx) = oneshot::channel();
         if let Err(mpsc::error::SendError((_, tx))) = self.req_tx.send((build(self.next_id), tx)) {
-            let _ = tx.send(Err(("transfer helper is not running".to_string(), 0)));
+            let _ = tx.send(Err(Failed {
+                message: "transfer helper is not running".to_string(),
+                attempts: 0,
+                missing: false,
+            }));
         }
         rx
     }
@@ -309,11 +346,12 @@ impl TransferClient {
                         report.mismatched.push((p.key, p.store));
                     }
                 }
-                Err((message, attempts)) => report.failures.push(TransferFailure {
+                Err(f) => report.failures.push(TransferFailure {
                     key: p.key,
                     store: p.store,
-                    message,
-                    attempts,
+                    message: f.message,
+                    attempts: f.attempts,
+                    missing: f.missing,
                 }),
             }
         }
@@ -345,11 +383,12 @@ impl TransferClient {
                         report.hashes.insert(key, h);
                     }
                 }
-                Err((message, attempts)) => report.failures.push(TransferFailure {
+                Err(f) => report.failures.push(TransferFailure {
                     key,
                     store,
-                    message,
-                    attempts,
+                    message: f.message,
+                    attempts: f.attempts,
+                    missing: f.missing,
                 }),
             }
         }
@@ -396,8 +435,7 @@ impl TransferClient {
 }
 
 async fn settle(rx: ReplyRx) -> Outcome {
-    rx.await
-        .unwrap_or_else(|_| Err(("transfer helper exited".to_string(), 1)))
+    rx.await.unwrap_or_else(|_| Err(Failed::helper_exited()))
 }
 
 /// Owns the socket: writes requests, routes replies to their waiters. On
@@ -419,7 +457,7 @@ async fn io_task(
                     TransferRequest::Shutdown => None,
                 };
                 if write_frame(&mut stream, &req).await.is_err() {
-                    let _ = tx.send(Err(("transfer helper exited".to_string(), 1)));
+                    let _ = tx.send(Err(Failed::helper_exited()));
                     break;
                 }
                 if let Some((id, what)) = entry {
@@ -431,8 +469,8 @@ async fn io_task(
                     Ok(Some(TransferReply::Done { id, size_bytes, sha256, fetched, mismatch })) => {
                         (id, Ok(Transferred { bytes: size_bytes, sha256, fetched, mismatch }))
                     }
-                    Ok(Some(TransferReply::Error { id, message, attempts })) => {
-                        (id, Err((message, attempts)))
+                    Ok(Some(TransferReply::Error { id, message, attempts, missing })) => {
+                        (id, Err(Failed { message, attempts, missing }))
                     }
                     Ok(None) | Err(_) => break,
                 };
@@ -453,7 +491,7 @@ async fn io_task(
     drop(pending);
     req_rx.close();
     while let Some((_, tx)) = req_rx.recv().await {
-        let _ = tx.send(Err(("transfer helper exited".to_string(), 1)));
+        let _ = tx.send(Err(Failed::helper_exited()));
     }
 }
 
@@ -515,6 +553,24 @@ mod tests {
         assert!(l.local_for("/w/a/n/h.json").is_none()); // legacy local row
         assert!(l.local_for("s3://b/x/../../etc/passwd").is_none());
         assert!(l.local_for("s3://b/x//h").is_none());
+    }
+
+    #[test]
+    fn local_path_is_a_plain_path_or_a_file_uri() {
+        assert_eq!(
+            local_path("/w/a/n/h.json"),
+            Some(Path::new("/w/a/n/h.json"))
+        );
+        assert_eq!(
+            local_path(".barca/a/h.json"),
+            Some(Path::new(".barca/a/h.json"))
+        );
+        assert_eq!(
+            local_path("file:///mnt/s/h.json"),
+            Some(Path::new("/mnt/s/h.json"))
+        );
+        assert_eq!(local_path("s3://b/p/h.json"), None);
+        assert_eq!(local_path("abfss://c@a.dfs.core.windows.net/h.json"), None);
     }
 
     // ── TransferClient vs a fake helper ─────────────────────────────────────
@@ -746,6 +802,8 @@ for t in threads: t.join()
             .failures;
         assert_eq!(failures.len(), 1);
         assert_eq!(failures[0].key, "n");
+        // A failure that is not "the object does not exist" is not reported as missing.
+        assert!(!failures[0].missing);
         assert!(!local.exists());
         within(c.shutdown()).await;
     }
@@ -882,6 +940,9 @@ for t in threads: t.join()
             failures[0].message.contains("FileNotFoundError"),
             "{failures:?}"
         );
+        // The helper says the object is not there, which is what lets the run compute the
+        // step again instead of failing (#252).
+        assert!(failures[0].missing, "{failures:?}");
         within(c.shutdown()).await;
     }
 }

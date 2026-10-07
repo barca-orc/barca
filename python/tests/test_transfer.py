@@ -260,6 +260,8 @@ class TestErrors:
         r = helper.reply()
         assert r["type"] == "error" and r["id"] == 1
         assert "FileNotFoundError" in r["message"]
+        # Said to be missing, so the coordinator recomputes the step instead of failing (#252).
+        assert r["missing"] is True
         assert not (tmp_path / "x").exists()
 
         src = tmp_path / "ok.bin"
@@ -311,6 +313,7 @@ class TestErrors:
                 "id": 5,
                 "message": "ConnectionError: unreachable",
                 "attempts": 3,
+                "missing": False,
             }
         finally:
             h.close()
@@ -330,6 +333,8 @@ class TestErrors:
             h.request({"type": "put", "id": 1, "local": str(src), "remote": "memory://r/a"})
             r = h.reply()
             assert r["type"] == "error" and r["attempts"] == 1
+            # Denied is not "missing": the object may well be there.
+            assert r["missing"] is False
             assert calls == [1]
         finally:
             h.close()
@@ -422,6 +427,21 @@ class TestHttpStatusClassification:
     )
     def test_client_errors_are_permanent(self, tmp_path, monkeypatch, exc):
         assert self._attempts(tmp_path, monkeypatch, exc) == 1
+
+    @pytest.mark.parametrize(
+        ("exc", "missing"),
+        [
+            (FileNotFoundError("no such key"), True),  # what s3fs, adlfs and gcsfs raise
+            (_HttpError("not found", code=404), True),
+            (_HttpError("AuthenticationFailed", status_code=403), False),
+            (PermissionError("denied"), False),
+            (ConnectionError("unreachable"), False),
+            (_HttpError("busy", status_code=503), False),
+        ],
+        ids=["file-not-found", "http-404", "http-403", "permission", "connection", "http-503"],
+    )
+    def test_only_an_object_that_does_not_exist_is_missing(self, exc, missing):
+        assert _transfer._is_missing(exc) is missing
 
     @pytest.mark.parametrize(
         "exc",

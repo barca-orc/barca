@@ -20,10 +20,12 @@ reply carries the request id.
        was; "mismatch" is true when the store's copy does not have the recorded hash. That
        is not an error: an artifact path is `{node}/{run_hash}`, so a refresh or a second
        machine computing the same step overwrites it, and the store's copy is still used.
-  ← {"type": "error", "id", "message", "attempts"}
+  ← {"type": "error", "id", "message", "attempts", "missing"}
                                                 final — transient errors are retried here;
                                                 a stalled attempt fails after
-                                                BARCA_TRANSFER_TIMEOUT seconds
+                                                BARCA_TRANSFER_TIMEOUT seconds.
+       "missing" is true when the source does not exist (for a get: the object is not in the
+       store). The coordinator recomputes such a cached result instead of failing the run.
 
 Transfers go through barca._storage, so credentials and BARCA_STORAGE_OPTIONS
 behave exactly as they do for workers and the state helper.
@@ -255,12 +257,24 @@ def _handle(msg: dict, requests: _Requests, retries: int, backoff: float) -> Non
             time.sleep(backoff * 2 ** (attempt - 1))
 
 
+def _is_missing(exc: BaseException) -> bool:
+    """True when the transfer failed because its source does not exist.
+
+    s3fs, adlfs and gcsfs raise FileNotFoundError for an object that is not there; an SDK
+    error that stays untranslated is judged by its HTTP status. Everything else (permissions,
+    authentication, a store that cannot be reached) is not "missing": the object may well be
+    there.
+    """
+    return isinstance(exc, FileNotFoundError) or _http_status(exc) == 404
+
+
 def _error(msg: dict, exc: BaseException, attempts: int) -> dict:
     return {
         "type": "error",
         "id": msg["id"],
         "message": f"{type(exc).__name__}: {exc}",
         "attempts": attempts,
+        "missing": _is_missing(exc),
     }
 
 
