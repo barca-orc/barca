@@ -470,6 +470,45 @@ class TestSignals:
         assert list(dest.parent.iterdir()) == []
 
 
+class TestCrossProcess:
+    def test_two_processes_fetching_the_same_local_path_both_succeed(
+        self, process_helper, tmp_path
+    ):
+        """Each downloads to its own temp file and renames it into place, so neither sees a
+        partial file and neither removes the other's.
+
+        Both helpers are held with their download staged, so the two fetches are certainly
+        in flight at once; whichever rename lands second replaces a whole file with a whole
+        file.
+        """
+        body = b"x" * 200_000
+        sha = hashlib.sha256(body).hexdigest()
+        remote = _store_file(tmp_path, body)
+        local = tmp_path / "local" / "h.json"
+        helpers = [process_helper(hold="get"), process_helper(hold="get")]
+        for h in helpers:
+            h.request(
+                {"type": "get", "id": 1, "remote": str(remote), "local": str(local), "sha256": sha}
+            )
+        for h in helpers:
+            h.wait_until_held()
+        assert len([p for p in local.parent.iterdir() if p.name.endswith(".tmp")]) == 2
+        assert not local.exists()
+
+        for h in helpers:
+            h.release()
+        replies = [h.reply() for h in helpers]
+        assert [(r["type"], r["sha256"], r["mismatch"]) for r in replies] == [
+            ("done", sha, False)
+        ] * 2
+        for h in helpers:
+            h.request({"type": "shutdown"})
+            code, err = h.finish()
+            assert code == 0, err
+        assert local.read_bytes() == body
+        assert sorted(p.name for p in local.parent.iterdir()) == ["h.json"]
+
+
 class TestConcurrency:
     def test_many_in_flight_all_answered_by_id(self, tmp_path):
         h = Helper(concurrency=4)
