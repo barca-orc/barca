@@ -23,6 +23,11 @@ barca serve pipeline.py --read-only       # inspect only: no runs, no scheduler,
 barca serve a.py b.py                      # multiple source files
 ```
 
+With a remote store, `barca serve` shares results but not history: it refuses to start
+unless shared history is off (`BARCA_STATE=off`, or `state = "off"` under `[remote]` in
+`barca.toml`), with `barca serve does not support shared remote state yet`. Runs it starts are
+recorded in the local `.barca/metadata.db` only.
+
 The server binds to `127.0.0.1` (local only). There is no authentication in v1 — do not
 expose it to untrusted networks. It also serves the web UI at `/ui/`; see
 [Deploying](/deploying/) for running it behind nginx.
