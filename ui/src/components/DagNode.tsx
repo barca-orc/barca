@@ -44,7 +44,7 @@ export function DagNode({
   const ring = selected
     ? '0 0 0 1px var(--signal), 0 0 18px -4px var(--c-green-glow)'
     : running
-      ? '0 0 14px -5px rgba(54,203,211,0.6)'
+      ? 'var(--glow-running)'
       : 'var(--shadow-sm)'
 
   // Tasks always re-run (never cached) — a dashed border marks that ephemeral
