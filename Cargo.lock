@@ -294,6 +294,8 @@ dependencies = [
 name = "barca-core"
 version = "0.18.1"
 dependencies = [
+ "chrono",
+ "chrono-tz",
  "croner",
  "futures",
  "indicatif",

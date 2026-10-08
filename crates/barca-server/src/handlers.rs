@@ -11,7 +11,10 @@ use axum::extract::{Path, State};
 use axum::response::Sse;
 use axum::response::sse::{Event, KeepAlive};
 use axum::response::{IntoResponse, Response};
-use barca_core::commands::{self, GetResult};
+use barca_core::cache::CachePolicy;
+use barca_core::commands;
+use barca_core::queries;
+use barca_core::results::{AssetSummary, GetResult, PlanResult};
 use barca_core::{BarcaError, RunEvent, db};
 use futures::stream::{self, Stream, StreamExt};
 use serde_json::{Value, json};
@@ -128,7 +131,7 @@ async fn node_states_in(
     let python_buf = python.to_path_buf();
     let (status, schedule) = tokio::join!(
         barca_core::status::status(&snap_cfg, &[], files, python, 0, false),
-        crate::scheduler::describe_schedule_in(files, &python_buf, zone),
+        barca_core::schedule::describe_schedule_in(files, &python_buf, zone),
     );
     let history = match &snapshot {
         Some(s) => db::materialization_history(s.path()).await?,
@@ -196,23 +199,21 @@ fn percentile(sorted: &[f64], q: f64) -> f64 {
 }
 
 /// `GET /plan` — execution plan for the server's files (cache-aware).
-pub async fn plan(State(state): State<AppState>) -> Result<Json<commands::PlanResult>, ApiError> {
+pub async fn plan(State(state): State<AppState>) -> Result<Json<PlanResult>, ApiError> {
     if let Some(cached) = state.cache.read().unwrap().plan.clone() {
         return Ok(Json(cached));
     }
-    let result = commands::plan(&state.config.files, &state.config.python).await?;
+    let result = queries::plan(&state.config.files, &state.config.python).await?;
     state.cache.write().unwrap().plan = Some(result.clone());
     Ok(Json(result))
 }
 
 /// `GET /assets` — list every node with kind/freshness/inputs (cache-aware).
-pub async fn assets(
-    State(state): State<AppState>,
-) -> Result<Json<Vec<commands::AssetSummary>>, ApiError> {
+pub async fn assets(State(state): State<AppState>) -> Result<Json<Vec<AssetSummary>>, ApiError> {
     if let Some(cached) = state.cache.read().unwrap().assets.clone() {
         return Ok(Json(cached));
     }
-    let result = commands::list_assets(&state.config.files, &state.config.python).await?;
+    let result = queries::list_assets(&state.config.files, &state.config.python).await?;
     state.cache.write().unwrap().assets = Some(result.clone());
     Ok(Json(result))
 }
@@ -224,7 +225,7 @@ pub async fn asset_schema(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<Json<Vec<barca_core::status::NodeStatus>>, ApiError> {
-    let summaries = commands::list_assets(&state.config.files, &state.config.python).await?;
+    let summaries = queries::list_assets(&state.config.files, &state.config.python).await?;
     let matches: Vec<_> = summaries
         .iter()
         .filter(|s| s.id == name || s.id.ends_with(&format!(":{name}")))
@@ -264,7 +265,7 @@ pub async fn asset_detail(
     let summaries = if let Some(cached) = state.cache.read().unwrap().assets.clone() {
         cached
     } else {
-        let result = commands::list_assets(&state.config.files, &state.config.python).await?;
+        let result = queries::list_assets(&state.config.files, &state.config.python).await?;
         state.cache.write().unwrap().assets = Some(result.clone());
         result
     };
@@ -291,7 +292,7 @@ pub async fn asset_detail(
         let snap = snapshot_db(&state).await?;
         db::get_asset_stats(&snap.path, &summary.id).await?
     } else {
-        commands::stats(
+        queries::stats(
             &state.config.resolved,
             &summary.id,
             &state.config.files,
@@ -315,20 +316,24 @@ pub async fn run(State(state): State<AppState>) -> Result<Json<Value>, ApiError>
 }
 
 /// Check a trigger's target before a run is started for it, with the function `barca get`
-/// and `barca run` use (`commands::resolve_target_among`), so the server refuses what the
+/// and `barca run` use (`barca_core::targets::resolve_target_among`), so the server refuses what the
 /// command line refuses, in the same words: an unknown name is `404`, a name that matches
 /// several nodes `409`, the wrong verb for the node's kind `400`. So is source that does not
 /// parse or a DAG that cannot be built.
 async fn check_target(state: &AppState, name: &str, verb: &str) -> Result<(), ApiError> {
     let nodes = target_nodes(state).await?;
     let nodes = nodes.iter().map(|(id, kind)| (id.as_str(), *kind));
-    match commands::resolve_target_among(nodes, name, verb) {
+    match barca_core::targets::resolve_target_among(nodes, name, verb) {
         Ok(_) => Ok(()),
-        Err(e @ commands::TargetError::NotFound { .. }) => Err(ApiError::NotFound(e.to_string())),
-        Err(e @ commands::TargetError::Ambiguous { .. }) => Err(ApiError::Conflict(e.to_string())),
+        Err(e @ barca_core::targets::TargetError::NotFound { .. }) => {
+            Err(ApiError::NotFound(e.to_string()))
+        }
+        Err(e @ barca_core::targets::TargetError::Ambiguous { .. }) => {
+            Err(ApiError::Conflict(e.to_string()))
+        }
         // The resolver's own words name a command (`use `barca run` instead`); an HTTP
         // client is told the endpoint.
-        Err(commands::TargetError::WrongKind { name, kind }) => {
+        Err(barca_core::targets::TargetError::WrongKind { name, kind }) => {
             let (what, endpoint) = match kind {
                 barca_core::NodeKind::Task => ("a task", "run"),
                 _ => ("an asset", "get"),
@@ -358,7 +363,7 @@ async fn target_nodes(
         return Ok(index.nodes.clone());
     }
     let nodes: Vec<(String, barca_core::NodeKind)> =
-        commands::list_assets(&state.config.files, &state.config.python)
+        queries::list_assets(&state.config.files, &state.config.python)
             .await?
             .into_iter()
             .map(|n| (n.id, n.kind))
@@ -441,7 +446,7 @@ pub(crate) fn schedule_at(state: &AppState, now: chrono::DateTime<chrono::Utc>) 
         .map(|j| {
             let next_fire = CronExpr::parse(&j.cron)
                 .ok()
-                .and_then(|c| crate::scheduler::next_fire(&c, &zone, now))
+                .and_then(|c| barca_core::schedule::next_fire(&c, &zone, now))
                 .map(|t| t.timestamp());
             let last_status = j
                 .last_handle
@@ -521,7 +526,7 @@ pub async fn events(
 /// `GET /logs/{run_id}` — persisted stdout lines for a run (durable history).
 ///
 /// Accepts the server-side polling handle and resolves it to the DB run id
-/// (which `commands::execute` generates and surfaces in the completed result);
+/// (which `execution::execute` generates and surfaces in the completed result);
 /// also accepts a raw DB run id directly.
 pub async fn logs(
     State(state): State<AppState>,
@@ -555,7 +560,7 @@ enum RunKind {
     /// `commands::get` with an optional target (assets).
     Get(Option<String>),
     /// `commands::run` for a task target, with how its upstream assets are treated.
-    Task(String, commands::CachePolicy),
+    Task(String, CachePolicy),
 }
 
 /// Insert a `Pending` run, spawn the background execution task, and return the
@@ -567,20 +572,14 @@ pub(crate) fn start_run(state: AppState, target: Option<String>) -> String {
 /// Insert a `Pending` run for a task, spawn the background execution via
 /// `commands::run`, and return the server-side handle.
 pub(crate) fn start_run_task(state: AppState, target: String) -> String {
-    spawn_run(
-        state,
-        RunKind::Task(target, commands::CachePolicy::RefreshAll),
-    )
+    spawn_run(state, RunKind::Task(target, CachePolicy::RefreshAll))
 }
 
 /// A cron tick for a scheduled task: the task runs, as a task always does, and each upstream
 /// asset is recomputed only if something on its input side changed (what `barca run <task>`
 /// does). A scheduled asset already goes through the cache-aware [`start_run`].
 pub(crate) fn start_scheduled_task(state: AppState, target: String) -> String {
-    spawn_run(
-        state,
-        RunKind::Task(target, commands::CachePolicy::CacheAware),
-    )
+    spawn_run(state, RunKind::Task(target, CachePolicy::CacheAware))
 }
 
 fn spawn_run(state: AppState, kind: RunKind) -> String {
@@ -654,7 +653,7 @@ fn spawn_run(state: AppState, kind: RunKind) -> String {
                             target.as_deref(),
                             &files,
                             &python,
-                            commands::CachePolicy::CacheAware,
+                            CachePolicy::CacheAware,
                             true,
                             cancel.clone(),
                             Some(event_tx),

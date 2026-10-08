@@ -267,3 +267,47 @@ def test_a_stop_signal_cancels_the_runs_and_exits_0(project, serve, sig):
 
     # The run in flight recorded itself as cancelled; it was not left `running`.
     assert [r["status"] for r in history(project)] == ["cancelled", "success"]
+
+
+@pytest.mark.parametrize("stop_signal", [signal.SIGTERM, signal.SIGINT])
+def test_stop_reaps_parallel_parent_and_active_children(project, stop_signal):
+    """parallel() freezes its parent with SIGSTOP; cancellation must reap it too."""
+    (project / "pipeline.py").write_text("""
+import os
+import time
+from functools import partial
+from pathlib import Path
+from barca import asset, parallel
+
+def slow(index):
+    Path(f"child{index}.pid").write_text(str(os.getpid()))
+    time.sleep(120)
+    return index
+
+@asset()
+def work():
+    Path("parent.pid").write_text(str(os.getpid()))
+    return parallel(partial(slow, 1), partial(slow, 2))
+""")
+    proc = subprocess.Popen(
+        [_find_binary(), "get", "work", "pipeline.py", "--json"],
+        cwd=project, env=_env(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    try:
+        wait_for(lambda: (project / "child2.pid").exists(), "parallel children")
+        pids = [int(p.read_text()) for p in project.glob("*.pid")]
+        assert len(pids) == 3
+        # Observe the actual frozen parent rather than infer it from parallel's API.
+        parent = int((project / "parent.pid").read_text())
+        wait_for(lambda: "State:\tT" in Path(f"/proc/{parent}/status").read_text(), "frozen parent")
+        proc.send_signal(stop_signal)
+        _, stderr = proc.communicate(timeout=WAIT)
+        assert proc.returncode == 130, stderr
+        for pid in pids:
+            assert not Path(f"/proc/{pid}").exists(), f"worker {pid} survived cancellation"
+        history = json.loads(barca(project, "history", "--json", "--all").stdout)
+        assert history["runs"][0]["status"] == "cancelled"
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.communicate(timeout=WAIT)

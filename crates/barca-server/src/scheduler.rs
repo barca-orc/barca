@@ -16,121 +16,24 @@
 
 use crate::handlers;
 use crate::state::{AppState, JobStatus, RunStatus};
-use barca_core::commands::{self, AssetSummary};
-use barca_core::{CronExpr, Freshness, NodeKind, db};
-use chrono::{DateTime, FixedOffset, Local, TimeZone, Timelike, Utc};
+#[cfg(test)]
+use barca_core::results::AssetSummary;
+pub(crate) use barca_core::schedule::Zone;
+#[cfg(test)]
+use barca_core::schedule::next_fire;
+use barca_core::schedule::{ScheduledJob, collect_jobs};
+#[cfg(test)]
+use barca_core::schedule::{describe_schedule, jobs_from_summaries};
+use barca_core::{NodeKind, db};
+use chrono::{DateTime, FixedOffset, TimeZone, Timelike};
+#[cfg(test)]
 use croner::Cron;
-use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-/// Static description of one scheduled job: what `barca list` and `GET /state` show.
-#[derive(Debug, Clone, Serialize)]
-pub struct ScheduleInfo {
-    pub id: String,
-    pub cron: String,
-    pub kind: NodeKind,
-    /// Next fire time as unix epoch seconds (for programmatic use).
-    pub next_fire: Option<i64>,
-    /// Next fire time as wall-clock time in the zone it was computed in (for display).
-    pub next_fire_local: Option<String>,
-}
-
-/// Enumerate scheduled jobs from source and compute each one's next fire time with cron
-/// evaluated in this machine's local time. Pure static analysis, no running server: this is
-/// what `barca list` shows. A server started with `--timezone` fires in that zone instead;
-/// its `GET /schedule` and `GET /state` report the times it will really fire at.
-pub async fn describe_schedule(files: &[String], python: &std::path::Path) -> Vec<ScheduleInfo> {
-    describe_schedule_in(files, python, &Zone::Local).await
-}
-
-/// [`describe_schedule`] with cron evaluated in `zone`.
-pub(crate) async fn describe_schedule_in(
-    files: &[String],
-    python: &std::path::Path,
-    zone: &Zone,
-) -> Vec<ScheduleInfo> {
-    let now = Utc::now();
-    collect_jobs(files, python)
-        .await
-        .iter()
-        .map(|j| {
-            let next = next_fire(&j.cron, zone, now);
-            ScheduleInfo {
-                id: j.id.clone(),
-                cron: j.cron_str.clone(),
-                kind: j.kind,
-                next_fire: next.map(|t| t.timestamp()),
-                next_fire_local: next.map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string()),
-            }
-        })
-        .collect()
-}
-
-/// The first time strictly after `now` that `cron` matches when evaluated in `zone`.
-pub(crate) fn next_fire(
-    cron: &Cron,
-    zone: &Zone,
-    now: DateTime<Utc>,
-) -> Option<DateTime<FixedOffset>> {
-    cron.find_next_occurrence(&zone.at(now), false).ok()
-}
-
-/// The zone a server evaluates cron in. `serve` refuses to start with a value that does not
-/// parse, so the fallback is only reached by a router built without it.
 pub(crate) fn zone_of(config: &crate::state::ServeConfig) -> Zone {
     Zone::parse(&config.timezone).unwrap_or(Zone::Local)
-}
-
-/// A parsed cron job discovered from the DAG at startup.
-struct ScheduledJob {
-    /// Full node id (e.g. `pipeline.py:daily_report`), used verbatim as the run target.
-    id: String,
-    /// Node kind decides the trigger path: asset/sensor → `get`, task → `run`.
-    kind: NodeKind,
-    /// The original cron string, kept for logging.
-    cron_str: String,
-    /// Parsed cron (5-field minute-granular, or 6-field seconds-granular),
-    /// evaluated in the scheduler's configured timezone.
-    cron: Cron,
-}
-
-/// Enumerate every node whose freshness is `Schedule(cron)` and parse each cron.
-/// A DAG-analysis failure disables the scheduler (returns empty); individual
-/// invalid/empty cron strings are logged and skipped rather than aborting.
-async fn collect_jobs(files: &[String], python: &std::path::Path) -> Vec<ScheduledJob> {
-    match commands::list_assets(files, python).await {
-        Ok(summaries) => jobs_from_summaries(summaries),
-        Err(e) => {
-            eprintln!("[barca] scheduler disabled: failed to analyze DAG: {e}");
-            Vec::new()
-        }
-    }
-}
-
-/// Pure summary → job mapping (split out from [`collect_jobs`] so it is testable
-/// without a Python interpreter). Drops entries whose cron fails to parse.
-fn jobs_from_summaries(summaries: Vec<AssetSummary>) -> Vec<ScheduledJob> {
-    let mut jobs = Vec::new();
-    for s in summaries {
-        let Freshness::Schedule(expr) = &s.freshness else {
-            continue;
-        };
-        match CronExpr::parse(&expr.0) {
-            Ok(cron) => jobs.push(ScheduledJob {
-                id: s.id,
-                kind: s.kind,
-                cron_str: expr.0.clone(),
-                cron,
-            }),
-            Err(e) => eprintln!(
-                "[barca] skipping '{}': invalid cron {:?}: {e}",
-                s.id, expr.0
-            ),
-        }
-    }
-    jobs
 }
 
 /// Pure eligibility check: which jobs fire at `now`? Split out so it can be
@@ -162,64 +65,6 @@ fn millis_to_next_second<Tz: TimeZone>(now: &DateTime<Tz>) -> u64 {
 /// Sleep until just after the next second boundary in the scheduler's timezone.
 async fn sleep_to_next_second(zone: &Zone) {
     tokio::time::sleep(Duration::from_millis(millis_to_next_second(&zone.now()))).await;
-}
-
-/// Resolved timezone that cron expressions are evaluated in.
-#[derive(Debug)]
-pub(crate) enum Zone {
-    Local,
-    Utc,
-    Named(chrono_tz::Tz),
-}
-
-impl Zone {
-    /// Parse a `--timezone` value: `local` or `utc` (in any letter case), or an IANA name
-    /// spelled as in the tz database (`America/New_York`, `Etc/UTC`; case-sensitive).
-    /// Surrounding whitespace is ignored. Anything else is an error that names the value and
-    /// shows valid ones.
-    pub(crate) fn parse(s: &str) -> Result<Self, String> {
-        let name = s.trim();
-        match name.to_ascii_lowercase().as_str() {
-            "local" => Ok(Zone::Local),
-            "utc" => Ok(Zone::Utc),
-            _ => name.parse::<chrono_tz::Tz>().map(Zone::Named).map_err(|_| {
-                format!(
-                    "unknown timezone '{s}': use `local`, `utc`, or an IANA name such as \
-                     `America/New_York` (IANA names are case-sensitive)"
-                )
-            }),
-        }
-    }
-
-    /// The current instant in this zone as a fixed-offset datetime.
-    fn now(&self) -> DateTime<FixedOffset> {
-        self.at(Utc::now())
-    }
-
-    /// An instant as a fixed-offset datetime in this zone.
-    pub(crate) fn at(&self, instant: DateTime<Utc>) -> DateTime<FixedOffset> {
-        match self {
-            Zone::Local => instant.with_timezone(&Local).fixed_offset(),
-            Zone::Utc => instant.fixed_offset(),
-            Zone::Named(tz) => instant.with_timezone(tz).fixed_offset(),
-        }
-    }
-
-    /// An epoch-seconds timestamp interpreted in this zone.
-    fn timestamp(&self, secs: i64) -> DateTime<FixedOffset> {
-        let dt = match self {
-            Zone::Local => Local
-                .timestamp_opt(secs, 0)
-                .single()
-                .map(|t| t.fixed_offset()),
-            Zone::Utc => Utc
-                .timestamp_opt(secs, 0)
-                .single()
-                .map(|t| t.fixed_offset()),
-            Zone::Named(tz) => tz.timestamp_opt(secs, 0).single().map(|t| t.fixed_offset()),
-        };
-        dt.unwrap_or_else(|| self.now())
-    }
 }
 
 /// What the scheduler decided to do with a due job on a given tick.
@@ -282,6 +127,7 @@ fn trigger(state: &AppState, job: &ScheduledJob) -> String {
 /// next cron occurrence strictly after `last_fired` is already in the past. This
 /// drives the single catch-up run after the daemon was down. Pure and generic
 /// over timezone so it is testable and reusable once a `--timezone` is honored.
+#[cfg(test)]
 fn needs_catchup<Tz: TimeZone>(cron: &Cron, last_fired: &DateTime<Tz>, now: &DateTime<Tz>) -> bool {
     match cron.find_next_occurrence(last_fired, false) {
         Ok(next) => next <= *now,
@@ -309,7 +155,13 @@ async fn catch_up(
         match saved.get(&job.id) {
             Some(&last_epoch) => {
                 let last = zone.timestamp(last_epoch);
-                if needs_catchup(&job.cron, &last, now) {
+                if barca_core::schedule::next_fire(
+                    &job.cron,
+                    zone,
+                    last.with_timezone(&chrono::Utc),
+                )
+                .is_some_and(|next| next <= *now)
+                {
                     let handle = trigger(state, job);
                     eprintln!("[barca] catch-up run {} → {handle}", job.id);
                     last_handle.insert(job.id.clone(), handle);
@@ -357,7 +209,7 @@ fn publish_registry(
 }
 
 /// Re-run static analysis to enumerate scheduled jobs. The parse itself runs
-/// on the blocking pool inside `commands::list_assets`.
+/// on the blocking pool inside `barca_core::queries::list_assets`.
 async fn reload_jobs(state: &AppState) -> Vec<ScheduledJob> {
     collect_jobs(&state.config.files, &state.config.python).await
 }
@@ -496,6 +348,7 @@ mod tests {
     use super::*;
     use crate::state::{RunState, ServeConfig};
     use barca_core::{CronExpr, Freshness, NodeKind};
+    use chrono::{Local, Utc};
     use std::net::{IpAddr, Ipv4Addr};
 
     fn summary(id: &str, kind: NodeKind, cron: &str) -> AssetSummary {
@@ -945,6 +798,27 @@ mod tests {
             HashMap::from([("f.py:daily".to_string(), now.timestamp())])
         );
         assert_eq!(db::get_schedule_state(&db_path).await.unwrap(), fired);
+    }
+
+    #[tokio::test]
+    async fn catch_up_does_not_fire_early_across_the_autumn_offset_change() {
+        let (_dir, db_path) = schedule_db().await;
+        let zone = Zone::parse("America/New_York").unwrap();
+        let jobs = [job("f.py:daily", NodeKind::Asset, "0 5 * * *")];
+        let before = Utc.with_ymd_and_hms(2026, 10, 31, 12, 0, 0).unwrap();
+        db::upsert_schedule_state(&db_path, "f.py:daily", before.timestamp())
+            .await
+            .unwrap();
+        // 09:30 UTC is 04:30 after the offset changed; the old fixed-offset
+        // search incorrectly treated the next 05:00 as 09:00 UTC.
+        let early = zone.at(Utc.with_ymd_and_hms(2026, 11, 1, 9, 30, 0).unwrap());
+        let st = app_state();
+        let (handles, fired) = catch_up(&st, &jobs, &zone, &early, &db_path).await;
+        assert!(handles.is_empty() && st.runs.is_empty());
+        assert_eq!(fired["f.py:daily"], before.timestamp());
+        let due = zone.at(Utc.with_ymd_and_hms(2026, 11, 1, 10, 0, 0).unwrap());
+        let (handles, _) = catch_up(&st, &jobs, &zone, &due, &db_path).await;
+        assert_eq!(handles.len(), 1);
     }
 
     #[tokio::test]

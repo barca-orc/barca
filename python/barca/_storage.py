@@ -387,6 +387,13 @@ def http_status(exc: BaseException) -> int | None:
     return None
 
 
+def first_line(exc: BaseException) -> str:
+    """The first line of an exception's message, or "" when it has none: storage errors
+    (botocore, azure-core) often carry the whole request on the following lines."""
+    lines = str(exc).strip().splitlines()
+    return lines[0] if lines else ""
+
+
 def exists(path: "str | Path") -> bool:
     """Existence check that works for local paths and remote URIs."""
     if is_remote(path):

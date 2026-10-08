@@ -2,7 +2,7 @@
 
 use barca_core::CancellationToken;
 use barca_core::RunEvent;
-use barca_core::commands::{AssetSummary, GetResult, PlanResult};
+use barca_core::results::{AssetSummary, GetResult, PlanResult};
 use dashmap::DashMap;
 use serde::Serialize;
 use std::net::IpAddr;
@@ -88,8 +88,8 @@ pub struct RunState {
     pub cancel: CancellationToken,
 }
 
-/// Cached static-analysis results, invalidated by the file watcher in `--watch`
-/// mode. Without `--watch` the cache simply persists for the process lifetime.
+/// Cached inspection results, invalidated by the file watcher in `--watch`
+/// mode. Trigger validation additionally checks source stamps on every request.
 #[derive(Default)]
 pub struct DagCache {
     pub assets: Option<Vec<AssetSummary>>,

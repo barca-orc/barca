@@ -131,9 +131,9 @@ pub fn print(warnings: &[PlanWarning]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::plan_for_targets;
     use crate::parse::extract_nodes;
     use crate::planner::{ResourceConfig, plan_from_dag};
+    use crate::targets::plan_for_targets;
 
     const SRC: &str = r#"
 import duckdb

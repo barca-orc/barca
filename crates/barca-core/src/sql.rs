@@ -315,12 +315,11 @@ async fn run_helper(
     request: &serde_json::Value,
 ) -> Result<HelperOutput, BarcaError> {
     use tokio::io::AsyncWriteExt;
-    let mut cmd = tokio::process::Command::new(python);
-    cmd.args(["-m", "barca._sql"]);
-    // Remote artifacts are fetched with the same storage options workers get.
-    if let Some(ref opts) = cfg.storage_options_json {
-        cmd.env("BARCA_STORAGE_OPTIONS", opts);
-    }
+    let mut cmd = crate::helper_proc::python_module(
+        python,
+        "barca._sql",
+        cfg.storage_options_json.as_deref(),
+    );
     cmd.stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());

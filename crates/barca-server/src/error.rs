@@ -5,7 +5,7 @@ use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use barca_core::BarcaError;
-use serde_json::json;
+use barca_core::envelope::{self, ErrorKind};
 
 /// Error type returned by route handlers. Implements `IntoResponse` so handlers
 /// can use `?` directly.
@@ -39,14 +39,12 @@ impl IntoResponse for ApiError {
             ApiError::Barca(err) => {
                 let status = match &err {
                     BarcaError::AssetNotFound(..) => StatusCode::NOT_FOUND,
-                    BarcaError::Parse(_) | BarcaError::Dag(_) | BarcaError::Usage(_) => {
-                        StatusCode::BAD_REQUEST
-                    }
+                    e if ErrorKind::of(e) == ErrorKind::Usage => StatusCode::BAD_REQUEST,
                     _ => StatusCode::INTERNAL_SERVER_ERROR,
                 };
                 (status, err.to_string())
             }
         };
-        (status, Json(json!({ "error": message }))).into_response()
+        (status, Json(envelope::http_error(message))).into_response()
     }
 }
