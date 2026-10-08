@@ -224,3 +224,33 @@ def test_local_names_inside_functions_do_not_turn_the_check_off(tmp_path: Path) 
     proc = listed(tmp_path, source)
     assert proc.returncode == 2
     assert "pipeline.py:t (line 21): `when` is not an argument of @task" in proc.stderr
+
+
+@pytest.mark.parametrize("rebinding", [
+    "def install(x=(asset := custom)): pass",
+    "@((asset := custom)())\ndef install(): pass",
+    "class Install((asset := custom) and object): pass",
+    "@((asset := custom)())\nclass Install: pass",
+])
+def test_definition_time_rebinding_allows_foreign_arguments(tmp_path, rebinding):
+    source = (
+        'from barca import asset\n'
+        'def custom(**kwargs):\n'
+        '    return lambda fn: lambda: kwargs["mode"]\n'
+        f'{rebinding}\n'
+        '@asset(mode="custom")\n'
+        'def value():\n'
+        '    return 0\n'
+    )
+    proc = listed(tmp_path, source)
+    assert proc.returncode == 0, proc.stderr
+    assert [(n["id"], n["kind"]) for n in json.loads(proc.stdout)["nodes"]] == [
+        ("pipeline.py:value", "asset")
+    ]
+    (tmp_path / "barca.toml").write_text("")
+    result = subprocess.run(
+        [_find_binary(), "get", "value", "pipeline.py"],
+        cwd=tmp_path, capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout.strip().splitlines()[-1])["final_output"] == "custom"
