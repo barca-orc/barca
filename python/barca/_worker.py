@@ -858,12 +858,14 @@ def run_batch(batch):
 
 
 # What a worker does with Ctrl-C (SIGINT). The terminal sends it to every process of the job,
-# workers included, and the coordinator, which gets it too, decides what it means for the run
-# and stops the workers. A worker acts on it only while a step's function runs:
+# and the coordinator, which gets it too, decides what it means for the run and stops the
+# workers. A worker acts on it only while a step's function runs:
 #
-# - While the interpreter starts and barca is imported: ignored. The coordinator starts workers
-#   with SIGINT ignored (`helper_proc::start_deaf_to_ctrl_c`), since nothing written here can
-#   keep an interrupt that arrives that early from ending the process with a traceback.
+# - While the interpreter starts and barca is imported: it does not get the signal at all.
+#   The coordinator starts a worker in a process group of its own
+#   (`helper_proc::start_outside_the_job`), since nothing written here can keep an interrupt
+#   that arrives that early from ending the process with a traceback. `_join_the_job` moves
+#   the worker into the coordinator's group once the handler below is installed.
 # - While a step's module is imported, between steps, and while a result or an error is
 #   reported: nothing happens (`_ctrl_c_does_nothing`). An interrupt there used to end the
 #   worker with a `KeyboardInterrupt` traceback of barca's own frames or of the module's
@@ -873,6 +875,24 @@ def run_batch(batch):
 #   as interrupted and the coordinator leaves it out of the cancelled run. The coordinator's
 #   SIGTERM follows the interrupt and ends the worker at once (`_on_sigterm`), so a step
 #   cannot count on its `except` or `finally` code running.
+#
+# One exception to all of it: a barca that was itself started with SIGINT ignored (`nohup`, a
+# background job of a non-interactive shell, cron, some supervisors). Its workers inherit that,
+# and keep it: SIGINT stays ignored at every stage, a step included, which is what Python does
+# for any program started that way and what a step saw before these stages existed. The
+# coordinator still acts on a SIGINT sent to it and stops the workers.
+
+# Whether this process was started with SIGINT ignored. Read before anything changes it.
+_ctrl_c_inherited_ignored: bool | None = None
+
+
+def _started_with_ctrl_c_ignored() -> bool:
+    global _ctrl_c_inherited_ignored
+    if _ctrl_c_inherited_ignored is None:
+        import signal
+
+        _ctrl_c_inherited_ignored = signal.getsignal(signal.SIGINT) is signal.SIG_IGN
+    return _ctrl_c_inherited_ignored
 
 
 def _no_interrupt(_signum, _frame) -> None:
@@ -887,6 +907,8 @@ def _ctrl_c_does_nothing() -> None:
     """
     import signal
 
+    if _started_with_ctrl_c_ignored():
+        return
     try:
         signal.signal(signal.SIGINT, _no_interrupt)
     except ValueError:
@@ -897,10 +919,25 @@ def _ctrl_c_interrupts_the_step() -> None:
     """Ctrl-C raises `KeyboardInterrupt` in the main thread, as in any Python program."""
     import signal
 
+    if _started_with_ctrl_c_ignored():
+        return
     try:
         signal.signal(signal.SIGINT, signal.default_int_handler)
     except ValueError:
         pass  # not the main thread: nothing to change
+
+
+def _join_the_job() -> None:
+    """Move this worker into the coordinator's process group, where the terminal's Ctrl-C is
+    delivered. Called once `_ctrl_c_does_nothing` is in place; until then the worker is in a
+    group of its own, out of the terminal's reach."""
+    job = os.environ.get("BARCA_JOB_PGID")
+    if not job:
+        return  # started by hand, or by a coordinator that leaves workers in its group
+    try:
+        os.setpgid(0, int(job))
+    except (OSError, ValueError):
+        pass  # the coordinator's group is gone; so is the coordinator, and the socket says so
 
 
 def _run_daemon_step(step, modules, art_dir, lru):
@@ -1083,6 +1120,7 @@ def run_daemon():
     global _use_socket
 
     _ctrl_c_does_nothing()
+    _join_the_job()
 
     from barca import _runtime
 

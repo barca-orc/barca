@@ -76,32 +76,26 @@ pub(crate) fn shield_from_ctrl_c(cmd: &mut Command) {
     cmd.process_group(0);
 }
 
-/// Start `cmd` with SIGINT ignored, in the coordinator's process group. For workers.
+/// Start a worker where the terminal's Ctrl-C does not reach it while it starts.
 ///
-/// A worker stays in the terminal's job, unlike a helper: while it runs a step, Ctrl-C is
-/// meant to reach the step's code. But a Ctrl-C that arrives while the interpreter is still
-/// starting would end the worker with a `KeyboardInterrupt` traceback before any of barca's
-/// Python code could prevent it. An ignored signal stays ignored across `exec`, and Python
-/// leaves an ignored SIGINT alone, so the worker starts deaf to it and turns it back on
-/// itself, for the time a step runs (`python/barca/_worker.py`).
+/// A worker belongs in the terminal's job: while it runs a step, Ctrl-C is meant to reach the
+/// step's code. But a Ctrl-C that arrives while the interpreter is still starting ends the
+/// worker with a `KeyboardInterrupt` traceback before any of barca's Python code can prevent
+/// it. So a worker starts like a helper, in a process group of its own ([`shield_from_ctrl_c`]
+/// explains why a group and not an ignored signal: it keeps `posix_spawn`), and is told the
+/// coordinator's group in `BARCA_JOB_PGID`. Once its own handling of the signal is in place it
+/// moves itself into that group (`python/barca/_worker.py`, `_join_the_job`), and from then
+/// on gets Ctrl-C like any process of the job.
 ///
-/// This needs a `pre_exec` hook, which [`shield_from_ctrl_c`] avoids because of the pipe the
-/// standard library then uses to learn that `exec` happened. That pipe is created and closed
-/// inside the `spawn` call, and every `spawn` call is made under [`spawn`]'s lock (a test
-/// checks there is no other), so no child can inherit it.
+/// (This was a `pre_exec` hook that ignored SIGINT. It made every worker start through
+/// `fork`, about 1 ms slower each, and it left the signal ignored in a way the worker could
+/// not tell from a barca that was itself started with SIGINT ignored.)
 #[cfg(unix)]
-pub(crate) fn start_deaf_to_ctrl_c(cmd: &mut std::process::Command) {
+pub(crate) fn start_outside_the_job(cmd: &mut std::process::Command) {
     use std::os::unix::process::CommandExt;
-    // SAFETY: the hook runs in the forked child before `exec` and makes one
-    // async-signal-safe call.
-    unsafe {
-        cmd.pre_exec(|| {
-            if libc::signal(libc::SIGINT, libc::SIG_IGN) == libc::SIG_ERR {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
+    cmd.process_group(0);
+    // SAFETY: plain syscall.
+    cmd.env("BARCA_JOB_PGID", unsafe { libc::getpgrp() }.to_string());
 }
 
 /// Give `cmd` a lifeline: its stdin is a pipe whose other end only this process holds, and
@@ -203,26 +197,27 @@ mod tests {
         stop(&mut child).await;
     }
 
-    /// A worker is started with SIGINT ignored: an interrupt that reaches it while its
-    /// interpreter starts does not end it. The control dies of the same signal.
+    /// A worker starts in a process group of its own and is told the coordinator's. Nothing
+    /// here depends on how this test process was started (its SIGINT disposition, whether it
+    /// leads its group): the child reports both facts itself.
     #[cfg(unix)]
     #[test]
-    fn a_child_started_deaf_to_ctrl_c_survives_an_interrupt() {
-        use std::os::unix::process::ExitStatusExt;
-        let script = "kill -INT $$; echo survived";
-
-        let mut deaf = std::process::Command::new("sh");
-        deaf.args(["-c", script]);
-        start_deaf_to_ctrl_c(&mut deaf);
-        let out = output_std(&mut deaf).unwrap();
-        assert_eq!(out.stdout, b"survived\n");
-        assert!(out.status.success());
-
-        let mut hearing = std::process::Command::new("sh");
-        hearing.args(["-c", script]);
-        let out = output_std(&mut hearing).unwrap();
-        assert_eq!(out.stdout, b"");
-        assert_eq!(out.status.signal(), Some(libc::SIGINT));
+    fn a_worker_starts_outside_the_job_and_knows_which_job_to_join() {
+        let mut cmd = std::process::Command::new("sh");
+        cmd.args(["-c", "echo $$ $(ps -o pgid= -p $$) $BARCA_JOB_PGID"]);
+        start_outside_the_job(&mut cmd);
+        let out = output_std(&mut cmd).unwrap();
+        let fields: Vec<i64> = String::from_utf8(out.stdout)
+            .unwrap()
+            .split_whitespace()
+            .map(|f| f.parse().unwrap())
+            .collect();
+        let [pid, group, job] = fields[..] else {
+            panic!("expected pid, group and job, got {fields:?}");
+        };
+        assert_eq!(group, pid, "a group of its own");
+        assert_eq!(job, own_group(), "told the coordinator's group");
+        assert_ne!(group, job);
     }
 
     /// A child whose output is read to the end, started while long-lived children are being
@@ -267,12 +262,18 @@ mod tests {
     /// `dir`: `(file, line number, line)`.
     ///
     /// `.spawn()` with no argument is `Command::spawn` (a thread or a task is spawned with
-    /// one). `.output()` and `.status()` are looked for only in a file that builds a
-    /// `Command`, since HTTP responses have a `.status()` too.
+    /// one) and is found in any file. `.output()` and `.status()` are looked for only in a
+    /// file that builds a `Command` or names `process::Command`, since HTTP responses have a
+    /// `.status()` too.
+    ///
+    /// What this cannot see: `.output()` or `.status()` on a `Command` in a file that names
+    /// the type only through a re-export or an alias defined in another file (`use
+    /// crate::Cmd`). A text scan does not resolve types; such a file must not be written.
     fn unlocked_spawns(dir: &std::path::Path, found: &mut Vec<(String, usize, String)>) {
         let spawn = [".spawn", "()"].concat();
         let waits = [[".output", "()"].concat(), [".status", "()"].concat()];
         let builds_a_command = ["Command", "::new"].concat();
+        let names_the_type = ["process::", "Command"].concat();
         let mut entries: Vec<_> = std::fs::read_dir(dir)
             .unwrap()
             .map(|e| e.unwrap().path())
@@ -288,7 +289,9 @@ mod tests {
             }
             let text = std::fs::read_to_string(&path).unwrap();
             let this_module = path.ends_with("barca-core/src/helper_proc.rs");
-            let has_command = text.contains(&builds_a_command);
+            // `process::Command` as well as `Command::new`: a file that imports the type under
+            // another name, or is handed a `Command` built elsewhere, still names the type.
+            let has_command = text.contains(&builds_a_command) || text.contains(&names_the_type);
             for (i, line) in text.lines().enumerate() {
                 let code = line.split("//").next().unwrap_or("");
                 let starts_one = code.contains(&spawn)
@@ -356,11 +359,27 @@ mod tests {
             ),
         )
         .unwrap();
+        // The type imported under another name, and a command built elsewhere and passed in.
+        std::fs::write(
+            dir.path().join("c.rs"),
+            format!(
+                "use std::process::{} as Cmd;\nfn h(cmd: &mut Cmd) {{\n{}}}\n",
+                "Command",
+                call(".status"),
+            ),
+        )
+        .unwrap();
         let mut found = Vec::new();
         unlocked_spawns(dir.path(), &mut found);
-        let lines: Vec<usize> = found.iter().map(|(_, line, _)| *line).collect();
-        assert_eq!(lines, [3, 4, 5], "{found:?}");
-        assert!(found.iter().all(|(file, _, _)| file.ends_with("a.rs")));
+        let hits: Vec<(&str, usize)> = found
+            .iter()
+            .map(|(file, line, _)| (&file[file.len() - 4..], *line))
+            .collect();
+        assert_eq!(
+            hits,
+            [("a.rs", 3), ("a.rs", 4), ("a.rs", 5), ("c.rs", 3)],
+            "{found:?}"
+        );
     }
 
     #[tokio::test]

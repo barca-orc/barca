@@ -3,7 +3,8 @@
 A terminal sends Ctrl-C to every process of the job, workers included. What a worker does with
 it depends on where it is (`python/barca/_worker.py`, "What a worker does with Ctrl-C"):
 
-- its interpreter is starting, or it is importing barca, or connecting: nothing;
+- its interpreter is starting or it is importing barca: it does not get the signal (it is in
+  a process group of its own until it handles the signal itself); connecting: nothing;
 - it is importing a step's module, or is idle between steps: nothing;
 - it is running a step: the step gets `KeyboardInterrupt`, as before. (The coordinator stops
   the worker right after, so the end-to-end test does not assert that the step's own handling
@@ -72,15 +73,38 @@ def held() -> int:
 """
 
 
-class Job:
-    """`barca get [<target>]` as a foreground job: in a process group of its own."""
+def sigint_disposition(ignored: bool):
+    """For `preexec_fn`: the child starts with SIGINT ignored, or with the default. Set
+    explicitly either way: the test process may itself have been started with it ignored (a
+    background job of a non-interactive shell), and a child inherits that."""
 
-    def __init__(self, root: Path, target: str | None, hold: str = "", pool: int = 2):
+    def set_it() -> None:
+        signal.signal(signal.SIGINT, signal.SIG_IGN if ignored else signal.SIG_DFL)
+
+    return set_it
+
+
+class Job:
+    """`barca get [<target>]` as a foreground job: in a process group of its own.
+    `ignored` starts barca with SIGINT ignored, as `nohup` or a background job would."""
+
+    def __init__(
+        self,
+        root: Path,
+        target: str | None,
+        hold: str = "",
+        pool: int = 2,
+        ignored: bool = False,
+        pool_fixed: bool = False,
+    ):
         self.root = root
         self.hold_dir = root / "hold"
         self.hold_dir.mkdir()
         env = {k: v for k, v in os.environ.items() if not k.startswith("BARCA_")}
-        env["BARCA_POOL_SIZE"] = str(pool)
+        # Two unless the test run's environment says otherwise; the idle test needs its two.
+        env["BARCA_POOL_SIZE"] = (
+            str(pool) if pool_fixed else os.environ.get("BARCA_POOL_SIZE", str(pool))
+        )
         if hold:
             env["PYTHONPATH"] = HOLD_SHIM + os.pathsep + env.get("PYTHONPATH", "")
             env["BARCA_TEST_HOLD"] = f"{hold}:{self.hold_dir}"
@@ -94,6 +118,7 @@ class Job:
                 stderr=err,
                 text=True,
                 start_new_session=True,
+                preexec_fn=sigint_disposition(ignored),
             )
 
     def wait(self, done, what: str) -> None:
@@ -103,14 +128,21 @@ class Job:
             raise AssertionError(f"{failed}\n--- stderr:\n{self.err_path.read_text()}") from None
 
     def ctrl_c(self) -> None:
-        self.members = self.group()
+        self.members = self.workers()
         self.sent = time.monotonic()
         os.killpg(self.proc.pid, signal.SIGINT)
 
     def group(self) -> list[int]:
-        """Every process of the job: barca and its workers."""
+        """Every process in barca's process group: what a terminal's Ctrl-C reaches."""
         out = subprocess.run(
             ["pgrep", "-g", str(self.proc.pid)], capture_output=True, text=True
+        ).stdout
+        return [int(pid) for pid in out.split()]
+
+    def workers(self) -> list[int]:
+        """barca's child processes, whatever group they are in."""
+        out = subprocess.run(
+            ["pgrep", "-P", str(self.proc.pid)], capture_output=True, text=True
         ).stdout
         return [int(pid) for pid in out.split()]
 
@@ -130,12 +162,10 @@ def cancelled_promptly_and_quietly(job: Job) -> None:
     assert (envelope["kind"], envelope["code"]) == ("cancelled", 130), envelope
     assert job.stdout == ""
     assert job.took < PROMPT < OLD_CONNECT_WAIT, f"took {job.took:.1f}s\n{err}"
-    # The job had workers when it was interrupted, and none of them is left.
-    assert len(job.members) >= 2, job.members
-    wait_until(
-        lambda: not any(alive(pid) for pid in job.members), "every process of the job to exit"
-    )
-    assert job.group() == []
+    # barca had workers when it was interrupted, and none of them is left.
+    assert len(job.members) >= 1, job.members
+    wait_until(lambda: not any(alive(pid) for pid in job.members), "every worker to exit")
+    assert job.group() == [] and job.workers() == []
     history = subprocess.run(
         [_find_binary(), "history", "--json"], cwd=job.root, capture_output=True, text=True
     )
@@ -153,6 +183,10 @@ def root(tmp_path):
 def test_ctrl_c_while_a_worker_starts(root, point):
     job = Job(root, "held", hold=point)
     job.wait((job.hold_dir / f"{point}.started").exists, f"a worker reached '{point}'")
+    worker = int((job.hold_dir / f"{point}.started").read_text())
+    # Until it handles the signal itself the worker is outside the terminal's job; by the
+    # time it connects it has joined.
+    assert (worker in job.group()) == (point == "worker-connect"), job.group()
     job.ctrl_c()
     cancelled_promptly_and_quietly(job)
     assert not (root / "step.started").exists()
@@ -171,7 +205,7 @@ def test_ctrl_c_while_a_worker_imports_the_steps_module(root):
 
 def test_ctrl_c_while_a_worker_is_idle_between_steps(root):
     # Two workers: one runs `quick` and is then idle, the other is in `held`.
-    job = Job(root, None, pool=2)
+    job = Job(root, None, pool=2, pool_fixed=True)
     job.wait((root / "step.started").exists, "the held step to start")
     job.wait(lambda: "quick completed" in job.err_path.read_text(), "the quick step to be reported")
     assert len(job.group()) == 3, job.group()  # barca and two workers
@@ -235,7 +269,11 @@ def test_a_worker_acts_on_ctrl_c_only_while_a_step_runs(tmp_path):
     import sys
 
     proc = subprocess.run(
-        [sys.executable, "-c", STAGES, str(tmp_path)], capture_output=True, text=True, timeout=120
+        [sys.executable, "-c", STAGES, str(tmp_path)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        preexec_fn=sigint_disposition(ignored=False),
     )
     assert proc.returncode == 0, proc.stderr
     assert "Traceback" not in proc.stderr, proc.stderr
@@ -245,3 +283,40 @@ def test_a_worker_acts_on_ctrl_c_only_while_a_step_runs(tmp_path):
         "after True",
         "['completed', 'KeyboardInterrupt', 'completed']",
     ], proc.stdout + proc.stderr
+
+
+# ─── barca itself started with SIGINT ignored ────────────────────────────────
+
+
+def test_a_worker_started_with_sigint_ignored_keeps_ignoring_it_in_a_step(tmp_path):
+    """`nohup barca ...`, a background job of a script, cron: barca starts with SIGINT ignored
+    and its workers inherit that. They keep it at every stage, a step included: the step is
+    not interrupted. (Python does the same for any program started that way, and it is what a
+    step saw before workers handled the signal at all.)"""
+    import sys
+
+    proc = subprocess.run(
+        [sys.executable, "-c", STAGES, str(tmp_path)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        preexec_fn=sigint_disposition(ignored=True),
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "Traceback" not in proc.stderr, proc.stderr
+    assert proc.stdout.splitlines() == [
+        "import True",
+        "step True",
+        "after True",
+        "['completed', 'completed', 'completed']",
+    ], proc.stdout + proc.stderr
+
+
+def test_sigint_to_a_barca_started_with_sigint_ignored_still_cancels_the_run(root):
+    """The coordinator acts on a SIGINT whatever it inherited, and stops its workers: exit
+    130, no traceback, nothing left, as for any Ctrl-C."""
+    job = Job(root, "held", ignored=True)
+    job.wait((root / "step.started").exists, "the step to start")
+    job.ctrl_c()
+    cancelled_promptly_and_quietly(job)
+    assert "failed" not in job.stderr

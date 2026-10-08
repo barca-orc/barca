@@ -993,11 +993,11 @@ async fn spawn_worker(
     if let Some(ref opts) = config.storage_options_json {
         cmd.env("BARCA_STORAGE_OPTIONS", opts);
     }
-    // Ctrl-C reaches a worker (it is in the terminal's job) and means something to it only
-    // while it runs a step. It starts with the signal ignored, so that one arriving while the
-    // interpreter starts is not a traceback.
+    // Ctrl-C means something to a worker only while it runs a step. It starts outside the
+    // terminal's job, so that one arriving while the interpreter starts is not a traceback,
+    // and joins the job once it handles the signal itself.
     #[cfg(unix)]
-    crate::helper_proc::start_deaf_to_ctrl_c(&mut cmd);
+    crate::helper_proc::start_outside_the_job(&mut cmd);
     start_worker(cmd, worker_id, listener, event_tx, cancel).await
 }
 
