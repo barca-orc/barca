@@ -71,7 +71,6 @@ pub(crate) const RUN_COLUMNS: &[&str] = &[
     "elapsed_seconds",
     "pid",
     "host",
-    "owner",
 ];
 
 /// Every column of `materializations` except its row id.

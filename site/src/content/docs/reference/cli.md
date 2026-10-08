@@ -303,9 +303,7 @@ run's `files` is an array of the `.py` files it was given.
 A run's `status` is `running`, `success`, `failed`, `cancelled` or `interrupted`. A run records
 each step as it finishes, so a `running` run already counts them in `steps_executed`, and
 `barca status` from another terminal shows them as `cached`. A run whose process was killed is
-`interrupted` (no `finished_at`); the next `barca get` reuses the steps it had recorded. A run
-killed in a container is `interrupted` too, once a container starts again on the same `.barca`
-volume (after 0.18.1; earlier versions left it `running`). See
+`interrupted` (no `finished_at`); the next `barca get` reuses the steps it had recorded. See
 `barca docs cache`, "While a run is going, and after one is killed", and the shared-state
 [limitations](/reference/remote-storage/#limitations).
 

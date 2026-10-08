@@ -137,13 +137,10 @@ before you bind it to anything wider, add [authentication](#authentication) at t
   does not stop when its worker is told to can outlast it, and Docker then kills the
   container.
 - **Killed** (SIGKILL, out of memory, host lost): steps that had finished are already recorded
-  and are served from cache next time. In 0.18.1 and earlier the run in progress is left in
-  `barca history` with status `running` for good: those versions look for the run's process
-  by its id and host name, and in a container the new server has the same process id and
-  another host name. Later versions report it as `interrupted` once a container starts again
-  on the same `.barca` volume, because the killed process no longer holds its lock under
-  `.barca/run-owners/` ([how](/reference/cli/#history)). The first run after the restart
-  writes `interrupted` to the history.
+  and are served from cache next time. The run in progress is left in `barca history` with
+  status `running`. Outside a container barca reports such a run as `interrupted` by checking
+  whether its process still exists; in a container the new server has the same process id, so
+  the stale `running` row stays.
 - **Runs are not resumed.** Nothing restarts a cancelled or killed run. The next tick or
   request starts a new one, which reuses whatever was cached.
 - **Schedules catch up once.** If a tick passed while the server was down, the job fires once

@@ -1002,10 +1002,6 @@ pub(crate) async fn init_schema(conn: &turso::Connection) -> Result<(), BarcaErr
     for col in [
         "ALTER TABLE runs ADD COLUMN pid INTEGER",
         "ALTER TABLE runs ADD COLUMN host TEXT",
-        // The id of the lock the coordinator holds while it lives (#290, `run_owner`): what
-        // tells a dead process from a live one where a pid cannot, in a container. NULL on
-        // rows from older versions, which are judged by pid and host.
-        "ALTER TABLE runs ADD COLUMN owner TEXT",
     ] {
         conn.execute(col, ()).await.ok();
     }
@@ -1424,11 +1420,8 @@ pub async fn create_run(
 ) -> Result<(), BarcaError> {
     let _g = db_guard().await;
     let (_db, conn) = open_conn(db_path).await?;
-    // Held from before the row exists until this process ends: a `running` row never names
-    // an owner whose lock is not there to be asked about.
-    let owner = crate::run_owner::claim(db_path).unwrap_or_default();
     conn.execute(
-        "INSERT INTO runs (run_id, command, files, target, status, steps_total, pid, host, owner) VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6, ?7, NULLIF(?8, ''))",
+        "INSERT INTO runs (run_id, command, files, target, status, steps_total, pid, host) VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6, ?7)",
         [
             run_id.to_string(),
             command.to_string(),
@@ -1437,12 +1430,11 @@ pub async fn create_run(
             steps_total.map(|n| n.to_string()).unwrap_or_default(),
             std::process::id().to_string(),
             local_host(),
-            owner,
         ],
     )
     .await
     .ok();
-    mark_interrupted_runs(&conn, db_path).await;
+    mark_interrupted_runs(&conn).await;
     Ok(())
 }
 
@@ -1474,63 +1466,29 @@ pub(crate) fn pid_alive(pid: i64) -> bool {
     rc == 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
 }
 
-/// The `running` runs whose process no longer exists (killed, out of memory, power loss):
-/// they will never record an outcome themselves.
-///
-/// A run that recorded an owner is judged by the owner's lock in the directory of `db_path`
-/// ([`crate::run_owner`]): interrupted when the lock file is there and nobody holds it. That
-/// holds in a container, where the pid is 1 on every start and the host name changes. A run
-/// whose owner has no lock file here was started somewhere else (it arrived with the shared
-/// history) and is never listed, whatever its pid and host say.
-///
-/// A run without an owner (an older barca, or a directory where the lock could not be
-/// taken) is judged as before: interrupted when it was started on this host and its pid is
-/// gone. Best effort: empty when nothing can be read.
-async fn interrupted_runs(conn: &turso::Connection, db_path: &str) -> Vec<String> {
-    interrupted_runs_by(
-        conn,
-        &local_host(),
-        |owner| crate::run_owner::probe(db_path, owner),
-        pid_alive,
-    )
-    .await
-}
-
-/// [`interrupted_runs`] with what it asks of the machine passed in: this host's name, whether
-/// an owner's process exists, and whether a pid does.
-async fn interrupted_runs_by(
-    conn: &turso::Connection,
-    this_host: &str,
-    owner_state: impl Fn(&str) -> crate::run_owner::Owner,
-    pid_alive: impl Fn(i64) -> bool,
-) -> Vec<String> {
-    use crate::run_owner::Owner;
-
+/// The `running` runs started on this host whose process no longer exists (killed, out of
+/// memory, power loss): they will never record an outcome themselves. Runs from other hosts,
+/// and from versions that did not record a pid, are never listed. Best effort: empty when the
+/// host name or the columns cannot be read.
+async fn interrupted_runs(conn: &turso::Connection) -> Vec<String> {
     let mut dead: Vec<String> = Vec::new();
-    // A database this version has not migrated (history read from one an older barca wrote)
-    // has no `owner` column yet.
-    let with_owner = "SELECT run_id, pid, COALESCE(host, ''), COALESCE(owner, '') FROM runs WHERE status = 'running'";
-    let without = "SELECT run_id, pid, COALESCE(host, ''), '' FROM runs WHERE status = 'running'";
-    let mut rows = match conn.query(with_owner, ()).await {
-        Ok(rows) => rows,
-        Err(_) => match conn.query(without, ()).await {
-            Ok(rows) => rows,
-            Err(_) => return dead,
-        },
+    let host = local_host();
+    if host.is_empty() {
+        return dead;
+    }
+    let Ok(mut rows) = conn
+        .query(
+            "SELECT run_id, pid FROM runs WHERE status = 'running' AND host = ?1 AND pid IS NOT NULL",
+            [host],
+        )
+        .await
+    else {
+        return dead;
     };
     while let Ok(Some(row)) = rows.next().await {
-        let Ok(run_id) = row.get::<String>(0) else {
-            continue;
-        };
-        let host = row.get::<String>(2).unwrap_or_default();
-        let owner = row.get::<String>(3).unwrap_or_default();
-        let gone = if owner.is_empty() {
-            let on_this_host = !this_host.is_empty() && host == this_host;
-            on_this_host && row.get::<i64>(1).is_ok_and(|pid| !pid_alive(pid))
-        } else {
-            owner_state(&owner) == Owner::Gone
-        };
-        if gone {
+        if let (Ok(run_id), Ok(pid)) = (row.get::<String>(0), row.get::<i64>(1))
+            && !pid_alive(pid)
+        {
             dead.push(run_id);
         }
     }
@@ -1540,10 +1498,9 @@ async fn interrupted_runs_by(
 /// Record [`interrupted_runs`] as `interrupted`. Their `finished_at` and `elapsed_seconds`
 /// stay NULL, since nobody saw them end. Only a run does this (it writes anyway, and with
 /// shared state pushes what it wrote); reading history reports the same status without
-/// writing it (see [`get_recent_runs`]). Afterwards the lock files of gone processes that
-/// no `running` row names any more are removed.
-async fn mark_interrupted_runs(conn: &turso::Connection, db_path: &str) {
-    for run_id in interrupted_runs(conn, db_path).await {
+/// writing it (see [`get_recent_runs`]).
+async fn mark_interrupted_runs(conn: &turso::Connection) {
+    for run_id in interrupted_runs(conn).await {
         conn.execute(
             "UPDATE runs SET status = 'interrupted' WHERE run_id = ?1 AND status = 'running'",
             [run_id],
@@ -1551,22 +1508,6 @@ async fn mark_interrupted_runs(conn: &turso::Connection, db_path: &str) {
         .await
         .ok();
     }
-    let Ok(mut rows) = conn
-        .query(
-            "SELECT DISTINCT owner FROM runs WHERE status = 'running' AND owner IS NOT NULL",
-            (),
-        )
-        .await
-    else {
-        return;
-    };
-    let mut still_named = std::collections::HashSet::new();
-    while let Ok(Some(row)) = rows.next().await {
-        if let Ok(owner) = row.get::<String>(0) {
-            still_named.insert(owner);
-        }
-    }
-    crate::run_owner::sweep(db_path, &still_named);
 }
 
 /// Finalize a run record with status and stats.
@@ -1601,7 +1542,7 @@ pub async fn get_recent_runs(db_path: &str, limit: usize) -> Result<Vec<RunRecor
     let (_db, conn) = open_conn(db_path).await?;
     // A run whose process died is reported as `interrupted`, not as still `running`. Reported,
     // not written: reading history must not change the database (the next run records it).
-    let interrupted = interrupted_runs(&conn, db_path).await;
+    let interrupted = interrupted_runs(&conn).await;
     let mut rows = conn
         .query(
             "SELECT run_id, command, files, target, status, steps_total, steps_executed, steps_cached, started_at, finished_at, elapsed_seconds FROM runs ORDER BY id DESC LIMIT ?1",
@@ -3181,221 +3122,6 @@ mod tests {
         assert_eq!(stored("dead").await, "interrupted");
         assert_eq!(stored("elsewhere").await, "running");
         assert_eq!(stored("alive").await, "running");
-    }
-
-    /// Insert a `running` run as some process recorded it.
-    async fn add_running(db_path: &str, run_id: &str, pid: u32, host: &str, owner: &str) {
-        let _g = db_guard().await;
-        let (_db, conn) = open_conn(db_path).await.unwrap();
-        conn.execute(
-            "INSERT INTO runs (run_id, command, files, status, pid, host, owner) VALUES (?1, 'get', 'f.py', 'running', ?2, ?3, NULLIF(?4, ''))",
-            [
-                run_id.to_string(),
-                pid.to_string(),
-                host.to_string(),
-                owner.to_string(),
-            ],
-        )
-        .await
-        .unwrap();
-    }
-
-    async fn stored_status(db_path: &str, run_id: &str) -> String {
-        let _g = db_guard().await;
-        let (_db, conn) = open_conn(db_path).await.unwrap();
-        let mut rows = conn
-            .query("SELECT status FROM runs WHERE run_id = ?1", [run_id])
-            .await
-            .unwrap();
-        let row = rows.next().await.unwrap().unwrap();
-        row.get::<String>(0).unwrap()
-    }
-
-    async fn reported(db_path: &str) -> HashMap<String, String> {
-        get_recent_runs(db_path, 100)
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|r| (r.run_id, r.status))
-            .collect()
-    }
-
-    /// A pid that existed and is certainly gone: a child that has been reaped.
-    fn a_dead_pid() -> u32 {
-        let mut child = std::process::Command::new("true").spawn().unwrap();
-        let pid = child.id();
-        child.wait().unwrap();
-        pid
-    }
-
-    #[tokio::test]
-    async fn a_run_killed_in_a_container_is_interrupted_after_the_restart() {
-        // #290. In a container the coordinator is pid 1, the next start is pid 1 too, and
-        // the host name is new on every start: by pid and host the killed run looked alive
-        // and foreign, and stayed `running` for ever. Here this test process stands for the
-        // restarted container: the killed run carries a pid that exists (ours) and another
-        // host name.
-        use crate::run_owner::tests::{A, B, other_process};
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("metadata.db").to_string_lossy().to_string();
-        init_db(&db_path).await.unwrap();
-        let live_pid = std::process::id();
-
-        // The previous container: it held its lock in this directory until it was killed.
-        drop(other_process(&db_path, A));
-        add_running(&db_path, "killed", live_pid, "container-1", A).await;
-        // A container that mounts the same directory and is still running.
-        let sibling = other_process(&db_path, B);
-        add_running(&db_path, "sibling", live_pid, "container-2", B).await;
-
-        let status = reported(&db_path).await;
-        assert_eq!(status["killed"], "interrupted");
-        assert_eq!(status["sibling"], "running");
-        // Reading reported it and wrote nothing; the next run records it.
-        assert_eq!(stored_status(&db_path, "killed").await, "running");
-        create_run(&db_path, "next", "get", "f.py", None, Some(1))
-            .await
-            .unwrap();
-        assert_eq!(stored_status(&db_path, "killed").await, "interrupted");
-        assert_eq!(stored_status(&db_path, "sibling").await, "running");
-        assert_eq!(stored_status(&db_path, "next").await, "running");
-
-        // And when the sibling is killed in its turn, the same happens to its run.
-        drop(sibling);
-        let status = reported(&db_path).await;
-        assert_eq!(status["sibling"], "interrupted");
-        assert_eq!(status["next"], "running", "this process holds its own lock");
-    }
-
-    #[tokio::test]
-    async fn a_run_from_another_machine_is_never_marked_interrupted() {
-        // The shared history brings other machines' `running` rows into this database. Such
-        // a run may be going right now. Its owner never had a lock file in this directory,
-        // and that settles it, even when the other machine has this machine's host name and
-        // the pid it recorded is dead here (which by pid and host alone read as "interrupted").
-        use crate::run_owner::tests::A;
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("metadata.db").to_string_lossy().to_string();
-        init_db(&db_path).await.unwrap();
-        add_running(&db_path, "theirs", a_dead_pid(), &local_host(), A).await;
-        add_running(&db_path, "theirs-too", a_dead_pid(), "elsewhere", A).await;
-
-        let status = reported(&db_path).await;
-        assert_eq!(status["theirs"], "running");
-        assert_eq!(status["theirs-too"], "running");
-        create_run(&db_path, "ours", "get", "f.py", None, Some(1))
-            .await
-            .unwrap();
-        assert_eq!(stored_status(&db_path, "theirs").await, "running");
-        assert_eq!(stored_status(&db_path, "theirs-too").await, "running");
-    }
-
-    #[tokio::test]
-    async fn who_is_asked_about_a_running_run() {
-        // The rule itself, with the machine's answers supplied: an owner's lock decides
-        // alone, and pid and host are consulted only for a run that recorded no owner.
-        use crate::run_owner::Owner;
-        use crate::run_owner::tests::{A, B};
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("metadata.db").to_string_lossy().to_string();
-        init_db(&db_path).await.unwrap();
-        const C: &str = "cccccccccccccccccccccccccccccccc";
-        for (run_id, pid, host, owner) in [
-            ("owner-gone-pid-alive", 1, "here", A),
-            ("owner-gone-other-host", 1, "there", A),
-            ("owner-alive-pid-dead", 2, "here", B),
-            ("owner-unknown-pid-dead", 2, "here", C),
-            ("no-owner-pid-dead", 2, "here", ""),
-            ("no-owner-pid-alive", 1, "here", ""),
-            ("no-owner-other-host", 2, "there", ""),
-        ] {
-            add_running(&db_path, run_id, pid, host, owner).await;
-        }
-        let owner_state = |owner: &str| match owner {
-            A => Owner::Gone,
-            B => Owner::Alive,
-            _ => Owner::NotHere,
-        };
-        let _g = db_guard().await;
-        let (_db, conn) = open_conn(&db_path).await.unwrap();
-        let mut dead = interrupted_runs_by(&conn, "here", owner_state, |pid| pid == 1).await;
-        dead.sort();
-        assert_eq!(
-            dead,
-            [
-                "no-owner-pid-dead",
-                "owner-gone-other-host",
-                "owner-gone-pid-alive"
-            ]
-        );
-        // With no host name to compare, only owners can be judged.
-        let mut dead = interrupted_runs_by(&conn, "", owner_state, |pid| pid == 1).await;
-        dead.sort();
-        assert_eq!(dead, ["owner-gone-other-host", "owner-gone-pid-alive"]);
-    }
-
-    #[tokio::test]
-    async fn history_of_a_database_an_older_barca_wrote_is_read_without_the_owner_column() {
-        // `barca history` does not migrate what it reads. A 0.18 database has pid and host
-        // and no owner: its killed run is still reported, by pid and host.
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("metadata.db").to_string_lossy().to_string();
-        {
-            let _g = db_guard().await;
-            let (_db, conn) = open_conn(&db_path).await.unwrap();
-            conn.execute(
-                "CREATE TABLE runs (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT UNIQUE NOT NULL, \
-                 command TEXT NOT NULL, files TEXT NOT NULL, target TEXT, \
-                 status TEXT NOT NULL DEFAULT 'running', steps_total INTEGER, \
-                 steps_executed INTEGER DEFAULT 0, steps_cached INTEGER DEFAULT 0, \
-                 started_at TEXT DEFAULT (datetime('now')), finished_at TEXT, elapsed_seconds REAL, \
-                 pid INTEGER, host TEXT)",
-                (),
-            )
-            .await
-            .unwrap();
-            for (run_id, pid) in [("killed", a_dead_pid()), ("going", std::process::id())] {
-                conn.execute(
-                    "INSERT INTO runs (run_id, command, files, pid, host) VALUES (?1, 'get', 'f.py', ?2, ?3)",
-                    [run_id.to_string(), pid.to_string(), local_host()],
-                )
-                .await
-                .unwrap();
-            }
-        }
-        let status = reported(&db_path).await;
-        assert_eq!(status["killed"], "interrupted");
-        assert_eq!(status["going"], "running");
-    }
-
-    #[tokio::test]
-    async fn a_run_records_the_owner_whose_lock_this_process_holds() {
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("metadata.db").to_string_lossy().to_string();
-        init_db(&db_path).await.unwrap();
-        create_run(&db_path, "r1", "get", "f.py", None, Some(1))
-            .await
-            .unwrap();
-        let owner = {
-            let _g = db_guard().await;
-            let (_db, conn) = open_conn(&db_path).await.unwrap();
-            let mut rows = conn
-                .query("SELECT owner FROM runs WHERE run_id = 'r1'", ())
-                .await
-                .unwrap();
-            let row = rows.next().await.unwrap().unwrap();
-            row.get::<String>(0).unwrap()
-        };
-        assert_eq!(
-            crate::run_owner::probe(&db_path, &owner),
-            crate::run_owner::Owner::Alive
-        );
-        assert!(
-            dir.path()
-                .join("run-owners")
-                .join(format!("{owner}.lock"))
-                .is_file()
-        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

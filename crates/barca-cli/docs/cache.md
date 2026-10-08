@@ -257,7 +257,6 @@ output, so the next `--dry-run` or `barca status` shows its consumers as stale.
 .barca/metadata.db.base                     with shared history: a counter of pulls and uploads (`barca docs remote`)
 .barca/metadata.db.prev                     with shared history: the local DB as it was before the last pull that changed it
 .barca/metadata.db.pull-*, .push-*          with shared history: a download or upload in progress; what a killed command left is removed by the next pull
-.barca/run-owners/<id>.lock                 one empty file per barca process that started a run, locked while that process lives ("While a run is going, and after one is killed")
 .barca/artifacts/<node>/<run_hash>.<ext>    one file per result
 ```
 
@@ -533,8 +532,7 @@ barca history --json            # the run is `running`; `steps_executed` is the 
   runs again.
 - **History says so.** `barca history` reports a run whose process no longer exists as
   `interrupted`, with `finished_at` and `elapsed_seconds` `null` (nobody saw it end) and
-  `steps_executed` at what it had recorded. This holds in a container too: a run killed with
-  its container is `interrupted` once a new container starts on the same `.barca` volume. Ctrl-C is different, and so is SIGTERM (a
+  `steps_executed` at what it had recorded. Ctrl-C is different, and so is SIGTERM (a
   supervisor, `docker stop`): the run stops its workers, records itself and is `cancelled`
   (exit 130). With an artifact store that also holds while
   artifacts upload, download or the shared history is pushed, and the cancelled run then shares
@@ -549,25 +547,9 @@ Known limits:
 - With a remote artifact store, steps are not recorded as they finish: a row is written only
   once the artifact's upload is confirmed, which happens when the run ends. Such a run shows no
   progress in `barca status`, and a killed one records nothing.
-- `interrupted` is decided from a lock, not from the process id. A barca process that starts a
-  run (`get`, `run`, `serve`) holds a lock on a file of its own, `.barca/run-owners/<id>.lock`,
-  for as long as it lives, and the run records that id. The system releases the lock when the
-  process ends, however it ended. A `running` run whose lock file is there with nobody holding
-  it is `interrupted`. A process id reused by another program does not matter, and neither does
-  a container, where the process id is 1 on every start and the host name changes. The next
-  `get` or `run` writes `interrupted` to the history and removes the lock file.
-- A `running` run that another machine started (it came with the shared history) has no lock
-  file here. It may be going right now, so this machine never marks it: it stays `running`
-  until its own machine records how it ended.
-- A run started by barca 0.18.1 or earlier recorded no lock. It is judged as those versions
-  did, by the process id and host name it recorded: it stays `running` if it ran in a
-  container, on another machine, or if its process id has been reused.
-- The lock needs `.barca/` on a filesystem where a lock taken by one process is visible to the
-  others that use the directory, which the metadata database needs anyway. A local disk, a
-  Docker volume and a bind mount qualify. Where barca cannot take the lock (a read-only
-  directory), the run records none and is judged by process id and host name.
-- Deleting `.barca/run-owners/` removes the evidence: a killed run not yet recorded as
-  `interrupted` then stays `running`.
+- `interrupted` is decided by looking for the run's process on this machine. A run started by an
+  older barca, or on another machine, stays `running`; so does a run whose process id has since
+  been reused by another program.
 - Failed steps are recorded when the run ends, so a killed run records its successes only.
 
 ## Environments

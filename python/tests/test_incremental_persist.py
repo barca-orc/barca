@@ -9,7 +9,6 @@ most twice a second), and the end-of-run write adds only what is missing.
 import json
 import os
 import signal
-import sqlite3
 import subprocess
 import time
 from pathlib import Path
@@ -266,85 +265,3 @@ def test_sigterm_cancels_a_run_the_way_ctrl_c_does(project):
     assert run["finished_at"] is not None
     # The steps that finished are kept, as after Ctrl-C.
     assert states(project) == {"first": "cached", "second": "cached", "slow": "never_run"}
-
-
-def run_rows(cwd: Path) -> dict[str, tuple]:
-    db = sqlite3.connect(cwd / ".barca" / "metadata.db")
-    try:
-        return {
-            r[0]: r[1:] for r in db.execute("select run_id, status, pid, host, owner from runs")
-        }
-    finally:
-        db.close()
-
-
-def a_dead_pid() -> int:
-    child = subprocess.Popen(["true"])
-    child.wait()
-    return child.pid
-
-
-def test_a_run_killed_in_a_container_is_interrupted_after_a_restart(project):
-    """In a container the coordinator is process 1, the next start is process 1 again, and the
-    host name is new on every start. Judged by pid and host, a killed run looked alive and
-    foreign, and stayed `running` for ever (#290)."""
-    proc = start_get(project)
-    wait_until_slow_is_running(project)
-    wait_for(lambda: states(project)["second"] == "cached", "the finished steps to be recorded")
-    os.kill(proc.pid, signal.SIGKILL)
-    assert proc.wait(timeout=WAIT) == -signal.SIGKILL
-    for pipe in (proc.stdout, proc.stderr):
-        pipe.close()
-
-    # What the restarted container sees: the pid the run recorded belongs to a live process
-    # (this one stands for the new process 1) and the host name is not its own.
-    (run_id, (_, _, _, owner)) = next(iter(run_rows(project).items()))
-    assert owner, "the run recorded its owner"
-    db = sqlite3.connect(project / ".barca" / "metadata.db")
-    with db:
-        db.execute("update runs set pid = ?, host = 'the-previous-container'", (os.getpid(),))
-    db.close()
-    assert run_rows(project)[run_id][:3] == ("running", os.getpid(), "the-previous-container")
-
-    run = latest_run(project)
-    assert run["status"] == "interrupted"
-    assert run["finished_at"] is None
-
-    # The next run records it, reuses what the killed one finished, and removes the dead
-    # process's lock file once no running row names it.
-    (project / "release").write_text("")
-    out = barca(project, "get", "pipeline.py", "--json")
-    assert out.returncode == 0, out.stderr
-    assert json.loads(out.stdout)["steps_executed"] == 1
-    assert run_rows(project)[run_id][0] == "interrupted"
-    runs = json.loads(barca(project, "history", "--json").stdout)["runs"]
-    assert [r["status"] for r in runs] == ["success", "interrupted"]
-    assert not (project / ".barca" / "run-owners" / f"{owner}.lock").exists()
-
-
-def test_a_running_run_started_somewhere_else_is_left_alone(project):
-    """With shared history the database also holds other machines' runs, and one of them may
-    be going right now. A run whose owner never held its lock in this directory is not ours
-    to judge, even when the other machine has this machine's host name and the pid it
-    recorded is dead here (by pid and host alone that read as interrupted)."""
-    out = barca(project, "get", "first", "pipeline.py", "--json")
-    assert out.returncode == 0, out.stderr
-    host = next(iter(run_rows(project).values()))[2]
-    db = sqlite3.connect(project / ".barca" / "metadata.db")
-    with db:
-        db.execute(
-            "insert into runs (run_id, command, files, status, pid, host, owner)"
-            " values ('theirs', 'get', '[\"pipeline.py\"]', 'running', ?, ?, ?)",
-            (a_dead_pid(), host, "0123456789abcdef0123456789abcdef"),
-        )
-    db.close()
-
-    def status_of_theirs() -> str:
-        runs = json.loads(barca(project, "history", "--json").stdout)["runs"]
-        return next(r["status"] for r in runs if r["run_id"] == "theirs")
-
-    assert status_of_theirs() == "running"
-    out = barca(project, "get", "second", "pipeline.py", "--json")
-    assert out.returncode == 0, out.stderr
-    assert run_rows(project)["theirs"][0] == "running"
-    assert status_of_theirs() == "running"
