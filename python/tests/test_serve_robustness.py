@@ -11,7 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from barca.api import _find_binary
+from barca.api import BarcaError, _find_binary
+from barca.client import Client
 
 # Settings from the developer's shell that would point the server at a real store.
 SCRUB = ("BARCA_", "FSSPEC_", "AWS_", "AZURE_", "GOOGLE_", "GCSFS_", "STORAGE_EMULATOR_HOST")
@@ -183,3 +184,48 @@ def test_list_says_its_next_fire_times_are_local(project):
     nodes = json.loads(barca(project, "list", "pipeline.py", "--json").stdout)["nodes"]
     nightly = next(n for n in nodes if n["id"] == "pipeline.py:nightly")
     assert nightly["next_fire"].endswith(" 05:00:00")
+
+
+# ─── POST /get/{target} and POST /run/{target} ───────────────────────────────
+
+
+def history(cwd: Path) -> list[dict]:
+    out = barca(cwd, "history", "--json")
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)["runs"]
+
+
+def test_a_trigger_for_a_target_that_cannot_run_is_an_error_response(project):
+    # Each of these used to be 200 with a run id, and the run then failed.
+    (project / "other.py").write_text(
+        "from barca import asset\n\n@asset()\ndef quick():\n    return 2\n"
+    )
+    server = Server(project, "other.py", "--no-schedule")
+    try:
+        cases = [
+            ("POST", "/get/nope", 404, "Asset 'nope' not found. Available: "),
+            ("POST", "/run/nope", 404, "Asset 'nope' not found. Available: "),
+            ("POST", "/get/quick", 409, "'quick' matches more than one node: other.py:quick, "),
+            ("POST", "/get/nightly", 400, "'nightly' is a task: use POST /run/nightly"),
+            ("POST", "/run/slow", 400, "'slow' is an asset: use POST /get/slow"),
+        ]
+        for method, path, want, says in cases:
+            status, body = server.request(method, path)
+            assert status == want, (path, body)
+            assert set(body) == {"error"}, (path, body)
+            assert body["error"].startswith(says), (path, body)
+
+        # The Python client raises with the server's message.
+        client = Client(f"http://127.0.0.1:{server.port}")
+        with pytest.raises(BarcaError, match=r"\(404\): Asset 'nope' not found"):
+            client.get("nope")
+        with pytest.raises(BarcaError, match=r"\(400\): 'slow' is an asset"):
+            client.run("slow")
+
+        # A full id picks one of two nodes with the same name, and that run happens.
+        result = client.get("other.py:quick").wait(timeout=WAIT)
+        assert result["status"] == "complete", result
+        # It is the only run there has been: the refused requests started none.
+        assert [r["status"] for r in history(project)] == ["success"]
+    finally:
+        server.stop()

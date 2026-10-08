@@ -77,6 +77,20 @@ def test_get_and_run_hit_correct_paths(monkeypatch):
     assert captured["method"] == "POST"
 
 
+def test_a_target_with_a_path_is_sent_as_one_url_segment(monkeypatch):
+    # A full node id is what the server says to use when a name matches several nodes.
+    captured: dict = {}
+    monkeypatch.setattr(
+        "barca.client.urllib.request.urlopen",
+        json_urlopen({"run_id": "r1"}, captured),
+    )
+    c = Client("http://h:1")
+    c.get("sub/pipeline.py:orders")
+    assert captured["url"] == "http://h:1/get/sub%2Fpipeline.py:orders"
+    c.run("sub/pipeline.py:publish")
+    assert captured["url"] == "http://h:1/run/sub%2Fpipeline.py:publish"
+
+
 def test_read_endpoints_parse_json(monkeypatch):
     captured: dict = {}
     monkeypatch.setattr(

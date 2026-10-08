@@ -354,6 +354,78 @@ async fn delete_cancels_in_flight_run() {
     }
 }
 
+/// A fixture with an asset, a task and (in a second file) a second asset named like the first.
+fn trigger_config(dir: &std::path::Path) -> ServeConfig {
+    let mut config = isolated_config(dir, false);
+    std::fs::write(
+        &config.files[0],
+        "from barca import asset, task\n\n\
+         @asset()\ndef first() -> int:\n    return 1\n\n\
+         @task()\ndef publish() -> None:\n    pass\n",
+    )
+    .unwrap();
+    let other = dir.join("other.py");
+    std::fs::write(
+        &other,
+        "from barca import asset\n\n@asset()\ndef first() -> int:\n    return 2\n",
+    )
+    .unwrap();
+    config.files.push(other.display().to_string());
+    config
+}
+
+#[tokio::test]
+async fn a_trigger_with_a_target_that_cannot_run_is_refused_before_a_run_starts() {
+    // These used to answer 200 with a run id; the failure only showed in /status (#289).
+    let dir = tempfile::tempdir().unwrap();
+    let app = app(trigger_config(dir.path()));
+    for (uri, want, says) in [
+        (
+            "/get/nope",
+            StatusCode::NOT_FOUND,
+            "Asset 'nope' not found. Available: ",
+        ),
+        (
+            "/run/nope",
+            StatusCode::NOT_FOUND,
+            "Asset 'nope' not found. Available: ",
+        ),
+        (
+            "/get/first",
+            StatusCode::CONFLICT,
+            "'first' matches more than one node: ",
+        ),
+        (
+            "/get/publish",
+            StatusCode::BAD_REQUEST,
+            "'publish' is a task: use POST /run/publish",
+        ),
+        (
+            "/run/other.py:first",
+            StatusCode::BAD_REQUEST,
+            "'other.py:first' is an asset: use POST /get/other.py:first",
+        ),
+    ] {
+        let (status, body) = send(&app, "POST", uri).await;
+        assert_eq!(status, want, "{uri}: {body}");
+        let error = body["error"].as_str().expect("an error message");
+        assert!(error.starts_with(says), "{uri}: {error}");
+        assert!(body.get("run_id").is_none(), "{uri} started a run: {body}");
+    }
+    // Nothing ran: a run would have created the metadata DB.
+    assert!(!dir.path().join("metadata.db").exists());
+}
+
+#[tokio::test]
+async fn a_trigger_on_source_that_does_not_parse_is_400() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = isolated_config(dir.path(), false);
+    std::fs::write(&config.files[0], "def broken(:\n").unwrap();
+    let (status, body) = send(&app(config), "POST", "/get/first").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body["error"].is_string());
+}
+
 #[tokio::test]
 async fn cancel_for_unknown_run_returns_404() {
     let dir = tempfile::tempdir().unwrap();
@@ -574,11 +646,13 @@ async fn ui_page_is_served_or_explains_it_was_not_built() {
 
 #[tokio::test]
 async fn run_events_are_not_buffered_by_proxies() {
-    // Start a run (it fails fast: the target doesn't exist) so a live event
-    // channel exists, then check the SSE response's headers.
+    // Start a run (it fails fast: the source does not parse, and `POST /run` takes no target
+    // to check first) so a live event channel exists, then check the SSE response's headers.
     let dir = tempfile::tempdir().unwrap();
-    let app = app(isolated_config(dir.path(), false));
-    let (status, body) = send(&app, "POST", "/get/does_not_exist").await;
+    let config = isolated_config(dir.path(), false);
+    std::fs::write(&config.files[0], "def broken(:\n").unwrap();
+    let app = app(config);
+    let (status, body) = send(&app, "POST", "/run").await;
     assert_eq!(status, StatusCode::OK);
     let handle = body["run_id"].as_str().unwrap().to_string();
     let resp = app

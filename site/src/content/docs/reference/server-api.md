@@ -97,10 +97,26 @@ Poll `GET /status/{run_id}` until `status` reaches a terminal state (`complete`,
 `size_bytes`, `elapsed_seconds`), for json results too. The command line prints a json value
 inline; the server does not. Read the file at `path`, relative to the project root.
 
-The target name is checked when the run starts, not when it is requested. A `POST` with an
-unknown target, or with an asset on `/run/{target}` or a task on `/get/{target}`, still returns
-`200` and a `run_id`; the run then has `"status": "failed"`, `"result": null` and the message
-in `error`:
+`POST /run/{target}` and `POST /get/{target}` check the target before they start a run, the
+way `barca run` and `barca get` do. The server reads the source for this on each request. When
+the target cannot run, no run is started, there is no `run_id`, and the response is an error
+with a JSON body `{ "error": "..." }`:
+
+| Request | Status | `error` |
+|---|---|---|
+| a name that matches no node | `404` | `Asset 'nope' not found. Available: pipeline.py:orders, pipeline.py:total` |
+| a name that matches several nodes (the same function name in two files) | `409` | ``'orders' matches more than one node: a.py:orders, b.py:orders. Name one by its full id, e.g. `a.py:orders` `` |
+| `POST /get/{target}` naming a task | `400` | `'publish' is a task: use POST /run/publish` |
+| `POST /run/{target}` naming an asset | `400` | `'orders' is an asset: use POST /get/orders` |
+| source that does not parse, or a DAG that cannot be built | `400` | the parse or DAG error |
+
+`POST /run/{target}` accepts a task or a sensor and `POST /get/{target}` an asset or a sensor,
+as on the command line. A target is a function name, a full node id (`pipeline.py:orders`) or a
+path-suffixed id; percent-encode a `/` in it (`sub%2Fpipeline.py:orders`).
+
+A run that was started can still fail on its target if the source changes between the check
+and the run. It then has `"status": "failed"`, `"result": null` and the message in `error`,
+like any other failed run:
 
 ```json
 { "handle": "52344f5c6f20", "status": "failed", "result": null,
@@ -289,10 +305,12 @@ separate: they start the `barca` binary for one command and do not talk to a ser
 ## Errors
 
 Errors return a JSON body `{ "error": "..." }`: `404` for an unknown name in
-`GET /assets/{name}` or an unknown run id, `400` for parse and DAG errors, `403` for a run or cancel requested of a
-`--read-only` server, `409` for conflicts (an ambiguous `{name}` match
-in `GET /assets/{name}`, or cancelling a run that already finished), and `500` for execution or
-database failures.
+`GET /assets/{name}`, an unknown target in `POST /run/{target}` or `POST /get/{target}`, or an
+unknown run id; `400` for parse and DAG errors and for a target of the wrong kind for the
+endpoint; `403` for a run or cancel requested of a `--read-only` server; `409` for conflicts (a
+name that matches several nodes in `GET /assets/{name}` or in a trigger, or cancelling a run
+that already finished); and `500` for execution or database failures. The Python client raises
+`BarcaError` carrying the status and the message for each of these.
 
 ## Limits
 

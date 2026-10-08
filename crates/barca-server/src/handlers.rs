@@ -313,22 +313,82 @@ pub async fn run(State(state): State<AppState>) -> Result<Json<Value>, ApiError>
     Ok(Json(json!({ "run_id": handle })))
 }
 
-/// `POST /run/{target}` — trigger a task run; returns a polling handle.
+/// The two verbs that take a target, as the CLI has them: `get` is for assets and sensors,
+/// `run` is for tasks (and sensors).
+#[derive(Clone, Copy)]
+enum Verb {
+    Get,
+    Run,
+}
+
+/// Check a trigger's target before a run is started for it, the way `barca get` and
+/// `barca run` do before they run anything: the name must identify exactly one node, of a
+/// kind the verb accepts. An unknown name is `404`, a name that matches several nodes `409`,
+/// the wrong verb for the node's kind `400`; so is source that does not parse or a DAG that
+/// cannot be built.
+///
+/// The source is read for this, not taken from the `/assets` cache: a run reads it again
+/// anyway, and without `--watch` the cache is as old as the server.
+async fn check_target(state: &AppState, name: &str, verb: Verb) -> Result<(), ApiError> {
+    let nodes = commands::list_assets(&state.config.files, &state.config.python).await?;
+    target_error(&nodes, name, verb).map_or(Ok(()), Err)
+}
+
+/// What is wrong with `name` as a target of `verb` among `nodes`, if anything.
+fn target_error(nodes: &[commands::AssetSummary], name: &str, verb: Verb) -> Option<ApiError> {
+    use barca_core::NodeKind;
+
+    let matches: Vec<&commands::AssetSummary> = nodes
+        .iter()
+        .filter(|n| commands::target_name_matches(&n.id, name))
+        .collect();
+    match matches.as_slice() {
+        [] => {
+            let available: Vec<&str> = nodes.iter().map(|n| n.id.as_str()).collect();
+            Some(ApiError::NotFound(
+                BarcaError::AssetNotFound(name.to_string(), available.join(", ")).to_string(),
+            ))
+        }
+        [node] => match (verb, node.kind) {
+            (Verb::Get, NodeKind::Task) => Some(ApiError::BadRequest(format!(
+                "'{name}' is a task: use POST /run/{name}"
+            ))),
+            (Verb::Run, NodeKind::Asset) => Some(ApiError::BadRequest(format!(
+                "'{name}' is an asset: use POST /get/{name}"
+            ))),
+            _ => None,
+        },
+        many => {
+            let ids: Vec<&str> = many.iter().map(|n| n.id.as_str()).collect();
+            Some(ApiError::Conflict(format!(
+                "'{name}' matches more than one node: {}. Name one by its full id, e.g. `{}`",
+                ids.join(", "),
+                ids[0]
+            )))
+        }
+    }
+}
+
+/// `POST /run/{target}` — trigger a task run; returns a polling handle. The target is
+/// checked first ([`check_target`]): no run is started for a name that cannot run.
 pub async fn run_target(
     State(state): State<AppState>,
     Path(target): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     refuse_if_read_only(&state)?;
+    check_target(&state, &target, Verb::Run).await?;
     let handle = start_run_task(state, target);
     Ok(Json(json!({ "run_id": handle })))
 }
 
-/// `POST /get/{target}` — trigger a target-scoped get; returns a polling handle.
+/// `POST /get/{target}` — trigger a target-scoped get; returns a polling handle. The target
+/// is checked first ([`check_target`]): no run is started for a name that cannot be got.
 pub async fn get_target(
     State(state): State<AppState>,
     Path(target): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     refuse_if_read_only(&state)?;
+    check_target(&state, &target, Verb::Get).await?;
     let handle = start_run(state, Some(target));
     Ok(Json(json!({ "run_id": handle })))
 }
@@ -685,6 +745,97 @@ pub async fn evict_finished_runs(state: AppState, interval: Duration, max_age: D
             }
             keep
         });
+    }
+}
+
+#[cfg(test)]
+mod target_tests {
+    use super::*;
+    use barca_core::{Freshness, NodeKind};
+
+    fn node(id: &str, kind: NodeKind) -> commands::AssetSummary {
+        commands::AssetSummary {
+            id: id.to_string(),
+            kind,
+            freshness: Freshness::Always,
+            inputs: vec![],
+            env: vec![],
+        }
+    }
+
+    fn nodes() -> Vec<commands::AssetSummary> {
+        vec![
+            node("a.py:orders", NodeKind::Asset),
+            node("a.py:poll", NodeKind::Sensor),
+            node("a.py:publish", NodeKind::Task),
+            node("b.py:orders", NodeKind::Asset),
+            node("b.py:total", NodeKind::Asset),
+        ]
+    }
+
+    /// The status and message a target is refused with, or `None` when it may run.
+    fn refused(name: &str, verb: Verb) -> Option<(u16, String)> {
+        use axum::response::IntoResponse;
+        target_error(&nodes(), name, verb).map(|e| {
+            let message = match &e {
+                ApiError::NotFound(m) | ApiError::Conflict(m) | ApiError::BadRequest(m) => {
+                    m.clone()
+                }
+                other => panic!("unexpected error {other:?}"),
+            };
+            (e.into_response().status().as_u16(), message)
+        })
+    }
+
+    #[test]
+    fn a_target_that_names_one_node_of_the_right_kind_may_run() {
+        assert_eq!(refused("total", Verb::Get), None);
+        assert_eq!(refused("b.py:orders", Verb::Get), None);
+        assert_eq!(refused("poll", Verb::Get), None);
+        assert_eq!(refused("publish", Verb::Run), None);
+        // The CLI lets `barca run` take a sensor; so does the API.
+        assert_eq!(refused("poll", Verb::Run), None);
+    }
+
+    #[test]
+    fn an_unknown_target_is_404_and_lists_what_exists() {
+        for verb in [Verb::Get, Verb::Run] {
+            let (status, message) = refused("nope", verb).unwrap();
+            assert_eq!(status, 404);
+            assert_eq!(
+                message,
+                "Asset 'nope' not found. Available: a.py:orders, a.py:poll, a.py:publish, \
+                 b.py:orders, b.py:total"
+            );
+        }
+        // A name matches whole, never as the tail of a longer one.
+        assert_eq!(refused("rders", Verb::Get).unwrap().0, 404);
+    }
+
+    #[test]
+    fn a_name_that_matches_several_nodes_is_409_and_lists_them() {
+        let (status, message) = refused("orders", Verb::Get).unwrap();
+        assert_eq!(status, 409);
+        assert_eq!(
+            message,
+            "'orders' matches more than one node: a.py:orders, b.py:orders. \
+             Name one by its full id, e.g. `a.py:orders`"
+        );
+    }
+
+    #[test]
+    fn the_wrong_verb_for_the_kind_is_400_and_names_the_right_one() {
+        assert_eq!(
+            refused("publish", Verb::Get).unwrap(),
+            (
+                400,
+                "'publish' is a task: use POST /run/publish".to_string()
+            )
+        );
+        assert_eq!(
+            refused("total", Verb::Run).unwrap(),
+            (400, "'total' is an asset: use POST /get/total".to_string())
+        );
     }
 }
 

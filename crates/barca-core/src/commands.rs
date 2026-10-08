@@ -55,7 +55,7 @@ fn reconcile_total(total_steps: usize, completed_steps: usize) -> usize {
 /// (`pipeline.py:deploy`), or a path-suffixed id (`p.py:deploy` for `sub/p.py:deploy`). It
 /// matches only at a `:` or `/` boundary, never as the tail of a longer name, so `deploy` does
 /// not select `prod_deploy`.
-pub(crate) fn target_name_matches(id: &str, name: &str) -> bool {
+pub fn target_name_matches(id: &str, name: &str) -> bool {
     if id == name {
         return true;
     }

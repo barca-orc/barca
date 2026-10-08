@@ -19,6 +19,8 @@ pub enum ApiError {
     Conflict(String),
     /// Refused by server mode (e.g. a run requested of a `--read-only` server).
     Forbidden(String),
+    /// The request cannot be served as asked (e.g. `POST /get/{target}` naming a task).
+    BadRequest(String),
 }
 
 impl From<BarcaError> for ApiError {
@@ -33,6 +35,7 @@ impl IntoResponse for ApiError {
             ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
             ApiError::Conflict(msg) => (StatusCode::CONFLICT, msg),
             ApiError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg),
+            ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
             ApiError::Barca(err) => {
                 let status = match &err {
                     BarcaError::AssetNotFound(..) => StatusCode::NOT_FOUND,
