@@ -57,7 +57,7 @@ pub fn compute_run_hash(
 use crate::store_sync::StoreSync;
 use crate::targets::{refresh_name_matches, short_name};
 use crate::transfer::ArtifactLayout;
-use crate::{dag::Dag, db, dispatch, dispatch::OutputRef};
+use crate::{dag::Dag, db, dispatch, dispatch::OutputRef, planner::Phase};
 
 // ─── Cache decisions ─────────────────────────────────────────────────────────
 //
@@ -180,7 +180,44 @@ pub(crate) async fn lookup_in(
     lookup_cached(cache?, node_id, run_hash).await
 }
 
-/// Decide what happens to `step`. Steps must be visited in plan order: in-phase upstream run
+/// The steps of `phase` with the index of their stream, each after every step of the phase it
+/// depends on.
+///
+/// A phase's streams are how its work is split across workers, which depends on the pool size:
+/// a partitioned step is cut into one chunk of keys per worker, and the chunks of an upstream
+/// and of its per-key consumer land in streams independently of each other. Decisions are not
+/// allowed to depend on that split. [`decide_step`] hashes a step from the run hashes of its
+/// upstreams that are already in the state, so every chunk of an upstream has to be decided
+/// before any chunk of its consumers (#330); walking stream by stream does not guarantee that.
+/// The order here is the DAG's topological order of the nodes; the chunks of one node keep
+/// their stream order.
+pub(crate) fn in_dependency_order<'p>(
+    dag: &Dag,
+    phase: &'p Phase,
+) -> Vec<(usize, &'p crate::planner::StreamStep)> {
+    let rank: HashMap<&str, usize> = dag
+        .topo_order()
+        .into_iter()
+        .enumerate()
+        .map(|(i, id)| (id, i))
+        .collect();
+    let mut steps: Vec<(usize, &crate::planner::StreamStep)> = phase
+        .streams
+        .iter()
+        .enumerate()
+        .flat_map(|(i, stream)| stream.steps.iter().map(move |step| (i, step)))
+        .collect();
+    // Stable: steps of the same node stay in stream order.
+    steps.sort_by_key(|(_, step)| {
+        rank.get(step.step_id.base_id())
+            .copied()
+            .unwrap_or(usize::MAX)
+    });
+    steps
+}
+
+/// Decide what happens to `step`. Steps must be visited in dependency order
+/// ([`in_dependency_order`]): in-phase upstream run
 /// hashes are already in `state` when a consumer is hashed, so check-time and persist-time hashes
 /// are identical. `cache` is `None` when there is no metadata DB yet (nothing is cached).
 pub(crate) async fn decide_step(
@@ -765,5 +802,157 @@ def downstream(x: int) -> int:
             compute_run_hash("d", None, ["p"].iter(), &hashes, o, None)
         };
         assert_ne!(fan_in(&out("p[k=a]", "1")), fan_in(&HashMap::new()));
+    }
+}
+
+#[cfg(test)]
+mod dependency_order_tests {
+    use super::*;
+    use crate::planner::ResourceConfig;
+
+    const CHAINED: &str = r#"
+from barca import asset, collect, partitions_from
+
+
+@asset()
+def keys() -> list:
+    return ["a", "b", "c"]
+
+
+@asset(partitions={"region": partitions_from(keys)})
+def sales(region: str) -> dict:
+    return {"region": region}
+
+
+@asset(partitions={"region": partitions_from(sales)})
+def margin(region: str, sales: dict) -> dict:
+    return sales
+
+
+@asset(inputs={"m": collect(margin)})
+def report(m: list) -> int:
+    return len(m)
+"#;
+
+    /// The phase of `sales` and `margin`, expanded over `keys` for a pool of `pool_size`.
+    fn expanded(dag: &Dag, keys: &[&str], pool_size: usize) -> Phase {
+        let dir = tempfile::tempdir().unwrap();
+        let artifact = dir.path().join("keys.json");
+        std::fs::write(&artifact, serde_json::to_string(keys).unwrap()).unwrap();
+        let outputs = HashMap::from([(
+            "t.py:keys".to_string(),
+            OutputRef {
+                path: artifact.to_string_lossy().to_string(),
+                format: "json".to_string(),
+                size_bytes: 0,
+                elapsed_seconds: None,
+                content_hash: None,
+            },
+        )]);
+        let config = ResourceConfig {
+            pool_size,
+            concurrency_groups: HashMap::new(),
+        };
+        let plan = crate::planner::plan_from_dag(dag, &config);
+        let phase = plan
+            .phases
+            .iter()
+            .find(|p| {
+                let mut steps = p.streams.iter().flat_map(|s| &s.steps);
+                steps.any(|st| st.step_id.base_id() == "t.py:margin")
+            })
+            .expect("a phase with margin");
+        dispatch::expand_pending_partitions(phase, &outputs, pool_size).expect("expanded")
+    }
+
+    /// Run hashes of every key of `sales` and `margin`, hashed in the order `order` gives.
+    fn run_hashes<'p>(
+        dag: &Dag,
+        order: impl Iterator<Item = &'p crate::planner::StreamStep>,
+    ) -> Vec<(String, String)> {
+        let mut state: HashMap<String, String> =
+            HashMap::from([("t.py:keys".to_string(), "h_keys".to_string())]);
+        for step in order {
+            let def_hash = &dag
+                .get_node(step.step_id.base_id())
+                .unwrap()
+                .definition_hash;
+            for pk in &step.partition_keys {
+                let hash = compute_run_hash(
+                    def_hash,
+                    Some(&pk.suffix()),
+                    step.inputs.values(),
+                    &state,
+                    &HashMap::new(),
+                    None,
+                );
+                state.insert(pk.display_id(&step.step_id.base), hash);
+            }
+        }
+        let mut hashes: Vec<(String, String)> = state.into_iter().collect();
+        hashes.sort();
+        hashes
+    }
+
+    /// #330: the chunks of `sales` and of `margin` are placed in streams independently, so
+    /// stream by stream a key of `margin` can come before the same key of `sales`. In
+    /// dependency order it never does, and the run hashes are the same at every pool size.
+    #[test]
+    fn every_key_of_an_upstream_is_decided_before_any_key_of_its_consumer() {
+        let nodes = crate::parse::extract_nodes(CHAINED, "t.py").unwrap();
+        let dag = Dag::build(&nodes).unwrap();
+        let keys = ["a", "b", "c", "d", "e"];
+
+        let reference = {
+            let phase = expanded(&dag, &keys, 64);
+            run_hashes(
+                &dag,
+                in_dependency_order(&dag, &phase)
+                    .into_iter()
+                    .map(|(_, s)| s),
+            )
+        };
+        assert_eq!(reference.len(), 1 + 2 * keys.len());
+
+        let mut stream_order_differs_somewhere = false;
+        for pool_size in 1..=8 {
+            let phase = expanded(&dag, &keys, pool_size);
+            let ordered = in_dependency_order(&dag, &phase);
+
+            // Every step of the phase, once, with the stream it came from.
+            assert_eq!(
+                ordered.len(),
+                phase.streams.iter().map(|s| s.steps.len()).sum::<usize>()
+            );
+            for (stream, step) in &ordered {
+                assert!(
+                    phase.streams[*stream]
+                        .steps
+                        .iter()
+                        .any(|st| std::ptr::eq(st, *step))
+                );
+            }
+            let bases: Vec<&str> = ordered.iter().map(|(_, s)| s.step_id.base_id()).collect();
+            let last_sales = bases.iter().rposition(|b| *b == "t.py:sales").unwrap();
+            let first_margin = bases.iter().position(|b| *b == "t.py:margin").unwrap();
+            assert!(last_sales < first_margin, "pool of {pool_size}: {bases:?}");
+
+            assert_eq!(
+                run_hashes(&dag, ordered.into_iter().map(|(_, s)| s)),
+                reference,
+                "pool of {pool_size}"
+            );
+
+            // What the run loop used to do: stream by stream.
+            let by_stream = phase.streams.iter().flat_map(|s| &s.steps);
+            if run_hashes(&dag, by_stream) != reference {
+                stream_order_differs_somewhere = true;
+            }
+        }
+        assert!(
+            stream_order_differs_somewhere,
+            "stream order gave the reference hashes at every pool size: this test no longer \
+             covers #330"
+        );
     }
 }

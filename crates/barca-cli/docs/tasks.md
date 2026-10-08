@@ -108,15 +108,104 @@ barca run validate_registry,validate_names pipeline.py --dry-run   # preview the
 
 ## Fan-out from inside a task
 
-`parallel(partial(f, x), ...)` and `parallel_map(f, items)` run other `@task` functions in
-parallel worker processes and return results in argument order. A failed branch comes back as
-a `ParallelError` instead of raising. They are recognized inside `@task` bodies only.
+`parallel(partial(f, x), ...)` and `parallel_map(f, items)` run other `@task` functions (the
+branches) in parallel worker processes and return their results in argument order.
+
+```python
+import datetime
+from functools import partial
+
+from barca import ParallelError, parallel, task
+
+
+@task()
+def check(region: str) -> dict:
+    if region == "ap":
+        raise RuntimeError("region unavailable")
+    return {"region": region, "checked": datetime.date(2026, 1, 2), "zones": {"a", "b"}}
+
+
+@task()
+def check_all() -> dict:
+    regions = ["us", "eu", "ap"]
+    results = parallel(*(partial(check, r) for r in regions))
+    ok = [r for r in results if not isinstance(r, ParallelError)]
+    return {
+        "failed": [reg for reg, r in zip(regions, results) if isinstance(r, ParallelError)],
+        "checked": [r["checked"].isoformat() for r in ok],
+        "zones": sorted(set().union(*(r["zones"] for r in ok))),
+    }
+```
+
+```bash
+barca run check_all pipeline.py
+# final_output: {"checked": ["2026-01-02", "2026-01-02"], "failed": ["ap"], "zones": ["a", "b"]}
+```
+
+**What a branch may return.** Anything a step may return. The branch's worker writes the value
+as an artifact, in the format barca picks for any step output (json, pickle or parquet by type:
+`barca docs types`), and the caller reads it back:
+
+- A set, a `date` or `datetime`, a `Decimal`, `bytes`, a dataclass or an object of your own
+  class, a numpy array, and containers of these (the dict above) come back equal and of the
+  same type.
+- A pandas or polars DataFrame, a polars LazyFrame, a pyarrow Table and a DuckDB relation come
+  back as the type the branch returned.
+- A value JSON can represent is passed as JSON, as between steps: a tuple comes back as a list
+  and a dict's non-string keys as strings (`{1: "a"}` as `{"1": "a"}`).
+- `None` comes back as `None`.
+
+**When a branch fails.** A branch that raises comes back as a `ParallelError` in place of its
+result (`.error` has the exception type, the message and the traceback); nothing is raised in
+the caller, which decides what a failed branch means. That holds for any exception, including a
+`BranchResultError` the branch got from a `parallel()` of its own. A branch that returns a value barca
+cannot pass back (an open file, a lambda, a generator: nothing pickle can write) is different:
+`parallel()` raises `BranchResultError` in the caller, the calling step fails and the run exits
+1, with the branch, the type and the reason in the error:
+
+```
+BranchResultError: parallel() branch 1: pipeline.py:handle returned a _io.TextIOWrapper, which
+cannot be passed back to the step that called parallel(): TypeError: cannot pickle
+'TextIOWrapper' instances.
+```
+
+A branch's result is never replaced by `None`. (Until 0.18.1 it was, for every value that is
+not JSON: the caller received `None` and the run succeeded.)
+
+**Where it can be called.** In the body of a `@task`, and in the body of a branch (a branch may
+fan out again). A call from an `@asset` body runs its branches too, but the asset is cached
+like any other: the branches do not run again until the asset does. A fan-out that should
+happen on every run belongs in a task.
+
+**Limits.**
+
+- Arguments given to `partial` are sent to the branch as JSON, not as artifacts: pass values
+  JSON can represent (a tuple arrives as a list). A set raises `TypeError` in the caller. So
+  does a `date` or `datetime`, unless the `fast` extra (orjson) is installed, in which case it
+  arrives as its ISO string. Convert such values yourself (`d.isoformat()`) and the branch
+  gets the same thing either way.
+- Branches are not steps of the plan: they are not cached and not retried, and
+  `timeout_seconds=` and `retries=` on a branch's `@task` have no effect (`parallel()` itself
+  takes no such options). A branch that runs longer than 300 seconds comes back as a
+  `ParallelError` holding a `TimeoutError`. The calling step's own `timeout_seconds` keeps
+  counting while it waits for its branches.
+- What a branch returns belongs to the run and is not an artifact. A small JSON value (up to
+  4 KB of JSON text) is passed in a message and never written. Anything else is a file,
+  `.barca/branches/<run>-<pid>/<group>/<branch>.<ext>`, one directory per `parallel()` call, so
+  two runs at the same time never read each other's results. It is never uploaded to an
+  artifact store. Barca removes a call's directory when the step that made the call ends, and
+  the run's directory when the run ends, however it ends (success, a failed step, Ctrl-C). A
+  run that was killed outright leaves its directory behind; the next `barca get` or
+  `barca run` in the project removes it. (Until 0.18.1 these files were written into the
+  artifact directory under the branch's name and never removed, and two runs of one pipeline
+  at the same time could receive each other's branch results.)
 
 ## When a task fails
 
 A task (or asset) that raises, or calls `sys.exit()` with any code, fails the run: barca prints
 the traceback on stderr and exits 1, and nothing downstream runs. To fail on purpose, for example
-on a validation error, raise an exception. A failed `parallel()` branch fails the run only if the
-parent task raises. Exit codes: `barca docs agents`.
+on a validation error, raise an exception. A `parallel()` branch that raises fails the run only
+if the calling step raises; a branch whose return value cannot be passed back fails the calling
+step (see above). Exit codes: `barca docs agents`.
 
 See also: `barca docs cache`, `barca docs examples/deploy-task`.
