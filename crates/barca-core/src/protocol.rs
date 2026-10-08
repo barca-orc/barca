@@ -37,7 +37,15 @@ pub enum WorkerMessage {
     Log { node_id: String, line: String },
     /// Worker is requesting parallel dispatch of sub-tasks.
     /// Worker blocks on socket read until it receives ParallelResponse.
-    Submit { items: Vec<SubmitItem> },
+    Submit {
+        items: Vec<SubmitItem>,
+        /// The worker reads each branch's result from its artifact, so the response names
+        /// the artifacts ([`ParallelResult::Ok::artifact`]) and carries no values. A worker
+        /// from an older barca Python package (0.18.1 or earlier) does not send this and gets the
+        /// values inline, as it expects.
+        #[serde(default)]
+        artifact_results: bool,
+    },
     /// Periodic heartbeat — worker is alive and working.
     Heartbeat,
     /// Library warnings the worker suppressed as repeats since its last report: first line of
@@ -83,6 +91,16 @@ pub struct ArtifactRef {
     pub finished_at: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wall_seconds: Option<f64>,
+    /// For a `parallel()` branch that returned a frame: which reader gives the caller the
+    /// type the branch returned (`pandas`, `polars`, `polars_lazy`, `pyarrow`, `duckdb`).
+    /// A step's consumer picks its reader from its own annotation; a branch's caller has
+    /// none for the result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_type: Option<String>,
+    /// For a `parallel()` branch whose result is a small JSON value: its text, sent instead
+    /// of writing a file (`path` is then empty). See [`BranchArtifact::json`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub json: Option<String>,
 }
 
 /// Outcome of a single `@sink` write. Sink failures never fail the parent
@@ -114,8 +132,35 @@ pub enum CoordinatorMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum ParallelResult {
-    Ok { result: serde_json::Value },
-    Error { error: String },
+    /// The branch returned. A worker that asked for artifact results gets `artifact` (it
+    /// reads the value itself, with the code that reads a step's input); one that did not
+    /// gets `result`.
+    Ok {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        result: Option<serde_json::Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        artifact: Option<BranchArtifact>,
+    },
+    Error {
+        error: String,
+    },
+}
+
+/// Where a branch's return value is: the artifact its worker wrote, like any step's output.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BranchArtifact {
+    pub path: String,
+    /// `json`, `pickle` or `parquet`.
+    pub format: String,
+    /// See [`ArtifactRef::frame_type`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_type: Option<String>,
+    /// A small JSON result's text, as the branch's worker sent it (`python/barca/_branches.py`,
+    /// `small_json`: a few KB at most). There is then no file and `path` is empty. The text is
+    /// never parsed here: the calling worker parses what the branch's worker wrote. A fan-out
+    /// of thousands of small branches creates, reads and removes no files this way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub json: Option<String>,
 }
 
 // ─── Coordinator ↔ transfer helper ───────────────────────────────────────────
@@ -305,6 +350,8 @@ mod tests {
                 content_hash: None,
                 finished_at: None,
                 wall_seconds: None,
+                frame_type: None,
+                json: None,
                 sinks: Vec::new(),
             },
         };
@@ -331,7 +378,8 @@ mod tests {
         let msg = CoordinatorMessage::ParallelResponse {
             results: vec![
                 ParallelResult::Ok {
-                    result: serde_json::json!({"value": 42}),
+                    result: Some(serde_json::json!({"value": 42})),
+                    artifact: None,
                 },
                 ParallelResult::Error {
                     error: "timeout".to_string(),
@@ -348,8 +396,8 @@ mod tests {
             CoordinatorMessage::ParallelResponse { results } => {
                 assert_eq!(results.len(), 2);
                 match &results[0] {
-                    ParallelResult::Ok { result } => {
-                        assert_eq!(result, &serde_json::json!({"value": 42}));
+                    ParallelResult::Ok { result, .. } => {
+                        assert_eq!(result, &Some(serde_json::json!({"value": 42})));
                     }
                     _ => panic!("expected Ok"),
                 }
@@ -378,6 +426,8 @@ mod tests {
                 content_hash: None,
                 finished_at: None,
                 wall_seconds: None,
+                frame_type: None,
+                json: None,
                 sinks: vec![
                     SinkOutcome {
                         path: "exports/out.parquet".to_string(),
@@ -439,6 +489,7 @@ mod tests {
     #[test]
     fn test_encode_decode_submit() {
         let msg = WorkerMessage::Submit {
+            artifact_results: true,
             items: vec![
                 SubmitItem {
                     fn_ref: "tasks.py:process_chunk".to_string(),
@@ -462,7 +513,11 @@ mod tests {
         let decoded = decoded.expect("should decode a message");
 
         match decoded {
-            WorkerMessage::Submit { items } => {
+            WorkerMessage::Submit {
+                items,
+                artifact_results,
+            } => {
+                assert!(artifact_results);
                 assert_eq!(items.len(), 2);
                 assert_eq!(items[0].fn_ref, "tasks.py:process_chunk");
                 assert_eq!(items[0].args.len(), 2);
@@ -549,6 +604,8 @@ mod tests {
                     content_hash: None,
                     finished_at: None,
                     wall_seconds: None,
+                    frame_type: None,
+                    json: None,
                     sinks: Vec::new(),
                 },
             },
@@ -639,13 +696,20 @@ mod tests {
         let msg = CoordinatorMessage::ParallelResponse {
             results: vec![
                 ParallelResult::Ok {
-                    result: serde_json::json!([1, 2, 3]),
+                    result: Some(serde_json::json!([1, 2, 3])),
+                    artifact: None,
                 },
                 ParallelResult::Error {
                     error: "division by zero".to_string(),
                 },
                 ParallelResult::Ok {
-                    result: serde_json::json!(null),
+                    result: None,
+                    artifact: Some(BranchArtifact {
+                        path: "/artifacts/work_branch_3.pkl".to_string(),
+                        format: "pickle".to_string(),
+                        frame_type: None,
+                        json: None,
+                    }),
                 },
             ],
         };
@@ -662,8 +726,8 @@ mod tests {
 
                 // First: Ok with array
                 match &results[0] {
-                    ParallelResult::Ok { result } => {
-                        assert_eq!(result, &serde_json::json!([1, 2, 3]));
+                    ParallelResult::Ok { result, .. } => {
+                        assert_eq!(result, &Some(serde_json::json!([1, 2, 3])));
                     }
                     _ => panic!("expected Ok"),
                 }
@@ -676,16 +740,93 @@ mod tests {
                     _ => panic!("expected Error"),
                 }
 
-                // Third: Ok with null
+                // Third: Ok, by artifact
                 match &results[2] {
-                    ParallelResult::Ok { result } => {
-                        assert!(result.is_null());
+                    ParallelResult::Ok { result, artifact } => {
+                        assert!(result.is_none());
+                        assert_eq!(artifact.as_ref().unwrap().format, "pickle");
                     }
                     _ => panic!("expected Ok"),
                 }
             }
             _ => panic!("expected ParallelResponse"),
         }
+    }
+
+    // python/barca/_runtime.py and python/barca/__init__.py send and parse these exact
+    // shapes; pin them.
+    #[test]
+    fn parallel_wire_shapes() {
+        // A worker from 0.18.1 or earlier sends no `artifact_results`: it gets values inline.
+        let old: WorkerMessage = serde_json::from_str(r#"{"type":"submit","items":[]}"#).unwrap();
+        assert!(matches!(
+            old,
+            WorkerMessage::Submit {
+                artifact_results: false,
+                ..
+            }
+        ));
+        let new: WorkerMessage =
+            serde_json::from_str(r#"{"type":"submit","items":[],"artifact_results":true}"#)
+                .unwrap();
+        assert!(matches!(
+            new,
+            WorkerMessage::Submit {
+                artifact_results: true,
+                ..
+            }
+        ));
+
+        let by_artifact = ParallelResult::Ok {
+            result: None,
+            artifact: Some(BranchArtifact {
+                path: "/a/b.parquet".to_string(),
+                format: "parquet".to_string(),
+                frame_type: Some("polars".to_string()),
+                json: None,
+            }),
+        };
+        assert_eq!(
+            serde_json::to_value(&by_artifact).unwrap(),
+            serde_json::json!({
+                "status": "ok",
+                "artifact": {"path": "/a/b.parquet", "format": "parquet", "frame_type": "polars"},
+            })
+        );
+        let small = ParallelResult::Ok {
+            result: None,
+            artifact: Some(BranchArtifact {
+                path: "/a/b.json".to_string(),
+                format: "json".to_string(),
+                frame_type: None,
+                json: Some(r#"{"b": 1, "a": NaN}"#.to_string()),
+            }),
+        };
+        assert_eq!(
+            serde_json::to_value(&small).unwrap(),
+            serde_json::json!({
+                "status": "ok",
+                "artifact": {"path": "/a/b.json", "format": "json", "json": "{\"b\": 1, \"a\": NaN}"},
+            })
+        );
+        let inline = ParallelResult::Ok {
+            result: Some(serde_json::json!(null)),
+            artifact: None,
+        };
+        assert_eq!(
+            serde_json::to_value(&inline).unwrap(),
+            serde_json::json!({"status": "ok", "result": null})
+        );
+
+        // The frame type a branch's worker reports survives the coordinator.
+        let reported: ArtifactRef = serde_json::from_str(
+            r#"{"path":"p","format":"parquet","size_bytes":1,"frame_type":"pandas"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&reported).unwrap()["frame_type"],
+            "pandas"
+        );
     }
 
     // ─── Transfer helper wire format ────────────────────────────────────────

@@ -20,56 +20,122 @@ pub(crate) fn target_name_matches(id: &str, name: &str) -> bool {
     }
 }
 
-/// The single node a target name identifies. No match is `AssetNotFound`; several matches (the
-/// same function name in two files) is a usage error that lists the full ids to choose from.
-pub(crate) fn find_target_id(dag: &Dag, name: &str) -> Result<String, BarcaError> {
-    let matches: Vec<&str> = dag
-        .topo_order()
-        .into_iter()
-        .filter(|id| target_name_matches(id, name))
-        .collect();
-    match matches.as_slice() {
-        [one] => Ok((*one).to_string()),
-        [] => {
-            let available: Vec<&str> = dag.topo_order();
-            Err(BarcaError::AssetNotFound(
-                name.to_string(),
-                available.join(", "),
-            ))
+/// Why a name cannot be the target of a command. The one place that decides it: `barca get`,
+/// `barca run` and the server's `POST /get/{target}` and `POST /run/{target}` all go through
+/// [`resolve_target_among`], so they refuse the same names with the same words.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TargetError {
+    /// No node has this name. `available` is every node id, in topological order.
+    NotFound {
+        name: String,
+        available: Vec<String>,
+    },
+    /// Several nodes have it (the same function name in two files).
+    Ambiguous { name: String, matches: Vec<String> },
+    /// One node has it, of a kind the command does not take: `get` is for assets and
+    /// sensors, `run` for tasks and sensors.
+    WrongKind { name: String, kind: crate::NodeKind },
+}
+
+impl std::fmt::Display for TargetError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TargetError::NotFound { name, available } => {
+                write!(
+                    f,
+                    "Asset '{name}' not found. Available: {}",
+                    available.join(", ")
+                )
+            }
+            TargetError::Ambiguous { name, matches } => write!(
+                f,
+                "'{name}' matches more than one node: {}. Name one by its full id, e.g. `{}`",
+                matches.join(", "),
+                matches[0]
+            ),
+            TargetError::WrongKind { name, kind } => match kind {
+                crate::NodeKind::Task => write!(f, "'{name}' is a task — use `barca run` instead"),
+                _ => write!(f, "'{name}' is an asset — use `barca get` instead"),
+            },
         }
-        many => Err(BarcaError::Usage(format!(
-            "'{name}' matches more than one node: {}. Name one by its full id, e.g. `{}`",
-            many.join(", "),
-            many[0]
-        ))),
     }
 }
 
-/// Resolve one target, enforcing that `get` targets assets and `run` targets tasks.
+impl From<TargetError> for BarcaError {
+    fn from(e: TargetError) -> Self {
+        match e {
+            TargetError::NotFound { name, available } => {
+                BarcaError::AssetNotFound(name, available.join(", "))
+            }
+            other => BarcaError::Usage(other.to_string()),
+        }
+    }
+}
+
+/// The single node `name` identifies among `nodes` (id and kind, in topological order), as a
+/// target of `command_label` (`get`, `run`; anything else takes every kind).
+pub fn resolve_target_among<'a>(
+    nodes: impl IntoIterator<Item = (&'a str, crate::NodeKind)>,
+    name: &str,
+    command_label: &str,
+) -> Result<String, TargetError> {
+    let nodes: Vec<(&str, crate::NodeKind)> = nodes.into_iter().collect();
+    let matches: Vec<&(&str, crate::NodeKind)> = nodes
+        .iter()
+        .filter(|(id, _)| target_name_matches(id, name))
+        .collect();
+    let ids = |of: &[&(&str, crate::NodeKind)]| of.iter().map(|(id, _)| id.to_string()).collect();
+    match matches.as_slice() {
+        [] => Err(TargetError::NotFound {
+            name: name.to_string(),
+            available: nodes.iter().map(|(id, _)| id.to_string()).collect(),
+        }),
+        [(id, kind)] => {
+            // `barca get` is for assets, `barca run` is for tasks.
+            let wrong = (command_label == "get" && *kind == crate::NodeKind::Task)
+                || (command_label == "run" && *kind == crate::NodeKind::Asset);
+            if wrong {
+                return Err(TargetError::WrongKind {
+                    name: name.to_string(),
+                    kind: *kind,
+                });
+            }
+            Ok(id.to_string())
+        }
+        many => Err(TargetError::Ambiguous {
+            name: name.to_string(),
+            matches: ids(many),
+        }),
+    }
+}
+
+/// The DAG's nodes as [`resolve_target_among`] takes them.
+fn dag_nodes(dag: &Dag) -> impl Iterator<Item = (&str, crate::NodeKind)> {
+    dag.topo_order()
+        .into_iter()
+        .filter_map(|id| dag.get_node(id).map(|node| (id, node.kind())))
+}
+
+/// The single node a target name identifies, whatever its kind. No match is `AssetNotFound`;
+/// several matches (the same function name in two files) is a usage error that lists the full
+/// ids to choose from.
+pub(crate) fn find_target_id(dag: &Dag, name: &str) -> Result<String, BarcaError> {
+    Ok(resolve_target_among(dag_nodes(dag), name, "")?)
+}
+
+/// The node a command's target names, checked for its kind: `barca get`
+/// targets assets and `barca run` targets tasks.
 pub(crate) fn resolve_target(
     dag: &Dag,
     target_name: Option<&str>,
     command_label: &str,
 ) -> Result<Option<String>, BarcaError> {
     match target_name {
-        Some(name) => {
-            let id = find_target_id(dag, name)?;
-            // Enforce get/run semantics: `barca get` is for assets, `barca run` is for tasks.
-            if let Some(node) = dag.get_node(&id) {
-                let kind = node.kind();
-                if command_label == "get" && kind == crate::NodeKind::Task {
-                    return Err(BarcaError::Usage(format!(
-                        "'{name}' is a task — use `barca run` instead"
-                    )));
-                }
-                if command_label == "run" && kind == crate::NodeKind::Asset {
-                    return Err(BarcaError::Usage(format!(
-                        "'{name}' is an asset — use `barca get` instead"
-                    )));
-                }
-            }
-            Ok(Some(id))
-        }
+        Some(name) => Ok(Some(resolve_target_among(
+            dag_nodes(dag),
+            name,
+            command_label,
+        )?)),
         None => Ok(None),
     }
 }
@@ -699,5 +765,86 @@ mod target_name_tests {
         assert!(!target_name_matches("p.py:dyn_margin_all", "margin_all"));
         assert!(!target_name_matches("subp.py:deploy", "p.py:deploy"));
         assert!(!target_name_matches("sub/p.py:deploy", "/p.py:deploy_x"));
+    }
+}
+
+#[cfg(test)]
+mod resolve_target_tests {
+    use super::{TargetError, resolve_target_among};
+    use crate::{BarcaError, NodeKind};
+
+    const NODES: [(&str, NodeKind); 5] = [
+        ("a.py:orders", NodeKind::Asset),
+        ("a.py:poll", NodeKind::Sensor),
+        ("a.py:publish", NodeKind::Task),
+        ("b.py:orders", NodeKind::Asset),
+        ("b.py:total", NodeKind::Asset),
+    ];
+
+    fn resolve(name: &str, command: &str) -> Result<String, TargetError> {
+        resolve_target_among(NODES, name, command)
+    }
+
+    #[test]
+    fn a_name_that_identifies_one_node_of_a_kind_the_command_takes() {
+        assert_eq!(resolve("total", "get").unwrap(), "b.py:total");
+        assert_eq!(resolve("b.py:orders", "get").unwrap(), "b.py:orders");
+        assert_eq!(resolve("poll", "get").unwrap(), "a.py:poll");
+        assert_eq!(resolve("publish", "run").unwrap(), "a.py:publish");
+        assert_eq!(resolve("poll", "run").unwrap(), "a.py:poll");
+        // A command that is neither (stats, status) takes every kind.
+        assert_eq!(resolve("publish", "").unwrap(), "a.py:publish");
+    }
+
+    #[test]
+    fn an_unknown_name_lists_what_exists() {
+        let err = resolve("nope", "get").unwrap_err();
+        assert!(matches!(err, TargetError::NotFound { .. }));
+        let text = "Asset 'nope' not found. Available: a.py:orders, a.py:poll, a.py:publish, \
+                    b.py:orders, b.py:total";
+        assert_eq!(err.to_string(), text);
+        // The command line's error is the same text.
+        let cli = BarcaError::from(err);
+        assert!(matches!(cli, BarcaError::AssetNotFound(..)));
+        assert_eq!(cli.to_string(), text);
+        // A name matches whole, never as the tail of a longer one.
+        assert!(matches!(
+            resolve("rders", "get"),
+            Err(TargetError::NotFound { .. })
+        ));
+    }
+
+    #[test]
+    fn a_name_several_nodes_have_lists_them() {
+        let err = resolve("orders", "get").unwrap_err();
+        assert!(matches!(err, TargetError::Ambiguous { .. }));
+        let text = "'orders' matches more than one node: a.py:orders, b.py:orders. \
+                    Name one by its full id, e.g. `a.py:orders`";
+        assert_eq!(err.to_string(), text);
+        let cli = BarcaError::from(err);
+        assert!(matches!(cli, BarcaError::Usage(_)));
+        assert_eq!(cli.to_string(), text);
+    }
+
+    #[test]
+    fn the_wrong_command_for_the_kind_names_the_right_one() {
+        let err = resolve("publish", "get").unwrap_err();
+        assert!(matches!(
+            err,
+            TargetError::WrongKind {
+                kind: NodeKind::Task,
+                ..
+            }
+        ));
+        assert_eq!(
+            err.to_string(),
+            "'publish' is a task — use `barca run` instead"
+        );
+        let err = resolve("total", "run").unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "'total' is an asset — use `barca get` instead"
+        );
+        assert!(matches!(BarcaError::from(err), BarcaError::Usage(_)));
     }
 }

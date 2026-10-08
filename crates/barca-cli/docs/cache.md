@@ -535,8 +535,9 @@ barca history --json            # the run is `running`; `steps_executed` is the 
   `interrupted`, with `finished_at` and `elapsed_seconds` `null` (nobody saw it end) and
   `steps_executed` at what it had recorded. It does so as soon as the process is gone, and
   also for a run killed with its container, once a container starts again on the same
-  `.barca` (see the limits below). Ctrl-C is different: the run stops its workers,
-  records itself and is `cancelled` (exit 130). With an artifact store that also holds while
+  `.barca` (see the limits below). Ctrl-C and SIGTERM (a supervisor, `docker stop`) are
+  different: the run stops its workers, records itself and is `cancelled` (exit 130).
+  With an artifact store that also holds while
   artifacts upload, download or the shared history is pushed, and the cancelled run then shares
   its record for at most 10 seconds; a second Ctrl-C ends that (`barca docs remote`, "Ctrl-C").
 

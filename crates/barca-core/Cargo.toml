@@ -1,6 +1,6 @@
 [package]
 name = "barca-core"
-version = "0.18.1"
+version = "0.19.0"
 edition = "2024"
 description = "Core library — models, parsing, DAG, execution planning, hashing, dispatch, caching"
 
@@ -15,6 +15,7 @@ thiserror = { workspace = true }
 sha2 = "0.10"
 croner = "3.0.1"
 chrono = "0.4.45"
+chrono-tz = "0.10.4"
 smallvec = { version = "1.13", features = ["serde"] }
 tempfile = "3"
 turso = { version = "0.7.0-pre.5", default-features = false }

@@ -17,7 +17,8 @@ pub mod envelope;
 pub mod events;
 pub(crate) mod execution;
 pub mod hash;
-mod helper_proc;
+#[doc(hidden)]
+pub mod helper_proc;
 pub mod interrupt;
 pub mod io_loop;
 pub mod load;
@@ -42,7 +43,7 @@ pub mod state_sync;
 pub(crate) mod state_validate;
 pub mod status;
 mod store_sync;
-pub(crate) mod targets;
+pub mod targets;
 pub mod telemetry;
 pub mod term;
 pub mod transfer;

@@ -124,6 +124,10 @@ pub struct ParallelGroup {
     pub parent: ItemId,
     pub items: Vec<ItemId>,
     pub completed_count: usize,
+    /// The directory this group's branches write their results to: one per group, inside a
+    /// directory of the run, so that a caller reads only what its own branches wrote (#332).
+    /// `None` leaves branch results where they were before, named after the branch alone.
+    pub result_dir: Option<std::path::PathBuf>,
 }
 
 // ─── Coordinator ──────────────────────────────────────────────────────────────
@@ -395,10 +399,39 @@ impl Coordinator {
             parent: parent_id,
             items: child_ids.clone(),
             completed_count: 0,
+            result_dir: None,
         };
         self.groups.insert(group_id, group);
 
         (group_id, child_ids)
+    }
+
+    /// Say where a group's branches write their results (see [`ParallelGroup::result_dir`]).
+    pub fn set_group_result_dir(&mut self, group_id: GroupId, dir: std::path::PathBuf) {
+        if let Some(group) = self.groups.get_mut(&group_id) {
+            group.result_dir = Some(dir);
+        }
+    }
+
+    /// Give up on a group whose caller is gone: its branches that have not started will not
+    /// start. Those already running finish, and nobody reads what they return.
+    pub fn abandon_group(&mut self, group_id: GroupId) {
+        let Some(group) = self.groups.get(&group_id) else {
+            return;
+        };
+        let waiting: Vec<ItemId> = group
+            .items
+            .iter()
+            .copied()
+            .filter(|id| self.ready.contains(id))
+            .collect();
+        self.ready.retain(|id| !waiting.contains(id));
+        for id in &waiting {
+            self.skipped.insert(*id);
+        }
+        if let Some(group) = self.groups.get_mut(&group_id) {
+            group.completed_count += waiting.len();
+        }
     }
 
     /// Check if a parallel group is fully complete (all children done or failed).
@@ -951,6 +984,33 @@ mod tests {
         assert_eq!(children.len(), 3);
         assert_eq!(c.ready_count(), 3);
         assert!(!c.is_group_complete(group_id));
+    }
+
+    /// #333: when the step that called parallel() is gone, its branches that have not
+    /// started never start, the group counts as resolved once the running ones are done,
+    /// and the run can finish.
+    #[test]
+    fn an_abandoned_group_drops_the_branches_that_have_not_started() {
+        let mut c = Coordinator::new();
+        let parent = c.add_item(crate::StepId::unpartitioned("p"), spec("p"), Vec::new());
+        assert_eq!(c.next_ready(), Some(parent));
+        let (group, children) =
+            c.on_parallel_requested(parent, vec![spec("c0"), spec("c1"), spec("c2")]);
+        let running = c.next_ready().unwrap();
+        assert_eq!(running, children[0]);
+
+        c.abandon_group(group);
+        assert_eq!(
+            c.ready_count(),
+            0,
+            "the two that had not started are dropped"
+        );
+        assert!(!c.is_group_complete(group), "one branch is still running");
+        c.on_item_failed(parent, "worker disconnected".to_string());
+        assert!(!c.is_finished());
+        c.on_item_completed(running);
+        assert!(c.is_group_complete(group));
+        assert!(c.is_finished());
     }
 
     #[test]

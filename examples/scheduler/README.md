@@ -10,7 +10,7 @@ barca serve job.py
 
 ```
 [barca] serving on http://127.0.0.1:8274  (1 file)
-[barca] scheduling 2 assets:
+[barca] scheduling 2 tasks:
   job.py:heartbeat — */15 * * * * * (next 2026-07-19 20:32:45)
   job.py:refresh   — */10 * * * *   (next 2026-07-19 20:40:00)
 ```
@@ -30,7 +30,7 @@ scheduling — Barca evaluates the schedule at 1-second resolution. Standard
 Inspect the schedule without starting a server:
 
 ```bash
-barca list job.py          # NEXT FIRE column shows each job's next tick
+barca list job.py          # NEXT FIRE (LOCAL TIME) column shows each job's next tick
 ```
 
 See the [Scheduling guide](https://barca.sh/scheduling/) for timezones, catch-up

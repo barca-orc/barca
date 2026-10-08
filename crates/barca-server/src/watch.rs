@@ -49,6 +49,7 @@ pub fn spawn(state: AppState) -> notify::Result<RecommendedWatcher> {
         if let Ok(mut c) = cache.write() {
             c.assets = None;
             c.plan = None;
+            c.targets = None;
         }
         // Signal the scheduler to re-read its job set on its next tick.
         generation.fetch_add(1, Ordering::Relaxed);

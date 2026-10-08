@@ -127,6 +127,29 @@ local disk — fails explicitly under a remote store) and `parallel()` return va
 remote store the parent gets `null` results with a warning). See
 [Remote Storage](/reference/remote-storage/) §"v1 limitations."
 
+> **Amended (after 0.18.1, issue #285):** `parallel()` return values are no longer an
+> exception. The second one above was worse than stated: the coordinator read a child's
+> artifact only when it was JSON, so a branch that returned anything else (a set, a date, a
+> DataFrame: written as pickle or parquet) resumed the parent with `null` for that branch,
+> with no warning, with or without a remote store. Checked on 0.18.1: the result was the
+> same in both cases, and no warning was printed in either.
+>
+> Now the coordinator tells the parent where each child's result is (`path`, `format`,
+> and for a frame the type the child returned), and the parent's worker reads it with the
+> reader steps use for their inputs. A child's result is written in the artifact formats
+> but is not an artifact of the store layout in §4.1: it is a file of the run, at
+> `.barca/branches/<run>-<pid>/<group>/<branch>.<ext>`, removed when the calling step ends
+> and never uploaded (issue #332: under the old name, shared by every run, two runs at the
+> same time read each other's results). A branch may return whatever a step may return. A value
+> that cannot be written or read back fails the calling step with an error naming the
+> branch, the type and the reason. Child results are local files whatever the store, so
+> nothing differs under a remote store.
+>
+> A JSON result whose text is at most 4 KB is not written at all: the child's worker sends
+> the text `json.dump` would have written in its report, the coordinator passes it on
+> unparsed, and the parent parses it. A fan-out of thousands of small branches then creates
+> no files. The coordinator reads no child result in any case.
+
 ### 4.4 Node-Kind Semantics
 
 Sensors' `(update_detected, output)` tuple is serialized like any other output; tasks'
@@ -212,7 +235,8 @@ with a more pluggable (and more configuration-heavy) interface; see
 ## 10. Unresolved Questions
 
 Should dynamic-partition source reads and `parallel()` return values (§4.3) grow remote
-support, closing the two documented v1 local-disk-only exceptions?
+support, closing the two documented v1 local-disk-only exceptions? (`parallel()` return
+values: closed, see the amendment in §4.3. Dynamic-partition source reads remain.)
 
 ## 11. Future Possibilities
 

@@ -490,6 +490,117 @@ def test_tasks_topic_example(binary, topics, tmp_path):
     assert "barca run" in bare.stderr
 
 
+def test_tasks_topic_fan_out_example(binary, topics, tmp_path):
+    """Fan-out: a branch returns a dict holding a date and a set, one branch raises."""
+    code = blocks(topics["tasks"], "python")[2]
+    assert "def check_all" in code
+    (tmp_path / "pipeline.py").write_text(code)
+    doc = result(barca(binary, tmp_path, "run", "check_all", "pipeline.py"))
+    assert doc["final_output"] == {
+        "checked": ["2026-01-02", "2026-01-02"],
+        "failed": ["ap"],
+        "zones": ["a", "b"],
+    }
+    # The value the topic prints is this one.
+    printed = re.search(r"^# final_output: (.*)$", topics["tasks"], re.M)
+    assert printed and json.loads(printed.group(1)) == doc["final_output"]
+
+
+def test_tasks_topic_what_a_branch_may_return(binary, topics, tmp_path):
+    """Every sentence of "What a branch may return", "When a branch fails" and "Limits"."""
+    (tmp_path / "pipeline.py").write_text(
+        """
+import datetime
+from functools import partial
+
+from barca import ParallelError, asset, parallel, task
+
+
+@task()
+def value(kind: str):
+    return {"tuple": (1, 2), "keys": {1: "a"}, "none": None, "set": {1, 2}}[kind]
+
+
+@task()
+def raises(i: int):
+    raise ValueError("boom")
+
+
+@task()
+def handle(i: int):
+    return open(__file__)
+
+
+@task()
+def kind_of(x) -> str:
+    return type(x).__name__
+
+
+@task()
+def values() -> list:
+    out = parallel(*(partial(value, k) for k in ["tuple", "keys", "none", "set"]))
+    failed = parallel(partial(raises, 0))[0]
+    return [repr(v) for v in out] + [isinstance(failed, ParallelError), failed.error.splitlines()[0]]
+
+
+@task()
+def unpassable() -> list:
+    return parallel(partial(value, "set"), partial(handle, 1))
+
+
+@task()
+def set_argument() -> list:
+    return parallel(partial(kind_of, {1, 2}))
+
+
+@task()
+def tuple_argument() -> list:
+    return parallel(partial(kind_of, (1, 2)))
+
+
+@asset()
+def from_an_asset() -> list:
+    return [sorted(v) for v in parallel(partial(value, "set"))]
+"""
+    )
+    doc = result(barca(binary, tmp_path, "run", "values", "pipeline.py"))
+    assert doc["final_output"] == [
+        "[1, 2]",  # a tuple comes back as a list
+        "{'1': 'a'}",  # non-string keys as strings
+        "None",
+        "{1, 2}",
+        True,
+        "ValueError: boom",
+    ]
+
+    proc = barca(binary, tmp_path, "run", "unpassable", "pipeline.py")
+    assert proc.returncode == 1
+    error = json.loads(proc.stdout)["error"]
+    quoted = " ".join(blocks(topics["tasks"], "")[0].split())
+    assert error.startswith(quoted), (error, quoted)
+
+    proc = barca(binary, tmp_path, "run", "set_argument", "pipeline.py")
+    assert proc.returncode == 1 and "TypeError" in json.loads(proc.stdout)["error"]
+    doc = result(barca(binary, tmp_path, "run", "tuple_argument", "pipeline.py"))
+    assert doc["final_output"] == ["list"]
+
+    # From an asset the branches run; served from cache, the asset does not call them again.
+    first = result(barca(binary, tmp_path, "get", "from_an_asset", "pipeline.py"))
+    assert first["final_output"] == [[1, 2]] and first["steps_executed"] == 1
+    again = result(barca(binary, tmp_path, "get", "from_an_asset", "pipeline.py"))
+    assert again["final_output"] == [[1, 2]] and again["steps_executed"] == 0
+
+    # What the branches returned is gone with the runs; the artifact directory holds the
+    # results of the steps that finished and nothing per branch.
+    barca_dir = tmp_path / ".barca"
+    assert [p for p in (barca_dir / "branches").rglob("*") if p.is_file()] == []
+    assert sorted(p.name for p in (barca_dir / "artifacts").iterdir()) == [
+        "pipeline.py--from_an_asset",
+        "pipeline.py--tuple_argument",
+        "pipeline.py--values",
+    ]
+
+
 def test_sinks_topic_example(binary, topics, tmp_path):
     pytest.importorskip("pyarrow")
     pd = pytest.importorskip("pandas")

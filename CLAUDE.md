@@ -42,8 +42,9 @@ pyproject.toml          ← Maturin build config (binary + Python stubs in one w
    - Imports user modules via `importlib.util.spec_from_file_location`
    - Executes the task, serializes results to artifact files (json/pickle/parquet)
    - Reports results back to Rust via the Unix domain socket protocol
-   - For `parallel()`: coordinator freezes the caller (SIGSTOP), spawns a temp replacement,
-     adds children to the ready queue; on completion kills the temp, resumes the caller (SIGCONT)
+   - For `parallel()`: coordinator freezes the caller (SIGSTOP), spawns a replacement,
+     adds children to the ready queue; on completion resumes the caller (SIGCONT) and stops
+     the next worker that has nothing leased
    - No DB access — Rust owns all persistence
    - Artifacts are always local; with a remote store, `python -m barca._transfer` (one per run,
      driven by `transfer.rs` over its own UDS) uploads them in the background and fetches

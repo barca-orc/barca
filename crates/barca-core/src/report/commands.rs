@@ -419,7 +419,7 @@ pub fn render_list(
     // Render each row's cells up front so column widths fit the actual content.
     let mut header = vec!["NAME", "KIND", "FRESHNESS"];
     if has_schedule {
-        header.push("NEXT FIRE");
+        header.push("NEXT FIRE (LOCAL TIME)");
     }
     header.push("DEPS");
     if has_env {

@@ -46,7 +46,7 @@ barca run <task[,task...]> [file.py|dir/ ...] [--refresh a,b [--no-cascade] | --
 barca plan [file.py|dir/ ...]                Emit the execution plan as JSON (experimental)
 barca history [-l N | --all] [--json|--pretty]  Show recent runs
 barca stats <target> [file.py|dir/ ...]       Show timing/cache stats for an asset
-barca serve [file.py|dir/ ...] [--port N] [--watch] [--no-schedule] [--timezone TZ] [--read-only]
+barca serve [file.py|dir/ ...] [--port N] [--host IP] [--watch] [--no-schedule] [--timezone TZ] [--read-only]
                                                Run the HTTP API server
 barca list [file.py|dir/ ...] [-l N | --all] [--json]  List discovered definitions and their deps
 barca status [target[,target...]] [file.py|dir/ ...] [--json] [--sample N]
@@ -340,20 +340,22 @@ barca stats summary pipeline.py --fields status,error_message   # JSON; trims re
 ## serve
 
 Start an HTTP server with a JSON API, the cron scheduler and the web UI at `/ui/`. It binds to
-`127.0.0.1` and has no authentication. See [Server API](/reference/server-api/) for the
+`127.0.0.1` by default; `--host 0.0.0.0` listens on every interface. It has no authentication. See [Server API](/reference/server-api/) for the
 endpoints and [Deploying](/deploying/) for running it behind nginx.
 
 ```bash
 barca serve pipeline.py                 # default port 8274
+barca serve pipeline.py --host 0.0.0.0  # every interface (containers, VMs); no auth
 barca serve --timezone utc              # every file in the project; cron evaluated in UTC
 ```
 
 | Flag | Default | Meaning |
 |---|---|---|
 | `-p`, `--port <PORT>` | `8274` | Port to listen on. |
+| `--host <IP>` | `127.0.0.1` | IP address to bind on; `0.0.0.0` (or `::`) listens on every interface. |
 | `--watch` | off | Re-parse the DAG when a source file changes. Files added later still need a restart. |
 | `--no-schedule` | off | Do not fire `Schedule(...)` nodes. |
-| `--timezone <TZ>` | `local` | Timezone for cron: `local`, `utc` or an IANA name. |
+| `--timezone <TZ>` | `local` | Timezone for cron: `local`, `utc` or an IANA name such as `America/New_York`. Any other value is a usage error (exit 2). |
 | `--read-only` | off | Refuse runs, never schedule, read the metadata DB from copies. |
 | `--env <name>` | `default` | Use a named environment's cache and history. |
 
@@ -369,7 +371,11 @@ See [Configuration](/reference/config/).
 ## list
 
 List every asset, task and sensor barca finds, with its kind, freshness and inputs. A scheduled
-node also shows its cron and its next fire time in local time, to the second.
+node also shows its cron and its next fire time, to the second. The time is the next match of
+the cron expression in the local time of the machine `list` runs on (the table column is
+`NEXT FIRE (LOCAL TIME)`). `list` talks to no server, so it does not know a server's
+`--timezone`: a server started with one fires at the same wall-clock time in that zone, and its
+[`GET /schedule`](/reference/server-api/#get-schedule) reports the times it will fire at.
 
 ```
 $ barca list pipeline.py
@@ -536,7 +542,7 @@ describes the output contract for scripts and AI agents.
 | 1    | `step_failed` | a step of yours raised; the traceback is included and the run is recorded as failed |
 | 2    | `usage`       | bad flags or arguments, unknown target, `get` on a task or `run` on an asset, unreadable or invalid `.py` file, invalid `--env` or barca.toml |
 | 3    | `infra`       | barca or its environment failed: metadata DB, worker pool, remote state, I/O |
-| 130  | `cancelled`   | interrupted (Ctrl-C)                                                       |
+| 130  | `cancelled`   | stopped by Ctrl-C (SIGINT) or SIGTERM                                      |
 
 A closed stdout or stderr never makes barca panic, never stops a run and is not an error:
 output for the closed stream is dropped, a `get` or `run` finishes and is recorded, and the
@@ -605,3 +611,12 @@ location. See [Configuration](/reference/config/#environments---env).
   `reason: "refresh_cascade"`.
 - A sensor's value is part of its consumers' run hashes; it used not to be. Assets that read a
   sensor re-ran once after that upgrade.
+- After 0.18.1: SIGTERM stops `get`, `run` and `serve` the way Ctrl-C does. `get` and `run`
+  exit 130 (`cancelled`) and record the run as `cancelled`; before, SIGTERM killed barca at
+  once (a shell reported 143) and the run was later reported as `interrupted`. As process 1 of
+  a container barca used to ignore SIGTERM.
+- After 0.18.1: `barca serve --timezone` with a value barca does not know exits 2; it used to
+  print a warning and use local time.
+- After 0.18.1: `POST /run/{target}` and `POST /get/{target}` answer 404, 409 or 400 for a
+  target that cannot run; they used to answer 200 with a `run_id` of a run that then failed.
+- After 0.18.1: the `barca list` table column `NEXT FIRE` is `NEXT FIRE (LOCAL TIME)`.

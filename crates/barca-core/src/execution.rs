@@ -2,7 +2,7 @@
 use crate::BarcaError;
 use crate::cache::{
     BLOCKED_ARTIFACT_PATH, CachePolicy, DecideState, Decision, RunReason, decide_step,
-    has_sensor_output, localize_decision, sensor_inputs,
+    has_sensor_output, in_dependency_order, localize_decision, sensor_inputs,
 };
 use crate::dag::Dag;
 use crate::db;
@@ -1594,131 +1594,129 @@ async fn predict_steps(
     phase_ref: &Phase,
 ) -> Vec<crate::planner::StreamStep> {
     let mut to_run = Vec::new();
-    for stream in &phase_ref.streams {
-        for step in &stream.steps {
-            let base = step.step_id.base_id();
-            let up_base = |up: &str| up.split('[').next().unwrap_or(up).to_string();
-            let unknown_dep = step
-                .inputs
-                .values()
-                .find(|up| ctx.unknown_ids.get(&up_base(up)) == Some(&"partitions_unknown"));
-            if let Some(up) = unknown_dep {
-                ctx.steps.push(unknown_report(
-                    ctx.dag,
-                    base,
-                    "partitions_unknown",
-                    format!(
-                        "depends on '{}', whose partitions are not known until it runs",
+    for (_, step) in in_dependency_order(ctx.dag, phase_ref) {
+        let base = step.step_id.base_id();
+        let up_base = |up: &str| up.split('[').next().unwrap_or(up).to_string();
+        let unknown_dep = step
+            .inputs
+            .values()
+            .find(|up| ctx.unknown_ids.get(&up_base(up)) == Some(&"partitions_unknown"));
+        if let Some(up) = unknown_dep {
+            ctx.steps.push(unknown_report(
+                ctx.dag,
+                base,
+                "partitions_unknown",
+                format!(
+                    "depends on '{}', whose partitions are not known until it runs",
+                    short_name(up)
+                ),
+            ));
+            ctx.unknown_ids
+                .insert(base.to_string(), "partitions_unknown");
+            ctx.summary.unknown += 1;
+            continue;
+        }
+
+        // Sensors this step reads, and whether the dry run knows their output.
+        let read_sensors = sensor_inputs(ctx.dag, step);
+        let missing_sensor = read_sensors
+            .iter()
+            .find(|s| !has_sensor_output(ctx.state, s))
+            .map(|s| s.to_string());
+        let hash_unknown_dep = step
+            .inputs
+            .values()
+            .find(|up| ctx.hash_unknown.contains(&up_base(up)))
+            .cloned();
+
+        let (step, decision) = decide_step(
+            ctx.dag,
+            ctx.policy,
+            ctx.no_cache,
+            ctx.cache,
+            ctx.state,
+            step,
+        )
+        .await;
+        // Forced to run whatever the cache holds (task, sensor, refresh, --no-cache).
+        let forced = matches!(
+            &decision,
+            Decision::Run(reason) if *reason != RunReason::NotMaterialized
+        );
+        if missing_sensor.is_some() || hash_unknown_dep.is_some() {
+            ctx.hash_unknown.insert(base.to_string());
+            if !forced {
+                let detail = match (&missing_sensor, &hash_unknown_dep) {
+                    (Some(s), _) => format!(
+                        "reads sensor '{}', which has no recorded output: its value is \
+                                 not known until it runs",
+                        short_name(s)
+                    ),
+                    (None, Some(up)) => format!(
+                        "depends on '{}', whose inputs include a sensor with no \
+                                 recorded output",
                         short_name(up)
                     ),
-                ));
+                    (None, None) => unreachable!(),
+                };
+                // A partitioned step split across streams is one line.
+                if !ctx.steps.iter().any(|r| r.id == base) {
+                    ctx.steps.push(unknown_report(
+                        ctx.dag,
+                        base,
+                        "sensor_output_unknown",
+                        detail,
+                    ));
+                }
                 ctx.unknown_ids
-                    .insert(base.to_string(), "partitions_unknown");
-                ctx.summary.unknown += 1;
+                    .insert(base.to_string(), "sensor_output_unknown");
+                ctx.summary.unknown += step.partition_keys.len().max(1);
                 continue;
             }
+        }
 
-            // Sensors this step reads, and whether the dry run knows their output.
-            let read_sensors = sensor_inputs(ctx.dag, step);
-            let missing_sensor = read_sensors
+        let mut report = report_for(ctx.dag, &step, &decision, true);
+        if !forced && !read_sensors.is_empty() {
+            let note = read_sensors
                 .iter()
-                .find(|s| !has_sensor_output(ctx.state, s))
-                .map(|s| s.to_string());
-            let hash_unknown_dep = step
-                .inputs
-                .values()
-                .find(|up| ctx.hash_unknown.contains(&up_base(up)))
-                .cloned();
-
-            let (step, decision) = decide_step(
-                ctx.dag,
-                ctx.policy,
-                ctx.no_cache,
-                ctx.cache,
-                ctx.state,
-                step,
-            )
-            .await;
-            // Forced to run whatever the cache holds (task, sensor, refresh, --no-cache).
-            let forced = matches!(
-                &decision,
-                Decision::Run(reason) if *reason != RunReason::NotMaterialized
-            );
-            if missing_sensor.is_some() || hash_unknown_dep.is_some() {
-                ctx.hash_unknown.insert(base.to_string());
-                if !forced {
-                    let detail = match (&missing_sensor, &hash_unknown_dep) {
-                        (Some(s), _) => format!(
-                            "reads sensor '{}', which has no recorded output: its value is \
-                                 not known until it runs",
-                            short_name(s)
-                        ),
-                        (None, Some(up)) => format!(
-                            "depends on '{}', whose inputs include a sensor with no \
-                                 recorded output",
-                            short_name(up)
-                        ),
-                        (None, None) => unreachable!(),
-                    };
-                    // A partitioned step split across streams is one line.
-                    if !ctx.steps.iter().any(|r| r.id == base) {
-                        ctx.steps.push(unknown_report(
-                            ctx.dag,
-                            base,
-                            "sensor_output_unknown",
-                            detail,
-                        ));
-                    }
-                    ctx.unknown_ids
-                        .insert(base.to_string(), "sensor_output_unknown");
-                    ctx.summary.unknown += step.partition_keys.len().max(1);
-                    continue;
-                }
+                .map(|s| {
+                    format!(
+                        "assumes sensor '{}' returns the same value as its last run",
+                        short_name(s)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("; ");
+            report.detail = Some(match report.detail.take() {
+                Some(d) => format!("{d}; {note}"),
+                None => note,
+            });
+        }
+        ctx.steps.push(report);
+        match decision {
+            Decision::Run(_) => {
+                ctx.summary.will_run += step.partition_keys.len().max(1);
+                to_run.push(step);
             }
-
-            let mut report = report_for(ctx.dag, &step, &decision, true);
-            if !forced && !read_sensors.is_empty() {
-                let note = read_sensors
-                    .iter()
-                    .map(|s| {
-                        format!(
-                            "assumes sensor '{}' returns the same value as its last run",
-                            short_name(s)
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("; ");
-                report.detail = Some(match report.detail.take() {
-                    Some(d) => format!("{d}; {note}"),
-                    None => note,
-                });
+            Decision::Cached { oref, .. } => {
+                ctx.summary.cached += 1;
+                ctx.all_outputs.insert(step.step_id.display(), oref);
+                ctx.cached_steps.remember(step);
             }
-            ctx.steps.push(report);
-            match decision {
-                Decision::Run(_) => {
-                    ctx.summary.will_run += step.partition_keys.len().max(1);
-                    to_run.push(step);
+            Decision::Partitioned { cached, missing } => {
+                ctx.summary.cached += cached.len();
+                ctx.summary.will_run += missing.len();
+                let any_cached = !cached.is_empty();
+                for (pdisplay, oref) in cached {
+                    ctx.all_outputs.insert(pdisplay, oref);
                 }
-                Decision::Cached { oref, .. } => {
-                    ctx.summary.cached += 1;
-                    ctx.all_outputs.insert(step.step_id.display(), oref);
+                if !missing.is_empty() {
+                    let mut partial = step.clone();
+                    partial.partition_keys = missing;
+                    to_run.push(partial);
+                }
+                if any_cached {
                     ctx.cached_steps.remember(step);
-                }
-                Decision::Partitioned { cached, missing } => {
-                    ctx.summary.cached += cached.len();
-                    ctx.summary.will_run += missing.len();
-                    let any_cached = !cached.is_empty();
-                    for (pdisplay, oref) in cached {
-                        ctx.all_outputs.insert(pdisplay, oref);
-                    }
-                    if !missing.is_empty() {
-                        let mut partial = step.clone();
-                        partial.partition_keys = missing;
-                        to_run.push(partial);
-                    }
-                    if any_cached {
-                        ctx.cached_steps.remember(step);
-                    }
                 }
             }
         }
@@ -1791,59 +1789,60 @@ async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaError> {
     // executes.
     let cache = db::CacheReader::open(db_path).await?;
 
-    for stream in &phase_ref.streams {
-        let mut uncached_steps: Vec<crate::planner::StreamStep> = Vec::new();
-
-        for step in &stream.steps {
-            let (step, decision) =
-                decide_step(dag, policy, no_cache, Some(&cache), decide_state, step).await;
-            let decision = localize_decision(decision, &step, store);
-            step_reports.push(report_for(dag, &step, &decision, false));
-            let display_id = step.step_id.display();
-            match decision {
-                Decision::Run(_) => uncached_steps.push(step),
-                Decision::Cached { oref, stale_root } => {
-                    if let Some(root) = stale_root {
-                        note(
-                            pb,
-                            &format!(
-                                "[barca] warning: {}",
-                                stale_warning(&display_id, &root, false)
-                            ),
-                        );
-                    }
-                    if agent_mode {
-                        // Announce a step once, with its true outcome: when its
-                        // artifact is known to be gone it may yet be computed
-                        // again, so its line waits until that is settled.
-                        if StoreSync::known_absent(store.as_ref(), &oref.path) {
-                            held_cached_lines.push(display_id.clone());
-                        } else {
-                            crate::errln!("{}", cached_step_line(dag, &display_id));
-                        }
-                    }
-                    all_outputs.insert(display_id.clone(), oref);
-                    cached_node_ids.insert(display_id);
-                    cached_steps.remember(step);
+    // Decide all upstream chunks before any consumer, independently of the worker split.
+    let mut uncached: Vec<Vec<crate::planner::StreamStep>> =
+        vec![Vec::new(); phase_ref.streams.len()];
+    for (stream_idx, step) in in_dependency_order(dag, phase_ref) {
+        let uncached_steps = &mut uncached[stream_idx];
+        let (step, decision) =
+            decide_step(dag, policy, no_cache, Some(&cache), decide_state, step).await;
+        let decision = localize_decision(decision, &step, store);
+        step_reports.push(report_for(dag, &step, &decision, false));
+        let display_id = step.step_id.display();
+        match decision {
+            Decision::Run(_) => uncached_steps.push(step),
+            Decision::Cached { oref, stale_root } => {
+                if let Some(root) = stale_root {
+                    note(
+                        pb,
+                        &format!(
+                            "[barca] warning: {}",
+                            stale_warning(&display_id, &root, false)
+                        ),
+                    );
                 }
-                Decision::Partitioned { cached, missing } => {
-                    let any_cached = !cached.is_empty();
-                    for (pdisplay, oref) in cached {
-                        all_outputs.insert(pdisplay.clone(), oref);
-                        cached_node_ids.insert(pdisplay);
+                if agent_mode {
+                    // Announce a step once, with its true outcome: when its
+                    // artifact is known to be gone it may yet be computed
+                    // again, so its line waits until that is settled.
+                    if StoreSync::known_absent(store.as_ref(), &oref.path) {
+                        held_cached_lines.push(display_id.clone());
+                    } else {
+                        crate::errln!("{}", cached_step_line(dag, &display_id));
                     }
-                    if !missing.is_empty() {
-                        let mut partial = step.clone();
-                        partial.partition_keys = missing;
-                        uncached_steps.push(partial);
-                    }
-                    if any_cached {
-                        cached_steps.remember(step);
-                    }
+                }
+                all_outputs.insert(display_id.clone(), oref);
+                cached_node_ids.insert(display_id);
+                cached_steps.remember(step);
+            }
+            Decision::Partitioned { cached, missing } => {
+                let any_cached = !cached.is_empty();
+                for (pdisplay, oref) in cached {
+                    all_outputs.insert(pdisplay.clone(), oref);
+                    cached_node_ids.insert(pdisplay);
+                }
+                if !missing.is_empty() {
+                    let mut partial = step.clone();
+                    partial.partition_keys = missing;
+                    uncached_steps.push(partial);
+                }
+                if any_cached {
+                    cached_steps.remember(step);
                 }
             }
         }
-
+    }
+    for (stream, uncached_steps) in phase_ref.streams.iter().zip(uncached) {
         if !uncached_steps.is_empty() {
             uncached_streams.push(crate::planner::WorkerStream {
                 stream_id: stream.stream_id.clone(),
@@ -2484,7 +2483,7 @@ async fn publish_history(
                 None
             }
             Err(BarcaError::Cancelled) if interrupt.abandon.is_cancelled() => {
-                Some("stopped by a second Ctrl-C".to_string())
+                Some("stopped by a second interrupt".to_string())
             }
             Err(BarcaError::Cancelled) => Some(format!(
                 "the upload did not finish within {}s",

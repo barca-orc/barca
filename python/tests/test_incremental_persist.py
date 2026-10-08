@@ -367,3 +367,25 @@ def test_a_live_run_on_another_kernel_stays_running_and_keeps_its_marker(project
     assert run_rows(project)["theirs"][0] == "running"
     assert status_of_theirs() == "running"
     assert markers(project) == [f"{token}.fifo"]
+
+
+def test_sigterm_cancels_a_run_the_way_ctrl_c_does(project):
+    """A supervisor, a CI timeout and `docker stop` send SIGTERM. It used to kill barca at
+    once: no exit code of its own, workers left behind, and the run `running` in history until
+    a later command reported it `interrupted` (#289)."""
+    proc = start_get(project)
+    wait_until_slow_is_running(project)
+    wait_for(lambda: states(project)["second"] == "cached", "the finished steps")
+    proc.send_signal(signal.SIGTERM)
+    _, stderr = proc.communicate(timeout=WAIT)
+    # 130, the exit code of `cancelled`: not -15 (killed by the signal) and not 143.
+    assert proc.returncode == 130, stderr
+    envelope = json.loads(stderr.strip().splitlines()[-1])
+    assert (envelope["kind"], envelope["code"]) == ("cancelled", 130)
+    assert "[barca] 2/3 steps | cancelled after" in stderr
+
+    run = latest_run(project)
+    assert run["status"] == "cancelled"
+    assert run["finished_at"] is not None
+    # The steps that finished are kept, as after Ctrl-C.
+    assert states(project) == {"first": "cached", "second": "cached", "slow": "never_run"}
