@@ -12,12 +12,16 @@
 //! and requires the findings to be exactly [`DELIBERATE`]: the places that show or test the
 //! warning on purpose. A new entry there needs a reason; anything else is a false positive (fix
 //! the rule) or a real unused input (fix the pipeline: use it, remove it, or `_`-prefix it).
+//!
+//! The same sweep checks decorator arguments (#284): a pipeline that passes a decorator an
+//! argument barca does not define is rejected when it is planned, so none in the repository
+//! may, except the ones in [`REJECTED_ARGUMENTS`] that show or test that error.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use barca_core::NodeKind;
-use barca_core::parse::extract_nodes;
+use barca_core::parse::{ParseError, extract_nodes};
 use ruff_python_ast::Expr;
 use ruff_python_ast::visitor::{self, Visitor};
 
@@ -84,6 +88,21 @@ const DELIBERATE: &[(&str, &str, &str)] = &[
     ),
     ("python/tests/test_unused_input_warning.py", "fan", "raw"),
     ("python/tests/test_warning_dedupe.py", "fetch", "seed"),
+];
+
+/// (file, function, argument) of the pipelines that must be rejected because a decorator is
+/// called with an argument it does not define (#284): the tests and the documentation of that
+/// check. Every other pipeline in the repository must plan.
+const REJECTED_ARGUMENTS: &[(&str, &str, &str)] = &[
+    // The manual's example of the error.
+    ("crates/barca-cli/docs/assets.md", "report", "input"),
+    // Dagster's `@asset(ins=...)`, shown beside barca's without its import. In a real file
+    // `from dagster import asset` makes the name not barca's and it is not checked.
+    (
+        "site/src/content/docs/comparisons/framework-comparison.md",
+        "b",
+        "ins",
+    ),
 ];
 
 fn repo_root() -> PathBuf {
@@ -185,6 +204,8 @@ fn dedent(code: &str) -> String {
 #[derive(Default)]
 struct Sweep {
     findings: BTreeSet<(String, String, String)>,
+    /// (file, function, argument) of every pipeline rejected for a decorator argument.
+    rejected: BTreeSet<(String, String, String)>,
     /// Pipelines checked (sources with at least one decorated function).
     pipelines: usize,
     /// Decorated functions that declare inputs.
@@ -192,9 +213,31 @@ struct Sweep {
 }
 
 impl Sweep {
+    /// Only whether the source is rejected for a decorator argument.
+    fn check_arguments(&mut self, file: &str, source: &str) {
+        if let Err(ParseError::InvalidArguments {
+            function, message, ..
+        }) = extract_nodes(source, file)
+        {
+            let argument = message.split('`').nth(1).unwrap_or("").to_string();
+            self.rejected.insert((file.to_string(), function, argument));
+        }
+    }
+
     fn check(&mut self, file: &str, source: &str) {
-        let Ok(nodes) = extract_nodes(source, file) else {
-            return; // not Python (a shell block, a template with placeholders)
+        let nodes = match extract_nodes(source, file) {
+            Ok(nodes) => nodes,
+            // A pipeline barca refuses to plan because of a decorator argument (#284).
+            Err(ParseError::InvalidArguments {
+                function, message, ..
+            }) => {
+                self.pipelines += 1;
+                let argument = message.split('`').nth(1).unwrap_or("").to_string();
+                self.rejected.insert((file.to_string(), function, argument));
+                return;
+            }
+            // Not Python (a shell block, a template with placeholders).
+            Err(_) => return,
         };
         if nodes.is_empty() {
             return;
@@ -247,6 +290,13 @@ fn only_the_deliberate_examples_trip_the_unused_input_warning() {
         for literal in string_literals(&source) {
             if literal.contains("barca") {
                 sweep.check(&rel(path), &literal);
+                // Fixtures written indented inside a test and dedented when they are saved:
+                // looked at for decorator arguments only. (The unused-input sweep has never
+                // read them; two of them have an unused input.)
+                let dedented = dedent(&literal);
+                if dedented != literal {
+                    sweep.check_arguments(&rel(path), &dedented);
+                }
             }
         }
     }
@@ -277,6 +327,19 @@ fn only_the_deliberate_examples_trip_the_unused_input_warning() {
         sweep.steps_with_inputs > 500,
         "only {} steps with inputs",
         sweep.steps_with_inputs
+    );
+
+    let rejected: BTreeSet<(String, String, String)> = REJECTED_ARGUMENTS
+        .iter()
+        .map(|(f, n, a)| (f.to_string(), n.to_string(), a.to_string()))
+        .collect();
+    assert!(
+        sweep.rejected == rejected,
+        "pipelines rejected for a decorator argument differ from REJECTED_ARGUMENTS.\n\
+         Not listed (remove or correct the argument, or list it if it shows the check): {:#?}\n\
+         Listed but no longer rejected: {:#?}",
+        sweep.rejected.difference(&rejected).collect::<Vec<_>>(),
+        rejected.difference(&sweep.rejected).collect::<Vec<_>>()
     );
 
     let expected: BTreeSet<(String, String, String)> = DELIBERATE

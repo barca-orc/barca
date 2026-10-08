@@ -28,6 +28,10 @@ def summary() -> dict:
 - A parquet sink needs a DataFrame, Arrow table or DuckDB relation. Anything else is a sink
   failure: barca never writes pickle bytes under a `.parquet` name.
 - Several `@sink` decorators may be stacked on one asset.
+- `@sink` takes the path by position and `serializer=` by keyword, nothing else.
+  `@sink(path="out.json")`, `@sink("out.txt", "json")` and an unknown keyword are errors when
+  the file is read, exit 2 (`barca docs assets`, "Accepted arguments"). Up to 0.18.1 the first
+  declared no sink and the second ignored the format.
 - Writes are staged and finalized atomically, so a crash never leaves a partial file.
 - A sink path is yours: barca writes the file there and changes nothing else. If the path is a
   symlink, the file it points to is written and the link stays. If a directory is at the path

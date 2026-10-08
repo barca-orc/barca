@@ -29,6 +29,8 @@ barca sql "select * from total"         # look at a cached result with DuckDB; r
   and shares its `.barca/` cache. File arguments are relative to where you are. Node ids
   (`pipelines/sources.py:ibp_model`) are relative to that root.
 - Unsure of a name? `barca list`. An unknown name exits 2 and lists the valid ones.
+- A decorator argument barca does not define (`@asset(after=x)`, `input=` for `inputs=`) exits 2
+  on every command that reads the file and names the accepted ones (`barca docs assets`).
 
 ## Argument order: target, then files
 

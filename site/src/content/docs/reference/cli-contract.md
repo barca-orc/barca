@@ -98,9 +98,13 @@ Positional rules (stable), for `get`, `run` and `status`:
   (`a,,b`), is a usage error.
 - An unknown target is a usage error (exit 2) on every command, with one remediation:
   ``Run `barca list <files>` to see available assets and tasks.``
-- barca never offers fuzzy suggestions: no "did you mean" for targets or `barca docs` topics (an
-  unknown topic lists every valid topic), and argument errors carry no "a similar argument
-  exists" tip. A guess can read as confirmation.
+- barca never offers fuzzy suggestions on the command line: no "did you mean" for targets or
+  `barca docs` topics (an unknown topic lists every valid topic), and argument errors carry no
+  "a similar argument exists" tip. A guess can read as confirmation. The one place a guess is
+  made is a misspelt decorator argument in a pipeline file (`input=` for `inputs=`): the error
+  names the accepted argument when exactly one is within one edit of what was written (two for
+  a name longer than four characters), always next to the full list of accepted arguments
+  (`barca docs assets`, "Accepted arguments").
 - `--refresh` and `--fields` take one comma-separated list (`--refresh a,b`).
 
 ## Arguments
@@ -297,7 +301,9 @@ Each error `kind` has exactly one exit code (stable):
 <!-- END GENERATED exit-codes -->
 
 `step_failed`: one of your steps raised (fix the code). `usage`: bad arguments, unknown target,
-task/asset misuse, a `.py` file that does not parse, a DAG that cannot be built (an input that
+task/asset misuse, a `.py` file that does not parse, a decorator called with an argument it does
+not define (`@asset(after=x)`, `input=` for `inputs=`, `@asset(**options)`; `barca docs assets`,
+"Accepted arguments"), a DAG that cannot be built (an input that
 names no definition, a cycle, a partitioned asset in an unpartitioned asset's `inputs=` without
 `collect()`, a `partitions_from()` the asset cannot mirror), invalid `--env` or `barca.toml`. `infra`:
 barca or its environment failed (metadata DB, workers, remote state, I/O); retrying may help.
@@ -306,6 +312,13 @@ with an artifact store also while artifacts upload or download or the shared his
 or pushed. The exit code is 130 whatever the store does: a cancelled run spends at most 10
 seconds sharing its record, a second Ctrl-C ends that at once, and a push that fails then is a
 line on stderr, not exit 3 (`barca docs remote`, "Ctrl-C").
+
+An error in a pipeline file (a syntax error, a decorator argument barca does not define, an
+invalid `env=` or cron) fails every command that reads that file, whatever the target: `list`,
+`plan`, `status`, `get`, `run`, `stats` and `sql` exit 2 and run nothing. With no file arguments
+that is every pipeline file of the project. The envelope's `error` starts with `Parse error:
+<file>:<function> (line <n>):` for a decorator argument, and its `remediation` says what to
+change; the wording is not contract.
 
 ## JSON output schemas
 

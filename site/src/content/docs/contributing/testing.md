@@ -31,7 +31,7 @@ coordinator, scheduler, config). The separate test files are:
 |---|---|
 | `crates/barca-core/tests/grammar_spec.rs` | Parsing of decorator syntax |
 | `crates/barca-core/tests/socket_stress.rs` | The worker socket protocol under load |
-| `crates/barca-core/tests/unused_input_repo_sweep.rs` | The unused-input warning against the repository's own examples and docs |
+| `crates/barca-core/tests/unused_input_repo_sweep.rs` | The unused-input warning against the repository's own examples and docs, and that none of them passes a decorator an argument barca does not define |
 | `crates/barca-server/tests/api.rs` | The HTTP endpoints of `barca serve` |
 
 ## Python
@@ -133,6 +133,10 @@ These keep the documentation and the command line in agreement.
   with `python/tests/snapshots/cli_contract/`.
 - `python/tests/test_docs_examples.py` runs the example pipelines in the manual and checks
   what the text says about them.
+- `cargo test -p barca-core decorator_args` compares the arguments each decorator and helper
+  accepts (`SIGNATURES` in `crates/barca-core/src/decorator_args.rs`) with the signatures in
+  `python/barca/__init__.py` and with the "Accepted arguments" tables in `barca docs assets`
+  and on the decorators page. Adding an argument means changing all four.
 
 When one fails after a deliberate change, run `scripts/update-cli-snapshots.sh` and review the
 diff. The script builds barca, so it takes as long as a release build.

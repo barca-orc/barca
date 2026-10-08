@@ -533,6 +533,10 @@ describes the output contract for scripts and AI agents.
 | 2    | `usage`       | bad flags or arguments, unknown target, `get` on a task or `run` on an asset, unreadable or invalid `.py` file, invalid `--env` or barca.toml |
 | 3    | `infra`       | barca or its environment failed: metadata DB, worker pool, remote state, I/O |
 | 130  | `cancelled`   | interrupted (Ctrl-C)                                                       |
+An error in a pipeline file fails every command that reads the file with exit 2, whatever the
+target: a syntax error, or a decorator called with an argument it does not define
+(`@asset(after=other)`, `input=` for `inputs=`). See
+[Accepted arguments](/reference/api/decorators/#accepted-arguments).
 
 In JSON output mode (whenever results are JSON: piped or captured stdout, `--json`, `-o json` or
 `BARCA_OUTPUT=json`; `plan` always; `docs` with `--json`), an error is a single JSON line, the

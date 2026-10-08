@@ -6,6 +6,7 @@ pub mod coordinator;
 pub mod cost;
 pub mod dag;
 pub mod db;
+pub mod decorator_args;
 pub mod discover;
 pub mod dispatch;
 pub mod envdeps;

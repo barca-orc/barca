@@ -50,7 +50,7 @@ class Manual:
 class Schedule:
     """Runs on a cron schedule."""
 
-    def __init__(self, cron: str) -> None:
+    def __init__(self, cron: str, /) -> None:
         self.cron = cron
 
 
@@ -59,6 +59,7 @@ class Schedule:
 
 def asset(
     fn=None,
+    /,
     *,
     name=None,
     inputs=None,
@@ -71,9 +72,12 @@ def asset(
     description=None,
     tags=None,
     env: list[str] | None = None,
-    **kwargs,
 ):
     """Declare a cached asset node.
+
+    The arguments below are the only ones: the `barca` binary rejects any other when it
+    plans (exit 2, naming the argument), and this signature rejects it when the module
+    is imported.
 
     `freshness` controls when the asset is kept up to date — `Always` (default),
     `Manual`, or `Schedule("<cron>")`. The Rust binary reads it statically; a
@@ -104,6 +108,7 @@ def asset(
 
 def sensor(
     fn=None,
+    /,
     *,
     name=None,
     freshness=Manual,
@@ -113,7 +118,6 @@ def sensor(
     description=None,
     tags=None,
     env: list[str] | None = None,
-    **kwargs,
 ):
     """Declare a sensor node (observes external state).
 
@@ -132,6 +136,7 @@ def sensor(
 
 def task(
     fn=None,
+    /,
     *,
     name=None,
     inputs=None,
@@ -142,7 +147,6 @@ def task(
     description=None,
     tags=None,
     env: list[str] | None = None,
-    **kwargs,
 ):
     """Declare a task node (always re-runs; never cached).
 
@@ -165,7 +169,7 @@ def task(
     return decorator
 
 
-def sink(path: str, serializer: str | None = None, **kwargs):
+def sink(path: str, /, *, serializer: str | None = None):
     """Declare a sink output (stacked on @asset).
 
     path may be local or a remote URI (abfss://, s3://, gs://). serializer
@@ -187,22 +191,22 @@ def unsafe(fn):
 # ─── Marker functions ─────────────────────────────────────────────────────────
 
 
-def partitions(values):
+def partitions(values, /):
     """Declare static partition values."""
     return values
 
 
-def partitions_from(source):
+def partitions_from(source, /):
     """Derive partitions from an upstream asset."""
     return source
 
 
-def collect(asset_fn):
+def collect(asset_fn, /):
     """Aggregate all partitions of an upstream asset."""
     return asset_fn
 
 
-def asset_ref(ref_string: str) -> str:
+def asset_ref(ref_string: str, /) -> str:
     """Canonical asset reference."""
     return ref_string
 

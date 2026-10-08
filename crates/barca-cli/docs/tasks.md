@@ -35,6 +35,10 @@ def notify(_migrate) -> None:
 - An `inputs` key starting with `_` means "run after, but do not load the data": the
   parameter receives `None` and no artifact is deserialized.
 - `@task(freshness=Schedule("<cron>"))` runs on a timer under `barca serve`.
+- `@task` accepts `name`, `inputs`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`,
+  `description`, `tags` and `env`. Any other argument (`when=`, `partitions=`, a misspelt
+  `input=`) is an error when the file is read, exit 2 (`barca docs assets`, "Accepted
+  arguments").
 
 ## Running tasks
 

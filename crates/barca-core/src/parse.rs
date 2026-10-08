@@ -37,6 +37,17 @@ pub enum ParseError {
         function: String,
         reason: String,
     },
+
+    /// A barca decorator or helper is called with an argument it does not define (#284).
+    /// The first line says what is wrong, the second what to do.
+    #[error("{file}:{function} (line {line}): {message}\n{fix}")]
+    InvalidArguments {
+        file: String,
+        function: String,
+        line: usize,
+        message: String,
+        fix: String,
+    },
 }
 
 /// Parse a Python source file and extract all barca-decorated nodes.
@@ -118,6 +129,19 @@ impl FileNames {
         names
     }
 
+    /// Whether `name` (`asset`, `collect`, ...) means barca's own in this file: not a function
+    /// the file defines, and not a name imported from another module. A name with no binding
+    /// here (`from barca import *`) counts as barca's, as it does for extraction.
+    fn is_barca(&self, name: &str) -> bool {
+        if self.local.contains(name) {
+            return false;
+        }
+        match self.from_imports.get(name) {
+            Some((module, original)) => module == "barca" && original == name,
+            None => true,
+        }
+    }
+
     /// The node an `inputs=` value (or `collect(...)` / `partitions_from(...)` argument) refers
     /// to: a function in this file, a name imported from a module, or `module.name`.
     fn node_ref(&self, expr: &Expr) -> Option<NodeRef> {
@@ -191,6 +215,20 @@ fn try_extract_function(
     let Some(kind) = kind else {
         return Ok(None);
     };
+
+    // Before anything is read from the arguments: an argument barca does not define is an
+    // error, not something to ignore (`decorator_args`).
+    if let Some(problem) =
+        crate::decorator_args::check_decorators(&func.decorator_list, &|name| names.is_barca(name))
+    {
+        return Err(ParseError::InvalidArguments {
+            file: file_path.to_string(),
+            function: func.name.to_string(),
+            line: source[..problem.offset].matches('\n').count() + 1,
+            message: problem.message,
+            fix: problem.fix,
+        });
+    }
 
     let freshness = extract_freshness(&keywords, file_path, func.name.as_str())?
         .unwrap_or(Freshness::default_for(kind));

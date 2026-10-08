@@ -27,6 +27,9 @@ def summary(all_sales: list[dict]) -> dict:
 - `partitions([...])` declares keys. A literal list is read statically; any other expression
   (a list comprehension, a function call) is evaluated by the Python runtime at plan time.
 - The partition key is passed to the function as the parameter named in `partitions={...}`.
+- `partitions()`, `partitions_from()` and `collect()` take one argument, by position. A keyword
+  (`partitions(values=[...])`, `collect(asset_fn=sales)`) is an error when the file is read,
+  exit 2 (`barca docs assets`, "Accepted arguments").
 - `partitions_from(upstream)` on a partitioned `upstream` gives the asset the same keys, and
   each key is called with the key and that key's output of `upstream`, passed as the parameter
   named after it: above, `margin(region="emea", sales=<the emea output of sales>)`. To receive

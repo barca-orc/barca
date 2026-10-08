@@ -55,6 +55,10 @@ BARCA_OUTPUT=json barca get total pipeline.py
 | 3    | `infra`       | barca or its environment failed: metadata DB, worker pool, remote state, I/O    | not your code; retrying may help |
 | 130  | `cancelled`   | interrupted (Ctrl-C)                                                            | re-run                        |
 
+A decorator argument barca does not define (`@asset(after=other)`, `input=` for `inputs=`) is a
+`usage` error on every command that reads the file; the envelope names the node, the line, the
+argument and the accepted ones (`barca docs assets`, "Accepted arguments").
+
 ```bash
 barca get total pipeline.py --agent > result.json 2> progress.log
 echo $?

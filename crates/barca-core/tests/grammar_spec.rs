@@ -1054,8 +1054,29 @@ def my_asset() -> dict:
     assert_eq!(nodes.len(), 1);
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// Arguments a decorator does not define (#284)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// The error text for a source that must be rejected for a decorator argument.
+fn rejected(src: &str) -> String {
+    match extract_nodes(src, "test.py") {
+        Err(e @ barca_core::parse::ParseError::InvalidArguments { .. }) => e.to_string(),
+        other => panic!("expected InvalidArguments, got {other:?}\n{src}"),
+    }
+}
+
+/// `decorators` above `def node(): ...`, after the usual import and one upstream asset.
+fn with_decorators(decorators: &str) -> String {
+    format!(
+        "from barca import *\n\n@asset()\ndef raw():\n    return 1\n\n{decorators}\ndef node():\n    return 1\n"
+    )
+}
+
+/// Until 0.18.1 this test was `unknown_decorator_kwargs_are_ignored`: the node was extracted
+/// and the arguments dropped without a word.
 #[test]
-fn unknown_decorator_kwargs_are_ignored() {
+fn unknown_decorator_kwargs_are_rejected() {
     let src = r#"
 from barca import asset
 
@@ -1063,8 +1084,371 @@ from barca import asset
 def my_asset() -> dict:
     return {}
 "#;
+    let err = rejected(src);
+    assert_eq!(
+        err,
+        "test.py:my_asset (line 4): `unknown_param` is not an argument of @asset. @asset \
+         accepts: name, inputs, partitions, serializer, freshness, timeout_seconds, retries, \
+         retry_backoff, description, tags, env\n\
+         Remove `unknown_param`, or replace it with an argument @asset accepts. See `barca \
+         docs assets`."
+    );
+}
+
+#[test]
+fn an_argument_from_old_documentation_is_rejected_on_each_decorator() {
+    for (decorators, argument, call) in [
+        ("@asset(after=raw)", "after", "@asset"),
+        ("@task(when=\"always\")", "when", "@task"),
+        ("@sensor(poll=5)", "poll", "@sensor"),
+        (
+            "@asset()\n@sink(\"out.json\", mode=\"append\")",
+            "mode",
+            "@sink",
+        ),
+        // Real arguments, on a decorator that does not take them.
+        (
+            "@task(partitions={\"k\": partitions([1])})",
+            "partitions",
+            "@task",
+        ),
+        ("@task(serializer=\"json\")", "serializer", "@task"),
+        ("@sensor(serializer=\"json\")", "serializer", "@sensor"),
+    ] {
+        let err = rejected(&with_decorators(decorators));
+        assert!(
+            err.contains(&format!("`{argument}` is not an argument of {call}.")),
+            "{decorators}: {err}"
+        );
+        assert!(err.starts_with("test.py:node (line "), "{err}");
+        assert!(err.contains(&format!("{call} accepts: ")), "{err}");
+        assert!(!err.contains("Did you mean"), "{decorators}: {err}");
+    }
+}
+
+#[test]
+fn a_misspelt_argument_names_the_one_it_is_close_to() {
+    for (decorators, typo, meant) in [
+        ("@asset(input={\"raw\": raw})", "input", "inputs"),
+        (
+            "@asset(partition={\"k\": partitions([1])})",
+            "partition",
+            "partitions",
+        ),
+        ("@asset(serialiser=\"pickle\")", "serialiser", "serializer"),
+        ("@task(Inputs={\"raw\": raw})", "Inputs", "inputs"),
+        ("@sensor(freshnes=Manual)", "freshnes", "freshness"),
+        (
+            "@asset()\n@sink(\"o.json\", serialiser=\"json\")",
+            "serialiser",
+            "serializer",
+        ),
+        ("@asset(retry_backof=1.0)", "retry_backof", "retry_backoff"),
+        (
+            "@asset(timeout_second=5)",
+            "timeout_second",
+            "timeout_seconds",
+        ),
+    ] {
+        let err = rejected(&with_decorators(decorators));
+        assert!(
+            err.contains(&format!("`{typo}` is not an argument of @")),
+            "{decorators}: {err}"
+        );
+        assert!(
+            err.contains(&format!(" Did you mean `{meant}`? ")),
+            "{decorators}: {err}"
+        );
+        assert!(
+            err.contains(&format!("\nRename `{typo}` to `{meant}`, or remove it.")),
+            "{decorators}: {err}"
+        );
+    }
+}
+
+#[test]
+fn the_helpers_take_their_argument_by_position_only() {
+    for (decorators, argument, call, usage) in [
+        (
+            "@asset(partitions={\"k\": partitions(values=[1, 2])})",
+            "values",
+            "partitions()",
+            "partitions([\"a\", \"b\"])",
+        ),
+        (
+            "@asset(partitions={\"k\": partitions_from(source=raw)})",
+            "source",
+            "partitions_from()",
+            "partitions_from(upstream)",
+        ),
+        (
+            "@asset(inputs={\"raw\": collect(asset_fn=raw)})",
+            "asset_fn",
+            "collect()",
+            "collect(upstream)",
+        ),
+        (
+            "@asset(inputs={\"raw\": asset_ref(ref_string=\"test.py:raw\")})",
+            "ref_string",
+            "asset_ref()",
+            "asset_ref(\"file.py:name\")",
+        ),
+        (
+            "@asset(freshness=Schedule(cron=\"0 5 * * *\"))",
+            "cron",
+            "Schedule()",
+            "Schedule(\"0 5 * * *\")",
+        ),
+        (
+            "@asset(freshness=Schedule(\"0 5 * * *\", timezone=\"utc\"))",
+            "timezone",
+            "Schedule()",
+            "Schedule(\"0 5 * * *\")",
+        ),
+    ] {
+        let err = rejected(&with_decorators(decorators));
+        assert!(
+            err.contains(&format!(
+                "`{argument}` is not an argument of {call}. {call} takes no keyword arguments"
+            )),
+            "{decorators}: {err}"
+        );
+        assert!(
+            err.contains(&format!("Pass the value by position, like `{usage}`")),
+            "{decorators}: {err}"
+        );
+    }
+    // The path of a sink is positional too; before, `@sink(path=...)` declared no sink.
+    let err = rejected(&with_decorators("@asset()\n@sink(path=\"out.json\")"));
+    assert!(err.contains("`path` is not an argument of @sink. @sink accepts: serializer"));
+}
+
+#[test]
+fn arguments_that_cannot_be_read_from_the_source_are_rejected() {
+    let err = rejected(&with_decorators("@asset(**OPTIONS)"));
+    assert!(
+        err.contains("@asset is called with `**` arguments. barca reads decorator arguments from the source without running it"),
+        "{err}"
+    );
+    assert!(
+        err.contains("\nWrite the arguments out, like `@asset(inputs="),
+        "{err}"
+    );
+
+    // A literal dict behind `**` is not read either: no special case.
+    let err = rejected(&with_decorators("@task(**{\"inputs\": {\"raw\": raw}})"));
+    assert!(err.contains("@task is called with `**` arguments"), "{err}");
+
+    let err = rejected(&with_decorators("@asset(*ARGS)"));
+    assert!(err.contains("@asset is called with `*` arguments"), "{err}");
+
+    let err = rejected(&with_decorators("@asset(\"daily\")"));
+    assert!(
+        err.contains(
+            "@asset takes keyword arguments only, and is called with a positional argument."
+        ),
+        "{err}"
+    );
+
+    // `@sink("path", "json")` used to drop the serializer.
+    let err = rejected(&with_decorators("@asset()\n@sink(\"out.txt\", \"json\")"));
+    assert!(
+        err.contains(
+            "@sink takes one positional argument, and is called with 2 positional arguments."
+        ),
+        "{err}"
+    );
+}
+
+#[test]
+fn the_error_names_the_line_of_the_argument_and_the_first_problem_in_the_file() {
+    let src = r#"from barca import asset, task
+
+@asset(
+    name="x",
+    retries=2,
+    after=None,
+)
+def first():
+    return 1
+
+@task(when=1)
+def second():
+    pass
+"#;
+    let err = rejected(src);
+    assert!(
+        err.starts_with("test.py:first (line 6): `after` is not"),
+        "{err}"
+    );
+}
+
+#[test]
+fn every_documented_argument_is_accepted() {
+    let src = r#"
+from barca import asset, sensor, task, sink, partitions, partitions_from, collect, asset_ref
+from barca import Always, Manual, Schedule
+
+@asset(
+    name="named",
+    inputs={},
+    partitions={"k": partitions(["a", "b"])},
+    serializer="json",
+    freshness=Always,
+    timeout_seconds=10,
+    retries=2,
+    retry_backoff=0.5,
+    description="d",
+    tags={"team": "data"},
+    env=["HOME"],
+)
+@sink("out.json", serializer="json")
+def full(k):
+    return 1
+
+@asset(partitions={"k": partitions_from(full)})
+def mirrored(k, full):
+    return 1
+
+@asset(inputs={"parts": collect(full), "other": asset_ref("test.py:mirrored")})
+def gathered(parts, other):
+    return parts
+
+@sensor(
+    name="s",
+    freshness=Schedule("*/5 * * * *"),
+    timeout_seconds=10,
+    retries=2,
+    retry_backoff=0.5,
+    description="d",
+    tags={"a": "b"},
+    env=["HOME"],
+)
+def watch():
+    return (True, 1)
+
+@task(
+    name="t",
+    inputs={"g": gathered},
+    freshness=Manual,
+    timeout_seconds=10,
+    retries=2,
+    retry_backoff=0.5,
+    description="d",
+    tags={"a": "b"},
+    env=["HOME"],
+)
+def publish(g):
+    pass
+"#;
     let nodes = extract_nodes(src, "test.py").unwrap();
-    assert_eq!(nodes.len(), 1);
-    // Unknown kwargs silently ignored — only known params extracted
-    assert_eq!(nodes[0].freshness, Freshness::Always); // default
+    assert_eq!(nodes.len(), 5);
+}
+
+#[test]
+fn a_decorator_that_is_not_barcas_is_not_checked() {
+    // Defined in the file.
+    let own = r#"
+import barca
+
+def asset(**options):
+    return lambda f: f
+
+@asset(owner="me")
+def mine():
+    return 1
+"#;
+    assert!(extract_nodes(own, "test.py").is_ok());
+
+    // Imported from somewhere else, also under barca's name.
+    let other = r#"
+from other_lib import task, sink
+from dagster import asset
+
+@asset(ins={"x": 1})
+@sink("p", mode="a")
+def a():
+    return 1
+
+@task(when="now")
+def t():
+    pass
+"#;
+    assert!(extract_nodes(other, "test.py").is_ok());
+
+    // A helper of the same name defined in the file, and calls that are not barca's inside
+    // the arguments.
+    let helpers = r#"
+from barca import asset, partitions
+
+def collect(thing, flatten=False):
+    return thing
+
+@asset()
+def raw():
+    return [1]
+
+@asset(inputs={"raw": collect(raw, flatten=True)}, partitions={"k": partitions(load(kind="x"))})
+def uses(raw, k):
+    return raw
+"#;
+    assert!(extract_nodes(helpers, "test.py").is_ok());
+
+    // A function that is no barca node: its decorators are not looked at.
+    let plain = r#"
+from barca import sink
+import functools
+
+@functools.lru_cache(maxsize=None)
+def cached():
+    return 1
+
+@sink(path="x")
+def not_a_node():
+    return 1
+"#;
+    assert_eq!(extract_nodes(plain, "test.py").unwrap().len(), 0);
+}
+
+#[test]
+fn barcas_name_is_checked_however_it_reaches_the_file() {
+    for import in [
+        "from barca import asset",
+        "from barca import *",
+        "", // no import at all: the name is still read as barca's, so it is checked
+    ] {
+        let src = format!("{import}\n\n@asset(after=None)\ndef a():\n    return 1\n");
+        let err = rejected(&src);
+        assert!(
+            err.contains("`after` is not an argument of @asset"),
+            "{import}: {err}"
+        );
+    }
+}
+
+/// `import barca as b` / `from barca import asset as a`: the parser has never read these as
+/// nodes (the file then defines none), so there is nothing to check. Recorded here so that a
+/// change to alias handling has to decide what the check does.
+#[test]
+fn aliased_decorators_are_not_nodes_and_so_not_checked() {
+    let src = r#"
+import barca as b
+from barca import asset as a
+
+@b.asset(bogus=1)
+def one():
+    return 1
+
+@a(bogus=1)
+def two():
+    return 2
+"#;
+    assert_eq!(extract_nodes(src, "test.py").unwrap().len(), 0);
+}
+
+/// `@sensor(inputs=...)` keeps its own message, from the DAG (`dag_rejects_sensor_with_inputs`).
+#[test]
+fn sensor_inputs_are_left_to_the_dag_error() {
+    let src = "from barca import sensor\n\n@sensor(inputs={})\ndef s():\n    return (True, 1)\n";
+    assert!(extract_nodes(src, "test.py").is_ok());
 }

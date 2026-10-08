@@ -242,7 +242,12 @@ impl CliError {
         match &e {
             // These messages put the fix after the first line (e.g. the valid `--refresh`
             // names, or what to close when the DB is locked): split it out.
-            BarcaError::Usage(_) | BarcaError::Db(_) | BarcaError::Other(_) => {
+            // A parse error that knows its fix (an argument a decorator does not define)
+            // carries it the same way; a syntax error is one line and gets the fallback.
+            BarcaError::Usage(_)
+            | BarcaError::Db(_)
+            | BarcaError::Other(_)
+            | BarcaError::Parse(_) => {
                 let mut out = Self::from_prose_or(kind, prose.clone(), fallback);
                 // Engine messages carry no `error: ` prefix; keep their prose exactly.
                 out.prose = prose.trim_end().to_string();
