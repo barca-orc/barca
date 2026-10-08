@@ -21,7 +21,7 @@ Options:
           Disable the cron scheduler (Schedule(...) assets will not auto-fire)
 
       --timezone <TIMEZONE>
-          Timezone for cron evaluation: local (this machine's zone), utc, or an IANA name such as America/New_York (case-sensitive). Any other value is a usage error
+          Timezone for cron evaluation: local (this machine's zone) or utc, in any letter case, or an IANA name such as America/New_York, which is case-sensitive. Any other value is a usage error
 
           [default: local]
 

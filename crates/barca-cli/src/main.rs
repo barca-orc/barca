@@ -467,7 +467,7 @@ enum Cli {
         /// Disable the cron scheduler (Schedule(...) assets will not auto-fire)
         #[arg(long)]
         no_schedule: bool,
-        /// Timezone for cron evaluation: local (this machine's zone), utc, or an IANA name such as America/New_York (case-sensitive). Any other value is a usage error
+        /// Timezone for cron evaluation: local (this machine's zone) or utc, in any letter case, or an IANA name such as America/New_York, which is case-sensitive. Any other value is a usage error
         #[arg(long, default_value = "local", value_parser = parse_timezone)]
         timezone: String,
         /// Inspect only: refuse runs, never schedule, read the metadata DB from snapshots

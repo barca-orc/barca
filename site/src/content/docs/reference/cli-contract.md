@@ -185,7 +185,7 @@ default, and any aliases.
 | `-p, --port` | `PORT` | default `8274` | experimental (with the command) | Port to bind on |
 | `--watch` | - | default `false` | experimental (with the command) | Dev mode: re-parse the DAG when source files change |
 | `--no-schedule` | - | default `false` | experimental (with the command) | Disable the cron scheduler (Schedule(...) assets will not auto-fire) |
-| `--timezone` | `TIMEZONE` | default `local` | experimental (with the command) | Timezone for cron evaluation: local (this machine's zone), utc, or an IANA name such as America/New_York (case-sensitive). Any other value is a usage error |
+| `--timezone` | `TIMEZONE` | default `local` | experimental (with the command) | Timezone for cron evaluation: local (this machine's zone) or utc, in any letter case, or an IANA name such as America/New_York, which is case-sensitive. Any other value is a usage error |
 | `--read-only` | - | default `false` | experimental (with the command) | Inspect only: refuse runs, never schedule, read the metadata DB from snapshots |
 | `--env` | `ENV` | - | experimental (with the command) | Environment name (separates cache/state per environment) |
 
