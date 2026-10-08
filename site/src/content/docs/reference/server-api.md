@@ -18,10 +18,11 @@ memory and can be cancelled with `DELETE /run/{run_id}`. Finished runs are writt
 
 ```bash
 barca serve pipeline.py                   # one file, default port 8274
+barca serve pipeline.py --host 0.0.0.0    # every interface (containers, VMs)
 barca serve --port 8400 --timezone utc    # every file in the project
 ```
 
-The flags (`--port`, `--watch`, `--no-schedule`, `--timezone`, `--read-only`, `--env`) are in
+The flags (`--host`, `--port`, `--watch`, `--no-schedule`, `--timezone`, `--read-only`, `--env`) are in
 the [CLI reference](/reference/cli/#serve). On start the server prints its address and the
 schedule on stderr:
 
@@ -30,6 +31,11 @@ schedule on stderr:
 [barca] scheduling 1 asset:
   pipeline.py:daily — 0 5 * * * (next 2026-10-08 05:00:00)
 ```
+
+The default bind address is `127.0.0.1`. `--host` takes an IP address, including `::` for
+IPv6; hostnames are rejected. `0.0.0.0` listens on every IPv4 interface. There is no
+authentication, so anyone who can reach the port can trigger runs. A non-loopback address
+prints a startup warning; use a private network or an authenticating proxy.
 
 `--watch` re-parses the DAG when a source file changes, so `/assets` and `/plan` reflect edits
 without a restart. Files added after the server started are not picked up until a restart, with
@@ -146,7 +152,7 @@ GET /health
 ```
 
 ```json
-{ "status": "ok", "version": "0.18.1", "read_only": false, "scheduler": true }
+{ "status": "ok", "version": "0.19.0", "read_only": false, "scheduler": true }
 ```
 
 `scheduler` is `true` when this server fires `Schedule(...)` nodes: on by default, `false` with
@@ -293,8 +299,8 @@ database failures.
 
 ## Limits
 
-- No authentication and no TLS. The server listens on `127.0.0.1` only; there is no flag to
-  change the address.
+- No authentication and no TLS. The server listens on `127.0.0.1` by default; `--host` can
+  make it reachable from other machines. Authenticate at a proxy.
 - No shared history: `BARCA_STATE=off` is required with a remote store.
 - Runs in progress are not persisted. After a restart their handles return `404`; finished runs
   remain in `barca history`.
