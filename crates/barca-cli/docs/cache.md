@@ -549,13 +549,13 @@ Known limits:
 - With a remote artifact store, steps are not recorded as they finish: a row is written only
   once the artifact's upload is confirmed, which happens when the run ends. Such a run shows no
   progress in `barca status`, and a killed one records nothing.
-- **When a run is `interrupted`.** Only on an observation that can only be made when the
-  run's process is gone; whenever barca cannot make one, the run stays `running`. A run
+- **When a run is `interrupted`.** For runs started after 0.18.1, only on an observation
+  that can only be made when the run's process is gone; whenever barca cannot make one, the run stays `running`. A run
   records which kernel its process ran on (the boot id), its pid namespace, its start time,
   and a marker: a FIFO in `.barca/run-owners/` that the process holds open for as long as it
   has a run in flight. Three observations count:
   - On the same kernel and in the same pid namespace, the process table: no process with
-    that id, or one with another start time.
+    that id, or one with another start time in the same known time namespace.
   - On the same kernel in another pid namespace (another container), the marker: the
     system refuses to open a FIFO for writing when no process has it open for reading, and
     it closes the owner's end when the owner ends, however it ended. This counts only where

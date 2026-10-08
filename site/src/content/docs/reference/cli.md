@@ -305,8 +305,9 @@ each step as it finishes, so a `running` run already counts them in `steps_execu
 `barca status` from another terminal shows them as `cached`. A run whose process was killed is
 `interrupted` (no `finished_at`); the next `barca get` reuses the steps it had recorded. A run
 killed in a container is `interrupted` too, once a container starts again on the same `.barca`
-volume (after 0.18.1; earlier versions left it `running`). A run stays `running` whenever barca
-cannot establish that its process is gone. See
+volume (after 0.18.1; earlier versions left it `running`). For runs started after 0.18.1, a run stays `running`
+whenever barca cannot establish that its process is gone. Earlier runs retain their legacy
+process-id and host-name checks. See
 `barca docs cache`, "While a run is going, and after one is killed", and the shared-state
 [limitations](/reference/remote-storage/#limitations).
 
