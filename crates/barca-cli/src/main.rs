@@ -322,6 +322,7 @@ async fn run_cli(cli: Cli, ctx: &Context) -> Result<(), CliError> {
         Cli::Serve {
             files,
             port,
+            host,
             watch,
             no_schedule,
             timezone,
@@ -330,6 +331,7 @@ async fn run_cli(cli: Cli, ctx: &Context) -> Result<(), CliError> {
         } => serve_cmd(
             env.as_deref(),
             files,
+            host,
             port,
             watch,
             !no_schedule,

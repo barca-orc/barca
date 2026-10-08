@@ -6,6 +6,7 @@ use std::path::PathBuf;
 pub(crate) async fn serve_cmd(
     env: Option<&str>,
     files: Vec<PathBuf>,
+    host: std::net::IpAddr,
     port: u16,
     watch: bool,
     schedule: bool,
@@ -23,7 +24,7 @@ pub(crate) async fn serve_cmd(
     }
     let config = barca_server::ServeConfig {
         files: files.iter().map(|p| p.display().to_string()).collect(),
-        host: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+        host,
         port,
         watch,
         schedule,
