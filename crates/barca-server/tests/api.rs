@@ -398,12 +398,12 @@ async fn a_trigger_with_a_target_that_cannot_run_is_refused_before_a_run_starts(
         (
             "/get/publish",
             StatusCode::BAD_REQUEST,
-            "'publish' is a task: use POST /run/publish",
+            "'publish' is a task — use `barca run` instead",
         ),
         (
             "/run/other.py:first",
             StatusCode::BAD_REQUEST,
-            "'other.py:first' is an asset: use POST /get/other.py:first",
+            "'other.py:first' is an asset — use `barca get` instead",
         ),
     ] {
         let (status, body) = send(&app, "POST", uri).await;
@@ -413,6 +413,43 @@ async fn a_trigger_with_a_target_that_cannot_run_is_refused_before_a_run_starts(
         assert!(body.get("run_id").is_none(), "{uri} started a run: {body}");
     }
     // Nothing ran: a run would have created the metadata DB.
+    assert!(!dir.path().join("metadata.db").exists());
+}
+
+#[tokio::test]
+async fn a_trigger_is_checked_against_the_source_as_it_is_now() {
+    // The nodes are kept between requests, but only while the source files are unchanged:
+    // a run reads the source again, and the check must name what that run would find.
+    let dir = tempfile::tempdir().unwrap();
+    let config = trigger_config(dir.path());
+    let pipeline = config.files[0].clone();
+    let app = app(config);
+    let (status, _) = send(&app, "POST", "/get/later").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = send(&app, "POST", "/get/later").await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "the same answer from the kept nodes"
+    );
+
+    // A node is added: known at once (and refused for its kind, so nothing runs).
+    let mut source = std::fs::read_to_string(&pipeline).unwrap();
+    source.push_str("\n@task()\ndef later() -> None:\n    pass\n");
+    std::fs::write(&pipeline, &source).unwrap();
+    let (status, body) = send(&app, "POST", "/get/later").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+
+    // A node is removed: unknown at once.
+    let (status, _) = send(&app, "POST", "/get/publish").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    std::fs::write(
+        &pipeline,
+        source.replace("def publish", "def no_longer_publish"),
+    )
+    .unwrap();
+    let (status, body) = send(&app, "POST", "/get/publish").await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
     assert!(!dir.path().join("metadata.db").exists());
 }
 

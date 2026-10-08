@@ -94,6 +94,37 @@ pub struct RunState {
 pub struct DagCache {
     pub assets: Option<Vec<AssetSummary>>,
     pub plan: Option<PlanResult>,
+    /// The nodes a trigger's target is checked against, with the state of the source files
+    /// they were read from. Unlike the two above it is never older than the source: a check
+    /// uses it only while every file still has the size and modification time recorded here,
+    /// so it names exactly the nodes a run started now would find.
+    pub targets: Option<TargetIndex>,
+}
+
+/// Every node's id and kind, as read from source files in the state `stamp` describes.
+#[derive(Clone)]
+pub struct TargetIndex {
+    pub stamp: SourceStamp,
+    pub nodes: Arc<Vec<(String, barca_core::NodeKind)>>,
+}
+
+/// The size and modification time of each source file, in the order of `ServeConfig::files`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SourceStamp(Vec<(std::time::SystemTime, u64)>);
+
+impl SourceStamp {
+    /// The current state of `files`. `None` when one of them is not a readable regular file
+    /// (a directory's own time says nothing about the files in it): then nothing is cached.
+    pub fn of(files: &[String]) -> Option<Self> {
+        files
+            .iter()
+            .map(|f| {
+                let meta = std::fs::metadata(f).ok().filter(|m| m.is_file())?;
+                Some((meta.modified().ok()?, meta.len()))
+            })
+            .collect::<Option<Vec<_>>>()
+            .map(Self)
+    }
 }
 
 /// One row of `GET /state`: the node's `barca status` entry plus what the

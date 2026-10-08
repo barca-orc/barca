@@ -207,8 +207,8 @@ def test_a_trigger_for_a_target_that_cannot_run_is_an_error_response(project):
             ("POST", "/get/nope", 404, "Asset 'nope' not found. Available: "),
             ("POST", "/run/nope", 404, "Asset 'nope' not found. Available: "),
             ("POST", "/get/quick", 409, "'quick' matches more than one node: other.py:quick, "),
-            ("POST", "/get/nightly", 400, "'nightly' is a task: use POST /run/nightly"),
-            ("POST", "/run/slow", 400, "'slow' is an asset: use POST /get/slow"),
+            ("POST", "/get/nightly", 400, "'nightly' is a task — use `barca run` instead"),
+            ("POST", "/run/slow", 400, "'slow' is an asset — use `barca get` instead"),
         ]
         for method, path, want, says in cases:
             status, body = server.request(method, path)

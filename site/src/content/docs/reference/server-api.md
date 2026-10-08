@@ -97,17 +97,20 @@ Poll `GET /status/{run_id}` until `status` reaches a terminal state (`complete`,
 `size_bytes`, `elapsed_seconds`), for json results too. The command line prints a json value
 inline; the server does not. Read the file at `path`, relative to the project root.
 
-`POST /run/{target}` and `POST /get/{target}` check the target before they start a run, the
-way `barca run` and `barca get` do. The server reads the source for this on each request. When
-the target cannot run, no run is started, there is no `run_id`, and the response is an error
-with a JSON body `{ "error": "..." }`:
+`POST /run/{target}` and `POST /get/{target}` check the target before they start a run, with
+the check `barca run` and `barca get` make, so the messages are the command line's (a wrong-kind
+message names the command; over HTTP use the other endpoint). The check is made against the
+source as it is now: the server keeps the list of nodes between requests and reads the files
+again when one of them has changed size or modification time. When the target cannot run, no
+run is started, there is no `run_id`, and the response is an error with a JSON body
+`{ "error": "..." }`:
 
 | Request | Status | `error` |
 |---|---|---|
 | a name that matches no node | `404` | `Asset 'nope' not found. Available: pipeline.py:orders, pipeline.py:total` |
 | a name that matches several nodes (the same function name in two files) | `409` | ``'orders' matches more than one node: a.py:orders, b.py:orders. Name one by its full id, e.g. `a.py:orders` `` |
-| `POST /get/{target}` naming a task | `400` | `'publish' is a task: use POST /run/publish` |
-| `POST /run/{target}` naming an asset | `400` | `'orders' is an asset: use POST /get/orders` |
+| `POST /get/{target}` naming a task | `400` | ``'publish' is a task — use `barca run` instead`` |
+| `POST /run/{target}` naming an asset | `400` | ``'orders' is an asset — use `barca get` instead`` |
 | source that does not parse, or a DAG that cannot be built | `400` | the parse or DAG error |
 
 `POST /run/{target}` accepts a task or a sensor and `POST /get/{target}` an asset or a sensor,
