@@ -296,7 +296,7 @@ With `orders` and `total` unscheduled, the server log shows one step per tick, b
 `orders.csv` changes:
 
 ```
-[barca] scheduling 1 asset:
+[barca] scheduling 1 sensor:
   pipeline.py:orders_version — */5 * * * * * (next 2026-10-07 14:14:00)
 [barca] scheduled run pipeline.py:orders_version → 51ee21bc84b0
 [barca] step:pipeline.py:orders_version completed 0.0s (1/1)

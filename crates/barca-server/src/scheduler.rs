@@ -328,17 +328,34 @@ async fn reload_jobs(state: &AppState) -> Vec<ScheduledJob> {
     collect_jobs(&state.config.files, &state.config.python).await
 }
 
+/// How many nodes of each kind are scheduled, in words: `1 task`, `2 assets and 1 task`,
+/// `1 asset, 2 sensors and 1 task`. Kinds are listed in the order asset, sensor, task.
+fn count_by_kind(jobs: &[ScheduledJob]) -> String {
+    let parts: Vec<String> = [
+        (NodeKind::Asset, "asset"),
+        (NodeKind::Sensor, "sensor"),
+        (NodeKind::Task, "task"),
+    ]
+    .into_iter()
+    .filter_map(|(kind, word)| {
+        let n = jobs.iter().filter(|j| j.kind == kind).count();
+        (n > 0).then(|| format!("{n} {word}{}", if n == 1 { "" } else { "s" }))
+    })
+    .collect();
+    match parts.as_slice() {
+        [] => "0 nodes".to_string(),
+        [one] => one.clone(),
+        [head @ .., last] => format!("{} and {last}", head.join(", ")),
+    }
+}
+
 /// Log the current schedule and each job's next fire time.
 fn log_schedule(jobs: &[ScheduledJob], zone: &Zone) {
     if jobs.is_empty() {
-        eprintln!("[barca] no scheduled assets yet (watching for changes)");
+        eprintln!("[barca] no scheduled nodes yet (watching for changes)");
         return;
     }
-    eprintln!(
-        "[barca] scheduling {} asset{}:",
-        jobs.len(),
-        if jobs.len() == 1 { "" } else { "s" }
-    );
+    eprintln!("[barca] scheduling {}:", count_by_kind(jobs));
     let now = zone.now();
     for job in jobs {
         let next = job
@@ -358,7 +375,7 @@ pub async fn run_scheduler(state: AppState) {
     let mut jobs = reload_jobs(&state).await;
 
     if jobs.is_empty() && !state.config.watch {
-        eprintln!("[barca] no scheduled assets — scheduler idle");
+        eprintln!("[barca] no scheduled nodes — scheduler idle");
         return;
     }
     log_schedule(&jobs, &zone);
@@ -586,6 +603,23 @@ mod tests {
         assert!(
             due_jobs(&at_s(5, 0, 3), &jobs).is_empty(),
             ":03 does not fire"
+        );
+    }
+
+    // ─── startup log wording ───────────────────────────────────────────────
+
+    #[test]
+    fn the_schedule_line_names_each_kind_with_its_count() {
+        let asset = || job("f.py:a", NodeKind::Asset, "0 5 * * *");
+        let sensor = || job("f.py:s", NodeKind::Sensor, "0 5 * * *");
+        let task = || job("f.py:t", NodeKind::Task, "0 5 * * *");
+        assert_eq!(count_by_kind(&[task()]), "1 task");
+        assert_eq!(count_by_kind(&[asset()]), "1 asset");
+        assert_eq!(count_by_kind(&[asset(), asset()]), "2 assets");
+        assert_eq!(count_by_kind(&[task(), asset()]), "1 asset and 1 task");
+        assert_eq!(
+            count_by_kind(&[task(), sensor(), asset(), sensor(), task()]),
+            "1 asset, 2 sensors and 2 tasks"
         );
     }
 

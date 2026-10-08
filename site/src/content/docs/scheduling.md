@@ -30,7 +30,7 @@ barca serve job.py
 
 ```
 [barca] serving on http://127.0.0.1:8274  (1 file)
-[barca] scheduling 1 asset:
+[barca] scheduling 1 task:
   job.py:refresh — */10 * * * * (next 2026-10-07 14:30:00)
 ```
 
