@@ -257,6 +257,7 @@ output, so the next `--dry-run` or `barca status` shows its consumers as stale.
 .barca/metadata.db.base                     with shared history: a counter of pulls and uploads (`barca docs remote`)
 .barca/metadata.db.prev                     with shared history: the local DB as it was before the last pull that changed it
 .barca/metadata.db.pull-*, .push-*          with shared history: a download or upload in progress; what a killed command left is removed by the next pull
+.barca/run-owners/<token>.fifo              a marker a barca process holds open while it has a run in flight ("While a run is going, and after one is killed")
 .barca/artifacts/<node>/<run_hash>.<ext>    one file per result
 ```
 
@@ -532,7 +533,9 @@ barca history --json            # the run is `running`; `steps_executed` is the 
   runs again.
 - **History says so.** `barca history` reports a run whose process no longer exists as
   `interrupted`, with `finished_at` and `elapsed_seconds` `null` (nobody saw it end) and
-  `steps_executed` at what it had recorded. Ctrl-C is different: the run stops its workers,
+  `steps_executed` at what it had recorded. It does so as soon as the process is gone, and
+  also for a run killed with its container, once a container starts again on the same
+  `.barca` (see the limits below). Ctrl-C is different: the run stops its workers,
   records itself and is `cancelled` (exit 130). With an artifact store that also holds while
   artifacts upload, download or the shared history is pushed, and the cancelled run then shares
   its record for at most 10 seconds; a second Ctrl-C ends that (`barca docs remote`, "Ctrl-C").
@@ -546,9 +549,40 @@ Known limits:
 - With a remote artifact store, steps are not recorded as they finish: a row is written only
   once the artifact's upload is confirmed, which happens when the run ends. Such a run shows no
   progress in `barca status`, and a killed one records nothing.
-- `interrupted` is decided by looking for the run's process on this machine. A run started by an
-  older barca, or on another machine, stays `running`; so does a run whose process id has since
-  been reused by another program.
+- **When a run is `interrupted`.** Only when barca can establish that the run's process no
+  longer exists; whenever it cannot, the run stays `running`, so a run that is going is never
+  shown or recorded as interrupted. A run records which kernel its process ran on (the boot
+  id), its pid namespace, its start time, and a marker: a FIFO in `.barca/run-owners/` that
+  the process holds open for as long as it has a run in flight. A barca on the same kernel
+  and in the same pid namespace looks the process up: no process with that id, or one with
+  another start time, means gone. A barca on the same kernel in another pid namespace
+  (another container) asks the marker instead: the system refuses to open a FIFO for
+  writing when no process has it open for reading, and it closes the owner's end when the
+  owner ends, however it ended. That answer is used only where barca can show that the file
+  is the one the owner held (same device and inode, and on Linux the same file handle). A
+  barca on another kernel can observe nothing of the process and says `running`, with one
+  exception: the same machine id and host name, with the marker in this directory, means
+  the machine was restarted since, and the run is gone.
+- No clock is involved: a killed run reads `interrupted` at once, and a suspended laptop or
+  a stopped process (Ctrl-Z) does not make a live run look dead.
+- What therefore stays `running` although its process is gone:
+  - a run another machine started (it came with the shared history), until that machine
+    records it;
+  - with Docker Desktop, a run killed on the host as seen from a container and a run killed
+    in a container as seen from the host (they are different kernels); the side the run
+    was on shows `interrupted`;
+  - a run killed with its container when `.barca` is on a Docker Desktop bind mount, which
+    gives no file handle, and the new container did not get the pid namespace number of
+    the old one. Restarting one container gives the same number in practice; a named
+    volume for `.barca` does not depend on it;
+  - a run killed in a container by a restart of the machine or of Docker's virtual
+    machine: a container has no machine id to recognise the machine by;
+  - a run started by barca 0.18.1 or earlier, which is judged by its process id and host
+    name: in a container, on another machine, or once its process id has been reused.
+- `interrupted` is written to the history by the next `get` or `run`, under the same rule.
+  A marker is removed by its process when its runs have ended, and otherwise by a later
+  `get` or `run` once no `running` run names it and it is an hour old. The marker of a
+  killed run that stays `running` for one of the reasons above stays too (an empty file).
 - Failed steps are recorded when the run ends, so a killed run records its successes only.
 
 ## Environments

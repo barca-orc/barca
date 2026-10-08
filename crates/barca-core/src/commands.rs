@@ -3901,6 +3901,8 @@ async fn persist_run(db_path: &str, l: &RunLedger<'_>) -> Result<(), BarcaError>
         )
         .await
         .map_err(|e| BarcaError::Db(format!("failed to finish run: {e}")))?;
+    // The row says how the run ended: it needs no witness that its process lives.
+    crate::run_owner::release(db_path, l.run_id);
 
     // What the [`StepRecorder`] wrote during the run, or, on a replay after a shared-state
     // conflict, what the pulled database holds of this run.

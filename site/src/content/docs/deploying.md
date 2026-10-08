@@ -128,10 +128,15 @@ before you bind it to anything wider, add [authentication](#authentication) at t
   runs in progress are cancelled, their workers are stopped, and they are recorded as
   `cancelled`. The process exits with code 0 within a few seconds.
 - **Killed** (SIGKILL, out of memory, host lost): steps that had finished are already recorded
-  and are served from cache next time. The run in progress is left in `barca history` with
-  status `running`. Outside a container barca reports such a run as `interrupted` by checking
-  whether its process still exists; in a container the new server has the same process id, so
-  the stale `running` row stays.
+  and are served from cache next time. In 0.18.1 and earlier the run in progress stays in
+  `barca history` with status `running` for good: those versions look for the run's process
+  by its id and host name, and in a container the new server has the same process id and
+  another host name. Later versions report it as `interrupted` once a container starts again
+  on the same `.barca` volume, and the first run after the restart writes that to the
+  history. Two cases stay `running`: a container killed by a restart of the whole machine
+  (or of Docker Desktop), and, on Docker Desktop, a `.barca` on a bind mount instead of a
+  volume when the new container did not get the old one's pid namespace number. The rule
+  is in `barca docs cache`, "While a run is going, and after one is killed".
 - **Runs are not resumed.** Nothing restarts a cancelled or killed run. The next tick or
   request starts a new one, which reuses whatever was cached.
 - **Schedules catch up once.** If a tick passed while the server was down, the job fires once

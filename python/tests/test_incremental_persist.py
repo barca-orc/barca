@@ -9,6 +9,7 @@ most twice a second), and the end-of-run write adds only what is missing.
 import json
 import os
 import signal
+import sqlite3
 import subprocess
 import time
 from pathlib import Path
@@ -243,3 +244,126 @@ def test_a_cancelled_run_is_recorded_as_cancelled_not_interrupted(project):
     for name in ("first", "second"):
         stats = json.loads(barca(project, "stats", name, "pipeline.py", "--json").stdout)
         assert stats["total_runs"] == 1, name
+
+
+def run_rows(cwd: Path) -> dict[str, tuple]:
+    db = sqlite3.connect(cwd / ".barca" / "metadata.db")
+    try:
+        return {
+            r[0]: r[1:] for r in db.execute("select run_id, status, pid, host, owner from runs")
+        }
+    finally:
+        db.close()
+
+
+def markers(cwd: Path) -> list[str]:
+    owners = cwd / ".barca" / "run-owners"
+    return sorted(p.name for p in owners.iterdir()) if owners.is_dir() else []
+
+
+def a_dead_pid() -> int:
+    child = subprocess.Popen(["true"])
+    child.wait()
+    return child.pid
+
+
+def kill_a_run_in_its_slow_step(project: Path) -> str:
+    """Start a run, SIGKILL it in its third step, and return its run id."""
+    proc = start_get(project)
+    wait_until_slow_is_running(project)
+    wait_for(lambda: states(project)["second"] == "cached", "the finished steps to be recorded")
+    os.kill(proc.pid, signal.SIGKILL)
+    assert proc.wait(timeout=WAIT) == -signal.SIGKILL
+    for pipe in (proc.stdout, proc.stderr):
+        pipe.close()
+    return next(iter(run_rows(project)))
+
+
+def test_a_run_holds_a_marker_while_it_is_going_and_removes_it_when_it_ends(project):
+    proc = start_get(project)
+    try:
+        wait_until_slow_is_running(project)
+        (run_id, (status, _, _, owner)) = next(iter(run_rows(project).items()))
+        owner = json.loads(owner)
+        assert status == "running" and owner["boot"]
+        assert markers(project) == [owner["fifo"]["token"] + ".fifo"]
+        # Reading history does not touch it.
+        assert latest_run(project)["status"] == "running"
+        assert markers(project) == [owner["fifo"]["token"] + ".fifo"]
+    finally:
+        finish(proc, project)
+    assert markers(project) == []
+    assert run_rows(project)[run_id][0] == "success"
+
+
+def test_a_run_killed_in_a_container_is_interrupted_after_a_restart(project):
+    """In a container the coordinator is process 1, the next start is process 1 again, and the
+    host name is new on every start. Judged by pid and host, a killed run looked alive and
+    foreign, and stayed `running` for ever (#290)."""
+    run_id = kill_a_run_in_its_slow_step(project)
+
+    # What the restarted container sees: the pid the run recorded belongs to a live process
+    # (this one stands for the new process 1) and the host name is not its own.
+    db = sqlite3.connect(project / ".barca" / "metadata.db")
+    with db:
+        db.execute("update runs set pid = ?, host = 'the-previous-container'", (os.getpid(),))
+    db.close()
+    assert run_rows(project)[run_id][:3] == ("running", os.getpid(), "the-previous-container")
+
+    run = latest_run(project)
+    assert run["status"] == "interrupted"
+    assert run["finished_at"] is None
+
+    # The next run records it and reuses what the killed one finished.
+    (project / "release").write_text("")
+    out = barca(project, "get", "pipeline.py", "--json")
+    assert out.returncode == 0, out.stderr
+    assert json.loads(out.stdout)["steps_executed"] == 1
+    assert run_rows(project)[run_id][0] == "interrupted"
+    runs = json.loads(barca(project, "history", "--json").stdout)["runs"]
+    assert [r["status"] for r in runs] == ["success", "interrupted"]
+
+
+def test_a_live_run_on_another_kernel_stays_running_and_keeps_its_marker(project):
+    """A run going on a macOS host, seen from a container that mounts the project (or the
+    other way round). The container's kernel knows nothing of the host's processes: to it the
+    run's pid does not exist and the run's marker has nobody at the other end. An earlier
+    design took that for "killed", wrote `interrupted`, and deleted the marker of a run that
+    was going. Here the reader is this machine and the run's row and marker are made to be
+    those of another kernel."""
+    out = barca(project, "get", "first", "pipeline.py", "--json")
+    assert out.returncode == 0, out.stderr
+    host = next(iter(run_rows(project).values()))[2]
+    token = "0123456789abcdef0123456789abcdef"
+    owners = project / ".barca" / "run-owners"
+    owners.mkdir(exist_ok=True)
+    os.mkfifo(owners / f"{token}.fifo")  # nobody holds it open here
+    marker = (owners / f"{token}.fifo").stat()
+    owner = {
+        "boot": "the-kernel-of-another-machine",
+        "machine": "",
+        "pidns": "",
+        "timens": "",
+        "start": None,
+        "fifo": {"token": token, "dev": marker.st_dev, "ino": marker.st_ino, "handle": None},
+    }
+    db = sqlite3.connect(project / ".barca" / "metadata.db")
+    with db:
+        db.execute(
+            "insert into runs (run_id, command, files, status, pid, host, owner)"
+            " values ('theirs', 'get', '[\"pipeline.py\"]', 'running', ?, ?, ?)",
+            (a_dead_pid(), host, json.dumps(owner)),
+        )
+    db.close()
+
+    def status_of_theirs() -> str:
+        runs = json.loads(barca(project, "history", "--json").stdout)["runs"]
+        return next(r["status"] for r in runs if r["run_id"] == "theirs")
+
+    assert status_of_theirs() == "running"
+    # A run started here would record what it took for interrupted, and sweeps the markers.
+    out = barca(project, "get", "second", "pipeline.py", "--json")
+    assert out.returncode == 0, out.stderr
+    assert run_rows(project)["theirs"][0] == "running"
+    assert status_of_theirs() == "running"
+    assert markers(project) == [f"{token}.fifo"]
