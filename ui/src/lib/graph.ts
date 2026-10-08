@@ -12,9 +12,7 @@ export interface GraphNodeData {
   kind: NodeKind
   status: StatusKind
   metric?: string | null
-  members?: string[]
   stateHint?: string
-  onExpand?: () => void
   [key: string]: unknown
 }
 
@@ -38,7 +36,7 @@ const RESTING_STATUS: StatusKind = 'skipped'
  * structural. Same input → same output; re-run only on structure or direction
  * change, never on a status tick (status is merged in afterward).
  */
-export function buildGraph(assets: AssetSummary[], dir: LayoutDir, groups: Record<string, string[]> = {}) {
+export function buildGraph(assets: AssetSummary[], dir: LayoutDir) {
   const byId = new Map(assets.map((a) => [a.id, a]))
 
   const g = new dagre.graphlib.Graph()
@@ -46,7 +44,7 @@ export function buildGraph(assets: AssetSummary[], dir: LayoutDir, groups: Recor
   g.setDefaultEdgeLabel(() => ({}))
 
   for (const a of assets) {
-    g.setNode(a.id, { width: DAG_NODE_WIDTH, height: groups[a.id] ? 100 : DAG_NODE_HEIGHT })
+    g.setNode(a.id, { width: DAG_NODE_WIDTH, height: DAG_NODE_HEIGHT })
   }
   // Edge per dependency: input → asset.
   const deps: Array<{ source: string; target: string }> = []
@@ -66,17 +64,16 @@ export function buildGraph(assets: AssetSummary[], dir: LayoutDir, groups: Recor
     const p = g.node(a.id)
     return {
       id: a.id,
-      type: groups[a.id] ? 'chain' : 'asset',
+      type: 'asset',
       data: {
         id: a.id,
         direction: dir,
-        name: groups[a.id] ? `${groups[a.id]!.length} intermediate steps` : shortName(a.id),
-        members: groups[a.id],
+        name: shortName(a.id),
         kind: a.kind,
         status: RESTING_STATUS,
       },
       // dagre centers nodes; React Flow positions by top-left.
-      position: { x: p.x - DAG_NODE_WIDTH / 2, y: p.y - (groups[a.id] ? 100 : DAG_NODE_HEIGHT) / 2 },
+      position: { x: p.x - DAG_NODE_WIDTH / 2, y: p.y - (DAG_NODE_HEIGHT) / 2 },
       sourcePosition: horizontal ? Position.Right : Position.Bottom,
       targetPosition: horizontal ? Position.Left : Position.Top,
     }

@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useOutletContext, useSearchParams } from 'react-router'
 import { Maximize, ArrowRight, ArrowDown } from 'lucide-react'
-import { Button, Chip, ChipGroup, ConnectionBadge, IconButton, StatusDot } from '@/components'
+import { ConnectionBadge, IconButton, StatusDot } from '@/components'
 import { GraphCanvas, type GraphCanvasHandle } from '@/components/graph/GraphCanvas'
 import { NodeInspector } from '@/components/graph/NodeInspector'
 import { useAssets } from '@/hooks/useAssets'
 import { useAssetStates } from '@/hooks/useAssetStates'
 import { useQueryClient } from '@tanstack/react-query'
-import { graphOverview, graphState, liveGraphState, UNKNOWN_GRAPH_STATE } from '@/lib/graphOverview'
+import { graphState, liveGraphState, UNKNOWN_GRAPH_STATE } from '@/lib/graphState'
 import { useHealth } from '@/hooks/useHealth'
 import { connection } from '@/lib/connection'
 import { useRunStream } from '@/hooks/useRunStream'
@@ -28,8 +28,6 @@ export function GraphPage() {
   const allAssets = useMemo(() => assetQuery.isPlaceholderData ? [] : assetQuery.data ?? [], [assetQuery.isPlaceholderData, assetQuery.data])
   const stateQuery = useAssetStates()
   const queryClient = useQueryClient()
-  const [overviewMode, setOverviewMode] = useState(true)
-  const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const { data: health, isError: healthError } = useHealth()
   const [dir, setDir] = useState<LayoutDir>('LR')
   // `?focus=<node id>` (from the Assets table) opens with that node selected.
@@ -90,15 +88,6 @@ export function GraphPage() {
     [stream.statuses, stream.running, run],
   )
 
-  const partitionKey = (stateQuery.data ?? []).filter(n => n.partitioned).map(n => n.id).sort().join('\n')
-  const partitioned = useMemo(() => new Set(partitionKey.split('\n').filter(Boolean)), [partitionKey])
-  // Before state loads, keep all nodes: partition boundaries must be known before grouping.
-  const canGroup = Boolean(stateQuery.data) && !stateQuery.isError
-  const overview = useMemo(() => overviewMode && canGroup
-    ? graphOverview(assets, partitioned, expanded, selected)
-    : { assets, groups: {}, allGroups: {} },
-  // Partition information affects structure; cache-state polls must not move nodes.
-  [assets, partitioned, expanded, selected, overviewMode, canGroup])
   const visualStates = useMemo(() => {
     const base = Object.fromEntries((stateQuery.isError ? [] : stateQuery.data ?? []).map(n => [n.id, graphState(n)]))
     if (stream.running) for (const [id, status] of Object.entries(statuses)) base[id] = liveGraphState(status)
@@ -107,7 +96,6 @@ export function GraphPage() {
   useEffect(() => {
     if (run && !stream.running) void queryClient.invalidateQueries({queryKey:['state']})
   }, [run, stream.running, queryClient])
-  const onExpand = useCallback((id: string) => setExpanded(prev => new Set([...prev, id])), [])
   const selectedState = selected ? visualStates[selected] ?? UNKNOWN_GRAPH_STATE : UNKNOWN_GRAPH_STATE
   const selectedError = (selected && stream.running && stream.errors[selected]) || stateQuery.data?.find(n => n.id === selected)?.last_materialization?.error || null
 
@@ -136,25 +124,15 @@ export function GraphPage() {
         </div>
       </div>
 
-      <div className="barca-graph-tools">
-        <ChipGroup label="Graph detail">
-          <Chip pressed={overviewMode} onClick={() => setOverviewMode(true)}>Overview</Chip>
-          <Chip pressed={!overviewMode} onClick={() => setOverviewMode(false)}>Full detail</Chip>
-        </ChipGroup>
-        <span>{overview.assets.length} shown · {assets.length} steps{Object.keys(overview.groups).length > 0 && ` · ${Object.keys(overview.groups).length} collapsed chains`}</span>
-        {expanded.size > 0 && <Button variant="ghost" size="sm" onClick={() => {setSelected(null); setExpanded(new Set())}}>Collapse intermediate steps</Button>}
-        {stateQuery.isError && <span role="status">Asset state unavailable; colors are neutral.</span>}
-      </div>
+      {stateQuery.isError && <div className="barca-graph-tools" role="status">Asset state unavailable; colors are neutral.</div>}
       <div className="barca-graph-wrap">
         <div className="barca-graph-canvas">
           <GraphCanvas
-            assets={overview.assets}
+            assets={assets}
             dir={dir}
             selected={selected}
             onSelect={setSelected}
             states={visualStates}
-            groups={overview.groups}
-            onExpand={onExpand}
             handleRef={canvasRef}
           />
           <div className="barca-legend">

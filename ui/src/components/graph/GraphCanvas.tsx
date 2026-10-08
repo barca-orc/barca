@@ -11,14 +11,13 @@ import {
   type NodeTypes,
 } from '@xyflow/react'
 import { AssetNode } from './AssetNode'
-import { ChainNode } from './ChainNode'
-import { groupState, UNKNOWN_GRAPH_STATE, type GraphState } from '@/lib/graphOverview'
+import { UNKNOWN_GRAPH_STATE, type GraphState } from '@/lib/graphState'
 import { buildGraph, edgeClassName, type LayoutDir, type GraphNode } from '@/lib/graph'
 import { statusMeta } from '@/lib/status'
 import type { AssetSummary } from '@/lib/types'
 
 // Defined once, outside the component — a fresh object each render is a perf bug.
-const nodeTypes: NodeTypes = { asset: AssetNode, chain: ChainNode }
+const nodeTypes: NodeTypes = { asset: AssetNode }
 
 const FIT_OPTIONS = { padding: 0.18, maxZoom: 1.4, duration: 200 }
 
@@ -33,8 +32,6 @@ interface GraphCanvasProps {
   onSelect: (id: string | null) => void
   /** Persistent state with active-run overlays. */
   states: Record<string, GraphState>
-  groups: Record<string, string[]>
-  onExpand: (id: string) => void
   handleRef?: Ref<GraphCanvasHandle>
 }
 
@@ -65,22 +62,20 @@ export function GraphCanvas({
   selected,
   onSelect,
   states,
-  groups,
-  onExpand,
   handleRef,
 }: GraphCanvasProps) {
   // Re-layout only when structure or direction changes — never on selection or
   // a live status tick.
-  const base = useMemo(() => buildGraph(assets, dir, groups), [assets, dir, groups])
+  const base = useMemo(() => buildGraph(assets, dir), [assets, dir])
 
   const nodes = useMemo<GraphNode[]>(
     () =>
       base.nodes.map((n) => {
-        const state = n.data.members ? groupState(n.data.members, states) : states[n.id] ?? UNKNOWN_GRAPH_STATE
+        const state = states[n.id] ?? UNKNOWN_GRAPH_STATE
         return { ...n, selected: n.id === selected,
-          data: { ...n.data, status: state.status, metric: state.label, stateHint: state.hint, onExpand: () => onExpand(n.id) } }
+          data: { ...n.data, status: state.status, metric: state.label, stateHint: state.hint } }
       }),
-    [base.nodes, selected, states, onExpand],
+    [base.nodes, selected, states],
   )
 
   const nodeStates = useMemo(() => new Map(nodes.map(n => [n.id, n.data.status])), [nodes])
@@ -98,9 +93,8 @@ export function GraphCanvas({
   )
 
   const onNodeClick = useCallback((_: unknown, n: Node) => {
-    if (groups[n.id]) onExpand(n.id)
-    else onSelect(n.id)
-  }, [onSelect, onExpand, groups])
+    onSelect(n.id)
+  }, [onSelect])
 
   return (
     <ReactFlowProvider>

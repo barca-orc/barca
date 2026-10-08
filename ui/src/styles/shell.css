@@ -499,8 +499,3 @@
 
 .barca-graph-tools { display: flex; align-items: center; gap: 14px; padding: 12px 24px; min-height: 50px; flex-wrap: wrap; border-bottom: 1px solid var(--border-default); }
 .barca-graph-tools > span { color: var(--text-muted); font-size: var(--text-xs); }
-.barca-chain-node { height: 100px; background: var(--bg-inset); border: 1px dashed var(--border-strong); border-radius: var(--radius-md); padding: 12px; cursor: pointer; }
-.barca-chain-title { display: flex; align-items: center; gap: 6px; font-size: var(--text-sm); color: var(--text-strong); }
-.barca-chain-title strong { flex: 1; font-weight: var(--weight-medium); }
-.barca-chain-counts { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; margin-top: 10px; font-size: var(--text-xs); color: var(--text-default); line-height: var(--leading-snug); }
-.barca-chain-expand { background: transparent; border: 0; padding: 0; cursor: pointer; margin-top: 8px; font-size: var(--text-2xs); color: var(--text-muted); }

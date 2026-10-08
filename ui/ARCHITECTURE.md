@@ -150,12 +150,9 @@ they arrive. The tests do not exercise that (fonts are local and fast).
 - Styling via the barca design-system CSS tokens; components reference `var(--…)`, never
   invented colors.
 
-Graph state and overview topology live in `src/lib/graphOverview.ts`. Resting node
+Graph state presentation lives in `src/lib/graphState.ts`. Resting node
 colors come from `/state`: cached green, stale/partial yellow, never-run/unknown/always-run
 neutral, and the latest failed attempt red even if an older artifact exists. Active
 run events overlay that state; completion refreshes it. Selection uses a separate outline.
-Overview collapses maximal chains of at least two ordinary intermediary assets.
-Sources, leaves, branches, joins, scheduled nodes, tasks, sensors, partitioned nodes
-and inputs outside the current pipeline remain visible. Groups aggregate status
-counts, prioritize failures, and expand on click or keyboard activation. Full detail
-retains every node; focusing a hidden asset expands its chain automatically.
+The graph displays every asset and dependency in the selected pipeline. No nodes
+are grouped or collapsed automatically.
