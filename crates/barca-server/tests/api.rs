@@ -454,6 +454,41 @@ async fn a_trigger_is_checked_against_the_source_as_it_is_now() {
 }
 
 #[tokio::test]
+async fn a_target_may_contain_a_slash_and_a_missing_one_is_a_json_404() {
+    // A full node id of a file in a directory. Unencoded, its `/` used to match no route:
+    // 404 with an empty body. So did a trigger with no target at all.
+    let dir = tempfile::tempdir().unwrap();
+    let app = app(trigger_config(dir.path()));
+    for uri in ["/get/sub/other.py:publish", "/get/sub%2Fother.py:publish"] {
+        let (status, body) = send(&app, "POST", uri).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{uri}");
+        let error = body["error"].as_str().expect("an error message");
+        assert!(
+            error.starts_with("Asset 'sub/other.py:publish' not found. Available: "),
+            "{uri}: {error}"
+        );
+    }
+    // A path-suffixed id resolves the same either way (a task on /get: refused, nothing runs).
+    let long = format!("{}:publish", dir.path().join("pipeline.py").display());
+    let tail: String = long.split('/').skip(2).collect::<Vec<_>>().join("/");
+    for target in [tail.clone(), tail.replace('/', "%2F")] {
+        let (status, body) = send(&app, "POST", &format!("/get/{target}")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{target}: {body}");
+    }
+    for (method, uri, says) in [
+        ("POST", "/get/", "POST /get/{target} needs a target"),
+        ("POST", "/run/", "POST /run/{target} needs a target"),
+        ("GET", "/nowhere", "no such endpoint: GET /nowhere"),
+        ("DELETE", "/run/", "no such endpoint: DELETE /run/"),
+    ] {
+        let (status, body) = send(&app, method, uri).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{method} {uri}");
+        let error = body["error"].as_str().expect("an error message");
+        assert!(error.starts_with(says), "{method} {uri}: {error}");
+    }
+}
+
+#[tokio::test]
 async fn a_trigger_on_source_that_does_not_parse_is_400() {
     let dir = tempfile::tempdir().unwrap();
     let config = isolated_config(dir.path(), false);

@@ -741,6 +741,24 @@ pub async fn evict_finished_runs(state: AppState, interval: Duration, max_age: D
     }
 }
 
+/// Any request no route matches: `404` with the same `{"error": ...}` body as every other
+/// error, naming what was asked for. A trigger with nothing after `/get/` or `/run/` is told
+/// what is missing.
+pub async fn no_route(method: axum::http::Method, uri: axum::http::Uri) -> ApiError {
+    let path = uri.path();
+    match (method.as_str(), path) {
+        ("POST", "/get/" | "/get") => ApiError::NotFound(
+            "POST /get/{target} needs a target: an asset or sensor name or its full id".into(),
+        ),
+        ("POST", "/run/") => ApiError::NotFound(
+            "POST /run/{target} needs a target: a task or sensor name or its full id \
+             (POST /run, without the slash, gets every asset and sensor)"
+                .into(),
+        ),
+        _ => ApiError::NotFound(format!("no such endpoint: {method} {path}")),
+    }
+}
+
 #[cfg(test)]
 mod duration_tests {
     use super::*;

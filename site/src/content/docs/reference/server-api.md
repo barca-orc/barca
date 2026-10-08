@@ -115,7 +115,9 @@ run is started, there is no `run_id`, and the response is an error with a JSON b
 
 `POST /run/{target}` accepts a task or a sensor and `POST /get/{target}` an asset or a sensor,
 as on the command line. A target is a function name, a full node id (`pipeline.py:orders`) or a
-path-suffixed id; percent-encode a `/` in it (`sub%2Fpipeline.py:orders`).
+path-suffixed id. An id with a directory in it works with its `/` as it is or percent-encoded
+(`sub/pipeline.py:orders`, `sub%2Fpipeline.py:orders`). A trigger with no target
+(`POST /get/`), like any path that is not an endpoint, is a `404` with an `error` body.
 
 A run that was started can still fail on its target if the source changes between the check
 and the run. It then has `"status": "failed"`, `"result": null` and the message in `error`,
