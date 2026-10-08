@@ -10,6 +10,9 @@ interface NodeInspectorProps {
   asset: AssetSummary
   /** Live visual status for this node. */
   status: StatusKind
+  statusLabel?: string
+  /** Run feedback stays separate from the resting cache badge. */
+  feedbackStatus?: StatusKind
   /** Captured log lines for the active run (run-wide). */
   logs: LogLine[]
   /** Whether a run is currently streaming. */
@@ -56,6 +59,8 @@ function ErrorPanel({ title, message }: { title: string; message: string }) {
 export function NodeInspector({
   asset,
   status,
+  statusLabel,
+  feedbackStatus,
   logs,
   running,
   error,
@@ -72,7 +77,7 @@ export function NodeInspector({
   // Presentation logic (pure, tested) decides the feedback descriptor; this
   // component only maps each descriptor variant to elements. Exhaustive on both
   // sides — no run state can render nothing by accident.
-  const feedback = match(runFeedback(status, logs, error))
+  const feedback = match(runFeedback(feedbackStatus ?? status, logs, error))
     .with({ kind: 'idle' }, () => null)
     .with({ kind: 'streaming' }, (f) => <OutputPanel logs={f.logs} live />)
     .with({ kind: 'output' }, (f) => <OutputPanel logs={f.logs} live={false} />)
@@ -102,7 +107,7 @@ export function NodeInspector({
           <Tag tone="signal" dot>
             {asset.kind}
           </Tag>
-          <StatusBadge status={status} size="sm" />
+          <StatusBadge status={status} label={statusLabel} size="sm" />
         </div>
 
         <div>
