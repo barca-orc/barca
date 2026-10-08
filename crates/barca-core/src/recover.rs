@@ -21,10 +21,11 @@
 //! `commands::execute` applies it where a phase's inputs are made available;
 //! `commands::explain_dag` predicts it with [`predict_recomputes`].
 
-use crate::commands::{ExplainSummary, PartitionSummary, RunReason, StepReport, StoreSync};
+use crate::commands::{ExplainSummary, PartitionSummary, RunReason, StepReport};
 use crate::dispatch::{OutputRef, ProvidedInput, build_provided_inputs};
 use crate::model::NodeKind;
 use crate::planner::{ExecutionPlan, Phase, PhaseReason, StreamStep, WorkerStream};
+use crate::store_sync::StoreSync;
 use crate::transfer::ArtifactLayout;
 use std::collections::{HashMap, HashSet};
 
