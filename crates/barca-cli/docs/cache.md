@@ -106,7 +106,12 @@ hashing for unvalidated syntax, not an accepted argument. The hash rules are key
 same accepted signatures and a test checks every `(decorator, argument)` pair. A decorator
 whose name is not positively bound to a barca import counts in full, even if it is named
 `asset`, `sensor`, `task`, `sink` or `unsafe`: its arguments, their order and the wrapper
-implementation can change the result.
+implementation can change the result. Binding proof is conservative: a walrus assignment
+to a decorator name anywhere in the module makes it uncertain, even inside a local scope;
+this can cause an extra recompute rather than risk a stale result. Any unproven decorator on a node (including a wrapper stacked with a known barca decorator)
+counts the whole module source and all dependencies available to the existing static cone,
+so even unrelated edits in that module can recompute it. This does not add tracking for
+dynamically imported modules.
 
 What this means in practice:
 

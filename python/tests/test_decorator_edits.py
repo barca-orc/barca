@@ -347,7 +347,7 @@ def test_a_new_sink_is_written(project):
     assert json.loads((project / "out" / "middle.json").read_text()) == {"x": 1}
 
 
-def test_a_constant_used_only_in_a_counted_argument_is_followed(project):
+def test_a_foreign_wrapper_counts_its_module_and_argument_dependencies(project):
     def source(size: int, unrelated: int) -> str:
         return chain(
             '@asset(inputs={"x": a})\n@functools.lru_cache(maxsize=SIZE)',
@@ -356,7 +356,8 @@ def test_a_constant_used_only_in_a_counted_argument_is_followed(project):
 
     write(project, source(1, 0))
     get(project, "end")
-    write(project, source(1, 5))  # a constant nothing uses
+    write(project, source(1, 5))  # foreign wrapper bindings conservatively count the module
+    assert ran(get(project, "end")) == {"middle": True, "end": True}
     assert ran(get(project, "end")) == {}
     write(project, source(2, 5))  # the constant the decorator's argument uses
     assert ran(get(project, "end")) == {"middle": True, "end": True}
@@ -511,3 +512,133 @@ def value():
     changed = get(project, "value")
     assert changed["final_output"] == ["tags", "description"]
     assert changed["steps_executed"] == 1
+
+
+@pytest.mark.parametrize("rebinding", [
+    "def install(x=(asset := custom)): pass",
+    "@((asset := custom)())\ndef install(): pass",
+    "class Install((asset := custom) and object): pass",
+    "@((asset := custom)())\nclass Install: pass",
+])
+def test_definition_time_walrus_does_not_hide_a_custom_decorator(project, rebinding):
+    template = '''from barca import asset
+
+def custom(**kwargs):
+    def decorate(fn):
+        def wrapped():
+            return kwargs.get("description")
+        return wrapped
+    return decorate
+
+{rebinding}
+
+@asset(description={description!r})
+def value():
+    return 0
+'''
+    write(project, template.format(rebinding=rebinding, description="one"))
+    assert get(project, "value")["final_output"] == "one"
+    assert get(project, "value")["steps_executed"] == 0
+    write(project, template.format(rebinding=rebinding, description="two"))
+    changed = get(project, "value")
+    assert changed["final_output"] == "two"
+    assert changed["steps_executed"] == 1
+    assert get(project, "value")["steps_executed"] == 0
+
+
+@pytest.mark.parametrize("rebinding", [
+    "def install(x=(asset := custom)): pass",
+    "@((asset := custom)())\ndef install(): pass",
+    "class Install((asset := custom) and object): pass",
+    "@((asset := custom)())\nclass Install: pass",
+    "if True:\n    asset = custom",
+    "def install():\n    global asset\n    asset = custom\ninstall()",
+])
+def test_rebound_decorator_body_is_not_hidden_by_its_original_import(project, rebinding):
+    template = '''from barca import asset
+
+def custom(**kwargs):
+    def decorate(fn):
+        def wrapped():
+            return {value!r}
+        return wrapped
+    return decorate
+
+{rebinding}
+
+@asset(description="fixed")
+def value():
+    return 0
+'''
+    write(project, template.format(rebinding=rebinding, value="one"))
+    assert get(project, "value")["final_output"] == "one"
+    assert get(project, "value")["steps_executed"] == 0
+    write(project, template.format(rebinding=rebinding, value="two"))
+    changed = get(project, "value")
+    assert changed["final_output"] == "two"
+    assert changed["steps_executed"] == 1
+    assert get(project, "value")["steps_executed"] == 0
+
+
+@pytest.mark.parametrize("imports", ["import helpers", "if True:\n    import helpers"])
+def test_unproven_decorator_fallback_follows_static_module_dependencies(project, imports):
+    write(project, '''from barca import asset
+{imports}
+
+def custom(**kwargs):
+    return lambda fn: lambda: helpers.result()
+
+def install(x=(asset := custom)): pass
+
+@asset(description="fixed")
+def value():
+    return 0
+'''.format(imports=imports))
+    helper = project / "helpers.py"
+    helper.write_text('def result():\n    return "one"\n')
+    assert get(project, "value")["final_output"] == "one"
+    assert get(project, "value")["steps_executed"] == 0
+    helper.write_text('def result():\n    return "two"\n')
+    changed = get(project, "value")
+    assert changed["final_output"] == "two"
+    assert changed["steps_executed"] == 1
+
+
+@pytest.mark.parametrize("decorator", ["sink", "unsafe", "wrapper"])
+def test_rebound_stacked_decorator_implementation_is_part_of_the_result(project, decorator):
+    template = '''from barca import asset, sink, unsafe
+
+def custom(**kwargs):
+    return lambda fn: lambda: {value!r}
+
+def install(x=({decorator} := custom)): pass
+
+@asset()
+@{decorator}()
+def value():
+    return 0
+'''
+    write(project, template.format(decorator=decorator, value="one"))
+    assert get(project, "value")["final_output"] == "one"
+    assert get(project, "value")["steps_executed"] == 0
+    write(project, template.format(decorator=decorator, value="two"))
+    changed = get(project, "value")
+    assert changed["final_output"] == "two"
+    assert changed["steps_executed"] == 1
+
+
+def test_foreign_star_import_decorator_implementation_is_part_of_the_result(project):
+    write(project, '''from barca import asset
+from helpers import *
+
+@asset(description="fixed")
+def value():
+    return 0
+''')
+    helper = project / "helpers.py"
+    for result in ["one", "two"]:
+        helper.write_text(f'def asset(**kwargs):\n    return lambda fn: lambda: {result!r}\n')
+        changed = get(project, "value")
+        assert changed["final_output"] == result
+        assert changed["steps_executed"] == 1
+        assert get(project, "value")["steps_executed"] == 0

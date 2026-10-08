@@ -185,6 +185,9 @@ pub struct Definition<'a> {
     /// is already part of this node's run hash, and following it would add that code a second
     /// time.
     pub followed: Vec<&'a Expr>,
+    /// An unproven decorator can be rebound dynamically during module evaluation.
+    /// Its definition includes the entire module and its cone must include static imports.
+    pub conservative_module: bool,
 }
 
 /// The definition of `func` if it is a node (has an `@asset`, `@sensor` or `@task` decorator),
@@ -197,6 +200,7 @@ pub fn node_definition<'a>(
     barca: &crate::decorator_args::BarcaNames,
 ) -> Option<Definition<'a>> {
     let mut is_node = false;
+    let mut conservative_module = false;
     // Decorators that count, in the order they are stacked.
     let mut decorators: Vec<String> = Vec::new();
     // Counted arguments of the node decorator, sorted before they are written.
@@ -214,7 +218,9 @@ pub fn node_definition<'a>(
             _ => None,
         };
         if !name.is_some_and(|name| barca.contains(name)) {
-            is_node |= match_node_decorator(expr).is_some();
+            let node_like = match_node_decorator(expr).is_some();
+            is_node |= node_like;
+            conservative_module = true;
             decorators.push(canonical_expr(expr, source));
             followed.push(expr);
         } else if is_unsafe_decorator(expr) {
@@ -257,7 +263,15 @@ pub fn node_definition<'a>(
         text.push('\n');
     }
     text.push_str(&source[def_start(func, source)..func.range().end().to_usize()]);
-    Some(Definition { text, followed })
+    if conservative_module {
+        text.push_str("\nconservative module\n");
+        text.push_str(source);
+    }
+    Some(Definition {
+        text,
+        followed,
+        conservative_module,
+    })
 }
 
 /// The counted arguments of one `@asset(...)` / `@sensor(...)` / `@task(...)` call.
@@ -775,6 +789,9 @@ argument serializer=\"json\"
 def sales(region: str, a: list, b: int) -> dict:
     # the function is hashed as written, comments included
     return {'region': region}"
+                .to_string()
+                + "\nconservative module\nfrom barca import asset, sensor, task, sink, unsafe\n"
+                + source
         );
     }
 
@@ -920,12 +937,13 @@ def sales(region: str, a: list, b: int) -> dict:
     }
 
     #[test]
-    fn other_decorators_keep_their_order_and_barca_s_position_among_them_does_not_matter() {
+    fn foreign_decorators_conservatively_count_the_entire_module() {
         let a = text(&format!("@asset()\n@first\n@second(1)\n{BODY}"));
         let b = text(&format!("@first\n@asset()\n@second(1)\n{BODY}"));
         let c = text(&format!("@first\n@second(1)\n@asset()\n{BODY}"));
-        assert_eq!(a, b);
-        assert_eq!(a, c);
+        assert_ne!(a, b);
+        assert_ne!(a, c);
+        assert!(a.contains("conservative module"));
         let swapped = text(&format!("@asset()\n@second(1)\n@first\n{BODY}"));
         assert_ne!(a, swapped);
     }

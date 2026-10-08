@@ -468,6 +468,40 @@ fn collect_definitions(source: &str, package: Option<&str>) -> HashMap<String, M
     };
     let mut defs: HashMap<String, ModuleDef> = HashMap::new();
     let barca = crate::decorator_args::BarcaNames::of(&parsed.syntax().body);
+    let mut conservative_functions = Vec::new();
+    struct StaticImports<'p> {
+        package: Option<&'p str>,
+        uses: Vec<LocalUse>,
+    }
+    impl<'a> Visitor<'a> for StaticImports<'_> {
+        fn visit_stmt(&mut self, stmt: &'a Stmt) {
+            self.uses
+                .extend(
+                    import_bindings(stmt, self.package)
+                        .into_iter()
+                        .map(|(bound, binding)| {
+                            // A star import can install any decorator/helper from this module.
+                            let binding = match binding {
+                                ModuleDef::FromImport { module, name } if name == "*" => {
+                                    ModuleDef::ModuleImport { module }
+                                }
+                                other => other,
+                            };
+                            LocalUse {
+                                bound,
+                                binding,
+                                attrs: Vec::new(),
+                            }
+                        }),
+                );
+            visitor::walk_stmt(self, stmt);
+        }
+    }
+    let mut static_imports = StaticImports {
+        package,
+        uses: Vec::new(),
+    };
+    visitor::walk_body(&mut static_imports, &parsed.syntax().body);
 
     for stmt in &parsed.syntax().body {
         match stmt {
@@ -481,6 +515,10 @@ fn collect_definitions(source: &str, package: Option<&str>) -> HashMap<String, M
                 let function = match crate::definition::node_definition(func, source, &barca) {
                     Some(definition) => {
                         uses.exprs(definition.followed.iter().copied());
+                        if definition.conservative_module {
+                            conservative_functions.push(func.name.to_string());
+                            uses.stmts(&parsed.syntax().body);
+                        }
                         Code {
                             source_text: definition.text.into(),
                             uses: uses.uses,
@@ -527,6 +565,17 @@ fn collect_definitions(source: &str, package: Option<&str>) -> HashMap<String, M
             }
             Stmt::ImportFrom(_) => defs.extend(import_bindings(stmt, package)),
             _ => {}
+        }
+    }
+    // Unproven node bindings may have changed in defaults, conditionals or global writes.
+    // Include all statically collected module definitions and imports; resolving just the
+    // original import could miss the implementation actually installed at evaluation time.
+    let names: Vec<_> = defs.keys().cloned().collect();
+    for name in conservative_functions {
+        if let Some(ModuleDef::Function(code)) = defs.get_mut(&name) {
+            code.uses.names.extend(names.iter().cloned());
+            code.uses.values.extend(names.iter().cloned());
+            code.uses.local.extend(static_imports.uses.iter().cloned());
         }
     }
     defs
@@ -2241,11 +2290,15 @@ def shadowing(helpers, json):
                 hash("FMT = 'pickle'\nPATH_PREFIX = 'a/'\nOTHER = 1"),
                 "{decorators}: editing FMT"
             );
-            assert_eq!(
-                before,
-                hash("FMT = 'json'\nPATH_PREFIX = 'a/'\nOTHER = 2"),
-                "{decorators}: editing a constant it does not use"
-            );
+            let unrelated = hash("FMT = 'json'\nPATH_PREFIX = 'a/'\nOTHER = 2");
+            if decorators.contains("@retry") {
+                assert_ne!(before, unrelated, "foreign wrappers count the whole module");
+            } else {
+                assert_eq!(
+                    before, unrelated,
+                    "{decorators}: editing an unused constant"
+                );
+            }
         }
     }
 
@@ -2375,7 +2428,7 @@ def shadowing(helpers, json):
     fn a_helper_that_is_not_a_node_is_hashed_as_written() {
         let pipeline = |decorator: &str, size: &str| {
             format!(
-                "SIZE = {size}\n\n\n{decorator}\ndef helper():\n    return 1\n\n\n@asset()\ndef my_asset():\n    return helper()\n"
+                "from barca import asset\nSIZE = {size}\n\n\n{decorator}\ndef helper():\n    return 1\n\n\n@asset()\ndef my_asset():\n    return helper()\n"
             )
         };
         let before = cone_hash(&pipeline("@lru_cache(maxsize=SIZE)", "1"), "my_asset");
