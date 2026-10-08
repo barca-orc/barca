@@ -534,6 +534,16 @@ describes the output contract for scripts and AI agents.
 | 3    | `infra`       | barca or its environment failed: metadata DB, worker pool, remote state, I/O |
 | 130  | `cancelled`   | interrupted (Ctrl-C)                                                       |
 
+A closed stdout or stderr never makes barca panic, never stops a run and is not an error:
+output for the closed stream is dropped, a `get` or `run` finishes and is recorded, and the
+exit code is the one the command would have had with a reader (`barca list | head -1` exits 0).
+See [the CLI contract](/reference/cli-contract/#a-closed-stdout-or-stderr-stable).
+
+An error in a pipeline file fails every command that reads the file with exit 2, whatever the
+target: a syntax error, or a decorator called with an argument it does not define
+(`@asset(after=other)`, `input=` for `inputs=`). See
+[Accepted arguments](/reference/api/decorators/#accepted-arguments).
+
 In JSON output mode (whenever results are JSON: piped or captured stdout, `--json`, `-o json` or
 `BARCA_OUTPUT=json`; `plan` always; `docs` with `--json`), an error is a single JSON line, the
 last line on stderr:

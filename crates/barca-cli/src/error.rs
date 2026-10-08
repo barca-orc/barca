@@ -39,8 +39,8 @@ impl CliErrorExt for CliError {
 
     /// Write the error to stderr and exit with its code.
     fn emit(&self, json: bool) -> ! {
-        eprintln!("{}", self.render(json));
-        std::process::exit(self.code())
+        barca_core::errln!("{}", self.render(json));
+        barca_core::term::exit(self.code())
     }
 }
 

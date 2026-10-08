@@ -191,7 +191,7 @@ pub async fn explain(
         && target_names.is_empty()
         && let Some(note) = skipped_tasks_note(&dag, file_args)
     {
-        eprintln!("{note}");
+        crate::errln!("{note}");
     }
     let result = crate::execution::explain_dag(
         &dag,

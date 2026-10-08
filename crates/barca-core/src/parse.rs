@@ -37,6 +37,17 @@ pub enum ParseError {
         function: String,
         reason: String,
     },
+
+    /// A barca decorator or helper is called with an argument it does not define (#284).
+    /// The first line says what is wrong, the second what to do.
+    #[error("{file}:{function} (line {line}): {message}\n{fix}")]
+    InvalidArguments {
+        file: String,
+        function: String,
+        line: usize,
+        message: String,
+        fix: String,
+    },
 }
 
 /// Parse a Python source file and extract all barca-decorated nodes.
@@ -75,11 +86,16 @@ struct FileNames {
     from_imports: HashMap<String, (String, String)>,
     /// local dotted name -> module (`s` -> `pipelines.sources`, `a.b` -> `a.b`)
     modules: HashMap<String, String>,
+    /// The decorator and helper names that are positively barca's, for the argument check.
+    barca: crate::decorator_args::BarcaNames,
 }
 
 impl FileNames {
     fn collect(body: &[Stmt]) -> Self {
-        let mut names = FileNames::default();
+        let mut names = FileNames {
+            barca: crate::decorator_args::BarcaNames::of(body),
+            ..FileNames::default()
+        };
         for stmt in body {
             match stmt {
                 Stmt::FunctionDef(f) => {
@@ -191,6 +207,20 @@ fn try_extract_function(
     let Some(kind) = kind else {
         return Ok(None);
     };
+
+    // Before anything is read from the arguments: an argument barca does not define is an
+    // error, not something to ignore (`decorator_args`).
+    if let Some(problem) =
+        crate::decorator_args::check_decorators(&func.decorator_list, &names.barca)
+    {
+        return Err(ParseError::InvalidArguments {
+            file: file_path.to_string(),
+            function: func.name.to_string(),
+            line: source[..problem.offset].matches('\n').count() + 1,
+            message: problem.message,
+            fix: problem.fix,
+        });
+    }
 
     let freshness = extract_freshness(&keywords, file_path, func.name.as_str())?
         .unwrap_or(Freshness::default_for(kind));
