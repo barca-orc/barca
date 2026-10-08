@@ -51,6 +51,10 @@ the same remediation as `get` and `run`. A target is one name or several, comma-
 spaces (`a,b`), parsed exactly as `get` and `run` parse them; the JSON names them in `targets`
 (and the single one in `target`).
 
+With shared remote state (`barca docs remote`), status first pulls the shared history, as a run
+does, so it also shows what other machines computed. A pull keeps what was recorded only on this
+machine, so this is safe while a run is going: its finished steps still show.
+
 Status reads the metadata DB as it is at that moment, and a run records each step as it
 finishes. So while a `barca get` is running, status in another terminal already shows the steps
 it has finished as `cached` (a partitioned asset as `partial`, with counts); see `barca docs
@@ -70,7 +74,7 @@ two cannot disagree. In JSON the states are snake_case, spelled exactly like the
 | state | meaning | `reason` |
 |---|---|---|
 | `cached` | a successful result matches this code and these inputs; `get` serves it | `materialized` |
-| `stale` | it ran before, but `get` would run it again | `changed`, `upstream_stale`, `failed` |
+| `stale` | it ran before, but `get` would run it again | `changed`, `upstream_stale`, `failed`, `artifact_missing` |
 | `never_run` | no successful materialization is recorded | `no_record`, `failed` |
 | `partial` | a partitioned asset with some keys cached | `partitions_missing` |
 | `unknown` | dynamic partitions (`partitions_from`) whose source has not run yet, or an asset reading a sensor with no recorded output (and what depends on either) | `partitions_unknown`, `sensor_output_unknown` |
@@ -87,6 +91,13 @@ two cannot disagree. In JSON the states are snake_case, spelled exactly like the
   `detail` names the input.
 - `failed`: the last attempt at exactly this code and these inputs raised; `detail` carries the
   message.
+- `artifact_missing`: the result is recorded and its run hash is unchanged, but the artifact file
+  is gone and a run over these nodes would have to read it (a step that runs takes it as an
+  input, or it is the output the run returns: a target, or with no target the last asset), so
+  it would be computed again. A missing
+  artifact that nothing would read does not make a node stale: it stays `cached`, and
+  `cache.artifact` then names a file that is not there (`barca docs cache`, "A cached result
+  whose artifact is missing").
 
 `cache.run_hash` is the cache key for the current code and inputs; `cache.artifact` is the file a
 `get` would serve (only when `cached`).

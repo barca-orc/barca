@@ -6,27 +6,21 @@ batch sizing.
 """
 
 import contextlib
-import shutil
 import sqlite3
 import textwrap
 import time
-from pathlib import Path
-
-import pytest
 
 import barca
+import pytest
 from barca._artifacts import serialize
 from barca._worker import _ArtifactLRU, _load_collected_artifacts, _peak_rss_bytes
 
 
 @pytest.fixture(autouse=True)
-def clean_barca_dir():
-    barca_dir = Path(".barca")
-    if barca_dir.exists():
-        shutil.rmtree(barca_dir)
-    yield
-    if barca_dir.exists():
-        shutil.rmtree(barca_dir)
+def clean_barca_dir(tmp_path, monkeypatch):
+    # The API resolves .barca relative to cwd. Give each test its own project,
+    # so another pytest worker cannot delete its database or input artifacts.
+    monkeypatch.chdir(tmp_path)
 
 
 def write_module(tmp_path, filename, code):
@@ -59,14 +53,14 @@ class TestArtifactLRU:
 
     def test_hit_returns_equal_value(self):
         lru = _ArtifactLRU()
-        lru.put("/a.json", {"k": [1, 2, 3]})
+        lru.put("/a.json", {"k": [1, 2, 3]}, size_bytes=1)
         assert lru.get("/a.json") == {"k": [1, 2, 3]}
 
     def test_hit_is_isolated_from_mutation(self):
         # A task mutating its input must never poison a later task's view.
         lru = _ArtifactLRU()
         original = {"rows": [1, 2, 3]}
-        lru.put("/a.json", original)
+        lru.put("/a.json", original, size_bytes=1)
         first = lru.get("/a.json")
         first["rows"].append(999)
         assert lru.get("/a.json") == {"rows": [1, 2, 3]}
@@ -74,16 +68,16 @@ class TestArtifactLRU:
     def test_put_copies_value(self):
         lru = _ArtifactLRU()
         value = {"rows": [1]}
-        lru.put("/a.json", value)
+        lru.put("/a.json", value, size_bytes=1)
         value["rows"].append(2)  # caller mutates after put
         assert lru.get("/a.json") == {"rows": [1]}
 
     def test_eviction_drops_least_recent(self):
         lru = _ArtifactLRU(max_entries=2)
-        lru.put("/a", 1)
-        lru.put("/b", 2)
+        lru.put("/a", 1, size_bytes=1)
+        lru.put("/b", 2, size_bytes=1)
         assert lru.get("/a") == 1  # touch /a → /b is now least recent
-        lru.put("/c", 3)
+        lru.put("/c", 3, size_bytes=1)
         assert lru.get("/b") is None
         assert lru.get("/a") == 1
         assert lru.get("/c") == 3
@@ -95,7 +89,7 @@ class TestArtifactLRU:
             def __deepcopy__(self, memo):
                 raise RuntimeError("no copies")
 
-        lru.put("/a", Uncopyable())
+        lru.put("/a", Uncopyable(), size_bytes=1)
         # put failed silently → miss, caller falls through to the store.
         assert lru.get("/a") is None
 
@@ -139,7 +133,7 @@ class TestLoadCollectedArtifacts:
         # ever touching storage.
         lru = _ArtifactLRU()
         ghost_path = str(tmp_path / "never_written.json")
-        lru.put(ghost_path, {"cached": True})
+        lru.put(ghost_path, {"cached": True}, size_bytes=1)
         result = _load_collected_artifacts([{"path": ghost_path, "format": "json"}], lru)
         assert result == [{"cached": True}]
 

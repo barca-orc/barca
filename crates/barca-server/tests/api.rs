@@ -135,6 +135,8 @@ async fn plan_returns_phases() {
     assert_eq!(resp.status(), StatusCode::OK);
     let json = body_json(resp).await;
     assert_eq!(json["total_steps"], 2);
+    // Plan warnings (`barca docs contract`): always an array, empty for this pipeline.
+    assert_eq!(json["warnings"], serde_json::json!([]));
     assert!(json["phases"].is_array());
 }
 
@@ -568,4 +570,122 @@ async fn run_events_are_not_buffered_by_proxies() {
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(resp.headers()["x-accel-buffering"], "no");
     assert_eq!(resp.headers()["content-type"], "text/event-stream");
+}
+
+#[tokio::test]
+async fn schema_reports_the_target_and_direct_inputs_without_creating_a_db() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app(isolated_config(dir.path(), true));
+    let (status, json) = send(&app, "GET", "/assets/second/schema").await;
+    assert_eq!(status, StatusCode::OK);
+    let nodes = json.as_array().unwrap();
+    assert_eq!(nodes.len(), 2);
+    assert_eq!(nodes[0]["name"], "first");
+    assert_eq!(nodes[1]["name"], "second");
+    assert!(nodes.iter().all(|n| n["shape"].is_null()));
+    assert!(!dir.path().join("metadata.db").exists());
+    let (status, _) = send(&app, "GET", "/assets/missing/schema").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn schema_excludes_indirect_ancestors() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = isolated_config(dir.path(), true);
+    let mut fixture = FIXTURE.to_string();
+    fixture
+        .push_str("\n@asset(inputs={\"second\": second})\ndef third(second):\n    return second\n");
+    std::fs::write(&config.files[0], fixture).unwrap();
+    let app = app(config);
+    let (status, json) = send(&app, "GET", "/assets/third/schema").await;
+    assert_eq!(status, StatusCode::OK);
+    let names: Vec<_> = json
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["second", "third"]);
+}
+
+#[tokio::test]
+async fn schema_reads_materialized_columns_and_reports_missing_artifacts() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = isolated_config(dir.path(), true);
+    // Run the repository's inspector with system Python, without requiring an
+    // installed wheel or mutating the process-wide environment in parallel tests.
+    let launcher = dir.path().join("inspect-python");
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../python");
+    std::fs::write(&launcher, format!(
+        "#!/usr/bin/env python3\nimport sys, runpy\nsys.path.insert(0, {})\nrunpy.run_module(sys.argv[2], run_name='__main__')\n",
+        serde_json::to_string(&source.display().to_string()).unwrap()
+    )).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755)).unwrap();
+    config.python = launcher;
+
+    let summaries = barca_core::queries::list_assets(&config.files, &config.python)
+        .await
+        .unwrap();
+    let first = summaries.iter().find(|n| n.id.ends_with(":first")).unwrap();
+    let artifact = dir.path().join("rows.json");
+    std::fs::write(
+        &artifact,
+        r#"[{"order_id":1,"region":"East"},{"order_id":2,"region":null}]"#,
+    )
+    .unwrap();
+    barca_core::db::init_db(&config.resolved.db_path)
+        .await
+        .unwrap();
+    let outputs = std::collections::HashMap::from([(
+        first.id.clone(),
+        barca_core::dispatch::OutputRef {
+            path: artifact.display().to_string(),
+            format: "json".into(),
+            size_bytes: 64,
+            elapsed_seconds: None,
+            content_hash: None,
+        },
+    )]);
+    barca_core::db::persist_outputs(&config.resolved.db_path, &outputs, &Default::default())
+        .await
+        .unwrap();
+    let object_path = dir.path().join("object.json");
+    std::fs::write(&object_path, r#"{"count":4,"enabled":true,"nothing":null}"#).unwrap();
+    let second = summaries
+        .iter()
+        .find(|n| n.id.ends_with(":second"))
+        .unwrap();
+    let output = barca_core::dispatch::OutputRef {
+        path: object_path.display().to_string(),
+        format: "json".into(),
+        size_bytes: 41,
+        elapsed_seconds: None,
+        content_hash: None,
+    };
+    barca_core::db::persist_outputs(
+        &config.resolved.db_path,
+        &std::collections::HashMap::from([(second.id.clone(), output)]),
+        &Default::default(),
+    )
+    .await
+    .unwrap();
+    let app = app(config);
+    let (status, json) = send(&app, "GET", "/assets/second/schema").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        json[1]["shape"]["columns"],
+        serde_json::json!([
+            {"name":"count","type":"int"}, {"name":"enabled","type":"bool"}, {"name":"nothing","type":"null"}
+        ])
+    );
+    assert_eq!(json[0]["shape"]["rows"], 2);
+    assert_eq!(
+        json[0]["shape"]["columns"][0],
+        serde_json::json!({"name":"order_id","type":"int"})
+    );
+    assert_eq!(json[0]["shape"]["columns"][1]["type"], "str | null");
+    std::fs::remove_file(artifact).unwrap();
+    let (_, json) = send(&app, "GET", "/assets/second/schema").await;
+    assert_eq!(json[0]["shape"]["note"], "artifact file not found");
 }

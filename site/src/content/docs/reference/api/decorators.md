@@ -1,9 +1,14 @@
 ---
 title: Decorators API
-description: Reference for @asset, @sink, @sensor, @task, @unsafe, Schedule, partitions, and parallel().
+description: Arguments and behavior of @asset, @sensor, @task, @sink and @unsafe, the freshness markers, partitions, parallel() and the other names barca exports.
 ---
 
-Core decorators for defining assets, sensors, tasks, sinks, and related primitives.
+Everything here is imported from `barca`. The decorators return the function unchanged: the
+`barca` binary reads their arguments from the source text and never imports your module to plan
+a run. Arguments must therefore be written literally (a dict literal for `inputs=`, a list of
+string literals for `env=`); a decorator built in a loop or called through a variable is not
+seen. The signatures below are those of `python/barca/__init__.py` in 0.18.0, and the behavior
+was checked by running that version.
 
 ## @asset
 
@@ -23,7 +28,13 @@ Core decorators for defining assets, sensors, tasks, sinks, and related primitiv
 )
 ```
 
-Declares a cacheable, provenance-tracked asset. The default freshness is `Always` — the asset is kept up to date automatically during `barca run`.
+Declares an asset: a function whose result barca stores and reuses. The function runs again
+only when its run hash changes, that is, when its code, an input, a sensor value it reads, its
+partition key or a declared environment variable changes.
+
+`inputs` maps a parameter name to an upstream node. `name` replaces the function name in the
+node id. `serializer` forces `"json"`, `"pickle"` or `"parquet"`. `timeout_seconds` is the
+limit for one attempt. `description` and `tags` are metadata.
 
 `retries` is the total number of attempts on failure (1 = no retry). `retry_backoff` is the base
 delay in seconds between attempts (delay grows linearly: `retry_backoff * attempt`).
@@ -38,35 +49,28 @@ from barca import asset, Always, Manual, Schedule
 def my_asset() -> dict:
     return {"x": 1}
 
-@asset(freshness=Manual)                    # only via explicit refresh
+@asset(freshness=Manual)                    # recorded; no effect on a run today
 def pinned_data() -> dict:
     return {"x": 1}
 
-@asset(freshness=Schedule("0 5 * * *"))     # daily at 05:00
+@asset(freshness=Schedule("0 5 * * *"))     # fires daily at 05:00 under `barca serve`
 def daily_report() -> dict:
     return {"x": 1}
 ```
 
-`Manual` freshness blocks downstream `Always` assets from auto-updating — a downstream asset cannot be fresher than its most-upstream `Manual` dependency.
+### Freshness
 
-### Type annotations and materialization
+`freshness=` takes `Always` (the default), `Manual` or `Schedule("<cron>")`. `Schedule` is the
+only value with an effect at run time: `barca serve` runs the node on each cron tick (see
+[Schedule](#schedule)). `Always` and `Manual` are recorded and shown (`barca list`, the
+`freshness` key in its JSON) and do nothing else today: `barca get` and `barca run` treat an
+`Always` asset and a `Manual` asset the same way. What they should do under `barca serve` is
+proposed in RFC-0008 ([PR #276](https://github.com/barca-orc/barca/pull/276)).
 
-Parameter and return type hints are optional and do not change the decorator API. When present,
-they tell barca which parquet **reader** or **writer** to use on step boundaries — for example
-`orders: pl.DataFrame` deserializes with polars instead of defaulting to pandas.
+### Type annotations
 
-**Every asset output is still fully materialized** to an artifact file at the end of the step.
-Barca does not keep lazy polars `LazyFrame`s or duckdb relations alive across workers; the
-artifact on disk is the cache checkpoint. On the reading side, a `pl.LazyFrame` or
-`duckdb.DuckDBPyRelation` input reads nothing up front: the step's query decides which columns
-and row groups are read, from a remote artifact store too (only those byte ranges are
-fetched). If you materialize an asset, you get a durable,
-content-addressed file that any downstream step (or machine) can hit.
-
-To run one efficient computation and cache multiple results, define multiple `@asset` functions
-that share helpers, or compute everything you need inside a single step before returning.
-
-Supported annotation shapes (statically parsed, no import):
+Parameter and return annotations are optional. For a parquet result they choose the reader or
+writer; they are read from the source, so use the conventional names.
 
 | Annotation | Parquet role |
 |---|---|
@@ -74,8 +78,13 @@ Supported annotation shapes (statically parsed, no import):
 | `pd.DataFrame` / `pandas.DataFrame` | pandas |
 | `pl.DataFrame` / `polars.DataFrame` | polars |
 | `pl.LazyFrame` | polars, lazy (a `LazyFrame` scanning the parquet file on read; collected on write) |
-| `pyarrow.Table` | pyarrow (written with `pyarrow.parquet`) |
-| `duckdb.DuckDBPyRelation` | duckdb (relation on read; materialized to parquet on write) |
+| `pyarrow.Table` | pyarrow |
+| `duckdb.DuckDBPyRelation` | duckdb (relation on read; written to parquet when the step ends) |
+
+Every result is written in full to an artifact file when the step ends; nothing lazy is passed
+between steps. A `pl.LazyFrame` or `duckdb.DuckDBPyRelation` input reads nothing up front, and
+the step's query decides which columns and row groups are read. See
+[Large inputs](/patterns/08-large-inputs/) and `barca docs types`.
 
 ### Declared environment variables (`env=`)
 
@@ -105,59 +114,120 @@ the step's run hash:
 `env=` is also accepted on `@task` and `@sensor`. Those always run, so there it only records the
 values each run used.
 
-**Limitation:** environment variables your code reads without declaring them are invisible to
+**Limitation:** environment variables your code reads without declaring them are not seen by
 barca. They are not part of the cache key, so changing one does not invalidate anything.
 
 ## Partitions
 
 ```python
-partitions(values: list[str | int])          # static partition values
-partitions_from(source: AssetLike)            # derive partitions from an upstream asset
-collect(source: AssetLike)                    # fan-in: aggregate all partitions of an upstream asset
-asset_ref(canonical_name: str)                # reference a node by id without importing it
+partitions(values)            # declare the keys of one dimension
+partitions_from(upstream)     # take the keys from an upstream asset
+collect(upstream)             # fan-in: every key of an upstream asset as one list
 ```
 
-Use `partitions=` on `@asset` to split an asset's work across a set of keys, executed as
-independent steps:
+`partitions=` on `@asset` splits an asset into one step per key. The keys run in parallel and
+each key is cached on its own.
 
 ```python
 from barca import asset, partitions, partitions_from, collect
 
-@asset(partitions={"ticker": partitions(["AAPL", "MSFT", "GOOG"])})
-def price(ticker: str) -> dict:
-    return fetch_price(ticker)
 
-@asset(partitions={"ticker": partitions_from(price)})   # same partition keys as `price`
-def signal(ticker: str, price: dict) -> dict:
-    return compute_signal(price)
+@asset(partitions={"region": partitions(["emea", "amer", "apac"])})
+def sales(region: str) -> dict:
+    return {"region": region, "revenue": len(region) * 100}
 
-@asset(inputs={"prices": collect(price)})                # fan-in: all partitions as a list
-def summary(prices: list[dict]) -> dict:
-    return aggregate(prices)
+
+@asset(partitions={"region": partitions_from(sales)})   # same keys as `sales`
+def margin(region: str, sales: dict) -> dict:
+    return {"region": region, "margin": sales["revenue"] * 0.2}
+
+
+@asset(inputs={"all_sales": collect(sales)})            # fan-in: every key as one list
+def summary(all_sales: list[dict]) -> dict:
+    return {"total": sum(s["revenue"] for s in all_sales)}
 ```
 
-`partitions(...)` accepts a literal list (extracted statically at parse time) or any other Python
-expression — e.g. a list comprehension or function call — which is evaluated by the Python runtime
-at plan time. `partitions_from(price)` on a partitioned `price` gives the asset the same keys
-(under the same dimension name, which must be its only dimension), and calls each key with the key
-and that key's output of `price`, as the parameter named after it: `signal(ticker="AAPL",
-price=<the AAPL output of price>)`. List the upstream in `inputs=` as well to receive it under
-another name (`inputs={"p": price}`). Each consumer key depends only on its own upstream key, so a
-new key of `price` runs only that key of `signal`. `partitions_from(tickers)` on an *unpartitioned*
-asset that returns a list uses the list's values as keys, known once `tickers` has run; the list is
-not passed to the function. `collect(...)`, used inside `inputs=`, aggregates every partition of an
-upstream asset into a single list delivered to the parameter. A partitioned asset in an
-unpartitioned asset's `inputs=` without `collect()` is a usage error (exit 2) that names both
-`collect(price)` and `partitions_from(price)`; up to 0.11 it silently behaved like `collect()`. An
-unpartitioned asset in a partitioned asset's `inputs=` is delivered whole to every key; it runs
-once, before any key, and its run hash is part of every key's run hash, so changing it (or
-`--refresh` on it) re-runs every key.
+```
+$ barca get summary pipeline.py --json
+[barca] 4/4 steps | done in 0.2s
+{"elapsed_seconds":0.578354167,"final_output":{"total":1200},"phases":2, ...}
+```
+
+### `partitions(values)`
+
+- The key is passed to the function as the parameter named in `partitions={...}` (`region`
+  above).
+- A literal list is read from the source. Any other expression (a module constant, a list
+  comprehension, a function call) is evaluated by Python when the run is planned.
+- A step's entry in the JSON result reports the keys: `"partitions": {"total": 3, "cached": 2,
+  "will_run": 1, "will_run_keys": ["k=LATAM"]}`.
+- On 0.18.0, adding a key ran only the new key when the keys came from an expression (a module
+  constant, a comprehension) or from `partitions_from(...)`. Adding a key to a literal list
+  inside the decorator ran every key again, for the asset and for an asset derived from it
+  with `partitions_from`.
+
+### `partitions_from(upstream)`
+
+On a partitioned `upstream`:
+
+- the asset gets the same keys, and each key is called with the key and that key's result of
+  `upstream`, passed as the parameter named after the upstream function:
+  `margin(region="emea", sales=<the emea result of sales>)`;
+- to receive it under another name, list the upstream in `inputs=` as well:
+  `@asset(inputs={"s": sales}, partitions={"region": partitions_from(sales)})` calls
+  `margin(region, s)`;
+- the dimension must keep the upstream's name, the upstream must have one dimension, and
+  `partitions_from(upstream)` must be the asset's only dimension. Anything else exits 2 when the
+  DAG is built, for example
+  `partitions_from(sales) is declared under dimension 'area', but 'sales' is partitioned by 'region'`;
+- each key depends on its own key of the upstream only.
+
+On an unpartitioned `upstream` that returns a list:
+
+- the list's values are the keys, and the list itself is not passed to the function;
+- the keys are known only after `upstream` has run. Until then `--dry-run` and `barca status`
+  report the asset as `unknown` (reason `partitions_unknown`);
+- when the list grows, only the new keys run.
+
+### `collect(upstream)`
+
+Used inside `inputs=`, it passes every key's result of a partitioned `upstream` as one list.
+The fan-in runs in its own phase after every key has finished, and runs again when its set of
+inputs changes.
+
+A partitioned asset in an unpartitioned asset's `inputs=` without `collect()` exits 2 and
+names both fixes:
+
+```
+DAG error: input 'all_sales' on 'pipeline.py:summary' reads partitioned asset 'pipeline.py:sales', but 'pipeline.py:summary' is not partitioned
+Use `inputs={"all_sales": collect(sales)}` to receive every partition of 'sales' as one list, or `partitions={"<key>": partitions_from(sales)}` to run once per partition of 'sales' with that partition's output.
+```
+
+Up to 0.11 this passed the list without an error.
+
+### Other rules and limits
+
+- An unpartitioned asset in a partitioned asset's `inputs=` is passed whole to every key. It
+  runs once, before any key, and its run hash is part of every key's run hash, so changing it,
+  or `--refresh` on it, re-runs every key.
+- Artifacts are stored per key: `.barca/artifacts/pipeline.py--sales_region_emea/<run_hash>.json`.
+- `barca get sales` on a partitioned asset prints one key's result as `final_output`, not all
+  of them, and no single key can be targeted or refreshed. To read every key, use a `collect`
+  asset or [`barca sql`](/reference/sql/) (one view with a `partition` column holding
+  `region=emea`).
+- `barca status` shows a partitioned asset as one node with `partitions: {total, cached,
+  missing, missing_keys}`.
+
+See `barca docs partitions`.
+
+## asset_ref
 
 Cross-file inputs are ordinary imports: `from other_module.assets import raw_data`, then
 `inputs={"data": raw_data}`. Barca resolves the import statically to that file's node (see
 [Discovery](/reference/discovery/)). `asset_ref("path/to/file.py:function_name")`, used inside
 `inputs=`, references a node by its canonical id (root-relative file path + function name, or its
-explicit `name=`) without importing it, for example to avoid an import cycle:
+explicit `name=`) without importing it, for example to avoid an import cycle. Its signature is
+`asset_ref(ref_string: str) -> str`:
 
 ```python
 from barca import asset, asset_ref
@@ -176,7 +246,11 @@ def process(data: dict) -> dict:
 )
 ```
 
-Stacked on an `@asset` to write the asset's output to a path when it materialises. Paths are fsspec-compatible (local, `abfss://`, `s3://`, `gs://`, etc. — remote schemes need the matching extra, see [Remote storage](/reference/remote-storage/)). Multiple `@sink` decorators may be stacked on the same asset.
+Stacked under `@asset`, it writes the asset's result to an extra path each time the asset
+runs. A cache hit does not write the sink again. Paths are local or any fsspec URI (`abfss://`,
+`s3://`, `gs://`); remote schemes need the matching extra (see
+[Remote storage](/reference/remote-storage/)). Several `@sink` decorators may be stacked on
+one asset.
 
 ```python
 from barca import asset, sink, Always
@@ -188,11 +262,20 @@ def banana() -> dict:
     return {'a': 1}
 ```
 
-The serialization format for each sink is chosen by precedence: the `serializer=` kwarg (`json`, `pickle`, `parquet`) → the sink path's extension (`.json`, `.pkl`, `.pickle`, `.parquet`) → the parent asset's artifact format. Writes are staged through a local temp file and uploaded/renamed atomically, so a crash never leaves a partial file at the destination.
+- The format comes from `serializer=` (`json`, `pickle`, `parquet`), else the path's extension
+  (`.json`, `.pkl`, `.pickle`, `.parquet`), else the asset's own artifact format.
+- A parquet sink needs a DataFrame, Arrow table or DuckDB relation. Anything else is a sink
+  failure.
+- Writes go to a temporary file first and are then renamed or uploaded, so a crash does not
+  leave a partial file at the destination.
+- No other node may take a sink as an input.
+- A failing sink does not fail the asset and does not change the exit code. It is reported on
+  stderr as `[barca] SINK FAILED: ...`; check stderr in automation.
+- On a partitioned asset each key writes its own file, with the key inserted before the
+  extension: `@sink("./exports/sales.json")` on keys `region=emea` and `region=amer` wrote
+  `exports/sales_region_emea.json` and `exports/sales_region_amer.json`.
 
-Sinks are leaf nodes — no other asset may list a sink as an input. A sink failure does not fail the parent asset, but is surfaced prominently in logs (`[barca] SINK FAILED: ...`).
-
-For partitioned assets, each partition writes its own sink file with the partition key injected before the extension: `@sink('out.parquet')` on partitions `ticker=AAPL, ticker=MSFT` produces `out_ticker_AAPL.parquet` and `out_ticker_MSFT.parquet`.
+See `barca docs sinks`.
 
 ## @sensor
 
@@ -209,29 +292,53 @@ For partitioned assets, each partition writes its own sink file with the partiti
 )
 ```
 
-Declares an external-state observer. Sensors must use `Manual` or `Schedule` freshness — `Always` is not valid for sensors (polling frequency must be declared explicitly). See `@asset` above for `env`, `retries` and `retry_backoff` semantics.
-
-Sensors return `(update_detected: bool, output)` tuples. The worker unpacks the tuple: a downstream asset receives `output` only. `update_detected` is not used for caching.
-
-A sensor's returned value is part of the run hash of every asset that reads it: when the value
-changes, those assets (and everything downstream of them) re-run; when it is the same, they are
-served from cache. That makes a sensor the way to track external data that changes in place, for
-example a sensor that returns a blob's etag in front of the asset that reads the blob. Return only
-what identifies the data: a value that changes on every run (a timestamp) re-runs the sensor's
-consumers every time. `--dry-run` and `barca status` assume a sensor returns its last recorded
-value, and report its consumers as `unknown` before it has ever run. See `barca docs cache`,
-"External data that changes in place".
+Declares a sensor: a function that looks at something outside the pipeline (a directory, a
+bucket, an API) and returns a value that identifies its current state. A sensor has no inputs
+(`sensor '...' cannot have inputs`, exit 2) and runs on every `barca get` or `barca run` whose
+cone includes it. See `@asset` above for `env`, `retries` and `retry_backoff`.
 
 ```python
-from barca import sensor, Schedule
+from pathlib import Path
+
+from barca import asset, sensor, Schedule
+
 
 @sensor(freshness=Schedule("*/5 * * * *"))
 def inbox_files() -> tuple[bool, list[str]]:
-    files = list(Path("inbox").glob("*.csv"))
-    return len(files) > 0, [str(f) for f in files]
+    files = sorted(str(f) for f in Path("inbox").glob("*.csv"))
+    return len(files) > 0, files
+
+
+@asset(inputs={"files": inbox_files})
+def loaded(files: list[str]) -> dict:
+    return {"n": len(files)}
 ```
 
-Sensors are source nodes only — they have no upstream inputs.
+**Return value.** Return a tuple `(update_detected, value)`. The asset that reads the sensor
+receives `value` only. `update_detected` is not used for caching. A sensor that returns
+something other than a two-item tuple has the whole return value passed on as `value`
+(observed on 0.18.0; the tuple is the documented form).
+
+**Caching.** The sensor's `value` is part of the run hash of every asset that reads it: with
+the same files `loaded` is served from cache, and after a file is added `loaded` and
+everything below it run again. This is the supported way to bring outside data into a
+pipeline; an asset that reads a file or a bucket in its own body is computed once and then
+served from cache. Return only what identifies the data (file names, an etag). A value that
+changes on every run, such as a timestamp, re-runs every consumer every time.
+
+**Previews.** `--dry-run` and `barca status` do not run the sensor. They assume it returns its
+last recorded value and say so in `detail`; before the sensor has ever run, its consumers are
+`unknown` (reason `sensor_output_unknown`).
+
+**Running one.** `barca get inbox_files pipeline.py` runs one sensor and prints its value.
+`barca get pipeline.py` with no target runs every sensor, including one nothing depends on.
+
+**Freshness.** The default is `Manual`. `Schedule("<cron>")` makes `barca serve` run the
+sensor on that cron; the tick records the sensor's value and does not trigger the assets that
+read it. 0.18.0 accepts `@sensor(freshness=Always)` without an error.
+
+See [Sensors and External Observations](/workflows/06-sensors-and-external-observations/) for
+a walk-through, and `barca docs assets` ("Sensors").
 
 ## @task
 
@@ -249,23 +356,20 @@ Sensors are source nodes only — they have no upstream inputs.
 )
 ```
 
-Declares a **task** — a workflow-management step such as a deploy, notification,
-migration, or cache warm. Tasks always re-run and are never cached, so they're
-the right home for "do something" operations that don't produce cacheable data.
+Declares a task: a step that does something (a deploy, a notification, a migration) and is
+not cached. A task runs every time it is in a run's cone.
 
-- They may appear **anywhere** in the graph (not just at the leaves).
+- They may appear anywhere in the graph, not only at the leaves.
 - They may depend on assets, sensors, or other tasks (via `inputs=`).
 - For ordering-only dependencies (no data needed), use the `_` prefix convention:
   `inputs={"_dep": some_node}`. The `_` prefix tells barca to skip artifact
   deserialization — the parameter receives `None`.
-- They must **not** be an input to an asset or sensor (a task always re-runs, so
-  feeding its output into a cacheable node would keep that node perpetually
-  stale).
+- They must not be an input to an asset or sensor. This exits 2:
+  `task 'pipeline.py:t1' cannot be an input to asset 'pipeline.py:d'`.
 
-Run a task with [`barca run`](/reference/cli/). Upstream assets are served from cache by
-default (like `barca get`); `--refresh a,b` re-materializes the named assets and everything
-downstream of them (`--no-cascade` limits it to the named assets), and `--refresh-all` (alias
-`--no-cache`) re-materializes all of them.
+Run a task with [`barca run`](/reference/cli/#run). Upstream assets are served from cache, as
+with `barca get`. `barca get` on a task exits 2 and names `barca run`. A task with
+`freshness=Schedule("<cron>")` runs on that cron under `barca serve`.
 
 ```python
 from barca import asset, task
@@ -317,17 +421,16 @@ def deploy_all(model) -> None:
     # or: results = parallel_map(deploy, ["us", "eu"])
 ```
 
-When running inside a barca worker, `parallel()` dispatches each branch to a separate worker
-process via the coordinator (the calling worker is frozen for the duration and resumed on
-completion); called standalone (outside a worker), it runs the callables sequentially. Barca's
-static analysis recognizes `partial(fn, ...)` arguments (including inside a starred generator or
-list comprehension, e.g. `parallel(*(partial(deploy, r) for r in regions))`) to build the
-dependency graph; fully dynamic call sets (e.g. `parallel(*work_items)`) are supported at runtime
-but can't be resolved statically. `parallel()`/`parallel_map()` calls are only recognized inside
-`@task` bodies, not `@asset` bodies.
+Inside a barca worker, `parallel()` runs each branch in a separate worker process (the calling
+worker is stopped until they finish). Called outside a worker, it runs the callables one after
+another. Arguments and results must be JSON values.
 
-A failed branch is returned as a `ParallelError` (with `.error` holding the message) rather than
-raising — inspect each result to detect failures.
+A failed branch is returned as a `ParallelError`, whose `.error` holds the message and
+traceback, and nothing is raised: the calling task succeeds and the run exits 0 unless your code
+inspects the results and raises. Branches are not retried and not cached. On 0.18.0 a call from
+an `@asset` body also ran its branches, but the asset is then cached like any other, so a
+fan-out that should happen on every run belongs in a task. See
+[Parallel Tasks](/patterns/04-parallel-tasks/).
 
 ## @unsafe
 
@@ -337,19 +440,30 @@ def my_asset() -> str:
     return global_config["value"]
 ```
 
-Marks a function as unsafe — it references globals, performs I/O, or otherwise cannot be tracked by AST analysis. `@unsafe` silences purity warnings; caching behaviour is unchanged. Barca makes no correctness guarantee for unsafe assets.
+Marks a function whose behavior barca cannot work out from its source, because it reads
+globals or does I/O. `@unsafe` silences purity warnings only. Caching is unchanged: the asset is
+still served from cache while its run hash matches.
 
 ## Schedule
 
 ```python
-Schedule("0 5 * * *")       # 5-field cron — daily at 05:00
-Schedule("*/15 * * * * *")  # 6-field cron — every 15 seconds
+Schedule("0 5 * * *")       # 5-field cron: daily at 05:00
+Schedule("*/15 * * * * *")  # 6-field cron: every 15 seconds
 ```
 
-Constructs a schedule freshness value. Use inside `freshness=` on any decorator.
+A freshness value for `freshness=` on `@asset`, `@sensor` or `@task`. It has an effect only
+while `barca serve` is running; `barca get` and `barca run` ignore it. `barca list` shows the
+cron and the next fire time.
 
-Accepts standard **5-field** cron (`minute hour day-of-month month day-of-week`) and a
-**6-field** form with a leading seconds field for sub-minute schedules. The scheduler
-(`barca serve`) evaluates at 1-second resolution; a 5-field expression has its seconds
-pinned to `0`, so it fires once per matching minute. The year field is not supported. See
-the [Scheduling guide](/scheduling/) for the full model.
+The cron has 5 fields (`minute hour day-of-month month day-of-week`) or 6 with a leading
+seconds field. There is no year field. See [Scheduling](/scheduling/) for what a tick does.
+
+## Other exports
+
+| Name | What it is |
+|---|---|
+| `duckdb_connection()` | The DuckDB connection barca binds `duckdb.DuckDBPyRelation` inputs to, one per worker process. Configure it at import time of your module. See `barca docs types`. |
+| `ParallelError` | What `parallel()` returns in place of a failed branch. |
+| `get`, `run`, `plan`, `history`, `stats` | Python functions that start the `barca` binary and return parsed results. See `barca docs agents`, "Getting values, not pointers". |
+| `BarcaError` | Raised by those functions; carries `kind`, `code`, `remediation`, and for a failed step `node`, `traceback`, `artifact_dir`. |
+| `Client`, `Run` | HTTP client for `barca serve`. See [Server API](/reference/server-api/#python-client). |

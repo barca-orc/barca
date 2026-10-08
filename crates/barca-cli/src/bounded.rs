@@ -7,7 +7,8 @@
 //! limits bound how many items are printed, not what an item says (error messages and
 //! tracebacks are always complete).
 
-use serde_json::{Map, Value};
+#[cfg(test)]
+use serde_json::Value;
 
 /// Default number of nodes `barca list` prints. High enough that typical pipelines (tens of
 /// nodes) are never truncated; a generated 300-node DAG is bounded and says so.
@@ -51,6 +52,7 @@ pub const STEP_FIELDS: &[&str] = &[
     "run_hash",
     "artifact",
     "warning",
+    "artifact_mismatch",
     "partitions",
     "env",
 ];
@@ -82,79 +84,10 @@ pub const STATUS_FIELDS: &[&str] = &[
 /// Fields of `barca docs --json`: `topics[]` items, or the single topic object.
 pub const DOCS_FIELDS: &[&str] = &["name", "summary", "content"];
 
-/// Keep only `fields` on each object in `items` (non-objects are left alone).
-pub fn project(items: &mut [Value], fields: &[String]) {
-    for item in items {
-        project_one(item, fields);
-    }
-}
-
-/// Keep only `fields` on one object.
-pub fn project_one(item: &mut Value, fields: &[String]) {
-    if let Value::Object(obj) = item {
-        obj.retain(|k, _| fields.iter().any(|f| f == k));
-    }
-}
-
-/// Apply `--fields` to the array at `obj[key]`, if both are present.
-pub fn project_key(obj: &mut Value, key: &str, fields: Option<&[String]>) {
-    if let (Some(fields), Some(Value::Array(items))) = (fields, obj.get_mut(key)) {
-        project(items, fields);
-    }
-}
-
-/// A truncated (or complete) page of a longer list.
-pub struct Page {
-    /// How many items exist in total.
-    pub total: usize,
-    /// True when fewer than `total` items are shown.
-    pub truncated: bool,
-}
-
-impl Page {
-    pub fn new(shown: usize, total: usize) -> Self {
-        Page {
-            total,
-            truncated: shown < total,
-        }
-    }
-
-    /// What to pass to see more, for the JSON `hint` and the table note.
-    fn hint(&self, noun: &str) -> String {
-        format!(
-            "pass --limit N for more, or --all for all {} {noun}",
-            self.total
-        )
-    }
-
-    /// `{key: items, total, truncated, hint?}` — `hint` only when truncated.
-    pub fn envelope(&self, key: &str, items: Vec<Value>, noun: &str) -> Value {
-        let mut obj = Map::new();
-        obj.insert(key.into(), Value::Array(items));
-        obj.insert("total".into(), self.total.into());
-        obj.insert("truncated".into(), self.truncated.into());
-        if self.truncated {
-            obj.insert("hint".into(), self.hint(noun).into());
-        }
-        Value::Object(obj)
-    }
-
-    /// One-line stderr note for human tables when truncated, e.g.
-    /// `showing 10 of 57 runs; pass --limit N for more, or --all for all 57 runs`.
-    pub fn note(&self, shown: usize, noun: &str) -> Option<String> {
-        self.truncated.then(|| {
-            format!(
-                "showing {shown} of {} {noun}; {}",
-                self.total,
-                self.hint(noun)
-            )
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use barca_core::report::{Page, project};
     use serde_json::json;
     use std::collections::BTreeSet;
 
@@ -197,7 +130,7 @@ mod tests {
 
     #[test]
     fn list_fields_match_the_serialized_node() {
-        let node = barca_core::commands::AssetSummary {
+        let node = barca_core::results::AssetSummary {
             id: "p.py:a".into(),
             kind: barca_core::NodeKind::Asset,
             freshness: barca_core::Freshness::Schedule(barca_core::CronExpr("0 6 * * *".into())),
@@ -205,7 +138,7 @@ mod tests {
             env: vec![],
         };
         let next = "2026-01-01 06:00".to_string();
-        let v = crate::list_node_json(&node, Some(&next));
+        let v = barca_core::report::list_node_json(&node, Some(&next));
         assert_eq!(v["freshness"], "schedule");
         assert_eq!(v["schedule"], "0 6 * * *");
         assert_eq!(keys(&v), set(LIST_FIELDS));
@@ -235,7 +168,7 @@ mod tests {
     #[test]
     fn step_fields_match_a_fully_populated_step() {
         let s = || Some(String::new());
-        let step = barca_core::commands::StepReport {
+        let step = barca_core::results::StepReport {
             id: String::new(),
             kind: String::new(),
             action: s(),
@@ -244,6 +177,7 @@ mod tests {
             detail: s(),
             run_hash: s(),
             artifact: s(),
+            artifact_mismatch: Some(true),
             warning: s(),
             partitions: Some(Default::default()),
             env: Some(Default::default()),

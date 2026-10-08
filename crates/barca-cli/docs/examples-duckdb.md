@@ -74,4 +74,7 @@ What to notice:
   `barca get revenue_by_region pipeline.py` returns an `_barca_artifact` pointer with the file
   path; `barca.get("revenue_by_region", "pipeline.py")` returns a DataFrame.
 
-See also: `barca docs types`.
+To load only a subset of a large upstream, keep the input a relation and narrow it in SQL
+before converting anything to pandas: `barca docs big-inputs`.
+
+See also: `barca docs types`, `barca docs big-inputs`.

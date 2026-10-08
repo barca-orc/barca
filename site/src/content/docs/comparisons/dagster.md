@@ -1,27 +1,35 @@
 ---
 title: "Barca vs Dagster"
-description: New-user experience comparison — install footprint, steps to first output, error handling.
+description: Install size, steps to a first result, run output and error output for the same two-asset pipeline, measured on 2026-06-10 with barca 0.2.0 and Dagster 1.13.8.
 ---
 
-Tested 2026-06-10. Barca 0.2.0, Dagster 1.13.8 (latest at time of test).
-Both installed from PyPI via `uv` on macOS (Apple Silicon), Python 3.14.
+Last measured: 2026-06-10, with barca 0.2.0 and Dagster 1.13.8, on macOS (Apple Silicon), Python 3.14, both installed from PyPI with `uv`. Not re-run since. Re-run tracked in [#277](https://github.com/barca-orc/barca/issues/277).
+
+Everything on this page describes those two versions on that date unless a note says otherwise.
+Dagster has had releases since, and so has barca: where barca's behavior has changed, a note
+dated 2026-10-07 says how.
 
 ## Install footprint
 
-| Metric | barca | dagster | Ratio |
-|--------|-------|---------|-------|
-| Packages installed | 1 | 100 | 100x |
-| Venv size | 16 MB | 301 MB | 19x |
-| Lockfile entries | 2 | 109 | 55x |
-| Wheel download | 6.9 MB | 30+ MB | ~4x |
+| Metric | barca 0.2.0 | Dagster 1.13.8 |
+|--------|-------|---------|
+| Packages installed | 1 | 100 |
+| Venv size | 16 MB | 301 MB |
+| Lockfile entries | 2 | 109 |
+| Wheel download | 6.9 MB | 30+ MB |
 
-Barca's only dependency is itself — the wheel contains a Rust binary and Python stubs.
-Dagster pulls in cryptography, uvloop, sqlalchemy, grpcio, graphql, starlette, pydantic,
-protobuf, and ~90 transitive dependencies for an empty scaffold.
+The barca wheel contained a Rust binary and Python decorator stubs and declared no dependencies.
+The Dagster scaffold installed 100 packages, among them cryptography, uvloop, sqlalchemy, grpcio,
+graphql, starlette, pydantic and protobuf.
+
+Note, 2026-10-07: the barca wheel now also embeds the web UI that `barca serve` shows. barca
+0.18.0 is still one package with no dependencies; its macOS arm64 wheel is 9.8 MB on PyPI, and a
+fresh Python 3.12 virtualenv with only barca installed is 21 MB (`du -sh`). The Dagster column
+was not re-measured.
 
 ## Steps to first output
 
-### Barca (3 steps)
+### Barca
 
 ```bash
 uv add barca                    # install
@@ -39,7 +47,11 @@ PY
 barca get pipeline.py            # run
 ```
 
-### Dagster (6–7 steps)
+These three steps still work on barca 0.18.0.
+
+### Dagster
+
+The steps of the Dagster quickstart as followed on 2026-06-10:
 
 ```bash
 uvx create-dagster@latest project myproj   # scaffold (interactive prompt)
@@ -50,18 +62,20 @@ uv add pandas                              # install deps for the quickstart
 dg launch --assets my_asset                # run
 ```
 
-The dagster quickstart also requires creating a data directory and CSV file before
-the asset can run, bringing the real count to 7–8 steps.
+The quickstart also had the reader create a data directory and a CSV file before the asset could
+run.
 
-## Running the same 2-asset pipeline
+## Running the same two-asset pipeline
 
-| Metric | barca | dagster |
+| Metric | barca 0.2.0 | Dagster 1.13.8 |
 |--------|-------|---------|
 | Command | `barca get pipeline.py` | `dg launch --assets raw_data,summary` |
 | Total time | 240ms | 1,550ms |
 | Output lines | 2 (progress + JSON) | 29 (all DEBUG) |
 | Result access | JSON on stdout | Pickled to temp dir |
 | Error output | 1 line | 25+ lines with internal frames |
+
+Each time is one run, not an average.
 
 ### Barca output
 
@@ -70,7 +84,11 @@ the asset can run, bringing the real count to 7–8 steps.
 {"elapsed_seconds":0.241,"final_output":{"count":3,"total":6},"phases":1,"run_id":"...","steps_executed":2}
 ```
 
-### Dagster output (abridged — actual is 29 lines)
+Note, 2026-10-07: barca 0.18.0 prints more keys in this JSON object (`status`, a `steps` array
+with each step's run hash and cache status, and `warnings`). The current shape is in the
+[CLI contract](/reference/cli-contract/).
+
+### Dagster output (abridged from 29 lines)
 
 ```
 2026-06-10 ... - dagster - DEBUG - RUN_START - Started execution of run for "__ASSET_JOB".
@@ -83,16 +101,24 @@ the asset can run, bringing the real count to 7–8 steps.
 2026-06-10 ... - dagster - DEBUG - RUN_SUCCESS - Finished execution of run for "__ASSET_JOB".
 ```
 
-## Error handling comparison
+## Error output
 
-### Barca
+The same asset raising `ValueError("something went wrong")`.
+
+### Barca 0.2.0
 
 ```
 [barca] 0/1 steps done in 0.0s
 Worker failed: something went wrong
 ```
 
-### Dagster
+Note, 2026-10-07: barca 0.18.0 prints more than this. Piped, the same failure gives a JSON
+result on stdout with `"status": "failed"`, `"error"` and `"failed_node"`, and on stderr a
+`[barca] run failed: step 'broken.py:oops' failed (exit 1)` line followed by one JSON line that
+carries the error, a remediation, and the traceback frames from the user's file. The exit code
+is 1. See [the CLI contract](/reference/cli-contract/).
+
+### Dagster 1.13.8
 
 ```
 dagster._core.errors.DagsterExecutionStepExecutionError: Error occurred while executing op "oops"::
@@ -109,67 +135,26 @@ Stack Trace:
     raise ValueError("something went wrong")
 ```
 
-The user's error is 6 frames deep in dagster internals.
+The frame from the user's file is the last one, below the Dagster frames.
 
-## What dagster does well (steal these)
+## Other things observed in the same session
 
-### `dg list defs` — discoverability command
+These are notes from using Dagster 1.13.8 on 2026-06-10. They have not been checked against a
+later Dagster release.
 
-Shows a clean table of every asset, deps, group, kind. Answers "what does the framework
-see?" without running anything. Barca's `barca list` command (added in 0.2.1) fills this gap.
-
-### Scaffolded `.gitignore`
-
-Dagster's scaffold includes a `.gitignore` covering framework artifacts. Barca silently
-creates `.barca/` (with a 480KB WAL file) and doesn't mention it.
-
-### Auto-discovery in `defs/` folder
-
-Drop a `.py` file in the defs folder and it's picked up automatically. No registration.
-(Barca already does this with explicit file arguments, but multi-file discovery from a
-project root is a good future direction.)
-
-## What dagster gets wrong (avoid these)
-
-### Framework internals in error output
-
-25 lines of dagster stack frames for a simple ValueError. Default should show only
-the user's error. Framework traces belong behind `--verbose`.
-
-### Two CLIs
-
-`dagster` (old, deprecated) and `dg` (new). Every Google result and Stack Overflow answer
-points to the old one. Never split the CLI — evolve subcommands within one binary.
-
-### Mandatory project structure
-
-Dagster requires pyproject.toml, src layout, definitions.py, defs/ folder before anything
-runs. `barca get any_file.py` is the killer feature. Never gate it behind project structure.
-
-### Verbose by default
-
-14 DEBUG lines per asset per run with no quiet mode. The right default is what barca does:
-progress + result. Lifecycle events belong behind `--verbose` or `--log-level debug`.
-
-### Interactive prompts in non-interactive contexts
-
-`create-dagster` prompts "Run uv sync? (y/n)" with no `--yes` flag. Blocks CI, scripts,
-and automated workflows.
-
-### Venv mismatch warning spam
-
-Every `dg` command prints a 5-line warning unless the venv is activated. Running
-`.venv/bin/dg` should just work without warnings.
-
-## The meta-lesson
-
-Dagster's UX problems stem from one design choice: the framework assumes it's the center
-of your world. It wants you in its project structure, its web UI, its process model, its
-logging format.
-
-Barca's thesis is the opposite — the orchestrator is invisible. As features are added
-(alerting, remote execution, integrations), each one will push toward making the framework
-more visible — scheduling and a server already shipped (`barca serve`) without becoming the
-center of the workflow: it's opt-in, binds to localhost, and the default `barca get` path
-never touches it. The discipline is to keep asking: "can this feature work without the user
-knowing barca is there?"
+- `dg list defs` printed a table of every asset with its deps, group and kind, without running
+  anything. barca's equivalent is `barca list`, added in 0.2.1.
+- The Dagster scaffold included a `.gitignore` covering the files Dagster writes. barca 0.2.0
+  created `.barca/` without one. Note, 2026-10-07: barca 0.18.0 writes `.barca/.gitignore`
+  containing `*`, so the directory ignores itself.
+- A `.py` file placed in the scaffold's `defs/` folder was picked up without registration.
+  barca 0.2.0 needed the files named on the command line. Note, 2026-10-07: barca 0.18.0 reads
+  every `.py` file under the project root that imports barca when no file is named; see
+  [Discovery](/reference/discovery/).
+- The Dagster project needed a `pyproject.toml`, a `src` layout, `definitions.py` and a `defs/`
+  folder before `dg launch` ran. `barca get file.py` runs on a single file.
+- Each asset printed 14 DEBUG lines per run. No option to reduce this was found during the test.
+- `create-dagster` asked "Run uv sync? (y/n)". No `--yes` flag was found during the test.
+- `dg` commands printed a five-line warning when the project's virtualenv was not activated,
+  including when run as `.venv/bin/dg`.
+- Both a `dagster` command and a `dg` command were installed.

@@ -16,7 +16,7 @@ use turso::Builder;
 /// Process-wide serialization of `metadata.db` operations. The server can run
 /// multiple pipelines in parallel (they execute Python concurrently), but their
 /// brief reads/writes to the shared SQLite file must not overlap. Every DB
-/// helper — and the inline cache-check/persist ops in `commands::execute` — holds
+/// helper — and the inline cache-check/persist ops in `execution::execute` — holds
 /// this guard for the duration of its (short) database work, so runs never race
 /// on the file without depending on WAL support. A one-shot CLI run leaves it
 /// uncontended.
@@ -198,6 +198,583 @@ async fn acquire_file_lock(db_path: &str, wait: Duration) -> Result<fs::File, Ba
     }
 }
 
+/// Where [`replace_db`] can be cut short. Each is a point at which the process may die; the
+/// tests stop there and check that the next pull still ends with nothing lost.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReplaceStage {
+    /// Local rows are copied onto the staged file and both logs are folded in.
+    Carried,
+    /// The previous database has its second name (`<db>.prev.tmp`); nothing else has changed.
+    PrevStaged,
+    /// The base record says a swap is in progress and the old database's (empty) sidecar
+    /// files are removed; the staged file is not moved yet.
+    SidecarsRemoved,
+    /// The staged file is in place; the base record does not name it yet.
+    Renamed,
+}
+
+/// A downloaded copy of the shared state, about to replace the local database.
+pub(crate) struct Incoming<'a> {
+    /// The downloaded file, in the same directory as the database.
+    pub staged: &'a Path,
+    /// The base record ([`crate::state_base::read_raw`]) as it was before the download began.
+    pub base_at_start: Option<&'a [u8]>,
+    /// Which version of the shared state object this is (its token), when known.
+    pub version: Option<&'a str>,
+}
+
+/// What [`replace_db`] did.
+#[derive(Debug)]
+pub(crate) enum Replaced {
+    /// The download is now the local database, with what was carried over from the old one.
+    Swapped(crate::state_carry::Carried),
+    /// The local database was replaced or pushed while this download was on its way, so the
+    /// download may be older than it: nothing was touched.
+    Superseded,
+    /// The download is not a database this version of barca can use
+    /// ([`crate::state_validate`]), and why: nothing was touched.
+    Invalid(crate::state_validate::Invalid),
+}
+
+/// Replace the database at `db_path` with a download of the shared state. This is the only
+/// place a local database is replaced.
+///
+/// A database is its main file *plus* its write-ahead log: frames left in `<db>-wal` are
+/// applied on top of whatever main file is there, so replacing only the main file lays the old
+/// database's log over the new one (#221). The old database can hold rows that were never
+/// pushed, which a pull must not lose. And a download takes time, during which another process
+/// can have pulled a newer blob. So, under the in-process guard and the cross-process lock (no
+/// barca process has the database open meanwhile):
+///
+/// 0. **Still current?** If the base record changed since the download began, the download
+///    is discarded ([`Replaced::Superseded`]): the local database is never replaced by a blob
+///    older than the one it is based on.
+/// 1. **Valid?** The download must be a database this version of barca can use
+///    ([`crate::state_validate`]), checked before anything is written to it. If it is not,
+///    nothing is touched ([`Replaced::Invalid`]).
+/// 2. **Carry.** Rows the old database has and the download lacks are copied onto the
+///    download ([`crate::state_carry`]). Always: nothing is assumed about the old database.
+/// 3. **Fold.** Both logs are checkpointed into their main files and checked to be empty. Each
+///    database is now one self-contained file, with the same rows as before.
+/// 4. **Swap.** The old database file is given a second name ([`crate::state_prev`]), the base
+///    record is advanced (so that downloads begun before this point are discarded even if this
+///    process dies now), the old sidecars (empty by now) are removed, the download is renamed
+///    over `db_path` (after an fsync when it carries rows that exist nowhere else), the old
+///    file becomes `<db>.prev`, and the base record is advanced again with what was kept.
+///
+/// A process that dies before the rename leaves the old database complete, unpushed rows
+/// included: nothing before that point changes what it holds, and the download is simply
+/// abandoned (the next pull starts over, and carrying is idempotent). One that dies after it
+/// leaves the new database complete. There is no state in between.
+///
+/// Only a local file that is positively not a database (wrong header, cut short, or reported
+/// corrupt by the engine) is replaced without being read, and the returned
+/// [`Carried::unreadable`](crate::state_carry::Carried) says why. A local database that cannot
+/// be opened for any other reason (held open by another program, permissions, I/O) is an
+/// error and stays as it was; so does everything when the download is not valid.
+pub(crate) async fn replace_db(
+    db_path: &str,
+    incoming: Incoming<'_>,
+) -> Result<Replaced, BarcaError> {
+    replace_db_until(db_path, incoming, None).await
+}
+
+/// [`replace_db`] for a caller that took the database's lock before it began the download,
+/// so that nothing can overtake it.
+pub(crate) async fn replace_db_holding(
+    _lock: &DbLock,
+    db_path: &str,
+    incoming: Incoming<'_>,
+) -> Result<Replaced, BarcaError> {
+    replace_locked(db_path, incoming, None).await
+}
+
+async fn replace_db_until(
+    db_path: &str,
+    incoming: Incoming<'_>,
+    stop_after: Option<ReplaceStage>,
+) -> Result<Replaced, BarcaError> {
+    let _lock = lock_db(db_path).await?;
+    replace_locked(db_path, incoming, stop_after).await
+}
+
+/// The in-process guard and the cross-process lock of the database at `db_path`, for an
+/// operation that must see no other barca process touch the file. Held until dropped.
+pub(crate) struct DbLock {
+    _lock: fs::File,
+    _guard: MutexGuard<'static, ()>,
+}
+
+pub(crate) async fn lock_db(db_path: &str) -> Result<DbLock, BarcaError> {
+    let guard = db_guard().await;
+    let lock = acquire_file_lock(db_path, DB_FILE_LOCK_WAIT).await?;
+    Ok(DbLock {
+        _lock: lock,
+        _guard: guard,
+    })
+}
+
+/// The body of [`replace_db`]; the caller holds [`lock_db`].
+async fn replace_locked(
+    db_path: &str,
+    incoming: Incoming<'_>,
+    stop_after: Option<ReplaceStage>,
+) -> Result<Replaced, BarcaError> {
+    use crate::{state_base, state_carry::Carried, state_prev, state_validate};
+    let staged = incoming.staged;
+    let staged_path = staged.to_string_lossy().to_string();
+
+    let base_raw = state_base::read_raw(db_path);
+    if base_raw.as_deref() != incoming.base_at_start {
+        return Ok(Replaced::Superseded);
+    }
+    let base = state_base::parse(base_raw.as_deref());
+    if !staged.exists() {
+        return Err(BarcaError::Db(format!(
+            "the downloaded shared state {staged_path} is not there"
+        )));
+    }
+    // A download that is byte-for-byte the local database (the usual case: nothing was pushed
+    // since this machine last pulled or pushed) replaces it with itself. Only then are its
+    // pages not all read again.
+    let unchanged =
+        log_holds_no_frame(db_path) && state_validate::same_bytes(db_path, &staged_path);
+    let pages = match unchanged {
+        true => state_validate::Pages::SameAsLocal,
+        false => state_validate::Pages::Check,
+    };
+    let pulled = match state_validate::open(&staged_path, pages).await? {
+        Ok(pulled) => pulled,
+        Err(why) => return Ok(Replaced::Invalid(why)),
+    };
+
+    let local_len = fs::metadata(db_path).map(|m| m.len());
+    let unreadable = |why: String| Carried {
+        unreadable: Some(why),
+        ..Default::default()
+    };
+    let mut carried = if !Path::new(db_path).exists() && wal_is_clean(db_path) {
+        // Nothing local.
+        fold_pulled(pulled, &staged_path).await?;
+        Carried::default()
+    } else if !Path::new(db_path).exists() {
+        // A log without its main file is not a database: there is nothing to apply it to.
+        fold_pulled(pulled, &staged_path).await?;
+        unreadable(format!(
+            "{db_path} is missing and only its write-ahead log was left"
+        ))
+    } else if matches!(local_len, Ok(0)) && wal_is_clean(db_path) {
+        fold_pulled(pulled, &staged_path).await?;
+        unreadable("it is empty".to_string())
+    } else if matches!(local_len, Ok(0)) {
+        // An empty main file beside a log with something in it: the rows, if any, are in
+        // the log, and nothing here shows they can be read back. Not ours to throw away.
+        return Err(BarcaError::Db(format!(
+            "{db_path} is empty but {db_path}-wal is not: the local history cannot be read, \
+             and it may hold rows that were never uploaded.\nThe local database was left as \
+             it was, and nothing was pulled. To go on with the shared history alone, move \
+             {db_path} and {db_path}-wal out of the way."
+        )));
+    } else if let Some(why) = not_a_database(db_path) {
+        fold_pulled(pulled, &staged_path).await?;
+        unreadable(why)
+    } else {
+        carry_and_fold(db_path, &staged_path, pulled).await?
+    };
+    // The same rows, kept again before anything pushed them, are not news.
+    carried.announced = !carried.digest().is_empty()
+        && base.as_ref().map(|b| b.kept.as_str()) == Some(carried.digest().as_str());
+    if stop_after == Some(ReplaceStage::Carried) {
+        return Ok(Replaced::Swapped(carried));
+    }
+
+    // Nothing above this line has changed what the old database holds, and everything below
+    // is the replacement itself. Here `staged` is the complete next database and `db_path` the
+    // complete previous one, each a single file with its log folded in: every pull compares,
+    // so this holds whenever the previous one is a barca database (it may also be absent, or a
+    // file that holds no history and is about to be replaced with a warning: see
+    // `carried.unreadable`).
+    let io = |what: &str, e: std::io::Error| BarcaError::Db(format!("failed to {what}: {e}"));
+
+    // The download was valid before the carry wrote to it. What goes in place is that file
+    // plus one committed transaction and a checkpoint; it must still be a whole file.
+    if let Err(why) = state_validate::whole_file(&staged_path) {
+        return Err(BarcaError::Db(format!(
+            "the database prepared from the shared state ({staged_path}) is not whole after \
+             the local rows were added to it: {why}. The local database was left as it was."
+        )));
+    }
+
+    // Keep what the swap replaces (`<db>.prev`), when that is a barca history and the swap
+    // changes it. The file gets its second name now and becomes `.prev` after the swap; if
+    // the swap does not happen, dropping `prev` takes the name away again.
+    //
+    // A download of the version the last swap put in place changes nothing either, however
+    // its bytes differ: the local database is that version plus rows of its own, which were
+    // carried again. Keeping it would replace the generation from before that version with
+    // a copy of what is here.
+    let same_version = incoming.version.is_some()
+        && base.as_ref().map(|b| b.pulled.as_str()) == incoming.version
+        && incoming.version != Some("");
+    let prev = match carried.compared && !unchanged && !same_version {
+        true => Some(state_prev::Kept::stage(db_path).map_err(|e| {
+            BarcaError::Db(format!(
+                "failed to keep the current local database as {} before replacing it: {e}. \
+                 The local database was left as it was, and nothing was pulled.",
+                state_prev::path(db_path)
+            ))
+        })?),
+        false => {
+            state_prev::remove_leftover(db_path);
+            None
+        }
+    };
+    if stop_after == Some(ReplaceStage::PrevStaged) {
+        // As a process killed here leaves it: the second name stays.
+        std::mem::forget(prev);
+        return Ok(Replaced::Swapped(carried));
+    }
+
+    // From here the local database is about to change: any download begun before this point
+    // must not be swapped in after it, even if this process dies before the last line.
+    state_base::write(db_path, base_raw.as_deref(), "", None)
+        .map_err(|e| io("write the base record", e))?;
+    remove_sidecars(db_path)?;
+    if stop_after == Some(ReplaceStage::SidecarsRemoved) {
+        std::mem::forget(prev);
+        return Ok(Replaced::Swapped(carried));
+    }
+    // Rows that exist only here must be on disk before the file that held them is unlinked.
+    let durable = carried.wrote();
+    if durable {
+        fs::File::open(staged)
+            .and_then(|f| f.sync_all())
+            .map_err(|e| io(&format!("sync {staged_path}"), e))?;
+    }
+    fs::rename(staged, db_path).map_err(|e| io(&format!("move {staged_path} to {db_path}"), e))?;
+    if durable && let Some(dir) = Path::new(db_path).parent() {
+        // Best effort: the rename is already visible; this makes it survive a power cut.
+        let dir = if dir.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            dir
+        };
+        fs::File::open(dir).and_then(|d| d.sync_all()).ok();
+    }
+    if stop_after == Some(ReplaceStage::Renamed) {
+        std::mem::forget(prev);
+        return Ok(Replaced::Swapped(carried));
+    }
+    if let Some(prev) = prev
+        && let Err(e) = prev.publish()
+    {
+        // The swap is done and stands whatever happens to the name of the old file.
+        eprintln!(
+            "[barca] warning: the local history was replaced, but the one it replaced could \
+             not be kept as {}: {e}",
+            state_prev::path(db_path)
+        );
+    }
+    // Best effort: it only keeps the same rows from being announced twice.
+    state_base::write(
+        db_path,
+        state_base::read_raw(db_path).as_deref(),
+        &carried.digest(),
+        Some(incoming.version.unwrap_or_default()),
+    )
+    .ok();
+    Ok(Replaced::Swapped(carried))
+}
+
+/// A copy of the local database, taken for an upload, and the base record as it was then.
+pub(crate) struct PushCopy {
+    /// The file to upload: the whole database in one file. The caller removes it.
+    pub path: PathBuf,
+    base_raw: Option<Vec<u8>>,
+}
+
+/// Fold the local database's write-ahead log into its main file and copy the result next to
+/// it, under the lock: the copy is one consistent database (turso keeps most data in the log;
+/// the main file alone, without a checkpoint, would be an old or empty database), and it
+/// stays that whatever other barca processes do to the database during the upload, which
+/// therefore needs no lock.
+pub(crate) async fn copy_for_push(db_path: &str, copy: PathBuf) -> Result<PushCopy, BarcaError> {
+    let _lock = lock_db(db_path).await?;
+    fold_log(db_path).await?;
+    fs::copy(db_path, &copy).map_err(|e| {
+        BarcaError::Db(format!(
+            "failed to copy {db_path} to {} for upload: {e}",
+            copy.display()
+        ))
+    })?;
+    Ok(PushCopy {
+        path: copy,
+        base_raw: crate::state_base::read_raw(db_path),
+    })
+}
+
+/// After the upload of `copy` succeeded: advance the base record, so that a download begun
+/// before the push is not swapped in over what was pushed. Returns whether the local database
+/// is still what was uploaded: false when something was written to it during the upload (every
+/// write goes to the write-ahead log, which was empty when the copy was taken) or a pull
+/// replaced it. Those rows are local only; the caller pushes again.
+pub(crate) async fn record_pushed(db_path: &str, copy: &PushCopy) -> bool {
+    use crate::state_base;
+    let Ok(_lock) = lock_db(db_path).await else {
+        return false;
+    };
+    let base_raw = state_base::read_raw(db_path);
+    let unchanged = base_raw == copy.base_raw && wal_is_clean(db_path);
+    state_base::write(db_path, base_raw.as_deref(), "", None).ok();
+    unchanged
+}
+
+/// Checkpoint the database at `db_path` and verify that its main file is now the whole
+/// database. The caller holds the database's lock.
+pub(crate) async fn fold_log(db_path: &str) -> Result<(), BarcaError> {
+    {
+        let (_db, conn) = connect(db_path).await?;
+        checkpoint(&conn).await?;
+    }
+    if !wal_is_clean(db_path) {
+        let wal = format!("{db_path}-wal");
+        return Err(BarcaError::Db(format!(
+            "WAL not empty after checkpoint ({} bytes remain in {wal}) — \
+             refusing to upload a torn database",
+            fs::metadata(&wal).map(|m| m.len()).unwrap_or(0)
+        )));
+    }
+    Ok(())
+}
+
+/// [`fold_log`] under the database's lock.
+pub(crate) async fn fold_log_locked(db_path: &str) -> Result<(), BarcaError> {
+    let _lock = lock_db(db_path).await?;
+    fold_log(db_path).await
+}
+
+/// A whole pull of an already downloaded file, for tests: the download began just now.
+#[cfg(test)]
+pub(crate) async fn pull_for_tests(db_path: &str, staged: &Path) -> crate::state_carry::Carried {
+    let base = crate::state_base::read_raw(db_path);
+    let incoming = Incoming {
+        staged,
+        base_at_start: base.as_deref(),
+        version: None,
+    };
+    match replace_db(db_path, incoming).await.unwrap() {
+        Replaced::Swapped(carried) => carried,
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Why the file at `path` is certainly not a usable SQLite database: it does not start with
+/// the SQLite header, or its length is not a whole number of pages (it was cut short). None
+/// for a file that looks like a database, and for an empty one (a database not yet
+/// checkpointed has an empty main file). A file that cannot be read is not judged here.
+pub(crate) fn not_a_database(path: &str) -> Option<String> {
+    use std::io::Read;
+    let len = fs::metadata(path).ok()?.len();
+    if len == 0 {
+        return None;
+    }
+    let mut header = [0u8; 100];
+    let mut file = fs::File::open(path).ok()?;
+    if len < header.len() as u64 {
+        return Some(format!("{len} bytes: too short to be a database"));
+    }
+    file.read_exact(&mut header).ok()?;
+    if &header[..16] != b"SQLite format 3\0" {
+        return Some("it does not start with a SQLite header".to_string());
+    }
+    let page_size = match u16::from_be_bytes([header[16], header[17]]) {
+        1 => 65536u64,
+        n => u64::from(n),
+    };
+    if !page_size.is_power_of_two() || page_size < 512 {
+        return Some(format!(
+            "its header gives an impossible page size ({page_size})"
+        ));
+    }
+    if len % page_size != 0 {
+        return Some(format!(
+            "{len} bytes is not a whole number of {page_size}-byte pages: the file was cut short"
+        ));
+    }
+    None
+}
+
+/// How long a pull waits for another program to let go of the local database before failing.
+const LOCAL_BUSY_WAIT: Duration = Duration::from_secs(5);
+
+/// The local database, opened for the carry, or the reason it is positively not a database.
+enum LocalDb {
+    Open(turso::Database, turso::Connection),
+    Damaged(String),
+}
+
+/// Open the local database to read what must be carried. Decided by the kind of error, and
+/// anything not recognised is an error, never a reason to replace the file:
+///
+/// - the engine says the file is not a database or is corrupt: [`LocalDb::Damaged`];
+/// - the file is held by another program: wait up to [`LOCAL_BUSY_WAIT`], then an error naming
+///   the likely holders;
+/// - anything else (permissions, I/O): an error.
+async fn open_local(db_path: &str) -> Result<LocalDb, BarcaError> {
+    let deadline = Instant::now() + LOCAL_BUSY_WAIT;
+    loop {
+        let attempt: Result<_, turso::Error> = async {
+            let db = Builder::new_local(db_path).build().await?;
+            let conn = db.connect()?;
+            // Reading the schema is what first touches the file's pages.
+            let mut rows = conn.query("SELECT COUNT(*) FROM sqlite_schema", ()).await?;
+            while rows.next().await?.is_some() {}
+            drop(rows);
+            Ok((db, conn))
+        }
+        .await;
+        let error = match attempt {
+            Ok((db, conn)) => return Ok(LocalDb::Open(db, conn)),
+            Err(e) => e,
+        };
+        match &error {
+            turso::Error::NotAdb(why) | turso::Error::Corrupt(why) => {
+                return Ok(LocalDb::Damaged(why.clone()));
+            }
+            // The engine reports a file lock held by another process as a plain error.
+            turso::Error::Busy(_) | turso::Error::BusySnapshot(_) => {}
+            other if other.to_string().contains("locked by another process") => {}
+            _ => return Err(db_open_error(error)),
+        }
+        if Instant::now() >= deadline {
+            return Err(BarcaError::Db(format!(
+                "{db_path} is in use by another program (waited {}s): {error}\n\
+                 Something outside barca's own locking has the metadata DB open (a DB browser, \
+                 a backup tool, a script using sqlite3, or a barca process from an older \
+                 version). Close it and retry.",
+                LOCAL_BUSY_WAIT.as_secs()
+            )));
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// True when the database has barca's `runs` or `materializations` table.
+async fn holds_barca_history(conn: &turso::Connection) -> Result<bool, BarcaError> {
+    let failed = |e| BarcaError::Db(format!("failed to read the schema: {e}"));
+    let mut rows = conn
+        .query(
+            "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' \
+             AND name IN ('runs', 'materializations')",
+            (),
+        )
+        .await
+        .map_err(failed)?;
+    let mut tables = 0;
+    while let Some(row) = rows.next().await.map_err(failed)? {
+        tables = row.get::<i64>(0).unwrap_or(0);
+    }
+    Ok(tables > 0)
+}
+
+/// Close a validated download nothing is carried onto: its log (the migrations may have
+/// written to it) is folded in, and the file at `staged_path` is the whole database.
+async fn fold_pulled(
+    (pulled_db, pulled): crate::state_validate::Valid,
+    staged_path: &str,
+) -> Result<(), BarcaError> {
+    checkpoint(&pulled).await?;
+    drop(pulled);
+    drop(pulled_db);
+    if !wal_is_clean(staged_path) {
+        return Err(BarcaError::Db(format!(
+            "the write-ahead log of {staged_path} is not empty after a checkpoint"
+        )));
+    }
+    remove_sidecars(staged_path)
+}
+
+/// Steps 2 and 3 of [`replace_db`], on the validated download `pulled` (the file at
+/// `staged_path`, with the current schema). Afterwards `staged_path` and (when it is a
+/// database) `db_path` are each one self-contained file with an empty or absent log.
+async fn carry_and_fold(
+    db_path: &str,
+    staged_path: &str,
+    pulled: crate::state_validate::Valid,
+) -> Result<crate::state_carry::Carried, BarcaError> {
+    let kept_local = |e: BarcaError| {
+        BarcaError::Db(format!(
+            "{e}\nThe local database was left as it was, and nothing was pulled. To go on with \
+             the shared history alone, move {db_path} and {db_path}-wal out of the way; what \
+             was recorded only on this machine is then not carried over."
+        ))
+    };
+
+    // The local database first: if it cannot be read, nothing else is touched.
+    let (_local_db, local) = match open_local(db_path).await.map_err(kept_local)? {
+        LocalDb::Open(db, conn) => (db, conn),
+        LocalDb::Damaged(why) => {
+            fold_pulled(pulled, staged_path).await.map_err(kept_local)?;
+            return Ok(crate::state_carry::Carried {
+                unreadable: Some(why),
+                ..Default::default()
+            });
+        }
+    };
+    if !holds_barca_history(&local).await.map_err(kept_local)? {
+        // A database, but not one barca wrote rows into: nothing in it is history.
+        drop(local);
+        drop(_local_db);
+        fold_pulled(pulled, staged_path).await.map_err(kept_local)?;
+        return Ok(crate::state_carry::Carried {
+            unreadable: Some("it has no barca tables".to_string()),
+            ..Default::default()
+        });
+    }
+    init_schema(&local).await.map_err(kept_local)?;
+
+    let (_pulled_db, pulled) = pulled;
+    let mut carried = crate::state_carry::carry_unpushed(&local, &pulled)
+        .await
+        .map_err(kept_local)?;
+    carried.compared = true;
+    checkpoint(&local).await.map_err(kept_local)?;
+    drop(local);
+    drop(_local_db);
+    // Its log must now be empty, or removing it in the swap would lose what it holds.
+    if !wal_is_clean(db_path) {
+        return Err(kept_local(BarcaError::Db(format!(
+            "the write-ahead log of {db_path} is not empty after a checkpoint"
+        ))));
+    }
+
+    checkpoint(&pulled).await.map_err(kept_local)?;
+    drop(pulled);
+    drop(_pulled_db);
+    if !wal_is_clean(staged_path) {
+        return Err(kept_local(BarcaError::Db(format!(
+            "the write-ahead log of {staged_path} is not empty after a checkpoint"
+        ))));
+    }
+    remove_sidecars(staged_path)?;
+    Ok(carried)
+}
+
+/// Remove the `-wal` and `-shm` files of the database at `path`, if they are there.
+pub(crate) fn remove_sidecars(path: &str) -> Result<(), BarcaError> {
+    for suffix in ["-wal", "-shm"] {
+        let sidecar = format!("{path}{suffix}");
+        match fs::remove_file(&sidecar) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(BarcaError::Db(format!("failed to remove {sidecar}: {e}")));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Wrap a Turso open failure, adding a hint when the DB is locked by something that
 /// does not follow barca's own locking.
 fn db_open_error(detail: impl std::fmt::Display) -> BarcaError {
@@ -241,18 +818,25 @@ impl CacheReader {
     }
 }
 
-/// Open the database at `db_path` and connect. Callers must hold [`db_guard`]
-/// for the duration of their work on the returned connection; the returned
-/// handle holds the cross-process lock until it is dropped.
-pub(crate) async fn open_conn(db_path: &str) -> Result<(DbHandle, turso::Connection), BarcaError> {
-    let lock = acquire_file_lock(db_path, DB_FILE_LOCK_WAIT).await?;
-    let db = Builder::new_local(db_path)
+/// Open the database file at `path` and connect, taking no lock. For callers that already
+/// hold the cross-process lock for the database this file is (or is about to become).
+async fn connect(path: &str) -> Result<(turso::Database, turso::Connection), BarcaError> {
+    let db = Builder::new_local(path)
         .build()
         .await
         .map_err(db_open_error)?;
     let conn = db
         .connect()
         .map_err(|e| BarcaError::Db(format!("failed to connect: {e}")))?;
+    Ok((db, conn))
+}
+
+/// Open the database at `db_path` and connect. Callers must hold [`db_guard`]
+/// for the duration of their work on the returned connection; the returned
+/// handle holds the cross-process lock until it is dropped.
+pub(crate) async fn open_conn(db_path: &str) -> Result<(DbHandle, turso::Connection), BarcaError> {
+    let lock = acquire_file_lock(db_path, DB_FILE_LOCK_WAIT).await?;
+    let (db, conn) = connect(db_path).await?;
     Ok((
         DbHandle {
             _db: db,
@@ -262,9 +846,59 @@ pub(crate) async fn open_conn(db_path: &str) -> Result<(DbHandle, turso::Connect
     ))
 }
 
+/// Fold the write-ahead log into the main database file (`PRAGMA wal_checkpoint(TRUNCATE)`).
+/// No other connection may be open on the file.
+pub(crate) async fn checkpoint(conn: &turso::Connection) -> Result<(), BarcaError> {
+    let failed = |e| BarcaError::Db(format!("wal_checkpoint(TRUNCATE) failed: {e}"));
+    // The pragma returns one (busy, log_pages, checkpointed_pages) row; busy means another
+    // connection kept it from finishing.
+    let mut rows = conn
+        .query("PRAGMA wal_checkpoint(TRUNCATE)", ())
+        .await
+        .map_err(failed)?;
+    let mut busy = false;
+    while let Some(row) = rows.next().await.map_err(failed)? {
+        busy |= row.get::<i64>(0).unwrap_or(0) != 0;
+    }
+    if busy {
+        return Err(BarcaError::Db(
+            "wal_checkpoint(TRUNCATE) could not finish: the database is in use by another \
+             connection"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// True when the write-ahead log beside `db_path` is absent or empty: the main file alone is
+/// then the whole database.
+pub fn wal_is_clean(db_path: &str) -> bool {
+    match fs::metadata(format!("{db_path}-wal")) {
+        Err(_) => true,
+        Ok(m) => m.len() == 0,
+    }
+}
+
+/// True when the write-ahead log beside `db_path` holds no frame, so the main file is the whole
+/// database: the log is absent, empty, or only its 32-byte header (which the engine writes
+/// when it opens a database, as `barca history` does, without changing anything).
+fn log_holds_no_frame(db_path: &str) -> bool {
+    const WAL_HEADER: u64 = 32;
+    match fs::metadata(format!("{db_path}-wal")) {
+        Err(_) => true,
+        Ok(m) => m.len() <= WAL_HEADER,
+    }
+}
+
 pub async fn init_db(db_path: &str) -> Result<(), BarcaError> {
     let _g = db_guard().await;
     let (_db, conn) = open_conn(db_path).await?;
+    init_schema(&conn).await
+}
+
+/// Create the tables and apply the migrations: afterwards the database has the current schema,
+/// whatever version wrote it. Idempotent, and writes nothing to a database that is current.
+pub(crate) async fn init_schema(conn: &turso::Connection) -> Result<(), BarcaError> {
     conn.execute(
         "CREATE TABLE IF NOT EXISTS materializations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -371,6 +1005,15 @@ pub async fn init_db(db_path: &str) -> Result<(), BarcaError> {
     ] {
         conn.execute(col, ()).await.ok();
     }
+
+    // A pull of the shared state looks for unfinished runs on both sides (`state_carry`):
+    // through this index that costs the number of such runs, not the length of the history.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status)",
+        (),
+    )
+    .await
+    .map_err(|e| BarcaError::Db(format!("failed to create index: {e}")))?;
 
     // Scheduler durability: the last time each scheduled node was fired, as
     // unix epoch seconds. Lets `barca serve` catch up a single missed tick
@@ -511,7 +1154,8 @@ pub struct LogEntry {
     pub line: String,
 }
 
-/// Persist captured stdout lines for a run, in order. `lines` is (node_id, line).
+/// Persist captured stdout lines for a run, in order. `lines` is (node_id, line). Idempotent:
+/// a run that already has lines here is left alone.
 pub async fn insert_logs(
     db_path: &str,
     run_id: &str,
@@ -522,6 +1166,15 @@ pub async fn insert_logs(
     }
     let _g = db_guard().await;
     let (_db, conn) = open_conn(db_path).await?;
+    // A run's lines are written once. They can be here already when this is the replay after
+    // a shared-state conflict: the pull carried them over from the local database.
+    if let Ok(mut rows) = conn
+        .query("SELECT 1 FROM logs WHERE run_id = ?1 LIMIT 1", [run_id])
+        .await
+        && matches!(rows.next().await, Ok(Some(_)))
+    {
+        return Ok(());
+    }
     for (seq, (node_id, line)) in lines.iter().enumerate() {
         conn.execute(
             "INSERT INTO logs (run_id, node_id, seq, line) VALUES (?1, ?2, ?3, ?4)",
@@ -801,7 +1454,7 @@ pub fn local_host() -> String {
 
 /// True unless the process is known to be gone. (A pid reused by an unrelated process reads as
 /// alive: the run then stays `running`, which is what it was before pids were recorded.)
-fn pid_alive(pid: i64) -> bool {
+pub(crate) fn pid_alive(pid: i64) -> bool {
     let Ok(pid) = libc::pid_t::try_from(pid) else {
         return true;
     };
@@ -1455,6 +2108,938 @@ mod tests {
         }
         assert!(columns.contains(&"cpu_seconds".to_string()));
         assert!(columns.contains(&"max_rss_bytes".to_string()));
+    }
+
+    // ── replace_db: what a pull does to the local database (#221) ──
+
+    use crate::state_carry::testing::{add_run, add_step, artifact, exec, fresh_db, runs, steps};
+
+    /// The shared state as another machine pushed it: two runs, one step each, in one file.
+    async fn pushed_db(dir: &tempfile::TempDir, name: &str) -> String {
+        let pushed = fresh_db(dir, name).await;
+        let file = artifact(dir, "theirs.json");
+        for run in ["theirs-1", "theirs-2"] {
+            add_run(&pushed, run, "success").await;
+            add_step(&pushed, run, "f.py:a", &file).await;
+        }
+        crate::state_sync::checkpoint_truncate(&pushed)
+            .await
+            .unwrap();
+        pushed
+    }
+
+    /// A local database that pulled `theirs-1` earlier and then recorded a run that was never
+    /// pushed, which is still in its write-ahead log.
+    async fn local_db_with_an_unpushed_run(dir: &tempfile::TempDir) -> String {
+        let local = fresh_db(dir, "local.db").await;
+        let file = artifact(dir, "ours.json");
+        add_run(&local, "theirs-1", "success").await;
+        add_step(&local, "theirs-1", "f.py:a", &file).await;
+        add_run(&local, "ours-unpushed", "running").await;
+        add_step(&local, "ours-unpushed", "f.py:a", &file).await;
+        add_step(&local, "ours-unpushed", "f.py:b", &file).await;
+        assert!(
+            !wal_is_clean(&local),
+            "the test needs a non-empty local WAL"
+        );
+        local
+    }
+
+    const ALL_RUNS: [&str; 3] = [
+        "ours-unpushed\trunning",
+        "theirs-1\tsuccess",
+        "theirs-2\tsuccess",
+    ];
+    const ALL_STEPS: [&str; 4] = [
+        "ours-unpushed\tf.py:a\tsuccess",
+        "ours-unpushed\tf.py:b\tsuccess",
+        "theirs-1\tf.py:a\tsuccess",
+        "theirs-2\tf.py:a\tsuccess",
+    ];
+
+    #[tokio::test]
+    async fn replacing_the_db_keeps_unpushed_local_rows_and_no_old_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let staged = pushed_db(&dir, "staged.db").await;
+        let local = local_db_with_an_unpushed_run(&dir).await;
+
+        let carried = pull_for_tests(&local, Path::new(&staged)).await;
+
+        // The database is one file: the staged file was moved into place, and neither it nor
+        // the old database left a log behind to be applied to the new file later.
+        for gone in [
+            staged.clone(),
+            format!("{staged}-wal"),
+            format!("{staged}-shm"),
+            format!("{local}-wal"),
+            format!("{local}-shm"),
+        ] {
+            assert!(!Path::new(&gone).exists(), "{gone} is still there");
+        }
+        // The pushed database plus the run only this machine had: nothing dropped on either
+        // side, and the row both had is there once.
+        assert_eq!((carried.runs, carried.steps), (1, 2), "{carried:?}");
+        assert_eq!(runs(&local).await, ALL_RUNS);
+        assert_eq!(steps(&local).await, ALL_STEPS);
+    }
+
+    #[tokio::test]
+    async fn a_pull_that_dies_at_any_point_loses_nothing() {
+        for stop in [
+            ReplaceStage::Carried,
+            ReplaceStage::PrevStaged,
+            ReplaceStage::SidecarsRemoved,
+            ReplaceStage::Renamed,
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let staged = pushed_db(&dir, "staged.db").await;
+            let local = local_db_with_an_unpushed_run(&dir).await;
+            let before = (runs(&local).await, steps(&local).await);
+
+            // The process dies here: the staged file is abandoned where it is.
+            let incoming = Incoming {
+                staged: Path::new(&staged),
+                base_at_start: None,
+                version: None,
+            };
+            replace_db_until(&local, incoming, Some(stop))
+                .await
+                .unwrap();
+
+            // The local database is whole: what it was, unpushed run included, or already
+            // the new one. Never a file under a log that belongs to another.
+            let now = (runs(&local).await, steps(&local).await);
+            if stop == ReplaceStage::Renamed {
+                assert_eq!(now.0, ALL_RUNS);
+                assert_eq!(now.1, ALL_STEPS);
+            } else {
+                assert_eq!(now, before, "{stop:?}");
+            }
+
+            // The next pull downloads again and ends where an undisturbed one would have.
+            let again = pushed_db(&dir, "staged-again.db").await;
+            pull_for_tests(&local, Path::new(&again)).await;
+            assert_eq!(runs(&local).await, ALL_RUNS, "{stop:?}");
+            assert_eq!(steps(&local).await, ALL_STEPS, "{stop:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_pull_after_a_completed_pull_adds_nothing_twice() {
+        // The process dies right after the swap, before it pushes: the carried rows are local
+        // only, and the next pull carries them again onto a fresh copy of the shared state.
+        let dir = tempfile::tempdir().unwrap();
+        let local = local_db_with_an_unpushed_run(&dir).await;
+        for name in ["staged-1.db", "staged-2.db", "staged-3.db"] {
+            let staged = pushed_db(&dir, name).await;
+            pull_for_tests(&local, Path::new(&staged)).await;
+            assert_eq!(runs(&local).await, ALL_RUNS, "{name}");
+            assert_eq!(steps(&local).await, ALL_STEPS, "{name}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_pulled_file_that_is_not_a_database_does_not_replace_the_local_one() {
+        // A download cut short, or a damaged blob.
+        let dir = tempfile::tempdir().unwrap();
+        let local = local_db_with_an_unpushed_run(&dir).await;
+        let before = (runs(&local).await, steps(&local).await);
+        let staged = dir.path().join("staged.db");
+        fs::write(&staged, b"not a database").unwrap();
+
+        let incoming = Incoming {
+            staged: &staged,
+            base_at_start: None,
+            version: None,
+        };
+        let refused = replace_db(&local, incoming).await.unwrap();
+        assert!(
+            matches!(&refused, Replaced::Invalid(invalid) if invalid.why.contains("too short")),
+            "{refused:?}"
+        );
+        assert_eq!((runs(&local).await, steps(&local).await), before);
+    }
+
+    // ── replace_db: a download must be valid, and the database it replaces is kept (#243) ──
+
+    /// The rows of the database in the single file at `path`, read from a copy so that the
+    /// file itself is not opened: it must be whole without a log beside it.
+    async fn rows_of_file(dir: &tempfile::TempDir, path: &str) -> (Vec<String>, Vec<String>) {
+        let copy = dir
+            .path()
+            .join("read-copy.db")
+            .to_string_lossy()
+            .to_string();
+        remove_sidecars(&copy).unwrap();
+        fs::copy(path, &copy).unwrap();
+        (runs(&copy).await, steps(&copy).await)
+    }
+
+    async fn try_pull(local: &str, staged: &str) -> Result<Replaced, BarcaError> {
+        let base = crate::state_base::read_raw(local);
+        let incoming = Incoming {
+            staged: Path::new(staged),
+            base_at_start: base.as_deref(),
+            version: None,
+        };
+        replace_db(local, incoming).await
+    }
+
+    fn prev_tmp(db: &str) -> String {
+        format!("{db}.prev.tmp")
+    }
+
+    /// Downloads that must never replace anything, each made from a good pushed database.
+    async fn invalid_downloads(dir: &tempfile::TempDir) -> Vec<(&'static str, String)> {
+        let good = pushed_db(dir, "good-source.db").await;
+        let file = artifact(dir, "theirs.json");
+        for i in 0..200 {
+            add_run(&good, &format!("bulk-{i}"), "success").await;
+            add_step(&good, &format!("bulk-{i}"), "f.py:a", &file).await;
+        }
+        crate::state_sync::checkpoint_truncate(&good).await.unwrap();
+        let whole = fs::read(&good).unwrap();
+        let page = 4096;
+        assert!(whole.len() > 10 * page);
+        let mut zeroed = whole.clone();
+        let middle = (whole.len() / page / 2) * page;
+        zeroed[middle..middle + 2 * page].fill(0);
+
+        let foreign = dir.path().join("foreign-source.db");
+        let foreign = foreign.to_string_lossy().to_string();
+        exec(&foreign, "CREATE TABLE notes (body TEXT)", vec![]).await;
+        crate::state_sync::checkpoint_truncate(&foreign)
+            .await
+            .unwrap();
+
+        let mut made = Vec::new();
+        for (name, bytes) in [
+            ("empty", Vec::new()),
+            ("garbage", b"<html>503 Service Unavailable</html>".to_vec()),
+            (
+                "cut short inside a page",
+                whole[..whole.len() - 1000].to_vec(),
+            ),
+            (
+                "cut short at a page boundary",
+                whole[..whole.len() - 3 * page].to_vec(),
+            ),
+            ("pages overwritten", zeroed),
+            ("another program's database", fs::read(&foreign).unwrap()),
+        ] {
+            let path = dir.path().join(format!("invalid-{}.db", made.len()));
+            fs::write(&path, bytes).unwrap();
+            made.push((name, path.to_string_lossy().to_string()));
+        }
+        made
+    }
+
+    #[tokio::test]
+    async fn no_invalid_download_touches_the_local_database_or_the_kept_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = local_db_with_an_unpushed_run(&dir).await;
+        let before = (runs(&local).await, steps(&local).await);
+        fs::write(crate::state_prev::path(&local), b"the generation before").unwrap();
+
+        for (name, staged) in invalid_downloads(&dir).await {
+            let refused = try_pull(&local, &staged).await.unwrap();
+            assert!(
+                matches!(refused, Replaced::Invalid(_)),
+                "{name}: {refused:?}"
+            );
+            assert_eq!((runs(&local).await, steps(&local).await), before, "{name}");
+            assert_eq!(
+                fs::read(crate::state_prev::path(&local)).unwrap(),
+                b"the generation before",
+                "{name}"
+            );
+            assert!(!Path::new(&prev_tmp(&local)).exists(), "{name}");
+            assert_eq!(crate::state_base::read_raw(&local), None, "{name}");
+        }
+
+        // The unpushed rows are still carried by the next pull of a good download.
+        let staged = pushed_db(&dir, "staged.db").await;
+        pull_for_tests(&local, Path::new(&staged)).await;
+        assert_eq!(runs(&local).await, ALL_RUNS);
+        assert_eq!(steps(&local).await, ALL_STEPS);
+    }
+
+    #[tokio::test]
+    async fn an_invalid_download_does_not_become_the_database_of_a_machine_without_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = dir.path().join("local.db").to_string_lossy().to_string();
+        for (name, staged) in invalid_downloads(&dir).await {
+            let refused = try_pull(&local, &staged).await.unwrap();
+            assert!(
+                matches!(refused, Replaced::Invalid(_)),
+                "{name}: {refused:?}"
+            );
+            for made in ["", "-wal", ".prev", ".prev.tmp", ".base"] {
+                assert!(
+                    !Path::new(&format!("{local}{made}")).exists(),
+                    "{name}: {made}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn the_database_a_pull_replaces_is_kept_whole_as_prev() {
+        let dir = tempfile::tempdir().unwrap();
+        let staged = pushed_db(&dir, "staged.db").await;
+        let local = local_db_with_an_unpushed_run(&dir).await;
+        let before = (runs(&local).await, steps(&local).await);
+        let prev = crate::state_prev::path(&local);
+
+        pull_for_tests(&local, Path::new(&staged)).await;
+        assert_eq!(runs(&local).await, ALL_RUNS);
+        // Exactly what was replaced, rows that were only in its log included, in one file.
+        assert_eq!(rows_of_file(&dir, &prev).await, before);
+        assert!(!Path::new(&prev_tmp(&local)).exists());
+        let first_generation = fs::read(&prev).unwrap();
+
+        // A pull that changes nothing (the download is the local database, byte for byte)
+        // leaves the kept generation alone, however often it happens.
+        for _ in 0..3 {
+            crate::state_sync::checkpoint_truncate(&local)
+                .await
+                .unwrap();
+            let same = dir.path().join("same.db").to_string_lossy().to_string();
+            fs::copy(&local, &same).unwrap();
+            pull_for_tests(&local, Path::new(&same)).await;
+            assert_eq!(fs::read(&prev).unwrap(), first_generation);
+        }
+
+        // The same after a command that only opened the database: the engine leaves the
+        // header of a log behind and no frame, so the main file is still the whole database
+        // and the download is still it, byte for byte (no page of it is read again).
+        let same = dir.path().join("same.db").to_string_lossy().to_string();
+        fs::copy(&local, &same).unwrap();
+        init_db(&local).await.unwrap();
+        let log = fs::metadata(format!("{local}-wal")).map_or(0, |m| m.len());
+        assert_eq!(
+            log, 32,
+            "the engine no longer leaves a header-only log on open"
+        );
+        assert!(log_holds_no_frame(&local) && !wal_is_clean(&local));
+        pull_for_tests(&local, Path::new(&same)).await;
+        assert_eq!(fs::read(&prev).unwrap(), first_generation);
+
+        // One generation: the next pull that changes the database replaces it.
+        let second = (runs(&local).await, steps(&local).await);
+        let newer = pushed_again_db(&dir, "newer.db").await;
+        pull_for_tests(&local, Path::new(&newer)).await;
+        assert_ne!(runs(&local).await, second.0);
+        assert_eq!(rows_of_file(&dir, &prev).await, second);
+    }
+
+    /// While rows recorded only here wait for a push, every pull finds a download that
+    /// differs from the local database (which has those rows) and swaps. Pulling the same
+    /// version of the shared state again must not push the generation from before it out
+    /// of `.prev`.
+    #[tokio::test]
+    async fn pulling_the_same_version_again_does_not_replace_the_kept_generation() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = local_db_with_an_unpushed_run(&dir).await;
+        let before = (runs(&local).await, steps(&local).await);
+        let prev = crate::state_prev::path(&local);
+        let pull = async |staged: String, version: &str| {
+            let base = crate::state_base::read_raw(&local);
+            let incoming = Incoming {
+                staged: Path::new(&staged),
+                base_at_start: base.as_deref(),
+                version: Some(version),
+            };
+            match replace_db(&local, incoming).await.unwrap() {
+                Replaced::Swapped(carried) => carried,
+                other => panic!("{other:?}"),
+            }
+        };
+
+        pull(pushed_db(&dir, "v1-a.db").await, "v1").await;
+        assert_eq!(rows_of_file(&dir, &prev).await, before);
+        for name in ["v1-b.db", "v1-c.db"] {
+            // The unpushed run is carried each time: the download is not the local database.
+            let carried = pull(pushed_db(&dir, name).await, "v1").await;
+            assert_eq!((carried.runs, carried.steps), (1, 2));
+            assert_eq!(rows_of_file(&dir, &prev).await, before, "{name}");
+        }
+        assert_eq!(runs(&local).await, ALL_RUNS);
+
+        // Another version is a new generation.
+        let second = (runs(&local).await, steps(&local).await);
+        pull(pushed_again_db(&dir, "v2.db").await, "v2").await;
+        assert_eq!(rows_of_file(&dir, &prev).await, second);
+    }
+
+    #[tokio::test]
+    async fn nothing_is_kept_when_there_was_no_history_to_replace() {
+        // No local database at all.
+        let dir = tempfile::tempdir().unwrap();
+        let staged = pushed_db(&dir, "staged.db").await;
+        let local = dir.path().join("local.db").to_string_lossy().to_string();
+        pull_for_tests(&local, Path::new(&staged)).await;
+        assert!(!Path::new(&crate::state_prev::path(&local)).exists());
+        assert!(!Path::new(&prev_tmp(&local)).exists());
+
+        // A local file that is not a database is replaced (with a warning) and is not kept
+        // over a generation that was one.
+        let prev = crate::state_prev::path(&local);
+        fs::write(&prev, b"an earlier, good generation").unwrap();
+        fs::write(&local, b"garbage").unwrap();
+        let staged = pushed_db(&dir, "staged-2.db").await;
+        let carried = pull_for_tests(&local, Path::new(&staged)).await;
+        assert!(carried.unreadable.is_some());
+        assert_eq!(fs::read(&prev).unwrap(), b"an earlier, good generation");
+    }
+
+    #[tokio::test]
+    async fn a_pull_that_dies_around_the_swap_leaves_a_whole_database_and_a_whole_prev() {
+        for stop in [
+            ReplaceStage::PrevStaged,
+            ReplaceStage::SidecarsRemoved,
+            ReplaceStage::Renamed,
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let local = local_db_with_an_unpushed_run(&dir).await;
+            let prev = crate::state_prev::path(&local);
+
+            // A first, undisturbed pull: `.prev` is generation 0.
+            let staged = pushed_db(&dir, "staged.db").await;
+            let generation_0 = (runs(&local).await, steps(&local).await);
+            pull_for_tests(&local, Path::new(&staged)).await;
+            let generation_1 = (runs(&local).await, steps(&local).await);
+            assert_eq!(rows_of_file(&dir, &prev).await, generation_0);
+
+            // The second pull dies.
+            let newer = pushed_again_db(&dir, "newer.db").await;
+            let base = crate::state_base::read_raw(&local);
+            let incoming = Incoming {
+                staged: Path::new(&newer),
+                base_at_start: base.as_deref(),
+                version: None,
+            };
+            replace_db_until(&local, incoming, Some(stop))
+                .await
+                .unwrap();
+            // `.prev` is still generation 0, whole: it changes only by the last rename.
+            assert_eq!(rows_of_file(&dir, &prev).await, generation_0, "{stop:?}");
+            assert!(Path::new(&prev_tmp(&local)).exists(), "{stop:?}");
+            if stop != ReplaceStage::Renamed {
+                assert_eq!(runs(&local).await, generation_1.0, "{stop:?}");
+            }
+
+            // A pull that changes nothing keeps nothing, and still clears the leftover name.
+            crate::state_sync::checkpoint_truncate(&local)
+                .await
+                .unwrap();
+            let same = dir.path().join("same.db").to_string_lossy().to_string();
+            fs::copy(&local, &same).unwrap();
+            pull_for_tests(&local, Path::new(&same)).await;
+            assert!(!Path::new(&prev_tmp(&local)).exists(), "{stop:?}");
+            assert_eq!(rows_of_file(&dir, &prev).await, generation_0, "{stop:?}");
+
+            // The next pull that changes it ends where an undisturbed one would have, and
+            // keeps the database it replaced.
+            let replaced = (runs(&local).await, steps(&local).await);
+            let again = pushed_again_db(&dir, "again.db").await;
+            add_run(&again, "theirs-4", "success").await;
+            crate::state_sync::checkpoint_truncate(&again)
+                .await
+                .unwrap();
+            pull_for_tests(&local, Path::new(&again)).await;
+            assert!(
+                runs(&local)
+                    .await
+                    .contains(&"theirs-4\tsuccess".to_string())
+            );
+            assert!(!Path::new(&prev_tmp(&local)).exists(), "{stop:?}");
+            assert_eq!(rows_of_file(&dir, &prev).await, replaced, "{stop:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_carry_that_fails_midway_changes_neither_the_database_nor_prev() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = local_db_with_an_unpushed_run(&dir).await;
+        let before = (runs(&local).await, steps(&local).await);
+        fs::write(crate::state_prev::path(&local), b"the generation before").unwrap();
+
+        // A valid download onto which the local rows cannot all be copied: the run rows and
+        // one step go in, then the next step collides with an index only this download has
+        // (the local steps share one artifact file).
+        let staged = fresh_db(&dir, "staged.db").await;
+        add_run(&staged, "theirs-2", "success").await;
+        add_step(
+            &staged,
+            "theirs-2",
+            "f.py:a",
+            &artifact(&dir, "theirs.json"),
+        )
+        .await;
+        let index = "CREATE UNIQUE INDEX one_row_per_file ON materializations(artifact_path)";
+        exec(&staged, index, vec![]).await;
+        crate::state_sync::checkpoint_truncate(&staged)
+            .await
+            .unwrap();
+
+        let failed = try_pull(&local, &staged).await.unwrap_err().to_string();
+        assert!(failed.contains("left as it was"), "{failed}");
+        assert_eq!((runs(&local).await, steps(&local).await), before);
+        assert_eq!(
+            fs::read(crate::state_prev::path(&local)).unwrap(),
+            b"the generation before"
+        );
+        assert!(!Path::new(&prev_tmp(&local)).exists());
+
+        // And a good download afterwards is pulled as if nothing had happened.
+        let staged = pushed_db(&dir, "staged-good.db").await;
+        pull_for_tests(&local, Path::new(&staged)).await;
+        assert_eq!(runs(&local).await, ALL_RUNS);
+        assert_eq!(steps(&local).await, ALL_STEPS);
+        assert_eq!(
+            rows_of_file(&dir, &crate::state_prev::path(&local)).await,
+            before
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn of_two_pulls_at_once_the_invalid_one_is_refused_and_the_valid_one_lands() {
+        for round in 0..8 {
+            let dir = tempfile::tempdir().unwrap();
+            let local = local_db_with_an_unpushed_run(&dir).await;
+            let before = (runs(&local).await, steps(&local).await);
+            let good = pushed_db(&dir, "staged.db").await;
+            let bad = dir.path().join("bad.db").to_string_lossy().to_string();
+            let whole = fs::read(&good).unwrap();
+            fs::write(&bad, &whole[..whole.len() - 4096]).unwrap();
+
+            let pull = |staged: String| {
+                let local = local.clone();
+                tokio::spawn(async move { try_pull(&local, &staged).await })
+            };
+            let (first, second) = match round % 2 {
+                0 => (pull(bad.clone()), pull(good.clone())),
+                _ => (pull(good.clone()), pull(bad.clone())),
+            };
+            let outcomes = [
+                first.await.unwrap().unwrap(),
+                second.await.unwrap().unwrap(),
+            ];
+            let (bad_outcome, good_outcome) = match round % 2 {
+                0 => (&outcomes[0], &outcomes[1]),
+                _ => (&outcomes[1], &outcomes[0]),
+            };
+            // The invalid download is refused, or was overtaken before it was looked at.
+            assert!(
+                matches!(bad_outcome, Replaced::Invalid(_) | Replaced::Superseded),
+                "{bad_outcome:?}"
+            );
+            assert!(
+                matches!(good_outcome, Replaced::Swapped(_)),
+                "{good_outcome:?}"
+            );
+            assert_eq!(runs(&local).await, ALL_RUNS, "round {round}");
+            assert_eq!(steps(&local).await, ALL_STEPS, "round {round}");
+            let prev = crate::state_prev::path(&local);
+            assert_eq!(rows_of_file(&dir, &prev).await, before, "round {round}");
+        }
+    }
+
+    #[tokio::test]
+    async fn with_no_local_database_the_pulled_one_is_moved_in() {
+        for prepare in ["missing", "log without a main file"] {
+            let dir = tempfile::tempdir().unwrap();
+            let staged = pushed_db(&dir, "staged.db").await;
+            let local = dir.path().join("local.db").to_string_lossy().to_string();
+            if prepare == "log without a main file" {
+                // What is left when only `metadata.db` was deleted by hand.
+                let other = local_db_with_an_unpushed_run(&dir).await;
+                fs::remove_file(&other).unwrap();
+            }
+            let carried = pull_for_tests(&local, Path::new(&staged)).await;
+            assert!(!carried.wrote(), "{prepare}");
+            // A leftover log is discarded, and that is said.
+            assert_eq!(carried.note().is_some(), prepare != "missing", "{prepare}");
+            assert_eq!(
+                runs(&local).await,
+                ["theirs-1\tsuccess", "theirs-2\tsuccess"],
+                "{prepare}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_local_file_that_is_not_a_database_is_replaced_and_reported() {
+        for damage in ["garbage", "cut short"] {
+            let dir = tempfile::tempdir().unwrap();
+            let staged = pushed_db(&dir, "staged.db").await;
+            let local = dir.path().join("local.db").to_string_lossy().to_string();
+            if damage == "garbage" {
+                fs::write(&local, b"garbage").unwrap();
+                fs::write(format!("{local}-wal"), b"more garbage").unwrap();
+            } else {
+                // A real database that lost its tail.
+                let whole = fs::read(pushed_db(&dir, "whole.db").await).unwrap();
+                fs::write(&local, &whole[..whole.len() - 1000]).unwrap();
+            }
+
+            let carried = pull_for_tests(&local, Path::new(&staged)).await;
+            assert!(carried.unreadable.is_some(), "{damage}: {carried:?}");
+            assert!(carried.note().unwrap().contains("warning"), "{damage}");
+            assert_eq!(
+                runs(&local).await,
+                ["theirs-1\tsuccess", "theirs-2\tsuccess"],
+                "{damage}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_local_database_that_cannot_be_read_for_another_reason_is_left_alone() {
+        // Not positively damaged: it must never be replaced, whatever the reason turns out
+        // to be. Here the file cannot be read at all.
+        use std::os::unix::fs::PermissionsExt;
+        // SAFETY: geteuid has no preconditions.
+        if unsafe { libc::geteuid() } == 0 {
+            return; // root reads anything
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let staged = pushed_db(&dir, "staged.db").await;
+        let local = local_db_with_an_unpushed_run(&dir).await;
+        let before = (runs(&local).await, steps(&local).await);
+        fs::set_permissions(&local, fs::Permissions::from_mode(0o000)).unwrap();
+
+        let incoming = Incoming {
+            staged: Path::new(&staged),
+            base_at_start: None,
+            version: None,
+        };
+        let result = replace_db(&local, incoming).await;
+        fs::set_permissions(&local, fs::Permissions::from_mode(0o644)).unwrap();
+
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("left as it was"), "{err}");
+        assert_eq!((runs(&local).await, steps(&local).await), before);
+        assert!(Path::new(&staged).exists(), "the download is not moved");
+    }
+
+    /// The shared state after another machine pushed once more: `pushed_db` plus a run whose
+    /// step's artifact is on that machine only.
+    async fn pushed_again_db(dir: &tempfile::TempDir, name: &str) -> String {
+        let pushed = pushed_db(dir, name).await;
+        let elsewhere = dir
+            .path()
+            .join("not-here.json")
+            .to_string_lossy()
+            .to_string();
+        add_step(&pushed, "theirs-3", "f.py:b", &elsewhere).await;
+        crate::state_carry::testing::add_run_from(&pushed, "theirs-3", "success", "machine-b")
+            .await;
+        crate::state_sync::checkpoint_truncate(&pushed)
+            .await
+            .unwrap();
+        pushed
+    }
+
+    #[tokio::test]
+    async fn a_download_overtaken_by_a_newer_pull_is_discarded() {
+        // `status` on A downloads the shared state (T0). B pushes (T1). A `get` on A pulls T1
+        // and swaps it in. Only then does the `status` reach its swap, holding T0. Swapping
+        // it in would take B's step out of the local database (its run would be carried, its
+        // step has no artifact here), and the `get` would then push that.
+        let dir = tempfile::tempdir().unwrap();
+        let local = local_db_with_an_unpushed_run(&dir).await;
+
+        // status: reads the base record, downloads T0.
+        let status_base = crate::state_base::read_raw(&local);
+        let t0 = pushed_db(&dir, "t0.db").await;
+        // get: pulls T1.
+        let t1 = pushed_again_db(&dir, "t1.db").await;
+        pull_for_tests(&local, Path::new(&t1)).await;
+        let after_get = (runs(&local).await, steps(&local).await);
+        assert!(
+            after_get
+                .1
+                .contains(&"theirs-3\tf.py:b\tsuccess".to_string())
+        );
+
+        // status: its swap is refused.
+        let incoming = Incoming {
+            staged: Path::new(&t0),
+            base_at_start: status_base.as_deref(),
+            version: None,
+        };
+        match replace_db(&local, incoming).await.unwrap() {
+            Replaced::Superseded => {}
+            other => panic!("{other:?}"),
+        }
+        assert_eq!((runs(&local).await, steps(&local).await), after_get);
+        assert!(Path::new(&t0).exists(), "the stale download is not moved");
+
+        // get: pushes the local database. B's run and step are in both, once.
+        crate::state_sync::checkpoint_truncate(&local)
+            .await
+            .unwrap();
+        let shared = dir.path().join("shared.db").to_string_lossy().to_string();
+        fs::copy(&local, &shared).unwrap();
+        for db_path in [&local, &shared] {
+            let theirs: Vec<String> = steps(db_path)
+                .await
+                .into_iter()
+                .filter(|s| s.starts_with("theirs-3"))
+                .collect();
+            assert_eq!(theirs, ["theirs-3\tf.py:b\tsuccess"], "{db_path}");
+            assert_eq!(runs(db_path).await.len(), 4, "{db_path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_swap_cut_short_still_discards_downloads_begun_before_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = local_db_with_an_unpushed_run(&dir).await;
+        let early_base = crate::state_base::read_raw(&local);
+        let t0 = pushed_db(&dir, "t0.db").await;
+
+        // Another pull swaps T1 in and dies before it records what the database is based on.
+        let t1 = pushed_again_db(&dir, "t1.db").await;
+        let incoming = Incoming {
+            staged: Path::new(&t1),
+            base_at_start: early_base.as_deref(),
+            version: None,
+        };
+        replace_db_until(&local, incoming, Some(ReplaceStage::Renamed))
+            .await
+            .unwrap();
+
+        // The earlier download is refused: the caller pulls again.
+        let incoming = Incoming {
+            staged: Path::new(&t0),
+            base_at_start: early_base.as_deref(),
+            version: None,
+        };
+        match replace_db(&local, incoming).await.unwrap() {
+            Replaced::Superseded => {}
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(runs(&local).await.len(), 4);
+        // And that next pull goes through.
+        let t1_again = pushed_again_db(&dir, "t1-again.db").await;
+        pull_for_tests(&local, Path::new(&t1_again)).await;
+        assert_eq!(runs(&local).await.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn what_a_pull_kept_is_announced_once_until_it_is_pushed() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = local_db_with_an_unpushed_run(&dir).await;
+        let t0 = pushed_db(&dir, "t0.db").await;
+        let first = pull_for_tests(&local, Path::new(&t0)).await;
+        assert_eq!((first.runs, first.compared), (1, true));
+        assert!(first.note().is_some());
+
+        // The same rows kept again (the shared state moved, nothing pushed them yet).
+        let t1 = pushed_again_db(&dir, "t1.db").await;
+        let again = pull_for_tests(&local, Path::new(&t1)).await;
+        assert_eq!((again.runs, again.compared), (1, true));
+        assert_eq!(again.note(), None);
+
+        // Another unpushed run joins them: that is news.
+        add_run(&local, "another", "running").await;
+        let t1_again = pushed_again_db(&dir, "t1-again.db").await;
+        assert!(
+            pull_for_tests(&local, Path::new(&t1_again))
+                .await
+                .note()
+                .is_some()
+        );
+
+        // After a push nothing is remembered as kept.
+        let copy = copy_for_push(&local, dir.path().join("push.db"))
+            .await
+            .unwrap();
+        assert!(record_pushed(&local, &copy).await);
+        let base = crate::state_base::parse(crate::state_base::read_raw(&local).as_deref());
+        assert_eq!(base.unwrap().kept, "");
+    }
+
+    #[tokio::test]
+    async fn an_empty_or_foreign_local_file_is_replaced_with_a_warning() {
+        for kind in ["empty", "not barca's"] {
+            let dir = tempfile::tempdir().unwrap();
+            let staged = pushed_db(&dir, "staged.db").await;
+            let local = dir.path().join("local.db").to_string_lossy().to_string();
+            if kind == "empty" {
+                fs::write(&local, b"").unwrap();
+            } else {
+                exec(&local, "CREATE TABLE notes (body TEXT)", vec![]).await;
+                exec(&local, "INSERT INTO notes VALUES ('mine')", vec![]).await;
+            }
+            let carried = pull_for_tests(&local, Path::new(&staged)).await;
+            let note = carried.note().expect(kind);
+            assert!(note.contains("warning"), "{kind}: {note}");
+            let why = if kind == "empty" {
+                "it is empty"
+            } else {
+                "it has no barca tables"
+            };
+            assert!(note.contains(why), "{kind}: {note}");
+            assert_eq!(runs(&local).await.len(), 2, "{kind}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_empty_main_file_beside_a_log_with_rows_is_left_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let staged = pushed_db(&dir, "staged.db").await;
+        let local = local_db_with_an_unpushed_run(&dir).await;
+        fs::write(&local, b"").unwrap();
+        let wal = fs::read(format!("{local}-wal")).unwrap();
+
+        let incoming = Incoming {
+            staged: Path::new(&staged),
+            base_at_start: None,
+            version: None,
+        };
+        let err = replace_db(&local, incoming).await.unwrap_err().to_string();
+        assert!(err.contains("left as it was"), "{err}");
+        assert_eq!(fs::read(format!("{local}-wal")).unwrap(), wal);
+        assert_eq!(fs::metadata(&local).unwrap().len(), 0);
+        assert!(Path::new(&staged).exists());
+    }
+
+    #[tokio::test]
+    async fn whatever_the_base_record_says_a_pull_compares_and_keeps_local_rows() {
+        // The record left by an earlier database (deleted and created again), a record copied
+        // from another project, garbage, none at all: none of them is a statement about what
+        // the local database holds.
+        let dir = tempfile::tempdir().unwrap();
+        let elsewhere = dir
+            .path()
+            .join("elsewhere.db")
+            .to_string_lossy()
+            .to_string();
+        let t0 = pushed_db(&dir, "t0.db").await;
+        pull_for_tests(&elsewhere, Path::new(&t0)).await;
+        let foreign = crate::state_base::read_raw(&elsewhere).unwrap();
+
+        for record in [Some(foreign.as_slice()), Some(b"garbage".as_slice()), None] {
+            let local = dir.path().join("local.db").to_string_lossy().to_string();
+            for suffix in ["", "-wal", ".base"] {
+                let _ = fs::remove_file(format!("{local}{suffix}"));
+            }
+            init_db(&local).await.unwrap();
+            add_run(&local, "ours", "running").await;
+            if let Some(bytes) = record {
+                fs::write(crate::state_base::path(&local), bytes).unwrap();
+            }
+            let staged = pushed_db(&dir, "staged.db").await;
+            let carried = pull_for_tests(&local, Path::new(&staged)).await;
+            assert_eq!((carried.compared, carried.runs), (true, 1), "{record:?}");
+            assert_eq!(runs(&local).await.len(), 3, "{record:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_push_says_whether_the_database_is_still_what_it_uploaded() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = local_db_with_an_unpushed_run(&dir).await;
+
+        // Untouched during the upload. The upload holds no lock: reading in between works.
+        let copy = copy_for_push(&local, dir.path().join("push-1.db"))
+            .await
+            .unwrap();
+        assert_eq!(runs(&copy.path.to_string_lossy()).await.len(), 2);
+        let before = crate::state_base::read_raw(&local);
+        assert_eq!(runs(&local).await.len(), 2);
+        assert!(record_pushed(&local, &copy).await);
+        assert_ne!(
+            crate::state_base::read_raw(&local),
+            before,
+            "the record advances"
+        );
+
+        // Another run records something while the upload is on its way: the caller is told,
+        // and pushes again.
+        let copy = copy_for_push(&local, dir.path().join("push-2.db"))
+            .await
+            .unwrap();
+        add_run(&local, "during-upload", "running").await;
+        assert!(!record_pushed(&local, &copy).await);
+
+        // A pull replaces the database while the upload is on its way: also told.
+        let copy = copy_for_push(&local, dir.path().join("push-3.db"))
+            .await
+            .unwrap();
+        let staged = pushed_db(&dir, "staged.db").await;
+        pull_for_tests(&local, Path::new(&staged)).await;
+        assert!(!record_pushed(&local, &copy).await);
+        assert!(
+            runs(&local)
+                .await
+                .contains(&"during-upload\trunning".to_string())
+        );
+    }
+
+    /// The tables as barca 0.13 created them: no `run_id`, `pid`, `host`, `output_hash`,
+    /// `error_type`.
+    async fn old_schema_db(dir: &tempfile::TempDir, name: &str, run_id: &str) -> String {
+        let path = dir.path().join(name).to_string_lossy().to_string();
+        for sql in [
+            "CREATE TABLE materializations (id INTEGER PRIMARY KEY AUTOINCREMENT, \
+             node_id TEXT NOT NULL, run_hash TEXT, output_json TEXT, artifact_path TEXT, \
+             artifact_format TEXT, artifact_size_bytes INTEGER, elapsed_seconds REAL, \
+             status TEXT NOT NULL DEFAULT 'success', error_message TEXT, error_traceback TEXT, \
+             attempts INTEGER DEFAULT 1, sinks_json TEXT, created_at TEXT DEFAULT (datetime('now')))",
+            "CREATE TABLE runs (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT UNIQUE NOT NULL, \
+             command TEXT NOT NULL, files TEXT NOT NULL, target TEXT, \
+             status TEXT NOT NULL DEFAULT 'running', steps_total INTEGER, \
+             steps_executed INTEGER DEFAULT 0, steps_cached INTEGER DEFAULT 0, \
+             started_at TEXT DEFAULT (datetime('now')), finished_at TEXT, elapsed_seconds REAL)",
+            "INSERT INTO materializations (node_id, run_hash, artifact_path) VALUES ('f.py:old', 'h', '/x')",
+        ] {
+            exec(&path, sql, vec![]).await;
+        }
+        exec(
+            &path,
+            "INSERT INTO runs (run_id, command, files, status) VALUES (?1, 'get', 'f.py', 'success')",
+            vec![turso::Value::Text(run_id.into())],
+        )
+        .await;
+        path
+    }
+
+    #[tokio::test]
+    async fn databases_from_an_older_schema_are_migrated_before_rows_are_carried() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // An old local database under a current shared one: its run is carried. Its step row
+        // has no run id (0.17 added it), so it cannot be told from a pushed one: not carried.
+        let staged = pushed_db(&dir, "staged.db").await;
+        let old_local = old_schema_db(&dir, "old-local.db", "old-run").await;
+        let carried = pull_for_tests(&old_local, Path::new(&staged)).await;
+        assert_eq!((carried.runs, carried.steps), (1, 0), "{carried:?}");
+        assert_eq!(
+            runs(&old_local).await,
+            ["old-run\tsuccess", "theirs-1\tsuccess", "theirs-2\tsuccess"]
+        );
+
+        // A current local database under a shared one an old barca pushed.
+        let old_staged = old_schema_db(&dir, "old-staged.db", "old-theirs").await;
+        crate::state_sync::checkpoint_truncate(&old_staged)
+            .await
+            .unwrap();
+        let local = local_db_with_an_unpushed_run(&dir).await;
+        let carried = pull_for_tests(&local, Path::new(&old_staged)).await;
+        assert_eq!((carried.runs, carried.steps), (2, 3), "{carried:?}");
+        assert_eq!(
+            runs(&local).await,
+            [
+                "old-theirs\tsuccess",
+                "ours-unpushed\trunning",
+                "theirs-1\tsuccess"
+            ]
+        );
     }
 
     #[tokio::test]

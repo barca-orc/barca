@@ -1,10 +1,12 @@
-import { Outlet, useLocation, useNavigate } from 'react-router'
+import { useState } from 'react'
+import { Outlet, useLocation } from 'react-router'
 import { Sidebar } from './Sidebar'
 import { Topbar } from './Topbar'
+import type { AppShellContext, TopbarRun } from './shellContext'
 
 export function AppShell() {
   const location = useLocation()
-  const navigate = useNavigate()
+  const [topbarRun, setTopbarRun] = useState<TopbarRun | null>(null)
   // Breadcrumbs from the path: "prod" root + the path segments.
   const segments = location.pathname.split('/').filter(Boolean)
   const crumbs = ['prod', ...(segments.length ? segments : ['graph'])]
@@ -13,9 +15,9 @@ export function AppShell() {
     <div className="barca-app">
       <Sidebar />
       <div className="barca-main">
-        <Topbar crumbs={crumbs} onRun={() => navigate('/runs')} />
+        <Topbar crumbs={crumbs} run={topbarRun} />
         <div className="barca-content">
-          <Outlet />
+          <Outlet context={{ setTopbarRun } satisfies AppShellContext} />
         </div>
       </div>
     </div>

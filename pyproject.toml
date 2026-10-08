@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "barca"
-version = "0.17.0"
+version = "0.18.1"
 description = "Invisible asset orchestrator"
 requires-python = ">=3.12"
 license = "MIT"
@@ -27,6 +27,7 @@ Repository = "https://github.com/barca-orc/barca"
 [project.optional-dependencies]
 parquet = ["pyarrow", "pandas"]
 fast = ["orjson"]
+datadog = ["ddtrace>=3,<5"]
 azure = ["fsspec", "adlfs"]
 s3 = ["fsspec", "s3fs"]
 # Cloudflare R2 is S3-compatible: install the s3 extra and point
@@ -42,6 +43,7 @@ remote = ["fsspec", "adlfs", "s3fs", "gcsfs", "google-cloud-storage"]
 # Azurite). Not part of a normal install.
 test = [
     "pytest",
+    "pytest-xdist>=3.8,<4",
     "pandas",
     "pyarrow",
     "polars",

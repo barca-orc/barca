@@ -103,7 +103,9 @@ read the outcome without parsing stderr: `{"status": "failed", "failed_node": ..
 `get`/`run` JSON fields: `status` (`success`, or `failed` as above), `run_id`, `elapsed_seconds`,
 `steps_executed` (0 means everything was a cache hit), `phases`, `steps` (what happened to each
 step: `status` ran/cached/partial and why, plus `env`, the declared environment variable values
-used, for nodes with `env=[...]`),
+used, for nodes with `env=[...]`, and `artifact_mismatch: true` when the artifact store's copy
+of the step's result, or of an input it read, is not the one that was recorded: `barca docs
+remote`),
 `final_output`. `final_output` is the value for json artifacts and
 `{"_barca_artifact": {"path", "format", "size_bytes"}}` for parquet and pickle
 (`barca docs types`).
@@ -200,6 +202,29 @@ Could not parse .netrc file
 
 Fix the cause when you can (here: repair or remove `~/.netrc`); the summary line tells you how
 much of it there was.
+
+## Plan warnings
+
+`plan`, `get`, `run` and `--dry-run` check the steps they plan before anything runs and report
+what they find twice: one `[barca] warning: <message>` line per finding on stderr (every mode,
+before the first step line), and the `warnings` array in the JSON on stdout, always present and
+`[]` when there is nothing:
+
+```json
+{"kind": "unused_input", "node": "pipeline.py:report", "param": "raw", "message": "..."}
+```
+
+Read the array, not stderr. `unused_input` is the only kind so far: the step declares an input its
+function never uses, which is still loaded and still part of its cache key. The fix is in the
+message: use the input, remove it from `inputs=`, or rename the parameter with a leading `_` when
+it is there for ordering only. Any of the three makes the warning go away; there is no flag or
+configuration key that turns it off. A name that appears inside a string in the body (SQL, a
+pandas `query` expression) counts as used. The list is the same on every run of the same command, cached or not, and never
+changes the exit code (`barca docs assets`, "Unused inputs"; `barca docs contract`).
+
+The array holds plan warnings only. What a run finds out while it runs is on the step it
+concerns: `steps[].warning`, and for a store copy that differs from its recorded hash the marker
+`steps[].artifact_mismatch` (`barca docs remote`, "Checking a local copy against the store").
 
 ## Environment variables
 

@@ -43,7 +43,7 @@ Options:
       --fields <FIELDS>
           Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones
 
-          [possible values: id, kind, action, status, reason, detail, run_hash, artifact, warning, partitions, env]
+          [possible values: id, kind, action, status, reason, detail, run_hash, artifact, warning, artifact_mismatch, partitions, env]
 
       --env <ENV>
           Environment name (separates cache/state per environment)
@@ -76,7 +76,11 @@ Output format: --json / --pretty / -o, else BARCA_OUTPUT=json|pretty, else the t
 (TTY -> pretty, piped -> JSON). JSON is one line on stdout with status ("success"), run_id,
 steps_executed (0 = all cached), phases, final_output, and `steps`: what happened to each step
 (ran or cached, and why; `env` holds the values of variables the node declares with env=[...],
-secrets redacted). For parquet/pickle assets final_output is a pointer,
+secrets redacted). `warnings` is always an array: plan-time warnings for the steps this command
+planned, [] when there are none; each is {kind, node, param, message} and is also one
+`[barca] warning: ...` line on stderr. The only kind is unused_input: a step declares an input its
+function never uses (barca docs assets, "Unused inputs"). Warnings never change the exit code.
+--dry-run reports the same list. For parquet/pickle assets final_output is a pointer,
 {"_barca_artifact": {"path", "format", "size_bytes"}}; the Python API (barca.get)
 loads the value for you.
 Several targets (`a,b`, comma-separated, no spaces): final_output is replaced by `targets`, keyed by
@@ -86,6 +90,9 @@ Refresh: the same vocabulary as `barca run`. --refresh takes ONE comma-separated
 the cone (the target itself may be named) and also re-runs everything downstream of them;
 --no-cascade re-runs only the named ones. --refresh-all re-runs every asset in the cone.
 --no-cache is a deprecated spelling of --refresh-all: it still works and warns on stderr.
+A cached step whose artifact file is gone is computed again when something needs to read it (a
+step that runs takes it as an input, or it is a target), with reason `artifact_missing` and a
+warning on stderr. A missing artifact that nothing reads is left alone (barca docs cache).
 Targets must be assets; use `barca run` for tasks. With no target, get materializes every asset and
 sensor and skips tasks (previously it ran tasks too); stderr names the skipped tasks and the
 `barca run` command. A file with only tasks gets nothing: exit 0, empty `steps`.

@@ -125,10 +125,11 @@ http:
           - url: "http://${UPSTREAM}"
 TRAEFIK
 
+# Label the temporary config mounts for SELinux hosts (also supported by Docker).
 docker run -d --name "$NGINX" "${HOSTS[@]}" -p "${NGINX_PORT}:${NGINX_PORT}" \
-    -v "$TMP/nginx.conf:/etc/nginx/nginx.conf:ro" nginx:1.27-alpine >/dev/null
+    -v "$TMP/nginx.conf:/etc/nginx/nginx.conf:ro,Z" nginx:1.27-alpine >/dev/null
 docker run -d --name "$TRAEFIK" "${HOSTS[@]}" -p "${TRAEFIK_PORT}:${TRAEFIK_PORT}" \
-    -v "$TMP/traefik.yml:/etc/traefik/dynamic.yml:ro" traefik:v3.1 \
+    -v "$TMP/traefik.yml:/etc/traefik/dynamic.yml:ro,Z" traefik:v3.1 \
     "--entryPoints.web.address=:${TRAEFIK_PORT}" \
     --providers.file.filename=/etc/traefik/dynamic.yml >/dev/null
 

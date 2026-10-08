@@ -14,16 +14,22 @@ reply carries the request id.
   → {"type": "get", "id", "remote", "local"}    download remote → local (atomic)
        optional "sha256": the hash recorded for the artifact. A local copy with that hash
        is kept as it is; any other is replaced by the store's copy.
+  → {"type": "probe", "id", "root"}             is the store holding `root` there and listable?
+       Replies "done" only when its bucket, container or root directory positively answers a
+       listing; anything else is an "error". Nothing is ever created by a probe.
   → {"type": "shutdown"}                        finish in-flight work, exit
   ← {"type": "done", "id", "size_bytes", "sha256", "fetched", "mismatch"}
        "sha256" is the local file's; "fetched" is false when a get left the local file as it
        was; "mismatch" is true when the store's copy does not have the recorded hash. That
        is not an error: an artifact path is `{node}/{run_hash}`, so a refresh or a second
        machine computing the same step overwrites it, and the store's copy is still used.
-  ← {"type": "error", "id", "message", "attempts"}
+  ← {"type": "error", "id", "message", "attempts", "missing"}
                                                 final — transient errors are retried here;
                                                 a stalled attempt fails after
-                                                BARCA_TRANSFER_TIMEOUT seconds
+                                                BARCA_TRANSFER_TIMEOUT seconds.
+       "missing" is true when the source does not exist (for a get: the object is not in the
+       store). That alone does not say the store is there: a deleted bucket answers the same
+       way. The coordinator recomputes such a cached result only after a "probe" succeeded.
 
 Transfers go through barca._storage, so credentials and BARCA_STORAGE_OPTIONS
 behave exactly as they do for workers and the state helper.
@@ -31,15 +37,15 @@ behave exactly as they do for workers and the state helper.
 
 import hashlib
 import os
+import signal
 import socket
 import sys
-import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from barca import _runtime, _storage
+from barca import _lifeline, _runtime, _storage
 
 _DEFAULT_CONCURRENCY = 4
 _DEFAULT_RETRIES = 3
@@ -57,30 +63,12 @@ _PERMANENT = (
     ValueError,
     TypeError,
     ImportError,
+    # A local directory in the way that cannot be moved: retrying changes nothing.
+    _storage.ArtifactPathError,
 )
 
 
-def _http_status(exc: BaseException) -> int | None:
-    """The HTTP status a cloud SDK attached to its error, if any.
-
-    azure.core's HttpResponseError carries `status_code`; gcsfs and
-    google.api_core errors carry `code`; requests-style errors carry
-    `response.status_code`.
-    """
-    for value in (
-        getattr(exc, "status_code", None),
-        getattr(exc, "code", None),
-        getattr(getattr(exc, "response", None), "status_code", None),
-    ):
-        if value is None:
-            continue
-        try:
-            status = int(value)
-        except (TypeError, ValueError):
-            continue
-        if 100 <= status <= 599:
-            return status
-    return None
+_http_status = _storage.http_status
 
 
 def _is_permanent(exc: BaseException) -> bool:
@@ -122,26 +110,29 @@ def _staged_get(remote: str, local: str, expected: str | None) -> dict:
 
     Returns the reply fields. The store's copy is used even when it does not have the
     `expected` hash; the caller is told so it can warn. A local file that already holds the
-    store's bytes is left untouched.
+    store's bytes is left untouched. A directory at `local` is not an artifact: it is moved
+    out of the way, never deleted (`_storage.make_way`).
     """
     dest = Path(local)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=dest.parent, prefix=f".{dest.name}.", suffix=".tmp")
-    os.close(fd)
-    try:
+    # Before anything is staged beside it: if the directory cannot be moved, that is the
+    # error to report, not a temp file that could not be created next to it.
+    _storage.make_way(dest)
+    with _storage.staged_beside(dest) as tmp:
         _storage.get_file(remote, tmp)
         digest = _sha256(tmp)
         mismatch = expected is not None and digest != expected
         fetched = not (mismatch and _local_sha256(dest) == digest)
         if fetched:
+            _storage.make_way(dest)
             os.replace(tmp, dest)
         return {"sha256": digest, "fetched": fetched, "mismatch": mismatch}
-    finally:
-        Path(tmp).unlink(missing_ok=True)
 
 
 def _transfer(msg: dict) -> dict:
-    """Perform one put/get; return the reply fields describing the local file."""
+    """Perform one request; for a put/get return the reply fields describing the local file."""
+    if msg["type"] == "probe":
+        _storage.check_store(msg["root"])
+        return {"size_bytes": 0, "fetched": False, "mismatch": False}
     local = msg["local"]
     if msg["type"] == "put":
         _storage.put_file(local, msg["remote"])
@@ -255,12 +246,24 @@ def _handle(msg: dict, requests: _Requests, retries: int, backoff: float) -> Non
             time.sleep(backoff * 2 ** (attempt - 1))
 
 
+def _is_missing(exc: BaseException) -> bool:
+    """True when the transfer failed because its source does not exist.
+
+    s3fs, adlfs and gcsfs raise FileNotFoundError for an object that is not there; an SDK
+    error that stays untranslated is judged by its HTTP status. Everything else (permissions,
+    authentication, a store that cannot be reached) is not "missing": the object may well be
+    there.
+    """
+    return isinstance(exc, FileNotFoundError) or _http_status(exc) == 404
+
+
 def _error(msg: dict, exc: BaseException, attempts: int) -> dict:
     return {
         "type": "error",
         "id": msg["id"],
         "message": f"{type(exc).__name__}: {exc}",
         "attempts": attempts,
+        "missing": _is_missing(exc),
     }
 
 
@@ -306,7 +309,7 @@ def serve(
                 # attempt may still be stuck, and must not hold up exit.
                 requests.wait_idle()
                 return
-            if kind in ("put", "get"):
+            if kind in ("put", "get", "probe"):
                 requests.accept(msg["id"])
                 pool.submit(_handle, msg, requests, retries, backoff)
     finally:
@@ -324,11 +327,42 @@ def _env_float(name: str, default: float) -> float:
     return float(raw) if raw else default
 
 
+def _stop(signum, frame) -> None:
+    """Asked to stop mid-transfer: leave no half-written temp file behind, then exit."""
+    _storage.discard_staged()
+    os._exit(128 + signum)
+
+
 def main() -> int:
     if not os.environ.get("BARCA_SOCKET"):
         print("BARCA_SOCKET not set", file=sys.stderr)
         return 1
-    sock = _runtime.connect()
+    # What Ctrl-C means for the run is the coordinator's decision alone: it cancels the run
+    # and stops this helper (SIGTERM). Acting on an interrupt here as well would end the
+    # helper under a coordinator that is still waiting on it, and print a KeyboardInterrupt
+    # traceback. The coordinator starts this process in a group of its own, which the
+    # terminal's Ctrl-C does not reach; a SIGINT sent to it directly is ignored too.
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    # Outside the terminal's foreground group, a write to the terminal (a warning on stderr)
+    # would stop the process if the terminal is set to `tostop`. Ignored, the write goes
+    # through.
+    signal.signal(signal.SIGTTOU, signal.SIG_IGN)
+    signal.signal(signal.SIGTERM, _stop)
+    # Deaf to Ctrl-C, so this process must notice by itself when the coordinator is gone.
+    _lifeline.watch()
+    try:
+        sock = _runtime.connect()
+    except OSError as exc:
+        # No socket to connect to. If the coordinator has gone (it failed, or was cancelled,
+        # before it ever used this helper) there is nobody to tell: exit without a word.
+        if _lifeline.coordinator_gone(wait=1.0):
+            return 0
+        print(
+            f"[barca] transfer helper: cannot reach the coordinator at "
+            f"{os.environ['BARCA_SOCKET']}: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return 1
     assert sock is not None
     serve(
         sock,
@@ -337,6 +371,9 @@ def main() -> int:
         timeout=_env_float("BARCA_TRANSFER_TIMEOUT", _DEFAULT_TIMEOUT),
     )
     _runtime.disconnect()
+    # Whatever was still in flight is abandoned (the coordinator disconnected, or an attempt
+    # timed out): leave no temp file of it.
+    _storage.discard_staged()
     # Exit without joining pool threads: a timed-out attempt may be stuck in
     # a network call that would otherwise keep the process alive.
     sys.stdout.flush()

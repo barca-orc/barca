@@ -41,7 +41,7 @@ Options:
       --fields <FIELDS>
           Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones
 
-          [possible values: id, kind, action, status, reason, detail, run_hash, artifact, warning, partitions, env]
+          [possible values: id, kind, action, status, reason, detail, run_hash, artifact, warning, artifact_mismatch, partitions, env]
 
       --env <ENV>
           Environment name (separates cache/state per environment)
@@ -67,6 +67,8 @@ Examples:
 Several targets: comma-separated, no spaces. Every target runs even if another fails (a failure
 skips only what depends on it); exit 1 if any failed. JSON output then carries `targets`, keyed by
 target, instead of `final_output` (see barca get --help, barca docs agents).
+`warnings` is always an array, as on `barca get`: plan-time warnings for the steps in the cone, such
+as an input a step never uses (barca docs assets); [] when there are none.
 
 --refresh takes ONE comma-separated list (`--refresh a,b`), never `--refresh a b`. It re-runs the
 assets you name and every asset downstream of them in the task's cone (reason `refresh_cascade`),
@@ -74,6 +76,9 @@ so fresh data reaches the task. --no-cascade re-runs only the named assets; cach
 downstream of them then do not reflect the refresh, and barca warns. A name that is not an
 upstream asset is an error. --no-cache is a deprecated spelling of --refresh-all: it still works
 and warns on stderr.
+An upstream asset that is cached but whose artifact file is gone is computed again before the task
+reads it (reason `artifact_missing`, a warning on stderr), so a deleted artifact does not fail the
+run (barca docs cache).
 The target must be a task; use `barca get` for assets. The target comes before the files:
 `barca run pipeline.py deploy` exits 2 and prints `barca run deploy pipeline.py`. Every usage
 error exits 2 and ends by pointing at `barca list` (with the files you gave, if any).

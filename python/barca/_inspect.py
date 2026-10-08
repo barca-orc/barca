@@ -16,7 +16,8 @@ artifacts are read concurrently, and once a store has failed (credentials, netwo
 artifacts not yet read report that failure instead of each waiting out the driver's retries.
 
 Protocol: one JSON document on stdin, {"sample": N, "artifacts": [{"path", "format"}, ...]};
-one JSON array on stdout with a shape object per artifact, in order.
+one JSON array on stdout with a shape object per artifact, in order. Optional
+`fields: true` includes JSON object field types and list item types for the UI.
 """
 
 import io
@@ -42,36 +43,31 @@ MAX_REMOTE_READERS = 8
 _store_down: dict[str, str] = {}
 
 
-def shape(path: str, fmt: str, sample: int = 0) -> dict:
+def shape(path: str, fmt: str, sample: int = 0, fields: bool = False) -> dict:
     """Shape of one artifact. Never raises: problems are reported in `note`."""
     try:
         if _storage.is_remote(path):
-            return _remote_shape(path, fmt, sample)
+            return _remote_shape(path, fmt, sample, fields)
         if not os.path.exists(path):
             return {"note": "artifact file not found"}
         if fmt == "parquet":
             return _parquet_shape(path, sample)
         if fmt == "json":
             with open(path, "rb") as f:
-                return _json_shape(f, sample)
+                return _json_shape(f, sample, fields)
         if fmt == "pickle":
             with open(path, "rb") as f:
                 return {"type": _pickle_type(f)}
         return {"note": f"unknown format '{fmt}'"}
     except Exception as e:  # noqa: BLE001 — report, never fail the status command
         where = "remote artifact" if _storage.is_remote(path) else "artifact"
-        return {"note": f"could not read {where}: {type(e).__name__}: {_one_line(e)}"}
-
-
-def _one_line(e: BaseException) -> str:
-    lines = str(e).strip().splitlines()
-    return lines[0] if lines else ""
+        return {"note": f"could not read {where}: {type(e).__name__}: {_storage.first_line(e)}"}
 
 
 # ─── remote ───────────────────────────────────────────────────────────────────
 
 
-def _remote_shape(path: str, fmt: str, sample: int) -> dict:
+def _remote_shape(path: str, fmt: str, sample: int, fields: bool = False) -> dict:
     """Shape of an artifact in an object store. Raises; `shape` turns that into a note."""
     if fmt not in ("parquet", "json", "pickle"):
         return {"note": f"unknown format '{fmt}'"}
@@ -83,7 +79,7 @@ def _remote_shape(path: str, fmt: str, sample: int) -> dict:
     try:
         fs = _storage.get_fs(path)
     except (ImportError, ValueError) as e:  # missing driver, bad BARCA_STORAGE_OPTIONS
-        return {"note": f"could not read remote artifact: {_one_line(e)}"}
+        return {"note": f"could not read remote artifact: {_storage.first_line(e)}"}
     scheme = path.split("://", 1)[0].lower()
     if scheme in _store_down:
         return {
@@ -106,10 +102,10 @@ def _remote_shape(path: str, fmt: str, sample: int) -> dict:
         return {"note": "artifact file not found"}
     except Exception as e:
         if not type(e).__module__.startswith("pyarrow"):  # the store, not this file's content
-            _store_down.setdefault(scheme, f"{type(e).__name__}: {_one_line(e)}")
+            _store_down.setdefault(scheme, f"{type(e).__name__}: {_storage.first_line(e)}")
         raise
     if fmt == "json":
-        return _json_shape(data, sample)
+        return _json_shape(data, sample, fields)
     return {"type": _pickle_type(data)}
 
 
@@ -165,11 +161,13 @@ def _json_type(v: Any) -> str:
     return type(v).__name__
 
 
-def _json_shape(f: IO[bytes], sample: int) -> dict:
+def _json_shape(f: IO[bytes], sample: int, fields: bool = False) -> dict:
     value = json.load(f)
     out: dict[str, Any] = {"type": _json_type(value)}
     if isinstance(value, list):
         out["rows"] = len(value)
+        if fields:
+            out["item_types"] = sorted({_json_type(v) for v in value})
         if value and all(isinstance(r, dict) for r in value):
             seen: dict[str, list[str]] = {}
             for row in value:
@@ -187,8 +185,12 @@ def _json_shape(f: IO[bytes], sample: int) -> dict:
     elif isinstance(value, dict):
         keys = list(value)
         out["keys"] = keys[:MAX_KEYS]
+        if fields:
+            out["columns"] = [{"name": k, "type": _json_type(value[k])} for k in keys[:MAX_KEYS]]
         if len(keys) > MAX_KEYS:
             out["key_count"] = len(keys)
+            if fields:
+                out["note"] = f"Showing the first {MAX_KEYS} of {len(keys)} fields"
         if sample > 0:
             out["sample"] = {k: value[k] for k in keys[:sample]}
     elif sample > 0:
@@ -377,12 +379,20 @@ def _reduce_label(fn: Any, args: Any) -> str:
         and isinstance(args.items[0], _Class)
     ):
         return args.items[0].name
+    if (
+        name == "_codecs.encode"
+        and isinstance(args, _Tuple)
+        and len(args.items) >= 2
+        and isinstance(args.items[0], _Str)
+        and _str_value(args.items[1]) == "latin1"
+    ):
+        return "bytes"  # bytes reconstruction in pickle protocols 0–2
     if name.startswith("numpy.") and short == "_frombuffer":
         return "numpy.ndarray"  # protocol 5 arrays
     return name
 
 
-def shapes(artifacts: list[dict], sample: int = 0) -> list[dict]:
+def shapes(artifacts: list[dict], sample: int = 0, fields: bool = False) -> list[dict]:
     """Shape of each artifact, in order. Remote ones are read concurrently, so a status over
     many nodes is not one network round trip after another."""
     out: list[dict | None] = [None] * len(artifacts)
@@ -391,17 +401,13 @@ def shapes(artifacts: list[dict], sample: int = 0) -> list[dict]:
         if _storage.is_remote(a["path"]):
             remote.append(i)
         else:
-            out[i] = shape(a["path"], a.get("format", ""), sample)
+            out[i] = shape(a["path"], a.get("format", ""), sample, fields)
     if remote:
-        # Build each filesystem once, here: the per-protocol cache is not locked.
-        for scheme in {artifacts[i]["path"].split("://", 1)[0] for i in remote}:
-            try:
-                _storage.get_fs(f"{scheme}://")
-            except Exception:  # noqa: BLE001 — each shape reports it in its own note
-                pass
         with ThreadPoolExecutor(max_workers=min(MAX_REMOTE_READERS, len(remote))) as pool:
             done = pool.map(
-                lambda i: shape(artifacts[i]["path"], artifacts[i].get("format", ""), sample),
+                lambda i: shape(
+                    artifacts[i]["path"], artifacts[i].get("format", ""), sample, fields
+                ),
                 remote,
             )
             for i, s in zip(remote, done):
@@ -412,7 +418,11 @@ def shapes(artifacts: list[dict], sample: int = 0) -> list[dict]:
 def main() -> None:
     req = json.load(sys.stdin)
     sample = int(req.get("sample") or 0)
-    sys.stdout.write(json.dumps(shapes(req.get("artifacts", []), sample), default=str))
+    sys.stdout.write(
+        json.dumps(
+            shapes(req.get("artifacts", []), sample, bool(req.get("fields", False))), default=str
+        )
+    )
 
 
 if __name__ == "__main__":

@@ -5,26 +5,18 @@ via the Python API to ensure barca.get/plan return correct values.
 """
 
 import textwrap
-from pathlib import Path
-
-import pandas as pd
-import pytest
 
 import barca
+import pandas as pd
+import pytest
 from barca.api import BarcaError
 
 
 @pytest.fixture(autouse=True)
-def clean_barca_dir():
-    """Remove entire .barca/ directory before and after each test for isolation."""
-    import shutil
-
-    barca_dir = Path(".barca")
-    if barca_dir.exists():
-        shutil.rmtree(barca_dir)
-    yield
-    if barca_dir.exists():
-        shutil.rmtree(barca_dir)
+def clean_barca_dir(tmp_path, monkeypatch):
+    # The API resolves .barca relative to cwd. Give each test its own project,
+    # so another pytest worker cannot delete its database or input artifacts.
+    monkeypatch.chdir(tmp_path)
 
 
 def write_module(tmp_path, filename, code):

@@ -1,54 +1,213 @@
 ---
 title: Deploying barca serve
-description: Run barca serve with its web UI, behind nginx, Traefik or another reverse proxy.
+description: Run barca serve as a long-lived service, in a container or behind nginx or Traefik, and what happens on restart.
 ---
 
-`barca serve` is the whole deployment: one process serves the HTTP API, the cron scheduler and
-the web UI. There is nothing else to install — the UI is compiled into the `barca` binary.
+`barca serve` is one process: the HTTP API, the cron scheduler and the web UI. The UI is
+compiled into the `barca` binary, so there is nothing else to install.
 
 ```bash
-barca serve                      # API + scheduler + web UI on 127.0.0.1:8274
+barca serve                      # API, scheduler and web UI on 127.0.0.1:8274
 open http://127.0.0.1:8274/      # redirects to /ui/
 ```
 
-The UI opens on the **Assets** table: every node with its cache state (failures and stale nodes
-first), last run, typical duration and next scheduled run, refreshed every 10 seconds. Click a
-row for its detail panel: state, last attempt and error, run history, lineage.
+The UI opens on the Assets table: every node with its cache state, last run, typical duration
+and next scheduled run, refreshed every 10 seconds. Failed and stale nodes are listed first.
 
-## Where it listens
+Three facts shape every deployment:
 
-`barca serve` binds to `127.0.0.1:8274` by default, so only the same machine can reach it. That is
-right when the proxy runs on the same host. When the proxy runs in another container, or the
-server is on a VM, listen on every interface:
+- **It binds `127.0.0.1` by default, with no authentication.** `--host 0.0.0.0` (or `--host ::`
+  for IPv6) makes it reachable through another interface. Anyone who can reach the port can
+  start runs, so use a private network and authenticate at a proxy.
+- **State is the `.barca/` directory in the project.** It holds the cache, the run history
+  and the scheduler's last fire times. Keep it on storage that survives a restart.
+- **One instance per project.** Runs in progress and their live events are held in the
+  server's memory. Do not run two servers on one project or load-balance across several.
+
+## Listen on another interface
 
 ```bash
-barca serve --host 0.0.0.0             # IPv4, every interface (`::` for IPv6)
+barca serve --host 0.0.0.0             # every IPv4 interface (containers, VMs)
 barca serve --host 0.0.0.0 --port 8400
 ```
 
-barca prints a warning when it listens on anything but loopback: there is no authentication, so
-anyone who can reach the port can trigger runs. Keep the port on a private network (in Docker:
-don't publish it; let only the proxy reach it) and authenticate at the proxy.
+A non-loopback address prints a startup warning. `--host` takes an IP address, not a hostname.
+In Docker, keep barca's port unpublished and let the proxy reach it over a private bridge
+network. An nginx upstream can then be `http://barca:8274/`, with no shared network namespace.
 
-## Behind a reverse proxy
+## In a container
 
-Mount barca under any path prefix. Open `https://your-host/barca/`: it redirects to
-`/barca/ui/`, and the UI finds the API under the same prefix on its own — there is no base-path
-setting. Strip the prefix at the proxy, so barca sees `/ui/`, `/state` and so on.
+This example was run with Docker 29 and barca 0.18.0. It has two services: barca, and an nginx
+that shares barca's network namespace so that it can reach `127.0.0.1:8274`.
 
-### nginx
+```dockerfile
+# Dockerfile
+FROM python:3.12-slim
+RUN pip install --no-cache-dir 'barca[parquet]==0.18.0'
+WORKDIR /project
+CMD ["barca", "serve", "--timezone", "utc"]
+```
 
-The minimal configuration works, including live run logs:
+```yaml
+# compose.yaml
+services:
+  barca:
+    build: .
+    platform: linux/amd64
+    volumes:
+      - ./project:/project
+      - barca-state:/project/.barca
+    stop_signal: SIGINT
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8274/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+
+  proxy:
+    image: nginx:1.27-alpine
+    network_mode: "service:barca"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      barca:
+        condition: service_healthy
+
+volumes:
+  barca-state:
+```
 
 ```nginx
-location /barca/ {
-    proxy_pass http://127.0.0.1:8274/;       # or http://barca:8274/ on a Docker network
+# nginx.conf
+server {
+    listen 8080;
+    location / {
+        proxy_pass http://127.0.0.1:8274/;
+    }
 }
 ```
 
-The trailing `/` on both sides strips the prefix.
+```
+$ docker compose up -d
+$ curl -s http://127.0.0.1:8080/health
+{"read_only":false,"scheduler":true,"status":"ok","version":"0.18.0"}
+```
 
-### Traefik
+`docker compose ps` shows the `barca` service as `healthy` once the first check passes, and
+the proxy starts after that.
+
+What each part is for:
+
+- **The image.** Barca publishes wheels for x86-64 Linux with glibc and for macOS on Apple
+  Silicon. Use a Debian-based image. There is no wheel for Alpine (musl)
+  ([issue #107](https://github.com/barca-orc/barca/issues/107)) or for Linux arm64; without a
+  wheel pip falls back to the sdist, which needs a Rust toolchain to build. That is why the
+  service sets `platform: linux/amd64`; on an x86-64 host the line changes nothing. Add your
+  pipeline's own dependencies to the same `pip install`.
+- **The project mount.** The project is mounted at the working directory. Barca reads the
+  source again for every run, so an edit to a function takes effect at the next run. A new
+  file, a new scheduled node or a changed cron expression needs a restart.
+- **The `.barca` volume.** A named volume at `/project/.barca` keeps the cache, history and
+  schedule state across restarts and image rebuilds. Without it, a recreated container
+  computes everything again and does not know which ticks it missed.
+- **`--timezone`.** Cron is evaluated in the container's local time unless you say otherwise,
+  and that is usually UTC whatever the host uses. State it. An unknown name is not an error:
+  barca prints a warning and uses local time.
+- **`stop_signal: SIGINT`.** Barca shuts down cleanly on SIGINT (Ctrl-C). It has no SIGTERM
+  handler, and as process 1 in a container it ignores SIGTERM, so a default `docker stop`
+  waits out its timeout and then kills the process.
+- **The health check.** `GET /health` returns 200 with the JSON above when the server is up.
+  The check runs inside the container, so it can use `127.0.0.1`. The slim image has no
+  `curl`, so the check uses Python.
+- **The port.** With the default loopback address, publishing barca's own port
+  (`-p 8274:8274`) does not work: Docker forwards
+  to the container's network interface and barca listens on loopback only, so the connection
+  is closed without a reply. The proxy shares barca's network namespace
+  (`network_mode: "service:barca"`), listens on all interfaces at 8080, and forwards to
+  `127.0.0.1:8274`. The published port belongs on the `barca` service because that service
+  owns the namespace. On Linux, `network_mode: host` for barca and a proxy on the host is an
+  alternative.
+
+The published port above is bound to the host's loopback. Barca has no authentication, so
+before you bind it to anything wider, add [authentication](#authentication) at the proxy.
+
+### What happens on restart
+
+- **Stopped with SIGINT** (`docker compose stop` with the `stop_signal` above, or Ctrl-C):
+  runs in progress are cancelled, their workers are stopped, and they are recorded as
+  `cancelled`. The process exits with code 0 within a few seconds.
+- **Killed** (SIGKILL, out of memory, host lost): steps that had finished are already recorded
+  and are served from cache next time. The run in progress is left in `barca history` with
+  status `running`. Outside a container barca reports such a run as `interrupted` by checking
+  whether its process still exists; in a container the new server has the same process id, so
+  the stale `running` row stays.
+- **Runs are not resumed.** Nothing restarts a cancelled or killed run. The next tick or
+  request starts a new one, which reuses whatever was cached.
+- **Schedules catch up once.** If a tick passed while the server was down, the job fires once
+  at startup (`[barca] catch-up run pipeline.py:report → ...`). Several missed ticks of one
+  job still produce one run.
+- **In-memory run handles are lost.** A `run_id` returned by `POST /run` before the restart
+  is unknown to `GET /status/{run_id}` afterwards. Finished runs are in `barca history`.
+
+### With a remote store
+
+With a remote store configured (`BARCA_REMOTE_URI` or `[remote]` in `barca.toml`), barca by
+default also keeps a shared history in the store. `barca serve` does not support that and
+refuses to start:
+
+```
+$ BARCA_REMOTE_URI=s3://my-bucket/barca/orders barca serve
+barca serve does not support shared remote state yet — set state = "off" in barca.toml (or BARCA_STATE=off) to serve with a local metadata DB
+
+See `barca serve --help`.
+```
+
+The exit code is 2. Set `BARCA_STATE=off` in the service's environment:
+
+```yaml
+    environment:
+      BARCA_REMOTE_URI: s3://my-bucket/barca/orders
+      BARCA_STATE: "off"
+```
+
+Artifacts are then written locally and uploaded to the store, and the run history stays in
+the `.barca` volume. Other machines that use the same store do not see this server's runs in
+`barca history` and do not get cache hits from its results: a cache hit is found through
+the history, and theirs has no row for it. Credentials and the store's other settings are in
+[Remote storage](/reference/remote-storage/).
+
+## Behind nginx
+
+Barca can be mounted under any path. This is enough, live run logs included:
+
+```nginx
+location /barca/ {
+    proxy_pass http://127.0.0.1:8274/;
+}
+```
+
+Open `https://your-host/barca/`. It redirects to `/barca/ui/`, and the UI finds the API under
+the same prefix. There is no base-path setting.
+
+- **Live logs.** The run event stream (`GET /events/{run_id}`) sends `X-Accel-Buffering: no`,
+  which makes nginx pass it through as it is produced. Do not add
+  `proxy_ignore_headers X-Accel-Buffering`: with it nginx buffers the stream and the UI shows
+  no logs until the run ends. An idle stream carries a keep-alive every 15 seconds, which is
+  inside nginx's default 60-second read timeout.
+- **One instance.** Point nginx at a single `barca serve`.
+- **The upstream address.** With the default `127.0.0.1`, nginx must run on the same machine
+  or share barca's network namespace as in the [container example](#in-a-container). With
+  `--host 0.0.0.0`, it can reach barca over a private Docker bridge network or another host.
+
+`tests/integration/test_reverse_proxy.sh` checks the prefix, the redirect, the UI and its assets,
+and that log lines arrive while a run is still going through nginx and Traefik. Both proxies
+run in separate containers and reach `barca serve --host 0.0.0.0` over the bridge network.
+A control check makes nginx ignore the streaming header and confirms that it buffers events.
+
+## Behind Traefik
 
 A path-prefix router with a `stripPrefix` middleware. With the Docker provider, as labels on the
 barca container:
@@ -89,54 +248,11 @@ http:
 
 Traefik needs no streaming settings: run events pass straight through.
 
-### What the proxy has to get right
-
-- **Live logs.** The run event stream (`GET /events/{run_id}`) sends `X-Accel-Buffering: no`,
-  which tells nginx to pass it through as it happens — including with nginx's defaults and with
-  `gzip` on. Without that header nginx holds the stream back and the UI shows no logs until the
-  run ends, so don't add `proxy_ignore_headers X-Accel-Buffering`. Idle streams carry a
-  keep-alive every 15 seconds, inside nginx's default 60-second read timeout.
-- **One instance.** Runs in progress, their handles and their live events live in the server's
-  memory. Point the proxy at a single `barca serve`; do not load-balance across replicas.
-
-`tests/integration/test_reverse_proxy.sh` runs both proxies in their own containers on a Docker
-network in front of `barca serve --host 0.0.0.0` (nginx with the bare `proxy_pass` above, Traefik
-with the file-provider routing above) and checks, through each: the prefix redirect, the UI and
-its assets, the API, and that log lines arrive while a run is still going. As a control it shows
-nginx withholding the events when told to ignore the header.
-
-## barca in a container
-
-A minimal image: your project plus `barca`, serving on every interface.
-
-```dockerfile
-FROM python:3.12-slim
-RUN pip install barca            # plus your pipeline's own dependencies
-WORKDIR /app
-COPY . .
-EXPOSE 8274
-# Until graceful shutdown lands (issue #190), SIGINT is the signal barca handles: it
-# cancels in-flight runs cleanly instead of being killed mid-step after the grace period.
-STOPSIGNAL SIGINT
-CMD ["barca", "serve", "--host", "0.0.0.0"]
-```
-
-- **Keep `.barca/` on a volume** (`/app/.barca` here). It holds the metadata DB and, unless you
-  use [remote storage](/reference/remote-storage/), the cached artifacts; on a fresh container
-  every asset starts as never run.
-- **Restarts drop in-flight runs.** With `STOPSIGNAL SIGINT`, `docker stop` cancels them and
-  records them as `cancelled`; without it Docker's default SIGTERM is not handled yet and the
-  process is killed after the grace period, which can leave those runs recorded as `running`.
-  Deploy between runs where you can.
-
-This image is a starting point, not a tested artifact: the proxy behavior above is what the
-integration test covers.
-
 ## Authentication
 
-barca has none yet. Anyone who can reach the server can trigger runs. Put authentication in front
-of it at the proxy — for example nginx basic auth, Traefik's `basicAuth` or `forwardAuth`
-middleware, or an SSO proxy such as oauth2-proxy:
+Barca has none. Anyone who can reach the server can start and cancel runs. Put authentication
+in front of it at the proxy, for example nginx basic auth or an SSO proxy such as
+oauth2-proxy:
 
 ```nginx
 location /barca/ {
@@ -148,14 +264,14 @@ location /barca/ {
 
 ## Read-only dashboards
 
-`barca serve --read-only` serves the UI and API without the ability to change anything: run and
-cancel endpoints return `403`, the scheduler never starts, and every read of the metadata DB
-goes through a private copy, so the database is never opened in place, created or written. Use it
-to share a view of a project — including one another barca process is running — with people who
-should only look. The UI shows a `read-only` tag and disables its run buttons.
+`barca serve --read-only` serves the UI and the API and changes nothing: run and cancel
+endpoints return `403`, the scheduler does not start, and the metadata database is read
+through a private copy, so it is never opened in place, created or written. Use it to show a
+project to people who should only look, including a project that another barca process is
+running. The UI shows a `read-only` tag and disables its run buttons.
 
 ```bash
-barca serve --read-only --host 0.0.0.0
+barca serve --read-only
 ```
 
-See the [Server API reference](/reference/server-api/) for every endpoint.
+Every endpoint is in the [Server API reference](/reference/server-api/).

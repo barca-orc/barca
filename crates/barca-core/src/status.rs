@@ -2,13 +2,14 @@
 //! materialization and artifact shape.
 //!
 //! Nothing here is new logic. Cache state comes from the same decision `--dry-run` makes
-//! ([`commands::explain_dag`]), history from the metadata DB, and artifact shape from
+//! ([`crate::execution::explain_dag`]), history from the metadata DB, and artifact shape from
 //! `python -m barca._inspect`, which opens artifact files only: user code is never imported.
 //! Nothing is written, and no `.barca` directory is created.
 
 use crate::BarcaError;
-use crate::commands::{self, CachePolicy, StepReport};
+use crate::cache::CachePolicy;
 use crate::db;
+use crate::results::StepReport;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -68,12 +69,12 @@ pub struct CacheStatus {
     )]
     pub state: String,
     /// Machine-readable reason: `materialized`, `changed`, `upstream_stale`, `failed`,
-    /// `no_record`, `partitions_missing`, `partitions_unknown`, `sensor_output_unknown`, `task`
-    /// or `sensor`.
+    /// `artifact_missing`, `no_record`, `partitions_missing`, `partitions_unknown`,
+    /// `sensor_output_unknown`, `task` or `sensor`.
     #[cfg_attr(
         feature = "ts",
         ts(
-            type = "\"materialized\" | \"changed\" | \"upstream_stale\" | \"failed\" | \"no_record\" | \"partitions_missing\" | \"partitions_unknown\" | \"sensor_output_unknown\" | \"task\" | \"sensor\""
+            type = "\"materialized\" | \"changed\" | \"upstream_stale\" | \"failed\" | \"artifact_missing\" | \"no_record\" | \"partitions_missing\" | \"partitions_unknown\" | \"sensor_output_unknown\" | \"task\" | \"sensor\""
         )
     )]
     pub reason: String,
@@ -140,8 +141,8 @@ pub async fn status(
     sample: usize,
     shape: bool,
 ) -> Result<StatusResult, BarcaError> {
-    let dag = commands::build_dag(file_args, python).await?;
-    let explained = commands::explain_dag(
+    let dag = crate::load::build_dag(file_args, python).await?;
+    let explained = crate::execution::explain_dag(
         &dag,
         cfg,
         target_names,
@@ -283,6 +284,12 @@ fn cache_status(
             "materialized",
             "a successful materialization matches this code and these inputs",
         ),
+        // The result is recorded, but its artifact is gone and a run would have to read it.
+        ("run", Some("artifact_missing")) => cache(
+            "stale",
+            "artifact_missing",
+            r.detail.clone().unwrap_or_default(),
+        ),
         ("partial", _) => {
             let (cached, total) = r
                 .partitions
@@ -383,6 +390,26 @@ async fn read_shapes(
     nodes: &mut [NodeStatus],
     sample: usize,
 ) {
+    read_shapes_inner(python, cfg, nodes, sample, false).await;
+}
+
+/// Inspect artifact schemas, including JSON object field and list element types.
+/// This richer on-demand view leaves the CLI's existing shape contract unchanged.
+pub async fn read_schemas(
+    python: &Path,
+    cfg: &crate::config::ResolvedConfig,
+    nodes: &mut [NodeStatus],
+) {
+    read_shapes_inner(python, cfg, nodes, 0, true).await;
+}
+
+async fn read_shapes_inner(
+    python: &Path,
+    cfg: &crate::config::ResolvedConfig,
+    nodes: &mut [NodeStatus],
+    sample: usize,
+    fields: bool,
+) {
     let wanted: Vec<(usize, String, String)> = nodes
         .iter()
         .enumerate()
@@ -399,6 +426,7 @@ async fn read_shapes(
     }
     let request = serde_json::json!({
         "sample": sample,
+        "fields": fields,
         "artifacts": wanted
             .iter()
             .map(|(_, path, format)| serde_json::json!({"path": path, "format": format}))
@@ -424,18 +452,16 @@ async fn run_inspector(
     request: &serde_json::Value,
 ) -> Result<Vec<serde_json::Value>, String> {
     use tokio::io::AsyncWriteExt;
-    let mut cmd = tokio::process::Command::new(python);
-    cmd.args(["-m", "barca._inspect"]);
-    // The same options workers get (`[remote.storage_options.*]` merged with the environment).
-    if let Some(ref opts) = cfg.storage_options_json {
-        cmd.env("BARCA_STORAGE_OPTIONS", opts);
-    }
-    let mut child = cmd
-        .stdin(std::process::Stdio::piped())
+    let mut cmd = crate::helper_proc::python_module(
+        python,
+        "barca._inspect",
+        cfg.storage_options_json.as_deref(),
+    );
+    cmd.stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("{}: {e}", python.display()))?;
+        .stderr(std::process::Stdio::piped());
+    let mut child =
+        crate::helper_proc::spawn(&mut cmd).map_err(|e| format!("{}: {e}", python.display()))?;
     let mut stdin = child.stdin.take().ok_or("no stdin")?;
     stdin
         .write_all(request.to_string().as_bytes())
@@ -509,6 +535,16 @@ mod tests {
             &h,
         );
         assert_eq!((c.state.as_str(), c.reason.as_str()), ("stale", "changed"));
+
+        // Its result is recorded and its run hash is unchanged, but the artifact is gone and a
+        // run needs it: that is not "changed" (#252).
+        let mut missing = report("run", Some("artifact_missing"));
+        missing.detail = Some("the artifact file is missing".into());
+        let c = cache_status(Some(&missing), &[], &none, &h);
+        assert_eq!(
+            (c.state.as_str(), c.reason.as_str(), c.detail.as_str()),
+            ("stale", "artifact_missing", "the artifact file is missing")
+        );
 
         let up: HashMap<String, String> = [("p.py:u".to_string(), "stale".to_string())].into();
         let c = cache_status(

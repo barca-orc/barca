@@ -2,7 +2,7 @@
 
 use barca_core::CancellationToken;
 use barca_core::RunEvent;
-use barca_core::commands::{AssetSummary, GetResult, PlanResult};
+use barca_core::results::{AssetSummary, GetResult, PlanResult};
 use dashmap::DashMap;
 use serde::Serialize;
 use std::net::IpAddr;

@@ -1,8 +1,6 @@
 import { X, Download, Play, Terminal, CircleAlert } from 'lucide-react'
 import { match } from 'ts-pattern'
-import { Button, IconButton, StatusBadge, Tag, StatusDot, LogViewer } from '@/components'
-import { useTriggerGet } from '@/hooks/useTriggerGet'
-import { useTriggerRun } from '@/hooks/useTriggerRun'
+import { Button, IconButton, KeyValue, SidePanel, StatusBadge, Tag, StatusDot, LogViewer } from '@/components'
 import { freshnessLabel } from '@/lib/status'
 import { shortName } from '@/lib/graph'
 import { runFeedback } from '@/lib/runFeedback'
@@ -12,6 +10,9 @@ interface NodeInspectorProps {
   asset: AssetSummary
   /** Live visual status for this node. */
   status: StatusKind
+  statusLabel?: string
+  /** Run feedback stays separate from the resting cache badge. */
+  feedbackStatus?: StatusKind
   /** Captured log lines for the active run (run-wide). */
   logs: LogLine[]
   /** Whether a run is currently streaming. */
@@ -20,8 +21,11 @@ interface NodeInspectorProps {
   error: string | null
   /** The server refuses runs (`barca serve --read-only`). */
   readOnly: boolean
-  /** Fired when a get/run is triggered, with the run handle + target node id. */
-  onTrigger: (handle: string, nodeId: string) => void
+  /** The node's trigger verb and state (owned by the page, shared with the topbar). */
+  verb: 'run' | 'get'
+  triggering: boolean
+  triggerError: Error | null
+  onFire: () => void
   onClose: () => void
 }
 
@@ -55,33 +59,25 @@ function ErrorPanel({ title, message }: { title: string; message: string }) {
 export function NodeInspector({
   asset,
   status,
+  statusLabel,
+  feedbackStatus,
   logs,
   running,
   error,
   readOnly,
-  onTrigger,
+  verb,
+  triggering,
+  triggerError,
+  onFire,
   onClose,
 }: NodeInspectorProps) {
-  const getTrigger = useTriggerGet()
-  const runTrigger = useTriggerRun()
   const name = shortName(asset.id)
-
-  // Canonical barca verbs: `run` a task (always re-executes), `get` an asset or
-  // sensor (cache-aware). No "materialize".
   const isTask = asset.kind === 'task'
-  const trigger = isTask ? runTrigger : getTrigger
-  const verb = isTask ? 'run' : 'get'
-
-  const onFire = () => {
-    trigger.mutate(name, {
-      onSuccess: (data) => onTrigger(data.run_id, asset.id),
-    })
-  }
 
   // Presentation logic (pure, tested) decides the feedback descriptor; this
   // component only maps each descriptor variant to elements. Exhaustive on both
   // sides — no run state can render nothing by accident.
-  const feedback = match(runFeedback(status, logs, error))
+  const feedback = match(runFeedback(feedbackStatus ?? status, logs, error))
     .with({ kind: 'idle' }, () => null)
     .with({ kind: 'streaming' }, (f) => <OutputPanel logs={f.logs} live />)
     .with({ kind: 'output' }, (f) => <OutputPanel logs={f.logs} live={false} />)
@@ -95,42 +91,30 @@ export function NodeInspector({
     .exhaustive()
 
   return (
-    <div className="barca-inspector">
-      <div className="barca-insp-head">
-        <div className="barca-insp-title">
-          <StatusDot status={status} size={8} />
-          <span>{name}</span>
-        </div>
+    <SidePanel
+      label={`${name} inspector`}
+      width={316}
+      title={name}
+      badge={<StatusDot status={status} size={8} />}
+      actions={
         <IconButton label="Close" size="sm" onClick={onClose}>
           <X size={14} />
         </IconButton>
-      </div>
-
+      }
+    >
       <div className="barca-insp-body">
         <div className="barca-tagrow">
           <Tag tone="signal" dot>
             {asset.kind}
           </Tag>
-          <StatusBadge status={status} size="sm" />
+          <StatusBadge status={status} label={statusLabel} size="sm" />
         </div>
 
-        <div className="barca-insp-kv">
-          <div className="barca-insp-kv-row">
-            <span>id</span>
-            <span>{asset.id}</span>
-          </div>
-          <div className="barca-insp-kv-row">
-            <span>kind</span>
-            <span>{asset.kind}</span>
-          </div>
-          <div className="barca-insp-kv-row">
-            <span>freshness</span>
-            <span>{freshnessLabel(asset.freshness)}</span>
-          </div>
-          <div className="barca-insp-kv-row">
-            <span>inputs</span>
-            <span>{asset.inputs.length}</span>
-          </div>
+        <div>
+          <KeyValue label="id">{asset.id}</KeyValue>
+          <KeyValue label="kind">{asset.kind}</KeyValue>
+          <KeyValue label="freshness">{freshnessLabel(asset.freshness)}</KeyValue>
+          <KeyValue label="inputs">{asset.inputs.length}</KeyValue>
         </div>
 
         {asset.inputs.length > 0 && (
@@ -148,7 +132,7 @@ export function NodeInspector({
             variant="signal"
             size="sm"
             iconLeft={isTask ? <Play size={12} /> : <Download size={12} />}
-            loading={trigger.isPending || running}
+            loading={triggering || running}
             disabled={readOnly}
             title={readOnly ? 'This server is read-only' : undefined}
             onClick={onFire}
@@ -164,10 +148,10 @@ export function NodeInspector({
 
         {/* Failure of the trigger request itself (network/404), distinct from a
             run that started and then failed. */}
-        {trigger.isError && (
-          <ErrorPanel title={`could not start ${verb}`} message={(trigger.error as Error).message} />
+        {triggerError && (
+          <ErrorPanel title={`could not start ${verb}`} message={triggerError.message} />
         )}
       </div>
-    </div>
+    </SidePanel>
   )
 }

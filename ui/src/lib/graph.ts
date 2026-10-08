@@ -12,6 +12,7 @@ export interface GraphNodeData {
   kind: NodeKind
   status: StatusKind
   metric?: string | null
+  stateHint?: string
   [key: string]: unknown
 }
 
@@ -25,10 +26,10 @@ export function shortName(id: string): string {
 
 /**
  * Resting node status before any run. Static analysis (`GET /assets`) carries
- * no run state — live status is overlaid from the event stream downstream
+ * no state — cache state and active run status are overlaid downstream
  * (see GraphCanvas + `overlayRunStatus`), never decided here.
  */
-const RESTING_STATUS: StatusKind = 'queued'
+const RESTING_STATUS: StatusKind = 'skipped'
 
 /**
  * Build positioned React Flow nodes + edges from the asset graph — purely
@@ -66,12 +67,13 @@ export function buildGraph(assets: AssetSummary[], dir: LayoutDir) {
       type: 'asset',
       data: {
         id: a.id,
+        direction: dir,
         name: shortName(a.id),
         kind: a.kind,
         status: RESTING_STATUS,
       },
       // dagre centers nodes; React Flow positions by top-left.
-      position: { x: p.x - DAG_NODE_WIDTH / 2, y: p.y - DAG_NODE_HEIGHT / 2 },
+      position: { x: p.x - DAG_NODE_WIDTH / 2, y: p.y - (DAG_NODE_HEIGHT) / 2 },
       sourcePosition: horizontal ? Position.Right : Position.Bottom,
       targetPosition: horizontal ? Position.Left : Position.Top,
     }

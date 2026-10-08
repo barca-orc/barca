@@ -10,6 +10,32 @@ description: 'json/pickle/parquet artifact formats, local and remote storage, st
 
 ---
 
+> **Amended (after 0.18.0, issue #246, decided):** artifact objects stay at
+> `{node}/{run_hash}{ext}`. Addressing them by a hash of their bytes was proposed (#246)
+> and will not be done.
+>
+> Immutability follows from purity. An asset is a pure function of its code and its inputs,
+> so its run hash identifies its bytes, and the object at `{node}/{run_hash}{ext}` is
+> immutable in practice. State from outside enters through sensors: a sensor always runs,
+> and the hash of what it returned is folded into the run hash of every asset that reads it
+> (`cache::compute_run_hash`), so a changed observation lands at a new path instead of
+> changing an old one.
+>
+> The one case where bytes change under the same run hash is a recompute of an asset that
+> is not deterministic (`--refresh`, or two machines computing the same step at once). The
+> object is then overwritten in place: same path, other bytes. Checked on 0.18.0 plus #263
+> with an asset that returns a random id: after `--refresh` on one machine the store holds
+> one object for the node, with new bytes. A machine that shares the history pulls the new
+> recorded hash, replaces its stale local copy and says nothing. A machine whose history
+> still has the old hash (one that keeps its history local, or a refresh that was killed
+> before it recorded) uses the store's bytes and is told: a `[barca] warning:` line on
+> stderr, and `steps[].artifact_mismatch: true` in the JSON result
+> ([CLI contract](/reference/cli-contract/)).
+>
+> The body below is left as written. Read its words this way: "content-addressed" (the
+> title, §1, §4.1, §5) means "addressed by run hash", as §8 says, and "immutable" means
+> "not rewritten except by `--refresh` of a non-deterministic asset".
+
 ## 1. Summary
 
 Data never passes between worker processes in-memory — every asset/task output is
@@ -117,6 +143,26 @@ artifact file if another task consumes it).
   nothing; its local rows are discarded by the next pull and those steps recompute
   (ties into [RFC-0006](/rfcs/0006-configuration-and-remote-state/)'s shared-state
   contract).
+- A cache row whose artifact is gone (#252). The row stays a cache hit; whether the
+  artifact can be read is decided only when something needs to read it — a step that is
+  going to run takes it as an input, a `partitions_from` step is expanded from it, or it is
+  the output the command returns (its targets; with no target, the one asset whose value is
+  `final_output`, per [RFC-0002](/rfcs/0002-cli-surface/); a partitioned returned asset
+  is returned whole, so each of its partitions is checked). A needed artifact that is neither on this machine's disk nor
+  fetchable from the artifact store has its producing step run again in the same run, with
+  reason `artifact_missing`; the run hash is unchanged, so the artifact lands at the same
+  path and no downstream row is invalidated. For a store-backed row the readable copy is
+  the local mirror: while a mirror exists the recorded store location is not consulted, and
+  the store is asked only when the mirror is absent. "Not fetchable" means the store
+  answered that the object does not exist **and** the store itself is positively there: its
+  bucket, container or root directory answered a listing (asked once per run, before the
+  first recompute). A store that is gone, misnamed or unreachable, and any other fetch
+  failure (permissions, timeout), fails the run with exit 3 with nothing recomputed,
+  uploaded or created. An artifact nothing reads is never checked, so pruned intermediates
+  and unreturned assets at the end of a pipeline are not recomputed. `--dry-run` and
+  `barca status` apply the same rule to what is on disk, including a store that is a
+  directory; they do not contact a remote store. Implemented in
+  `crates/barca-core/src/recover.rs`.
 - A `@sink` failure (missing extra, bad credentials, unreachable endpoint) never fails
   the parent asset — logged as `[barca] SINK FAILED: ...` and recorded in run metadata.
 
@@ -174,3 +220,8 @@ A content-hash (rather than node-id-keyed) path for local-mode artifacts would r
 the local/remote asymmetry noted in §4.1, at the cost of local disk usage no longer
 mapping 1:1 to "current" outputs (ties into the `barca prune` command described as
 future work in [RFC-0002](/rfcs/0002-cli-surface/) §11).
+
+The same idea was considered for remote objects (a path that includes a hash of the bytes,
+#246) and declined: for pure assets the run hash already identifies the bytes, and the one
+exception, a recompute of an asset that is not deterministic, is reported as a hash mismatch
+rather than prevented (see the amendment at the top).

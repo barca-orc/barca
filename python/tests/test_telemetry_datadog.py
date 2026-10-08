@@ -49,6 +49,7 @@ class FakeAgent:
 
     def __init__(self, status: int = 200):
         self.requests: list[dict] = []
+        self.python_spans: list[dict] = []
         agent = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -60,6 +61,18 @@ class FakeAgent:
                 self.send_response(status)
                 self.send_header("Content-Length", "0")
                 self.end_headers()
+
+            def do_POST(self):
+                body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+                if self.path.startswith("/v0.4/traces"):
+                    import msgpack
+
+                    for trace in msgpack.unpackb(body, raw=False, strict_map_key=False):
+                        agent.python_spans.extend(trace)
+                self.send_response(status)
+                self.send_header("Content-Length", "2")
+                self.end_headers()
+                self.wfile.write(b"{}")
 
             def log_message(self, *args):
                 pass
@@ -105,7 +118,13 @@ def cli(cwd: Path, *args: str, **env: str) -> subprocess.CompletedProcess:
 
 
 def datadog(agent: FakeAgent, **extra: str) -> dict[str, str]:
-    return {"BARCA_TELEMETRY": "datadog", "DD_TRACE_AGENT_URL": agent.url, **extra}
+    return {
+        "BARCA_TELEMETRY": "datadog",
+        "DD_TRACE_AGENT_URL": agent.url,
+        "DD_TRACE_API_VERSION": "v0.4",
+        "DD_INSTRUMENTATION_TELEMETRY_ENABLED": "false",
+        **extra,
+    }
 
 
 def by_node(spans: list[dict]) -> dict[str, dict]:
@@ -132,7 +151,8 @@ def test_a_run_is_one_trace_with_a_span_per_step(project, agent):
 
     spans = agent.spans()
     (root,) = [s for s in spans if s["name"] == "barca.run"]
-    assert root["resource"] == "run publish"
+    assert root["resource"] == "run pipeline.py:publish"
+    assert root["meta"]["barca.job"] == "pipeline.py:publish"
     assert root["meta"]["barca.target"] == "publish"
     assert root["service"] == "planning"
     assert root["error"] == 0
@@ -329,3 +349,131 @@ def test_under_serve_a_delivery_failure_is_reported_once_until_it_recovers(tmp_p
 
     assert err.count("scheduled run") >= 3, err
     assert err.count("telemetry 'datadog' did not receive run") == 1, err
+
+
+def test_cli_aliases_group_under_the_same_job(project, agent):
+    for target in ("publish", "pipeline.py:publish"):
+        proc = cli(project, "run", target, "--json", **datadog(agent))
+        assert proc.returncode == 0, proc.stderr
+        root = agent.spans()[0]
+        assert root["resource"] == "run pipeline.py:publish"
+        assert root["meta"]["barca.target"] == target
+        assert all(s["meta"]["barca.job"] == "pipeline.py:publish" for s in agent.spans())
+    assert len(agent.requests) == 2
+    assert (
+        agent.requests[0]["body"][0][0]["trace_id"] != agent.requests[1]["body"][0][0]["trace_id"]
+    )
+
+
+def test_python_calls_are_children_of_the_job_execution(project, agent):
+    pytest.importorskip("ddtrace")
+    pytest.importorskip("msgpack")
+    # A real automatically instrumented library call, plus a user-created span.
+    with (project / "pipeline.py").open("a") as f:
+        f.write("""
+
+@task()
+def traced():
+    import sqlite3
+    from ddtrace import tracer
+    with tracer.trace("user.work"):
+        sqlite3.connect(":memory:").execute("select 1").fetchall()
+""")
+    proc = cli(project, "run", "traced", "--json", **datadog(agent, DD_SERVICE="jobs"))
+    assert proc.returncode == 0, proc.stderr
+    root = agent.spans()[0]
+    (step,) = by_node(agent.spans()).values()
+    (execution,) = [s for s in agent.python_spans if s["name"] == "barca.execute"]
+    (user,) = [s for s in agent.python_spans if s["name"] == "user.work"]
+    sql = [s for s in agent.python_spans if s["name"] == "sqlite.query"]
+    assert sql, agent.python_spans
+    assert execution["resource"] == "pipeline.py:traced"
+    assert execution["service"] == "jobs-python"
+    assert execution["parent_id"] == step["span_id"]
+    assert execution["meta"]["barca.job"] == "pipeline.py:traced"
+    assert execution["meta"]["barca.node"] == "pipeline.py:traced"
+    assert user["parent_id"] == execution["span_id"]
+    assert all(s["parent_id"] == user["span_id"] for s in sql)
+    assert all(s["trace_id"] == root["trace_id"] for s in agent.python_spans)
+
+
+def test_python_failure_is_delivered_before_worker_is_replaced(project, agent):
+    pytest.importorskip("ddtrace")
+    pytest.importorskip("msgpack")
+    proc = cli(project, "run", "broken", "--json", **datadog(agent))
+    assert proc.returncode == 1, proc.stderr
+    spans = [s for s in agent.python_spans if s["name"] == "barca.execute"]
+    (failed,) = [s for s in spans if s["meta"]["barca.node"] == "pipeline.py:broken"]
+    assert failed["error"] == 1
+    assert failed["meta"]["error.type"].endswith("ValueError")
+    assert failed["meta"]["error.message"] == "cannot publish"
+    root = agent.spans()[0]
+    assert all(s["trace_id"] == root["trace_id"] for s in spans)
+    assert all(s["meta"]["barca.run_id"] == root["meta"]["barca.run_id"] for s in spans)
+
+
+def test_retry_attempts_keep_the_same_job_trace(project, agent):
+    pytest.importorskip("ddtrace")
+    pytest.importorskip("msgpack")
+    with (project / "pipeline.py").open("a") as f:
+        f.write("""
+
+@task(retries=2)
+def retrying():
+    from pathlib import Path
+    marker = Path("attempted")
+    if not marker.exists():
+        marker.touch()
+        raise ValueError("try again")
+    return "done"
+""")
+    proc = cli(project, "run", "retrying", "--json", **datadog(agent))
+    assert proc.returncode == 0, proc.stderr
+    executions = [s for s in agent.python_spans if s["name"] == "barca.execute"]
+    assert len(executions) == 2
+    assert sorted(s["metrics"]["barca.attempt"] for s in executions) == [1, 2]
+    assert sorted(s.get("error", 0) for s in executions) == [0, 1]
+    root = agent.spans()[0]
+    (step,) = by_node(agent.spans()).values()
+    assert all(s["trace_id"] == root["trace_id"] for s in executions)
+    assert all(s["parent_id"] == step["span_id"] for s in executions)
+    assert len({s["span_id"] for s in executions}) == 2
+
+
+def test_parallel_python_calls_have_a_reported_parent(project, agent):
+    pytest.importorskip("ddtrace")
+    pytest.importorskip("msgpack")
+    with (project / "pipeline.py").open("a") as f:
+        f.write("""
+
+@task()
+def child():
+    from ddtrace import tracer
+    with tracer.trace("child.work"):
+        return 1
+
+@task()
+def fanout():
+    from functools import partial
+    from barca import parallel
+    return parallel(partial(child), partial(child))
+""")
+    proc = cli(project, "run", "fanout", "--json", **datadog(agent))
+    assert proc.returncode == 0, proc.stderr
+    root = agent.spans()[0]
+    (step,) = by_node(agent.spans()).values()
+    executions = [s for s in agent.python_spans if s["name"] == "barca.execute"]
+    assert len(executions) == 3, agent.python_spans
+    assert all(s["parent_id"] == step["span_id"] for s in executions)
+    assert all(s["resource"] == "pipeline.py:fanout" for s in executions)
+    assert all(s["trace_id"] == root["trace_id"] for s in agent.python_spans)
+    children = [s for s in agent.python_spans if s["name"] == "child.work"]
+    assert len(children) == 2
+    assert all(s["parent_id"] in {e["span_id"] for e in executions} for s in children)
+
+
+def test_disabled_tracing_sends_no_python_executions(project, agent):
+    proc = cli(project, "run", "publish", "--json", **datadog(agent, DD_TRACE_ENABLED="false"))
+    assert proc.returncode == 0, proc.stderr
+    assert agent.requests == []
+    assert agent.python_spans == []

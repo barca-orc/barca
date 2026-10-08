@@ -1,10 +1,21 @@
 import { useMemo } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
-import { ArrowDown, ArrowUp, Search, X } from 'lucide-react'
-import { StatusBadge, StatusDot, Tag } from '@/components'
+import { ArrowDown, ArrowUp, X } from 'lucide-react'
+import {
+  Chip,
+  ChipGroup,
+  ConnectionBadge,
+  SearchInput,
+  Select,
+  Skeleton,
+  StatusBadge,
+  StatusDot,
+  Tag,
+} from '@/components'
 import { useAssetStates } from '@/hooks/useAssetStates'
 import { NodePanel } from '@/components/assets/NodePanel'
 import { useHealth } from '@/hooks/useHealth'
+import { connection } from '@/lib/connection'
 import { inPipeline, pipelineName } from '@/lib/pipeline'
 import {
   EMPTY_FILTERS,
@@ -98,7 +109,7 @@ function SortHeader({
 
 export function AssetsPage() {
   const { data, isError, error, dataUpdatedAt } = useAssetStates()
-  const { data: health } = useHealth()
+  const { data: health, isError: healthError } = useHealth()
   const navigate = useNavigate()
   // The sort lives in the URL (#/assets?sort=typical&dir=desc), so it survives
   // a reload and can be shared.
@@ -152,83 +163,68 @@ export function AssetsPage() {
         <div className="barca-view-bar">
           <div className="barca-view-title">
             <h1>{pipeline ? pipelineName(pipeline) : 'Assets'}</h1>
-            {data && (
+            {data ? (
               <span className="barca-count" title={pipeline ?? undefined}>
                 {pipeline ? `${rows.length} of ${data.length} nodes · ${pipeline}` : `${rows.length} nodes`}
               </span>
+            ) : (
+              <Skeleton width={64} height={14} />
             )}
           </div>
           <div className="barca-view-actions">
             {health?.read_only && <Tag tone="bare">read-only</Tag>}
-            <span className="barca-conn">
-              <StatusDot status={health && !isError ? 'success' : 'queued'} size={6} />
-              {health ? `barca serve · v${health.version}` : 'offline'}
-            </span>
+            <ConnectionBadge connection={connection(health, healthError)} />
           </div>
         </div>
         <div className="barca-table-tools">
-          <label className="barca-search">
-            <Search size={13} />
-            <input
-              placeholder="Search by name or file"
-              value={filters.query}
-              onChange={(e) => setFilters({ ...filters, query: e.target.value })}
-              autoFocus
-            />
-          </label>
+          <SearchInput
+            placeholder="Search by name or file"
+            value={filters.query}
+            onChange={(query) => setFilters({ ...filters, query })}
+            autoFocus
+          />
 
-          <div className="barca-chips" role="group" aria-label="Kind">
+          <Select
+            label="Last run"
+            value={filters.lastRun}
+            options={LAST_RUNS.map((l) => ({
+              value: l,
+              label: LAST_RUN_LABEL[l] + (l === 'any' ? '' : ` (${counts.lastRun[l]})`),
+            }))}
+            onChange={(lastRun) => setFilters({ ...filters, lastRun })}
+          />
+
+          <ChipGroup label="Kind">
             {KINDS.filter((k) => counts.kinds[k] > 0 || filters.kinds.includes(k)).map((k) => (
-              <button
+              <Chip
                 key={k}
-                type="button"
-                className={filters.kinds.includes(k) ? 'is-on' : undefined}
-                aria-pressed={filters.kinds.includes(k)}
+                pressed={filters.kinds.includes(k)}
                 onClick={() => setFilters({ ...filters, kinds: toggle(filters.kinds, k) })}
               >
                 {counts.kinds[k]} {KIND_LABEL[k]}
-              </button>
+              </Chip>
             ))}
-          </div>
-
-          <label className="barca-select">
-            <span>Last run</span>
-            <select
-              value={filters.lastRun}
-              onChange={(e) => setFilters({ ...filters, lastRun: e.target.value as LastRun })}
-            >
-              {LAST_RUNS.map((l) => (
-                <option key={l} value={l}>
-                  {LAST_RUN_LABEL[l]}
-                  {l === 'any' ? '' : ` (${counts.lastRun[l]})`}
-                </option>
-              ))}
-            </select>
-          </label>
+          </ChipGroup>
 
           {(counts.scheduled > 0 || filters.scheduled) && (
-            <div className="barca-chips">
-              <button
-                type="button"
-                className={filters.scheduled ? 'is-on' : undefined}
-                aria-pressed={filters.scheduled}
+            <ChipGroup label="Scheduled">
+              <Chip
+                pressed={filters.scheduled}
                 onClick={() => setFilters({ ...filters, scheduled: !filters.scheduled })}
               >
                 {counts.scheduled} scheduled
-              </button>
-            </div>
+              </Chip>
+            </ChipGroup>
           )}
           {(counts.partitioned > 0 || filters.partitioned) && (
-            <div className="barca-chips">
-              <button
-                type="button"
-                className={filters.partitioned ? 'is-on' : undefined}
-                aria-pressed={filters.partitioned}
+            <ChipGroup label="Partitioned">
+              <Chip
+                pressed={filters.partitioned}
                 onClick={() => setFilters({ ...filters, partitioned: !filters.partitioned })}
               >
                 {counts.partitioned} partitioned
-              </button>
-            </div>
+              </Chip>
+            </ChipGroup>
           )}
 
           {isFiltered(filters) && (
@@ -239,20 +235,18 @@ export function AssetsPage() {
         </div>
 
         <div className="barca-table-tools">
-          <div className="barca-chips" role="group" aria-label="State">
-            {SEVERITIES.filter((s) => counts.states[s] > 0 || filters.states.includes(s)).map((s) => (
-              <button
-                key={s}
-                type="button"
-                className={filters.states.includes(s) ? 'is-on' : undefined}
-                aria-pressed={filters.states.includes(s)}
-                onClick={() => setFilters({ ...filters, states: toggle(filters.states, s) })}
+          <ChipGroup label="State">
+            {SEVERITIES.filter((sev) => counts.states[sev] > 0 || filters.states.includes(sev)).map((sev) => (
+              <Chip
+                key={sev}
+                pressed={filters.states.includes(sev)}
+                onClick={() => setFilters({ ...filters, states: toggle(filters.states, sev) })}
               >
-                <StatusDot status={severityStatus(s)} size={6} />
-                {counts.states[s]} {SEVERITY_LABEL[s]}
-              </button>
+                <StatusDot status={severityStatus(sev)} size={6} />
+                {counts.states[sev]} {SEVERITY_LABEL[sev]}
+              </Chip>
             ))}
-          </div>
+          </ChipGroup>
           <span className="barca-count barca-shown">
             {visible.length === rows.length ? `${rows.length} shown` : `${visible.length} of ${rows.length} shown`}
           </span>
@@ -260,13 +254,17 @@ export function AssetsPage() {
       </div>
 
       <div className="barca-assets-split">
-      <div className="barca-view-body">
+      <div className="barca-view-body barca-table-scroll">
         {isError ? (
           <p className="barca-table-empty">
             Can't load state: {error instanceof Error ? error.message : 'barca serve is not reachable'}
           </p>
         ) : !data ? (
-          <p className="barca-table-empty">Loading…</p>
+          <div className="barca-table-skeleton" aria-label="Loading">
+            {[0, 1, 2, 3, 4, 5].map((i) => (
+              <Skeleton key={i} height={52} />
+            ))}
+          </div>
         ) : visible.length === 0 ? (
           <p className="barca-table-empty">Nothing matches.</p>
         ) : (

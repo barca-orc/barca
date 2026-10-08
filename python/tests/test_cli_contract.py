@@ -64,8 +64,10 @@ def keys(parts: list) -> list:
     return sorted(p["key"] for p in parts)
 
 
-@task(inputs={"t": total})
-def report(t: dict) -> dict:
+# `rows` is never used: the one plan warning of the fixture (`unused_input`), so the commands
+# that plan `report` show a filled `warnings` array and the others an empty one.
+@task(inputs={"t": total, "rows": numbers})
+def report(t: dict, rows: list) -> dict:
     return {"reported": t["total"]}
 
 
@@ -110,6 +112,38 @@ CASES: list[tuple[str, list[str], str, int]] = [
     ("error_usage_parse", ["list", "pipeline.py", "--jsn", "--json"], "stderr", 2),
 ]
 
+# Cases that need a setup of their own, run after CASES: (case, stream, expected exit code).
+# `get_artifact_mismatch` is `MISMATCH_ARGV` on a second machine of a project with an artifact
+# store, after one stored object was overwritten (see `_artifact_mismatch_run`).
+STORE_PIPELINE = """
+from barca import asset
+
+
+@asset()
+def numbers() -> list:
+    return [1, 2, 3]
+
+
+@asset()
+def side() -> int:
+    return 10
+
+
+@asset(inputs={"numbers": numbers})
+def total(numbers: list) -> dict:
+    return {"total": sum(numbers)}
+
+
+@asset(inputs={"t": total, "side": side})
+def summary(t: dict, side: int) -> dict:
+    return {"summary": t["total"] + side}
+"""
+MISMATCH_ARGV = ["get", "summary", "pipeline.py", "--refresh", "total", "--json"]
+SETUP_CASES: list[tuple[str, list[str], str, int]] = [
+    ("get_artifact_mismatch", MISMATCH_ARGV, "stdout", 0),
+]
+ALL_CASES = CASES + SETUP_CASES
+
 # Values that are user data, not barca's schema: recorded as `<user value>`.
 USER_VALUES = {"final_output", "targets.<name>.final_output", "nodes[].shape.sample", "rows"}
 # Objects keyed by user-chosen names (targets, environment variables): keys become `<name>`.
@@ -120,6 +154,7 @@ AGENT_RUNS = [
     ["get", "keys", "pipeline.py", "--agent", "--refresh-all"],
     ["get", "total", "pipeline.py", "--agent"],
     ["run", "broken", "pipeline.py", "--agent"],
+    ["run", "report", "pipeline.py", "--agent"],
 ]
 
 
@@ -278,6 +313,10 @@ def runs(tmp_path_factory) -> dict:
         s = schema(doc)
         out[case] = (s, render_snapshot(argv, stream, code, s), proc)
 
+    proc = _artifact_mismatch_run(binary, tmp_path_factory.mktemp("contract_store"), env)
+    s = schema(json.loads(proc.stdout))
+    out["get_artifact_mismatch"] = (s, render_snapshot(MISMATCH_ARGV, "stdout", 0, s), proc)
+
     agent: set[str] = set()
     for argv in AGENT_RUNS:
         proc = barca(argv)
@@ -288,7 +327,34 @@ def runs(tmp_path_factory) -> dict:
     return out
 
 
-@pytest.mark.parametrize("case", [c[0] for c in CASES])
+def _artifact_mismatch_run(binary: str, tmp: Path, env: dict) -> subprocess.CompletedProcess:
+    """`MISMATCH_ARGV` where the store's copy of `numbers` is not the one that was recorded.
+
+    One machine fills a plain-directory store, the object of `numbers` is then overwritten
+    (as a refresh on another machine would), and a second machine recomputes `total`, which
+    reads it. `numbers` (the owner) and `total` (which read it) carry the marker; `side` and
+    `summary` do not, so the key is seen to be optional.
+    """
+    store = tmp / "store"
+    env = {**env, "BARCA_REMOTE_URI": str(store)}
+
+    def barca(machine: str, argv: list[str]) -> subprocess.CompletedProcess:
+        cwd = tmp / machine
+        cwd.mkdir(exist_ok=True)
+        (cwd / "pipeline.py").write_text(STORE_PIPELINE)
+        proc = subprocess.run(
+            [binary, *argv], cwd=cwd, env=env, capture_output=True, text=True, timeout=300
+        )
+        assert proc.returncode == 0, f"{machine}: barca {' '.join(argv)}\n{proc.stderr}"
+        return proc
+
+    barca("producer", ["get", "summary", "pipeline.py", "--json"])
+    (stored,) = store.glob("default/artifacts/*--numbers/*.json")
+    stored.write_text("[5, 5]")
+    return barca("reader", MISMATCH_ARGV)
+
+
+@pytest.mark.parametrize("case", [c[0] for c in ALL_CASES])
 def test_json_schema_matches_snapshot(runs, case):
     _, rendered, _ = runs[case]
     check(SNAPSHOTS / f"{case}.txt", rendered)
@@ -302,7 +368,7 @@ def test_agent_lines_match_snapshot(runs):
 def test_contract_doc_tables_match_the_schemas(runs):
     """Every schema table in contract.md is generated from these runs, so it cannot drift."""
     doc = CONTRACT_MD.read_text()
-    tables = {f"schema {case}": render_table(runs[case][0]) for case, *_ in CASES}
+    tables = {f"schema {case}": render_table(runs[case][0]) for case, *_ in ALL_CASES}
     tables["agent-lines"] = "```\n" + "\n".join(runs["agent_lines"]) + "\n```"
     if UPDATE:
         for name, table in tables.items():
@@ -317,7 +383,7 @@ def test_contract_doc_tables_match_the_schemas(runs):
 
 
 def test_no_stale_snapshots():
-    known = {f"{c[0]}.txt" for c in CASES} | {"agent_lines.txt"}
+    known = {f"{c[0]}.txt" for c in ALL_CASES} | {"agent_lines.txt"}
     stale = sorted(p.name for p in SNAPSHOTS.glob("*.txt") if p.name not in known)
     if UPDATE:
         for name in stale:
@@ -351,3 +417,56 @@ def test_schema_reduction_ignores_values():
     assert {k: v for k, v in sa.items() if "env" not in k} == {
         k: v for k, v in sb.items() if "env" not in k
     }
+
+
+def test_warnings_is_always_an_array_filled_only_where_the_plan_has_an_unused_input(runs):
+    """`barca docs contract`, "Plan warnings": the key is on every plan/get/run document; the
+    fixture's one unused input (`report`'s `rows`) fills it exactly where `report` is planned."""
+    with_warning = {"plan", "run", "run_dry_run_multi_target", "run_multi_target_failed"}
+    without = {
+        "get_dry_run",
+        "get",
+        "get_artifact_pointer",
+        "get_partitioned",
+        "get_multi_target",
+        "run_failed",
+    }
+    item = {
+        "warnings[]": ("object", True),
+        "warnings[].kind": ("string", True),
+        "warnings[].message": ("string", True),
+        "warnings[].node": ("string", True),
+        "warnings[].param": ("string", True),
+    }
+    for case in with_warning | without:
+        s, _, proc = runs[case]
+        assert s["warnings"] == ("array", True), case
+        assert {k: v for k, v in s.items() if k.startswith("warnings[")} == (
+            item if case in with_warning else {}
+        ), case
+        doc = json.loads(proc.stdout)
+        expected = [("pipeline.py:report", "rows")] if case in with_warning else []
+        assert [(w["node"], w["param"]) for w in doc["warnings"]] == expected, case
+        assert all(w["kind"] == "unused_input" for w in doc["warnings"]), case
+    for case, *_ in CASES:
+        if case not in with_warning | without:
+            assert "warnings" not in runs[case][0], case
+
+
+def test_artifact_mismatch_is_a_boolean_on_the_steps_concerned_and_absent_elsewhere(runs):
+    """`barca docs contract`, "A store copy that differs from its recorded hash"."""
+    s, _, proc = runs["get_artifact_mismatch"]
+    # Present on some steps only, and always `true` where present: never `false` or `null`.
+    assert s["steps[].artifact_mismatch"] == ("boolean", False)
+    assert s["steps[].warning"] == ("string", False)
+    doc = json.loads(proc.stdout)
+    marked = {st["id"]: st for st in doc["steps"] if "artifact_mismatch" in st}
+    assert sorted(marked) == ["pipeline.py:numbers", "pipeline.py:total"]
+    assert all(st["artifact_mismatch"] is True and st["warning"] for st in marked.values())
+    assert doc["final_output"] == {"summary": 20}  # 5 + 5 + 10: the store's copy was used
+    # It is a step-level finding of the run: the plan-warnings array does not carry it.
+    assert doc["warnings"] == []
+    assert "[barca] warning: pipeline.py:numbers: the copy at " in proc.stderr
+    # No other fixture run has a mismatch, so no other schema has the key.
+    for case, *_ in CASES:
+        assert "steps[].artifact_mismatch" not in runs[case][0], case

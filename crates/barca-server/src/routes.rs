@@ -15,6 +15,7 @@ pub fn router(state: AppState) -> Router {
         .route("/plan", get(handlers::plan))
         .route("/assets", get(handlers::assets))
         .route("/assets/{name}", get(handlers::asset_detail))
+        .route("/assets/{name}/schema", get(handlers::asset_schema))
         .route("/run", post(handlers::run))
         // POST starts a task run; DELETE cancels an in-flight run by handle.
         .route(

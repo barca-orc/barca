@@ -289,3 +289,89 @@ class TestGetFsConcurrency:
 
         assert calls == ["memory"]
         assert len({id(fs) for fs in results}) == 1
+
+
+# ─── Is the store there? (the probe behind recomputing a missing artifact) ────
+
+
+class _Refused(Exception):
+    def __init__(self, status):
+        super().__init__(f"HTTP {status}")
+        self.status_code = status
+
+
+class _FakeFs:
+    """A filesystem whose bucket listing and existence answers are scripted."""
+
+    def __init__(self, ls=None, exists=True):
+        self._ls, self._exists = ls, exists
+
+    def _strip_protocol(self, path):
+        return path.split("://", 1)[1]
+
+    def invalidate_cache(self):
+        pass
+
+    def ls(self, path, detail=False):
+        if isinstance(self._ls, BaseException):
+            raise self._ls
+        return []
+
+    def exists(self, path):
+        return self._exists
+
+
+class TestCheckStore:
+    def _check(self, monkeypatch, root, fs):
+        monkeypatch.setattr(_storage, "get_fs", lambda _path: fs)
+        _storage.check_store(root)
+
+    def test_a_listable_bucket_that_exists_passes(self, monkeypatch):
+        self._check(monkeypatch, "s3://b/proj/artifacts", _FakeFs())
+
+    @pytest.mark.parametrize(
+        ("root", "permission"),
+        [
+            ("s3://b/proj/artifacts", "s3:ListBucket"),
+            ("gs://b/proj/artifacts", "storage.objects.list"),
+            ("abfs://c/proj/artifacts", "Storage Blob Data Reader"),
+        ],
+    )
+    @pytest.mark.parametrize(
+        "refusal", [PermissionError("Access Denied"), _Refused(403), _Refused(401)]
+    )
+    def test_a_refused_listing_is_not_permitted_and_names_the_permission(
+        self, monkeypatch, root, permission, refusal
+    ):
+        with pytest.raises(PermissionError) as raised:
+            self._check(monkeypatch, root, _FakeFs(ls=refusal))
+        message = str(raised.value)
+        assert "is not permitted" in message and permission in message
+        assert "not found" not in message
+
+    @pytest.mark.parametrize("gone", [FileNotFoundError("NoSuchBucket"), _Refused(404)])
+    def test_a_bucket_the_store_does_not_know_is_not_found(self, monkeypatch, gone):
+        with pytest.raises(FileNotFoundError, match="was not found"):
+            self._check(monkeypatch, "s3://b/proj/artifacts", _FakeFs(ls=gone))
+
+    def test_an_empty_listing_of_a_bucket_that_does_not_exist_is_not_found(self, monkeypatch):
+        with pytest.raises(FileNotFoundError, match="was not found"):
+            self._check(monkeypatch, "gs://b/proj/artifacts", _FakeFs(exists=False))
+
+    def test_any_other_failure_is_passed_through(self, monkeypatch):
+        with pytest.raises(ConnectionError):
+            self._check(monkeypatch, "s3://b/p", _FakeFs(ls=ConnectionError("refused")))
+
+    def test_a_directory_store_is_its_root_directory(self, tmp_path):
+        _storage.check_store(str(tmp_path))
+        with pytest.raises(FileNotFoundError):
+            _storage.check_store(str(tmp_path / "unmounted" / "artifacts"))
+        assert not (tmp_path / "unmounted").exists()
+
+
+def test_first_line_keeps_only_the_first_line_of_a_message():
+    from barca import _storage
+
+    assert _storage.first_line(OSError("denied\nRequestId: abc\nHeaders: ...")) == "denied"
+    assert _storage.first_line(KeyError()) == ""
+    assert _storage.first_line(ValueError("  padded  \n")) == "padded"

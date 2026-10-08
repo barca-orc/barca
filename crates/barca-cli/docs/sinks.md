@@ -29,6 +29,9 @@ def summary() -> dict:
   failure: barca never writes pickle bytes under a `.parquet` name.
 - Several `@sink` decorators may be stacked on one asset.
 - Writes are staged and finalized atomically, so a crash never leaves a partial file.
+- A sink path is yours: barca writes the file there and changes nothing else. If the path is a
+  symlink, the file it points to is written and the link stays. If a directory is at the path
+  (or the link leads to one), the sink fails and the directory is left as it is.
 - Sinks are leaf nodes: no other node may take a sink as an input.
 - A failing sink does **not** fail the parent asset. It is reported on stderr as
   `[barca] SINK FAILED: ...`; check stderr in automation.
