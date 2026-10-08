@@ -144,7 +144,7 @@ fn parse_tags(raw: &str) -> Vec<(String, String)> {
 
 /// A non-zero 63-bit id derived from `parts`, so a run's ids are the same however often
 /// it is exported.
-fn span_id(parts: &[&str]) -> u64 {
+pub(crate) fn span_id(parts: &[&str]) -> u64 {
     let mut hasher = Sha256::new();
     for part in parts {
         hasher.update(part.as_bytes());
@@ -199,6 +199,7 @@ impl Datadog {
             meta.insert("version".to_string(), json!(version));
         }
         meta.insert("barca.run_id".to_string(), json!(run.run_id));
+        meta.insert("barca.job".to_string(), json!(run.job));
         meta
     }
 
@@ -206,10 +207,7 @@ impl Datadog {
     fn trace(&self, run: &RunReport) -> Value {
         let trace_id = span_id(&["trace", &run.run_id]);
         let root_id = span_id(&["run", &run.run_id]);
-        let resource = match &run.target {
-            Some(target) => format!("{} {target}", run.command),
-            None => run.command.clone(),
-        };
+        let resource = format!("{} {}", run.command, run.job);
 
         let mut meta = self.common_meta(run);
         meta.insert("barca.command".to_string(), json!(run.command));
@@ -401,6 +399,7 @@ mod tests {
             run_id: "r1".to_string(),
             command: "run".to_string(),
             target: Some("p.py:publish".to_string()),
+            job: "p.py:publish".to_string(),
             status: status.to_string(),
             start_unix_ns: 900,
             duration_ns: 2_000,

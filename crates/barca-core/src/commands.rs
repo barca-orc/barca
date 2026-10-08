@@ -2277,6 +2277,7 @@ async fn execute(
 
     let targets = resolve_targets(&dag, target_names, command_label)?;
     let target_ids: Vec<&str> = targets.iter().map(|(_, id)| id.as_str()).collect();
+    let job_name = canonical_job(&target_ids);
     if command_label == "get"
         && target_ids.is_empty()
         && let Some(note) = skipped_tasks_note(&dag, file_args)
@@ -2494,6 +2495,10 @@ async fn execute(
         python: python.to_path_buf(),
         pool_size,
         run_id: run_id.clone(),
+        datadog_job: telemetry
+            .iter()
+            .any(|(name, _)| name == "datadog")
+            .then(|| job_name.clone()),
         artifact_root: worker_artifact_root,
         storage_options_json: cfg.storage_options_json.clone(),
     };
@@ -3350,7 +3355,7 @@ async fn execute(
     trace_point!("persist_run_done");
 
     if !telemetry.is_empty() {
-        let report = telemetry_report(&ledger, &dag, run_started, &step_clocks);
+        let report = telemetry_report(&ledger, &dag, run_started, &step_clocks, &job_name);
         crate::telemetry::export(&telemetry, &report).await;
         trace_point!("telemetry_exported");
     }
@@ -3836,6 +3841,19 @@ fn exception_of(error: &dispatch::StepError) -> (String, String, Option<String>)
     (error.error_type.clone(), text.to_string(), stack)
 }
 
+/// Group resolved ids consistently in APM. The run ledger retains the
+/// original target spelling for CLI/history compatibility.
+fn canonical_job(target_ids: &[&str]) -> String {
+    let mut ids = target_ids.to_vec();
+    ids.sort();
+    ids.dedup();
+    if ids.is_empty() {
+        "all".to_string()
+    } else {
+        ids.join(",")
+    }
+}
+
 /// The run as telemetry integrations see it: every step that ran, was served from cache, or
 /// failed. A step that ran is placed by the worker's own clock; a cached step is a zero-length
 /// mark at the start of the run and a failed one at its end, since neither reports a time.
@@ -3844,6 +3862,7 @@ fn telemetry_report(
     dag: &Dag,
     started: std::time::SystemTime,
     clocks: &HashMap<String, (f64, f64)>,
+    job: &str,
 ) -> crate::telemetry::RunReport {
     use crate::telemetry::{RunReport, StepOutcome, StepReport};
 
@@ -3923,6 +3942,7 @@ fn telemetry_report(
         run_id: l.run_id.to_string(),
         command: l.command.to_string(),
         target: l.target.map(str::to_string),
+        job: job.to_string(),
         status: l.status.to_string(),
         start_unix_ns,
         duration_ns,
