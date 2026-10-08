@@ -8,6 +8,8 @@ export interface DagNodeProps {
   kind: string
   status: StatusKind
   metric?: string | null
+  statusLabel?: string
+  stateHint?: string
   selected?: boolean
   icon?: ReactNode
   style?: CSSProperties
@@ -27,6 +29,8 @@ export function DagNode({
   kind,
   status,
   metric,
+  statusLabel,
+  stateHint,
   selected = false,
   icon,
   style,
@@ -36,13 +40,13 @@ export function DagNode({
   const running = status === 'running'
 
   const borderColor = selected
-    ? 'var(--signal)'
+    ? 'var(--text-strong)'
     : running
       ? 'var(--status-running-line)'
       : 'var(--border-strong)'
 
   const ring = selected
-    ? '0 0 0 1px var(--signal), 0 0 18px -4px var(--c-green-glow)'
+    ? '0 0 0 1px var(--text-strong)'
     : running
       ? 'var(--glow-running)'
       : 'var(--shadow-sm)'
@@ -54,6 +58,7 @@ export function DagNode({
   return (
     <div
       onClick={onClick}
+      title={stateHint ?? statusLabel}
       data-status={status}
       data-kind={kind}
       style={{
@@ -129,7 +134,7 @@ export function DagNode({
           >
             {kind}
           </span>
-          {metric && (
+          {(statusLabel ?? metric) && (
             <span
               style={{
                 fontFamily: 'var(--font-mono)',
@@ -137,7 +142,7 @@ export function DagNode({
                 color: running ? 'var(--status-running)' : 'var(--text-muted)',
               }}
             >
-              {metric}
+              {statusLabel ?? metric}
             </span>
           )}
         </div>

@@ -24,7 +24,9 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+#[cfg(test)]
+use std::process::Command;
+use std::process::{Child, Stdio};
 use std::time::Duration;
 
 use tokio::net::{UnixListener, UnixStream};
@@ -43,6 +45,8 @@ pub struct IoConfig {
     pub python: PathBuf,
     pub pool_size: usize,
     pub run_id: String,
+    /// Present only when the Datadog integration successfully configured.
+    pub datadog_job: Option<String>,
     /// Local artifact directory workers write to and read from. Always local:
     /// a separate artifact store is synced by `transfer::TransferClient`.
     /// Set explicitly on every worker so env-separated layouts work
@@ -238,6 +242,33 @@ impl WorkerPool {
     /// step does not look like a hang.
     pub fn on_running(&mut self, hook: RunningHook) {
         self.running_hook = Some(hook);
+    }
+
+    /// Add the remote parent context without requiring a Python SDK.
+    fn traced_step(
+        &self,
+        item: &crate::coordinator::Item,
+        coord: &Coordinator,
+    ) -> serde_json::Value {
+        let mut step = build_step_json(item, coord);
+        if let Some(job) = &self.config.datadog_job {
+            use crate::telemetry::datadog::span_id;
+            let run = &self.config.run_id;
+            // Dynamic parallel items have no synthetic step span in the run report.
+            // Attach their Python execution to the nearest reported ancestor.
+            let mut parent = item;
+            while let Some(group) = parent.group {
+                parent = coord.item(coord.group(group).parent);
+            }
+            step["datadog"] = serde_json::json!({
+                "trace_id": span_id(&["trace", run]),
+                "parent_id": span_id(&["step", run, &parent.step_id.display()]),
+                "run_id": run,
+                "job": job,
+                "attempt": item.attempts,
+            });
+        }
+        step
     }
 
     /// `(node_id, seconds)` for every worker's in-flight step older than the interval.
@@ -767,12 +798,12 @@ impl WorkerPool {
             }
 
             let msg = if batch.len() == 1 {
-                let step = build_step_json(coord.item(batch[0]), coord);
+                let step = self.traced_step(coord.item(batch[0]), coord);
                 serde_json::json!({"type": "execute", "step": step})
             } else {
                 let steps: Vec<serde_json::Value> = batch
                     .iter()
-                    .map(|&iid| build_step_json(coord.item(iid), coord))
+                    .map(|&iid| self.traced_step(coord.item(iid), coord))
                     .collect();
                 serde_json::json!({"type": "execute_batch", "steps": steps})
             };
@@ -916,8 +947,12 @@ async fn spawn_worker(
     listener: &UnixListener,
     event_tx: &mpsc::Sender<IoEvent>,
 ) -> Result<WorkerHandle, String> {
-    let mut cmd = Command::new(&config.python);
-    cmd.args(["-m", "barca._worker", "--daemon"])
+    let mut cmd = crate::helper_proc::python_module_std(
+        &config.python,
+        "barca._worker",
+        config.storage_options_json.as_deref(),
+    );
+    cmd.arg("--daemon")
         .env("BARCA_SOCKET", socket_path.to_str().unwrap_or(""))
         .env("BARCA_WORKER", "1")
         .env("BARCA_WORKER_ID", worker_id.to_string())
@@ -927,9 +962,6 @@ async fn spawn_worker(
         .stdout(Stdio::from(std::io::stderr()))
         .stderr(Stdio::inherit())
         .stdin(Stdio::null());
-    if let Some(ref opts) = config.storage_options_json {
-        cmd.env("BARCA_STORAGE_OPTIONS", opts);
-    }
     let trace_on = std::env::var("BARCA_TRACE_TIMING").is_ok();
     let t_spawn = std::time::Instant::now();
     let child = crate::helper_proc::spawn_std(&mut cmd).map_err(|e| format!("spawn: {e}"))?;
@@ -1303,6 +1335,7 @@ mod tests {
                     python: PathBuf::from("python3"),
                     pool_size: n,
                     run_id: "test-shutdown".to_string(),
+                    datadog_job: None,
                     artifact_root: ".".to_string(),
                     storage_options_json: None,
                 },

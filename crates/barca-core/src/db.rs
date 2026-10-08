@@ -16,7 +16,7 @@ use turso::Builder;
 /// Process-wide serialization of `metadata.db` operations. The server can run
 /// multiple pipelines in parallel (they execute Python concurrently), but their
 /// brief reads/writes to the shared SQLite file must not overlap. Every DB
-/// helper — and the inline cache-check/persist ops in `commands::execute` — holds
+/// helper — and the inline cache-check/persist ops in `execution::execute` — holds
 /// this guard for the duration of its (short) database work, so runs never race
 /// on the file without depending on WAL support. A one-shot CLI run leaves it
 /// uncontended.

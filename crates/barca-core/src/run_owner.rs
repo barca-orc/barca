@@ -16,7 +16,8 @@
 //!
 //! - **The process table**, when the reader is on the owner's kernel (same boot id) and in
 //!   its pid namespace: no process with the owner's pid, or one with another start time,
-//!   means the owner is gone. (A restarted container often gets the pid namespace number of
+//!   means the owner is gone. Start ticks are compared only when both time namespace
+//!   identities are known and equal. (A restarted container often gets the pid namespace number of
 //!   the one it replaces; a number is only handed out again after its namespace, and every
 //!   process in it, is gone, so the lookup is right then as well.)
 //! - **The marker**: a FIFO the owner created in the project directory
@@ -284,15 +285,19 @@ pub(crate) fn judge(pid: Option<i64>, id: &Identity, on: &dyn Observer) -> Owner
     let witness = witness(fifo, &seen, here.handles);
 
     // 1. This kernel and this pid namespace: the process table answers. A namespace that
-    // could not be read is not known to be the same one.
+    // could not be read is not known to be the same one. A missing pid is conclusive
+    // regardless of time namespace; start ticks require a proven shared time namespace.
     if let Some(pid) = pid
         && !id.pidns.is_empty()
         && id.pidns == here.pidns
-        && id.timens == here.timens
     {
         let gone = match (on.process(pid), id.start) {
             (Process::Absent, _) => Some(true),
-            (Process::Present(Some(now)), Some(then)) => Some(now != then),
+            (Process::Present(Some(now)), Some(then))
+                if !id.timens.is_empty() && id.timens == here.timens =>
+            {
+                Some(now != then)
+            }
             // A process has the pid and it cannot be told whether it is the same one.
             (Process::Present(_), _) => None,
         };
@@ -1043,6 +1048,34 @@ pub(crate) mod tests {
         assert_eq!(verdict(&id, &fake(ABSENT, Marker::Missing)), Owner::Gone);
     }
 
+    #[test]
+    fn unknown_time_namespaces_do_not_make_a_live_process_gone() {
+        // Failure to read both time namespace identities does not prove that their
+        // clock offsets match. A start-time mismatch must fall back to the marker.
+        for (owner_time, reader_time) in [("", ""), ("", "time:[1]"), ("time:[1]", "")] {
+            let mut id = identity();
+            id.timens = owner_time.into();
+            let mut on = fake(REUSED, marker(Some(true)));
+            on.here.timens = reader_time.into();
+            assert_eq!(verdict(&id, &on), Owner::Alive);
+            on.marker = Marker::Missing;
+            assert_eq!(verdict(&id, &on), Owner::Unknown);
+            on.process = SAME;
+            assert_eq!(verdict(&id, &on), Owner::Unknown);
+        }
+    }
+
+    #[test]
+    fn a_missing_pid_is_gone_even_with_unknown_or_different_time_namespace() {
+        for (owner_time, reader_time) in [("", ""), ("time:[1]", ""), ("time:[1]", "time:[2]")] {
+            let mut id = identity();
+            id.timens = owner_time.into();
+            let mut on = fake(ABSENT, marker(Some(true)));
+            on.here.timens = reader_time.into();
+            assert_eq!(verdict(&id, &on), Owner::Gone);
+        }
+    }
+
     // ─── rule 2: the owner's kernel, another pid namespace ────────────────────
 
     #[test]
@@ -1070,7 +1103,7 @@ pub(crate) mod tests {
         let mut on = fake(ABSENT, Marker::Missing);
         on.here.pidns = String::new();
         assert_eq!(verdict(&unread, &on), Owner::Unknown);
-        // Another time namespace shows other start times: the pid is not compared either.
+        // Another time namespace shows other start ticks: those ticks cannot be compared.
         let mut on = fake(REUSED, Marker::Missing);
         on.here.timens = "time:[2]".into();
         assert_eq!(verdict(&identity(), &on), Owner::Unknown);
