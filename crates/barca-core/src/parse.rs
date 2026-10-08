@@ -86,11 +86,16 @@ struct FileNames {
     from_imports: HashMap<String, (String, String)>,
     /// local dotted name -> module (`s` -> `pipelines.sources`, `a.b` -> `a.b`)
     modules: HashMap<String, String>,
+    /// The decorator and helper names that are positively barca's, for the argument check.
+    barca: crate::decorator_args::BarcaNames,
 }
 
 impl FileNames {
     fn collect(body: &[Stmt]) -> Self {
-        let mut names = FileNames::default();
+        let mut names = FileNames {
+            barca: crate::decorator_args::BarcaNames::of(body),
+            ..FileNames::default()
+        };
         for stmt in body {
             match stmt {
                 Stmt::FunctionDef(f) => {
@@ -127,19 +132,6 @@ impl FileNames {
             }
         }
         names
-    }
-
-    /// Whether `name` (`asset`, `collect`, ...) means barca's own in this file: not a function
-    /// the file defines, and not a name imported from another module. A name with no binding
-    /// here (`from barca import *`) counts as barca's, as it does for extraction.
-    fn is_barca(&self, name: &str) -> bool {
-        if self.local.contains(name) {
-            return false;
-        }
-        match self.from_imports.get(name) {
-            Some((module, original)) => module == "barca" && original == name,
-            None => true,
-        }
     }
 
     /// The node an `inputs=` value (or `collect(...)` / `partitions_from(...)` argument) refers
@@ -219,7 +211,7 @@ fn try_extract_function(
     // Before anything is read from the arguments: an argument barca does not define is an
     // error, not something to ignore (`decorator_args`).
     if let Some(problem) =
-        crate::decorator_args::check_decorators(&func.decorator_list, &|name| names.is_barca(name))
+        crate::decorator_args::check_decorators(&func.decorator_list, &names.barca)
     {
         return Err(ParseError::InvalidArguments {
             file: file_path.to_string(),

@@ -111,6 +111,8 @@ def sensor(
     /,
     *,
     name=None,
+    partitions: dict | None = None,
+    serializer: str | None = None,
     freshness=Manual,
     timeout_seconds=300,
     retries=1,
@@ -124,6 +126,10 @@ def sensor(
     Sensors must use `Manual` or `Schedule(...)` freshness — `Always` is not
     valid for a sensor (its polling cadence must be declared explicitly). See
     `asset` for `env`, `retries` and `retry_backoff` semantics.
+
+    `partitions` runs the sensor once per key, with the key passed as the parameter
+    named in the dict, as on `asset`. `serializer` forces the format its value is
+    stored in ("json", "pickle" or "parquet").
     """
     if fn is not None:
         return fn
@@ -140,6 +146,8 @@ def task(
     *,
     name=None,
     inputs=None,
+    partitions: dict | None = None,
+    serializer: str | None = None,
     freshness=Always,
     timeout_seconds=300,
     retries=1,
@@ -159,6 +167,10 @@ def task(
     on a timer: leave `barca serve` running and it fires on each cron tick (see
     the Scheduling guide). See `asset` for `env`, `retries` and `retry_backoff`
     semantics; a task always runs, so `env` only records the values it used.
+
+    `partitions` runs the task once per key, with the key passed as the parameter
+    named in the dict, as on `asset`. `serializer` forces the format its return
+    value is stored in ("json", "pickle" or "parquet").
     """
     if fn is not None:
         return fn

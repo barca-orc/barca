@@ -94,14 +94,11 @@ const DELIBERATE: &[(&str, &str, &str)] = &[
 /// called with an argument it does not define (#284): the tests and the documentation of that
 /// check. Every other pipeline in the repository must plan.
 const REJECTED_ARGUMENTS: &[(&str, &str, &str)] = &[
-    // The manual's example of the error.
-    ("crates/barca-cli/docs/assets.md", "report", "input"),
-    // Dagster's `@asset(ins=...)`, shown beside barca's without its import. In a real file
-    // `from dagster import asset` makes the name not barca's and it is not checked.
+    // The test that names in other scopes do not turn the check off.
     (
-        "site/src/content/docs/comparisons/framework-comparison.md",
-        "b",
-        "ins",
+        "python/tests/test_decorator_names_not_barcas.py",
+        "t",
+        "when",
     ),
 ];
 

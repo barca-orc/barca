@@ -50,8 +50,8 @@ These are all the arguments barca's decorators and helpers take:
 | Call | Positional arguments | Keyword arguments |
 |---|---|---|
 | `@asset` | none | `name`, `inputs`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env` |
-| `@sensor` | none | `name`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env` |
-| `@task` | none | `name`, `inputs`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env` |
+| `@sensor` | none | `name`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env` |
+| `@task` | none | `name`, `inputs`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env` |
 | `@sink` | one | `serializer` |
 | `partitions()` | one | none |
 | `partitions_from()` | one | none |
@@ -59,9 +59,16 @@ These are all the arguments barca's decorators and helpers take:
 | `asset_ref()` | one | none |
 | `Schedule()` | one | none |
 
+Every argument in the table does something, on each decorator it is listed for: on `@task` and
+`@sensor`, `partitions=` runs the function once per key and `serializer=` forces the format its
+value is stored in, as on `@asset`.
+
 Any other argument is an error when barca reads the file, before anything runs: exit 2, `kind`
 `usage`. Up to 0.18.1 such an argument was ignored without a message, so `@asset(after=other)`
-or a misspelt `input=` planned, ran and did nothing.
+or a misspelt `input=` planned, ran and did nothing. Only arguments that had no effect are
+rejected: a pipeline whose arguments all did something plans exactly as before.
+
+After `from barca import asset`:
 
 ```python
 @asset(input={"raw": raw})          # `input` for `inputs`
@@ -82,11 +89,12 @@ In JSON mode the first line is the envelope's `error` and the second its `remedi
   everything the call accepts. "Did you mean" appears only when exactly one accepted argument
   is one edit away from what was written (two edits for a name longer than four characters):
   `input`, `partition`, `serialiser`. `after` or `when` get the list and no guess.
-- The helpers take their one argument by position. `partitions(values=[...])`,
-  `collect(asset_fn=x)`, `Schedule(cron="...")` and `@sink(path="...")` are rejected the same
-  way, as is a second positional argument to `@sink` (`@sink("out.txt", "json")`: write
-  `serializer="json"`). Before, these were read as "no keys", "no input", "no schedule" and
-  "no sink".
+- The helpers and `@sink` take exactly one argument by position. Passing it by keyword
+  (`partitions(values=[...])`, `collect(asset_fn=x)`, `Schedule(cron="...")`,
+  `@sink(path="...")`) is rejected, and the error says to pass the value as the first argument.
+  Before, these were read as "no keys", "no input", "an empty cron" and "no sink". A call with
+  none or with two (`@sink()`, `partitions(a, b)`, `@sink("out.txt", "json")`: write
+  `serializer="json"`) is rejected too; Python refuses those calls as well.
 - `@asset`, `@sensor` and `@task` take keyword arguments only. `@asset(**options)`,
   `@asset(*args)` and `@asset("x")` are rejected: barca reads the arguments from the source
   without running it and cannot see what a `**` or `*` holds.
@@ -105,9 +113,16 @@ In JSON mode the first line is the envelope's `error` and the second its `remedi
 
 Not checked:
 
-- A decorator or helper that is not barca's: a function named `asset` (or `collect`, ...) that
-  the file defines itself, or a name imported from another module (`from dagster import
-  asset`). A name with no import in the file at all is read as barca's.
+- A decorator or helper that is not positively barca's. A name is checked only when a
+  `from barca import <name>` (or `from barca import *`) stands at the top level of the module
+  and nothing else in the file binds that name at module level: no assignment
+  (`task = app.task`), `def`, `class`, other import (`from prefect import task`, also inside
+  `try:` or `if`), loop or `with` target, `global` in a function, or `from other import *`
+  after the barca import. Celery's or Prefect's `@task(bind=True)` in a file that also uses
+  barca is therefore left alone, and so is a file with no such import at all. When barca
+  cannot be sure, it does not check. (barca still reads such a function as a node, as it
+  always has: it recognises its decorators by their plain names.)
+- What a helper receives through `*` or `**` (`partitions(*keys)`).
 - The values. `inputs=` that is not a dict literal (`inputs=dict(raw=raw)`,
   `inputs=make_inputs()`) is still read as "no inputs", without a message. `env=` is the
   exception: anything but a list of string literals is an error.
@@ -312,7 +327,8 @@ turns the warning off.
 
 ## Sensors
 
-`@sensor` observes external state and returns `(update_detected: bool, value)`. Sensors have no
+`@sensor` takes the arguments in the table under "Accepted arguments" (`@asset`'s without
+`inputs`). `@sensor` observes external state and returns `(update_detected: bool, value)`. Sensors have no
 inputs and must use `Manual` or `Schedule(...)` freshness, never `Always`.
 
 A sensor always runs, and its `value` is part of the run hash of every asset that reads it: when

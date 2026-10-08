@@ -1106,14 +1106,6 @@ fn an_argument_from_old_documentation_is_rejected_on_each_decorator() {
             "mode",
             "@sink",
         ),
-        // Real arguments, on a decorator that does not take them.
-        (
-            "@task(partitions={\"k\": partitions([1])})",
-            "partitions",
-            "@task",
-        ),
-        ("@task(serializer=\"json\")", "serializer", "@task"),
-        ("@sensor(serializer=\"json\")", "serializer", "@sensor"),
     ] {
         let err = rejected(&with_decorators(decorators));
         assert!(
@@ -1199,28 +1191,131 @@ fn the_helpers_take_their_argument_by_position_only() {
             "Schedule()",
             "Schedule(\"0 5 * * *\")",
         ),
+        // The path of a sink is positional too; before, `@sink(path=...)` declared no sink.
         (
-            "@asset(freshness=Schedule(\"0 5 * * *\", timezone=\"utc\"))",
-            "timezone",
-            "Schedule()",
-            "Schedule(\"0 5 * * *\")",
+            "@asset()\n@sink(path=\"out.json\")",
+            "path",
+            "@sink",
+            "@sink(\"path/to/file.json\", serializer=\"json\")",
         ),
     ] {
         let err = rejected(&with_decorators(decorators));
         assert!(
             err.contains(&format!(
-                "`{argument}` is not an argument of {call}. {call} takes no keyword arguments"
+                "`{argument}` is passed by keyword to {call}, which takes it by position only."
             )),
             "{decorators}: {err}"
         );
+        // The fix is to move the value, never to remove it.
         assert!(
-            err.contains(&format!("Pass the value by position, like `{usage}`")),
+            err.contains(&format!(
+                "\nPass the value as the first argument, without `{argument}=`, like `{usage}`."
+            )),
             "{decorators}: {err}"
         );
+        assert!(!err.contains("Remove"), "{decorators}: {err}");
     }
-    // The path of a sink is positional too; before, `@sink(path=...)` declared no sink.
-    let err = rejected(&with_decorators("@asset()\n@sink(path=\"out.json\")"));
-    assert!(err.contains("`path` is not an argument of @sink. @sink accepts: serializer"));
+
+    // A keyword the helper does not have at all.
+    let err = rejected(&with_decorators(
+        "@asset(freshness=Schedule(\"0 5 * * *\", timezone=\"utc\"))",
+    ));
+    assert!(
+        err.contains(
+            "`timezone` is not an argument of Schedule(). Schedule() takes no keyword arguments"
+        ),
+        "{err}"
+    );
+    assert!(
+        err.contains("\nRemove `timezone`: write it like `Schedule(\"0 5 * * *\")`."),
+        "{err}"
+    );
+    // The positional argument given by position and again by name.
+    let err = rejected(&with_decorators(
+        "@asset()\n@sink(\"a.json\", path=\"b.json\")",
+    ));
+    assert!(
+        err.contains("`path` is passed by keyword to @sink, which takes it by position only."),
+        "{err}"
+    );
+}
+
+#[test]
+fn the_number_of_positional_arguments_is_checked() {
+    for (decorators, message, fix) in [
+        (
+            "@asset()\n@sink()",
+            "@sink takes one positional argument (`path`), and is called with none. @sink accepts: serializer",
+            "Write it like `@sink(\"path/to/file.json\", serializer=\"json\")`.",
+        ),
+        (
+            "@asset()\n@sink(serializer=\"json\")",
+            "@sink takes one positional argument (`path`), and is called with none.",
+            "Write it like `@sink(",
+        ),
+        // `@sink("path", "json")` used to drop the serializer.
+        (
+            "@asset()\n@sink(\"out.txt\", \"json\")",
+            "@sink takes one positional argument (`path`), and is called with 2.",
+            "Pass the extra argument by keyword, like `@sink(\"path/to/file.json\", serializer=\"json\")`, or remove it.",
+        ),
+        (
+            "@asset(partitions={\"k\": partitions([1], [2])})",
+            "partitions() takes one positional argument (`values`), and is called with 2. partitions() takes no keyword arguments",
+            "Remove the extra argument: write it like `partitions([\"a\", \"b\"])`.",
+        ),
+        (
+            "@asset(partitions={\"k\": partitions()})",
+            "partitions() takes one positional argument (`values`), and is called with none.",
+            "Write it like `partitions([\"a\", \"b\"])`.",
+        ),
+        (
+            "@asset(inputs={\"r\": collect(raw, raw)})",
+            "collect() takes one positional argument (`asset_fn`), and is called with 2.",
+            "Remove the extra argument: write it like `collect(upstream)`.",
+        ),
+        (
+            "@asset(inputs={\"r\": collect()})",
+            "collect() takes one positional argument (`asset_fn`), and is called with none.",
+            "Write it like `collect(upstream)`.",
+        ),
+        (
+            "@asset(partitions={\"k\": partitions_from()})",
+            "partitions_from() takes one positional argument (`source`), and is called with none.",
+            "Write it like `partitions_from(upstream)`.",
+        ),
+        (
+            "@asset(inputs={\"r\": asset_ref(\"a.py:x\", \"b\")})",
+            "asset_ref() takes one positional argument (`ref_string`), and is called with 2.",
+            "Remove the extra argument",
+        ),
+        (
+            "@asset(freshness=Schedule())",
+            "Schedule() takes one positional argument (`cron`), and is called with none.",
+            "Write it like `Schedule(\"0 5 * * *\")`.",
+        ),
+        (
+            "@asset(\"daily\")",
+            "@asset takes keyword arguments only, and is called with one. @asset accepts: name,",
+            "Pass the extra argument by keyword, like `@asset(inputs=",
+        ),
+    ] {
+        let err = rejected(&with_decorators(decorators));
+        assert!(err.contains(message), "{decorators}: {err}");
+        let (_, remediation) = err.split_once('\n').unwrap();
+        assert!(remediation.starts_with(fix), "{decorators}: {err}");
+    }
+
+    // What a helper receives through `*` or `**` is not in the source: left alone, as before.
+    for decorators in [
+        "@asset(partitions={\"k\": partitions(*KEYS)})",
+        "@asset(partitions={\"k\": partitions(KEYS, **OPTIONS)})",
+    ] {
+        assert!(
+            extract_nodes(&with_decorators(decorators), "test.py").is_ok(),
+            "{decorators}"
+        );
+    }
 }
 
 #[test]
@@ -1242,22 +1337,8 @@ fn arguments_that_cannot_be_read_from_the_source_are_rejected() {
     let err = rejected(&with_decorators("@asset(*ARGS)"));
     assert!(err.contains("@asset is called with `*` arguments"), "{err}");
 
-    let err = rejected(&with_decorators("@asset(\"daily\")"));
-    assert!(
-        err.contains(
-            "@asset takes keyword arguments only, and is called with a positional argument."
-        ),
-        "{err}"
-    );
-
-    // `@sink("path", "json")` used to drop the serializer.
-    let err = rejected(&with_decorators("@asset()\n@sink(\"out.txt\", \"json\")"));
-    assert!(
-        err.contains(
-            "@sink takes one positional argument, and is called with 2 positional arguments."
-        ),
-        "{err}"
-    );
+    let err = rejected(&with_decorators("@asset()\n@sink(*PATHS)"));
+    assert!(err.contains("@sink is called with `*` arguments"), "{err}");
 }
 
 #[test]
@@ -1316,6 +1397,8 @@ def gathered(parts, other):
 
 @sensor(
     name="s",
+    partitions={"k": partitions(["a", "b"])},
+    serializer="pickle",
     freshness=Schedule("*/5 * * * *"),
     timeout_seconds=10,
     retries=2,
@@ -1324,12 +1407,14 @@ def gathered(parts, other):
     tags={"a": "b"},
     env=["HOME"],
 )
-def watch():
+def watch(k):
     return (True, 1)
 
 @task(
     name="t",
     inputs={"g": gathered},
+    partitions={"k": partitions(["a", "b"])},
+    serializer="pickle",
     freshness=Manual,
     timeout_seconds=10,
     retries=2,
@@ -1338,11 +1423,51 @@ def watch():
     tags={"a": "b"},
     env=["HOME"],
 )
-def publish(g):
+def publish(g, k):
     pass
 "#;
     let nodes = extract_nodes(src, "test.py").unwrap();
     assert_eq!(nodes.len(), 5);
+    // What the parser has always read on every node kind is still read (0.18.1 ran a
+    // partitioned task or sensor once per key and honoured its serializer).
+    for node in nodes.iter().filter(|n| n.kind != NodeKind::Asset) {
+        assert_eq!(node.partitions.len(), 1, "{}", node.function_name);
+        assert_eq!(
+            node.artifact_serializer,
+            Some(SerializerKind::Pickle),
+            "{}",
+            node.function_name
+        );
+    }
+}
+
+/// The principle of the check: it rejects only arguments that had no effect. Every keyword
+/// the 0.18.1 parser read, on every node kind, must still be accepted.
+#[test]
+fn every_keyword_the_parser_reads_is_accepted_on_every_node_kind() {
+    let read_by_the_parser = [
+        ("freshness", "Manual"),
+        ("inputs", "{}"),
+        ("partitions", "{\"k\": partitions([\"a\"])}"),
+        ("name", "\"n\""),
+        ("description", "\"d\""),
+        ("timeout_seconds", "5"),
+        ("retries", "2"),
+        ("retry_backoff", "1.5"),
+        ("tags", "{\"a\": \"b\"}"),
+        ("env", "[\"HOME\"]"),
+        ("serializer", "\"json\""),
+    ];
+    for decorator in ["asset", "sensor", "task"] {
+        for (keyword, value) in read_by_the_parser {
+            let src = with_decorators(&format!("@{decorator}({keyword}={value})"));
+            let nodes = extract_nodes(&src, "test.py")
+                .unwrap_or_else(|e| panic!("@{decorator}({keyword}=...): {e}"));
+            assert_eq!(nodes.len(), 2);
+        }
+    }
+    let src = with_decorators("@asset()\n@sink(\"o.json\", serializer=\"json\")");
+    assert_eq!(extract_nodes(&src, "test.py").unwrap()[1].sinks.len(), 1);
 }
 
 #[test]
@@ -1414,8 +1539,8 @@ def not_a_node():
 fn barcas_name_is_checked_however_it_reaches_the_file() {
     for import in [
         "from barca import asset",
+        "from barca import asset, task",
         "from barca import *",
-        "", // no import at all: the name is still read as barca's, so it is checked
     ] {
         let src = format!("{import}\n\n@asset(after=None)\ndef a():\n    return 1\n");
         let err = rejected(&src);
@@ -1424,6 +1549,106 @@ fn barcas_name_is_checked_however_it_reaches_the_file() {
             "{import}: {err}"
         );
     }
+    // No `from barca import asset` in the file: the name is not positively barca's. The
+    // function is still read as a node, as it always was, and its arguments are not judged.
+    for import in ["", "import barca", "from barca import task"] {
+        let src = format!("{import}\n\n@asset(after=None)\ndef a():\n    return 1\n");
+        assert_eq!(extract_nodes(&src, "test.py").unwrap().len(), 1, "{import}");
+    }
+}
+
+/// Every way a module-level name can be bound to something that is not barca's turns the
+/// check off for that name (`BarcaNames`). The same sources, and what 0.18.1 lists for them,
+/// are run through the binary in `python/tests/test_decorator_names_not_barcas.py`.
+#[test]
+fn a_name_bound_by_anything_but_the_barca_import_is_not_checked() {
+    let use_it = "\n\n@task(bind=True)\ndef t():\n    pass\n";
+    for binding in [
+        "task = app.task",
+        "task: object = make()",
+        "task |= extra",
+        "(asset, [task, *rest]) = make()",
+        "if (task := make()) is not None:\n    pass",
+        "def task(**kw):\n    return lambda f: f",
+        "class task:\n    pass",
+        "import celery_shim as task",
+        "import task.helpers",
+        "from prefect import task",
+        "from celery import shared_task as task",
+        "try:\n    from prefect import task\nexcept ImportError:\n    pass",
+        "if NEW:\n    from newlib import task",
+        "with ctx():\n    from newlib import task",
+        "def setup():\n    global task\n    task = make()",
+        "class Setup:\n    def run(self):\n        global task",
+        "for task in registry():\n    pass",
+        "with make() as task:\n    pass",
+        "with a() as x, b() as (task, y):\n    pass",
+        "try:\n    pass\nexcept Exception as task:\n    pass",
+        "match make():\n    case [task, *_]:\n        pass",
+        "match make():\n    case {\"a\": 1, **task}:\n        pass",
+        "del task",
+        "from celery_shim import *",
+        "while True:\n    task = make()\n    break",
+    ] {
+        let src = format!("from barca import task\n{binding}{use_it}");
+        let nodes = extract_nodes(&src, "test.py").unwrap_or_else(|e| panic!("{binding}: {e}"));
+        assert_eq!(nodes.last().unwrap().function_name, "t", "{binding}");
+        // The same binding before the import turns it off too: when in doubt, no check.
+        let src = format!("{binding}\nfrom barca import task{use_it}");
+        if !binding.contains("import *") {
+            assert!(extract_nodes(&src, "test.py").is_ok(), "{binding} (before)");
+        }
+    }
+    // Not at the top level, or under another name: not a positive import.
+    for import in [
+        "try:\n    from barca import task\nexcept ImportError:\n    raise",
+        "if True:\n    from barca import task",
+        "from barca import asset as task",
+        "from .barca import task",
+        "from barca.api import task",
+    ] {
+        let src = format!("{import}{use_it}");
+        assert!(extract_nodes(&src, "test.py").is_ok(), "{import}");
+    }
+    // A star import from elsewhere before the barca import does not shadow it.
+    let err = rejected(&format!(
+        "from os.path import *\nfrom barca import task{use_it}"
+    ));
+    assert!(err.contains("`bind` is not an argument of @task"), "{err}");
+}
+
+/// Other scopes do not bind the module's name: a parameter, a local variable, a class
+/// attribute or a comprehension variable called `task` leaves the check on.
+#[test]
+fn a_name_bound_in_another_scope_is_still_checked() {
+    let src = r#"from barca import task
+
+def helper(task, asset=None):
+    collect = [task for task in asset or []]
+    for sink in collect:
+        task = sink
+    return collect
+
+class Registry:
+    task = None
+
+    def sensor(self):
+        import task
+        return task
+
+names = [task for task in ("a", "b")]
+by_name = {task: 1 for task in names}
+fn = lambda task: task
+
+@task(bind=True)
+def t():
+    pass
+"#;
+    let err = rejected(src);
+    assert!(
+        err.starts_with("test.py:t (line 20): `bind` is not an argument of @task"),
+        "{err}"
+    );
 }
 
 /// `import barca as b` / `from barca import asset as a`: the parser has never read these as

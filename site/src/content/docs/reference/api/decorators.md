@@ -19,8 +19,8 @@ check in the binary equal), so a type checker and an IDE know them too.
 | Call | Positional arguments | Keyword arguments |
 |---|---|---|
 | `@asset` | none | `name`, `inputs`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env` |
-| `@sensor` | none | `name`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env` |
-| `@task` | none | `name`, `inputs`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env` |
+| `@sensor` | none | `name`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env` |
+| `@task` | none | `name`, `inputs`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env` |
 | `@sink` | one | `serializer` |
 | `partitions()` | one | none |
 | `partitions_from()` | one | none |
@@ -41,9 +41,13 @@ Rename `input` to `inputs`, or remove it. See `barca docs assets`.
 - The error names the node, the line, the argument and everything the call accepts. "Did you
   mean" appears only when exactly one accepted argument is one edit away from what was written
   (two for a name longer than four characters).
-- The helpers and `@sink`'s path are positional: `partitions(values=[...])`,
-  `collect(asset_fn=x)`, `Schedule(cron="...")`, `@sink(path="...")` and
-  `@sink("out.txt", "json")` are errors.
+- Every argument in the table has an effect on each decorator it is listed for, and only
+  arguments that had none are rejected. On `@task` and `@sensor`, `partitions=` runs the
+  function once per key and `serializer=` forces the stored format, as on `@asset`.
+- The helpers and `@sink` take exactly one argument, by position: `partitions(values=[...])`,
+  `collect(asset_fn=x)`, `Schedule(cron="...")` and `@sink(path="...")` are errors that say to
+  pass the value as the first argument; `@sink()`, `partitions(a, b)` and
+  `@sink("out.txt", "json")` are errors too.
 - `@asset(**options)`, `@asset(*args)` and `@asset("x")` are errors: barca reads the arguments
   from the source and cannot see what a `**` or `*` holds.
 - The check is made per file, like the check for a syntax error. Every command that reads the
@@ -52,9 +56,14 @@ Rename `input` to `inputs`, or remove it. See `barca docs assets`.
   the pipeline. Only the first such argument in a file is reported.
 - Importing the module (`python pipeline.py`) raises
   `TypeError: asset() got an unexpected keyword argument 'after'`.
-- Not checked: a function named `asset`, `task`, ... that the file defines itself or imports
-  from another module; the values of the arguments (an `inputs=` that is not a dict literal is
-  still read as "no inputs"); `parallel()` and `parallel_map()`.
+- Not checked: a decorator or helper that is not positively barca's. A name is checked only
+  when `from barca import <name>` (or `from barca import *`) stands at the top level of the
+  module and nothing else binds the name at module level (an assignment such as
+  `task = app.task`, a `def` or `class`, another import, also inside `try:` or `if`, a loop or
+  `with` target, `global`, a later `from other import *`). Celery's or Prefect's
+  `@task(bind=True)` is left alone. Also not checked: the values of the arguments (an `inputs=`
+  that is not a dict literal is still read as "no inputs"), and `parallel()` and
+  `parallel_map()`.
 - `import barca as b` with `@b.asset(...)` and `from barca import asset as a` with `@a(...)`
   are not read as nodes at all, so nothing is checked there and `barca list` shows nothing.
 
@@ -332,6 +341,8 @@ See `barca docs sinks`.
 ```python
 @sensor(
     name: str | None = None,
+    partitions: dict[str, PartitionSpecLike] | None = None,
+    serializer: SerializerKind | None = None,
     freshness: Manual | Schedule = Manual,
     timeout_seconds: int = 300,
     retries: int = 1,
@@ -346,6 +357,10 @@ Declares a sensor: a function that looks at something outside the pipeline (a di
 bucket, an API) and returns a value that identifies its current state. A sensor has no inputs
 (`sensor '...' cannot have inputs`, exit 2) and runs on every `barca get` or `barca run` whose
 cone includes it. See `@asset` above for `env`, `retries` and `retry_backoff`.
+
+`partitions` runs the sensor once per key, with the key passed as the parameter named in the
+dict; each key's value is stored on its own. `serializer` forces the format the value is stored
+in (`"json"`, `"pickle"` or `"parquet"`).
 
 ```python
 from pathlib import Path
@@ -396,6 +411,8 @@ a walk-through, and `barca docs assets` ("Sensors").
 @task(
     name: str | None = None,
     inputs: dict[str, NodeRefLike] | None = None,
+    partitions: dict[str, PartitionSpecLike] | None = None,
+    serializer: SerializerKind | None = None,
     freshness: Freshness = Always,
     timeout_seconds: int = 300,
     retries: int = 1,
@@ -410,6 +427,9 @@ Declares a task: a step that does something (a deploy, a notification, a migrati
 not cached. A task runs every time it is in a run's cone.
 
 - They may appear anywhere in the graph, not only at the leaves.
+- `partitions` runs the task once per key, with the key passed as the parameter named in the
+  dict. `serializer` forces the format the return value is stored in (`"json"`, `"pickle"` or
+  `"parquet"`).
 - They may depend on assets, sensors, or other tasks (via `inputs=`).
 - For ordering-only dependencies (no data needed), use the `_` prefix convention:
   `inputs={"_dep": some_node}`. The `_` prefix tells barca to skip artifact

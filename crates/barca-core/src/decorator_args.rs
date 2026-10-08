@@ -7,6 +7,22 @@
 //! (`python/barca/__init__.py`) and the tables in the manual and on the site to it.
 //!
 //! The check works on the decorators of one function, already parsed: no second parse.
+//!
+//! Two rules keep it from rejecting a pipeline that worked:
+//!
+//! - **Only arguments that had no effect are rejected.** Every keyword the parser reads for a
+//!   call is in [`SIGNATURES`] (`partitions=` and `serializer=` work on `@task` and `@sensor`
+//!   as they do on `@asset`).
+//! - **Only names that are positively barca's are checked** ([`BarcaNames`]): bound by a
+//!   `from barca import ...` at the top of the module and bound by nothing else. A `task` that
+//!   is Celery's, Prefect's or the file's own is not barca's to judge.
+//!
+//! # Sharing the list
+//!
+//! [`SIGNATURES`] is the single list of argument names; anything else that needs them (which
+//! arguments count toward a definition hash, for instance) should be keyed to it rather than
+//! repeat the names. [`arguments`] gives it flat, as `(call, argument, how it is passed)`,
+//! and a test on the other table can assert that it names exactly these.
 
 use ruff_python_ast::visitor::{self, Visitor};
 use ruff_python_ast::{self as ast, Expr};
@@ -18,8 +34,10 @@ pub struct Signature {
     pub name: &'static str,
     /// Whether it is written with `@`.
     pub decorator: bool,
-    /// How many positional arguments it takes at most.
-    pub positional: usize,
+    /// The arguments it takes by position, by the name the Python signature gives them
+    /// (they are positional-only there). The node decorators take none; the others take
+    /// exactly these.
+    pub positional: &'static [&'static str],
     /// The keyword arguments it accepts, in the order of the Python signature.
     pub keywords: &'static [&'static str],
     /// Keywords that are not accepted but are rejected later with a message of their own.
@@ -36,7 +54,7 @@ pub const SIGNATURES: &[Signature] = &[
     Signature {
         name: "asset",
         decorator: true,
-        positional: 0,
+        positional: &[],
         keywords: &[
             "name",
             "inputs",
@@ -57,9 +75,11 @@ pub const SIGNATURES: &[Signature] = &[
     Signature {
         name: "sensor",
         decorator: true,
-        positional: 0,
+        positional: &[],
         keywords: &[
             "name",
+            "partitions",
+            "serializer",
             "freshness",
             "timeout_seconds",
             "retries",
@@ -76,10 +96,12 @@ pub const SIGNATURES: &[Signature] = &[
     Signature {
         name: "task",
         decorator: true,
-        positional: 0,
+        positional: &[],
         keywords: &[
             "name",
             "inputs",
+            "partitions",
+            "serializer",
             "freshness",
             "timeout_seconds",
             "retries",
@@ -95,7 +117,7 @@ pub const SIGNATURES: &[Signature] = &[
     Signature {
         name: "sink",
         decorator: true,
-        positional: 1,
+        positional: &["path"],
         keywords: &["serializer"],
         deferred: &[],
         usage: "@sink(\"path/to/file.json\", serializer=\"json\")",
@@ -104,7 +126,7 @@ pub const SIGNATURES: &[Signature] = &[
     Signature {
         name: "partitions",
         decorator: false,
-        positional: 1,
+        positional: &["values"],
         keywords: &[],
         deferred: &[],
         usage: "partitions([\"a\", \"b\"])",
@@ -113,7 +135,7 @@ pub const SIGNATURES: &[Signature] = &[
     Signature {
         name: "partitions_from",
         decorator: false,
-        positional: 1,
+        positional: &["source"],
         keywords: &[],
         deferred: &[],
         usage: "partitions_from(upstream)",
@@ -122,7 +144,7 @@ pub const SIGNATURES: &[Signature] = &[
     Signature {
         name: "collect",
         decorator: false,
-        positional: 1,
+        positional: &["asset_fn"],
         keywords: &[],
         deferred: &[],
         usage: "collect(upstream)",
@@ -131,7 +153,7 @@ pub const SIGNATURES: &[Signature] = &[
     Signature {
         name: "asset_ref",
         decorator: false,
-        positional: 1,
+        positional: &["ref_string"],
         keywords: &[],
         deferred: &[],
         usage: "asset_ref(\"file.py:name\")",
@@ -140,13 +162,51 @@ pub const SIGNATURES: &[Signature] = &[
     Signature {
         name: "Schedule",
         decorator: false,
-        positional: 1,
+        positional: &["cron"],
         keywords: &[],
         deferred: &[],
         usage: "Schedule(\"0 5 * * *\")",
         topic: "scheduling",
     },
 ];
+
+/// How an argument is passed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Passing {
+    /// By position only (`partitions(values)`, the path of `@sink`).
+    Positional,
+    /// By keyword only (`inputs=`, `serializer=`).
+    Keyword,
+}
+
+/// One argument of one barca call: the flat form of [`SIGNATURES`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Argument {
+    /// The call as written in a pipeline: `asset`, `sink`, `partitions`, `Schedule`.
+    pub call: &'static str,
+    /// The argument's name in the Python signature.
+    pub name: &'static str,
+    pub passing: Passing,
+}
+
+/// Every argument of every barca call, in the order of [`SIGNATURES`]: positional arguments
+/// first, then keywords in signature order. There is no "any other argument": a call with one
+/// is rejected before anything else reads it.
+pub fn arguments() -> impl Iterator<Item = Argument> {
+    SIGNATURES.iter().flat_map(|sig| {
+        let positional = sig.positional.iter().map(move |name| Argument {
+            call: sig.name,
+            name,
+            passing: Passing::Positional,
+        });
+        let keywords = sig.keywords.iter().map(move |name| Argument {
+            call: sig.name,
+            name,
+            passing: Passing::Keyword,
+        });
+        positional.chain(keywords)
+    })
+}
 
 impl Signature {
     pub fn named(name: &str) -> Option<&'static Signature> {
@@ -182,7 +242,7 @@ impl Signature {
                 .collect::<Vec<_>>()
                 .join(", ")
         };
-        let positional = match self.positional {
+        let positional = match self.positional.len() {
             0 => "none",
             _ => "one",
         };
@@ -243,47 +303,95 @@ pub struct Problem {
 fn check_call(call: &ast::ExprCall, sig: &Signature) -> Option<Problem> {
     let shown = sig.display();
     let see = format!("See `barca docs {}`.", sig.topic);
+    let args = &call.arguments.args;
+    let starred = args.iter().find(|a| matches!(a, Expr::Starred(_)));
 
-    for arg in call.arguments.args.iter() {
-        if let Expr::Starred(star) = arg
-            && sig.decorator
-        {
+    if sig.decorator
+        && let Some(star) = starred
+    {
+        return Some(Problem {
+            offset: star.range().start().to_usize(),
+            message: format!(
+                "{shown} is called with `*` arguments. barca reads decorator arguments from \
+                 the source without running it, so it cannot see what they are"
+            ),
+            fix: format!("Write the arguments out, like `{}`. {see}", sig.usage),
+        });
+    }
+    // How many positional arguments. A helper called with `*values` is left alone: what it
+    // receives is not in the source.
+    if starred.is_none() && args.len() != sig.positional.len() {
+        let takes = match sig.positional {
+            [] => "takes keyword arguments only".to_string(),
+            [only] => format!("takes one positional argument (`{only}`)"),
+            many => format!("takes {} positional arguments", many.len()),
+        };
+        let given = match args.len() {
+            0 => "none".to_string(),
+            1 => "one".to_string(),
+            n => n.to_string(),
+        };
+        let by_keyword = sig
+            .positional
+            .first()
+            .filter(|_| args.is_empty())
+            .and_then(|name| {
+                call.arguments
+                    .keywords
+                    .iter()
+                    .find(|kw| kw.arg.as_ref().is_some_and(|a| a.as_str() == *name))
+                    .map(|kw| (*name, kw.range().start().to_usize()))
+            });
+        if let Some((name, offset)) = by_keyword {
+            // `@sink(path="out.json")`, `partitions(values=[...])`: the value is there, under
+            // the name the signature gives the positional argument.
             return Some(Problem {
-                offset: star.range().start().to_usize(),
+                offset,
                 message: format!(
-                    "{shown} is called with `*` arguments. barca reads decorator arguments \
-                     from the source without running it, so it cannot see what they are"
+                    "`{name}` is passed by keyword to {shown}, which takes it by position \
+                     only. {}",
+                    sig.accepts()
                 ),
-                fix: format!("Write the arguments out, like `{}`. {see}", sig.usage),
+                fix: format!(
+                    "Pass the value as the first argument, without `{name}=`, like `{}`. {see}",
+                    sig.usage
+                ),
             });
         }
-    }
-    if sig.decorator && call.arguments.args.len() > sig.positional {
-        let extra = &call.arguments.args[sig.positional];
-        let takes = match sig.positional {
-            0 => "takes keyword arguments only".to_string(),
-            _ => "takes one positional argument".to_string(),
+        let offset = args
+            .get(sig.positional.len())
+            .map(|extra| extra.range().start())
+            .unwrap_or(call.range().start())
+            .to_usize();
+        let fix = if args.len() < sig.positional.len() {
+            format!("Write it like `{}`. {see}", sig.usage)
+        } else if sig.keywords.is_empty() {
+            format!(
+                "Remove the extra argument: write it like `{}`. {see}",
+                sig.usage
+            )
+        } else {
+            format!(
+                "Pass the extra argument by keyword, like `{}`, or remove it. {see}",
+                sig.usage
+            )
         };
         return Some(Problem {
-            offset: extra.range().start().to_usize(),
+            offset,
             message: format!(
-                "{shown} {takes}, and is called with {}. {}",
-                match call.arguments.args.len() {
-                    1 => "a positional argument".to_string(),
-                    n => format!("{n} positional arguments"),
-                },
+                "{shown} {takes}, and is called with {given}. {}",
                 sig.accepts()
             ),
-            fix: format!(
-                "Pass it by keyword, like `{}`, or remove it. {see}",
-                sig.usage
-            ),
+            fix,
         });
     }
 
     for kw in call.arguments.keywords.iter() {
         let offset = kw.range().start().to_usize();
         let Some(name) = kw.arg.as_ref().map(|a| a.as_str()) else {
+            if !sig.decorator {
+                continue; // a helper's `**options`: not in the source, left alone
+            }
             return Some(Problem {
                 offset,
                 message: format!(
@@ -297,21 +405,33 @@ fn check_call(call: &ast::ExprCall, sig: &Signature) -> Option<Problem> {
         if sig.keywords.contains(&name) || sig.deferred.contains(&name) {
             continue;
         }
+        if sig.positional.contains(&name) {
+            // The positional argument given twice: by position and by its name.
+            return Some(Problem {
+                offset,
+                message: format!(
+                    "`{name}` is passed by keyword to {shown}, which takes it by position \
+                     only. {}",
+                    sig.accepts()
+                ),
+                fix: format!(
+                    "Remove `{name}=...`: the first argument is already `{name}`. Write it \
+                     like `{}`. {see}",
+                    sig.usage
+                ),
+            });
+        }
         let guess = sig.closest(name);
         let meant = guess
             .map(|g| format!(" Did you mean `{g}`?"))
             .unwrap_or_default();
-        let fix = if sig.keywords.is_empty() {
-            format!(
-                "Pass the value by position, like `{}`, or remove `{name}`. {see}",
-                sig.usage
-            )
-        } else {
-            match guess {
-                Some(g) => format!("Rename `{name}` to `{g}`, or remove it. {see}"),
-                None => format!(
-                    "Remove `{name}`, or replace it with an argument {shown} accepts. {see}"
-                ),
+        let fix = match guess {
+            Some(g) => format!("Rename `{name}` to `{g}`, or remove it. {see}"),
+            None if sig.keywords.is_empty() => {
+                format!("Remove `{name}`: write it like `{}`. {see}", sig.usage)
+            }
+            None => {
+                format!("Remove `{name}`, or replace it with an argument {shown} accepts. {see}")
             }
         };
         return Some(Problem {
@@ -326,19 +446,215 @@ fn check_call(call: &ast::ExprCall, sig: &Signature) -> Option<Problem> {
     None
 }
 
+/// The names of one file that are positively barca's.
+///
+/// A name counts only when a `from barca import NAME` (or `from barca import *`) stands at the
+/// top level of the module and nothing else in the file binds the name at module scope:
+/// no assignment (plain, annotated, augmented, unpacking, `:=`), `def`, `class`, `import`,
+/// `from other import`, `for` target, `with ... as`, `except ... as`, `match` capture, `del`,
+/// no such statement inside `if` / `try` / `with` / loops, no `global NAME` in a function, and
+/// no `from other import *` after the barca import. A barca import that is itself nested
+/// (`try: from barca import task`) or renames (`from barca import task as asset`) does not
+/// count either. When in doubt the name is not barca's, and its arguments are not checked.
+#[derive(Debug, Default)]
+pub struct BarcaNames(std::collections::HashSet<&'static str>);
+
+impl BarcaNames {
+    pub fn contains(&self, name: &str) -> bool {
+        self.0.contains(name)
+    }
+
+    pub fn of(body: &[ast::Stmt]) -> Self {
+        use ast::Stmt;
+        use std::collections::{HashMap, HashSet};
+
+        // Where each name is imported from barca at the top level, under its own name.
+        let mut imported: HashMap<&'static str, usize> = HashMap::new();
+        let mut top_level_imports: HashSet<usize> = HashSet::new();
+        for stmt in body {
+            let Stmt::ImportFrom(imp) = stmt else {
+                continue;
+            };
+            if imp.level != 0 || imp.module.as_ref().is_none_or(|m| m.as_str() != "barca") {
+                continue;
+            }
+            let at = imp.range().start().to_usize();
+            top_level_imports.insert(at);
+            for alias in &imp.names {
+                if alias.name.as_str() == "*" {
+                    for sig in SIGNATURES {
+                        imported.entry(sig.name).or_insert(at);
+                    }
+                } else if alias.asname.is_none()
+                    && let Some(sig) = Signature::named(alias.name.as_str())
+                {
+                    imported.entry(sig.name).or_insert(at);
+                }
+            }
+        }
+        if imported.is_empty() {
+            return Self::default();
+        }
+
+        /// Everything else that binds a name at module scope.
+        struct Bindings<'s> {
+            top_level_imports: &'s HashSet<usize>,
+            /// Inside a `def` or `class`: only `global` reaches the module scope from there.
+            nested: usize,
+            rebound: HashSet<String>,
+            /// Offsets of `from <not barca> import *`.
+            foreign_stars: Vec<usize>,
+        }
+        impl Bindings<'_> {
+            fn bind(&mut self, name: &str) {
+                if self.nested == 0 {
+                    self.rebound.insert(name.to_string());
+                }
+            }
+            fn bind_target(&mut self, target: &Expr) {
+                match target {
+                    Expr::Name(n) => self.bind(n.id.as_str()),
+                    Expr::Tuple(t) => t.elts.iter().for_each(|e| self.bind_target(e)),
+                    Expr::List(l) => l.elts.iter().for_each(|e| self.bind_target(e)),
+                    Expr::Starred(s) => self.bind_target(&s.value),
+                    _ => {} // an attribute or a subscript binds no name
+                }
+            }
+        }
+        impl<'a> Visitor<'a> for Bindings<'_> {
+            fn visit_stmt(&mut self, stmt: &'a Stmt) {
+                match stmt {
+                    Stmt::FunctionDef(f) => {
+                        self.bind(f.name.as_str());
+                        self.nested += 1;
+                        visitor::walk_stmt(self, stmt);
+                        self.nested -= 1;
+                        return;
+                    }
+                    Stmt::ClassDef(c) => {
+                        self.bind(c.name.as_str());
+                        self.nested += 1;
+                        visitor::walk_stmt(self, stmt);
+                        self.nested -= 1;
+                        return;
+                    }
+                    Stmt::Global(g) => {
+                        for name in &g.names {
+                            self.rebound.insert(name.to_string());
+                        }
+                    }
+                    Stmt::Assign(a) => a.targets.iter().for_each(|t| self.bind_target(t)),
+                    Stmt::AnnAssign(a) => self.bind_target(&a.target),
+                    Stmt::AugAssign(a) => self.bind_target(&a.target),
+                    Stmt::TypeAlias(t) => self.bind_target(&t.name),
+                    Stmt::Delete(d) => d.targets.iter().for_each(|t| self.bind_target(t)),
+                    Stmt::For(f) => self.bind_target(&f.target),
+                    Stmt::With(w) => {
+                        for item in &w.items {
+                            if let Some(vars) = &item.optional_vars {
+                                self.bind_target(vars);
+                            }
+                        }
+                    }
+                    Stmt::Import(imp) => {
+                        for alias in &imp.names {
+                            let bound = match &alias.asname {
+                                Some(asname) => asname.as_str(),
+                                None => alias.name.as_str().split('.').next().unwrap_or(""),
+                            };
+                            self.bind(bound);
+                        }
+                    }
+                    Stmt::ImportFrom(imp) => {
+                        let at = imp.range().start().to_usize();
+                        let positive = self.top_level_imports.contains(&at);
+                        for alias in &imp.names {
+                            if alias.name.as_str() == "*" {
+                                if !positive && self.nested == 0 {
+                                    self.foreign_stars.push(at);
+                                }
+                            } else if let Some(asname) = &alias.asname {
+                                // `from barca import task as asset` makes `asset` a task.
+                                self.bind(asname.as_str());
+                            } else if !positive {
+                                self.bind(alias.name.as_str());
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                visitor::walk_stmt(self, stmt);
+            }
+
+            fn visit_expr(&mut self, expr: &'a Expr) {
+                if let Expr::Named(walrus) = expr {
+                    self.bind_target(&walrus.target);
+                }
+                visitor::walk_expr(self, expr);
+            }
+
+            fn visit_except_handler(&mut self, handler: &'a ast::ExceptHandler) {
+                let ast::ExceptHandler::ExceptHandler(h) = handler;
+                if let Some(name) = &h.name {
+                    self.bind(name.as_str());
+                }
+                visitor::walk_except_handler(self, handler);
+            }
+
+            fn visit_pattern(&mut self, pattern: &'a ast::Pattern) {
+                match pattern {
+                    ast::Pattern::MatchAs(p) => {
+                        if let Some(name) = &p.name {
+                            self.bind(name.as_str());
+                        }
+                    }
+                    ast::Pattern::MatchStar(p) => {
+                        if let Some(name) = &p.name {
+                            self.bind(name.as_str());
+                        }
+                    }
+                    ast::Pattern::MatchMapping(p) => {
+                        if let Some(rest) = &p.rest {
+                            self.bind(rest.as_str());
+                        }
+                    }
+                    _ => {}
+                }
+                visitor::walk_pattern(self, pattern);
+            }
+        }
+
+        let mut bindings = Bindings {
+            top_level_imports: &top_level_imports,
+            nested: 0,
+            rebound: HashSet::new(),
+            foreign_stars: Vec::new(),
+        };
+        visitor::walk_body(&mut bindings, body);
+
+        Self(
+            imported
+                .into_iter()
+                .filter(|(name, at)| {
+                    !bindings.rebound.contains(*name)
+                        && !bindings.foreign_stars.iter().any(|star| star > at)
+                })
+                .map(|(name, _)| name)
+                .collect(),
+        )
+    }
+}
+
 /// Check every barca call in the decorators of one function: the decorators themselves and
 /// the helpers inside their arguments (`partitions(...)`, `collect(...)`, `Schedule(...)`).
 /// Returns the first problem, in source order.
 ///
-/// `is_barca(name)` says whether `name` is barca's in this file. A name the file defines or
-/// imports from somewhere else is not checked: its arguments are that function's business.
-pub fn check_decorators(
-    decorators: &[ast::Decorator],
-    is_barca: &dyn Fn(&str) -> bool,
-) -> Option<Problem> {
+/// Only names in `barca` ([`BarcaNames`]) are checked: any other `asset`, `task` or `collect`
+/// is somebody else's function, and its arguments are its own business.
+pub fn check_decorators(decorators: &[ast::Decorator], barca: &BarcaNames) -> Option<Problem> {
     /// The helper calls inside a decorator's arguments.
     struct Helpers<'f> {
-        is_barca: &'f dyn Fn(&str) -> bool,
+        barca: &'f BarcaNames,
         found: Option<Problem>,
     }
     impl<'a> Visitor<'a> for Helpers<'_> {
@@ -350,7 +666,7 @@ pub fn check_decorators(
                 && let Expr::Name(n) = call.func.as_ref()
                 && let Some(sig) = Signature::named(n.id.as_str())
                 && !sig.decorator
-                && (self.is_barca)(sig.name)
+                && self.barca.contains(sig.name)
             {
                 self.found = check_call(call, sig);
                 if self.found.is_some() {
@@ -372,16 +688,13 @@ pub fn check_decorators(
         let Some(sig) = Signature::named(n.id.as_str()).filter(|s| s.decorator) else {
             continue;
         };
-        if !is_barca(sig.name) {
+        if !barca.contains(sig.name) {
             continue;
         }
         if let Some(problem) = check_call(call, sig) {
             return Some(problem);
         }
-        let mut helpers = Helpers {
-            is_barca,
-            found: None,
-        };
+        let mut helpers = Helpers { barca, found: None };
         visitor::walk_arguments(&mut helpers, &call.arguments);
         if helpers.found.is_some() {
             return helpers.found;
@@ -424,12 +737,49 @@ mod tests {
         assert_eq!(Signature::named("collect").unwrap().closest("asset"), None);
     }
 
+    /// The flat form other tables are meant to be keyed to: one row per argument, with no
+    /// duplicates, covering exactly what `SIGNATURES` lists.
+    #[test]
+    fn the_flat_list_has_every_argument_once() {
+        let all: Vec<Argument> = arguments().collect();
+        let expected: usize = SIGNATURES
+            .iter()
+            .map(|s| s.positional.len() + s.keywords.len())
+            .sum();
+        assert_eq!(all.len(), expected);
+        let unique: std::collections::HashSet<(&str, &str)> =
+            all.iter().map(|a| (a.call, a.name)).collect();
+        assert_eq!(unique.len(), all.len());
+        assert!(all.contains(&Argument {
+            call: "sink",
+            name: "path",
+            passing: Passing::Positional
+        }));
+        assert!(all.contains(&Argument {
+            call: "task",
+            name: "partitions",
+            passing: Passing::Keyword
+        }));
+        // What the parser reads on one node kind it reads on all three; `inputs` on a sensor
+        // is the one difference, and it is an error of its own.
+        let keywords = |call: &str| -> Vec<&str> {
+            all.iter()
+                .filter(|a| a.call == call)
+                .map(|a| a.name)
+                .collect()
+        };
+        assert_eq!(keywords("asset"), keywords("task"));
+        let mut sensor = keywords("asset");
+        sensor.retain(|k| *k != "inputs");
+        assert_eq!(keywords("sensor"), sensor);
+    }
+
     #[test]
     fn two_close_names_give_no_suggestion() {
         let sig = Signature {
             name: "x",
             decorator: true,
-            positional: 0,
+            positional: &[],
             keywords: &["inputs", "input_s"],
             deferred: &[],
             usage: "",
@@ -499,10 +849,9 @@ mod tests {
                  SIGNATURES in crates/barca-core/src/decorator_args.rs"
             );
             assert_eq!(
-                positional.len(),
-                sig.positional,
-                "positional-only parameters of `{name}` in python/barca/__init__.py \
-                 ({positional:?}) differ from SIGNATURES"
+                positional, sig.positional,
+                "positional-only parameters of `{name}` in python/barca/__init__.py differ \
+                 from SIGNATURES"
             );
             seen.push(name.to_string());
         }

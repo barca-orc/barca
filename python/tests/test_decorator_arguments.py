@@ -70,7 +70,7 @@ def envelope(proc: subprocess.CompletedProcess) -> dict:
         ),
         (
             "@task(when='always')",
-            "`when` is not an argument of @task. @task accepts: name, inputs, freshness, "
+            "`when` is not an argument of @task. @task accepts: name, inputs, partitions, serializer, freshness, "
             "timeout_seconds, retries, retry_backoff, description, tags, env",
             "Remove `when`, or replace it with an argument @task accepts. See `barca docs tasks`.",
         ),
@@ -98,19 +98,23 @@ def envelope(proc: subprocess.CompletedProcess) -> dict:
         ),
         (
             "@asset(partitions={'k': partitions(values=['a', 'b'])})",
-            "`values` is not an argument of partitions(). partitions() takes no keyword arguments",
-            'Pass the value by position, like `partitions(["a", "b"])`, or remove `values`. '
+            "`values` is passed by keyword to partitions(), which takes it by position only. "
+            "partitions() takes no keyword arguments",
+            'Pass the value as the first argument, without `values=`, like `partitions(["a", "b"])`. '
             "See `barca docs partitions`.",
         ),
         (
             "@asset()\n@sink(path='out.json')",
-            "`path` is not an argument of @sink. @sink accepts: serializer",
-            "Remove `path`, or replace it with an argument @sink accepts. See `barca docs sinks`.",
+            "`path` is passed by keyword to @sink, which takes it by position only. "
+            "@sink accepts: serializer",
+            "Pass the value as the first argument, without `path=`, like "
+            '`@sink("path/to/file.json", serializer="json")`. See `barca docs sinks`.',
         ),
         (
             "@asset(freshness=Schedule(cron='0 5 * * *'))",
-            "`cron` is not an argument of Schedule(). Schedule() takes no keyword arguments",
-            'Pass the value by position, like `Schedule("0 5 * * *")`, or remove `cron`. '
+            "`cron` is passed by keyword to Schedule(), which takes it by position only. "
+            "Schedule() takes no keyword arguments",
+            'Pass the value as the first argument, without `cron=`, like `Schedule("0 5 * * *")`. '
             "See `barca docs scheduling`.",
         ),
     ],
@@ -198,6 +202,114 @@ def test_a_decorator_that_is_not_barcas_is_not_checked(tmp_path: Path) -> None:
     proc = barca_cmd(tmp_path, "list", "pipeline.py", "--json")
     assert proc.returncode == 0, proc.stderr
     assert [n["id"] for n in json.loads(proc.stdout)["nodes"]] == ["pipeline.py:mine"]
+
+
+# ─── Arguments that work are not rejected ─────────────────────────────────────
+
+WORKING = """
+from barca import asset, sensor, task, partitions
+
+
+@sensor(partitions={"k": partitions(["a", "b"])}, serializer="pickle")
+def watch(k: str):
+    return (True, {"key": k})
+
+
+@task(partitions={"k": partitions(["a", "b"])}, serializer="pickle")
+def publish(k: str):
+    print("publishing", k)
+    return {"key": k}
+
+
+@task(serializer="pickle")
+def plain_task():
+    return {1, 2}
+
+
+@sensor(serializer="pickle")
+def plain_sensor():
+    return (True, {1, 2})
+"""
+
+
+def test_partitions_and_serializer_work_on_tasks_and_sensors_as_on_0_18_1(tmp_path: Path) -> None:
+    """The check rejects only arguments that had no effect. These had one on 0.18.1, where
+    this file produced the same runs and the same artifact files: a partitioned task or sensor
+    runs once per key, and `serializer=` decides the format its value is stored in."""
+    (tmp_path / "pipeline.py").write_text(WORKING)
+
+    proc = barca_cmd(tmp_path, "run", "publish", "pipeline.py", "--json")
+    assert proc.returncode == 0, proc.stderr
+    result = json.loads(proc.stdout)
+    assert result["steps_executed"] == 2
+    assert [(s["id"], s["partitions"]["total"]) for s in result["steps"]] == [
+        ("pipeline.py:publish", 2)
+    ]
+    assert sorted(line for line in proc.stderr.splitlines() if line.startswith("publishing")) == [
+        "publishing a",
+        "publishing b",
+    ]
+
+    proc = barca_cmd(tmp_path, "get", "watch", "pipeline.py", "--json")
+    assert proc.returncode == 0, proc.stderr
+    result = json.loads(proc.stdout)
+    assert result["steps_executed"] == 2
+    assert result["steps"][0]["partitions"]["total"] == 2
+
+    for command, target in (("run", "plain_task"), ("get", "plain_sensor")):
+        proc = barca_cmd(tmp_path, command, target, "pipeline.py", "--json")
+        assert proc.returncode == 0, proc.stderr
+        # A set is not JSON: only the forced pickle format can hold it.
+        assert json.loads(proc.stdout)["final_output"]["_barca_artifact"]["format"] == "pickle"
+
+    artifacts = sorted(
+        (p.parent.name, p.suffix)
+        for p in (tmp_path / ".barca" / "artifacts").rglob("*")
+        if p.is_file()
+    )
+    assert artifacts == [
+        ("pipeline.py--plain_sensor", ".pkl"),
+        ("pipeline.py--plain_task", ".pkl"),
+        ("pipeline.py--publish_k_a", ".pkl"),
+        ("pipeline.py--publish_k_b", ".pkl"),
+        ("pipeline.py--watch_k_a", ".pkl"),
+        ("pipeline.py--watch_k_b", ".pkl"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("decorator", "error"),
+    [
+        (
+            "@asset()\n@sink()",
+            "@sink takes one positional argument (`path`), and is called with none.",
+        ),
+        (
+            "@asset()\n@sink('out.txt', 'json')",
+            "@sink takes one positional argument (`path`), and is called with 2.",
+        ),
+        (
+            "@asset(partitions={'k': partitions(['a'], ['b'])})",
+            "partitions() takes one positional argument (`values`), and is called with 2.",
+        ),
+        (
+            "@asset(inputs={'raw': collect()})",
+            "collect() takes one positional argument (`asset_fn`), and is called with none.",
+        ),
+    ],
+)
+def test_the_number_of_positional_arguments_is_checked(
+    tmp_path: Path, decorator: str, error: str
+) -> None:
+    (tmp_path / "pipeline.py").write_text(pipeline(decorator))
+    proc = barca_cmd(tmp_path, "list", "pipeline.py", "--json")
+    assert proc.returncode == 2
+    assert error in envelope(proc)["error"]
+    # Python agrees: the module does not import.
+    standalone = subprocess.run(
+        [sys.executable, str(tmp_path / "pipeline.py")], capture_output=True, text=True
+    )
+    assert standalone.returncode == 1 and "TypeError" in standalone.stderr
 
 
 # ─── The Python stubs ─────────────────────────────────────────────────────────
@@ -288,7 +400,8 @@ def test_every_documented_argument_still_works_standalone() -> None:
         )(fn)
         is fn
     )
-    assert sensor(freshness=Schedule("*/5 * * * *"), **common)(fn) is fn
-    assert task(inputs={"x": fn}, freshness=Manual, **common)(fn) is fn
+    split = dict(partitions={"k": partitions(["a"])}, serializer="pickle")
+    assert sensor(freshness=Schedule("*/5 * * * *"), **split, **common)(fn) is fn
+    assert task(inputs={"x": fn}, freshness=Manual, **split, **common)(fn) is fn
     assert sink("out.json", serializer="json")(fn) is fn
     assert Schedule("0 5 * * *").cron == "0 5 * * *"
