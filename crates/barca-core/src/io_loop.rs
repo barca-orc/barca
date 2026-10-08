@@ -926,8 +926,11 @@ async fn spawn_worker(
         .env("BARCA_ARTIFACT_URI", &config.artifact_root)
         // A step's own print() output goes to barca's stderr, never stdout: stdout carries
         // only barca's result, so `barca run ... | jq` works when steps print.
-        .stdout(Stdio::from(std::io::stderr()))
-        .stderr(Stdio::inherit())
+        // Both streams are one destination, as they always were; when barca's stderr is a
+        // pipe it is a pipe barca owns, so a reader that leaves cannot fail the step or
+        // kill a process it starts (`crate::term`, "What barca's child processes write to").
+        .stdout(crate::term::child_output())
+        .stderr(crate::term::child_output())
         .stdin(Stdio::null());
     if let Some(ref opts) = config.storage_options_json {
         cmd.env("BARCA_STORAGE_OPTIONS", opts);

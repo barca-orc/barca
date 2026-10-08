@@ -331,7 +331,7 @@ impl CliError {
     /// exit code is the error's either way (`barca_core::term`).
     pub fn emit(&self, json: bool) -> ! {
         barca_core::errln!("{}", self.render(json));
-        std::process::exit(self.code())
+        barca_core::term::exit(self.code())
     }
 }
 

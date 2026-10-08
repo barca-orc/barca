@@ -13,6 +13,9 @@ The rule (`barca docs contract`, "A closed stdout or stderr"):
   succeeded, and 1, 2, 3 or 130 for one with an error of its own. `barca list | grep -q x`
   under `set -o pipefail` therefore does not fail because grep stopped reading.
 
+A step is covered whatever it does: its `print()`, a child process it starts, a raw write to
+descriptor 1 or 2 and C stdio all go to a pipe barca owns, never to the caller's.
+
 The tests do not race a reader: barca is started with a pipe whose read end is already
 closed, so its first write fails, every time. The one test of a reader that closes after
 reading part of the output uses an output larger than any pipe buffer, so barca is still
@@ -24,6 +27,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -310,37 +314,177 @@ def test_a_write_that_fails_for_another_reason_is_an_error(materialized: Path) -
         assert check(proc.stderr), proc.stderr
 
 
-# ─── The worker's own guard ───────────────────────────────────────────────────
+# ─── What a step does below Python's print ────────────────────────────────────
+#
+# A worker's stdout and stderr are barca's stderr. When that is a pipe, the workers get a pipe
+# barca owns and barca forwards (`crates/barca-core/src/term.rs`), so nothing a step does can
+# meet a pipe without a reader: not a child process, not a raw write, not a C library.
+
+CHILDREN = """
+import ctypes
+import os
+import subprocess
+import sys
+
+from barca import task
 
 
-def test_the_pipe_guard_drops_output_and_keeps_the_descriptor_usable() -> None:
-    """`barca._pipes`: what keeps a step's `print()` from raising in the worker."""
-    import sys
+@task()
+def child() -> int:
+    done = subprocess.run(["sh", "-c", "echo child-out; echo child-err >&2; echo child-again"])
+    # -13 here is the child killed by SIGPIPE.
+    assert done.returncode == 0, done.returncode
+    return done.returncode
 
-    script = (
-        "import os, sys\n"
-        "from barca import _pipes\n"
-        "_pipes.install(); _pipes.install()\n"
-        "for i in range(3):\n"
-        "    print('to stdout', i)\n"
-        "    sys.stdout.flush()\n"
-        "    print('to stderr', i, file=sys.stderr)\n"
-        "os.write(1, b'raw write to the descriptor')\n"
-        "os.write(2, b'raw write to the descriptor')\n"
-        "assert sys.stdout.isatty() is False and sys.stderr.fileno() == 2\n"
+
+@task()
+def raw_writes() -> int:
+    for i in range(3000):
+        os.write(1, b"fd1 line %d\\n" % i)
+        os.write(2, b"fd2 line %d\\n" % i)
+    return 3000
+
+
+@task()
+def c_library() -> int:
+    libc = ctypes.CDLL(None)
+    for _ in range(3000):
+        assert libc.puts(b"a line from C stdio") >= 0
+    assert libc.fflush(None) == 0
+    return 3000
+
+
+@task()
+def shell_pipeline() -> str:
+    # SIGPIPE is at its default for what a step starts: `yes` ends when `head` has its line.
+    done = subprocess.run("yes | head -1", shell=True, capture_output=True, text=True, timeout=30)
+    assert done.returncode == 0, done
+    return done.stdout.strip()
+
+
+@task()
+def ordered() -> int:
+    os.write(2, b"marker: start\\n")
+    for i in range(200):
+        os.write(1, b"out %d\\n" % i)
+        os.write(2, b"err %d\\n" % i)
+    subprocess.run(["sh", "-c", "echo child-out; echo child-err >&2"], check=True)
+    print("printed to stdout")
+    print("printed to stderr", file=sys.stderr)
+    return 200
+
+
+@task()
+def flood() -> int:
+    open("started", "w").close()
+    for i in range(20000):
+        os.write(2, b"flood line %06d\\n" % i)
+    return 20000
+"""
+
+CLOSED = {
+    "stdout closed": {"stdout_closed": True},
+    "stderr closed": {"stderr_closed": True},
+    "both closed": {"stdout_closed": True, "stderr_closed": True},
+}
+
+
+@pytest.fixture
+def children(tmp_path: Path) -> Path:
+    (tmp_path / "pipeline.py").write_text(CHILDREN)
+    return tmp_path
+
+
+@pytest.mark.parametrize("closed", list(CLOSED))
+@pytest.mark.parametrize("step", ["child", "raw_writes", "c_library", "shell_pipeline"])
+def test_a_step_that_writes_below_python_is_not_failed_by_a_closed_stream(
+    children: Path, step: str, closed: str
+) -> None:
+    """A child process, `os.write` to descriptors 1 and 2, and C stdio. Before barca owned the
+    workers' pipe, the child was killed by SIGPIPE and the raw write raised BrokenPipeError
+    whenever barca's stderr had lost its reader: the step failed because nobody was reading."""
+    proc = run_barca(children, "run", step, "pipeline.py", "--json", **CLOSED[closed])
+    assert proc.returncode == 0, proc.stderr
+    if proc.stderr is not None:
+        assert_quiet(proc)
+    if proc.stdout is not None:
+        result = json.loads(proc.stdout)
+        assert result["status"] == "success"
+        assert (
+            result["final_output"]
+            == {
+                "child": 0,
+                "raw_writes": 3000,
+                "c_library": 3000,
+                "shell_pipeline": "y",
+            }[step]
+        )
+    assert history(children) == [("run", step, "success", 1)]
+
+
+def step_output(stderr: str) -> list[str]:
+    """What the step wrote, without barca's own lines."""
+    return [line for line in stderr.splitlines() if not line.startswith("[barca]")]
+
+
+def test_with_a_reader_a_steps_output_is_what_it_always_was(children: Path) -> None:
+    """Normal operation. The order of a step's writes to its two streams, of its child's, and
+    of barca's own line that follows them is kept, and the output through barca's pipe (stderr
+    is a pipe) is the same as when the workers hold stderr itself (stderr is a file, the path
+    that did not change)."""
+    piped = run_barca(children, "run", "ordered", "pipeline.py", "--agent", "--json")
+    assert piped.returncode == 0, piped.stderr
+    lines = piped.stderr.splitlines()
+
+    expected = ["marker: start"]
+    for i in range(200):
+        expected += [f"out {i}", f"err {i}"]
+    expected += ["child-out", "child-err"]
+    start = lines.index("marker: start")
+    assert lines[start : start + len(expected)] == expected
+    # Python's own buffered print() lines come when Python flushes them, as before.
+    assert "printed to stdout" in lines and "printed to stderr" in lines
+    # barca's line about the step comes after everything the step wrote.
+    completed = next(
+        i for i, line in enumerate(lines) if "step:pipeline.py:ordered completed" in line
     )
-    out, err = closed_pipe(), closed_pipe()
-    try:
-        proc = subprocess.run([sys.executable, "-c", script], stdout=out, stderr=err)
-    finally:
-        os.close(out)
-        os.close(err)
-    assert proc.returncode == 0
+    assert completed > max(lines.index("printed to stdout"), lines.index("printed to stderr"))
+    # Nothing of it is on stdout: that is the result alone.
+    assert json.loads(piped.stdout)["final_output"] == 200
 
-    # An open stream is passed through unchanged.
-    proc = subprocess.run(
-        [sys.executable, "-c", "from barca import _pipes\n_pipes.install()\nprint('kept')"],
-        capture_output=True,
+    with open(children / "stderr.txt", "w") as to_file:
+        direct = subprocess.run(
+            [_find_binary(), "run", "ordered", "pipeline.py", "--agent", "--json"],
+            cwd=children,
+            stdout=subprocess.PIPE,
+            stderr=to_file,
+            text=True,
+            timeout=120,
+        )
+    assert direct.returncode == 0
+    assert step_output((children / "stderr.txt").read_text()) == step_output(piped.stderr)
+
+
+def test_a_reader_that_falls_behind_loses_nothing(children: Path) -> None:
+    """A slow reader: nothing is read until the step has started, by which time it is writing
+    far more than barca's pipe and the caller's can hold together. The step waits, as it did on
+    the caller's pipe; every line then arrives, in order, and barca keeps no backlog in memory
+    (it copies through a fixed buffer)."""
+    proc = subprocess.Popen(
+        [_find_binary(), "run", "flood", "pipeline.py", "--json"],
+        cwd=children,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
     )
-    assert (proc.returncode, proc.stdout) == (0, "kept\n")
+    assert proc.stderr is not None
+    deadline = time.monotonic() + 60
+    while not (children / "started").exists():
+        assert proc.poll() is None and time.monotonic() < deadline
+        time.sleep(0.01)
+    # 20,000 lines of 18 bytes: 360 kB against two 64 kB pipes.
+    received = [line for line in proc.stderr if line.startswith("flood line")]
+    stdout, _ = proc.communicate(timeout=60)
+    assert proc.returncode == 0
+    assert received == [f"flood line {i:06d}\n" for i in range(20000)]
+    assert json.loads(stdout)["final_output"] == 20000

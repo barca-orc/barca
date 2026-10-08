@@ -15,10 +15,36 @@
 //!
 //! Clippy denies `print_stdout` and `print_stderr` in the three crates, so a new `println!`
 //! does not compile in CI.
+//!
+//! # What barca's child processes write to
+//!
+//! A worker's stdout and stderr are barca's stderr: a step's `print()` shows up there. If the
+//! workers held barca's stderr itself and that were a pipe whose reader left, the damage would
+//! be done where barca cannot catch it: Python raises `BrokenPipeError` inside the step, a
+//! child process the step starts is killed by SIGPIPE, a C extension gets EPIPE. So when
+//! barca's stderr is a pipe or a socket, the children get a pipe barca owns instead
+//! ([`child_output`]), and barca copies what arrives on it to its own stderr, dropping it when
+//! that is closed. The children's pipe never loses its reader while barca lives.
+//!
+//! - One pipe serves every child, and each child's stdout and stderr are both that pipe, as
+//!   before both were the one stderr: the order in which the children's writes arrive is the
+//!   order they were written in.
+//! - barca's own lines keep their place: [`stderr_line`] first copies what the children had
+//!   already written. A step's output therefore still precedes the `[barca] step:... completed`
+//!   line that reports it.
+//! - Nothing is held in memory: bytes are copied through a fixed buffer, and a child that
+//!   writes faster than barca's stderr is read waits on a full pipe, as it did on the
+//!   caller's.
+//! - When barca's stderr is a terminal, a file or `/dev/null`, the children hold it directly,
+//!   exactly as before: a terminal stays a terminal for a step that draws a progress bar, and
+//!   none of those can lose its reader.
 
 use std::fmt;
-use std::io::{ErrorKind, Write};
+use std::io::{ErrorKind, PipeReader, PipeWriter, Read, Write};
+use std::os::fd::AsRawFd;
+use std::process::Stdio;
 use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 const OPEN: u8 = 0;
 /// The reader went away (EPIPE).
@@ -65,9 +91,143 @@ pub fn stdout_str(text: &str) {
     );
 }
 
-/// `eprintln!` that does not panic. Use [`errln!`](crate::errln).
+/// `eprintln!` that does not panic. Use [`errln!`](crate::errln). What the child processes
+/// wrote before this call is copied to stderr first, so the line keeps its place.
 pub fn stderr_line(args: fmt::Arguments<'_>) {
+    let _order = ChildOutput::copy_pending();
     write_to(&mut std::io::stderr().lock(), &STDERR, args, true);
+}
+
+/// The pipe barca's children write to when barca's own stderr could lose its reader.
+struct ChildOutput {
+    /// Non-blocking, so a copy never waits for a child to write.
+    reader: PipeReader,
+    /// Kept open for the life of the process: the children's pipe always has a reader and a
+    /// writer, so a read never reports end-of-file while a child could still be started.
+    writer: PipeWriter,
+    /// Held while bytes are copied and while barca writes a line of its own: the order on
+    /// stderr is the order of those critical sections.
+    order: Mutex<()>,
+}
+
+static CHILD_OUTPUT: OnceLock<Option<ChildOutput>> = OnceLock::new();
+
+/// Whether descriptor `fd` is a pipe or a socket: the kinds whose reader can go away.
+fn can_lose_its_reader(fd: i32) -> bool {
+    // SAFETY: `fstat` fills the struct it is given; an error leaves the answer "no".
+    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstat(fd, &mut st) } != 0 {
+        return false;
+    }
+    matches!(st.st_mode & libc::S_IFMT, libc::S_IFIFO | libc::S_IFSOCK)
+}
+
+impl ChildOutput {
+    fn get() -> Option<&'static ChildOutput> {
+        CHILD_OUTPUT
+            .get_or_init(|| {
+                if !can_lose_its_reader(libc::STDERR_FILENO) {
+                    return None;
+                }
+                let (reader, writer) = std::io::pipe().ok()?;
+                // SAFETY: plain syscalls on a descriptor this function owns. The flag is on
+                // the read end only: the children's writes stay blocking.
+                let nonblocking = unsafe {
+                    let flags = libc::fcntl(reader.as_raw_fd(), libc::F_GETFL);
+                    flags >= 0
+                        && libc::fcntl(reader.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK)
+                            == 0
+                };
+                if !nonblocking {
+                    return None;
+                }
+                let fd = reader.as_raw_fd();
+                std::thread::Builder::new()
+                    .name("barca-child-output".into())
+                    .spawn(move || {
+                        loop {
+                            let mut poll = libc::pollfd {
+                                fd,
+                                events: libc::POLLIN,
+                                revents: 0,
+                            };
+                            // SAFETY: one valid pollfd; the descriptor lives as long as the
+                            // process (it is in a static).
+                            let ready = unsafe { libc::poll(&mut poll, 1, -1) };
+                            if ready < 0
+                                && std::io::Error::last_os_error().kind() != ErrorKind::Interrupted
+                            {
+                                return;
+                            }
+                            ChildOutput::copy_pending();
+                        }
+                    })
+                    .ok()?;
+                Some(ChildOutput {
+                    reader,
+                    writer,
+                    order: Mutex::new(()),
+                })
+            })
+            .as_ref()
+    }
+
+    /// Copy to stderr what the children have written so far, and return the guard that keeps
+    /// the order until the caller has written its own line. Copies only what was in the pipe
+    /// when it was called, so a child that never stops writing cannot hold the caller.
+    fn copy_pending() -> Option<MutexGuard<'static, ()>> {
+        // Not `get()`: before the first child is started there is nothing to copy, and a
+        // command that starts none never creates the pipe.
+        let out = CHILD_OUTPUT.get()?.as_ref()?;
+        let guard = out.order.lock().unwrap_or_else(|e| e.into_inner());
+        let mut pending: libc::c_int = 0;
+        // SAFETY: FIONREAD writes one int.
+        if unsafe { libc::ioctl(out.reader.as_raw_fd(), libc::FIONREAD, &mut pending) } != 0 {
+            return Some(guard);
+        }
+        let mut left = pending.max(0) as usize;
+        let mut buf = [0u8; 16 * 1024];
+        while left > 0 {
+            let want = left.min(buf.len());
+            match (&out.reader).read(&mut buf[..want]) {
+                Ok(0) => break,
+                Ok(n) => {
+                    left -= n;
+                    forward(&buf[..n]);
+                }
+                Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+                Err(_) => break, // WouldBlock: another copy took it
+            }
+        }
+        Some(guard)
+    }
+}
+
+/// Write the children's bytes to stderr as they are; drop them once stderr is closed.
+fn forward(bytes: &[u8]) {
+    if STDERR.load(Ordering::Relaxed) != OPEN {
+        return;
+    }
+    if let Err(e) = std::io::stderr().lock().write_all(bytes) {
+        STDERR.store(state_of(&e), Ordering::Relaxed);
+    }
+}
+
+/// What a child process's stdout and stderr should be, so that its output reaches barca's
+/// stderr and the child never writes to a pipe that has lost its reader (see the module
+/// documentation). Use it for both streams of every child whose output is not captured.
+pub fn child_output() -> Stdio {
+    match ChildOutput::get().and_then(|out| out.writer.try_clone().ok()) {
+        Some(writer) => Stdio::from(writer),
+        None => Stdio::from(std::io::stderr()),
+    }
+}
+
+/// Exit the process, after copying to stderr what its children wrote. Every exit of the CLI
+/// goes through here: `std::process::exit` alone would leave their last lines in the pipe.
+pub fn exit(code: i32) -> ! {
+    drop(ChildOutput::copy_pending());
+    std::process::exit(code)
 }
 
 /// Flush stdout and say whether everything written to it got out.
@@ -145,6 +305,21 @@ mod tests {
             false,
         );
         assert_eq!(state.load(Ordering::Relaxed), FAILED);
+    }
+
+    #[test]
+    fn only_a_pipe_or_a_socket_can_lose_its_reader() {
+        let (reader, writer) = std::io::pipe().unwrap();
+        assert!(can_lose_its_reader(writer.as_raw_fd()));
+        assert!(can_lose_its_reader(reader.as_raw_fd()));
+        let (a, _b) = std::os::unix::net::UnixStream::pair().unwrap();
+        assert!(can_lose_its_reader(a.as_raw_fd()));
+        // A file and the null device are held by the children directly, as before.
+        let file = std::fs::File::open(std::env::current_exe().unwrap()).unwrap();
+        assert!(!can_lose_its_reader(file.as_raw_fd()));
+        let null = std::fs::File::open("/dev/null").unwrap();
+        assert!(!can_lose_its_reader(null.as_raw_fd()));
+        assert!(!can_lose_its_reader(-1));
     }
 
     #[test]

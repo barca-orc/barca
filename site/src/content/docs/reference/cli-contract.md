@@ -328,9 +328,17 @@ caller that stops reading), barca prints nothing about it and does not stop what
 - Output for the closed stream is dropped. There is no panic, no traceback and no message on
   the other stream.
 - The command finishes. A `get` or `run` executes every step and records the run as it would
-  with a reader, whether stdout, stderr or both are closed. A step's own `print` output for a
-  closed stream is dropped and does not fail the step. A closed pipe is not a cancellation: to
-  stop a run, interrupt it (Ctrl-C, exit 130).
+  with a reader, whether stdout, stderr or both are closed. A closed pipe is not a
+  cancellation: to stop a run, interrupt it (Ctrl-C, exit 130).
+- A step is not affected, whatever it does. Its `print` output, the output of a process it
+  starts, a write to file descriptor 1 or 2 and the output of a C library are dropped like
+  barca's own; none of them raises `BrokenPipeError` in the step or ends a child process with
+  SIGPIPE. When barca's stderr is a pipe or a socket, the workers write to a pipe barca itself
+  reads and copies to its stderr, so they never hold a pipe that can lose its reader. With a
+  reader attached the output is the same as before, in the same order, on the same stream
+  (stderr); when stderr is a terminal or a file the workers hold it directly, as before.
+  SIGPIPE keeps its default for the processes a step starts, so `yes | head -1` inside a step
+  ends as usual.
 - The exit code does not change. It is the one the command would have had with a reader: 0
   when it succeeded, and 1, 2, 3 or 130 when it has an error of its own (the envelope is still
   written to stderr if stderr is open). A reader that stops early is not an error, so
@@ -342,7 +350,9 @@ This holds for every command, `--help`, `--version` and `barca docs` included. U
 a closed stderr abandoned a run in the middle (it stayed `interrupted` in `barca history`).
 
 Limits: barca learns that a stream is closed only when it writes to it, so a run whose reader
-has left goes on to its end; interrupt it to stop it. A caller cannot tell from the exit code
+has left goes on to its end; interrupt it to stop it. A process that a step leaves running
+after barca itself has exited writes to a pipe nobody reads any more and is ended by SIGPIPE on
+its next write, as any orphan of a pipeline is. A caller cannot tell from the exit code
 that part of the result was not read: it is the caller that stopped reading. A write to stdout
 that fails for any other reason (a full disk behind `> result.json`) is exit 3, with one line
 on stderr.

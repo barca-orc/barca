@@ -1009,11 +1009,6 @@ def run_daemon():
         sys.exit(1)
     _use_socket = True
 
-    # A reader of barca's stderr that goes away must not fail a step that prints (#286).
-    from barca import _pipes
-
-    _pipes.install()
-
     # Collapse repeated library warnings (barca docs agents, "Repeated warnings").
     from barca import _dedupe
 

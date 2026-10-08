@@ -980,7 +980,7 @@ fn finish(json: bool) -> ! {
         )
         .emit(json)
     }
-    std::process::exit(0)
+    barca_core::term::exit(0)
 }
 
 fn main() {

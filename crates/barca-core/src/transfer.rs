@@ -201,8 +201,10 @@ impl Launching {
         crate::helper_proc::shield_from_ctrl_c(&mut cmd);
         crate::helper_proc::give_lifeline(&mut cmd);
         cmd.env("BARCA_SOCKET", &socket_path)
+            // Its warnings go to barca's stderr, through the pipe barca owns when that could
+            // lose its reader (`crate::term`).
             .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
+            .stderr(crate::term::child_output())
             .kill_on_drop(true);
         let mut child = crate::helper_proc::spawn(&mut cmd).map_err(|e| {
             std::fs::remove_file(&socket_path).ok();
