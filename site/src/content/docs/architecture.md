@@ -37,6 +37,8 @@ crates/
     report.rs, report/        shared result formatting, field projection and progress lines
     envelope.rs               error classification, remediation and error envelopes
     schedule.rs               schedule discovery and next-fire descriptions
+    decorator_args.rs         accepted decorator/helper arguments and static validation
+    term.rs                   ordered output and child streams that tolerate closed pipes
     helper_proc.rs            Python command construction, serialized spawning and helper lifetime
     telemetry/                run reports; one Datadog trace per run
   barca-server/src/           axum HTTP API, cron scheduler, file watcher, embedded web UI

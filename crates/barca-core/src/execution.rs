@@ -163,7 +163,7 @@ struct Trace {
 macro_rules! trace_point {
     ($trace:expr, $($arg:tt)*) => {
         if $trace.enabled {
-            eprintln!("[trace] {:>8.1}ms  {}", $trace.start.elapsed().as_secs_f64() * 1000.0, format_args!($($arg)*));
+            crate::errln!("[trace] {:>8.1}ms  {}", $trace.start.elapsed().as_secs_f64() * 1000.0, format_args!($($arg)*));
         }
     };
 }
@@ -313,15 +313,15 @@ async fn open_state(
             };
             let (state_sync::Pulled { token, carried }, took) = pulled;
             if let Some(note) = carried.note() {
-                eprintln!("{note}");
+                crate::errln!("{note}");
             }
             match token.0 {
-                Some(_) => eprintln!(
+                Some(_) => crate::errln!(
                     "[barca] pulled state ({}) in {:.2}s",
                     fmt_bytes(std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0)),
                     took.as_secs_f64()
                 ),
-                None => eprintln!("[barca] no shared state yet — this run will create it"),
+                None => crate::errln!("[barca] no shared state yet — this run will create it"),
             }
             Some(token)
         }
@@ -496,7 +496,7 @@ async fn start_workers(
             }
             _ => {
                 for (id, secs) in running {
-                    eprintln!("[barca] still running ({}s): {id}", *secs as u64);
+                    crate::errln!("[barca] still running ({}s): {id}", *secs as u64);
                 }
             }
         }));
@@ -1006,7 +1006,7 @@ async fn collect_failures(
             continue;
         }
         if session.request.agent_mode {
-            eprintln!("{}", failed_step_line(&node_id, error_msg));
+            crate::errln!("{}", failed_step_line(&node_id, error_msg));
         }
         if first_non_group_failure.is_none() {
             first_non_group_failure = Some((node_id.clone(), error_msg.to_string()));
@@ -1079,7 +1079,7 @@ fn finish_queue(session: &mut RunSession<'_, '_>, queue: &mut VecDeque<Work<'_>>
     // all is announced now.
     for id in std::mem::take(&mut session.state.held_cached_lines) {
         if session.state.cached_node_ids.contains(&id) {
-            eprintln!("{}", cached_step_line(&session.prepared.dag, &id));
+            crate::errln!("{}", cached_step_line(&session.prepared.dag, &id));
         }
     }
 }
@@ -1265,7 +1265,7 @@ async fn prepare_run(
         && target_ids.is_empty()
         && let Some(note) = skipped_tasks_note(&dag, file_args)
     {
-        eprintln!("{note}");
+        crate::errln!("{note}");
     }
     // Several targets: a step failure stops only what depends on it, so every target that can
     // still run does (one run reports every failure). One target keeps the stop-at-first-failure
@@ -1407,7 +1407,7 @@ pub(crate) async fn explain_dag(
     if cfg.state == crate::config::StateMode::Optimistic && cfg.state_uri.is_some() {
         let pulled = state_sync::pull_state(python, cfg, state_sync::Until::done()).await?;
         if let Some(note) = pulled.carried.note() {
-            eprintln!("{note}");
+            crate::errln!("{note}");
         }
     }
 
@@ -1819,7 +1819,7 @@ async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaError> {
                         if StoreSync::known_absent(store.as_ref(), &oref.path) {
                             held_cached_lines.push(display_id.clone());
                         } else {
-                            eprintln!("{}", cached_step_line(dag, &display_id));
+                            crate::errln!("{}", cached_step_line(dag, &display_id));
                         }
                     }
                     all_outputs.insert(display_id.clone(), oref);
@@ -1866,7 +1866,7 @@ async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaError> {
 pub(crate) fn note(pb: &Option<indicatif::ProgressBar>, msg: &str) {
     match pb {
         Some(bar) if !bar.is_hidden() => bar.println(msg),
-        _ => eprintln!("{msg}"),
+        _ => crate::errln!("{msg}"),
     }
 }
 
@@ -2013,7 +2013,7 @@ async fn dispatch_phase(
                 }
                 bar.set_message(format!("{short_name} done"));
             } else if agent_mode {
-                eprintln!(
+                crate::errln!(
                     "[barca] step:{} completed {:.1}s ({}/{}){}",
                     node_id,
                     elapsed_s.unwrap_or(0.0),
@@ -2308,11 +2308,11 @@ async fn stop_workers(ctx: StopProgress<'_>, trace: &impl Fn(&str)) {
     // The ten most repeated get a line each, so the summary cannot become the noise it removes.
     const SUMMARY_LINES: usize = 10;
     for (text, n) in repeated_warnings.iter().take(SUMMARY_LINES) {
-        eprintln!("[barca] {n} more: {text}");
+        crate::errln!("[barca] {n} more: {text}");
     }
     if repeated_warnings.len() > SUMMARY_LINES {
         let rest = &repeated_warnings[SUMMARY_LINES..];
-        eprintln!(
+        crate::errln!(
             "[barca] {} more: {} other repeated warnings",
             rest.iter().map(|(_, n)| n).sum::<u64>(),
             rest.len()
@@ -2326,7 +2326,7 @@ async fn stop_workers(ctx: StopProgress<'_>, trace: &impl Fn(&str)) {
         } else {
             RunOutcome::Done
         };
-        eprintln!(
+        crate::errln!(
             "{}",
             end_of_run_line(completed_steps, total_steps, elapsed_so_far, outcome)
         );
@@ -2397,7 +2397,7 @@ async fn drain_store(ctx: DrainStore<'_>, trace: &impl Fn(&str)) -> bool {
             }
         }
         if report.transferred > 0 {
-            eprintln!(
+            crate::errln!(
                 "[barca] uploaded {} artifact{} ({}); waited {:.1}s at end of run",
                 report.transferred,
                 if report.transferred == 1 { "" } else { "s" },
@@ -2494,14 +2494,14 @@ async fn publish_history(
             Err(e) => Some(e.to_string().lines().next().unwrap_or_default().to_string()),
         };
         if let Some(why) = why {
-            eprintln!(
+            crate::errln!(
                 "[barca] the shared history was not updated ({why}). This run is recorded \
                      on this machine; the next barca get or barca run here uploads it."
             );
         }
     }
     if let Some(retries) = pushed {
-        eprintln!(
+        crate::errln!(
             "[barca] pushed state ({}) in {:.2}s{}",
             fmt_bytes(std::fs::metadata(db_path).map(|m| m.len()).unwrap_or(0)),
             t_push.elapsed().as_secs_f64(),

@@ -93,7 +93,7 @@ benchmarks/chain_100/bench.sh 5   # (coming soon)
 The CLI must be usable by humans **and** AI agents without leaving the terminal. Any change to a
 command, flag, decorator, output format, or caching behavior ships with all of:
 
-1. **`--help` examples** — the subcommand's `after_help` in `crates/barca-cli/src/main.rs`
+1. **`--help` examples** — the subcommand's `after_help` in `crates/barca-cli/src/args.rs`
    (runnable `barca ...` example lines; a new flag gets an example).
 2. **The manual** — the matching topic in `crates/barca-cli/docs/*.md`, embedded by
    `crates/barca-cli/src/docs.rs`. New topics go in `TOPICS` and must be linked from
@@ -124,6 +124,14 @@ and asserts what the text claims. `cargo test -p barca` (`crates/barca-cli/src/c
 `contract.md` do not reflect. Document behavior you have run, and state known limitations
 plainly (e.g. partitioned steps are not cache-checked yet) rather than describing intended
 behavior.
+
+## Output and decorator arguments
+
+`barca-core/src/decorator_args.rs` is the shared list of accepted decorator/helper arguments.
+Its tests keep Python stubs and documentation tables in sync. Use `outln!` / `errln!` for
+lines, or `term::stdout_str` / `stderr_str` for rendered chunks; direct print macros are denied
+by Clippy. Use `term::child_output()` for uncaptured child streams and `term::exit` to drain
+child output before exiting.
 
 ## Git workflow
 

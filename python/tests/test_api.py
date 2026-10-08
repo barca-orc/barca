@@ -197,17 +197,21 @@ class TestTask:
             def migrate():
                 return {"step": "migrate"}
 
-            @task(after=[migrate])
-            def warm_cache():
+            @task(inputs={"_migrate": migrate})
+            def warm_cache(_migrate):
                 return {"step": "warm_cache"}
 
-            @task(after=[warm_cache])
-            def notify():
+            @task(inputs={"_warm_cache": warm_cache})
+            def notify(_warm_cache):
                 return {"step": "notify"}
             """,
         )
-        # The whole after-chain runs; targeting notify scopes to the subtree.
+        # Ordering-only inputs (`_` prefix): the whole chain runs before notify. Until 0.18.1
+        # this fixture said `@task(after=[...])`, an argument barca never had and ignored
+        # (#284), so only notify ran.
         assert barca.run("notify", f) == {"step": "notify"}
+        run = barca.history()[0]
+        assert (run["target"], run["steps_executed"]) == ("notify", 3)
 
     def test_task_always_reruns(self, tmp_path):
         f = write_module(
