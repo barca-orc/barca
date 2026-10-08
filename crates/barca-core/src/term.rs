@@ -67,24 +67,83 @@ fn write_to(stream: &mut dyn Write, state: &AtomicU8, args: fmt::Arguments<'_>, 
     if state.load(Ordering::Relaxed) != OPEN {
         return;
     }
-    let mut result = stream.write_fmt(args);
-    if result.is_ok() && newline {
-        result = stream.write_all(b"\n");
+    // One buffer, one `write_all`: a line is not split between two writers of the stream.
+    let mut text = fmt::format(args);
+    if newline {
+        text.push('\n');
     }
-    if let Err(e) = result {
+    if let Err(e) = stream.write_all(text.as_bytes()) {
         state.store(state_of(&e), Ordering::Relaxed);
     }
 }
 
+/// A standard stream written to directly, for a write that waits instead of failing.
+///
+/// The caller may hand barca a descriptor in non-blocking mode (a pipe shared with an event
+/// loop does this). A write to it fails with EAGAIN while the reader is behind. That is not a
+/// closed stream: the write waits until the descriptor is writable (`poll`, no busy loop) and
+/// goes on, so a slow reader receives everything and the wait reaches whoever produces the
+/// output, as it does on a blocking pipe. EINTR is retried. Only a real error (EPIPE when the
+/// reader is gone, EIO, ENOSPC) comes back to the caller.
+///
+/// It writes to the descriptor itself and not through `std::io::stdout()`, whose line buffer
+/// cannot be retried after a partial write without repeating bytes.
+struct Stream(i32);
+
+impl Write for Stream {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        loop {
+            // SAFETY: the pointer and length are those of `buf`. The length is capped
+            // because some systems refuse a single write above INT_MAX.
+            let n = unsafe { libc::write(self.0, buf.as_ptr().cast(), buf.len().min(1 << 30)) };
+            if n >= 0 {
+                return Ok(n as usize);
+            }
+            let e = std::io::Error::last_os_error();
+            match e.kind() {
+                ErrorKind::Interrupted => {}
+                ErrorKind::WouldBlock => {
+                    let mut poll = libc::pollfd {
+                        fd: self.0,
+                        events: libc::POLLOUT,
+                        revents: 0,
+                    };
+                    // SAFETY: one valid pollfd. It returns when the descriptor is writable
+                    // or its reader is gone; the next write then succeeds or says why not.
+                    unsafe { libc::poll(&mut poll, 1, -1) };
+                }
+                // A stream that was closed before barca started (`>&-`): nothing to write
+                // to, and not an error, as with `println!`.
+                _ if e.raw_os_error() == Some(libc::EBADF) => return Ok(buf.len()),
+                _ => return Err(e),
+            }
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// One writer at a time per stream, so lines from different threads do not interleave.
+static STDOUT_WRITER: Mutex<()> = Mutex::new(());
+static STDERR_WRITER: Mutex<()> = Mutex::new(());
+
+fn locked(lock: &'static Mutex<()>) -> MutexGuard<'static, ()> {
+    lock.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// `println!` that does not panic. Use [`outln!`](crate::outln).
 pub fn stdout_line(args: fmt::Arguments<'_>) {
-    write_to(&mut std::io::stdout().lock(), &STDOUT, args, true);
+    let _one = locked(&STDOUT_WRITER);
+    write_to(&mut Stream(libc::STDOUT_FILENO), &STDOUT, args, true);
 }
 
 /// Write text to stdout as it is (no newline added), without panicking.
 pub fn stdout_str(text: &str) {
+    let _one = locked(&STDOUT_WRITER);
     write_to(
-        &mut std::io::stdout().lock(),
+        &mut Stream(libc::STDOUT_FILENO),
         &STDOUT,
         format_args!("{text}"),
         false,
@@ -95,7 +154,8 @@ pub fn stdout_str(text: &str) {
 /// wrote before this call is copied to stderr first, so the line keeps its place.
 pub fn stderr_line(args: fmt::Arguments<'_>) {
     let _order = ChildOutput::copy_pending();
-    write_to(&mut std::io::stderr().lock(), &STDERR, args, true);
+    let _one = locked(&STDERR_WRITER);
+    write_to(&mut Stream(libc::STDERR_FILENO), &STDERR, args, true);
 }
 
 /// The pipe barca's children write to when barca's own stderr could lose its reader.
@@ -208,7 +268,8 @@ fn forward(bytes: &[u8]) {
     if STDERR.load(Ordering::Relaxed) != OPEN {
         return;
     }
-    if let Err(e) = std::io::stderr().lock().write_all(bytes) {
+    let _one = locked(&STDERR_WRITER);
+    if let Err(e) = Stream(libc::STDERR_FILENO).write_all(bytes) {
         STDERR.store(state_of(&e), Ordering::Relaxed);
     }
 }
@@ -230,17 +291,13 @@ pub fn exit(code: i32) -> ! {
     std::process::exit(code)
 }
 
-/// Flush stdout and say whether everything written to it got out.
+/// Whether everything written to stdout got out. Nothing is buffered: each write went to the
+/// descriptor when it was made.
 fn stdout_state() -> u8 {
-    if STDOUT.load(Ordering::Relaxed) == OPEN
-        && let Err(e) = std::io::stdout().lock().flush()
-    {
-        STDOUT.store(state_of(&e), Ordering::Relaxed);
-    }
     STDOUT.load(Ordering::Relaxed)
 }
 
-/// Whether a write to stdout failed for a reason other than a closed pipe (flushes first).
+/// Whether a write to stdout failed for a reason other than a closed pipe.
 /// The caller reports that as an error; a reader that went away is not one.
 pub fn stdout_write_failed() -> bool {
     stdout_state() == FAILED
@@ -305,6 +362,69 @@ mod tests {
             false,
         );
         assert_eq!(state.load(Ordering::Relaxed), FAILED);
+    }
+
+    /// A non-blocking pipe that is full is not a closed one: the write waits for the reader
+    /// and every byte arrives, in order.
+    #[test]
+    fn a_write_to_a_full_non_blocking_pipe_waits_for_the_reader() {
+        let (mut reader, writer) = std::io::pipe().unwrap();
+        // SAFETY: plain syscalls on a descriptor this test owns.
+        unsafe {
+            let flags = libc::fcntl(writer.as_raw_fd(), libc::F_GETFL);
+            assert_eq!(
+                libc::fcntl(writer.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK),
+                0
+            );
+        }
+        // Fill the pipe until it refuses: from here on a plain write fails with EAGAIN.
+        let mut filled = 0usize;
+        loop {
+            let n = unsafe { libc::write(writer.as_raw_fd(), [b'.'; 4096].as_ptr().cast(), 4096) };
+            if n < 0 {
+                assert_eq!(
+                    std::io::Error::last_os_error().kind(),
+                    ErrorKind::WouldBlock
+                );
+                break;
+            }
+            filled += n as usize;
+        }
+        let payload: Vec<u8> = (0..300_000u32).map(|i| b'a' + (i % 26) as u8).collect();
+        let expected = payload.clone();
+        let fd = writer.as_raw_fd();
+        let state = std::sync::Arc::new(AtomicU8::new(OPEN));
+        let seen = state.clone();
+        let writing = std::thread::spawn(move || {
+            let text = String::from_utf8(payload).unwrap();
+            write_to(&mut Stream(fd), &seen, format_args!("{text}"), false);
+            drop(writer); // end-of-file for the reader
+        });
+        // The reader starts only now, with the pipe full and the writer waiting.
+        let mut received = Vec::new();
+        reader.read_to_end(&mut received).unwrap();
+        writing.join().unwrap();
+        assert_eq!(state.load(Ordering::Relaxed), OPEN);
+        assert_eq!(received.len(), filled + expected.len());
+        assert_eq!(&received[filled..], &expected[..]);
+    }
+
+    #[test]
+    fn a_write_to_a_pipe_without_a_reader_is_a_closed_stream() {
+        let (reader, writer) = std::io::pipe().unwrap();
+        drop(reader);
+        let state = AtomicU8::new(OPEN);
+        write_to(
+            &mut Stream(writer.as_raw_fd()),
+            &state,
+            format_args!("x"),
+            true,
+        );
+        assert_eq!(state.load(Ordering::Relaxed), CLOSED);
+        // A descriptor that is not open at all is not an error, as with `println!`.
+        let state = AtomicU8::new(OPEN);
+        write_to(&mut Stream(-1), &state, format_args!("x"), true);
+        assert_eq!(state.load(Ordering::Relaxed), OPEN);
     }
 
     #[test]

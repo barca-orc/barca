@@ -325,6 +325,7 @@ import ctypes
 import os
 import subprocess
 import sys
+import time
 
 from barca import task
 
@@ -375,6 +376,20 @@ def ordered() -> int:
 
 
 @task()
+def leaves_a_process() -> int:
+    # Started by the step and still running when barca exits (`late.py`, below).
+    stream, redirect = open("leave").read().split()
+    out = subprocess.DEVNULL if redirect == "redirected" else None
+    child = subprocess.Popen(
+        [sys.executable, "late.py", stream], stdout=out, stderr=out, start_new_session=True
+    )
+    while not os.path.exists("locked"):
+        assert child.poll() is None
+        time.sleep(0.01)
+    return child.pid
+
+
+@task()
 def flood() -> int:
     open("started", "w").close()
     for i in range(20000):
@@ -389,10 +404,31 @@ CLOSED = {
 }
 
 
+# What `leaves_a_process` starts: holds a lock for as long as it lives, waits for `go`, writes
+# to the descriptor named in argv, then records that it got that far.
+LATE = """
+import fcntl
+import os
+import sys
+import time
+
+lock = open("alive.lock", "w")
+fcntl.flock(lock, fcntl.LOCK_EX)
+open("locked", "w").close()
+while not os.path.exists("go"):
+    time.sleep(0.01)
+os.write(int(sys.argv[1]), b"late line")
+open("survived", "w").close()
+"""
+
+
 @pytest.fixture
 def children(tmp_path: Path) -> Path:
     (tmp_path / "pipeline.py").write_text(CHILDREN)
-    return tmp_path
+    (tmp_path / "late.py").write_text(LATE)
+    yield tmp_path
+    # Whatever a failed test left waiting ends now.
+    (tmp_path / "go").touch()
 
 
 @pytest.mark.parametrize("closed", list(CLOSED))
@@ -488,3 +524,121 @@ def test_a_reader_that_falls_behind_loses_nothing(children: Path) -> None:
     assert proc.returncode == 0
     assert received == [f"flood line {i:06d}\n" for i in range(20000)]
     assert json.loads(stdout)["final_output"] == 20000
+
+
+def wait_until_full(fd: int) -> int:
+    """Wait until the pipe read from `fd` holds data and has stopped filling: its writer has
+    more to write (the tests below write far more than a pipe holds) and cannot."""
+    import fcntl
+    import struct
+    import termios
+
+    def held() -> int:
+        return struct.unpack("i", fcntl.ioctl(fd, termios.FIONREAD, b"\0\0\0\0"))[0]
+
+    deadline = time.monotonic() + 60
+    last, since = -1, time.monotonic()
+    while True:
+        assert time.monotonic() < deadline
+        now = held()
+        if now != last:
+            last, since = now, time.monotonic()
+        elif now > 0 and time.monotonic() - since > 0.5:
+            return now
+        time.sleep(0.01)
+
+
+def test_a_non_blocking_stderr_whose_reader_stalls_loses_nothing(children: Path) -> None:
+    """The caller's pipe is in non-blocking mode (an event loop's pipe is). While the reader
+    is behind, a write to it fails with EAGAIN. That is not a closed stream: barca waits until
+    it can write, and when the reader resumes every line arrives, in order."""
+    read_end, write_end = os.pipe()
+    os.set_blocking(write_end, False)
+    proc = subprocess.Popen(
+        [_find_binary(), "run", "flood", "pipeline.py", "--json"],
+        cwd=children,
+        stdout=subprocess.PIPE,
+        stderr=write_end,
+    )
+    os.close(write_end)
+    # Stall: read nothing until the pipe is full and has stayed full.
+    assert wait_until_full(read_end) > 0
+    assert proc.poll() is None
+    with os.fdopen(read_end, "rb") as stderr:
+        received = [line for line in stderr if line.startswith(b"flood line")]
+    stdout, _ = proc.communicate(timeout=60)
+    assert proc.returncode == 0
+    assert received == [b"flood line %06d\n" % i for i in range(20000)]
+    assert json.loads(stdout)["final_output"] == 20000
+
+
+def test_a_non_blocking_stdout_whose_reader_stalls_loses_nothing(project: Path) -> None:
+    """The same on stdout, with a result larger than a pipe holds."""
+    whole = run_barca(project, "docs", "--all")
+    assert whole.returncode == 0 and len(whole.stdout.encode()) > 128 * 1024
+
+    read_end, write_end = os.pipe()
+    os.set_blocking(write_end, False)
+    proc = subprocess.Popen(
+        [_find_binary(), "docs", "--all"], cwd=project, stdout=write_end, stderr=subprocess.PIPE
+    )
+    os.close(write_end)
+    assert wait_until_full(read_end) > 0
+    assert proc.poll() is None
+    with os.fdopen(read_end, "rb") as stdout:
+        received = stdout.read()
+    _, stderr = proc.communicate(timeout=60)
+    assert (proc.returncode, stderr) == (0, b"")
+    assert received == whole.stdout.encode()
+
+
+def is_running(cwd: Path) -> bool:
+    """Whether the process started from `late.py` is alive: it holds `alive.lock` until it
+    ends, however it ends."""
+    import fcntl
+
+    with open(cwd / "alive.lock", "w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+    return False
+
+
+@pytest.mark.parametrize("stream", ["1", "2"])
+def test_a_process_a_step_leaves_running_loses_its_output_pipe_when_barca_exits(
+    children: Path, stream: str
+) -> None:
+    """New with barca's own pipe (`barca docs contract`, "A closed stdout or stderr"): when
+    barca's stderr is a pipe, a process a step leaves behind holds barca's pipe as its stdout
+    and stderr, not the caller's. Once barca has exited, its next write to either ends it
+    (SIGPIPE). Redirecting its output when starting it is the remedy; with barca's stderr a
+    file, it holds the file and nothing changes."""
+
+    def leave(redirect: str, stderr) -> bool:
+        for name in ("go", "survived", "locked"):
+            (children / name).unlink(missing_ok=True)
+        (children / "leave").write_text(f"{stream} {redirect}")
+        proc = subprocess.run(
+            [_find_binary(), "run", "leaves_a_process", "pipeline.py", "--json"],
+            cwd=children,
+            stdout=subprocess.PIPE,
+            stderr=stderr,
+            timeout=120,
+        )
+        assert proc.returncode == 0
+        assert is_running(children)  # barca has exited; the process it left has not
+        (children / "go").touch()
+        deadline = time.monotonic() + 60
+        while is_running(children):
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        return (children / "survived").exists()
+
+    # barca's stderr is a pipe: the write after barca's exit ends the process.
+    assert leave("inherited", subprocess.PIPE) is False
+    # The remedy: start it with its output redirected.
+    assert leave("redirected", subprocess.PIPE) is True
+    # barca's stderr is a file: the process holds the file, as it always did.
+    with open(children / "stderr.txt", "w") as to_file:
+        assert leave("inherited", to_file) is True

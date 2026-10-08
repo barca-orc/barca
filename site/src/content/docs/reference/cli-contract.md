@@ -350,9 +350,23 @@ This holds for every command, `--help`, `--version` and `barca docs` included. U
 a closed stderr abandoned a run in the middle (it stayed `interrupted` in `barca history`).
 
 Limits: barca learns that a stream is closed only when it writes to it, so a run whose reader
-has left goes on to its end; interrupt it to stop it. A process that a step leaves running
-after barca itself has exited writes to a pipe nobody reads any more and is ended by SIGPIPE on
-its next write, as any orphan of a pipeline is. A caller cannot tell from the exit code
+has left goes on to its end; interrupt it to stop it.
+
+**New in this release: a process a step leaves running.** If a step starts a process that
+outlives the run (a server, a watcher) and lets it inherit the step's stdout and stderr, then,
+when barca's stderr is a pipe or a socket, that process holds barca's pipe on both, not the
+caller's. Once barca has exited nobody reads that pipe: the process's next write to its stdout
+or its stderr ends it (SIGPIPE), or fails with `BrokenPipeError` if it ignores the signal. Up to
+0.18.1 it held the caller's pipe instead, went on writing to it, and the caller's pipeline
+(`barca run start_server 2>&1 | tee log`) did not finish until that process did. Nothing
+changes when barca's stderr is a terminal or a file: the process holds that, as before. The
+remedy is to give such a process its own output when starting it, for example
+`subprocess.Popen(cmd, stdout=log, stderr=log)` or `stdout=subprocess.DEVNULL,
+stderr=subprocess.DEVNULL`.
+
+A caller's pipe in non-blocking mode is supported: while its reader is behind, barca waits for
+it (no output is dropped, and the wait reaches the step that is printing), on stdout and on
+stderr. A caller cannot tell from the exit code
 that part of the result was not read: it is the caller that stopped reading. A write to stdout
 that fails for any other reason (a full disk behind `> result.json`) is exit 3, with one line
 on stderr.
