@@ -252,7 +252,10 @@ Each `ScheduleEntry` is:
 }
 ```
 
-`next_fire` and `last_fired` are unix epoch seconds. A job the scheduler has not seen before
+`next_fire` and `last_fired` are unix epoch seconds. `next_fire` is the next match of the cron
+expression in the zone the server evaluates cron in (`--timezone`), so it is when the job will
+fire; `next_run` in `GET /state` is computed the same way. `barca list` cannot know a server's
+zone and always uses the local time of the machine it runs on. A job the scheduler has not seen before
 gets `last_fired` set to the time the server first started with it, so it is not `null` even
 though nothing has run. `last_run` is the most recent scheduled `run_id` and `last_status` its state
 (`pending`/`running`/`complete`/`failed`/`cancelled`, or `null` if none yet).

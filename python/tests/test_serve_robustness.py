@@ -155,3 +155,31 @@ def test_an_unknown_timezone_is_a_usage_error(project, value):
 def test_a_known_timezone_starts_the_server(serve, value):
     server = serve("--timezone", value)
     assert server.request("GET", "/health")[0] == 200
+
+
+# ─── next fire times ─────────────────────────────────────────────────────────
+
+
+def test_the_server_reports_next_fire_in_its_own_timezone(serve):
+    # `nightly` is `0 5 * * *`. Kolkata is UTC+5:30 all year, so 05:00 there is 23:30 UTC,
+    # whatever zone this machine is in. /schedule and /state used to use the machine's zone.
+    server = serve("--timezone", "Asia/Kolkata")
+    jobs = wait_for(lambda: server.request("GET", "/schedule")[1], "the scheduler to publish")
+    assert [j["id"] for j in jobs] == ["pipeline.py:nightly"]
+    assert jobs[0]["next_fire"] % 86400 == 23 * 3600 + 1800
+    status, nodes = server.request("GET", "/state")
+    assert status == 200
+    next_run = {n["id"]: n["next_run"] for n in nodes}
+    assert next_run["pipeline.py:nightly"] == jobs[0]["next_fire"]
+    assert next_run["pipeline.py:quick"] is None
+
+
+def test_list_says_its_next_fire_times_are_local(project):
+    out = barca(project, "list", "pipeline.py", "--pretty")
+    assert out.returncode == 0, out.stderr
+    header = out.stdout.splitlines()[0]
+    assert "NEXT FIRE (LOCAL TIME)" in header
+    # JSON keeps the same wall-clock string; `barca docs contract` says which zone it is in.
+    nodes = json.loads(barca(project, "list", "pipeline.py", "--json").stdout)["nodes"]
+    nightly = next(n for n in nodes if n["id"] == "pipeline.py:nightly")
+    assert nightly["next_fire"].endswith(" 05:00:00")

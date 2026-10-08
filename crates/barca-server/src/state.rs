@@ -106,7 +106,7 @@ pub struct NodeState {
     pub status: barca_core::status::NodeStatus,
     /// Typical wall time over the most recent successful materializations.
     pub durations: Option<Durations>,
-    /// Next cron fire time (local time, unix epoch seconds), if scheduled.
+    /// Next cron fire time (unix epoch seconds) in the server's `--timezone`, if scheduled.
     #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub next_run: Option<i64>,
 }

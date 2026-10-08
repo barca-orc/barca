@@ -424,6 +424,29 @@ async fn logs_for_unknown_run_returns_empty() {
 }
 
 #[tokio::test]
+async fn state_reports_the_next_run_in_the_servers_timezone() {
+    // `0 5 * * *` in UTC is always 05:00 UTC; in Asia/Kolkata (UTC+5:30, no summer time) it
+    // is always 23:30 UTC. The next run used to be computed in the machine's local time
+    // whatever the server's `--timezone` (#289).
+    for (zone, seconds_into_the_utc_day) in [("utc", 5 * 3600), ("Asia/Kolkata", 23 * 3600 + 1800)]
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = isolated_config(dir.path(), false);
+        std::fs::write(
+            &config.files[0],
+            "from barca import asset, Schedule\n\n\
+             @asset(freshness=Schedule(\"0 5 * * *\"))\ndef daily() -> int:\n    return 1\n",
+        )
+        .unwrap();
+        config.timezone = zone.to_string();
+        let (status, json) = send(&app(config), "GET", "/state").await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        let next_run = json[0]["next_run"].as_i64().expect("a scheduled node");
+        assert_eq!(next_run % 86_400, seconds_into_the_utc_day, "{zone}");
+    }
+}
+
+#[tokio::test]
 async fn state_reports_every_node_without_creating_a_db() {
     let dir = tempfile::tempdir().unwrap();
     let app = app(isolated_config(dir.path(), false));

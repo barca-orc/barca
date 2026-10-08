@@ -83,14 +83,16 @@ async fn snapshot_db(state: &AppState) -> Result<SnapshotDb, ApiError> {
 /// construction: the cache check runs against a private snapshot of the DB.
 pub async fn state(State(state): State<AppState>) -> Result<Json<Vec<NodeState>>, ApiError> {
     let cfg = &state.config;
+    let zone = crate::scheduler::zone_of(cfg);
     Ok(Json(
-        node_states(&cfg.resolved, &cfg.files, &cfg.python).await?,
+        node_states_in(&cfg.resolved, &cfg.files, &cfg.python, &zone).await?,
     ))
 }
 
 /// Every node's [`NodeState`], in topological order: its `barca status` entry
 /// (the same cache decision `--dry-run` makes), typical durations, and the next
-/// fire time of its cron schedule (local time).
+/// fire time of its cron schedule, with cron evaluated in this machine's local
+/// time. The server's `GET /state` evaluates it in its `--timezone` instead.
 ///
 /// Read-only by construction: status and history are read from a private
 /// snapshot of the metadata DB, so this never opens, locks for longer than the
@@ -100,6 +102,16 @@ pub async fn node_states(
     cfg: &barca_core::config::ResolvedConfig,
     files: &[String],
     python: &std::path::Path,
+) -> Result<Vec<NodeState>, BarcaError> {
+    node_states_in(cfg, files, python, &crate::scheduler::Zone::Local).await
+}
+
+/// [`node_states`] with cron evaluated in `zone`.
+async fn node_states_in(
+    cfg: &barca_core::config::ResolvedConfig,
+    files: &[String],
+    python: &std::path::Path,
+    zone: &crate::scheduler::Zone,
 ) -> Result<Vec<NodeState>, BarcaError> {
     let snapshot = db::DbSnapshot::take(&cfg.db_path).await?;
     let scratch = tempfile::tempdir()
@@ -115,7 +127,7 @@ pub async fn node_states(
     let python_buf = python.to_path_buf();
     let (status, schedule) = tokio::join!(
         barca_core::status::status(&snap_cfg, &[], files, python, 0, false),
-        crate::scheduler::describe_schedule(files, &python_buf),
+        crate::scheduler::describe_schedule_in(files, &python_buf, zone),
     );
     let history = match &snapshot {
         Some(s) => db::materialization_history(s.path()).await?,
@@ -349,17 +361,22 @@ pub async fn cancel_run(
 /// Reads the scheduler's published registry; volatile fields (next fire, live
 /// status) are computed per request.
 pub async fn schedule(State(state): State<AppState>) -> Json<Value> {
-    use barca_core::CronExpr;
-    use chrono::Local;
+    Json(schedule_at(&state, chrono::Utc::now()))
+}
 
-    let now = Local::now();
+/// The body of `GET /schedule` as of `now`. `next_fire` is computed in the zone the server
+/// evaluates cron in (`--timezone`), so it is the time the scheduler will fire the job.
+pub(crate) fn schedule_at(state: &AppState, now: chrono::DateTime<chrono::Utc>) -> Value {
+    use barca_core::CronExpr;
+
+    let zone = crate::scheduler::zone_of(&state.config);
     let jobs = state.schedule.read().map(|g| g.clone()).unwrap_or_default();
     let items: Vec<Value> = jobs
         .into_iter()
         .map(|j| {
             let next_fire = CronExpr::parse(&j.cron)
                 .ok()
-                .and_then(|c| c.find_next_occurrence(&now, false).ok())
+                .and_then(|c| crate::scheduler::next_fire(&c, &zone, now))
                 .map(|t| t.timestamp());
             let last_status = j
                 .last_handle
@@ -376,7 +393,7 @@ pub async fn schedule(State(state): State<AppState>) -> Json<Value> {
             })
         })
         .collect();
-    Json(json!(items))
+    json!(items)
 }
 
 /// `GET /status/{run_id}` — poll an in-flight or finished run.

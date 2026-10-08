@@ -62,13 +62,13 @@ barca list pipeline.py
 ```
 
 ```
-NAME                     KIND   FRESHNESS             NEXT FIRE            DEPS
--------------------------------------------------------------------------------
-pipeline.py:standalone   asset  always                -                    -
-pipeline.py:prices       asset  cron: */5 * * * * *   2026-10-07 14:17:25  -
-pipeline.py:source       asset  manual                -                    -
-pipeline.py:report       asset  always                -                    pipeline.py:source
-pipeline.py:send_report  task   cron: */10 * * * * *  2026-10-07 14:17:30  pipeline.py:report
+NAME                     KIND   FRESHNESS             NEXT FIRE (LOCAL TIME)  DEPS
+----------------------------------------------------------------------------------
+pipeline.py:standalone   asset  always                -                       -
+pipeline.py:prices       asset  cron: */5 * * * * *   2026-10-07 14:17:25     -
+pipeline.py:source       asset  manual                -                       -
+pipeline.py:report       asset  always                -                       pipeline.py:source
+pipeline.py:send_report  task   cron: */10 * * * * *  2026-10-07 14:17:30     pipeline.py:report
 ```
 
 ## One-shot commands ignore freshness

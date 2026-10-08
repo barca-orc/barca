@@ -61,9 +61,9 @@ barca serve job.py
 (output from barca 0.18.0):
 
 ```
-NAME            KIND  FRESHNESS           NEXT FIRE            DEPS
--------------------------------------------------------------------
-job.py:refresh  task  cron: */10 * * * *  2026-10-07 14:20:00  -
+NAME            KIND  FRESHNESS           NEXT FIRE (LOCAL TIME)  DEPS
+----------------------------------------------------------------------
+job.py:refresh  task  cron: */10 * * * *  2026-10-07 14:20:00     -
 ```
 
 ## Feature by feature

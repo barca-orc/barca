@@ -736,7 +736,10 @@ Truncated (`--limit 1`):
 
 `nodes[].kind` is `asset`, `task` or `sensor`; `nodes[].freshness` is `always`, `manual` or
 `schedule`, lowercase like `kind`. A scheduled node also has `schedule` (the cron expression) and
-`next_fire` (string, local time). `list` reads no state, so it takes no `--env`.
+`next_fire` (string, `YYYY-MM-DD HH:MM:SS`): the next match of the cron expression in the local
+time of the machine `list` runs on. `list` talks to no server, so the value does not follow a
+server's `--timezone`; `GET /schedule` on the running server does (`barca docs scheduling`).
+`list` reads no state, so it takes no `--env`.
 
 ### sql (experimental)
 

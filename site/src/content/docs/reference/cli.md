@@ -365,7 +365,11 @@ See [Configuration](/reference/config/).
 ## list
 
 List every asset, task and sensor barca finds, with its kind, freshness and inputs. A scheduled
-node also shows its cron and its next fire time in local time, to the second.
+node also shows its cron and its next fire time, to the second. The time is the next match of
+the cron expression in the local time of the machine `list` runs on (the table column is
+`NEXT FIRE (LOCAL TIME)`). `list` talks to no server, so it does not know a server's
+`--timezone`: a server started with one fires at the same wall-clock time in that zone, and its
+[`GET /schedule`](/reference/server-api/#get-schedule) reports the times it will fire at.
 
 ```
 $ barca list pipeline.py

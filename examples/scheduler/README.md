@@ -30,7 +30,7 @@ scheduling — Barca evaluates the schedule at 1-second resolution. Standard
 Inspect the schedule without starting a server:
 
 ```bash
-barca list job.py          # NEXT FIRE column shows each job's next tick
+barca list job.py          # NEXT FIRE (LOCAL TIME) column shows each job's next tick
 ```
 
 See the [Scheduling guide](https://barca.sh/scheduling/) for timezones, catch-up

@@ -25,7 +25,7 @@ use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-/// Static description of one scheduled job, for `barca schedule` (no server).
+/// Static description of one scheduled job: what `barca list` and `GET /state` show.
 #[derive(Debug, Clone, Serialize)]
 pub struct ScheduleInfo {
     pub id: String,
@@ -33,19 +33,30 @@ pub struct ScheduleInfo {
     pub kind: NodeKind,
     /// Next fire time as unix epoch seconds (for programmatic use).
     pub next_fire: Option<i64>,
-    /// Next fire time formatted in local time (for display).
+    /// Next fire time as wall-clock time in the zone it was computed in (for display).
     pub next_fire_local: Option<String>,
 }
 
-/// Enumerate scheduled jobs from source and compute each one's next fire time.
-/// Pure static analysis — used by the `barca schedule` CLI, no running server.
+/// Enumerate scheduled jobs from source and compute each one's next fire time with cron
+/// evaluated in this machine's local time. Pure static analysis, no running server: this is
+/// what `barca list` shows. A server started with `--timezone` fires in that zone instead;
+/// its `GET /schedule` and `GET /state` report the times it will really fire at.
 pub async fn describe_schedule(files: &[String], python: &std::path::Path) -> Vec<ScheduleInfo> {
-    let now = Local::now();
+    describe_schedule_in(files, python, &Zone::Local).await
+}
+
+/// [`describe_schedule`] with cron evaluated in `zone`.
+pub(crate) async fn describe_schedule_in(
+    files: &[String],
+    python: &std::path::Path,
+    zone: &Zone,
+) -> Vec<ScheduleInfo> {
+    let now = Utc::now();
     collect_jobs(files, python)
         .await
         .iter()
         .map(|j| {
-            let next = j.cron.find_next_occurrence(&now, false).ok();
+            let next = next_fire(&j.cron, zone, now);
             ScheduleInfo {
                 id: j.id.clone(),
                 cron: j.cron_str.clone(),
@@ -55,6 +66,21 @@ pub async fn describe_schedule(files: &[String], python: &std::path::Path) -> Ve
             }
         })
         .collect()
+}
+
+/// The first time strictly after `now` that `cron` matches when evaluated in `zone`.
+pub(crate) fn next_fire(
+    cron: &Cron,
+    zone: &Zone,
+    now: DateTime<Utc>,
+) -> Option<DateTime<FixedOffset>> {
+    cron.find_next_occurrence(&zone.at(now), false).ok()
+}
+
+/// The zone a server evaluates cron in. `serve` refuses to start with a value that does not
+/// parse, so the fallback is only reached by a router built without it.
+pub(crate) fn zone_of(config: &crate::state::ServeConfig) -> Zone {
+    Zone::parse(&config.timezone).unwrap_or(Zone::Local)
 }
 
 /// A parsed cron job discovered from the DAG at startup.
@@ -167,10 +193,15 @@ impl Zone {
 
     /// The current instant in this zone as a fixed-offset datetime.
     fn now(&self) -> DateTime<FixedOffset> {
+        self.at(Utc::now())
+    }
+
+    /// An instant as a fixed-offset datetime in this zone.
+    pub(crate) fn at(&self, instant: DateTime<Utc>) -> DateTime<FixedOffset> {
         match self {
-            Zone::Local => Local::now().fixed_offset(),
-            Zone::Utc => Utc::now().fixed_offset(),
-            Zone::Named(tz) => Utc::now().with_timezone(tz).fixed_offset(),
+            Zone::Local => instant.with_timezone(&Local).fixed_offset(),
+            Zone::Utc => instant.fixed_offset(),
+            Zone::Named(tz) => instant.with_timezone(tz).fixed_offset(),
         }
     }
 
@@ -690,6 +721,57 @@ mod tests {
                 "{bad:?}: {err}"
             );
             assert!(err.contains("America/New_York"), "{err}");
+        }
+    }
+
+    /// 2026-10-08 14:33:00 UTC.
+    fn an_instant() -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 10, 8, 14, 33, 0)
+            .single()
+            .unwrap()
+    }
+
+    #[test]
+    fn the_next_fire_time_is_computed_in_the_given_zone() {
+        let j = job("f.py:daily", NodeKind::Asset, "0 5 * * *");
+        let epoch = |zone: &Zone| next_fire(&j.cron, zone, an_instant()).unwrap().timestamp();
+        let utc_5am = Utc.with_ymd_and_hms(2026, 10, 9, 5, 0, 0).single().unwrap();
+        assert_eq!(epoch(&Zone::Utc), utc_5am.timestamp());
+        // 05:00 in Kolkata (UTC+5:30) is 23:30 UTC the day before; in Honolulu (UTC-10), 15:00.
+        let kolkata = Zone::parse("Asia/Kolkata").unwrap();
+        assert_eq!(epoch(&kolkata), utc_5am.timestamp() - 5 * 3600 - 1800);
+        let honolulu = Zone::parse("Pacific/Honolulu").unwrap();
+        assert_eq!(
+            epoch(&honolulu),
+            Utc.with_ymd_and_hms(2026, 10, 8, 15, 0, 0)
+                .single()
+                .unwrap()
+                .timestamp()
+        );
+    }
+
+    #[test]
+    fn get_schedule_reports_next_fire_in_the_servers_zone() {
+        // It used to compute it in local time whatever `--timezone` said (#289). Two zones, so
+        // the test cannot pass by running on a machine whose local zone is one of them.
+        for (zone, want) in [
+            ("Asia/Kolkata", "2026-10-08T23:30:00Z"),
+            ("Pacific/Honolulu", "2026-10-08T15:00:00Z"),
+            ("utc", "2026-10-09T05:00:00Z"),
+        ] {
+            let mut config = (*app_state().config).clone();
+            config.timezone = zone.to_string();
+            let st = AppState::new(config);
+            publish_registry(
+                &st,
+                &[job("f.py:daily", NodeKind::Task, "0 5 * * *")],
+                &HashMap::new(),
+                &HashMap::new(),
+            );
+            let body = handlers::schedule_at(&st, an_instant());
+            let want = DateTime::parse_from_rfc3339(want).unwrap().timestamp();
+            assert_eq!(body[0]["next_fire"], want, "{zone}: {body}");
+            assert_eq!(body[0]["id"], "f.py:daily");
         }
     }
 

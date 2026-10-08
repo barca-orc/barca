@@ -222,6 +222,10 @@ Examples:
 An ENV column (and `env` in JSON) lists the environment variables each node declares with
 @asset(env=[...]); their values are part of the run hash. `freshness` is `always`, `manual` or
 `schedule`; a scheduled node also has `schedule` (the cron expression) and `next_fire`.
+`next_fire` (NEXT FIRE (LOCAL TIME) in the table) is the next match of the cron expression in
+this machine's local time, which is when `barca serve` fires it unless the server was started
+with --timezone. `list` does not know a server's zone: GET /schedule on the running server
+reports the times it will fire at (barca docs scheduling).
 `list` reads no state, so it takes no --env.
 
 Node ids are relative to the project root (`root` in JSON; barca docs discovery).
@@ -475,7 +479,8 @@ enum Cli {
     },
     /// List all discovered definitions (assets, tasks, sensors) with their deps
     ///
-    /// Scheduled definitions also show their next fire time in local time.
+    /// Scheduled definitions also show their next fire time, computed in this
+    /// machine's local time (a server started with --timezone fires in that zone).
     #[command(after_help = LIST_HELP)]
     List {
         /// Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`)
@@ -1891,8 +1896,10 @@ async fn list_cmd(
     assets.truncate(limit.unwrap_or(total));
     let page = bounded::Page::new(assets.len(), total);
 
-    // Next fire times (local time) for scheduled definitions. Empty when nothing is
-    // scheduled, so the table's NEXT FIRE column only appears when it carries information.
+    // Next fire times for scheduled definitions, with cron evaluated in local time: `list`
+    // talks to no server, so it cannot know a `--timezone`, and the column header says which
+    // zone it used. Empty when nothing is scheduled, so the column only appears when it
+    // carries information.
     let next_fires: std::collections::HashMap<String, String> =
         barca_server::describe_schedule(&file_args, python)
             .await
@@ -1926,7 +1933,7 @@ async fn list_cmd(
     // Render each row's cells up front so column widths fit the actual content.
     let mut header = vec!["NAME", "KIND", "FRESHNESS"];
     if has_schedule {
-        header.push("NEXT FIRE");
+        header.push("NEXT FIRE (LOCAL TIME)");
     }
     header.push("DEPS");
     if has_env {

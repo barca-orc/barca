@@ -156,11 +156,16 @@ For a container, see [Deploying](/deploying/#in-a-container).
 
 ## Inspecting the schedule
 
-`barca list job.py` shows each schedule and its next fire time, in the machine's local time,
-without a server. While the server is running, `GET /schedule` returns each job's next fire
-time, last fire time, last run id and last status
-([Server API](/reference/server-api/#scheduling)), and the web UI at `/ui/` shows the next
-scheduled run of each node.
+`barca list job.py` shows each schedule and its next fire time without a server. It evaluates
+the cron expression in the local time of the machine it runs on and says so in the column
+header, `NEXT FIRE (LOCAL TIME)`. It does not know what `--timezone` a server was started with:
+for `0 5 * * *` it shows 05:00 local, while a server running with `--timezone utc` fires at
+05:00 UTC.
+
+While the server is running, `GET /schedule` returns each job's next fire time, last fire time,
+last run id and last status ([Server API](/reference/server-api/#scheduling)), and the web UI at
+`/ui/` shows the next scheduled run of each node. Both are computed in the server's
+`--timezone`, so they are the times the job will fire at.
 
 ## Caveats
 
