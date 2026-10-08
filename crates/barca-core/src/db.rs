@@ -3049,7 +3049,8 @@ mod tests {
         init_db(&db_path).await.unwrap();
 
         // A pid that existed and is certainly gone: a child that has been reaped.
-        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let mut child =
+            crate::helper_proc::spawn_std(&mut std::process::Command::new("true")).unwrap();
         let dead_pid = child.id();
         child.wait().unwrap();
 

@@ -1062,9 +1062,9 @@ for t in threads: t.join()
     /// The repo venv's python, when barca is importable there.
     fn repo_python() -> Option<PathBuf> {
         let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.venv/bin/python");
-        let ok = std::process::Command::new(&p)
-            .args(["-c", "import barca._transfer"])
-            .output()
+        let mut probe = std::process::Command::new(&p);
+        probe.args(["-c", "import barca._transfer"]);
+        let ok = crate::helper_proc::output_std(&mut probe)
             .ok()?
             .status
             .success();

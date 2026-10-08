@@ -1267,10 +1267,12 @@ mod tests {
             let mut workers = HashMap::new();
             let mut pids = Vec::new();
             for i in 0..n {
-                let child = Command::new("sh")
-                    .args(["-c", "trap '' TERM; sleep 30"])
-                    .spawn()
-                    .unwrap();
+                // `exec`: the process that ignores SIGTERM is the child itself. Without it
+                // the shell forks `sleep`, and killing the shell leaves the `sleep` running
+                // for its 30 seconds with every descriptor it inherited.
+                let mut cmd = Command::new("sh");
+                cmd.args(["-c", "trap '' TERM; exec sleep 30"]);
+                let child = crate::helper_proc::spawn_std(&mut cmd).unwrap();
                 pids.push(child.id());
                 let (cmd_tx, _cmd_rx) = mpsc::channel(1);
                 workers.insert(
