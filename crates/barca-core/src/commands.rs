@@ -3338,7 +3338,7 @@ async fn execute(
                     None
                 }
                 Err(BarcaError::Cancelled) if interrupt.abandon.is_cancelled() => {
-                    Some("stopped by a second Ctrl-C".to_string())
+                    Some("stopped by a second interrupt".to_string())
                 }
                 Err(BarcaError::Cancelled) => Some(format!(
                     "the upload did not finish within {}s",
