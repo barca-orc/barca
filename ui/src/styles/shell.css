@@ -496,3 +496,6 @@
 .barca-schema-table td:last-child { color: var(--text-link); }
 
 .barca-schema-content { height: 440px; overflow: auto; scrollbar-gutter: stable; }
+
+.barca-graph-tools { display: flex; align-items: center; gap: 14px; padding: 12px 24px; min-height: 50px; flex-wrap: wrap; border-bottom: 1px solid var(--border-default); }
+.barca-graph-tools > span { color: var(--text-muted); font-size: var(--text-xs); }

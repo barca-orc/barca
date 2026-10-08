@@ -429,6 +429,7 @@ def module_name_for(path: Path) -> str:
 def _run_with_timeout(fn, kwargs, timeout_seconds):
     """Run a function with a timeout. Raises TimeoutError if exceeded."""
     import threading
+    from contextvars import copy_context
 
     result = None
     exception = None
@@ -443,7 +444,8 @@ def _run_with_timeout(fn, kwargs, timeout_seconds):
             # silently and the step "succeeded" with a None result (issue #149).
             exception = e
 
-    thread = threading.Thread(target=target)
+    # Timeout execution uses a new thread; carry the active job trace into it.
+    thread = threading.Thread(target=copy_context().run, args=(target,))
     thread.daemon = True
     thread.start()
     thread.join(timeout=timeout_seconds)
@@ -628,7 +630,16 @@ def _write_sinks(result, step, node_id, primary_fmt):
     return outcomes
 
 
-def _materialize(result, node_id, art_dir, step, elapsed, elapsed_in_artifact=False, timing=None):
+def _materialize(
+    result,
+    node_id,
+    art_dir,
+    step,
+    elapsed,
+    elapsed_in_artifact=False,
+    timing=None,
+    before_emit=None,
+):
     """Serialize a result to its artifact and emit a `result` protocol message.
 
     `timing` (cpu_seconds, max_rss_bytes) rides on the artifact dict — the
@@ -687,6 +698,8 @@ def _materialize(result, node_id, art_dir, step, elapsed, elapsed_in_artifact=Fa
     sink_outcomes = _write_sinks(result, step, node_id, fmt)
     if sink_outcomes:
         artifact["sinks"] = sink_outcomes
+    if before_emit is not None:
+        before_emit()
     _emit("result", node_id=node_id, artifact=artifact, elapsed=elapsed)
     return artifact
 
@@ -899,7 +912,9 @@ def _run_daemon_step(step, modules, art_dir, lru):
     work), wall time, and peak RSS ride back on the completion message.
     """
     from barca import _runtime
+    from barca._telemetry import Execution
 
+    tracing = Execution(step)
     node_id = step.get("node_id", "unknown")
     t0 = time.perf_counter()
     c0 = time.process_time()
@@ -907,6 +922,8 @@ def _run_daemon_step(step, modules, art_dir, lru):
     # Views bound for duckdb-typed inputs. They must outlive materialization: a returned
     # relation is lazy and may still reference them when it is written to parquet.
     bound_views: list[str] = []
+    # Set when this step is a parallel() branch whose return value could not be written.
+    unwritable = False
 
     try:
         source = str(Path(step["source_file"]).resolve())
@@ -1001,6 +1018,7 @@ def _run_daemon_step(step, modules, art_dir, lru):
                 wall,
                 elapsed_in_artifact=True,
                 timing={"cpu_seconds": cpu, "max_rss_bytes": _peak_rss_bytes()},
+                before_emit=tracing.finish,
             )
         except Exception as exc:
             if not step.get("branch"):
@@ -1009,6 +1027,7 @@ def _run_daemon_step(step, modules, art_dir, lru):
             # the branch, for the step that called it (barca/_branches.py).
             from barca import _branches
 
+            unwritable = True
             raise _branches.unwritable(step, result, exc) from exc
         # A downstream step in this worker may consume what we just produced, keyed by the
         # reader it is equivalent to so a consumer never gets a different frame type.
@@ -1038,15 +1057,15 @@ def _run_daemon_step(step, modules, art_dir, lru):
         note = _duckdb.explain_error(exc, bound_views)
         if note:
             message = f"{message}\n\n{note}"
-        from barca import BranchResultError, _branches
+        tracing.finish(exc)
+        from barca import _branches
 
         _runtime.emit_step_error(
             node_id=node_id,
-            error_type=(
-                _branches.UNRETURNABLE
-                if isinstance(exc, BranchResultError) and step.get("branch")
-                else type(exc).__name__
-            ),
+            # Only this branch's own return value that could not be written is reported as
+            # such. A branch that raises, a BranchResultError from a parallel() of its own
+            # included, is a branch that raised.
+            error_type=_branches.UNRETURNABLE if unwritable else type(exc).__name__,
             message=message,
             traceback=_user_traceback(exc),
             elapsed=wall,
@@ -1055,6 +1074,7 @@ def _run_daemon_step(step, modules, art_dir, lru):
 
     finally:
         _ctrl_c_does_nothing()
+        tracing.finish()
         _duckdb.unbind_inputs(bound_views)
 
 

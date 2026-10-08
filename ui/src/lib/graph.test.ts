@@ -22,11 +22,11 @@ describe('buildGraph', () => {
     expect(edges.map((e) => e.id)).toEqual(['p.py:a->p.py:b', 'p.py:b->p.py:c'])
   })
 
-  it('carries kind + short name, and rests at queued (status is overlaid later)', () => {
+  it('carries kind + short name, and rests neutral (status is overlaid later)', () => {
     const { nodes } = buildGraph(ASSETS, 'LR')
     expect(nodes[0]!.data.name).toBe('a')
     expect(nodes[2]!.data.kind).toBe('task')
-    expect(nodes.every((n) => n.data.status === 'queued')).toBe(true)
+    expect(nodes.every((n) => n.data.status === 'skipped')).toBe(true)
   })
 
   it('drops edges whose input is not in the asset set', () => {
