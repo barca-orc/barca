@@ -46,6 +46,97 @@ hash: changing one runs the asset again. The other options, the partition keys a
 formatting of the decorator are not: editing them re-runs nothing. `barca docs cache` ("Which
 decorator arguments count") has the full list and the reason for each.
 
+These are the only options: any other is an error ("Accepted arguments" below).
+
+## Accepted arguments
+
+These are all the arguments barca's decorators and helpers take:
+
+| Call | Positional arguments | Keyword arguments |
+|---|---|---|
+| `@asset` | none | `name`, `inputs`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env` |
+| `@sensor` | none | `name`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env` |
+| `@task` | none | `name`, `inputs`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env` |
+| `@sink` | one | `serializer` |
+| `partitions()` | one | none |
+| `partitions_from()` | one | none |
+| `collect()` | one | none |
+| `asset_ref()` | one | none |
+| `Schedule()` | one | none |
+
+Every argument in the table does something, on each decorator it is listed for: on `@task` and
+`@sensor`, `partitions=` runs the function once per key and `serializer=` forces the format its
+value is stored in, as on `@asset`.
+
+Any other argument is an error when barca reads the file, before anything runs: exit 2, `kind`
+`usage`. Up to 0.18.1 such an argument was ignored without a message, so `@asset(after=other)`
+or a misspelt `input=` planned, ran and did nothing. Only arguments that had no effect are
+rejected: a pipeline whose arguments all did something plans exactly as before.
+
+After `from barca import asset`:
+
+```python
+@asset(input={"raw": raw})          # `input` for `inputs`
+def report(raw: dict) -> int:
+    return raw["n"]
+```
+
+```
+$ barca list pipeline.py --pretty
+Parse error: pipeline.py:report (line 9): `input` is not an argument of @asset. Did you mean `inputs`? @asset accepts: name, inputs, partitions, serializer, freshness, timeout_seconds, retries, retry_backoff, description, tags, env
+Rename `input` to `inputs`, or remove it. See `barca docs assets`.
+```
+
+In JSON mode the first line is the envelope's `error` and the second its `remediation`
+(`barca docs contract`).
+
+- The error names the node (`file.py:function`), the line of the argument, the argument and
+  everything the call accepts. "Did you mean" appears only when exactly one accepted argument
+  is one edit away from what was written (two edits for a name longer than four characters):
+  `input`, `partition`, `serialiser`. `after` or `when` get the list and no guess.
+- The helpers and `@sink` take exactly one argument by position. Passing it by keyword
+  (`partitions(values=[...])`, `collect(asset_fn=x)`, `Schedule(cron="...")`,
+  `@sink(path="...")`) is rejected, and the error says to pass the value as the first argument.
+  Before, these were read as "no keys", "no input", "an empty cron" and "no sink". A call with
+  none or with two (`@sink()`, `partitions(a, b)`, `@sink("out.txt", "json")`: write
+  `serializer="json"`) is rejected too; Python refuses those calls as well.
+- `@asset`, `@sensor` and `@task` take keyword arguments only. `@asset(**options)`,
+  `@asset(*args)` and `@asset("x")` are rejected: barca reads the arguments from the source
+  without running it and cannot see what a `**` or `*` holds.
+- `@sensor(inputs=...)` keeps its own error (`sensor '...' cannot have inputs`, exit 2).
+- **Which commands fail.** The check is made per file, like the check for a syntax error: a
+  command fails if it reads a file with such an argument, whatever its target. `list`, `plan`,
+  `status`, `get`, `run` (with or without `--dry-run`), `stats` and `sql` exit 2 and run
+  nothing. With no file arguments barca reads every pipeline file of the project
+  (`barca docs discovery`), so one such argument anywhere stops all of them until it is
+  corrected; `barca get report good.py` reads `good.py` only. `barca serve` starts, and
+  answers `400` with the same message on the routes that read the pipeline.
+- Only the first such argument in a file is reported. Fix it and run the command again.
+- The Python signatures in `barca/__init__.py` take the same arguments and no others, so a
+  type checker and an IDE flag the argument, and importing the module (`python pipeline.py`)
+  raises `TypeError: asset() got an unexpected keyword argument 'after'`.
+
+Not checked:
+
+- A decorator or helper that is not positively barca's. A name is checked only when a
+  `from barca import <name>` (or `from barca import *`) stands at the top level of the module
+  and nothing else in the file binds that name at module level: no assignment
+  (`task = app.task`), `def`, `class`, other import (`from prefect import task`, also inside
+  `try:` or `if`), loop or `with` target, `global` in a function, or `from other import *`
+  after the barca import. Celery's or Prefect's `@task(bind=True)` in a file that also uses
+  barca is therefore left alone, and so is a file with no such import at all. When barca
+  cannot be sure, it does not check. (barca still reads such a function as a node, as it
+  always has: it recognises its decorators by their plain names.)
+- What a helper receives through `*` or `**` (`partitions(*keys)`).
+- The values. `inputs=` that is not a dict literal (`inputs=dict(raw=raw)`,
+  `inputs=make_inputs()`) is still read as "no inputs", without a message. `env=` is the
+  exception: anything but a list of string literals is an error.
+- `parallel()` and `parallel_map()`: their arguments are your own.
+
+**Limitation:** barca recognises its decorators by their plain names. `import barca as b` with
+`@b.asset(...)`, and `from barca import asset as a` with `@a(...)`, are not read as nodes at
+all: `barca list` shows nothing for them, and no argument is checked.
+
 ## Environment variables: `env=`
 
 An asset that reads an environment variable (a source path, a region, a model name) should
@@ -119,7 +210,8 @@ not warn about this; Python simply uses the later definition.
 Planning never imports your code. The decorators, `inputs=` and `freshness=` must be written
 literally enough for barca to read them from the source. Dynamic decorator construction
 (building `inputs` in a loop, calling a decorator through a variable) is not visible to the
-planner. Mark code barca cannot reason about with `@unsafe` (silences purity warnings only).
+planner. An argument barca does not define, and `**options` in a decorator call, are errors
+("Accepted arguments" above). Mark code barca cannot reason about with `@unsafe` (silences purity warnings only).
 
 ## Unused inputs
 
@@ -240,7 +332,8 @@ turns the warning off.
 
 ## Sensors
 
-`@sensor` observes external state and returns `(update_detected: bool, value)`. Sensors have no
+`@sensor` takes the arguments in the table under "Accepted arguments" (`@asset`'s without
+`inputs`). `@sensor` observes external state and returns `(update_detected: bool, value)`. Sensors have no
 inputs and must use `Manual` or `Schedule(...)` freshness, never `Always`.
 
 A sensor always runs, and its `value` is part of the run hash of every asset that reads it: when

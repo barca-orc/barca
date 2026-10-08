@@ -357,7 +357,7 @@ impl WorkerPool {
                         ref artifact,
                     } => {
                         if self.trace_on {
-                            eprintln!(
+                            crate::errln!(
                                 "[trace]  {:>8.1}ms  StepCompleted <- worker {worker_id}: {node_id} (self-reported elapsed={:.1}ms cpu={:.1}ms)",
                                 self.trace_start.elapsed().as_secs_f64() * 1000.0,
                                 artifact.elapsed_seconds.unwrap_or(0.0) * 1000.0,
@@ -365,7 +365,7 @@ impl WorkerPool {
                             );
                         }
                         let Some(item_id) = self.take_lease(worker_id, node_id, coord) else {
-                            eprintln!(
+                            crate::errln!(
                                 "[barca] StepCompleted for '{node_id}' from worker {worker_id} \
                                  with no matching lease — ignoring"
                             );
@@ -411,7 +411,7 @@ impl WorkerPool {
                         ..
                     } => {
                         let Some(item_id) = self.take_lease(worker_id, node_id, coord) else {
-                            eprintln!(
+                            crate::errln!(
                                 "[barca] StepError for '{node_id}' from worker {worker_id} \
                                  with no matching lease — ignoring"
                             );
@@ -459,7 +459,7 @@ impl WorkerPool {
                         reason,
                     } => {
                         let Some(item_id) = self.take_lease(worker_id, node_id, coord) else {
-                            eprintln!(
+                            crate::errln!(
                                 "[barca] Blocked for '{node_id}' from worker {worker_id} \
                                  with no matching lease — ignoring"
                             );
@@ -477,11 +477,13 @@ impl WorkerPool {
                     }
                     WorkerMessage::Submit { items } => {
                         let Some(handle) = self.workers.get(&worker_id) else {
-                            eprintln!("[barca] Submit from unknown worker {worker_id}, ignoring");
+                            crate::errln!(
+                                "[barca] Submit from unknown worker {worker_id}, ignoring"
+                            );
                             continue;
                         };
                         let Some(&item_id) = handle.leases.front() else {
-                            eprintln!(
+                            crate::errln!(
                                 "[barca] Submit from worker {worker_id} with no lease, ignoring"
                             );
                             continue;
@@ -551,7 +553,7 @@ impl WorkerPool {
                                 self.workers.insert(replacement_id, replacement);
                             }
                             Err(e) => {
-                                eprintln!("[barca] failed to spawn replacement worker: {e}")
+                                crate::errln!("[barca] failed to spawn replacement worker: {e}")
                             }
                         }
 
@@ -756,7 +758,7 @@ impl WorkerPool {
                             wid
                         }
                         Err(e) => {
-                            eprintln!("[barca] failed to spawn worker: {e}");
+                            crate::errln!("[barca] failed to spawn worker: {e}");
                             return;
                         }
                     }
@@ -813,7 +815,7 @@ impl WorkerPool {
                     .iter()
                     .map(|&iid| coord.item(iid).step_id.display())
                     .collect();
-                eprintln!(
+                crate::errln!(
                     "[trace]  {:>8.1}ms  dispatch -> worker {wid}: {names:?}",
                     self.trace_start.elapsed().as_secs_f64() * 1000.0
                 );
@@ -959,14 +961,17 @@ async fn spawn_worker(
         .env("BARCA_ARTIFACT_URI", &config.artifact_root)
         // A step's own print() output goes to barca's stderr, never stdout: stdout carries
         // only barca's result, so `barca run ... | jq` works when steps print.
-        .stdout(Stdio::from(std::io::stderr()))
-        .stderr(Stdio::inherit())
+        // Both streams are one destination, as they always were; when barca's stderr is a
+        // pipe it is a pipe barca owns, so a reader that leaves cannot fail the step or
+        // kill a process it starts (`crate::term`, "What barca's child processes write to").
+        .stdout(crate::term::child_output())
+        .stderr(crate::term::child_output())
         .stdin(Stdio::null());
     let trace_on = std::env::var("BARCA_TRACE_TIMING").is_ok();
     let t_spawn = std::time::Instant::now();
     let child = crate::helper_proc::spawn_std(&mut cmd).map_err(|e| format!("spawn: {e}"))?;
     if trace_on {
-        eprintln!(
+        crate::errln!(
             "[trace]  worker {worker_id} process spawned in {:.1}ms",
             t_spawn.elapsed().as_secs_f64() * 1000.0
         );
@@ -979,7 +984,7 @@ async fn spawn_worker(
         .map_err(|e| format!("accept: {e}"))?
         .0;
     if trace_on {
-        eprintln!(
+        crate::errln!(
             "[trace]  worker {worker_id} connected (accept) in {:.1}ms",
             t_accept.elapsed().as_secs_f64() * 1000.0
         );

@@ -303,7 +303,6 @@ CHANGES_THE_RESULT = {
         '@asset(inputs={"x": a})\n@functools.lru_cache(maxsize=1)',
         '@asset(inputs={"x": a})\n@functools.lru_cache(maxsize=2)',
     ),
-    "unknown_argument": ('@asset(inputs={"x": a})', '@asset(inputs={"x": a}, mode="fast")'),
 }
 
 
@@ -318,6 +317,25 @@ def test_an_edit_that_can_change_the_result_reruns_the_step_and_its_downstream(p
     again = ran(get(project, "end"))
     assert again.get("middle") is True and again.get("end") is True, again
     assert "a" not in again  # upstream of the edit: cached
+    assert get(project, "end")["steps_executed"] == 0
+
+
+def test_an_unknown_argument_edit_is_rejected_before_using_the_cache(project):
+    before = chain('@asset(inputs={"x": a})')
+    write(project, before)
+    get(project, "end")
+    assert get(project, "end")["steps_executed"] == 0
+    write(project, chain('@asset(inputs={"x": a}, mode="fast")'))
+    proc = subprocess.run(
+        [_find_binary(), "get", "end", "pipeline.py"], cwd=project,
+        capture_output=True, text=True,
+    )
+    assert proc.returncode == 2
+    assert proc.stdout == ""
+    error = json.loads(proc.stderr.strip().splitlines()[-1])
+    assert error["kind"] == "usage"
+    assert "`mode` is not an argument of @asset" in error["error"]
+    write(project, before)
     assert get(project, "end")["steps_executed"] == 0
 
 

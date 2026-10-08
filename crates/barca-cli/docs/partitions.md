@@ -34,6 +34,10 @@ def summary(all_sales: list[dict]) -> dict:
   `partitions_from`. The keys are not part of the function's definition (`barca docs cache`,
   "Which decorator arguments count"); renaming the dimension is, and re-runs every key. (Up to
   0.18, editing a list written inside the decorator re-ran every key.)
+- `partitions()`, `partitions_from()` and `collect()` take exactly one argument, by position. A
+  keyword (`partitions(values=[...])`, `collect(asset_fn=sales)`), no argument or two are
+  errors when the file is read, exit 2 (`barca docs assets`, "Accepted arguments").
+- `partitions=` works on `@task` and `@sensor` as on `@asset`: one run per key.
 - `partitions_from(upstream)` on a partitioned `upstream` gives the asset the same keys, and
   each key is called with the key and that key's output of `upstream`, passed as the parameter
   named after it: above, `margin(region="emea", sales=<the emea output of sales>)`. To receive

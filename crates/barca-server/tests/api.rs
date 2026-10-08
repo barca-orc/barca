@@ -140,6 +140,29 @@ async fn plan_returns_phases() {
     assert!(json["phases"].is_array());
 }
 
+/// A decorator argument barca does not define (#284) is a source error like a syntax error:
+/// the server starts, and every route that reads the pipeline answers 400 with the message.
+#[tokio::test]
+async fn an_unknown_decorator_argument_is_a_400_on_the_routes_that_read_the_pipeline() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = fixture_config(dir.path());
+    std::fs::write(
+        dir.path().join("pipeline.py"),
+        "from barca import asset\n\n@asset(after=None)\ndef first() -> dict:\n    return {}\n",
+    )
+    .unwrap();
+    let app = app(config);
+    for uri in ["/assets", "/plan"] {
+        let (status, body) = send(&app, "GET", uri).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}");
+        let error = body["error"].as_str().unwrap();
+        assert!(
+            error.contains("first (line 3): `after` is not an argument of @asset"),
+            "{uri}: {error}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn unknown_asset_returns_404() {
     let dir = tempfile::tempdir().unwrap();

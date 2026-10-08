@@ -90,7 +90,7 @@ pub const RULES: &[Rule] = &[
     Rule {
         part: UNKNOWN_ARGUMENT,
         counts: Counts::Yes,
-        reason: "barca does not know what it means, so it is assumed to matter",
+        reason: "conservative fallback for unvalidated calls; recognized barca calls reject it",
     },
     Rule {
         part: "env",
@@ -147,6 +147,34 @@ fn rule(part: &str) -> Counts {
         .unwrap_or(Counts::Yes)
 }
 
+/// Hash rules keyed to the accepted node arguments, rather than a second signature table.
+/// Unknown arguments can reach the conservative fallback only for calls whose barca binding
+/// cannot be established; the parser validates positively bound barca calls first.
+pub fn node_argument_rules()
+-> impl Iterator<Item = (crate::decorator_args::Argument, &'static Rule)> {
+    crate::decorator_args::arguments()
+        .filter(|argument| matches!(argument.call, "asset" | "sensor" | "task"))
+        .map(|argument| {
+            let rule = RULES
+                .iter()
+                .find(|rule| rule.part == argument.name)
+                .expect("every accepted node argument must have an explicit hash rule");
+            (argument, rule)
+        })
+}
+
+fn node_argument_counts(kind: crate::NodeKind, name: &str) -> Counts {
+    let call = match kind {
+        crate::NodeKind::Asset => "asset",
+        crate::NodeKind::Sensor => "sensor",
+        crate::NodeKind::Task => "task",
+    };
+    node_argument_rules()
+        .find(|(argument, _)| argument.call == call && argument.name == name)
+        .map(|(_, rule)| rule.counts)
+        .unwrap_or_else(|| rule(UNKNOWN_ARGUMENT))
+}
+
 /// The hashed form of a node function.
 pub struct Definition<'a> {
     /// The canonical counted decorator parts, one per line, then the source from `def` on.
@@ -184,10 +212,10 @@ pub fn node_definition<'a>(func: &'a ast::StmtFunctionDef, source: &str) -> Opti
                     followed.extend(call.arguments.keywords.iter().map(|kw| &kw.value));
                 }
             }
-        } else if match_node_decorator(expr).is_some() {
+        } else if let Some((kind, _)) = match_node_decorator(expr) {
             is_node = true;
             if let Expr::Call(call) = expr {
-                node_arguments(call, source, &mut arguments, &mut followed);
+                node_arguments(kind, call, source, &mut arguments, &mut followed);
             }
         } else if rule(OTHER_DECORATOR) != Counts::No {
             decorators.push(canonical_expr(expr, source));
@@ -216,6 +244,7 @@ pub fn node_definition<'a>(func: &'a ast::StmtFunctionDef, source: &str) -> Opti
 
 /// The counted arguments of one `@asset(...)` / `@sensor(...)` / `@task(...)` call.
 fn node_arguments<'a>(
+    kind: crate::NodeKind,
     call: &'a ast::ExprCall,
     source: &str,
     arguments: &mut Vec<String>,
@@ -237,7 +266,7 @@ fn node_arguments<'a>(
             }
             continue;
         };
-        match rule(name) {
+        match node_argument_counts(kind, name) {
             Counts::No => {}
             Counts::PartitionShape => {
                 arguments.push(format!(
@@ -995,6 +1024,36 @@ def f(a, b, c):
             expr("f(x, *rest, k = [1, 'two', 3.0, None, True], **{'a': -b.c[0]})"),
             "f(x, *rest, k=[1, \"two\", 3.0, None, True], **{\"a\": (- b.c[0])})"
         );
+    }
+
+    #[test]
+    fn node_hash_rules_match_exactly_the_accepted_signature_pairs() {
+        use std::collections::BTreeSet;
+        let accepted: BTreeSet<_> = crate::decorator_args::arguments()
+            .filter(|argument| matches!(argument.call, "asset" | "sensor" | "task"))
+            .map(|argument| (argument.call, argument.name))
+            .collect();
+        let mapped: Vec<_> = node_argument_rules().collect();
+        let pairs: BTreeSet<_> = mapped
+            .iter()
+            .map(|(argument, _)| (argument.call, argument.name))
+            .collect();
+        assert_eq!(pairs, accepted);
+        assert_eq!(mapped.len(), pairs.len(), "duplicate argument rules");
+        for (argument, rule) in mapped {
+            assert_eq!(argument.name, rule.part);
+            assert_eq!(argument.passing, crate::decorator_args::Passing::Keyword);
+        }
+        // A rule for a removed keyword must not remain silently in the hash/manual table.
+        let accepted_names: BTreeSet<_> = accepted.iter().map(|(_, name)| *name).collect();
+        let keyword_rules: Vec<_> = RULES
+            .iter()
+            .filter(|rule| ![SINK, OTHER_DECORATOR, UNKNOWN_ARGUMENT, UNSAFE].contains(&rule.part))
+            .map(|rule| rule.part)
+            .collect();
+        let names: BTreeSet<_> = keyword_rules.iter().copied().collect();
+        assert_eq!(names, accepted_names);
+        assert_eq!(keyword_rules.len(), names.len(), "duplicate keyword rules");
     }
 
     /// `barca docs cache` lists exactly [`RULES`]: the same parts, in the same order, with the

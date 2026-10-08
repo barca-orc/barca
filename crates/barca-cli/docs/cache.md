@@ -86,7 +86,7 @@ re-run, never a stale result.
 | `partitions=` | the shape, not the keys | the dimension names and a `partitions_from` source decide how the function is called; the keys do not count, because each key is part of its own run hash |
 | `@sink(...)` | yes | a cached step does not write its sinks, so a new or edited sink has to run the asset to be written |
 | any other decorator | yes | it wraps the function and can change what it returns |
-| any other argument | yes | barca does not know what it means, so it is assumed to matter |
+| any other argument | yes | conservative fallback for unvalidated calls; recognized barca calls reject it |
 | `env=` | no | the declared names and their values are already part of the run hash |
 | `name=` | no | it is the node's id, under which results are looked up, not part of the result |
 | `freshness=` | no | decides when the step runs, not what it returns |
@@ -99,7 +99,11 @@ re-run, never a stale result.
 
 The same list applies to `@asset`, `@sensor` and `@task`. "Any other decorator" is one that is
 not barca's: `@functools.cache`, a wrapper of your own. "Any other argument" is a keyword barca
-does not define, a positional argument, or `**options`.
+does not define, a positional argument, or `**options`, only in a call that barca cannot
+positively identify from its imports. Positively identified barca node calls reject all of
+these at plan time (`barca docs assets`, "Accepted arguments"); the fallback is conservative
+hashing for unvalidated syntax, not an accepted argument. The hash rules are keyed to the
+same accepted signatures and a test checks every `(decorator, argument)` pair.
 
 What this means in practice:
 

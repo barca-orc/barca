@@ -283,6 +283,43 @@ def test_assets_topic_example(binary, topics, tmp_path):
     }
 
 
+def test_assets_topic_accepted_arguments_example(binary, topics, tmp_path):
+    """The "Accepted arguments" section: the example is rejected with exactly the two lines
+    the manual prints, exit 2, and the table lists what the Python stubs take."""
+    import inspect
+
+    import barca as stubs
+
+    body = topics["assets"]
+    snippet = next(b for b in blocks(body, "python") if "`input` for `inputs`" in b)
+    header = 'from barca import asset\n\n\n@asset()\ndef raw() -> dict:\n    return {"n": 1}\n\n\n'
+    (tmp_path / "pipeline.py").write_text(header + snippet)
+    documented = next(
+        b for b in blocks(body, "") if b.startswith("$ barca list pipeline.py --pretty")
+    )
+    proc = barca(binary, tmp_path, "list", "pipeline.py", "--pretty")
+    assert proc.returncode == 2
+    assert proc.stderr == documented.split("\n", 1)[1]
+    # Corrected as the message says, it plans.
+    (tmp_path / "pipeline.py").write_text(header + snippet.replace("input=", "inputs="))
+    nodes = result(barca(binary, tmp_path, "list", "pipeline.py", "--json"))["nodes"]
+    assert {n["id"]: n["inputs"] for n in nodes}["pipeline.py:report"] == ["pipeline.py:raw"]
+
+    # The table against the stubs a type checker reads (the Rust list is held to both by
+    # `cargo test -p barca-core decorator_args`).
+    rows = re.findall(r"^\| `@?(\w+)(?:\(\))?` \| (\w+) \| (.*) \|$", body, re.M)
+    assert [r[0] for r in rows] == [
+        "asset", "sensor", "task", "sink",
+        "partitions", "partitions_from", "collect", "asset_ref", "Schedule",
+    ]  # fmt: skip
+    for name, positional, keywords in rows:
+        params = inspect.signature(getattr(stubs, name)).parameters.values()
+        by_keyword = [p.name for p in params if p.kind in (p.KEYWORD_ONLY, p.POSITIONAL_OR_KEYWORD)]
+        by_position = [p.name for p in params if p.kind == p.POSITIONAL_ONLY and p.name != "fn"]
+        assert by_keyword == ([] if keywords == "none" else re.findall(r"`(\w+)`", keywords)), name
+        assert len(by_position) == {"none": 0, "one": 1}[positional], name
+
+
 def test_assets_topic_unused_input_example(binary, topics, tmp_path):
     """The "Unused inputs" section: the example pipeline produces exactly the warning line and
     the JSON entry the manual prints, on every planning command, and exit 0."""

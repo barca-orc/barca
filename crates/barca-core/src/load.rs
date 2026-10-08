@@ -118,7 +118,7 @@ fn resolve_dynamic_partitions(nodes: &mut [crate::model::ExtractedNode], python:
 
                 if !output.status.success() {
                     let stderr = String::from_utf8_lossy(&output.stderr);
-                    eprintln!(
+                    crate::errln!(
                         "[barca] warning: failed to evaluate partition expression '{}' for {}: {}",
                         source_text,
                         node.function_name,
