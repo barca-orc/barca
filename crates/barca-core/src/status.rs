@@ -2,13 +2,14 @@
 //! materialization and artifact shape.
 //!
 //! Nothing here is new logic. Cache state comes from the same decision `--dry-run` makes
-//! ([`commands::explain_dag`]), history from the metadata DB, and artifact shape from
+//! ([`crate::execution::explain_dag`]), history from the metadata DB, and artifact shape from
 //! `python -m barca._inspect`, which opens artifact files only: user code is never imported.
 //! Nothing is written, and no `.barca` directory is created.
 
 use crate::BarcaError;
-use crate::commands::{self, CachePolicy, StepReport};
+use crate::cache::CachePolicy;
 use crate::db;
+use crate::results::StepReport;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -140,8 +141,8 @@ pub async fn status(
     sample: usize,
     shape: bool,
 ) -> Result<StatusResult, BarcaError> {
-    let dag = commands::build_dag(file_args, python).await?;
-    let explained = commands::explain_dag(
+    let dag = crate::load::build_dag(file_args, python).await?;
+    let explained = crate::execution::explain_dag(
         &dag,
         cfg,
         target_names,
@@ -451,12 +452,11 @@ async fn run_inspector(
     request: &serde_json::Value,
 ) -> Result<Vec<serde_json::Value>, String> {
     use tokio::io::AsyncWriteExt;
-    let mut cmd = tokio::process::Command::new(python);
-    cmd.args(["-m", "barca._inspect"]);
-    // The same options workers get (`[remote.storage_options.*]` merged with the environment).
-    if let Some(ref opts) = cfg.storage_options_json {
-        cmd.env("BARCA_STORAGE_OPTIONS", opts);
-    }
+    let mut cmd = crate::helper_proc::python_module(
+        python,
+        "barca._inspect",
+        cfg.storage_options_json.as_deref(),
+    );
     cmd.stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());

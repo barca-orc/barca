@@ -647,7 +647,7 @@ async fn schema_reads_materialized_columns_and_reports_missing_artifacts() {
     std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755)).unwrap();
     config.python = launcher;
 
-    let summaries = barca_core::commands::list_assets(&config.files, &config.python)
+    let summaries = barca_core::queries::list_assets(&config.files, &config.python)
         .await
         .unwrap();
     let first = summaries.iter().find(|n| n.id.ends_with(":first")).unwrap();

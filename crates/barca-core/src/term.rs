@@ -150,8 +150,20 @@ pub fn stdout_str(text: &str) {
     );
 }
 
-/// `eprintln!` that does not panic. Use [`errln!`](crate::errln). What the child processes
-/// wrote before this call is copied to stderr first, so the line keeps its place.
+/// Write text to stderr as it is (no newline added), without panicking.
+pub fn stderr_str(text: &str) {
+    let _order = ChildOutput::copy_pending();
+    let _one = locked(&STDERR_WRITER);
+    write_to(
+        &mut Stream(libc::STDERR_FILENO),
+        &STDERR,
+        format_args!("{text}"),
+        false,
+    );
+}
+
+/// `eprintln!` that does not panic. Use [`errln!`](crate::errln). Child output
+/// written before this call is copied first, so the line keeps its place.
 pub fn stderr_line(args: fmt::Arguments<'_>) {
     let _order = ChildOutput::copy_pending();
     let _one = locked(&STDERR_WRITER);

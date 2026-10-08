@@ -24,7 +24,9 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+#[cfg(test)]
+use std::process::Command;
+use std::process::{Child, Stdio};
 use std::time::Duration;
 
 use tokio::net::{UnixListener, UnixStream};
@@ -947,8 +949,12 @@ async fn spawn_worker(
     listener: &UnixListener,
     event_tx: &mpsc::Sender<IoEvent>,
 ) -> Result<WorkerHandle, String> {
-    let mut cmd = Command::new(&config.python);
-    cmd.args(["-m", "barca._worker", "--daemon"])
+    let mut cmd = crate::helper_proc::python_module_std(
+        &config.python,
+        "barca._worker",
+        config.storage_options_json.as_deref(),
+    );
+    cmd.arg("--daemon")
         .env("BARCA_SOCKET", socket_path.to_str().unwrap_or(""))
         .env("BARCA_WORKER", "1")
         .env("BARCA_WORKER_ID", worker_id.to_string())
@@ -961,9 +967,6 @@ async fn spawn_worker(
         .stdout(crate::term::child_output())
         .stderr(crate::term::child_output())
         .stdin(Stdio::null());
-    if let Some(ref opts) = config.storage_options_json {
-        cmd.env("BARCA_STORAGE_OPTIONS", opts);
-    }
     let trace_on = std::env::var("BARCA_TRACE_TIMING").is_ok();
     let t_spawn = std::time::Instant::now();
     let child = crate::helper_proc::spawn_std(&mut cmd).map_err(|e| format!("spawn: {e}"))?;

@@ -23,7 +23,6 @@ mod ui;
 mod watch;
 
 pub use handlers::node_states;
-pub use scheduler::{ScheduleInfo, describe_schedule};
 pub use state::{NodeState, ServeConfig};
 
 use state::AppState;
