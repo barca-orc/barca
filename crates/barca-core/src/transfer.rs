@@ -295,19 +295,19 @@ impl TransferClient {
         let local_root = std::fs::canonicalize(&cfg.local_artifact_dir)?;
         let layout = ArtifactLayout::new(local_root, &cfg.artifact_root);
 
-        let mut cmd = Command::new(python);
-        cmd.args(["-m", "barca._transfer"])
-            .env(
-                "BARCA_TRANSFER_CONCURRENCY",
-                cfg.transfer_concurrency.to_string(),
-            )
-            .env(
-                "BARCA_TRANSFER_TIMEOUT",
-                cfg.transfer_timeout_secs.to_string(),
-            );
-        if let Some(ref opts) = cfg.storage_options_json {
-            cmd.env("BARCA_STORAGE_OPTIONS", opts);
-        }
+        let mut cmd = crate::helper_proc::python_module(
+            python,
+            "barca._transfer",
+            cfg.storage_options_json.as_deref(),
+        );
+        cmd.env(
+            "BARCA_TRANSFER_CONCURRENCY",
+            cfg.transfer_concurrency.to_string(),
+        )
+        .env(
+            "BARCA_TRANSFER_TIMEOUT",
+            cfg.transfer_timeout_secs.to_string(),
+        );
         Launching::start(
             cmd,
             crate::protocol::socket_path(run_id, "transfer"),

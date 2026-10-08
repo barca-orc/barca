@@ -12,172 +12,18 @@
 //! unchanged, with the remediation appended. Errors always go to stderr; stdout is for results.
 //! The schema is documented in `barca docs agents` (crates/barca-cli/docs/agents.md).
 
-use barca_core::BarcaError;
-use serde_json::{Map, Value, json};
+pub use barca_core::envelope::{
+    Context, ErrorEnvelope as CliError, ErrorKind, list_hint, shell_quote,
+};
 
-/// What went wrong, as an agent needs to know it: fix the command, fix the code, retry, or
-/// nothing (the user cancelled). Each kind has exactly one exit code.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ErrorKind {
-    /// A user step raised (traceback included). Fix the code; retrying barca will not help.
-    StepFailed,
-    /// Bad arguments, unknown target, wrong command for the node kind, invalid config.
-    Usage,
-    /// barca or its environment failed: metadata DB, worker spawn, remote state, I/O.
-    Infra,
-    /// Interrupted (Ctrl-C).
-    Cancelled,
+pub trait CliErrorExt {
+    fn from_clap(e: &clap::Error) -> Self;
+    fn emit(&self, json: bool) -> !;
 }
 
-impl ErrorKind {
-    /// The exit code table — defined here and nowhere else.
-    ///
-    /// | code | kind          |
-    /// |------|---------------|
-    /// | 0    | success       |
-    /// | 1    | `step_failed` |
-    /// | 2    | `usage`       |
-    /// | 3    | `infra`       |
-    /// | 130  | `cancelled`   |
-    pub const fn exit_code(self) -> i32 {
-        match self {
-            ErrorKind::StepFailed => 1,
-            ErrorKind::Usage => 2,
-            ErrorKind::Infra => 3,
-            ErrorKind::Cancelled => 130,
-        }
-    }
-
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            ErrorKind::StepFailed => "step_failed",
-            ErrorKind::Usage => "usage",
-            ErrorKind::Infra => "infra",
-            ErrorKind::Cancelled => "cancelled",
-        }
-    }
-
-    /// The mapping from engine errors to kinds.
-    pub fn of(e: &BarcaError) -> Self {
-        match e {
-            BarcaError::WorkerFailed(_) => ErrorKind::StepFailed,
-            BarcaError::AssetNotFound(..)
-            | BarcaError::Usage(_)
-            | BarcaError::Parse(_)
-            | BarcaError::Dag(_) => ErrorKind::Usage,
-            BarcaError::Cancelled => ErrorKind::Cancelled,
-            BarcaError::Io(_) | BarcaError::Db(_) | BarcaError::Other(_) => ErrorKind::Infra,
-        }
-    }
-}
-
-/// What the command was asked to do, so a remediation can name a runnable next command.
-#[derive(Clone, Debug, Default)]
-pub struct Context {
-    /// The subcommand (`get`, `run`, ...).
-    pub command: &'static str,
-    /// The `.py` files the user passed.
-    pub files: Vec<String>,
-}
-
-/// Quote a word for display in a copy-pasteable shell command.
-pub fn shell_quote(s: &str) -> String {
-    let plain = !s.is_empty()
-        && s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || "-_./:,=@+%".contains(c));
-    if plain {
-        s.to_string()
-    } else {
-        format!("'{}'", s.replace('\'', r"'\''"))
-    }
-}
-
-/// `barca list <files>`, quoted for the shell (plain `barca list`, the whole project, when no
-/// file is known).
-pub fn list_cmd(files: &[String]) -> String {
-    if files.is_empty() {
-        "barca list".to_string()
-    } else {
-        let quoted: Vec<String> = files.iter().map(|f| shell_quote(f)).collect();
-        format!("barca list {}", quoted.join(" "))
-    }
-}
-
-/// The one remediation for an unknown target or a misused name, on every command: `barca list`
-/// is how you discover the assets, tasks and sensors a project defines.
-pub fn list_hint(files: &[String]) -> String {
-    format!(
-        "Run `{}` to see available assets and tasks.",
-        list_cmd(files)
-    )
-}
-
-impl Context {
-    fn list_cmd(&self) -> String {
-        list_cmd(&self.files)
-    }
-
-    fn help_cmd(&self) -> String {
-        if self.command.is_empty() {
-            "barca --help".to_string()
-        } else {
-            format!("barca {} --help", self.command)
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct CliError {
-    pub kind: ErrorKind,
-    /// The message: what went wrong, without the fix.
-    pub error: String,
-    /// What to do next.
-    pub remediation: Option<String>,
-    /// `step_failed` only: the failing node id.
-    pub node: Option<String>,
-    /// `step_failed` only: the user-code traceback.
-    pub traceback: Option<String>,
-    /// `step_failed` only: the failing step's artifact directory (local path or URI).
-    pub artifact_dir: Option<String>,
-    /// Human-mode text (the existing prose).
-    prose: String,
-    /// Whether `prose` already contains the remediation (so it is not printed twice).
-    prose_has_remediation: bool,
-}
-
-impl CliError {
-    /// An error written as prose: an optional `error: ` prefix, the message on the first line,
-    /// then (after the first line) what to do about it. Human mode prints the prose verbatim;
-    /// JSON splits it into `error` and `remediation`.
-    pub fn from_prose(kind: ErrorKind, prose: impl Into<String>) -> Self {
-        let prose = prose.into();
-        let text = prose.strip_prefix("error: ").unwrap_or(&prose);
-        let (head, rest) = text.split_once('\n').unwrap_or((text, ""));
-        let rest = rest.trim();
-        CliError {
-            kind,
-            error: head.trim().to_string(),
-            remediation: (!rest.is_empty()).then(|| rest.to_string()),
-            node: None,
-            traceback: None,
-            artifact_dir: None,
-            prose_has_remediation: true,
-            prose: prose.trim_end().to_string(),
-        }
-    }
-
-    /// Like [`CliError::from_prose`], with a remediation for when the prose has none.
-    pub fn from_prose_or(kind: ErrorKind, prose: impl Into<String>, fallback: String) -> Self {
-        let mut e = Self::from_prose(kind, prose);
-        if e.remediation.is_none() {
-            e.remediation = Some(fallback);
-            e.prose_has_remediation = false;
-        }
-        e
-    }
-
+impl CliErrorExt for CliError {
     /// An argument-parser (clap) error: always `usage`.
-    pub fn from_clap(e: &clap::Error) -> Self {
+    fn from_clap(e: &clap::Error) -> Self {
         let mut out = Self::from_prose(ErrorKind::Usage, e.render().to_string());
         // "the following required arguments were not provided:" names them on the next line.
         if out.error.ends_with(':')
@@ -191,139 +37,8 @@ impl CliError {
         out
     }
 
-    /// An engine error, with a remediation that names the next command to run.
-    pub fn from_barca(e: BarcaError, ctx: &Context) -> Self {
-        let kind = ErrorKind::of(&e);
-        if let BarcaError::WorkerFailed(step) = &e {
-            return CliError {
-                kind,
-                error: format!("step '{}' failed: {}", step.node, step.summary()),
-                remediation: Some(format!(
-                    "Fix the error in '{}' (see the traceback) and re-run the same command. \
-                     Steps that succeeded are cached and will not re-run.",
-                    step.node
-                )),
-                node: Some(step.node.clone()),
-                traceback: step.traceback().map(str::to_string),
-                artifact_dir: step.artifact_dir.clone(),
-                prose: e.to_string(),
-                prose_has_remediation: false,
-            };
-        }
-        let fallback = match &e {
-            BarcaError::AssetNotFound(..) => list_hint(&ctx.files),
-            BarcaError::Parse(_) => format!(
-                "Fix the Python syntax error, then run `{}` to confirm discovery.",
-                ctx.list_cmd()
-            ),
-            BarcaError::Dag(d) => match d.remediation() {
-                Some(fix) => fix,
-                None => format!(
-                    "Fix the inputs between definitions, then run `{}` to check each node's \
-                     inputs.",
-                    ctx.list_cmd()
-                ),
-            },
-            BarcaError::Usage(_) => format!("See `{}`.", ctx.help_cmd()),
-            BarcaError::Cancelled => "Re-run the same command; steps that finished before the \
-                                      cancel are cached and will not re-run."
-                .to_string(),
-            BarcaError::Db(_) => "Not a problem in your code. Retry the command; if it keeps \
-                                  failing, check that .barca/ is writable and that no other \
-                                  program holds the metadata DB."
-                .to_string(),
-            BarcaError::Io(_) | BarcaError::Other(_) | BarcaError::WorkerFailed(_) => {
-                "Not a problem in your code: barca or its environment failed. Retrying may \
-                 succeed."
-                    .to_string()
-            }
-        };
-        let prose = e.to_string();
-        match &e {
-            // These messages put the fix after the first line (e.g. the valid `--refresh`
-            // names, or what to close when the DB is locked): split it out.
-            BarcaError::Usage(_) | BarcaError::Db(_) | BarcaError::Other(_) => {
-                let mut out = Self::from_prose_or(kind, prose.clone(), fallback);
-                // Engine messages carry no `error: ` prefix; keep their prose exactly.
-                out.prose = prose.trim_end().to_string();
-                out
-            }
-            _ => CliError {
-                kind,
-                error: prose.trim().to_string(),
-                remediation: Some(fallback),
-                node: None,
-                traceback: None,
-                artifact_dir: None,
-                prose: prose.trim_end().to_string(),
-                prose_has_remediation: false,
-            },
-        }
-    }
-
-    /// Append a final line to the remediation (and to the human prose when it already carries
-    /// the remediation), unless the remediation already says it.
-    pub fn with_final_hint(mut self, hint: String) -> Self {
-        if self
-            .remediation
-            .as_deref()
-            .is_some_and(|r| r.contains(&hint))
-        {
-            return self;
-        }
-        // A generic fallback remediation is replaced, not repeated, by the more specific hint.
-        if !self.prose_has_remediation {
-            self.remediation = Some(hint);
-            return self;
-        }
-        self.remediation = Some(match self.remediation.take() {
-            Some(r) => format!("{r}\n{hint}"),
-            None => hint.clone(),
-        });
-        if self.prose_has_remediation {
-            self.prose = format!("{}\n\n{hint}", self.prose);
-        }
-        self
-    }
-
-    pub fn code(&self) -> i32 {
-        self.kind.exit_code()
-    }
-
-    /// The JSON envelope.
-    pub fn to_json(&self) -> Value {
-        let mut m = Map::new();
-        m.insert("error".into(), json!(self.error));
-        m.insert("code".into(), json!(self.code()));
-        m.insert("kind".into(), json!(self.kind.as_str()));
-        m.insert("remediation".into(), json!(self.remediation));
-        if self.kind == ErrorKind::StepFailed {
-            m.insert("node".into(), json!(self.node));
-            m.insert("traceback".into(), json!(self.traceback));
-            m.insert("artifact_dir".into(), json!(self.artifact_dir));
-        }
-        Value::Object(m)
-    }
-
-    /// The human-mode text: the prose, then the remediation unless the prose already has it.
-    pub fn to_human(&self) -> String {
-        match (&self.remediation, self.prose_has_remediation) {
-            (Some(r), false) => format!("{}\n\n{r}", self.prose),
-            _ => self.prose.clone(),
-        }
-    }
-
-    /// The line(s) written to stderr.
-    pub fn render(&self, json: bool) -> String {
-        if json {
-            self.to_json().to_string()
-        } else {
-            self.to_human()
-        }
-    }
-
     /// Write the error to stderr and exit with its code.
-    pub fn emit(&self, json: bool) -> ! {
+    fn emit(&self, json: bool) -> ! {
         eprintln!("{}", self.render(json));
         std::process::exit(self.code())
     }
@@ -384,6 +99,8 @@ pub fn json_mode_from_argv_with(argv: &[String], env: Option<&str>, stdout_is_tt
 #[cfg(test)]
 mod tests {
     use super::*;
+    use barca_core::BarcaError;
+    use serde_json::Value;
 
     fn argv(s: &str) -> Vec<String> {
         s.split_whitespace().map(String::from).collect()
