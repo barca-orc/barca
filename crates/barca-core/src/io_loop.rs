@@ -25,9 +25,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
-#[cfg(test)]
-use std::process::Command;
-use std::process::{Child, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
 use tokio::net::{UnixListener, UnixStream};
