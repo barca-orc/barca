@@ -343,6 +343,10 @@ def main() -> int:
     # traceback. The coordinator starts this process in a group of its own, which the
     # terminal's Ctrl-C does not reach; a SIGINT sent to it directly is ignored too.
     signal.signal(signal.SIGINT, signal.SIG_IGN)
+    # A warning printed for a reader that has gone away is dropped, not raised (#286).
+    from barca import _pipes
+
+    _pipes.install()
     # Outside the terminal's foreground group, a write to the terminal (a warning on stderr)
     # would stop the process if the terminal is set to `tostop`. Ignored, the write goes
     # through.

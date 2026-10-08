@@ -77,7 +77,7 @@ async fn collect_jobs(files: &[String], python: &std::path::Path) -> Vec<Schedul
     match commands::list_assets(files, python).await {
         Ok(summaries) => jobs_from_summaries(summaries),
         Err(e) => {
-            eprintln!("[barca] scheduler disabled: failed to analyze DAG: {e}");
+            barca_core::errln!("[barca] scheduler disabled: failed to analyze DAG: {e}");
             Vec::new()
         }
     }
@@ -98,9 +98,10 @@ fn jobs_from_summaries(summaries: Vec<AssetSummary>) -> Vec<ScheduledJob> {
                 cron_str: expr.0.clone(),
                 cron,
             }),
-            Err(e) => eprintln!(
+            Err(e) => barca_core::errln!(
                 "[barca] skipping '{}': invalid cron {:?}: {e}",
-                s.id, expr.0
+                s.id,
+                expr.0
             ),
         }
     }
@@ -155,7 +156,7 @@ impl Zone {
             _ => match s.trim().parse::<chrono_tz::Tz>() {
                 Ok(tz) => Zone::Named(tz),
                 Err(_) => {
-                    eprintln!("[barca] unknown timezone {s:?}, using local time");
+                    barca_core::errln!("[barca] unknown timezone {s:?}, using local time");
                     Zone::Local
                 }
             },
@@ -277,7 +278,7 @@ async fn catch_up(
                 let last = zone.timestamp(last_epoch);
                 if needs_catchup(&job.cron, &last, now) {
                     let handle = trigger(state, job);
-                    eprintln!("[barca] catch-up run {} → {handle}", job.id);
+                    barca_core::errln!("[barca] catch-up run {} → {handle}", job.id);
                     last_handle.insert(job.id.clone(), handle);
                     last_fired.insert(job.id.clone(), now.timestamp());
                     persist_fired(db_path, &job.id, now.timestamp()).await;
@@ -295,7 +296,7 @@ async fn catch_up(
 /// Record that `node_id` fired at `epoch` seconds. Best-effort durability.
 async fn persist_fired(db_path: &str, node_id: &str, epoch: i64) {
     if let Err(e) = db::upsert_schedule_state(db_path, node_id, epoch).await {
-        eprintln!("[barca] schedule_state write failed for {node_id}: {e}");
+        barca_core::errln!("[barca] schedule_state write failed for {node_id}: {e}");
     }
 }
 
@@ -331,10 +332,10 @@ async fn reload_jobs(state: &AppState) -> Vec<ScheduledJob> {
 /// Log the current schedule and each job's next fire time.
 fn log_schedule(jobs: &[ScheduledJob], zone: &Zone) {
     if jobs.is_empty() {
-        eprintln!("[barca] no scheduled assets yet (watching for changes)");
+        barca_core::errln!("[barca] no scheduled assets yet (watching for changes)");
         return;
     }
-    eprintln!(
+    barca_core::errln!(
         "[barca] scheduling {} asset{}:",
         jobs.len(),
         if jobs.len() == 1 { "" } else { "s" }
@@ -346,7 +347,7 @@ fn log_schedule(jobs: &[ScheduledJob], zone: &Zone) {
             .find_next_occurrence(&now, false)
             .map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string())
             .unwrap_or_else(|_| "?".to_string());
-        eprintln!("  {} — {} (next {})", job.id, job.cron_str, next);
+        barca_core::errln!("  {} — {} (next {})", job.id, job.cron_str, next);
     }
 }
 
@@ -358,7 +359,7 @@ pub async fn run_scheduler(state: AppState) {
     let mut jobs = reload_jobs(&state).await;
 
     if jobs.is_empty() && !state.config.watch {
-        eprintln!("[barca] no scheduled assets — scheduler idle");
+        barca_core::errln!("[barca] no scheduled assets — scheduler idle");
         return;
     }
     log_schedule(&jobs, &zone);
@@ -372,7 +373,7 @@ pub async fn run_scheduler(state: AppState) {
             Some(path)
         }
         Err(_) => {
-            eprintln!("[barca] scheduler: durability disabled (no metadata db)");
+            barca_core::errln!("[barca] scheduler: durability disabled (no metadata db)");
             None
         }
     };
@@ -397,7 +398,7 @@ pub async fn run_scheduler(state: AppState) {
         if current_gen != seen_gen {
             seen_gen = current_gen;
             let fresh = reload_jobs(&state).await;
-            eprintln!("[barca] schedule reloaded: {} job(s)", fresh.len());
+            barca_core::errln!("[barca] schedule reloaded: {} job(s)", fresh.len());
             jobs = fresh;
             log_schedule(&jobs, &zone);
             publish_registry(&state, &jobs, &last_handle, &last_fired);
@@ -410,13 +411,13 @@ pub async fn run_scheduler(state: AppState) {
         // that substring ("scheduled run", plus the job id) if this wording changes.
         for action in plan_tick(&now, &jobs, &last_handle, |h| is_in_flight(&state, h)) {
             match action {
-                TickAction::Skip { job, handle } => eprintln!(
+                TickAction::Skip { job, handle } => barca_core::errln!(
                     "[barca] scheduled run {} skipped — previous run {handle} still in flight",
                     job.id
                 ),
                 TickAction::Fire(job) => {
                     let handle = trigger(&state, job);
-                    eprintln!("[barca] scheduled run {} → {handle}", job.id);
+                    barca_core::errln!("[barca] scheduled run {} → {handle}", job.id);
                     last_handle.insert(job.id.clone(), handle);
                     last_fired.insert(job.id.clone(), now.timestamp());
                     if let Some(dbp) = &db_path {

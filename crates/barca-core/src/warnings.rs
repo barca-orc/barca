@@ -27,7 +27,7 @@ pub fn warn_once(message: &str) -> bool {
         .map(|mut seen| seen.insert(message.to_string()))
         .unwrap_or(true);
     if first {
-        eprintln!("[barca] warning: {message}");
+        crate::errln!("[barca] warning: {message}");
     }
     first
 }

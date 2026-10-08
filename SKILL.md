@@ -85,6 +85,8 @@ barca get total pipeline.py --refresh-all         # recompute an asset's whole c
 | 130  | `cancelled`   | interrupted                                     | re-run               |
 
 Steps that finished before a failure, a cancel or a kill stay cached: re-running resumes.
+Cutting the output short (`barca list | head -1`, `barca run deploy 2>&1 | head -20`) stops
+nothing and is not an error: the run finishes and is recorded, and the exit code is unchanged.
 While a run is going, `barca status` from another process shows the steps it has finished.
 
 ## Agent flags and jq

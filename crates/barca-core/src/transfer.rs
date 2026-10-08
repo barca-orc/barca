@@ -561,7 +561,7 @@ async fn io_task(
                 };
                 if let Some((tx, t0, what)) = pending.remove(&id) {
                     if trace {
-                        eprintln!(
+                        crate::errln!(
                             "[trace]  transfer {what} {} in {:.1}ms",
                             if result.is_ok() { "done" } else { "FAILED" },
                             t0.elapsed().as_secs_f64() * 1000.0
@@ -1074,7 +1074,7 @@ for t in threads: t.join()
     #[tokio::test]
     async fn real_helper_round_trip_through_plain_path_store() {
         let Some(python) = repo_python() else {
-            eprintln!("SKIP: no .venv with barca installed");
+            crate::errln!("SKIP: no .venv with barca installed");
             return;
         };
         let fx = Fixture::new();

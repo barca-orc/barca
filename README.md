@@ -141,7 +141,9 @@ cannot be queried.
 stdout: a table or summary in a terminal, JSON when piped or captured (`--json` and
 `--pretty` override). Progress and errors go to stderr; in JSON mode an error is one JSON
 line with `error`, `code`, `kind` and `remediation`. Exit codes: `0` ok, `1` a step
-failed, `2` usage error, `3` barca or infrastructure failure, `130` cancelled.
+failed, `2` usage error, `3` barca or infrastructure failure, `130` cancelled. A reader
+that stops early (`barca list | head -1`) is not an error: nothing panics, a run still finishes
+and is recorded, and the exit code is unchanged.
 
 ```
 $ barca sql "select * from raw_data where x > 1" --json

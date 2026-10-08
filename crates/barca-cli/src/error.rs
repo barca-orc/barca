@@ -327,9 +327,10 @@ impl CliError {
         }
     }
 
-    /// Write the error to stderr and exit with its code.
+    /// Write the error to stderr and exit with its code. A closed stderr drops the text; the
+    /// exit code is the error's either way (`barca_core::term`).
     pub fn emit(&self, json: bool) -> ! {
-        eprintln!("{}", self.render(json));
+        barca_core::errln!("{}", self.render(json));
         std::process::exit(self.code())
     }
 }

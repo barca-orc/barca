@@ -44,6 +44,11 @@ pytest python/tests/test_sql.py -q        # one file
 Most tests in `python/tests/` create a temporary project with decorated functions, run the
 real `barca` binary on it, and check the output, exit code and files.
 
+barca prints through `barca_core::outln!` and `errln!`, which do not panic when the reader of
+stdout or stderr has gone; clippy denies `println!` and `eprintln!` in the three crates.
+`python/tests/test_closed_pipe.py` starts barca with a pipe whose read end is already closed,
+so the first write fails every time and no test waits for a reader to exit.
+
 Tests that must act while a helper process is in the middle of something (a Ctrl-C during an
 upload, in `test_remote_cancel.py`) do not sleep and hope: `python/tests/hold/` is a
 `sitecustomize` shim that pauses a barca helper at a named point until the test releases it

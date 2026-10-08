@@ -11,6 +11,9 @@
 //! them directly on the server's runtime — no `spawn_blocking`, and every run
 //! future is genuinely cancellable.
 
+// Print with `barca_core::outln!` / `errln!`, which cannot panic on a closed pipe (#286).
+#![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]
+
 mod error;
 mod handlers;
 mod routes;
@@ -61,7 +64,7 @@ pub async fn serve(config: ServeConfig) -> Result<(), ServeError> {
     ));
 
     if read_only {
-        eprintln!(
+        barca_core::errln!(
             "[barca] read-only: runs are refused and the metadata DB is only read from snapshots"
         );
     }
@@ -76,7 +79,7 @@ pub async fn serve(config: ServeConfig) -> Result<(), ServeError> {
         match watch::spawn(state.clone()) {
             Ok(w) => Some(w),
             Err(e) => {
-                eprintln!("[barca] watch disabled: {e}");
+                barca_core::errln!("[barca] watch disabled: {e}");
                 None
             }
         }
@@ -87,7 +90,7 @@ pub async fn serve(config: ServeConfig) -> Result<(), ServeError> {
     let app = routes::router(state.clone());
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    eprintln!(
+    barca_core::errln!(
         "[barca] serving on http://{addr}  ({n_files} file{}{})",
         if n_files == 1 { "" } else { "s" },
         if watch { " · watch" } else { "" },

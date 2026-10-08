@@ -320,6 +320,33 @@ that is every pipeline file of the project. The envelope's `error` starts with `
 <file>:<function> (line <n>):` for a decorator argument, and its `remediation` says what to
 change; the wording is not contract.
 
+### A closed stdout or stderr (stable)
+
+When the reader of barca's output goes away (`barca list | head -1`, a pager that quits, a
+caller that stops reading), barca prints nothing about it and does not stop what it is doing:
+
+- Output for the closed stream is dropped. There is no panic, no traceback and no message on
+  the other stream.
+- The command finishes. A `get` or `run` executes every step and records the run as it would
+  with a reader, whether stdout, stderr or both are closed. A step's own `print` output for a
+  closed stream is dropped and does not fail the step. A closed pipe is not a cancellation: to
+  stop a run, interrupt it (Ctrl-C, exit 130).
+- The exit code does not change. It is the one the command would have had with a reader: 0
+  when it succeeded, and 1, 2, 3 or 130 when it has an error of its own (the envelope is still
+  written to stderr if stderr is open). A reader that stops early is not an error, so
+  `barca list | head -1` and `barca list | grep -q name` exit 0, also under `set -o pipefail`.
+  barca does not exit 141 and is not ended by SIGPIPE.
+
+This holds for every command, `--help`, `--version` and `barca docs` included. Up to 0.18.1,
+`docs` and `--help` behaved this way, every other command ended in a Rust panic (exit 101), and
+a closed stderr abandoned a run in the middle (it stayed `interrupted` in `barca history`).
+
+Limits: barca learns that a stream is closed only when it writes to it, so a run whose reader
+has left goes on to its end; interrupt it to stop it. A caller cannot tell from the exit code
+that part of the result was not read: it is the caller that stopped reading. A write to stdout
+that fails for any other reason (a full disk behind `> result.json`) is exit 3, with one line
+on stderr.
+
 ## JSON output schemas
 
 How to read the tables: a key path is dotted, `[]` is "each item of the array", `<name>` stands

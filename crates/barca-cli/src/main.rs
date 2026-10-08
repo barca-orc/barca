@@ -1,5 +1,8 @@
 //! Barca CLI — invisible asset orchestrator.
 
+// Print with `barca_core::outln!` / `errln!`, which cannot panic on a closed pipe (#286).
+#![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]
+
 mod bounded;
 #[cfg(test)]
 mod contract;
@@ -601,7 +604,7 @@ fn cache_policy(
 ) -> barca_core::commands::CachePolicy {
     use barca_core::commands::CachePolicy;
     if no_cache {
-        eprintln!(
+        barca_core::errln!(
             "[barca] warning: --no-cache is deprecated and will be removed in a future minor \
              release; use --refresh-all"
         );
@@ -844,7 +847,7 @@ fn enter_project_root(cli: &mut Cli) -> Result<(), barca_core::BarcaError> {
                 root.display()
             ))
         })?;
-        eprintln!(
+        barca_core::errln!(
             "barca: project root: {} ({} found above the cwd)",
             root.display(),
             barca_core::config::CONFIG_FILE
@@ -962,6 +965,24 @@ fn targets_arg(target: Option<&str>, files: &[PathBuf]) -> Result<Vec<String>, C
     }
 }
 
+/// End a command that has no error of its own. A reader of stdout that went away is not an
+/// error (exit 0, `barca docs contract`); a result that could not be written for any other
+/// reason, such as a full disk behind `> result.json`, is one (exit 3).
+fn finish(json: bool) -> ! {
+    if barca_core::term::stdout_write_failed() {
+        CliError::from_barca(
+            barca_core::BarcaError::Other(
+                "could not write the result to stdout\nCheck the file or device stdout is \
+                 redirected to (a full disk, a revoked terminal), then run the command again."
+                    .to_string(),
+            ),
+            &Context::default(),
+        )
+        .emit(json)
+    }
+    std::process::exit(0)
+}
+
 fn main() {
     // Support `barca file.py [--flags]` as shorthand for `barca get file.py [--flags]`.
     let args: Vec<String> = std::env::args().collect();
@@ -985,8 +1006,8 @@ fn main() {
 
     // Version needs no runtime — answer before paying for thread spawns.
     if let Cli::Version = cli {
-        println!("barca {}", env!("CARGO_PKG_VERSION"));
-        return;
+        barca_core::outln!("barca {}", env!("CARGO_PKG_VERSION"));
+        finish(json);
     }
 
     // The manual is compiled in: no runtime, no Python, no project files needed.
@@ -1000,13 +1021,10 @@ fn main() {
         match docs::run(topic.as_deref(), *all, *json || fields.is_some())
             .map(|out| project_docs_json(out, fields.as_deref()))
         {
-            // Ignore write errors (e.g. a closed pipe from `barca docs --all | head`).
-            Ok(out) => {
-                let _ = std::io::stdout().lock().write_all(out.as_bytes());
-            }
+            Ok(out) => barca_core::term::stdout_str(&out),
             Err(msg) => CliError::from_prose(ErrorKind::Usage, msg).emit(*json || fields.is_some()),
         }
-        return;
+        finish(*json || fields.is_some());
     }
 
     // Hints in errors name files as the user typed them, so take them before rebasing.
@@ -1040,13 +1058,17 @@ fn main() {
         if e.kind == ErrorKind::StepFailed
             && let Some(node) = &e.node
         {
-            eprintln!(
+            barca_core::errln!(
                 "[barca] run failed: step '{node}' failed (exit {})",
                 e.code()
             );
         }
         e.emit(json);
     }
+    // Let the runtime finish its blocking work as it did when `main` returned, then exit 0
+    // (3 if the result could not be written to stdout for a reason other than a closed pipe).
+    drop(rt);
+    finish(json);
 }
 
 /// On a failed run in JSON mode, still print the one-line result on stdout so agents need not
@@ -1057,7 +1079,7 @@ fn print_failed_run(err: &barca_core::BarcaError, mode: OutputMode) {
         return;
     };
     let Some(run) = &f.run else { return };
-    println!(
+    barca_core::outln!(
         "{}",
         serde_json::json!({
             "status": "failed",
@@ -1384,11 +1406,11 @@ async fn get_cmd(
                 "warnings": &result.warnings,
             });
             bounded::project_key(&mut out, "steps", fields);
-            println!("{out}");
+            barca_core::outln!("{out}");
         }
         OutputMode::Value => {
             if let Some(ref val) = final_output {
-                println!("{}", serde_json::to_string_pretty(val).unwrap());
+                barca_core::outln!("{}", serde_json::to_string_pretty(val).unwrap());
             }
         }
         OutputMode::Pretty => {
@@ -1396,7 +1418,7 @@ async fn get_cmd(
                 .as_ref()
                 .map(|t| format!("got '{t}'"))
                 .unwrap_or_else(|| "all assets".to_string());
-            println!(
+            barca_core::outln!(
                 "Run {} | {} in {:.3}s ({} step{}, {} phase{})",
                 result.run_id,
                 label,
@@ -1407,7 +1429,7 @@ async fn get_cmd(
                 if result.phases == 1 { "" } else { "s" }
             );
             if let Some(ref val) = final_output {
-                println!("\nValue:\n{}", serde_json::to_string_pretty(val).unwrap());
+                barca_core::outln!("\nValue:\n{}", serde_json::to_string_pretty(val).unwrap());
             }
         }
     }
@@ -1474,15 +1496,15 @@ async fn run_cmd(
                 "warnings": &result.warnings,
             });
             bounded::project_key(&mut out, "steps", fields);
-            println!("{out}");
+            barca_core::outln!("{out}");
         }
         OutputMode::Value => {
             if let Some(ref val) = final_output {
-                println!("{}", serde_json::to_string_pretty(val).unwrap());
+                barca_core::outln!("{}", serde_json::to_string_pretty(val).unwrap());
             }
         }
         OutputMode::Pretty => {
-            println!(
+            barca_core::outln!(
                 "Run {} | ran '{}' in {:.3}s ({} step{}, {} phase{})",
                 result.run_id,
                 target,
@@ -1493,7 +1515,7 @@ async fn run_cmd(
                 if result.phases == 1 { "" } else { "s" }
             );
             if let Some(ref val) = final_output {
-                println!("\nValue:\n{}", serde_json::to_string_pretty(val).unwrap());
+                barca_core::outln!("\nValue:\n{}", serde_json::to_string_pretty(val).unwrap());
             }
         }
     }
@@ -1528,18 +1550,20 @@ async fn explain_cmd(
                         .map(|(n, p)| (n.clone(), serde_json::to_value(p).unwrap()))
                         .collect();
                     let rest = out.to_string();
-                    println!(
+                    barca_core::outln!(
                         "{},\"targets\":{}}}",
                         &rest[..rest.len() - 1],
                         ordered_object(&per_target)
                     );
                 }
-                None => println!("{out}"),
+                None => barca_core::outln!("{out}"),
             }
         }
-        OutputMode::Value => println!("{}", serde_json::to_string_pretty(&result.steps).unwrap()),
+        OutputMode::Value => {
+            barca_core::outln!("{}", serde_json::to_string_pretty(&result.steps).unwrap())
+        }
         OutputMode::Pretty => {
-            println!(
+            barca_core::outln!(
                 "Dry run: barca {label}{} (nothing executed, nothing written)\n",
                 if result.targets.len() > 1 {
                     format!(" {}", result.target_names().join(","))
@@ -1552,9 +1576,11 @@ async fn explain_cmd(
                 }
             );
             print_step_table(&result.steps, true);
-            println!(
+            barca_core::outln!(
                 "\n{} will run, {} cached, {} unknown",
-                result.summary.will_run, result.summary.cached, result.summary.unknown
+                result.summary.will_run,
+                result.summary.cached,
+                result.summary.unknown
             );
         }
     }
@@ -1627,7 +1653,7 @@ fn print_multi(
             });
             bounded::project_key(&mut run, "steps", fields);
             let run = run.to_string();
-            println!(
+            barca_core::outln!(
                 "{},\"targets\":{}}}",
                 &run[..run.len() - 1],
                 ordered_object(&per_target)
@@ -1642,11 +1668,11 @@ fn print_multi(
                     (name.clone(), v)
                 })
                 .collect();
-            println!("{}", serde_json::to_string_pretty(&values).unwrap());
+            barca_core::outln!("{}", serde_json::to_string_pretty(&values).unwrap());
         }
         OutputMode::Pretty => {
             let failed = result.targets.iter().filter(|(_, t)| t.status != "success");
-            println!(
+            barca_core::outln!(
                 "Run {} | {verb} {} targets in {:.3}s ({} step{}, {} phase{}, {} failed)",
                 result.run_id,
                 result.targets.len(),
@@ -1659,10 +1685,10 @@ fn print_multi(
             );
             for (name, t) in &per_target {
                 let status = t["status"].as_str().unwrap_or("?");
-                println!("\n{name}: {status}");
+                barca_core::outln!("\n{name}: {status}");
                 match t.get("final_output") {
-                    Some(v) => println!("{}", serde_json::to_string_pretty(v).unwrap()),
-                    None => println!(
+                    Some(v) => barca_core::outln!("{}", serde_json::to_string_pretty(v).unwrap()),
+                    None => barca_core::outln!(
                         "  failed at {}",
                         t["failed_node"].as_str().unwrap_or("(did not run)")
                     ),
@@ -1682,7 +1708,7 @@ fn print_multi(
                 .as_deref()
                 .map(|s| format!(" (failed step: {s})"))
                 .unwrap_or_default();
-            eprintln!(
+            barca_core::errln!(
                 "error: target '{name}' failed{at}: {}",
                 t.error.as_deref().unwrap_or("unknown error")
             );
@@ -1734,13 +1760,13 @@ fn print_step_table(steps: &[barca_core::commands::StepReport], dry: bool) {
         .max()
         .unwrap_or(3)
         .clamp(3, 70);
-    println!("{:<w_status$}  {:<w_why$}  STEP", "STATUS", "WHY");
+    barca_core::outln!("{:<w_status$}  {:<w_why$}  STEP", "STATUS", "WHY");
     for (label, why, id) in &rows {
-        println!("{label:<w_status$}  {why:<w_why$}  {id}");
+        barca_core::outln!("{label:<w_status$}  {why:<w_why$}  {id}");
     }
     for s in steps {
         if let Some(w) = &s.warning {
-            println!("\n  ! {w}");
+            barca_core::outln!("\n  ! {w}");
         }
     }
 }
@@ -1751,7 +1777,7 @@ async fn plan_cmd(
 ) -> Result<(), barca_core::BarcaError> {
     let file_args: Vec<String> = files.iter().map(|p| p.display().to_string()).collect();
     let result = barca_core::commands::plan(&file_args, python).await?;
-    println!("{}", serde_json::to_string_pretty(&result).unwrap());
+    barca_core::outln!("{}", serde_json::to_string_pretty(&result).unwrap());
     Ok(())
 }
 
@@ -1796,7 +1822,7 @@ async fn sql_cmd(
     let file_args: Vec<String> = files.iter().map(|p| p.display().to_string()).collect();
     let result = barca_core::sql::sql(&cfg, query, &file_args, python, limit).await?;
     for note in &result.notes {
-        eprintln!("barca: {note}");
+        barca_core::errln!("barca: {note}");
     }
     let page = bounded::Page::new(result.rows.len(), result.total as usize);
     if json {
@@ -1813,7 +1839,7 @@ async fn sql_cmd(
                 ),
             );
         }
-        println!("{}", serde_json::to_string_pretty(&out).unwrap());
+        barca_core::outln!("{}", serde_json::to_string_pretty(&out).unwrap());
         return Ok(());
     }
     let cell = |v: &serde_json::Value| match v {
@@ -1849,13 +1875,13 @@ async fn sql_cmd(
             .to_string()
     };
     if !result.columns.is_empty() {
-        println!("{}", line(&result.columns));
+        barca_core::outln!("{}", line(&result.columns));
     }
     for row in &grid {
-        println!("{}", line(row));
+        barca_core::outln!("{}", line(row));
     }
     if let Some(note) = page.note(grid.len(), "rows") {
-        eprintln!("{note}");
+        barca_core::errln!("{note}");
     }
     Ok(())
 }
@@ -1903,13 +1929,13 @@ async fn list_cmd(
         }
         let mut out = page.envelope("nodes", nodes, "nodes");
         insert_root(&mut out);
-        println!("{}", serde_json::to_string_pretty(&out).unwrap());
+        barca_core::outln!("{}", serde_json::to_string_pretty(&out).unwrap());
         return Ok(());
     }
     if assets.is_empty() {
         match page.note(0, "nodes") {
-            Some(note) => eprintln!("{note}"),
-            None => println!("No definitions found."),
+            Some(note) => barca_core::errln!("{note}"),
+            None => barca_core::outln!("No definitions found."),
         }
         return Ok(());
     }
@@ -1981,17 +2007,17 @@ async fn list_cmd(
             .collect::<Vec<_>>()
             .join("  ")
     };
-    println!("{}", render(&header));
-    println!(
+    barca_core::outln!("{}", render(&header));
+    barca_core::outln!(
         "{}",
         "-".repeat(widths[..last].iter().sum::<usize>() + 2 * last + 4)
     );
     for row in &rows {
         let cells: Vec<&str> = row.iter().map(String::as_str).collect();
-        println!("{}", render(&cells));
+        barca_core::outln!("{}", render(&cells));
     }
     if let Some(note) = page.note(rows.len(), "nodes") {
-        eprintln!("{note}");
+        barca_core::errln!("{note}");
     }
     Ok(())
 }
@@ -2035,12 +2061,12 @@ async fn status_cmd(
             }
         }
         insert_root(&mut out);
-        println!("{}", serde_json::to_string_pretty(&out).unwrap());
+        barca_core::outln!("{}", serde_json::to_string_pretty(&out).unwrap());
         return Ok(());
     }
     print_status_table(&result);
     if let Some(note) = page.note(result.nodes.len(), "nodes") {
-        eprintln!("{note}");
+        barca_core::errln!("{note}");
     }
     Ok(())
 }
@@ -2118,16 +2144,21 @@ fn print_status_table(result: &barca_core::status::StatusResult) {
                 out.push_str(&format!("{c:<w$}  ", w = widths[i]));
             }
         }
-        println!("{}", out.trim_end());
+        barca_core::outln!("{}", out.trim_end());
     };
     line(&header.map(String::from));
     for r in &rows {
         line(r);
     }
     let s = &result.summary;
-    println!(
+    barca_core::outln!(
         "\n{} cached, {} stale, {} never run, {} partial, {} unknown, {} always run",
-        s.cached, s.stale, s.never_run, s.partial, s.unknown, s.always_runs
+        s.cached,
+        s.stale,
+        s.never_run,
+        s.partial,
+        s.unknown,
+        s.always_runs
     );
 }
 
@@ -2190,28 +2221,34 @@ async fn history_cmd(
             bounded::project(&mut items, f);
         }
         let out = page.envelope("runs", items, "runs");
-        println!("{}", serde_json::to_string_pretty(&out).unwrap());
+        barca_core::outln!("{}", serde_json::to_string_pretty(&out).unwrap());
         return Ok(());
     }
     if runs.is_empty() {
         match page.note(0, "runs") {
-            Some(note) => eprintln!("{note}"),
-            None => println!("No run history found."),
+            Some(note) => barca_core::errln!("{note}"),
+            None => barca_core::outln!("No run history found."),
         }
         return Ok(());
     }
     // Table header.
-    println!(
+    barca_core::outln!(
         "{:<14} {:<7} {:<11} {:>5} {:>6} {:>6} {:<20}",
-        "RUN_ID", "CMD", "STATUS", "STEPS", "CACHED", "TIME", "STARTED"
+        "RUN_ID",
+        "CMD",
+        "STATUS",
+        "STEPS",
+        "CACHED",
+        "TIME",
+        "STARTED"
     );
-    println!("{}", "-".repeat(77));
+    barca_core::outln!("{}", "-".repeat(77));
     for r in &runs {
         let elapsed_str = r
             .elapsed_seconds
             .map(|e| format!("{:.1}s", e))
             .unwrap_or_else(|| "-".to_string());
-        println!(
+        barca_core::outln!(
             "{:<14} {:<7} {:<11} {:>5} {:>6} {:>6} {:<20}",
             r.run_id,
             r.command,
@@ -2223,7 +2260,7 @@ async fn history_cmd(
         );
     }
     if let Some(note) = page.note(runs.len(), "runs") {
-        eprintln!("{note}");
+        barca_core::errln!("{note}");
     }
     Ok(())
 }
@@ -2254,40 +2291,46 @@ async fn stats_cmd(
     if json || fields.is_some() {
         let mut out = stats_json(&stats);
         bounded::project_key(&mut out, "recent_runs", fields);
-        println!("{}", serde_json::to_string_pretty(&out).unwrap());
+        barca_core::outln!("{}", serde_json::to_string_pretty(&out).unwrap());
         return Ok(());
     }
     let fmt = |v: Option<f64>| v.map(|e| format!("{:.3}s", e)).unwrap_or("-".to_string());
-    println!("Asset: {}", stats.node_id);
-    println!("Total materializations: {}", stats.total_runs);
-    println!(
+    barca_core::outln!("Asset: {}", stats.node_id);
+    barca_core::outln!("Total materializations: {}", stats.total_runs);
+    barca_core::outln!(
         "Timing:  avg {}  median {}  p95 {}  max {}",
         fmt(stats.avg_elapsed_seconds),
         fmt(stats.median_elapsed_seconds),
         fmt(stats.p95_elapsed_seconds),
         fmt(stats.max_elapsed_seconds),
     );
-    println!("Cache hit rate: {:.1}%", stats.cache_hit_rate * 100.0);
+    barca_core::outln!("Cache hit rate: {:.1}%", stats.cache_hit_rate * 100.0);
     if !stats.recent_runs.is_empty() {
-        println!("\nRecent runs:");
-        println!(
+        barca_core::outln!("\nRecent runs:");
+        barca_core::outln!(
             "  {:<10} {:<9} {:<8} {:<20}",
-            "ELAPSED", "STATUS", "ATTEMPTS", "CREATED"
+            "ELAPSED",
+            "STATUS",
+            "ATTEMPTS",
+            "CREATED"
         );
         for entry in &stats.recent_runs {
             let elapsed_str = entry
                 .elapsed_seconds
                 .map(|e| format!("{:.3}s", e))
                 .unwrap_or_else(|| "-".to_string());
-            println!(
+            barca_core::outln!(
                 "  {:<10} {:<9} {:<8} {:<20}",
-                elapsed_str, entry.status, entry.attempts, entry.created_at,
+                elapsed_str,
+                entry.status,
+                entry.attempts,
+                entry.created_at,
             );
             if entry.status == "failed"
                 && let Some(msg) = &entry.error_message
                 && !msg.is_empty()
             {
-                println!("      └─ {msg}");
+                barca_core::outln!("      └─ {msg}");
             }
         }
     }
