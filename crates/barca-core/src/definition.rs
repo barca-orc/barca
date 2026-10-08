@@ -153,8 +153,9 @@ pub struct Definition<'a> {
     pub text: String,
     /// The expressions inside counted parts whose names the cone follows, like names in the
     /// body. A reference to an upstream node (`inputs={"x": up}`, `collect(up)`,
-    /// `partitions_from(up)`) is not among them: the upstream's result reaches this node through
-    /// the run hash, and following it would add the upstream's code a second time.
+    /// `partitions_from(up)`) is not among them: the upstream's run hash, which covers its code,
+    /// is already part of this node's run hash, and following it would add that code a second
+    /// time.
     pub followed: Vec<&'a Expr>,
 }
 

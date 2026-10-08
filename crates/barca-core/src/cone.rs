@@ -2284,9 +2284,12 @@ def shadowing(helpers, json):
         assert_eq!(before, hash_of(entry, &unrelated, &[]));
     }
 
-    /// `inputs={"x": up}` names the upstream; the upstream's result reaches the consumer through
-    /// the run hash. Following it would also re-run every consumer of a sensor whenever the
-    /// sensor's code changed, whatever it returned.
+    /// `inputs={"x": up}` names the upstream. The upstream's code already reaches the consumer:
+    /// its run hash, which covers its definition, is part of the consumer's run hash (for a
+    /// sensor, next to the hash of its output). Following the reference would put the same
+    /// code in the consumer's definition hash a second time and change nothing about what
+    /// re-runs. (An edit to a sensor's code does re-run its consumers, through the run hash,
+    /// whatever the sensor returns.)
     #[test]
     fn an_upstream_named_in_inputs_or_partitions_from_is_not_followed() {
         for decorators in [

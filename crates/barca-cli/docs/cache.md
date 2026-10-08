@@ -132,7 +132,8 @@ the step, and so does editing `retry` itself if it is defined in your project. N
 argument that does not count are not followed: with `partitions(REGIONS)` or
 `description=SUMMARY`, editing `REGIONS` or `SUMMARY` re-runs nothing (a new key in `REGIONS`
 runs that key). An upstream named in `inputs=`, `collect(...)` or `partitions_from(...)` is not
-followed either: its result reaches the step through its run hash.
+followed either, and does not need to be: the upstream's run hash, which covers its code, is
+already part of the step's run hash.
 
 Known limits:
 
@@ -312,8 +313,14 @@ How it works:
   SHA-256 of those bytes is folded into the run hash of every asset that reads the sensor
   directly. Everything downstream of those assets changes with them, through their run hashes.
   Assets that do not depend on the sensor are not affected.
-- The same output gives the same run hash, so the consumer is served from cache. Going back to
-  an earlier output (an etag that was current before) serves the materialization made then.
+- The sensor's own code counts too. A sensor's run hash covers its function and the helpers it
+  reaches, and is part of its consumers' run hashes next to the hash of its output. Editing
+  the sensor's function re-runs the assets that read it, even when it returns the same value.
+  Editing its `freshness=`, `description=` or another decorator argument that does not count
+  ("Which decorator arguments count" above) re-runs nothing.
+- The same code and the same output give the same run hash, so the consumer is served from
+  cache. Going back to an earlier output (an etag that was current before) serves the
+  materialization made then.
 - Sensors run in a phase of their own, before their consumers, so a consumer's cache decision
   always uses the value the sensor returned in this run.
 - The `bool` in the sensor's `(update_detected, value)` return is not used for caching; only
