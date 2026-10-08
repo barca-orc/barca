@@ -208,7 +208,7 @@ def downstream(x: int) -> int:
         .unwrap();
 
         let file = root.join("p.py").to_string_lossy().to_string();
-        let dag = crate::commands::build_dag_blocking(
+        let dag = crate::load::build_dag_blocking(
             std::slice::from_ref(&file),
             &std::path::PathBuf::from("python3"),
         )
