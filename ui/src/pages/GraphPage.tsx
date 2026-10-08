@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useOutletContext, useSearchParams } from 'react-router'
-import { Filter, Maximize, ArrowRight, ArrowDown } from 'lucide-react'
-import { ConnectionBadge, IconButton, StatusDot } from '@/components'
+import { Maximize, ArrowRight, ArrowDown } from 'lucide-react'
+import { Button, Chip, ChipGroup, ConnectionBadge, IconButton, StatusDot } from '@/components'
 import { GraphCanvas, type GraphCanvasHandle } from '@/components/graph/GraphCanvas'
 import { NodeInspector } from '@/components/graph/NodeInspector'
 import { useAssets } from '@/hooks/useAssets'
+import { useAssetStates } from '@/hooks/useAssetStates'
+import { useQueryClient } from '@tanstack/react-query'
+import { graphOverview, graphState, liveGraphState, UNKNOWN_GRAPH_STATE } from '@/lib/graphOverview'
 import { useHealth } from '@/hooks/useHealth'
 import { connection } from '@/lib/connection'
 import { useRunStream } from '@/hooks/useRunStream'
@@ -15,10 +18,18 @@ import { inPipeline, sourceFile, pipelineName } from '@/lib/pipeline'
 import { overlayRunStatus, type LayoutDir } from '@/lib/graph'
 import type { StatusKind } from '@/lib/types'
 
-const LEGEND: StatusKind[] = ['success', 'running', 'queued', 'failed']
+const LEGEND: { status: StatusKind; label: string }[] = [
+  {status:'success', label:'Cached'}, {status:'warning', label:'Stale / partial'},
+  {status:'skipped', label:'Neutral / no cached state'}, {status:'failed', label:'Last attempt failed'}, {status:'running', label:'Running'},
+]
 
 export function GraphPage() {
-  const { data: allAssets = [] } = useAssets()
+  const assetQuery = useAssets()
+  const allAssets = useMemo(() => assetQuery.isPlaceholderData ? [] : assetQuery.data ?? [], [assetQuery.isPlaceholderData, assetQuery.data])
+  const stateQuery = useAssetStates()
+  const queryClient = useQueryClient()
+  const [overviewMode, setOverviewMode] = useState(true)
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const { data: health, isError: healthError } = useHealth()
   const [dir, setDir] = useState<LayoutDir>('LR')
   // `?focus=<node id>` (from the Assets table) opens with that node selected.
@@ -79,8 +90,26 @@ export function GraphPage() {
     [stream.statuses, stream.running, run],
   )
 
-  const selectedStatus = (selected && statuses[selected]) || 'queued'
-  const selectedError = (selected && stream.errors[selected]) || null
+  const partitionKey = (stateQuery.data ?? []).filter(n => n.partitioned).map(n => n.id).sort().join('\n')
+  const partitioned = useMemo(() => new Set(partitionKey.split('\n').filter(Boolean)), [partitionKey])
+  // Before state loads, keep all nodes: partition boundaries must be known before grouping.
+  const canGroup = Boolean(stateQuery.data) && !stateQuery.isError
+  const overview = useMemo(() => overviewMode && canGroup
+    ? graphOverview(assets, partitioned, expanded, selected)
+    : { assets, groups: {}, allGroups: {} },
+  // Partition information affects structure; cache-state polls must not move nodes.
+  [assets, partitioned, expanded, selected, overviewMode, canGroup])
+  const visualStates = useMemo(() => {
+    const base = Object.fromEntries((stateQuery.isError ? [] : stateQuery.data ?? []).map(n => [n.id, graphState(n)]))
+    if (stream.running) for (const [id, status] of Object.entries(statuses)) base[id] = liveGraphState(status)
+    return base
+  }, [stateQuery.data, stateQuery.isError, statuses, stream.running])
+  useEffect(() => {
+    if (run && !stream.running) void queryClient.invalidateQueries({queryKey:['state']})
+  }, [run, stream.running, queryClient])
+  const onExpand = useCallback((id: string) => setExpanded(prev => new Set([...prev, id])), [])
+  const selectedState = selected ? visualStates[selected] ?? UNKNOWN_GRAPH_STATE : UNKNOWN_GRAPH_STATE
+  const selectedError = (selected && stream.running && stream.errors[selected]) || stateQuery.data?.find(n => n.id === selected)?.last_materialization?.error || null
 
   return (
     <div className="barca-view">
@@ -92,16 +121,13 @@ export function GraphPage() {
           <div className="barca-view-actions">
             <ConnectionBadge
               connection={connection(health, healthError)}
-              offlineLabel="offline · mock data"
+              offlineLabel="offline"
             />
             <IconButton
               label={dir === 'LR' ? 'Top-down layout' : 'Left-right layout'}
               onClick={() => setDir((d) => (d === 'LR' ? 'TB' : 'LR'))}
             >
               {dir === 'LR' ? <ArrowDown size={15} /> : <ArrowRight size={15} />}
-            </IconButton>
-            <IconButton label="Filter">
-              <Filter size={15} />
             </IconButton>
             <IconButton label="Fit to screen" onClick={() => canvasRef.current?.fit()}>
               <Maximize size={15} />
@@ -110,21 +136,32 @@ export function GraphPage() {
         </div>
       </div>
 
+      <div className="barca-graph-tools">
+        <ChipGroup label="Graph detail">
+          <Chip pressed={overviewMode} onClick={() => setOverviewMode(true)}>Overview</Chip>
+          <Chip pressed={!overviewMode} onClick={() => setOverviewMode(false)}>Full detail</Chip>
+        </ChipGroup>
+        <span>{overview.assets.length} shown · {assets.length} steps{Object.keys(overview.groups).length > 0 && ` · ${Object.keys(overview.groups).length} collapsed chains`}</span>
+        {expanded.size > 0 && <Button variant="ghost" size="sm" onClick={() => {setSelected(null); setExpanded(new Set())}}>Collapse intermediate steps</Button>}
+        {stateQuery.isError && <span role="status">Asset state unavailable; colors are neutral.</span>}
+      </div>
       <div className="barca-graph-wrap">
         <div className="barca-graph-canvas">
           <GraphCanvas
-            assets={assets}
+            assets={overview.assets}
             dir={dir}
             selected={selected}
             onSelect={setSelected}
-            statuses={statuses}
+            states={visualStates}
+            groups={overview.groups}
+            onExpand={onExpand}
             handleRef={canvasRef}
           />
           <div className="barca-legend">
             {LEGEND.map((s) => (
-              <span key={s}>
-                <StatusDot status={s} size={6} />
-                {s}
+              <span key={s.label}>
+                <StatusDot status={s.status} size={6} />
+                {s.label}
               </span>
             ))}
           </div>
@@ -132,7 +169,9 @@ export function GraphPage() {
         {selectedAsset && (
           <NodeInspector
             asset={selectedAsset}
-            status={selectedStatus}
+            status={selectedState.status}
+            statusLabel={selectedState.label}
+            feedbackStatus={statuses[selectedAsset.id] ?? (selectedState.status === 'failed' ? 'failed' : 'skipped')}
             logs={stream.logs}
             running={stream.running}
             error={selectedError}
