@@ -1,6 +1,6 @@
 ---
 title: Deploying barca serve
-description: Run barca serve as a long-lived service, in a container or behind nginx, and what happens on restart.
+description: Run barca serve as a long-lived service, in a container or behind nginx or Traefik, and what happens on restart.
 ---
 
 `barca serve` is one process: the HTTP API, the cron scheduler and the web UI. The UI is
@@ -16,13 +16,24 @@ and next scheduled run, refreshed every 10 seconds. Failed and stale nodes are l
 
 Three facts shape every deployment:
 
-- **It binds `127.0.0.1` only, with no authentication.** There is no flag to change the
-  address. Anything that should reach it from another host, or from outside its container,
-  goes through a proxy that you put in front of it.
+- **It binds `127.0.0.1` by default, with no authentication.** `--host 0.0.0.0` (or `--host ::`
+  for IPv6) makes it reachable through another interface. Anyone who can reach the port can
+  start runs, so use a private network and authenticate at a proxy.
 - **State is the `.barca/` directory in the project.** It holds the cache, the run history
   and the scheduler's last fire times. Keep it on storage that survives a restart.
 - **One instance per project.** Runs in progress and their live events are held in the
   server's memory. Do not run two servers on one project or load-balance across several.
+
+## Listen on another interface
+
+```bash
+barca serve --host 0.0.0.0             # every IPv4 interface (containers, VMs)
+barca serve --host 0.0.0.0 --port 8400
+```
+
+A non-loopback address prints a startup warning. `--host` takes an IP address, not a hostname.
+In Docker, keep barca's port unpublished and let the proxy reach it over a private bridge
+network. An nginx upstream can then be `http://barca:8274/`, with no shared network namespace.
 
 ## In a container
 
@@ -114,7 +125,8 @@ What each part is for:
 - **The health check.** `GET /health` returns 200 with the JSON above when the server is up.
   The check runs inside the container, so it can use `127.0.0.1`. The slim image has no
   `curl`, so the check uses Python.
-- **The port.** Publishing barca's own port (`-p 8274:8274`) does not work: Docker forwards
+- **The port.** With the default loopback address, publishing barca's own port
+  (`-p 8274:8274`) does not work: Docker forwards
   to the container's network interface and barca listens on loopback only, so the connection
   is closed without a reply. The proxy shares barca's network namespace
   (`network_mode: "service:barca"`), listens on all interfaces at 8080, and forwards to
@@ -195,12 +207,55 @@ the same prefix. There is no base-path setting.
   no logs until the run ends. An idle stream carries a keep-alive every 15 seconds, which is
   inside nginx's default 60-second read timeout.
 - **One instance.** Point nginx at a single `barca serve`.
-- **Same network namespace.** Barca listens on `127.0.0.1` only, so nginx must run on the same
-  machine, or share barca's network namespace as in the [container example](#in-a-container).
+- **The upstream address.** With the default `127.0.0.1`, nginx must run on the same machine
+  or share barca's network namespace as in the [container example](#in-a-container). With
+  `--host 0.0.0.0`, it can reach barca over a private Docker bridge network or another host.
 
-`tests/integration/test_reverse_proxy.sh` in the repository checks the prefix, the redirect,
-the UI and its assets, and that log lines arrive while a run is still going, through a real
-nginx.
+`tests/integration/test_reverse_proxy.sh` checks the prefix, the redirect, the UI and its assets,
+and that log lines arrive while a run is still going through nginx and Traefik. Both proxies
+run in separate containers and reach `barca serve --host 0.0.0.0` over the bridge network.
+A control check makes nginx ignore the streaming header and confirms that it buffers events.
+
+## Behind Traefik
+
+A path-prefix router with a `stripPrefix` middleware. With the Docker provider, as labels on the
+barca container:
+
+```yaml
+services:
+  barca:
+    # ... image, volumes (see below)
+    command: ["barca", "serve", "--host", "0.0.0.0"]
+    stop_signal: SIGINT
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.barca.rule=PathPrefix(`/barca`)
+      - traefik.http.routers.barca.middlewares=barca-strip
+      - traefik.http.middlewares.barca-strip.stripprefix.prefixes=/barca
+      - traefik.http.services.barca.loadbalancer.server.port=8274
+```
+
+The same routing with the file provider:
+
+```yaml
+http:
+  routers:
+    barca:
+      rule: "PathPrefix(`/barca`)"
+      middlewares: [barca-strip]
+      service: barca
+  middlewares:
+    barca-strip:
+      stripPrefix:
+        prefixes: ["/barca"]
+  services:
+    barca:
+      loadBalancer:
+        servers:
+          - url: "http://barca:8274"
+```
+
+Traefik needs no streaming settings: run events pass straight through.
 
 ## Authentication
 

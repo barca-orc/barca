@@ -199,13 +199,15 @@ Examples:
   barca serve                                # every file in the project; files added later need a restart
   barca serve pipeline.py                    # HTTP API on 127.0.0.1:8274 plus the scheduler
   barca serve pipeline.py --port 8400        # custom port
+  barca serve pipeline.py --host 0.0.0.0     # all interfaces (containers, VMs); the API has no auth
   barca serve pipeline.py --watch            # dev: re-parse the DAG when files change
   barca serve pipeline.py --no-schedule      # API only; Schedule(...) nodes do not fire
   barca serve pipeline.py --timezone utc     # evaluate cron in UTC (default: local)
   barca serve pipeline.py --timezone America/New_York   # an IANA zone name
   barca serve pipeline.py --read-only        # inspect only: no runs, no scheduler, DB never written
 
-Binds to localhost with no authentication.
+Binds to 127.0.0.1 by default. There is no authentication: with --host 0.0.0.0, anyone who
+can reach the port can trigger runs, so keep it on a private network or behind a proxy.
 More: barca docs scheduling";
 
 const LIST_HELP: &str = "\
@@ -454,8 +456,9 @@ pub(crate) enum Cli {
     },
     /// Run a long-running HTTP server exposing the orchestrator as a JSON API
     ///
-    /// Binds to 127.0.0.1 (local only, no auth). POST /run and /get trigger
-    /// async runs; poll GET /status/<run_id> for results.
+    /// Binds to 127.0.0.1 by default (local only); --host changes the address.
+    /// There is no authentication. POST /run and /get trigger async runs; poll
+    /// GET /status/<run_id> for results.
     #[command(after_help = SERVE_HELP)]
     Serve {
         /// Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`). With --watch, files added later are not picked up until restart
@@ -463,6 +466,9 @@ pub(crate) enum Cli {
         /// Port to bind on
         #[arg(short, long, default_value = "8274")]
         port: u16,
+        /// IP address to bind on; 0.0.0.0 (or ::) listens on every interface. The API has no authentication
+        #[arg(long, default_value = "127.0.0.1")]
+        host: std::net::IpAddr,
         /// Dev mode: re-parse the DAG when source files change
         #[arg(long)]
         watch: bool,

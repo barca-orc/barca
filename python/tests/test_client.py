@@ -208,3 +208,63 @@ def test_end_to_end_run_via_server(tmp_path):
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             proc.kill()
+
+
+def _serve_and_capture_stderr(tmp_path, extra_args):
+    """Start `barca serve`, wait until /health answers on 127.0.0.1, stop it; return its stderr."""
+    binary = _barca_binary()
+    if binary is None:
+        pytest.skip("barca binary not available")
+
+    module = tmp_path / "pipe.py"
+    module.write_text(
+        "from barca import asset\n\n@asset()\ndef hello() -> dict:\n    return {'msg': 'hi'}\n"
+    )
+    port = _free_port()
+    proc = subprocess.Popen(
+        [binary, "serve", str(module), "--port", str(port), "--no-schedule", *extra_args],
+        cwd=tmp_path,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        client = Client(f"http://127.0.0.1:{port}")
+        for _ in range(50):
+            try:
+                if client.health().get("status") == "ok":
+                    break
+            except BarcaError:
+                time.sleep(0.2)
+        else:
+            pytest.fail("server did not come up")
+    finally:
+        proc.terminate()
+        try:
+            _, stderr = proc.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            _, stderr = proc.communicate()
+    return stderr, port
+
+
+def test_serve_host_all_interfaces_is_reachable_and_warns(tmp_path):
+    stderr, port = _serve_and_capture_stderr(tmp_path, ["--host", "0.0.0.0"])
+    assert f"serving on http://0.0.0.0:{port}" in stderr
+    assert "warning: listening on 0.0.0.0 with no authentication" in stderr
+
+
+def test_serve_default_host_is_loopback_without_warning(tmp_path):
+    stderr, port = _serve_and_capture_stderr(tmp_path, [])
+    assert f"serving on http://127.0.0.1:{port}" in stderr
+    assert "no authentication" not in stderr
+
+
+def test_serve_host_rejects_a_non_ip_as_a_usage_error(tmp_path):
+    binary = _barca_binary()
+    if binary is None:
+        pytest.skip("barca binary not available")
+    proc = subprocess.run(
+        [binary, "serve", "--host", "localhost"], cwd=tmp_path, capture_output=True, text=True
+    )
+    assert proc.returncode == 2

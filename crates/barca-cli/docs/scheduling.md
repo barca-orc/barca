@@ -25,6 +25,8 @@ def heartbeat() -> None:
 - Cron has 5 fields (`minute hour day-of-month month day-of-week`) or 6 with a leading seconds
   field. The scheduler evaluates at 1-second resolution. There is no year field.
 - Schedules only fire while `barca serve` is running; `barca get` never fires them.
+- `Schedule` takes the cron expression by position. `Schedule(cron="0 5 * * *")` and any other
+  keyword are errors when the file is read, exit 2 (`barca docs assets`, "Accepted arguments").
 
 A tick brings the node up to date. It does not force it to recompute:
 
@@ -72,16 +74,20 @@ barca serve pipeline.py --timezone utc         # evaluate cron in UTC (default: 
 barca serve pipeline.py --no-schedule          # API only, no scheduler
 barca serve pipeline.py --watch                # dev: re-parse the DAG when files change
 barca serve pipeline.py --read-only            # inspect only: no runs, no scheduler
+barca serve pipeline.py --host 0.0.0.0         # listen on every interface (containers, VMs)
 ```
 
 `--read-only` serves the API without the ability to change anything: run and cancel endpoints
 return `403`, the scheduler never starts, and every read of the metadata DB goes through a
 private copy, so it is safe to point at a project another process is running.
 
-`serve` binds to `127.0.0.1` with no authentication. Open `http://127.0.0.1:8274/` for the web
-UI. Endpoints are documented at https://barca.sh/reference/server-api/ and `GET /schedule`
-reports live schedule status. Behind nginx (any path prefix, live logs included):
-https://barca.sh/deploying/.
+`serve` binds to `127.0.0.1` by default and has no authentication. `--host 0.0.0.0` (or `::`)
+listens on every interface, which a container or VM needs for the port to be reachable from
+outside; barca then prints a warning on stderr, because anyone who can reach the port can trigger
+runs. Keep it on a private network or behind a proxy that authenticates. Open
+`http://127.0.0.1:8274/` for the web UI. Endpoints are documented at
+https://barca.sh/reference/server-api/ and `GET /schedule` reports live schedule status. Behind
+nginx or Traefik (any path prefix, live logs included): https://barca.sh/deploying/.
 Full model: https://barca.sh/scheduling/.
 
 ## Stopping the server

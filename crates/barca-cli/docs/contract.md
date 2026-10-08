@@ -93,9 +93,13 @@ Positional rules (stable), for `get`, `run` and `status`:
   (`a,,b`), is a usage error.
 - An unknown target is a usage error (exit 2) on every command, with one remediation:
   ``Run `barca list <files>` to see available assets and tasks.``
-- barca never offers fuzzy suggestions: no "did you mean" for targets or `barca docs` topics (an
-  unknown topic lists every valid topic), and argument errors carry no "a similar argument
-  exists" tip. A guess can read as confirmation.
+- barca never offers fuzzy suggestions on the command line: no "did you mean" for targets or
+  `barca docs` topics (an unknown topic lists every valid topic), and argument errors carry no
+  "a similar argument exists" tip. A guess can read as confirmation. The one place a guess is
+  made is a misspelt decorator argument in a pipeline file (`input=` for `inputs=`): the error
+  names the accepted argument when exactly one is within one edit of what was written (two for
+  a name longer than four characters), always next to the full list of accepted arguments
+  (`barca docs assets`, "Accepted arguments").
 - `--refresh` and `--fields` take one comma-separated list (`--refresh a,b`).
 
 ## Arguments
@@ -178,6 +182,7 @@ default, and any aliases.
 |---|---|---|---|---|
 | `<FILES>...` | - | - | experimental (with the command) | Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`). With --watch, files added later are not picked up until restart |
 | `-p, --port` | `PORT` | default `8274` | experimental (with the command) | Port to bind on |
+| `--host` | `HOST` | default `127.0.0.1` | experimental (with the command) | IP address to bind on; 0.0.0.0 (or ::) listens on every interface. The API has no authentication |
 | `--watch` | - | default `false` | experimental (with the command) | Dev mode: re-parse the DAG when source files change |
 | `--no-schedule` | - | default `false` | experimental (with the command) | Disable the cron scheduler (Schedule(...) assets will not auto-fire) |
 | `--timezone` | `TIMEZONE` | default `local` | experimental (with the command) | Timezone for cron evaluation: local (this machine's zone) or utc, in any letter case, or an IANA name such as America/New_York, which is case-sensitive. Any other value is a usage error |
@@ -292,7 +297,9 @@ Each error `kind` has exactly one exit code (stable):
 <!-- END GENERATED exit-codes -->
 
 `step_failed`: one of your steps raised (fix the code). `usage`: bad arguments, unknown target,
-task/asset misuse, a `.py` file that does not parse, a DAG that cannot be built (an input that
+task/asset misuse, a `.py` file that does not parse, a decorator called with an argument it does
+not define (`@asset(after=x)`, `input=` for `inputs=`, `@asset(**options)`; `barca docs assets`,
+"Accepted arguments"), a DAG that cannot be built (an input that
 names no definition, a cycle, a partitioned asset in an unpartitioned asset's `inputs=` without
 `collect()`, a `partitions_from()` the asset cannot mirror), invalid `--env` or `barca.toml`. `infra`:
 barca or its environment failed (metadata DB, workers, remote state, I/O); retrying may help.
@@ -311,6 +318,64 @@ later reported as `interrupted` (`barca docs cache`).
 
 `barca serve` is not a run: stopped by SIGINT or SIGTERM it cancels the runs in flight, records
 them as `cancelled` and exits 0 (`barca docs scheduling`, "Stopping the server").
+
+An error in a pipeline file (a syntax error, a decorator argument barca does not define, an
+invalid `env=` or cron) fails every command that reads that file, whatever the target: `list`,
+`plan`, `status`, `get`, `run`, `stats` and `sql` exit 2 and run nothing. With no file arguments
+that is every pipeline file of the project. The envelope's `error` starts with `Parse error:
+<file>:<function> (line <n>):` for a decorator argument, and its `remediation` says what to
+change; the wording is not contract.
+
+### A closed stdout or stderr (stable)
+
+When the reader of barca's output goes away (`barca list | head -1`, a pager that quits, a
+caller that stops reading), barca prints nothing about it and does not stop what it is doing:
+
+- Output for the closed stream is dropped. There is no panic, no traceback and no message on
+  the other stream.
+- The command finishes. A `get` or `run` executes every step and records the run as it would
+  with a reader, whether stdout, stderr or both are closed. A closed pipe is not a
+  cancellation: to stop a run, interrupt it (Ctrl-C, exit 130).
+- A step is not affected, whatever it does. Its `print` output, the output of a process it
+  starts, a write to file descriptor 1 or 2 and the output of a C library are dropped like
+  barca's own; none of them raises `BrokenPipeError` in the step or ends a child process with
+  SIGPIPE. When barca's stderr is a pipe or a socket, the workers write to a pipe barca itself
+  reads and copies to its stderr, so they never hold a pipe that can lose its reader. With a
+  reader attached the output is the same as before, in the same order, on the same stream
+  (stderr); when stderr is a terminal or a file the workers hold it directly, as before.
+  SIGPIPE keeps its default for the processes a step starts, so `yes | head -1` inside a step
+  ends as usual.
+- The exit code does not change. It is the one the command would have had with a reader: 0
+  when it succeeded, and 1, 2, 3 or 130 when it has an error of its own (the envelope is still
+  written to stderr if stderr is open). A reader that stops early is not an error, so
+  `barca list | head -1` and `barca list | grep -q name` exit 0, also under `set -o pipefail`.
+  barca does not exit 141 and is not ended by SIGPIPE.
+
+This holds for every command, `--help`, `--version` and `barca docs` included. Up to 0.18.1,
+`docs` and `--help` behaved this way, every other command ended in a Rust panic (exit 101), and
+a closed stderr abandoned a run in the middle (it stayed `interrupted` in `barca history`).
+
+Limits: barca learns that a stream is closed only when it writes to it, so a run whose reader
+has left goes on to its end; interrupt it to stop it.
+
+**New in this release: a process a step leaves running.** If a step starts a process that
+outlives the run (a server, a watcher) and lets it inherit the step's stdout and stderr, then,
+when barca's stderr is a pipe or a socket, that process holds barca's pipe on both, not the
+caller's. Once barca has exited nobody reads that pipe: the process's next write to its stdout
+or its stderr ends it (SIGPIPE), or fails with `BrokenPipeError` if it ignores the signal. Up to
+0.18.1 it held the caller's pipe instead, went on writing to it, and the caller's pipeline
+(`barca run start_server 2>&1 | tee log`) did not finish until that process did. Nothing
+changes when barca's stderr is a terminal or a file: the process holds that, as before. The
+remedy is to give such a process its own output when starting it, for example
+`subprocess.Popen(cmd, stdout=log, stderr=log)` or `stdout=subprocess.DEVNULL,
+stderr=subprocess.DEVNULL`.
+
+A caller's pipe in non-blocking mode is supported: while its reader is behind, barca waits for
+it (no output is dropped, and the wait reaches the step that is printing), on stdout and on
+stderr. A caller cannot tell from the exit code
+that part of the result was not read: it is the caller that stopped reading. A write to stdout
+that fails for any other reason (a full disk behind `> result.json`) is exit 3, with one line
+on stderr.
 
 ## JSON output schemas
 

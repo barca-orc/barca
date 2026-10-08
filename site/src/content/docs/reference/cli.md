@@ -46,7 +46,7 @@ barca run <task[,task...]> [file.py|dir/ ...] [--refresh a,b [--no-cascade] | --
 barca plan [file.py|dir/ ...]                Emit the execution plan as JSON (experimental)
 barca history [-l N | --all] [--json|--pretty]  Show recent runs
 barca stats <target> [file.py|dir/ ...]       Show timing/cache stats for an asset
-barca serve [file.py|dir/ ...] [--port N] [--watch] [--no-schedule] [--timezone TZ] [--read-only]
+barca serve [file.py|dir/ ...] [--port N] [--host IP] [--watch] [--no-schedule] [--timezone TZ] [--read-only]
                                                Run the HTTP API server
 barca list [file.py|dir/ ...] [-l N | --all] [--json]  List discovered definitions and their deps
 barca status [target[,target...]] [file.py|dir/ ...] [--json] [--sample N]
@@ -336,17 +336,19 @@ barca stats summary pipeline.py --fields status,error_message   # JSON; trims re
 ## serve
 
 Start an HTTP server with a JSON API, the cron scheduler and the web UI at `/ui/`. It binds to
-`127.0.0.1` and has no authentication. See [Server API](/reference/server-api/) for the
+`127.0.0.1` by default; `--host 0.0.0.0` listens on every interface. It has no authentication. See [Server API](/reference/server-api/) for the
 endpoints and [Deploying](/deploying/) for running it behind nginx.
 
 ```bash
 barca serve pipeline.py                 # default port 8274
+barca serve pipeline.py --host 0.0.0.0  # every interface (containers, VMs); no auth
 barca serve --timezone utc              # every file in the project; cron evaluated in UTC
 ```
 
 | Flag | Default | Meaning |
 |---|---|---|
 | `-p`, `--port <PORT>` | `8274` | Port to listen on. |
+| `--host <IP>` | `127.0.0.1` | IP address to bind on; `0.0.0.0` (or `::`) listens on every interface. |
 | `--watch` | off | Re-parse the DAG when a source file changes. Files added later still need a restart. |
 | `--no-schedule` | off | Do not fire `Schedule(...)` nodes. |
 | `--timezone <TZ>` | `local` | Timezone for cron: `local`, `utc` or an IANA name such as `America/New_York`. Any other value is a usage error (exit 2). |
@@ -537,6 +539,16 @@ describes the output contract for scripts and AI agents.
 | 2    | `usage`       | bad flags or arguments, unknown target, `get` on a task or `run` on an asset, unreadable or invalid `.py` file, invalid `--env` or barca.toml |
 | 3    | `infra`       | barca or its environment failed: metadata DB, worker pool, remote state, I/O |
 | 130  | `cancelled`   | stopped by Ctrl-C (SIGINT) or SIGTERM                                      |
+
+A closed stdout or stderr never makes barca panic, never stops a run and is not an error:
+output for the closed stream is dropped, a `get` or `run` finishes and is recorded, and the
+exit code is the one the command would have had with a reader (`barca list | head -1` exits 0).
+See [the CLI contract](/reference/cli-contract/#a-closed-stdout-or-stderr-stable).
+
+An error in a pipeline file fails every command that reads the file with exit 2, whatever the
+target: a syntax error, or a decorator called with an argument it does not define
+(`@asset(after=other)`, `input=` for `inputs=`). See
+[Accepted arguments](/reference/api/decorators/#accepted-arguments).
 
 In JSON output mode (whenever results are JSON: piped or captured stdout, `--json`, `-o json` or
 `BARCA_OUTPUT=json`; `plan` always; `docs` with `--json`), an error is a single JSON line, the

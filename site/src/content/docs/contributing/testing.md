@@ -31,7 +31,7 @@ coordinator, scheduler, config). The separate test files are:
 |---|---|
 | `crates/barca-core/tests/grammar_spec.rs` | Parsing of decorator syntax |
 | `crates/barca-core/tests/socket_stress.rs` | The worker socket protocol under load |
-| `crates/barca-core/tests/unused_input_repo_sweep.rs` | The unused-input warning against the repository's own examples and docs |
+| `crates/barca-core/tests/unused_input_repo_sweep.rs` | The unused-input warning against the repository's own examples and docs, and that none of them passes a decorator an argument barca does not define |
 | `crates/barca-server/tests/api.rs` | The HTTP endpoints of `barca serve` |
 
 ## Python
@@ -43,6 +43,13 @@ pytest python/tests/test_sql.py -q        # one file
 
 Most tests in `python/tests/` create a temporary project with decorated functions, run the
 real `barca` binary on it, and check the output, exit code and files.
+
+barca prints through `barca_core::outln!` and `errln!`, which do not panic when the reader of
+stdout or stderr has gone; clippy denies `println!` and `eprintln!` in the three crates.
+Workers do not hold barca's stderr when it is a pipe: they write to a pipe barca reads and
+forwards (`crates/barca-core/src/term.rs`), so a step's child processes cannot meet a closed
+pipe either. `python/tests/test_closed_pipe.py` starts barca with a pipe whose read end is
+already closed, so the first write fails every time and no test waits for a reader to exit.
 
 Tests that must act while a helper process is in the middle of something (a Ctrl-C during an
 upload, in `test_remote_cancel.py`) do not sleep and hope: `python/tests/hold/` is a
@@ -133,6 +140,10 @@ These keep the documentation and the command line in agreement.
   with `python/tests/snapshots/cli_contract/`.
 - `python/tests/test_docs_examples.py` runs the example pipelines in the manual and checks
   what the text says about them.
+- `cargo test -p barca-core decorator_args` compares the arguments each decorator and helper
+  accepts (`SIGNATURES` in `crates/barca-core/src/decorator_args.rs`) with the signatures in
+  `python/barca/__init__.py` and with the "Accepted arguments" tables in `barca docs assets`
+  and on the decorators page. Adding an argument means changing all four.
 
 When one fails after a deliberate change, run `scripts/update-cli-snapshots.sh` and review the
 diff. The script builds barca, so it takes as long as a release build.

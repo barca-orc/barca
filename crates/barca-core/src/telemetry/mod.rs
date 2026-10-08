@@ -162,7 +162,7 @@ pub async fn export(integrations: &[(String, Box<dyn Integration>)], run: &RunRe
                     .map(|mut f| f.remove(name))
                     .unwrap_or(false)
                 {
-                    eprintln!("[barca] telemetry '{name}' is receiving runs again");
+                    crate::errln!("[barca] telemetry '{name}' is receiving runs again");
                 }
                 continue;
             }
@@ -174,7 +174,7 @@ pub async fn export(integrations: &[(String, Box<dyn Integration>)], run: &RunRe
             .map(|mut f| f.insert(name.clone()))
             .unwrap_or(true)
         {
-            eprintln!(
+            crate::errln!(
                 "[barca] warning: telemetry '{name}' did not receive run {}: {problem}",
                 run.run_id
             );

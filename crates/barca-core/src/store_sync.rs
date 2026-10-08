@@ -178,7 +178,7 @@ impl StoreSync {
             );
             match pb {
                 Some(bar) if !bar.is_hidden() => bar.println(&msg),
-                _ => eprintln!("{msg}"),
+                _ => crate::errln!("{msg}"),
             }
         }
         // An artifact path is `{node}/{run_hash}`, so a refresh or another machine computing
@@ -198,7 +198,7 @@ impl StoreSync {
             let msg = format!("[barca] warning: {base}: {finding}");
             match pb {
                 Some(bar) if !bar.is_hidden() => bar.println(&msg),
-                _ => eprintln!("{msg}"),
+                _ => crate::errln!("{msg}"),
             }
             self.mismatched.insert(base, finding);
         }

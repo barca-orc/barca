@@ -18,20 +18,17 @@ pub(crate) use get::*;
 mod run;
 pub(crate) use run::*;
 
-/// Emit ordered rendering writes. Flush stdout before stderr to retain result/error order.
+/// Emit ordered rendering writes directly, preserving result/error order.
 fn emit(rendered: barca_core::report::RenderedOutput) {
     use barca_core::report::OutputChunk;
-    use std::io::Write;
     for chunk in rendered.chunks {
         match chunk {
-            OutputChunk::Stdout(text) => print!("{text}"),
+            OutputChunk::Stdout(text) => barca_core::term::stdout_str(&text),
             OutputChunk::Stderr(text) => {
-                let _ = std::io::stdout().flush();
-                eprint!("{text}");
+                barca_core::term::stderr_str(&text);
             }
         }
     }
-    let _ = std::io::stdout().flush();
 }
 fn project_root() -> Option<String> {
     std::env::current_dir()

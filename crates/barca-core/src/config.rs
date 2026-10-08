@@ -214,7 +214,7 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
     //            [remote].artifacts_uri (literal) > {uri}/{env}/artifacts > local
     let artifact_env_override = env_var("BARCA_ARTIFACT_URI");
     if artifact_env_override.is_some() && env != DEFAULT_ENV {
-        eprintln!(
+        crate::errln!(
             "[barca] warning: BARCA_ARTIFACT_URI is set — it is used literally and \
              bypasses the '{env}' environment prefix for artifacts"
         );

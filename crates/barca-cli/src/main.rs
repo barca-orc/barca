@@ -1,5 +1,7 @@
 //! Barca CLI — invisible asset orchestrator.
 
+#![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]
+
 mod args;
 mod input;
 use input::*;
@@ -16,8 +18,20 @@ mod output;
 use error::{CliError, CliErrorExt, Context, ErrorKind};
 
 use clap::Parser;
-use std::io::Write;
 use std::path::PathBuf;
+
+/// Finish a successful command, reporting non-pipe stdout write failures as infrastructure errors.
+fn finish(json: bool) -> ! {
+    if barca_core::term::stdout_write_failed() {
+        CliError::from_barca(
+            barca_core::BarcaError::Other(
+                "could not write the result to stdout\nCheck the file or device stdout is redirected to (a full disk, a revoked terminal), then run the command again.".to_string(),
+            ),
+            &Context::default(),
+        ).emit(json)
+    }
+    barca_core::term::exit(0)
+}
 
 fn main() {
     // Support `barca file.py [--flags]` as shorthand for `barca get file.py [--flags]`.
@@ -42,8 +56,8 @@ fn main() {
 
     // Version needs no runtime — answer before paying for thread spawns.
     if let Cli::Version = cli {
-        println!("barca {}", env!("CARGO_PKG_VERSION"));
-        return;
+        barca_core::outln!("barca {}", env!("CARGO_PKG_VERSION"));
+        finish(json);
     }
 
     // The manual is compiled in: no runtime, no Python, no project files needed.
@@ -57,13 +71,10 @@ fn main() {
         match docs::run(topic.as_deref(), *all, *json || fields.is_some())
             .map(|out| project_docs_json(out, fields.as_deref()))
         {
-            // Ignore write errors (e.g. a closed pipe from `barca docs --all | head`).
-            Ok(out) => {
-                let _ = std::io::stdout().lock().write_all(out.as_bytes());
-            }
+            Ok(out) => barca_core::term::stdout_str(&out),
             Err(msg) => CliError::from_prose(ErrorKind::Usage, msg).emit(*json || fields.is_some()),
         }
-        return;
+        finish(*json || fields.is_some());
     }
 
     // Hints in errors name files as the user typed them, so take them before rebasing.
@@ -97,13 +108,15 @@ fn main() {
         if e.kind == ErrorKind::StepFailed
             && let Some(node) = &e.node
         {
-            eprintln!(
+            barca_core::errln!(
                 "[barca] run failed: step '{node}' failed (exit {})",
                 e.code()
             );
         }
         e.emit(json);
     }
+    drop(rt);
+    finish(json);
 }
 
 #[allow(clippy::result_large_err)] // cold path: one CliError per process, right before exiting
@@ -309,6 +322,7 @@ async fn run_cli(cli: Cli, ctx: &Context) -> Result<(), CliError> {
         Cli::Serve {
             files,
             port,
+            host,
             watch,
             no_schedule,
             timezone,
@@ -317,6 +331,7 @@ async fn run_cli(cli: Cli, ctx: &Context) -> Result<(), CliError> {
         } => serve_cmd(
             env.as_deref(),
             files,
+            host,
             port,
             watch,
             !no_schedule,
