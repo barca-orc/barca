@@ -188,6 +188,58 @@ pub struct WorkerPool {
     running_hook: Option<RunningHook>,
     /// Library warnings the workers suppressed as repeats: (first line, times suppressed).
     repeated_warnings: Vec<(String, u64)>,
+    /// Where this run's `parallel()` branches write their results: see [`branch_results_root`].
+    branch_root: PathBuf,
+    /// Numbers the run's parallel groups, across phases: each gets a directory of its own.
+    next_branch_group: u64,
+    /// The result directories of the groups each step started, removed when the step ends.
+    branch_dirs: HashMap<ItemId, Vec<PathBuf>>,
+}
+
+/// The directory that holds branch results, under the project's `.barca`.
+fn branch_results_parent() -> PathBuf {
+    std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join(".barca")
+        .join("branches")
+}
+
+/// Where one run's `parallel()` branches write what they return:
+/// `.barca/branches/<run id>-<coordinator pid>/<group>/<branch>.<ext>`.
+///
+/// Branch results used to be written into the artifact directory under a name made of the
+/// branch's file, its function and its number within the phase. Two runs of one pipeline at
+/// the same time (two runs under one `barca serve`, two `barca` processes in one project)
+/// wrote and read the same files, and a caller received results another run's branches had
+/// written (#332). The run id keeps runs apart, the group number keeps a run's groups apart
+/// (nested ones, and the same call made twice), and the branch number its branches. Nothing
+/// else is ever written there, so the whole directory can be removed when the run ends.
+///
+/// The pid is for the sweep ([`sweep_branch_results`]): it tells whether the run that owns a
+/// directory can still be alive.
+fn branch_results_root(run_id: &str) -> PathBuf {
+    branch_results_parent().join(format!("{run_id}-{}", std::process::id()))
+}
+
+/// Remove the branch results of runs whose coordinator is gone (killed, out of memory): a run
+/// that ends in any other way removes its own. Like the staging directories of dead workers,
+/// they are found by the pid in their name.
+fn sweep_branch_results(parent: &Path) {
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let owner = name
+            .to_str()
+            .and_then(|n| n.rsplit_once('-'))
+            .and_then(|(_, pid)| pid.parse::<i64>().ok());
+        // A name this code did not make is left alone.
+        if owner.is_some_and(|pid| !crate::db::pid_alive(pid)) {
+            std::fs::remove_dir_all(entry.path()).ok();
+        }
+    }
+    // The directory itself stays, empty: another run may be creating its own inside it now.
 }
 
 /// Where workers claim "first in this run to print this warning": a directory next to the
@@ -211,6 +263,8 @@ impl WorkerPool {
         std::fs::remove_dir_all(&claims).ok();
         std::fs::create_dir_all(&claims).ok();
         let (event_tx, event_rx) = mpsc::channel::<IoEvent>(config.pool_size.max(1) * 8);
+        sweep_branch_results(&branch_results_parent());
+        let branch_root = branch_results_root(&config.run_id);
         Ok(Self {
             config,
             socket_path,
@@ -230,6 +284,9 @@ impl WorkerPool {
             ),
             running_hook: None,
             repeated_warnings: Vec::new(),
+            branch_root,
+            next_branch_group: 0,
+            branch_dirs: HashMap::new(),
         })
     }
 
@@ -406,6 +463,7 @@ impl WorkerPool {
                             });
                         }
                         coord.on_item_completed(item_id);
+                        self.drop_branch_results(item_id);
 
                         // Check if any frozen worker's group is now complete
                         self.resume_frozen(coord).await;
@@ -446,6 +504,7 @@ impl WorkerPool {
                         {
                             schedule_retry(&self.event_tx, item_id, delay);
                         }
+                        self.drop_branch_results(item_id);
 
                         // User code failed (or hung past its timeout) in this
                         // process — kill it so retries and remaining work get a
@@ -530,6 +589,18 @@ impl WorkerPool {
                             .collect();
 
                         let (group_id, _child_ids) = coord.on_parallel_requested(item_id, specs);
+                        // The group's own directory for what its branches return, removed
+                        // when the step that called parallel() ends (`drop_branch_results`).
+                        let result_dir = self.branch_root.join(self.next_branch_group.to_string());
+                        self.next_branch_group += 1;
+                        if let Err(e) = std::fs::create_dir_all(&result_dir) {
+                            eprintln!("[barca] could not create {}: {e}", result_dir.display());
+                        }
+                        coord.set_group_result_dir(group_id, result_dir.clone());
+                        self.branch_dirs
+                            .entry(item_id)
+                            .or_default()
+                            .push(result_dir);
 
                         // The parent blocks frozen on its group. Whatever else this
                         // worker had leased stays leased to it (see `FrozenWorker::rest`).
@@ -603,16 +674,46 @@ impl WorkerPool {
                     // Worker crashed — its in-flight item failed; unstarted
                     // leases return to the queue for another worker.
                     if let Some(mut handle) = self.workers.remove(&worker_id) {
-                        if let Some(in_flight) = handle.leases.pop_front()
-                            && let FailureAction::RetryAfter(delay) =
+                        if let Some(in_flight) = handle.leases.pop_front() {
+                            if let FailureAction::RetryAfter(delay) =
                                 coord.on_item_failed(in_flight, "worker disconnected".to_string())
-                        {
-                            schedule_retry(&self.event_tx, in_flight, delay);
+                            {
+                                schedule_retry(&self.event_tx, in_flight, delay);
+                            }
+                            self.drop_branch_results(in_flight);
                         }
                         Self::return_leases(&mut handle, coord);
                         tokio::task::spawn_blocking(move || {
                             let _ = handle.child.kill();
                             let _ = handle.child.wait();
+                        });
+                    } else if let Some(at) = self
+                        .frozen
+                        .iter()
+                        .position(|fw| fw.original_worker_id == worker_id)
+                    {
+                        // A worker that died while frozen in parallel() (killed, out of
+                        // memory). It is a dead worker like any other: its step failed. This
+                        // used to go unnoticed, since only running workers were looked up,
+                        // and when its branches finished there was nobody to resume: the run
+                        // never ended (#333).
+                        let mut fw = self.frozen.swap_remove(at);
+                        coord.abandon_group(fw.group_id);
+                        if let FailureAction::RetryAfter(delay) = coord.on_item_failed(
+                            fw.parent_item,
+                            "worker disconnected while it waited for its parallel() branches"
+                                .to_string(),
+                        ) {
+                            schedule_retry(&self.event_tx, fw.parent_item, delay);
+                        }
+                        self.drop_branch_results(fw.parent_item);
+                        // The rest of its batch never started and nobody has it in hand now.
+                        while let Some(item_id) = fw.rest.pop_back() {
+                            coord.return_leased(item_id);
+                        }
+                        tokio::task::spawn_blocking(move || {
+                            let _ = fw.child.kill();
+                            let _ = fw.child.wait();
                         });
                     }
                     self.resume_frozen(coord).await;
@@ -691,6 +792,13 @@ impl WorkerPool {
             }
         });
         let _ = kill_task.await;
+        // Every worker is gone, so nothing writes or reads a branch result any more: the
+        // run's directory goes, whatever way the run ended.
+        let branch_root = self.branch_root;
+        let _ = tokio::task::spawn_blocking(move || {
+            std::fs::remove_dir_all(&branch_root).ok();
+        })
+        .await;
         std::fs::remove_file(&self.socket_path).ok();
         std::fs::remove_dir_all(warning_claims_dir(&self.socket_path)).ok();
     }
@@ -862,6 +970,19 @@ impl WorkerPool {
             }
             handle.leases = batch.into_iter().collect();
             handle.front_since = std::time::Instant::now();
+        }
+    }
+
+    /// Remove what the branches of `item_id`'s parallel groups returned. Called when the step
+    /// has ended (finished, failed, or its worker died): it has read every result it was
+    /// going to read, lazily loaded frames included, since its own result is written by then.
+    fn drop_branch_results(&mut self, item_id: ItemId) {
+        if let Some(dirs) = self.branch_dirs.remove(&item_id) {
+            tokio::task::spawn_blocking(move || {
+                for dir in dirs {
+                    std::fs::remove_dir_all(dir).ok();
+                }
+            });
         }
     }
 
@@ -1177,6 +1298,12 @@ fn build_step_json(item: &crate::coordinator::Item, coord: &Coordinator) -> serd
         "return_type": item.spec.return_type.map(|t| t.as_str()),
         // A `parallel()` branch: its result goes back to the step that called it.
         "branch": item.group.is_some(),
+        // Where the branch writes that result, without the extension: the worker adds the one
+        // for the format it picks.
+        "branch_path": item
+            .group
+            .and_then(|g| coord.group(g).result_dir.as_ref())
+            .map(|dir| dir.join(item.id.0.to_string())),
     })
 }
 
@@ -1186,8 +1313,8 @@ fn build_step_json(item: &crate::coordinator::Item, coord: &Coordinator) -> serd
 ///
 /// A branch that finished is answered with where its artifact is, and the calling worker
 /// reads it with the code that reads any step's input: whatever a step can return, a branch
-/// can return. (For a small JSON artifact the file's text goes along, so the worker need not
-/// open it; the text is not interpreted here.) The coordinator used to read the file itself and pass the value inline, which
+/// can return. (A small JSON result has no file: the branch's worker sent its text, which is
+/// passed on as it is.) Nothing of a result is read or interpreted here. The coordinator used to read the file itself and pass the value inline, which
 /// it could do for JSON only: any other value (a set, a date, a DataFrame: written as pickle
 /// or parquet) reached the caller as `None`, with no error (#285), and a JSON value went
 /// through this process's JSON types on the way (an integer beyond 64 bits arrived as a
@@ -1214,31 +1341,33 @@ fn branch_result(
             .and_then(|v| v.as_str())
             .filter(|v| !v.is_empty())
     };
-    let (Some(path), Some(format)) = (field("path"), field("format")) else {
+    // A small JSON result came in the branch's report and has no file (`ArtifactRef::json`).
+    let text = artifact
+        .and_then(|a| a.get("json"))
+        .and_then(|v| v.as_str());
+    let Some(format) = field("format") else {
         return ParallelResult::Error {
-            error: "the branch finished but reported no artifact for its result".to_string(),
+            error: "the branch finished but did not report its result".to_string(),
         };
     };
+    let path = field("path");
+    if path.is_none() && text.is_none() {
+        return ParallelResult::Error {
+            error: "the branch finished but did not report where its result is".to_string(),
+        };
+    }
     if artifact_results {
-        // A small JSON artifact's text goes along, unparsed (`BranchArtifact::json`). If it
-        // cannot be read here the worker reads the file itself, and reports why it cannot.
-        let small = artifact
-            .and_then(|a| a.get("size_bytes"))
-            .and_then(|v| v.as_u64())
-            .is_some_and(|size| size <= crate::protocol::INLINE_JSON_MAX_BYTES);
-        let json = (format == "json" && small)
-            .then(|| std::fs::read_to_string(path).ok())
-            .flatten();
         return ParallelResult::Ok {
             result: None,
             artifact: Some(crate::protocol::BranchArtifact {
-                path: path.to_string(),
+                path: path.unwrap_or_default().to_string(),
                 format: format.to_string(),
                 frame_type: field("frame_type").map(str::to_string),
-                json,
+                json: text.map(str::to_string),
             }),
         };
     }
+    let path = path.unwrap_or_default();
     let inline = if format == "json" {
         std::fs::read_to_string(path)
             .map_err(|e| e.to_string())
@@ -1441,35 +1570,31 @@ mod tests {
         );
     }
 
-    /// A small JSON artifact's text goes along exactly as it is on disk: nothing here parses
-    /// it (this text is not JSON a Rust parser accepts, and its key order is kept). A larger
-    /// one, and one that cannot be read, is named only.
+    /// A small JSON result arrives as text in the branch's report and is passed on exactly
+    /// as it is: nothing here parses it (this text is not JSON a Rust parser accepts, and its
+    /// key order is kept), and there is no file to read.
     #[test]
-    fn a_small_json_branch_artifact_is_sent_with_its_text_unparsed() {
-        let dir = tempfile::tempdir().unwrap();
+    fn a_small_json_branch_result_is_passed_on_as_text_unparsed() {
         let text = r#"{"b": 1, "a": NaN, "n": 1000000000000000000000000000000}"#;
-        let small = dir.path().join("small.json");
-        std::fs::write(&small, text).unwrap();
-        let answer = |path: &Path, size: u64| {
-            let artifact = serde_json::json!({
-                "path": path.to_str().unwrap(), "format": "json", "size_bytes": size
-            });
-            match branch_result(Ok(Some(&artifact)), true) {
-                ParallelResult::Ok {
-                    result: None,
-                    artifact: Some(a),
-                } => a,
-                other => panic!("expected an artifact answer, got {other:?}"),
-            }
+        let reported = serde_json::json!({
+            "path": "", "format": "json", "size_bytes": text.len(), "json": text
+        });
+        let ParallelResult::Ok {
+            result: None,
+            artifact: Some(sent),
+        } = branch_result(Ok(Some(&reported)), true)
+        else {
+            panic!("expected an artifact answer");
         };
-        let sent = answer(&small, text.len() as u64);
         assert_eq!(sent.json.as_deref(), Some(text));
-        assert_eq!(sent.path, small.to_str().unwrap());
+        assert_eq!((sent.path.as_str(), sent.format.as_str()), ("", "json"));
 
-        let limit = crate::protocol::INLINE_JSON_MAX_BYTES;
-        assert!(answer(&small, limit).json.is_some());
-        assert_eq!(answer(&small, limit + 1).json, None);
-        assert_eq!(answer(&dir.path().join("gone.json"), 10).json, None);
+        // Neither a path nor a text: an error, not a null.
+        let nothing = serde_json::json!({"path": "", "format": "json", "size_bytes": 0});
+        assert!(matches!(
+            branch_result(Ok(Some(&nothing)), true),
+            ParallelResult::Error { .. }
+        ));
     }
 
     /// #285: a finished branch is answered with its artifact, whatever its format, and the
@@ -1589,6 +1714,102 @@ mod tests {
             build_step_json(coord.item(children[0]), &coord)["branch"],
             true
         );
+    }
+
+    /// #332: a branch is told where to write its result, in its group's own directory and
+    /// under its own number.
+    #[test]
+    fn build_step_json_gives_a_branch_its_own_result_path() {
+        let mut coord = Coordinator::new();
+        let spec = ItemSpec {
+            fn_ref: "f.py:a".to_string(),
+            function_name: "a".to_string(),
+            source_file: "f.py".to_string(),
+            direct_args: Vec::new(),
+            direct_kwargs: HashMap::new(),
+            dag_inputs: HashMap::new(),
+            timeout_seconds: 300,
+            retries: 1,
+            retry_backoff_seconds: 0.0,
+            serializer: None,
+            sinks: Vec::new(),
+            run_hash: None,
+            upstream_inputs: HashMap::new(),
+            collected_inputs: HashMap::new(),
+            param_types: HashMap::new(),
+            return_type: None,
+            kind: "task".to_string(),
+            is_dynamic: false,
+        };
+        let parent = coord.add_item(
+            crate::StepId::unpartitioned("f.py:a"),
+            spec.clone(),
+            Vec::new(),
+        );
+        // The same call twice in one group: two branches, two paths.
+        let (group, children) = coord.on_parallel_requested(parent, vec![spec.clone(), spec]);
+        assert_eq!(
+            build_step_json(coord.item(children[0]), &coord)["branch_path"],
+            serde_json::Value::Null,
+            "no directory, no path: the worker names the file as it used to"
+        );
+        coord.set_group_result_dir(group, PathBuf::from("/p/.barca/branches/r1-77/3"));
+        let paths: Vec<String> = children
+            .iter()
+            .map(|&c| {
+                build_step_json(coord.item(c), &coord)["branch_path"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(
+            paths,
+            [
+                format!("/p/.barca/branches/r1-77/3/{}", children[0].0),
+                format!("/p/.barca/branches/r1-77/3/{}", children[1].0),
+            ]
+        );
+        assert_ne!(paths[0], paths[1]);
+        assert_eq!(
+            build_step_json(coord.item(parent), &coord)["branch_path"],
+            serde_json::Value::Null
+        );
+    }
+
+    /// Two runs never share a directory, and a run's directory names the process that owns it.
+    #[test]
+    fn a_runs_branch_results_are_under_its_own_id_and_pid() {
+        let a = branch_results_root("run-a");
+        let b = branch_results_root("run-b");
+        assert_ne!(a, b);
+        assert!(a.ends_with(format!(".barca/branches/run-a-{}", std::process::id())));
+    }
+
+    /// The sweep removes what a killed run left and nothing else: not a live run's results
+    /// (this process is alive), not a name it did not make.
+    #[cfg(unix)]
+    #[test]
+    fn the_sweep_removes_the_branch_results_of_dead_runs_only() {
+        // A pid that existed and is certainly gone: a child that has been reaped.
+        let mut child = crate::helper_proc::spawn_std(&mut Command::new("true")).unwrap();
+        let dead = child.id();
+        child.wait().unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let of_dead = dir.path().join(format!("r1-{dead}"));
+        let of_live = dir.path().join(format!("r2-{}", std::process::id()));
+        let foreign = dir.path().join("notes");
+        for d in [&of_dead, &of_live, &foreign] {
+            std::fs::create_dir_all(d.join("0")).unwrap();
+            std::fs::write(d.join("0").join("5.json"), "1").unwrap();
+        }
+        sweep_branch_results(dir.path());
+        assert!(!of_dead.exists());
+        assert!(of_live.join("0").join("5.json").exists());
+        assert!(foreign.join("0").join("5.json").exists());
+        // A project that never used parallel() has no such directory: nothing to do.
+        sweep_branch_results(&dir.path().join("absent"));
     }
 
     fn test_listener(name: &str) -> (UnixListener, PathBuf) {
@@ -1759,6 +1980,9 @@ mod tests {
                 progress_interval: Duration::ZERO,
                 running_hook: None,
                 repeated_warnings: Vec::new(),
+                branch_root: std::env::temp_dir().join("barca_test_shutdown_branches"),
+                next_branch_group: 0,
+                branch_dirs: HashMap::new(),
             };
 
             let start = std::time::Instant::now();

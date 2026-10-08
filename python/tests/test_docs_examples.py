@@ -553,9 +553,15 @@ def from_an_asset() -> list:
     again = result(barca(binary, tmp_path, "get", "from_an_asset", "pipeline.py"))
     assert again["final_output"] == [[1, 2]] and again["steps_executed"] == 0
 
-    # Branch artifacts: local files named after the file, the function and a number.
-    names = [p.name for p in (tmp_path / ".barca" / "artifacts").iterdir() if p.is_file()]
-    assert names and all(re.search(r"pipeline\.py--\w+__branch_\d+\.(json|pkl)$", n) for n in names)
+    # What the branches returned is gone with the runs; the artifact directory holds the
+    # results of the steps that finished and nothing per branch.
+    barca_dir = tmp_path / ".barca"
+    assert [p for p in (barca_dir / "branches").rglob("*") if p.is_file()] == []
+    assert sorted(p.name for p in (barca_dir / "artifacts").iterdir()) == [
+        "pipeline.py--from_an_asset",
+        "pipeline.py--tuple_argument",
+        "pipeline.py--values",
+    ]
 
 
 def test_sinks_topic_example(binary, topics, tmp_path):

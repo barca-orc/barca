@@ -25,6 +25,7 @@ from barca._source_import import load_package_module, load_source_module
 from barca._artifacts import (
     LAZY_FRAME_TYPES,
     _frame_kind,
+    _FORMAT_EXTENSIONS,
     artifact_path,
     clean_staging,
     deserialize,
@@ -658,22 +659,38 @@ def _materialize(
     # unpartitioned steps (a per-step hash is wrong per-partition; the daemon
     # path gets a per-item hash from Rust and batch mode is test-only).
     run_hash = step.get("run_hash") if node_id == step.get("node_id") else None
-    path = artifact_path(art_dir, node_id, fmt, run_hash)
-    # A directory where the artifact file belongs is not an artifact: it is moved out of the
-    # way (never deleted) so the step's result can be written. Sinks are the user's paths and
-    # never get this treatment.
-    local = _storage.local_path_of(path)
-    if local is not None:
-        _storage.make_way(local)
+    branch_path = step.get("branch_path")
+    if branch_path:
+        # A parallel() branch: the coordinator names a file that belongs to this run and this
+        # group alone, so the caller can only read what its own branches wrote (#332).
+        path = Path(f"{branch_path}{_FORMAT_EXTENSIONS[fmt]}")
+    else:
+        path = artifact_path(art_dir, node_id, fmt, run_hash)
     _ser_wall0 = time.perf_counter()
     _ser_cpu0 = time.process_time()
     # A sensor's output is hashed: the coordinator folds the hash into the run hash of every
     # asset that reads the sensor, so a changed output re-runs them.
     content_hash = None
-    if step.get("kind") == "sensor":
-        size, content_hash = serialize_hashed(result, path, fmt)
+    # A branch's small JSON result is not written at all: its text goes back in the report
+    # and on to the caller (barca/_branches.py). The text is what the file would have held.
+    inline_json = None
+    if branch_path and fmt == "json":
+        from barca import _branches
+
+        inline_json = _branches.small_json(result)
+    if inline_json is not None:
+        path, size = "", len(inline_json)
     else:
-        size = serialize(result, path, fmt)
+        # A directory where the artifact file belongs is not an artifact: it is moved out of
+        # the way (never deleted) so the step's result can be written. Sinks are the user's
+        # paths and never get this treatment.
+        local = _storage.local_path_of(path)
+        if local is not None:
+            _storage.make_way(local)
+        if step.get("kind") == "sensor":
+            size, content_hash = serialize_hashed(result, path, fmt)
+        else:
+            size = serialize(result, path, fmt)
     elapsed += time.perf_counter() - _ser_wall0
     if timing and timing.get("cpu_seconds") is not None:
         timing = {
@@ -681,6 +698,8 @@ def _materialize(
             "cpu_seconds": timing["cpu_seconds"] + (time.process_time() - _ser_cpu0),
         }
     artifact: dict = {"path": str(path), "format": fmt, "size_bytes": size}
+    if inline_json is not None:
+        artifact["json"] = inline_json
     if content_hash is not None:
         artifact["content_hash"] = content_hash
     if step.get("branch") and fmt == "parquet":
@@ -1068,8 +1087,10 @@ def _run_daemon_step(step, modules, art_dir, lru):
             raise _branches.unwritable(step, result, exc) from exc
         # A downstream step in this worker may consume what we just produced, keyed by the
         # reader it is equivalent to so a consumer never gets a different frame type.
+        # (Not a branch's result: no step of this worker reads it, and its file is removed
+        # when the calling step ends.)
         result_type = _result_frame_type(result)
-        if result_type is not False:
+        if result_type is not False and not step.get("branch"):
             lru.admit(artifact["path"], result, result_type, artifact.get("size_bytes"))
         return True
 

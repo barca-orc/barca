@@ -18,15 +18,32 @@ a `BranchResultError` raised from `parallel()`: the calling step fails and the r
 (The coordinator used to read the artifacts itself and send the values inline. It could do
 that for JSON only, and every other value reached the caller as `None`, with no error: #285.)
 
-A large value never travels over the socket: the caller reads it from its file. The text of a
-small json artifact (a few KB at most) is sent along with its path, as it is on disk, so that
-a fan-out of thousands of small branches does not open thousands of files here.
-Branch artifacts stay in the artifact directory under the branch's name and number and are
-overwritten by later runs, as before.
+A large value never travels over the socket: the caller reads it from its file. A JSON value
+whose text is a few KB at most (`INLINE_JSON_MAX_CHARS`) is not written to a file at all: the
+branch's worker sends the text `json.dump` would have written, in its report, and the caller
+parses it. A fan-out of thousands of small branches then creates, reads and removes no files.
+
+Branch results are files of the run, not artifacts: `.barca/branches/<run>-<pid>/<group>/`,
+one directory per parallel group, written nowhere else and never uploaded. The coordinator
+removes a group's directory when the step that called `parallel()` ends (so a lazily read
+frame stays readable for as long as that step runs), the run's directory when the run ends,
+however it ends, and the directories of runs that were killed when the next run starts.
 """
 
 import json
 import os
+
+# The largest JSON text a branch's worker sends back in its report instead of writing a file
+# (`small_json`). Larger results, and everything that is not JSON, are files the caller reads.
+INLINE_JSON_MAX_CHARS = 4096
+
+
+def small_json(value) -> str | None:
+    """The text `json.dump` would write for `value` (it is ASCII: one character, one byte),
+    when it is small enough to travel in a message; `None` when it is not."""
+    text = json.dumps(value)
+    return text if len(text) <= INLINE_JSON_MAX_CHARS else None
+
 
 # `error_type` of a branch that finished but whose return value could not be written. No
 # Python class name contains a dot, so no exception raised by user code reports this.
@@ -68,7 +85,7 @@ def _read(artifact: dict, source_file: str):
     path, fmt = artifact["path"], artifact["format"]
     text = artifact.get("json")
     if text is not None:
-        # The file's text, sent along by the coordinator for a small json artifact.
+        # A small json result: the text the branch's worker would have written to a file.
         return json.loads(text)
     if fmt == "json":
         # What `_artifacts.deserialize` gives for a local json artifact (the same parser on

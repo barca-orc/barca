@@ -134,17 +134,21 @@ remote store the parent gets `null` results with a warning). See
 > with no warning, with or without a remote store. Checked on 0.18.1: the result was the
 > same in both cases, and no warning was printed in either.
 >
-> Now the coordinator tells the parent where each child's artifact is (`path`, `format`,
+> Now the coordinator tells the parent where each child's result is (`path`, `format`,
 > and for a frame the type the child returned), and the parent's worker reads it with the
-> reader steps use for their inputs. A branch may return whatever a step may return. A value
+> reader steps use for their inputs. A child's result is written in the artifact formats
+> but is not an artifact of the store layout in §4.1: it is a file of the run, at
+> `.barca/branches/<run>-<pid>/<group>/<branch>.<ext>`, removed when the calling step ends
+> and never uploaded (issue #332: under the old name, shared by every run, two runs at the
+> same time read each other's results). A branch may return whatever a step may return. A value
 > that cannot be written or read back fails the calling step with an error naming the
-> branch, the type and the reason. Child artifacts are local files whatever the store, so
+> branch, the type and the reason. Child results are local files whatever the store, so
 > nothing differs under a remote store.
 >
-> One narrowing remains, and it does not interpret anything: for a JSON child artifact of at
-> most 4 KB the coordinator reads the file and sends its text along, unparsed, so that the
-> parent does not open thousands of small files after a large fan-out. The parent parses
-> that text exactly as it would have parsed the file.
+> A JSON result whose text is at most 4 KB is not written at all: the child's worker sends
+> the text `json.dump` would have written in its report, the coordinator passes it on
+> unparsed, and the parent parses it. A fan-out of thousands of small branches then creates
+> no files. The coordinator reads no child result in any case.
 
 ### 4.4 Node-Kind Semantics
 

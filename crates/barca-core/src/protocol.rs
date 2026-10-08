@@ -97,6 +97,10 @@ pub struct ArtifactRef {
     /// none for the result.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frame_type: Option<String>,
+    /// For a `parallel()` branch whose result is a small JSON value: its text, sent instead
+    /// of writing a file (`path` is then empty). See [`BranchArtifact::json`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub json: Option<String>,
 }
 
 /// Outcome of a single `@sink` write. Sink failures never fail the parent
@@ -151,17 +155,13 @@ pub struct BranchArtifact {
     /// See [`ArtifactRef::frame_type`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frame_type: Option<String>,
-    /// The artifact's text, for a JSON artifact of at most [`INLINE_JSON_MAX_BYTES`]: the
-    /// file's bytes as they are, never parsed here, so the worker parses exactly what it
-    /// would have read. Saves the worker opening the file, which is most of the cost of a
-    /// fan-out of thousands of small branches.
+    /// A small JSON result's text, as the branch's worker sent it (`python/barca/_branches.py`,
+    /// `small_json`: a few KB at most). There is then no file and `path` is empty. The text is
+    /// never parsed here: the calling worker parses what the branch's worker wrote. A fan-out
+    /// of thousands of small branches creates, reads and removes no files this way.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub json: Option<String>,
 }
-
-/// The largest JSON branch artifact whose text is sent along with its path. Anything larger
-/// is read by the worker from the file, so a response never carries a large payload.
-pub const INLINE_JSON_MAX_BYTES: u64 = 4096;
 
 // ─── Coordinator ↔ transfer helper ───────────────────────────────────────────
 
@@ -351,6 +351,7 @@ mod tests {
                 finished_at: None,
                 wall_seconds: None,
                 frame_type: None,
+                json: None,
                 sinks: Vec::new(),
             },
         };
@@ -426,6 +427,7 @@ mod tests {
                 finished_at: None,
                 wall_seconds: None,
                 frame_type: None,
+                json: None,
                 sinks: vec![
                     SinkOutcome {
                         path: "exports/out.parquet".to_string(),
@@ -603,6 +605,7 @@ mod tests {
                     finished_at: None,
                     wall_seconds: None,
                     frame_type: None,
+                    json: None,
                     sinks: Vec::new(),
                 },
             },

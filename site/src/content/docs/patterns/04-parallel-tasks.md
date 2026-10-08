@@ -92,8 +92,13 @@ results = parallel_map(deploy, ["us-east-1", "eu-west-1"], version=m["version"])
   Worker failed: TypeError: parallel() expects functools.partial objects, got function
   ```
 
-- **Branches are not retried.** A branch runs once, whatever `retries=` its task declares
-  (checked on 0.18.0 with a branch declared `retries=2`: one attempt).
+- **Branches are not retried and have a fixed time limit.** A branch runs once, whatever
+  `retries=` its task declares (checked on 0.18.0 with a branch declared `retries=2`: one
+  attempt), and `timeout_seconds=` on its task has no effect: a branch that runs longer than
+  300 seconds comes back as a `ParallelError` holding a `TimeoutError` (checked with a branch
+  declared `timeout_seconds=1000`). The calling step's own `timeout_seconds` keeps counting
+  while it waits. `parallel()` and `parallel_map()` take no such options themselves
+  (`parallel_map`'s keyword arguments are passed to the function).
 - **Branches are not cached.** They are tasks, and tasks always run.
 - **Use it in tasks.** A call from an `@asset` body also runs its branches, but the asset is
   then cached like any other asset and the branches do not run again until the asset does. If
@@ -118,7 +123,7 @@ reads it back:
 | a pandas or polars DataFrame, a polars LazyFrame, a pyarrow Table, a DuckDB relation | a frame of the type the branch returned |
 | a value JSON can represent | what JSON gives back, as between steps: a tuple as a list, a dict's non-string keys as strings (`{1: "a"}` as `{"1": "a"}`) |
 | `None` | `None` |
-| nothing, because it raised | a `ParallelError` |
+| nothing, because it raised (any exception, a `BranchResultError` from a `parallel()` of its own included) | a `ParallelError` |
 | a value that cannot be written or read back (an open file, a lambda, a generator) | nothing: `parallel()` raises `BranchResultError`, the calling step fails and the run exits 1 |
 
 The error names the branch, the type and the reason:
@@ -132,7 +137,16 @@ cannot be passed back to the step that called parallel(): TypeError: cannot pick
 Until 0.18.1 only JSON values came back. Any other return value (a set, a date, a DataFrame)
 reached the caller as `None`, with no error or warning, and the run succeeded.
 
-A large result is not sent between processes: the caller reads it from the branch's artifact
-file. Branch artifacts are local files in the artifact directory, named after the branch's
-file, its function and a number; later runs overwrite them. They are not uploaded to an
-artifact store, with or without one configured.
+A small JSON result (up to 4 KB of JSON text) is passed in a message and never written to
+disk. Any other result is not sent between processes: the caller reads it from the file the
+branch's worker wrote. Those files belong to the run:
+`.barca/branches/<run>-<pid>/<group>/<branch>.<ext>`, one directory per `parallel()` call. Two
+runs at the same time (two runs under `barca serve`, two `barca` processes in one project)
+never read each other's results. Barca removes a call's directory when the step that made the
+call ends and the run's directory when the run ends, however it ends; a run that was killed
+outright leaves its directory, and the next `barca get` or `barca run` in the project removes
+it. Branch results are not uploaded to an artifact store, with or without one configured.
+
+Until 0.18.1 these files were written into the artifact directory under the branch's name and
+never removed, and two runs of one pipeline at the same time could receive each other's branch
+results.

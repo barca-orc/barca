@@ -210,10 +210,13 @@ JSON_ROUND_TRIP = {
 }
 
 
-def run(root: Path, command: str, target: str, *extra: str, pool: int = 4, store: bool = False):
-    """`barca <command> <target> <file>` as a job of its own, stopped as a whole if it hangs."""
+def run(
+    root: Path, command: str, target: str, *extra: str, pool: int | None = None, store: bool = False
+):
+    """`barca <command> <target> <file>` as a job of its own, stopped as a whole if it hangs.
+    The pool is `pool`, else `BARCA_POOL_SIZE` of the test run's environment, else 4."""
     env = {k: v for k, v in os.environ.items() if not k.startswith("BARCA_")}
-    env["BARCA_POOL_SIZE"] = str(pool)
+    env["BARCA_POOL_SIZE"] = str(pool or os.environ.get("BARCA_POOL_SIZE", 4))
     if store:
         (root / "store").mkdir(exist_ok=True)
         env["BARCA_REMOTE_URI"] = str(root / "store")
@@ -273,15 +276,18 @@ def test_a_branch_may_return_whatever_a_step_may_return(root, target, pool):
 @pytest.mark.parametrize("target", ["task_parallel", "asset_map"])
 def test_branch_results_arrive_with_a_remote_store_configured(root, target):
     """RFC-0005 §4.3 said the caller gets `null` results with a warning under a remote
-    store. Branch artifacts are local whatever the store, and are read where they are."""
+    store. Branch results are local whatever the store, and are read where they are."""
     code, out, err = run(root, "run" if target.startswith("task") else "get", target,
                          "pipeline.py", store=True)  # fmt: skip
     assert code == 0, err
     assert_intact(json.loads(out)["final_output"])
     assert "null" not in err and "warning" not in err.lower(), err
-    # Branch artifacts are not uploaded: only the caller's own result is a step of the run.
-    stored = [p.name for p in (root / "store").rglob("*") if "_branch_" in p.name]
-    assert stored == []
+    # Branch results are not uploaded: the store has the caller's result and the shared
+    # history, however many branches ran.
+    stored = sorted(p.name for p in (root / "store").rglob("*") if p.is_file())
+    results = [name for name in stored if not name.startswith("metadata.db")]
+    assert len(results) == 1 and "metadata.db" in stored, stored
+    assert not [p for p in (root / "store").rglob("*") if "branch" in p.name]
 
 
 def test_none_is_a_value_and_a_failed_branch_is_a_parallel_error(root):
@@ -473,6 +479,54 @@ def test_a_value_that_cannot_be_read_back_fails_the_calling_step(root):
     assert ".pkl (pickle)" in error
 
 
+NESTED_UNPASSABLE = """
+from functools import partial
+
+from barca import BranchResultError, ParallelError, parallel, task
+
+
+@task()
+def handle(i: int):
+    return open(__file__)
+
+
+@task()
+def middle(i: int):
+    # Does not catch: the BranchResultError of its own group leaves this branch.
+    return parallel(partial(handle, i))
+
+
+@task()
+def middle_catches(i: int) -> str:
+    try:
+        parallel(partial(handle, i))
+    except BranchResultError as e:
+        return f"caught: {str(e)[:40]}"
+    return "not raised"
+
+
+@task()
+def outer() -> list:
+    raised, caught = parallel(partial(middle, 1), partial(middle_catches, 2))
+    return [type(raised).__name__, str(raised).splitlines()[0][:70], caught]
+"""
+
+
+def test_a_branch_that_raises_branch_result_error_is_a_branch_that_raised(root):
+    """The rule, both halves. A value a branch of THIS group returned and that cannot be
+    passed raises `BranchResultError` in the caller. A branch that raises, whatever it
+    raises, comes back as a `ParallelError`: also when what it raises is the
+    `BranchResultError` of a `parallel()` it called itself."""
+    (root / "pipeline.py").write_text(NESTED_UNPASSABLE)
+    code, out, err = run(root, "run", "outer", "pipeline.py")
+    assert code == 0, err
+    assert json.loads(out)["final_output"] == [
+        "ParallelError",
+        "BranchResultError: parallel() branch 0: pipeline.py:handle returned a ",
+        "caught: parallel() branch 0: pipeline.py:handle ",
+    ]
+
+
 def test_a_class_from_a_module_the_caller_imports_by_name(tmp_path):
     """The branch's worker loads the branch's file under barca's own module name, and a
     pickled object names that module. The calling worker knows the file as `helpers`."""
@@ -550,6 +604,21 @@ def test_collect_accepts_inline_values_from_an_older_coordinator():
     assert _branches.collect(answer, [{"fn_ref": "p.py:f"}] * 2) == [{"i": 1}, None]
 
 
+def test_a_small_json_result_is_text_in_the_report_and_a_large_one_is_a_file():
+    """The text is what `json.dump` writes, so the caller parses what a file would hold."""
+    import io
+
+    from barca import _branches
+
+    for value in [{"b": 1, "a": (1, 2)}, float("nan"), 10**30, None, "é"]:
+        written = io.StringIO()
+        json.dump(value, written)
+        assert _branches.small_json(value) == written.getvalue()
+    at_limit = "x" * (_branches.INLINE_JSON_MAX_CHARS - 2)  # two quotes
+    assert _branches.small_json(at_limit) is not None
+    assert _branches.small_json(at_limit + "x") is None
+
+
 def test_the_submit_message_asks_for_artifact_results(monkeypatch):
     from barca import _runtime
 
@@ -560,3 +629,66 @@ def test_the_submit_message_asks_for_artifact_results(monkeypatch):
     )
     assert _runtime.submit_and_wait([]) == []
     assert sent == [{"type": "submit", "items": [], "artifact_results": True}]
+
+
+SPANS = """
+import os, signal, sys
+from pathlib import Path
+from barca import _runtime, _telemetry, _worker
+
+finished = []
+
+
+class Recorded:
+    def __init__(self, step):
+        self.done = False
+
+    def finish(self, exc=None):
+        if not self.done:
+            self.done = True
+            finished.append(type(exc).__name__ if exc is not None else "ok")
+
+
+_telemetry.Execution = Recorded
+reported = []
+_runtime.emit_step_error = lambda **kw: reported.append(kw["error_type"])
+_runtime.emit_step_completed = lambda node_id, artifact: reported.append("completed")
+_worker._use_socket = True
+root = Path(sys.argv[1])
+
+
+def run(name, body, **extra):
+    source = root / f"{name}.py"
+    source.write_text(body)
+    step = {"node_id": f"{name}.py:step", "function_name": "step", "source_file": str(source),
+            "kind": "task", "inputs": {}, **extra}
+    _worker._run_daemon_step(step, {}, str(root / "arts"), _worker._ArtifactLRU())
+
+
+branch = {"branch": True, "branch_path": str(root / "branches" / "0" / "1")}
+run("fine", "def step():\\n    return {1, 2}\\n", **branch)
+run("unwritable", "def step():\\n    return open(__file__)\\n", **branch)
+run("interrupted", "import os, signal\\ndef step():\\n    os.kill(os.getpid(), signal.SIGINT)\\n    for _ in range(1000): pass\\n", run_hash="h")
+print(finished)
+print(reported)
+"""
+
+
+def test_a_span_is_finished_however_a_step_ends(tmp_path):
+    """Telemetry (#315) and this change meet in one function: the span of a step is finished
+    with what happened, also for a branch whose result cannot be written and for a step that
+    Ctrl-C interrupted."""
+    import sys
+
+    proc = subprocess.run(
+        [sys.executable, "-c", SPANS, str(tmp_path)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL),
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.splitlines() == [
+        "['ok', 'BranchResultError', 'KeyboardInterrupt']",
+        "['completed', 'barca.BranchResultError', 'KeyboardInterrupt']",
+    ], proc.stdout + proc.stderr

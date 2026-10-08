@@ -152,7 +152,8 @@ as an artifact, in the format barca picks for any step output (json, pickle or p
 
 **When a branch fails.** A branch that raises comes back as a `ParallelError` in place of its
 result (`.error` has the exception type, the message and the traceback); nothing is raised in
-the caller, which decides what a failed branch means. A branch that returns a value barca
+the caller, which decides what a failed branch means. That holds for any exception, including a
+`BranchResultError` the branch got from a `parallel()` of its own. A branch that returns a value barca
 cannot pass back (an open file, a lambda, a generator: nothing pickle can write) is different:
 `parallel()` raises `BranchResultError` in the caller, the calling step fails and the run exits
 1, with the branch, the type and the reason in the error:
@@ -178,10 +179,21 @@ happen on every run belongs in a task.
   does a `date` or `datetime`, unless the `fast` extra (orjson) is installed, in which case it
   arrives as its ISO string. Convert such values yourself (`d.isoformat()`) and the branch
   gets the same thing either way.
-- Branches are not steps of the plan: they are not cached, not retried and not uploaded to an
-  artifact store. Their artifacts are files in the local artifact directory, named after the
-  path of the branch's file, its function and a number
-  (`..._pipeline.py--<function>__branch_<n>.<ext>`), and are overwritten by later runs.
+- Branches are not steps of the plan: they are not cached and not retried, and
+  `timeout_seconds=` and `retries=` on a branch's `@task` have no effect (`parallel()` itself
+  takes no such options). A branch that runs longer than 300 seconds comes back as a
+  `ParallelError` holding a `TimeoutError`. The calling step's own `timeout_seconds` keeps
+  counting while it waits for its branches.
+- What a branch returns belongs to the run and is not an artifact. A small JSON value (up to
+  4 KB of JSON text) is passed in a message and never written. Anything else is a file,
+  `.barca/branches/<run>-<pid>/<group>/<branch>.<ext>`, one directory per `parallel()` call, so
+  two runs at the same time never read each other's results. It is never uploaded to an
+  artifact store. Barca removes a call's directory when the step that made the call ends, and
+  the run's directory when the run ends, however it ends (success, a failed step, Ctrl-C). A
+  run that was killed outright leaves its directory behind; the next `barca get` or
+  `barca run` in the project removes it. (Until 0.18.1 these files were written into the
+  artifact directory under the branch's name and never removed, and two runs of one pipeline
+  at the same time could receive each other's branch results.)
 
 ## When a task fails
 
