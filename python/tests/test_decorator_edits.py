@@ -444,3 +444,70 @@ def test_wrapper_keyword_order_is_part_of_the_result(project):
     changed = get(project, "result")
     assert changed["steps_executed"] == 1
     assert changed["final_output"] == ["second", "first"]
+
+
+def test_local_asset_decorator_metadata_is_part_of_its_result(project):
+    template = '''def asset(**kwargs):
+    def decorate(fn):
+        def wrapped():
+            return kwargs["description"]
+        return wrapped
+    return decorate
+
+@asset(description={description!r})
+def value():
+    return 0
+'''
+    write(project, template.format(description="one"))
+    first = get(project, "value")
+    assert first["final_output"] == "one"
+    assert first["steps_executed"] == 1
+    assert get(project, "value")["steps_executed"] == 0
+    write(project, template.format(description="two"))
+    changed = get(project, "value")
+    assert changed["final_output"] == "two"
+    assert changed["steps_executed"] == 1
+    assert get(project, "value")["steps_executed"] == 0
+
+
+def test_local_node_decorator_implementation_changes_its_result(project):
+    decorator = "asset"
+    template = '''def {decorator}(**kwargs):
+    def decorate(fn):
+        def wrapped():
+            return {value!r}
+        return wrapped
+    return decorate
+
+@{decorator}()
+def value():
+    return 0
+'''
+    write(project, template.format(decorator=decorator, value="one"))
+    assert get(project, "value")["final_output"] == "one"
+    assert get(project, "value")["steps_executed"] == 0
+    write(project, template.format(decorator=decorator, value="two"))
+    changed = get(project, "value")
+    assert changed["final_output"] == "two"
+    assert changed["steps_executed"] == 1
+
+
+def test_local_node_decorator_keyword_order_changes_its_result(project):
+    template = '''def asset(**kwargs):
+    def decorate(fn):
+        def wrapped():
+            return list(kwargs)
+        return wrapped
+    return decorate
+
+@asset({arguments})
+def value():
+    return 0
+'''
+    write(project, template.format(arguments='description="one", tags=["two"]'))
+    assert get(project, "value")["final_output"] == ["description", "tags"]
+    assert get(project, "value")["steps_executed"] == 0
+    write(project, template.format(arguments='tags=["two"], description="one"'))
+    changed = get(project, "value")
+    assert changed["final_output"] == ["tags", "description"]
+    assert changed["steps_executed"] == 1

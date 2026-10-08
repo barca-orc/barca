@@ -485,6 +485,9 @@ impl BarcaNames {
                     for sig in SIGNATURES {
                         imported.entry(sig.name).or_insert(at);
                     }
+                    imported.entry("unsafe").or_insert(at);
+                } else if alias.asname.is_none() && alias.name.as_str() == "unsafe" {
+                    imported.entry("unsafe").or_insert(at);
                 } else if alias.asname.is_none()
                     && let Some(sig) = Signature::named(alias.name.as_str())
                 {

@@ -188,8 +188,14 @@ pub struct Definition<'a> {
 }
 
 /// The definition of `func` if it is a node (has an `@asset`, `@sensor` or `@task` decorator),
-/// else `None`. `source` is the text `func` was parsed from.
-pub fn node_definition<'a>(func: &'a ast::StmtFunctionDef, source: &str) -> Option<Definition<'a>> {
+/// else `None`. `source` is the text `func` was parsed from. Only names positively bound
+/// to barca imports receive barca metadata rules; other decorators count and are followed
+/// in full, including wrappers that happen to be named `asset`, `sensor` or `task`.
+pub fn node_definition<'a>(
+    func: &'a ast::StmtFunctionDef,
+    source: &str,
+    barca: &crate::decorator_args::BarcaNames,
+) -> Option<Definition<'a>> {
     let mut is_node = false;
     // Decorators that count, in the order they are stacked.
     let mut decorators: Vec<String> = Vec::new();
@@ -199,7 +205,19 @@ pub fn node_definition<'a>(func: &'a ast::StmtFunctionDef, source: &str) -> Opti
 
     for decorator in &func.decorator_list {
         let expr = &decorator.expression;
-        if is_unsafe_decorator(expr) {
+        let name = match expr {
+            Expr::Name(name) => Some(name.id.as_str()),
+            Expr::Call(call) => match call.func.as_ref() {
+                Expr::Name(name) => Some(name.id.as_str()),
+                _ => None,
+            },
+            _ => None,
+        };
+        if !name.is_some_and(|name| barca.contains(name)) {
+            is_node |= match_node_decorator(expr).is_some();
+            decorators.push(canonical_expr(expr, source));
+            followed.push(expr);
+        } else if is_unsafe_decorator(expr) {
             if rule(UNSAFE) != Counts::No {
                 decorators.push("unsafe".to_string());
             }
@@ -674,6 +692,7 @@ mod tests {
     }
 
     fn definition_of<T>(source: &str, read: impl FnOnce(&Definition) -> T) -> T {
+        let source = &format!("from barca import asset, sensor, task, sink, unsafe\n{source}");
         let parsed = parse_module(source).expect("test source parses");
         let func = parsed
             .syntax()
@@ -684,7 +703,14 @@ mod tests {
                 _ => None,
             })
             .expect("a function");
-        read(&node_definition(func, source).expect("a node"))
+        read(
+            &node_definition(
+                func,
+                source,
+                &crate::decorator_args::BarcaNames::of(&parsed.syntax().body),
+            )
+            .expect("a node"),
+        )
     }
 
     /// The canonical form of each followed expression.
@@ -711,7 +737,14 @@ mod tests {
         let Stmt::FunctionDef(func) = &parsed.syntax().body[0] else {
             panic!("a function");
         };
-        assert!(node_definition(func, source).is_none());
+        assert!(
+            node_definition(
+                func,
+                source,
+                &crate::decorator_args::BarcaNames::of(&parsed.syntax().body)
+            )
+            .is_none()
+        );
     }
 
     /// The exact text, pinned: a change here changes every definition hash.

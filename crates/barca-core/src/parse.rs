@@ -257,7 +257,7 @@ fn try_extract_function(
     let start = func.range().start().to_usize();
     // What the definition hash covers: the function from `def` on and the decorator parts that
     // count, in canonical form. Never the decorators as written (`crate::definition`).
-    let source_text = crate::definition::node_definition(func, source)
+    let source_text = crate::definition::node_definition(func, source, &names.barca)
         .map(|definition| definition.text)
         .unwrap_or_default();
 

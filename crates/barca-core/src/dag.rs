@@ -1034,6 +1034,9 @@ def margin(region: str, tier: str, sales: dict) -> dict:\n    return sales\n"
 
     /// The definition hash of `a` in a one-file pipeline, through the parser.
     fn definition_hash_of(source: &str) -> String {
+        let source = &format!(
+            "from barca import asset, sensor, task, sink, partitions, partitions_from\n{source}"
+        );
         let nodes = crate::parse::extract_nodes(source, "test.py").unwrap();
         let dag = Dag::build(&nodes).unwrap();
         dag.get_node("test.py:a").unwrap().definition_hash.clone()

@@ -467,6 +467,7 @@ fn collect_definitions(source: &str, package: Option<&str>) -> HashMap<String, M
         uses: uses.uses,
     };
     let mut defs: HashMap<String, ModuleDef> = HashMap::new();
+    let barca = crate::decorator_args::BarcaNames::of(&parsed.syntax().body);
 
     for stmt in &parsed.syntax().body {
         match stmt {
@@ -477,7 +478,7 @@ fn collect_definitions(source: &str, package: Option<&str>) -> HashMap<String, M
                 // covers, wherever it is reached from: the decorator parts that count, in
                 // canonical form, and the names in them (rule 7). Any other function
                 // contributes its text as written, decorators included.
-                let function = match crate::definition::node_definition(func, source) {
+                let function = match crate::definition::node_definition(func, source, &barca) {
                     Some(definition) => {
                         uses.exprs(definition.followed.iter().copied());
                         Code {
@@ -2200,11 +2201,27 @@ def shadowing(helpers, json):
         }
     }
 
+    #[test]
+    fn foreign_node_decorator_implementations_are_followed() {
+        for name in ["asset", "task", "sensor", "unsafe", "sink"] {
+            let pipeline = |result: &str| {
+                format!(
+                    "from barca import asset as actual_asset\ndef {name}(**kwargs):\n    return lambda fn: {result}\n\n@asset()\n@{name}()\ndef my_asset():\n    return 0\n"
+                )
+            };
+            let first = cone_hash(&pipeline("1"), "my_asset");
+            assert!(!first.is_empty(), "{name}");
+            assert_ne!(first, cone_hash(&pipeline("2"), "my_asset"), "{name}");
+        }
+    }
+
     // ─── Rule 7: nodes and their decorators (#283) ───────────────────────────
 
     /// A pipeline file made of `constants` and one node `my_asset` under `decorators`.
     fn decorated(constants: &str, decorators: &str) -> String {
-        format!("{constants}\n\n{decorators}\ndef my_asset(x=None):\n    return 1\n")
+        format!(
+            "from barca import asset, sensor, sink, partitions, partitions_from, collect, asset_ref\n{constants}\n\n{decorators}\ndef my_asset(x=None):\n    return 1\n"
+        )
     }
 
     #[test]
@@ -2300,7 +2317,7 @@ def shadowing(helpers, json):
         ] {
             let pipeline = |up_body: &str| {
                 format!(
-                    "@sensor()\ndef up():\n    return {up_body}\n\n\n{decorators}\ndef my_asset(x=None, region=None):\n    return 1\n"
+                    "from barca import asset, sensor, collect, partitions_from, asset_ref\n@sensor()\ndef up():\n    return {up_body}\n\n\n{decorators}\ndef my_asset(x=None, region=None):\n    return 1\n"
                 )
             };
             assert_eq!(cone_hash(&pipeline("1"), "my_asset"), "", "{decorators}");
@@ -2316,7 +2333,7 @@ def shadowing(helpers, json):
     fn a_node_reached_by_name_contributes_its_definition_not_its_decorator_text() {
         let pipeline = |sales_decorator: &str, revenue: &str| {
             format!(
-                "{sales_decorator}\ndef sales(region):\n    return {revenue}\n\n\n@asset(partitions={{\"region\": partitions_from(sales)}})\ndef margin(region, sales):\n    return sales * 0.2\n"
+                "from barca import asset, partitions, partitions_from\n{sales_decorator}\ndef sales(region):\n    return {revenue}\n\n\n@asset(partitions={{\"region\": partitions_from(sales)}})\ndef margin(region, sales):\n    return sales * 0.2\n"
             )
         };
         let hash =

@@ -103,7 +103,10 @@ does not define, a positional argument, or `**options`, only in a call that barc
 positively identify from its imports. Positively identified barca node calls reject all of
 these at plan time (`barca docs assets`, "Accepted arguments"); the fallback is conservative
 hashing for unvalidated syntax, not an accepted argument. The hash rules are keyed to the
-same accepted signatures and a test checks every `(decorator, argument)` pair.
+same accepted signatures and a test checks every `(decorator, argument)` pair. A decorator
+whose name is not positively bound to a barca import counts in full, even if it is named
+`asset`, `sensor`, `task`, `sink` or `unsafe`: its arguments, their order and the wrapper
+implementation can change the result.
 
 What this means in practice:
 
