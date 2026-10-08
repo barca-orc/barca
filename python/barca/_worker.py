@@ -839,11 +839,48 @@ def run_batch(batch):
             _materialize(result, node_id, art_dir, step, elapsed)
 
 
-def _ignore_further_interrupts() -> None:
+# What a worker does with Ctrl-C (SIGINT). The terminal sends it to every process of the job,
+# workers included, and the coordinator, which gets it too, decides what it means for the run
+# and stops the workers. A worker acts on it only while a step's function runs:
+#
+# - While the interpreter starts and barca is imported: ignored. The coordinator starts workers
+#   with SIGINT ignored (`helper_proc::start_deaf_to_ctrl_c`), since nothing written here can
+#   keep an interrupt that arrives that early from ending the process with a traceback.
+# - While a step's module is imported, between steps, and while a result or an error is
+#   reported: nothing happens (`_ctrl_c_does_nothing`). An interrupt there used to end the
+#   worker with a `KeyboardInterrupt` traceback of barca's own frames or of the module's
+#   import, which tells the user nothing.
+# - While a step runs, from loading its inputs to writing its result: `KeyboardInterrupt` is
+#   raised in the step (`_ctrl_c_interrupts_the_step`), as before. The worker reports the step
+#   as interrupted and the coordinator leaves it out of the cancelled run. The coordinator's
+#   SIGTERM follows the interrupt and ends the worker at once (`_on_sigterm`), so a step
+#   cannot count on its `except` or `finally` code running.
+
+
+def _no_interrupt(_signum, _frame) -> None:
+    pass
+
+
+def _ctrl_c_does_nothing() -> None:
+    """Ctrl-C has no effect on this process until a step runs.
+
+    A handler that does nothing, not `SIG_IGN`: an ignored signal is inherited as ignored by
+    every process the user's code starts, a handled one is not.
+    """
     import signal
 
     try:
-        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        signal.signal(signal.SIGINT, _no_interrupt)
+    except ValueError:
+        pass  # not the main thread: nothing to change
+
+
+def _ctrl_c_interrupts_the_step() -> None:
+    """Ctrl-C raises `KeyboardInterrupt` in the main thread, as in any Python program."""
+    import signal
+
+    try:
+        signal.signal(signal.SIGINT, signal.default_int_handler)
     except ValueError:
         pass  # not the main thread: nothing to change
 
@@ -871,6 +908,9 @@ def _run_daemon_step(step, modules, art_dir, lru):
         if source not in modules:
             modules[source] = load_module(source)
         fn = getattr(modules[source], step["function_name"])
+
+        # From here until the result is written, Ctrl-C interrupts the step.
+        _ctrl_c_interrupts_the_step()
 
         # Direct args/kwargs from parallel() dispatch.
         d_args = step.get("direct_args", [])
@@ -969,12 +1009,11 @@ def _run_daemon_step(step, modules, art_dir, lru):
         # errors are OSError subclasses, so a socket-error catch here would
         # swallow them; genuine socket death surfaces when the emit below
         # fails, and that propagates to the caller.)
-        if isinstance(exc, KeyboardInterrupt):
-            # Ctrl-C reached this worker and interrupted the step. A second Ctrl-C (people
-            # press it twice) must not interrupt the report of the first: it would leave
-            # this function as an uncaught KeyboardInterrupt and print a traceback. The
-            # coordinator has the same signal and stops this worker.
-            _ignore_further_interrupts()
+        # The step is over. A Ctrl-C from here on (people press it twice) must not interrupt
+        # the report of how it ended: it would leave this function as an uncaught
+        # KeyboardInterrupt and print a traceback. The coordinator has the same signal and
+        # stops this worker.
+        _ctrl_c_does_nothing()
         wall = time.perf_counter() - t0
         message = str(exc)
         if isinstance(exc, SystemExit):
@@ -995,12 +1034,15 @@ def _run_daemon_step(step, modules, art_dir, lru):
         return False
 
     finally:
+        _ctrl_c_does_nothing()
         _duckdb.unbind_inputs(bound_views)
 
 
 def run_daemon():
     """Daemon mode: read execute commands from socket, run each step, send results."""
     global _use_socket
+
+    _ctrl_c_does_nothing()
 
     from barca import _runtime
 
@@ -1068,6 +1110,11 @@ def run_daemon():
                     break
         except (BrokenPipeError, ConnectionResetError, OSError):
             # Socket was closed (e.g. replacement worker killed) — exit cleanly.
+            break
+        except KeyboardInterrupt:
+            # A Ctrl-C that landed in the instant between a step's last statement and
+            # `_ctrl_c_does_nothing`. Leave without a traceback; the coordinator, which has
+            # the same signal, is stopping the run.
             break
 
     _runtime.disconnect()

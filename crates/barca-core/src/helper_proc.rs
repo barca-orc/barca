@@ -76,6 +76,34 @@ pub(crate) fn shield_from_ctrl_c(cmd: &mut Command) {
     cmd.process_group(0);
 }
 
+/// Start `cmd` with SIGINT ignored, in the coordinator's process group. For workers.
+///
+/// A worker stays in the terminal's job, unlike a helper: while it runs a step, Ctrl-C is
+/// meant to reach the step's code. But a Ctrl-C that arrives while the interpreter is still
+/// starting would end the worker with a `KeyboardInterrupt` traceback before any of barca's
+/// Python code could prevent it. An ignored signal stays ignored across `exec`, and Python
+/// leaves an ignored SIGINT alone, so the worker starts deaf to it and turns it back on
+/// itself, for the time a step runs (`python/barca/_worker.py`).
+///
+/// This needs a `pre_exec` hook, which [`shield_from_ctrl_c`] avoids because of the pipe the
+/// standard library then uses to learn that `exec` happened. That pipe is created and closed
+/// inside the `spawn` call, and every `spawn` call is made under [`spawn`]'s lock (a test
+/// checks there is no other), so no child can inherit it.
+#[cfg(unix)]
+pub(crate) fn start_deaf_to_ctrl_c(cmd: &mut std::process::Command) {
+    use std::os::unix::process::CommandExt;
+    // SAFETY: the hook runs in the forked child before `exec` and makes one
+    // async-signal-safe call.
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::signal(libc::SIGINT, libc::SIG_IGN) == libc::SIG_ERR {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+}
+
 /// Give `cmd` a lifeline: its stdin is a pipe whose other end only this process holds, and
 /// `BARCA_LIFELINE=stdin` tells the helper to watch it (`barca._lifeline`). When this process
 /// is gone, however it went (`kill -9` included), the pipe reaches end-of-file and the helper
@@ -173,6 +201,28 @@ mod tests {
         out.read_line(&mut line).await.unwrap();
         assert_eq!(line.trim().parse::<i64>().unwrap(), own_group());
         stop(&mut child).await;
+    }
+
+    /// A worker is started with SIGINT ignored: an interrupt that reaches it while its
+    /// interpreter starts does not end it. The control dies of the same signal.
+    #[cfg(unix)]
+    #[test]
+    fn a_child_started_deaf_to_ctrl_c_survives_an_interrupt() {
+        use std::os::unix::process::ExitStatusExt;
+        let script = "kill -INT $$; echo survived";
+
+        let mut deaf = std::process::Command::new("sh");
+        deaf.args(["-c", script]);
+        start_deaf_to_ctrl_c(&mut deaf);
+        let out = output_std(&mut deaf).unwrap();
+        assert_eq!(out.stdout, b"survived\n");
+        assert!(out.status.success());
+
+        let mut hearing = std::process::Command::new("sh");
+        hearing.args(["-c", script]);
+        let out = output_std(&mut hearing).unwrap();
+        assert_eq!(out.stdout, b"");
+        assert_eq!(out.status.signal(), Some(libc::SIGINT));
     }
 
     /// A child whose output is read to the end, started while long-lived children are being

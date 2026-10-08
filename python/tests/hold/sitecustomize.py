@@ -23,6 +23,8 @@ Points:
 - ``pull``    the state helper is about to pull it (``python -m barca._state pull``)
 - ``pushed``  the state helper has put the metadata DB in a directory store and has not said so
               yet (after the rename, before it prints the new token)
+- ``worker-start``    a worker's interpreter is starting: nothing of barca is imported yet
+- ``worker-connect``  a worker has imported barca and is about to connect to the coordinator
 """
 
 import os
@@ -50,7 +52,30 @@ def _hold(point: str, directory: Path) -> None:
         time.sleep(0.02)
 
 
+def _is_worker() -> bool:
+    argv = getattr(sys, "orig_argv", [])
+    return "barca._worker" in argv and "--daemon" in argv
+
+
 def _install(point: str, directory: Path) -> None:
+    if point == "worker-start":
+        # Here and now: this module is imported while the interpreter starts.
+        if _is_worker():
+            _hold(point, directory)
+        return
+    if point == "worker-connect":
+        if _is_worker():
+            from barca import _runtime
+
+            real_connect = _runtime.connect
+
+            def connect_after_hold():
+                _hold(point, directory)
+                return real_connect()
+
+            _runtime.connect = connect_after_hold
+        return
+
     from barca import _storage
 
     def wrap(name: str, when=lambda *a: True) -> None:
