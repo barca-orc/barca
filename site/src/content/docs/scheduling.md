@@ -165,8 +165,9 @@ scheduled run of each node.
 ## Caveats
 
 - **Timezone.** Cron is evaluated in the machine's local time by default. Pass
-  `--timezone utc` or an IANA name (`--timezone America/New_York`). An unknown name is not an
-  error: the server prints `unknown timezone "...", using local time` and carries on.
+  `--timezone utc` or an IANA name (`--timezone America/New_York`). `local` and `utc` are
+  accepted in any letter case; IANA names are spelled as in the tz database. Any other value is
+  a usage error: the server exits 2 and does not start.
 - **Catch-up.** If a tick passed while the server was down, the job fires once at startup
   (`[barca] catch-up run job.py:refresh → ...`). Ticks missed during a long outage are not
   replayed one for one. A job seen for the first time waits for its next tick.

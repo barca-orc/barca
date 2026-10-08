@@ -349,7 +349,7 @@ barca serve --timezone utc              # every file in the project; cron evalua
 | `-p`, `--port <PORT>` | `8274` | Port to listen on. |
 | `--watch` | off | Re-parse the DAG when a source file changes. Files added later still need a restart. |
 | `--no-schedule` | off | Do not fire `Schedule(...)` nodes. |
-| `--timezone <TZ>` | `local` | Timezone for cron: `local`, `utc` or an IANA name. |
+| `--timezone <TZ>` | `local` | Timezone for cron: `local`, `utc` or an IANA name such as `America/New_York`. Any other value is a usage error (exit 2). |
 | `--read-only` | off | Refuse runs, never schedule, read the metadata DB from copies. |
 | `--env <name>` | `default` | Use a named environment's cache and history. |
 

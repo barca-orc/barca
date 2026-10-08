@@ -30,6 +30,15 @@ use state::AppState;
 pub enum ServeError {
     #[error("server I/O error: {0}")]
     Io(#[from] std::io::Error),
+    /// `ServeConfig::timezone` is not a zone the scheduler knows.
+    #[error("{0}")]
+    Timezone(String),
+}
+
+/// Check a `--timezone` value: `local`, `utc`, or an IANA name such as `America/New_York`.
+/// The error names the value and shows valid ones.
+pub fn check_timezone(value: &str) -> Result<(), String> {
+    scheduler::Zone::parse(value).map(|_| ())
 }
 
 /// Build the API router over a fresh [`AppState`] for the given config.
@@ -44,6 +53,8 @@ pub fn app(config: ServeConfig) -> axum::Router {
 /// shutdown, in-flight runs are cancelled (workers terminated, runs marked
 /// cancelled) before returning.
 pub async fn serve(config: ServeConfig) -> Result<(), ServeError> {
+    // Before anything starts: an unknown zone must not become local time (#289).
+    check_timezone(&config.timezone).map_err(ServeError::Timezone)?;
     let addr = std::net::SocketAddr::new(config.host, config.port);
     let n_files = config.files.len();
     let watch = config.watch;

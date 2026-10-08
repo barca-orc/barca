@@ -139,26 +139,29 @@ async fn sleep_to_next_second(zone: &Zone) {
 }
 
 /// Resolved timezone that cron expressions are evaluated in.
-enum Zone {
+#[derive(Debug)]
+pub(crate) enum Zone {
     Local,
     Utc,
     Named(chrono_tz::Tz),
 }
 
 impl Zone {
-    /// Parse a `--timezone` value: `local` (default), `utc`, or an IANA name
-    /// like `America/New_York`. Unknown names fall back to local with a warning.
-    fn parse(s: &str) -> Self {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "" | "local" => Zone::Local,
-            "utc" => Zone::Utc,
-            _ => match s.trim().parse::<chrono_tz::Tz>() {
-                Ok(tz) => Zone::Named(tz),
-                Err(_) => {
-                    eprintln!("[barca] unknown timezone {s:?}, using local time");
-                    Zone::Local
-                }
-            },
+    /// Parse a `--timezone` value: `local` or `utc` (in any letter case), or an IANA name
+    /// spelled as in the tz database (`America/New_York`, `Etc/UTC`; case-sensitive).
+    /// Surrounding whitespace is ignored. Anything else is an error that names the value and
+    /// shows valid ones.
+    pub(crate) fn parse(s: &str) -> Result<Self, String> {
+        let name = s.trim();
+        match name.to_ascii_lowercase().as_str() {
+            "local" => Ok(Zone::Local),
+            "utc" => Ok(Zone::Utc),
+            _ => name.parse::<chrono_tz::Tz>().map(Zone::Named).map_err(|_| {
+                format!(
+                    "unknown timezone '{s}': use `local`, `utc`, or an IANA name such as \
+                     `America/New_York` (IANA names are case-sensitive)"
+                )
+            }),
         }
     }
 
@@ -370,7 +373,15 @@ fn log_schedule(jobs: &[ScheduledJob], zone: &Zone) {
 /// The scheduler background task. Spawned from `serve_async` when scheduling is
 /// enabled; runs for the lifetime of the server.
 pub async fn run_scheduler(state: AppState) {
-    let zone = Zone::parse(&state.config.timezone);
+    // `serve` checks the timezone before it starts anything, so this only fails for a caller
+    // that spawned the scheduler on its own.
+    let zone = match Zone::parse(&state.config.timezone) {
+        Ok(zone) => zone,
+        Err(e) => {
+            eprintln!("[barca] scheduler disabled: {e}");
+            return;
+        }
+    };
 
     let mut jobs = reload_jobs(&state).await;
 
@@ -656,13 +667,30 @@ mod tests {
     // ─── timezone handling ─────────────────────────────────────────────────
 
     #[test]
-    fn zone_parse_handles_local_utc_named_and_unknown() {
-        assert!(matches!(Zone::parse("local"), Zone::Local));
-        assert!(matches!(Zone::parse(""), Zone::Local));
-        assert!(matches!(Zone::parse("UTC"), Zone::Utc));
-        assert!(matches!(Zone::parse("America/New_York"), Zone::Named(_)));
-        // Unknown names fall back to local rather than erroring.
-        assert!(matches!(Zone::parse("Not/AZone"), Zone::Local));
+    fn zone_parse_accepts_local_utc_and_iana_names() {
+        assert!(matches!(Zone::parse("local"), Ok(Zone::Local)));
+        assert!(matches!(Zone::parse("Local"), Ok(Zone::Local)));
+        assert!(matches!(Zone::parse("utc"), Ok(Zone::Utc)));
+        assert!(matches!(Zone::parse("UTC"), Ok(Zone::Utc)));
+        assert!(matches!(Zone::parse(" utc "), Ok(Zone::Utc)));
+        assert!(matches!(
+            Zone::parse("America/New_York"),
+            Ok(Zone::Named(chrono_tz::America::New_York))
+        ));
+        assert!(matches!(Zone::parse("Etc/UTC"), Ok(Zone::Named(_))));
+    }
+
+    #[test]
+    fn zone_parse_rejects_anything_else_and_names_it() {
+        // An unknown zone used to fall back to local time with one line on stderr (#289).
+        for bad in ["Not/AZone", "", "america/new_york", "EST5", "+02:00"] {
+            let err = Zone::parse(bad).unwrap_err();
+            assert!(
+                err.contains(&format!("unknown timezone '{bad}'")),
+                "{bad:?}: {err}"
+            );
+            assert!(err.contains("America/New_York"), "{err}");
+        }
     }
 
     #[test]

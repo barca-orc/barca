@@ -51,6 +51,11 @@ something that identifies the version of the data, such as an etag or a last-mod
 A tick is skipped while the previous run of the same scheduled node is still going. Two
 scheduled nodes that share an upstream run separately, and both may compute it.
 
+Cron is evaluated in one timezone for the whole server, set with `--timezone`: `local` (the
+default: the zone of the machine or container), `utc`, or an IANA name such as
+`America/New_York`. `local` and `utc` are accepted in any letter case; IANA names are spelled as
+in the tz database. Any other value is a usage error: the server exits 2 and names the value.
+
 ```bash
 barca list pipeline.py                         # shows each schedule and its next fire time
 barca serve pipeline.py                        # HTTP API + scheduler + web UI on 127.0.0.1:8274

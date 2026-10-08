@@ -200,6 +200,7 @@ Examples:
   barca serve pipeline.py --watch            # dev: re-parse the DAG when files change
   barca serve pipeline.py --no-schedule      # API only; Schedule(...) nodes do not fire
   barca serve pipeline.py --timezone utc     # evaluate cron in UTC (default: local)
+  barca serve pipeline.py --timezone America/New_York   # an IANA zone name
   barca serve pipeline.py --read-only        # inspect only: no runs, no scheduler, DB never written
 
 Binds to localhost with no authentication.
@@ -462,8 +463,8 @@ enum Cli {
         /// Disable the cron scheduler (Schedule(...) assets will not auto-fire)
         #[arg(long)]
         no_schedule: bool,
-        /// Timezone for cron evaluation: local (default), utc, or an IANA name
-        #[arg(long, default_value = "local")]
+        /// Timezone for cron evaluation: local (this machine's zone), utc, or an IANA name such as America/New_York (case-sensitive). Any other value is a usage error
+        #[arg(long, default_value = "local", value_parser = parse_timezone)]
         timezone: String,
         /// Inspect only: refuse runs, never schedule, read the metadata DB from snapshots
         #[arg(long)]
@@ -960,6 +961,11 @@ fn targets_arg(target: Option<&str>, files: &[PathBuf]) -> Result<Vec<String>, C
         Some(Ok(names)) => Ok(names),
         Some(Err(msg)) => Err(usage_error(&msg, files)),
     }
+}
+
+/// `barca serve --timezone`: accepted as given when the scheduler knows the zone.
+fn parse_timezone(value: &str) -> Result<String, String> {
+    barca_server::check_timezone(value).map(|()| value.to_string())
 }
 
 fn main() {

@@ -103,8 +103,8 @@ What each part is for:
   schedule state across restarts and image rebuilds. Without it, a recreated container
   computes everything again and does not know which ticks it missed.
 - **`--timezone`.** Cron is evaluated in the container's local time unless you say otherwise,
-  and that is usually UTC whatever the host uses. State it. An unknown name is not an error:
-  barca prints a warning and uses local time.
+  and that is usually UTC whatever the host uses. State it. A value barca does not know is a
+  usage error: the server exits 2 and names it.
 - **`stop_signal: SIGINT`.** Barca shuts down cleanly on SIGINT (Ctrl-C). It has no SIGTERM
   handler, and as process 1 in a container it ignores SIGTERM, so a default `docker stop`
   waits out its timeout and then kills the process.
