@@ -21,16 +21,17 @@ function kindIcon(kind: NodeKind) {
 export function AssetNode({ data, selected }: NodeProps<GraphNode>) {
   return (
     <div style={{ width: DAG_NODE_WIDTH }}>
-      <Handle type="target" position={Position.Left} />
+      <Handle type="target" position={data.direction === "TB" ? Position.Top : Position.Left} />
       <DagNode
         name={data.name}
         kind={data.kind}
         status={data.status}
-        metric={data.metric}
+        statusLabel={data.metric ?? undefined}
+        stateHint={data.stateHint}
         selected={selected}
         icon={kindIcon(data.kind)}
       />
-      <Handle type="source" position={Position.Right} />
+      <Handle type="source" position={data.direction === "TB" ? Position.Bottom : Position.Right} />
     </div>
   )
 }

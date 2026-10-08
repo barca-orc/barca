@@ -66,6 +66,8 @@ pub struct RunReport {
     /// `get` or `run`.
     pub command: String,
     pub target: Option<String>,
+    /// Canonical resolved job ids, independent of how a target was entered.
+    pub job: String,
     /// `success`, `failed` or `cancelled`.
     pub status: String,
     pub start_unix_ns: u64,

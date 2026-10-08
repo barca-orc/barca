@@ -370,6 +370,14 @@ barca.plan("pipeline.py")["total_steps"]   # 2
 The decorators return the function unchanged, so decorated functions can be called and
 unit tested as ordinary Python.
 
+## Datadog job traces
+
+Set `BARCA_TELEMETRY=datadog` to report job runs and steps to a Datadog Agent.
+Install `barca[datadog]` in your job environment to add named Python executions and
+nested library traces in the same job trace. In the `<DD_SERVICE>-python` service,
+select `barca.execute` to see jobs by their canonical names. See `barca docs telemetry`
+for setup, tags, and delivery limits.
+
 ## The manual
 
 `barca docs` lists the topics and `barca docs <topic>` prints one. Start with `overview`.
