@@ -95,7 +95,7 @@ pub async fn serve(config: ServeConfig) -> Result<(), ServeError> {
         if watch { " · watch" } else { "" },
     );
     if !addr.ip().is_loopback() {
-        eprintln!(
+        barca_core::errln!(
             "[barca] warning: listening on {} with no authentication — anyone who can reach \
              port {} can trigger runs",
             addr.ip(),
