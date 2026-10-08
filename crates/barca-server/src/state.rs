@@ -125,6 +125,47 @@ impl SourceStamp {
             .collect::<Option<Vec<_>>>()
             .map(Self)
     }
+
+    /// True when every file was last modified more than [`Self::SETTLED`] before `now`.
+    ///
+    /// A file's modification time is only as fine as the filesystem's clock (a few
+    /// milliseconds on Linux). A file read just after it was written can be written again
+    /// within the same instant with the same size, and its stamp would not show it. So a
+    /// stamp that recent is not kept: the files are read again next time, until they have
+    /// been still for a moment.
+    pub fn settled(&self, now: std::time::SystemTime) -> bool {
+        self.0.iter().all(|(modified, _)| {
+            now.duration_since(*modified)
+                .is_ok_and(|age| age > Self::SETTLED)
+        })
+    }
+
+    const SETTLED: std::time::Duration = std::time::Duration::from_secs(2);
+}
+
+#[cfg(test)]
+mod stamp_tests {
+    use super::SourceStamp;
+    use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn a_stamp_is_kept_only_once_its_files_have_been_still_for_a_moment() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("p.py").display().to_string();
+        std::fs::write(&file, "x = 1\n").unwrap();
+        let stamp = SourceStamp::of(std::slice::from_ref(&file)).unwrap();
+        let now = SystemTime::now();
+        assert!(!stamp.settled(now), "just written");
+        assert!(!stamp.settled(now + Duration::from_secs(1)));
+        assert!(stamp.settled(now + Duration::from_secs(5)));
+        // A clock that went backwards proves nothing either.
+        assert!(!stamp.settled(now - Duration::from_secs(60)));
+        // A change of size or time is another stamp; a directory or a missing file has none.
+        std::fs::write(&file, "x = 12\n").unwrap();
+        assert_ne!(SourceStamp::of(std::slice::from_ref(&file)).unwrap(), stamp);
+        assert!(SourceStamp::of(&[dir.path().display().to_string()]).is_none());
+        assert!(SourceStamp::of(&[format!("{file}.missing")]).is_none());
+    }
 }
 
 /// One row of `GET /state`: the node's `barca status` entry plus what the

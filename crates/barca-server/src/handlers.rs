@@ -355,10 +355,13 @@ async fn target_nodes(
             .map(|n| (n.id, n.kind))
             .collect();
     let nodes = std::sync::Arc::new(nodes);
-    state.cache.write().unwrap().targets = stamp.map(|stamp| crate::state::TargetIndex {
-        stamp,
-        nodes: nodes.clone(),
-    });
+    // Kept only when the files have been still for a moment (see `SourceStamp::settled`).
+    state.cache.write().unwrap().targets = stamp
+        .filter(|stamp| stamp.settled(std::time::SystemTime::now()))
+        .map(|stamp| crate::state::TargetIndex {
+            stamp,
+            nodes: nodes.clone(),
+        });
     Ok(nodes)
 }
 
