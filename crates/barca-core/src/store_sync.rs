@@ -1,9 +1,10 @@
 //! A run's connection to a remote store: queue each finished artifact for upload, fetch remote
 //! inputs before a phase reads them, and wait for the transfers at the end of the run.
 
-use crate::commands::{BLOCKED_ARTIFACT_PATH, fmt_bytes};
+use crate::cache::BLOCKED_ARTIFACT_PATH;
 use crate::dispatch;
 use crate::recover;
+use crate::report::fmt_bytes;
 use crate::transfer::{ArtifactLayout, TransferClient};
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;

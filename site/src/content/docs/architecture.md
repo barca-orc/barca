@@ -1,6 +1,6 @@
 ---
 title: Architecture
-description: The crates, modules, worker protocol and storage that make up barca 0.18.0.
+description: The crates, modules, worker protocol and storage that make up barca.
 ---
 
 Barca is a Rust binary and a Python package shipped in one wheel. The binary parses Python
@@ -8,7 +8,7 @@ source without importing it, builds a dependency graph, decides what needs to ru
 dispatches steps to Python worker processes. The Python package holds the decorators and the
 worker.
 
-This page describes the code as of 0.18.0. The reasons behind the main choices are in
+This page describes the current source layout. The reasons behind the main choices are in
 [Architecture decisions](/architecture-decisions/).
 
 ## Layout
@@ -28,12 +28,24 @@ crates/
     transfer.rs, state_*.rs   remote store: artifact transfer, and shared history as one blob
     store_sync.rs             a run's link to the store: upload results, fetch remote inputs, wait at the end
     persist.rs                recording a run: run and step rows, the final write, the shared-history push
-    commands.rs               get and run: target resolution, cache decisions, executing a run
+    commands.rs               get and run entry points
+    targets.rs                target resolution, refresh-name checks and target planning
+    execution.rs              prepare, decide, dispatch and finalize a run
     queries.rs, status.rs, sql.rs   read-only commands: plan, history, stats, list; status; sql
     results.rs                what a command returns (serde types shared by the CLI and the server)
+    report.rs, report/        shared result formatting, field projection and progress lines
+    envelope.rs               error classification, remediation and error envelopes
+    schedule.rs               schedule discovery and next-fire descriptions
+    helper_proc.rs            Python command construction, serialized spawning and helper lifetime
     telemetry/                run reports; one Datadog trace per run
   barca-server/src/           axum HTTP API, cron scheduler, file watcher, embedded web UI
-  barca-cli/                  the `barca` binary: clap commands, output, error envelope; `serve` calls barca-server
+  barca-cli/                  the `barca` binary; only `serve` calls barca-server
+    src/args.rs               clap argument definitions
+    src/commands/             one handler module per subcommand
+    src/main.rs               argument parsing, project setup and dispatch
+    src/input.rs, output.rs   input validation, project roots and output selection
+    src/error.rs              clap and stderr adapter to the shared core error envelope
+    src/tests.rs, contract.rs CLI behavior, help and contract checks
     docs/                     the manual, compiled into the binary
 python/barca/
   __init__.py                 decorators (they return the function unchanged), parallel()

@@ -25,7 +25,7 @@ pub struct GetResult {
 
 /// The result of `barca get|run a,b` (several targets): one run over the union of the targets'
 /// cones, with each target's outcome. A failed target does not stop the others.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MultiResult {
     pub run_id: String,
     pub elapsed_seconds: f64,
@@ -36,7 +36,10 @@ pub struct MultiResult {
     /// Plan-time warnings for the steps this run planned (`[]` when there are none).
     pub warnings: Vec<PlanWarning>,
     /// Each target by the name it was given, in the order given (serialized as a map).
-    #[serde(serialize_with = "serialize_targets")]
+    #[serde(
+        serialize_with = "serialize_targets",
+        deserialize_with = "deserialize_targets"
+    )]
     pub targets: Vec<(String, TargetOutcome)>,
 }
 
@@ -45,6 +48,38 @@ fn serialize_targets<S: serde::Serializer>(
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
     serializer.collect_map(targets.iter().map(|(k, v)| (k, v)))
+}
+
+/// Read target objects directly through serde so their declared order survives a wire round trip.
+fn deserialize_targets<'de, D, T>(deserializer: D) -> Result<Vec<(String, T)>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    struct TargetsVisitor<T>(std::marker::PhantomData<T>);
+    impl<'de, T: Deserialize<'de>> serde::de::Visitor<'de> for TargetsVisitor<T> {
+        type Value = Vec<(String, T)>;
+        fn expecting(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            fmt.write_str("an object keyed by target name")
+        }
+        fn visit_map<A: serde::de::MapAccess<'de>>(
+            self,
+            mut map: A,
+        ) -> Result<Self::Value, A::Error> {
+            let mut targets = Vec::new();
+            let mut names = std::collections::HashSet::new();
+            while let Some((name, value)) = map.next_entry::<String, T>()? {
+                if !names.insert(name.clone()) {
+                    return Err(serde::de::Error::custom(format!(
+                        "duplicate target '{name}'"
+                    )));
+                }
+                targets.push((name, value));
+            }
+            Ok(targets)
+        }
+    }
+    deserializer.deserialize_map(TargetsVisitor(std::marker::PhantomData))
 }
 
 impl MultiResult {
@@ -184,6 +219,39 @@ impl Serialize for ExplainResult {
     }
 }
 
+impl<'de> Deserialize<'de> for ExplainResult {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct WireExplain {
+            dry_run: bool,
+            command: String,
+            #[serde(default)]
+            target: Option<String>,
+            #[serde(default, deserialize_with = "deserialize_targets")]
+            targets: Vec<(String, TargetPrediction)>,
+            steps: Vec<StepReport>,
+            summary: ExplainSummary,
+            #[serde(default)]
+            warnings: Vec<PlanWarning>,
+        }
+        let wire = WireExplain::deserialize(deserializer)?;
+        if !wire.targets.is_empty() && (wire.targets.len() < 2 || wire.target.is_some()) {
+            return Err(serde::de::Error::custom(
+                "an explanation has one target or multiple targets, never both",
+            ));
+        }
+        Ok(Self {
+            dry_run: wire.dry_run,
+            command: wire.command,
+            target: wire.target,
+            targets: wire.targets,
+            steps: wire.steps,
+            summary: wire.summary,
+            warnings: wire.warnings,
+        })
+    }
+}
+
 impl ExplainSummary {
     /// Add one (merged) dry-run step line: a partitioned line counts its keys.
     pub(crate) fn add(&mut self, r: &StepReport) {
@@ -268,4 +336,109 @@ pub struct AssetSummary {
     /// Declared environment variable names (`@asset(env=[...])`), in declaration order.
     #[serde(default)]
     pub env: Vec<String>,
+}
+
+#[cfg(test)]
+mod wire_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn roundtrip<T: Serialize + serde::de::DeserializeOwned>(value: serde_json::Value) -> T {
+        let decoded: T = serde_json::from_value(value.clone()).unwrap();
+        let encoded = serde_json::to_string(&decoded).unwrap();
+        let restored: T = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(serde_json::to_value(&restored).unwrap(), value);
+        restored
+    }
+
+    #[test]
+    fn successful_result_preserves_artifact_steps_and_warnings() {
+        let result: GetResult = roundtrip(json!({
+            "run_id": "run-1", "elapsed_seconds": 1.25, "steps_executed": 1, "phases": 2,
+            "final_output": {"path": ".barca/artifacts/z.json", "format": "json", "size_bytes": 12},
+            "steps": [{"id": "p.py:z", "kind": "asset", "status": "ran", "reason": "not_materialized",
+                "env": {"TOKEN": "<redacted>", "OPTIONAL": null}}],
+            "warnings": [{"kind": "unused_input", "node": "p.py:z", "param": "a", "message": "unused a"}]
+        }));
+        assert_eq!(result.final_output.unwrap().path, ".barca/artifacts/z.json");
+        assert_eq!(result.steps[0].env.as_ref().unwrap()["OPTIONAL"], None);
+        assert_eq!(result.warnings.len(), 1);
+    }
+
+    #[test]
+    fn multi_result_keeps_target_order_and_failure_details() {
+        let wire = r#"{"run_id":"multi","elapsed_seconds":2.0,"steps_executed":1,"phases":1,"steps":[],"warnings":[],"targets":{"z":{"status":"success","final_output":{"path":"z.json","format":"json","size_bytes":3}},"a":{"status":"failed","error":"ValueError: bad","failed_node":"p.py:a"}}}"#;
+        let result: MultiResult = serde_json::from_str(wire).unwrap();
+        assert_eq!(
+            result
+                .targets
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            ["z", "a"]
+        );
+        assert!(result.any_failed());
+        let encoded = serde_json::to_string(&result).unwrap();
+        assert!(encoded.find("\"z\":").unwrap() < encoded.find("\"a\":").unwrap());
+        let restored: MultiResult = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(restored.targets[1].1.failed_node.as_deref(), Some("p.py:a"));
+        assert_eq!(serde_json::to_string(&restored).unwrap(), encoded);
+    }
+
+    #[test]
+    fn failed_step_keeps_the_partial_run_and_complete_traceback() {
+        let failed: crate::FailedStep = roundtrip(json!({
+            "node": "p.py:a", "message": "ValueError: bad\n  File \"p.py\", line 4, in a\n    raise ValueError('bad')",
+            "artifact_dir": "s3://bucket/p.py--a", "run": {
+                "run_id": "partial", "elapsed_seconds": 0.5, "steps_executed": 2, "phases": 1,
+                "steps": [{"id":"p.py:z", "kind":"asset", "status":"ran"}, {"id":"p.py:a", "kind":"task", "status":"failed"}],
+                "warnings": []
+            }
+        }));
+        assert_eq!(failed.summary(), "ValueError: bad");
+        assert!(failed.traceback().unwrap().contains("line 4"));
+        let partial = failed.run.unwrap();
+        let restored: crate::PartialRun =
+            serde_json::from_str(&serde_json::to_string(&partial).unwrap()).unwrap();
+        assert_eq!(restored.steps[0].status.as_deref(), Some("ran"));
+        assert_eq!(restored.steps[1].status.as_deref(), Some("failed"));
+        assert_eq!(restored.steps_executed, 2);
+        let no_run: crate::FailedStep = roundtrip(
+            json!({"node":"p.py:a", "message":"SystemExit: 1", "artifact_dir":null, "run":null}),
+        );
+        assert!(no_run.run.is_none());
+    }
+
+    #[test]
+    fn explanations_roundtrip_whole_file_single_target_and_ordered_multiple_targets() {
+        for target in [None, Some("p.py:z")] {
+            let result: ExplainResult = roundtrip(json!({
+                "dry_run": true, "command": "get", "target": target,
+                "steps": [{"id":"p.py:z", "kind":"asset", "action":"run", "reason":"not_materialized"}],
+                "summary": {"will_run":1,"cached":0,"unknown":0}, "warnings":[]
+            }));
+            assert_eq!(result.target.as_deref(), target);
+            assert!(result.targets.is_empty());
+        }
+        let wire = r#"{"dry_run":true,"command":"get","targets":{"z":{"summary":{"will_run":1,"cached":0,"unknown":0}},"a":{"summary":{"will_run":0,"cached":2,"unknown":1}}},"steps":[],"summary":{"will_run":1,"cached":2,"unknown":1},"warnings":[]}"#;
+        let result: ExplainResult = serde_json::from_str(wire).unwrap();
+        assert_eq!(result.target_names(), ["z", "a"]);
+        let encoded = serde_json::to_string(&result).unwrap();
+        assert!(encoded.find("\"z\":").unwrap() < encoded.find("\"a\":").unwrap());
+        assert!(!encoded.contains("\"target\":"));
+        let restored: ExplainResult = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(restored.targets[1].1.summary.unknown, 1);
+        assert_eq!(serde_json::to_string(&restored).unwrap(), encoded);
+    }
+
+    #[test]
+    fn target_map_rejects_duplicate_names_instead_of_losing_an_outcome() {
+        let wire = r#"{"run_id":"multi","elapsed_seconds":0.0,"steps_executed":0,"phases":0,"steps":[],"warnings":[],"targets":{"z":{"status":"success"},"z":{"status":"failed"}}}"#;
+        assert!(
+            serde_json::from_str::<MultiResult>(wire)
+                .unwrap_err()
+                .to_string()
+                .contains("duplicate target 'z'")
+        );
+    }
 }

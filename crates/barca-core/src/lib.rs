@@ -9,7 +9,9 @@ pub mod db;
 pub mod discover;
 pub mod dispatch;
 pub mod envdeps;
+pub mod envelope;
 pub mod events;
+pub(crate) mod execution;
 pub mod hash;
 mod helper_proc;
 pub mod interrupt;
@@ -24,7 +26,9 @@ pub mod project_modules;
 pub mod protocol;
 pub mod queries;
 mod recover;
+pub mod report;
 pub mod results;
+pub mod schedule;
 pub mod sql;
 pub(crate) mod state_base;
 pub mod state_carry;
@@ -33,6 +37,7 @@ pub mod state_sync;
 pub(crate) mod state_validate;
 pub mod status;
 mod store_sync;
+pub(crate) mod targets;
 pub mod telemetry;
 pub mod transfer;
 pub mod unrelated_modules;
@@ -84,7 +89,7 @@ pub enum BarcaError {
 }
 
 /// A step that failed permanently, as reported by its worker.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FailedStep {
     /// Node id of the failing step (`file.py:name`, with a partition suffix when partitioned).
     pub node: String,
@@ -99,14 +104,14 @@ pub struct FailedStep {
 }
 
 /// A run that stopped because a user step failed: what was reached before it stopped.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PartialRun {
     pub run_id: String,
     pub elapsed_seconds: f64,
     pub steps_executed: usize,
     pub phases: usize,
     /// What happened to each step that was reached; the failed step has status `failed`.
-    pub steps: Vec<commands::StepReport>,
+    pub steps: Vec<results::StepReport>,
     /// Plan-time warnings for the steps this run planned (the same list a successful run has).
     pub warnings: Vec<warnings::PlanWarning>,
 }

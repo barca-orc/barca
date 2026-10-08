@@ -3,12 +3,12 @@
 //! None of these run a step. They read the project's source (statically) or the metadata DB.
 
 use crate::BarcaError;
-use crate::commands::find_target_id;
 use crate::db;
 use crate::load::build_dag;
 use crate::planner::Phase;
 use crate::planner::{self, ExecutionPlan, ResourceConfig};
 use crate::results::{AssetSummary, PlanPhase, PlanPhaseReason, PlanResult, PlanStream};
+use crate::targets::find_target_id;
 use std::collections::HashMap;
 
 // ─── plan ────────────────────────────────────────────────────────────────────
@@ -163,4 +163,46 @@ pub(crate) fn filter_plan_to_subgraph(plan: ExecutionPlan, subgraph_ids: &[&str]
             .sum(),
         ..exec_plan
     }
+}
+
+use crate::targets::skipped_tasks_note;
+use crate::{cache::CachePolicy, results::ExplainResult};
+
+/// `barca get|run --dry-run` — report what the command would do, without doing it.
+///
+/// Plans exactly as a real run does and sends every step through [`crate::cache::decide_step`], so the
+/// prediction is the real run's decision. Nothing executes, no worker starts, and nothing is
+/// written: no `.barca` directory is created and no run is recorded. A dry run cannot know
+/// the key set of a dynamic partition (`partitions_from`) whose source has to run first, nor
+/// what a sensor will return: a step reading a sensor is predicted from the sensor's last
+/// recorded output, and is `unknown` when there is none. Those steps (and anything depending on
+/// them) are reported as `unknown`.
+pub async fn explain(
+    cfg: &crate::config::ResolvedConfig,
+    target_names: &[String],
+    file_args: &[String],
+    python: &std::path::Path,
+    policy: CachePolicy,
+    no_cache: bool,
+    command_label: &str,
+) -> Result<ExplainResult, BarcaError> {
+    let dag = build_dag(file_args, python).await?;
+    if command_label == "get"
+        && target_names.is_empty()
+        && let Some(note) = skipped_tasks_note(&dag, file_args)
+    {
+        eprintln!("{note}");
+    }
+    let result = crate::execution::explain_dag(
+        &dag,
+        cfg,
+        target_names,
+        python,
+        policy,
+        no_cache,
+        command_label,
+    )
+    .await?;
+    crate::warnings::print(&result.warnings);
+    Ok(result)
 }

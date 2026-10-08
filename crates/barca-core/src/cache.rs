@@ -54,6 +54,423 @@ pub fn compute_run_hash(
     crate::hash::run_hash(def_hash, partition_key, &hash_refs, None, env)
 }
 
+use crate::store_sync::StoreSync;
+use crate::targets::{refresh_name_matches, short_name};
+use crate::transfer::ArtifactLayout;
+use crate::{dag::Dag, db, dispatch, dispatch::OutputRef};
+
+// ─── Cache decisions ─────────────────────────────────────────────────────────
+//
+// One function decides what happens to a step; a real run and `--dry-run` both call it, so the
+// dry run cannot drift from what a run would do.
+
+/// Why a step runs instead of being served from cache.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RunReason {
+    Task,
+    Sensor,
+    NoCache,
+    Refresh,
+    /// Downstream of an asset named in `--refresh` (the cascade); `root` is that asset.
+    RefreshCascade {
+        root: String,
+    },
+    RefreshAll,
+    NotMaterialized,
+    /// It has a cached result, but the artifact is gone and something needs to read it
+    /// (see [`crate::recover`]).
+    ArtifactMissing,
+}
+
+impl RunReason {
+    pub(crate) fn code(&self) -> &'static str {
+        match self {
+            RunReason::Task => "task",
+            RunReason::Sensor => "sensor",
+            RunReason::NoCache => "no_cache",
+            RunReason::Refresh => "refresh",
+            RunReason::RefreshCascade { .. } => "refresh_cascade",
+            RunReason::RefreshAll => "refresh_all",
+            RunReason::NotMaterialized => "not_materialized",
+            RunReason::ArtifactMissing => "artifact_missing",
+        }
+    }
+
+    pub(crate) fn detail(&self) -> String {
+        match self {
+            RunReason::Task => "tasks always re-run".to_string(),
+            RunReason::Sensor => "sensors always re-run".to_string(),
+            RunReason::NoCache => "--no-cache".to_string(),
+            RunReason::Refresh => "named in --refresh".to_string(),
+            RunReason::RefreshCascade { root } => {
+                format!("downstream of refreshed '{root}'")
+            }
+            RunReason::RefreshAll => "--refresh-all".to_string(),
+            RunReason::NotMaterialized => {
+                "no cached result for this code and these inputs".to_string()
+            }
+            RunReason::ArtifactMissing => {
+                "its cached result is still valid, but the artifact file is missing and \
+                 something needs to read it"
+                    .to_string()
+            }
+        }
+    }
+}
+
+pub(crate) enum Decision {
+    Run(RunReason),
+    Cached {
+        oref: OutputRef,
+        /// The refreshed asset this cached step depends on, if any.
+        stale_root: Option<String>,
+    },
+    Partitioned {
+        cached: Vec<(String, OutputRef)>,
+        missing: Vec<crate::model::PartitionKey>,
+    },
+}
+
+/// Per-run state the decisions accumulate: run hashes (also used to persist results), assets
+/// refreshed in this run, and cached assets downstream of a refreshed one.
+#[derive(Default)]
+pub(crate) struct DecideState {
+    pub(crate) run_hashes: HashMap<String, String>,
+    pub(crate) refreshed_ids: std::collections::HashSet<String>,
+    /// Refreshed asset -> the `--refresh` name it was refreshed for (itself, or the named
+    /// upstream it cascaded from).
+    pub(crate) cascade_roots: HashMap<String, String>,
+    pub(crate) stale_cached: HashMap<String, String>,
+    /// Sensor step (display id) -> content hash of its output, folded into each consumer's run
+    /// hash (#183). A real run fills it as sensors finish (they run in an earlier phase than
+    /// their consumers); a dry run seeds it from each sensor's last recorded output.
+    pub(crate) sensor_outputs: HashMap<String, String>,
+}
+
+/// The sensors `step` reads directly (base ids).
+pub(crate) fn sensor_inputs<'a>(dag: &Dag, step: &'a crate::planner::StreamStep) -> Vec<&'a str> {
+    let mut out: Vec<&str> = step
+        .inputs
+        .values()
+        .map(|up| up.split('[').next().unwrap_or(up))
+        .filter(|up| {
+            dag.get_node(up)
+                .is_some_and(|n| n.kind() == crate::NodeKind::Sensor)
+        })
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// True when `sensor` (a base id) has an output hash for this run (any partition of it).
+pub(crate) fn has_sensor_output(state: &DecideState, sensor: &str) -> bool {
+    let prefix = format!("{sensor}[");
+    state
+        .sensor_outputs
+        .keys()
+        .any(|k| k == sensor || k.starts_with(&prefix))
+}
+
+pub(crate) async fn lookup_in(
+    cache: Option<&db::CacheReader>,
+    node_id: &str,
+    run_hash: &str,
+) -> Option<OutputRef> {
+    lookup_cached(cache?, node_id, run_hash).await
+}
+
+/// Decide what happens to `step`. Steps must be visited in plan order: in-phase upstream run
+/// hashes are already in `state` when a consumer is hashed, so check-time and persist-time hashes
+/// are identical. `cache` is `None` when there is no metadata DB yet (nothing is cached).
+pub(crate) async fn decide_step(
+    dag: &Dag,
+    policy: &CachePolicy,
+    no_cache: bool,
+    cache: Option<&db::CacheReader>,
+    state: &mut DecideState,
+    step: &crate::planner::StreamStep,
+) -> (crate::planner::StreamStep, Decision) {
+    let base_id = step.step_id.base_id();
+    let display_id = step.step_id.display();
+    let base_node = dag.get_node(base_id);
+    let def_hash = base_node.map(|n| n.definition_hash.as_str()).unwrap_or("");
+    // Declared env (`@asset(env=[...])`) is read now, at plan time, and folded into the run hash.
+    let env_input = base_node
+        .map(|n| crate::envdeps::hash_input(&crate::envdeps::resolve(&n.extracted.env)))
+        .unwrap_or(None);
+
+    // Run hashes for EVERY step (sensors, tasks, refreshed and partitioned steps too): they
+    // content-address artifacts and key persistence.
+    let mut step = step.clone();
+    if step.partition_keys.is_empty() {
+        let partition_key = if step.step_id.partition.is_empty() {
+            None
+        } else {
+            Some(step.step_id.partition.suffix())
+        };
+        let run_h = compute_run_hash(
+            def_hash,
+            partition_key.as_deref(),
+            step.inputs.values(),
+            &state.run_hashes,
+            &state.sensor_outputs,
+            env_input.as_deref(),
+        );
+        state.run_hashes.insert(display_id.clone(), run_h.clone());
+        step.run_hashes.insert(display_id.clone(), run_h);
+    } else {
+        for pk in &step.partition_keys {
+            let pdisplay = pk.display_id(&step.step_id.base);
+            let run_h = compute_run_hash(
+                def_hash,
+                Some(&pk.suffix()),
+                step.inputs.values(),
+                &state.run_hashes,
+                &state.sensor_outputs,
+                env_input.as_deref(),
+            );
+            state.run_hashes.insert(pdisplay.clone(), run_h.clone());
+            step.run_hashes.insert(pdisplay, run_h);
+        }
+    }
+
+    let kind = base_node.map(|n| n.kind());
+    // Sensors and tasks always re-run — never cached.
+    match kind {
+        Some(crate::NodeKind::Task) => return (step, Decision::Run(RunReason::Task)),
+        Some(crate::NodeKind::Sensor) => return (step, Decision::Run(RunReason::Sensor)),
+        _ => {}
+    }
+    if no_cache {
+        return (step, Decision::Run(RunReason::NoCache));
+    }
+
+    // Refresh policy (`barca run`): force-rerun assets named in the refresh set and, when
+    // cascading, every asset downstream of one (plan order puts upstream steps first, so a
+    // refreshed upstream is already in `cascade_roots` when its consumers are decided).
+    let is_asset = kind == Some(crate::NodeKind::Asset);
+    let refresh = match policy {
+        CachePolicy::CacheAware => None,
+        CachePolicy::RefreshAll => is_asset.then_some(RunReason::RefreshAll),
+        CachePolicy::RefreshSelective { names, cascade } => {
+            if !is_asset {
+                None
+            } else if names.iter().any(|name| refresh_name_matches(base_id, name)) {
+                Some(RunReason::Refresh)
+            } else if *cascade {
+                step.inputs.values().find_map(|up| {
+                    let up_base = up.split('[').next().unwrap_or(up);
+                    state
+                        .cascade_roots
+                        .get(up_base)
+                        .map(|root| RunReason::RefreshCascade { root: root.clone() })
+                })
+            } else {
+                None
+            }
+        }
+    };
+    if let Some(reason) = refresh {
+        let root = match &reason {
+            RunReason::RefreshCascade { root } => root.clone(),
+            _ => short_name(base_id).to_string(),
+        };
+        state.refreshed_ids.insert(base_id.to_string());
+        state.cascade_roots.insert(base_id.to_string(), root);
+        return (step, Decision::Run(reason));
+    }
+
+    // A consumer of a sensor is only cache-checked against that sensor's output. The planner
+    // runs sensors in an earlier phase, and a dry run reports such a step as unknown before it
+    // gets here, so this is a safety net: without the output, never serve from cache.
+    if sensor_inputs(dag, &step)
+        .iter()
+        .any(|s| !has_sensor_output(state, s))
+    {
+        return (step, Decision::Run(RunReason::NotMaterialized));
+    }
+
+    // Partitioned steps are checked per key: each partition has its own run hash, so keys
+    // with a successful materialization are served from cache and only the rest execute.
+    if !step.partition_keys.is_empty() {
+        let mut cached = Vec::new();
+        let mut missing = Vec::new();
+        for pk in &step.partition_keys {
+            let pdisplay = pk.display_id(&step.step_id.base);
+            let run_h = step
+                .run_hashes
+                .get(&pdisplay)
+                .cloned()
+                .expect("partitioned step has a precomputed run hash per key");
+            match lookup_in(cache, &pdisplay, &run_h).await {
+                Some(oref) => cached.push((pdisplay, oref)),
+                None => missing.push(pk.clone()),
+            }
+        }
+        return (step, Decision::Partitioned { cached, missing });
+    }
+
+    let run_h = step
+        .run_hashes
+        .get(&display_id)
+        .cloned()
+        .expect("unpartitioned step has a precomputed run hash");
+    match lookup_in(cache, &display_id, &run_h).await {
+        None => (step, Decision::Run(RunReason::NotMaterialized)),
+        Some(oref) => {
+            // Cached, but does it depend on something refreshed in this run?
+            let stale_root = step.inputs.values().find_map(|up| {
+                let up_base = up.split('[').next().unwrap_or(up);
+                if state.refreshed_ids.contains(up_base) {
+                    Some(short_name(up_base).to_string())
+                } else {
+                    state.stale_cached.get(up_base).cloned()
+                }
+            });
+            if let Some(root) = &stale_root {
+                state.stale_cached.insert(base_id.to_string(), root.clone());
+            }
+            (step, Decision::Cached { oref, stale_root })
+        }
+    }
+}
+
+/// The most recent successful materialization of `node_id` with this run hash, if any. The row
+/// is the cache hit; whether its artifact can still be read is settled only when something
+/// needs to read it (see [`crate::recover`]).
+pub(crate) async fn lookup_cached(
+    cache: &db::CacheReader,
+    node_id: &str,
+    run_hash: &str,
+) -> Option<dispatch::OutputRef> {
+    const COLUMNS: &str = "artifact_path, artifact_format, artifact_size_bytes";
+    let query = |columns: String| {
+        cache.conn().query(
+            format!(
+                "SELECT {columns} FROM materializations WHERE node_id = ?1 AND run_hash = ?2 \
+                 AND status = 'success' ORDER BY id DESC LIMIT 1"
+            ),
+            [node_id.to_string(), run_hash.to_string()],
+        )
+    };
+    // A database from before barca recorded output hashes has no such column.
+    let mut rows = match query(format!("{COLUMNS}, output_hash")).await {
+        Ok(rows) => rows,
+        Err(_) => query(COLUMNS.to_string()).await.unwrap(),
+    };
+    rows.next().await.unwrap().and_then(|row| {
+        Some(dispatch::OutputRef {
+            path: row.get::<String>(0).ok()?,
+            format: row.get::<String>(1).ok()?,
+            size_bytes: row.get::<i64>(2).ok()? as u64,
+            elapsed_seconds: None,
+            content_hash: row.get::<String>(3).ok().filter(|h| !h.is_empty()),
+        })
+    })
+}
+
+/// How a cache row's artifact is reached on this machine.
+pub(crate) enum CacheHit {
+    /// Use the output as recorded.
+    Local(dispatch::OutputRef),
+    /// The row records a location in the artifact store; `local` points at
+    /// its local mirror, which is fetched before anything reads it.
+    Store {
+        local: dispatch::OutputRef,
+        store: String,
+    },
+}
+
+/// Resolve a cache row against this run's artifact store (`layout` is Some
+/// when the store is separate from the local artifact dir). This only says
+/// where the artifact is read from; whether it is there is checked when
+/// something needs to read it (see [`crate::recover`]).
+pub(crate) fn resolve_cache_hit(
+    oref: dispatch::OutputRef,
+    layout: Option<&ArtifactLayout>,
+) -> CacheHit {
+    match layout.and_then(|l| l.local_for(&oref.path)) {
+        Some(local) => {
+            let store = oref.path.clone();
+            CacheHit::Store {
+                local: dispatch::OutputRef {
+                    path: local.to_string_lossy().into_owned(),
+                    ..oref
+                },
+                store,
+            }
+        }
+        None => CacheHit::Local(oref),
+    }
+}
+
+/// Apply this run's artifact store to a cache row: the output to read, with
+/// a store-backed row registered for fetching.
+pub(crate) fn accept_cache_hit(
+    store: &mut Option<StoreSync>,
+    node_id: &str,
+    oref: dispatch::OutputRef,
+) -> dispatch::OutputRef {
+    match resolve_cache_hit(oref, store.as_ref().map(|s| &s.layout)) {
+        CacheHit::Local(o) => o,
+        CacheHit::Store { local, store: at } => {
+            if let Some(s) = store.as_mut() {
+                s.fetchable.insert(
+                    local.path.clone(),
+                    (node_id.to_string(), at, local.content_hash.clone()),
+                );
+            }
+            local
+        }
+    }
+}
+
+/// Apply this run's artifact store to a cache decision: cached outputs point
+/// at their local mirror.
+pub(crate) fn localize_decision(
+    decision: Decision,
+    step: &crate::planner::StreamStep,
+    store: &mut Option<StoreSync>,
+) -> Decision {
+    match decision {
+        Decision::Cached { oref, stale_root } => Decision::Cached {
+            oref: accept_cache_hit(store, &step.step_id.display(), oref),
+            stale_root,
+        },
+        Decision::Partitioned { cached, missing } => Decision::Partitioned {
+            cached: cached
+                .into_iter()
+                .map(|(pdisplay, oref)| {
+                    let oref = accept_cache_hit(store, &pdisplay, oref);
+                    (pdisplay, oref)
+                })
+                .collect(),
+            missing,
+        },
+        run => run,
+    }
+}
+
+/// How the engine treats cached asset materializations for this invocation.
+#[derive(Debug, Clone)]
+pub enum CachePolicy {
+    /// Normal cache-aware behavior — reuse fresh asset artifacts.
+    CacheAware,
+    /// Force-rerun every asset in the target's cone (`barca get|run ... --refresh-all`).
+    RefreshAll,
+    /// Force-rerun the named assets (`barca get|run ... --refresh a,b`). A name matches when it
+    /// equals the node's base id exactly, or matches the trailing `:name` segment. With
+    /// `cascade` (the default) every asset downstream of a named one in the target's cone
+    /// re-runs too; without it (`--no-cascade`) all other assets stay cache-aware.
+    RefreshSelective { names: Vec<String>, cascade: bool },
+}
+
+/// How an error starts when a directory at an artifact path could not be moved aside
+/// (`barca._storage.ArtifactPathError`): the state of barca's own artifact directory, not a
+/// fault of the step that was writing there.
+pub(crate) const BLOCKED_ARTIFACT_PATH: &str = "ArtifactPathError";
+
 #[cfg(test)]
 mod tests {
     use super::*;

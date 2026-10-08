@@ -71,12 +71,7 @@ impl<'a> Until<'a> {
 }
 
 fn state_cmd(python: &Path, cfg: &ResolvedConfig) -> Command {
-    let mut cmd = Command::new(python);
-    cmd.arg("-m").arg("barca._state");
-    if let Some(ref opts) = cfg.storage_options_json {
-        cmd.env("BARCA_STORAGE_OPTIONS", opts);
-    }
-    cmd
+    crate::helper_proc::python_module(python, "barca._state", cfg.storage_options_json.as_deref())
 }
 
 /// What a pull did: the token of the shared state blob it downloaded, and what it kept of

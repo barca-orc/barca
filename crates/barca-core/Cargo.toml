@@ -14,6 +14,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 sha2 = "0.10"
 croner = "3.0.1"
+chrono = "0.4.45"
 smallvec = { version = "1.13", features = ["serde"] }
 tempfile = "3"
 turso = { version = "0.7.0-pre.5", default-features = false }
