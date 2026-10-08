@@ -110,6 +110,15 @@ def write(project: Path, source: str) -> None:
     (project / "pipeline.py").write_text(source)
 
 
+@pytest.fixture(params=[1, 2, 16], ids=lambda n: f"pool{n}", autouse=True)
+def pool_size(request, monkeypatch) -> int:
+    """Every test here runs with 1, 2 and 16 workers. What runs after an edit must not depend
+    on the pool size, which defaults to the machine's core count: these tests passed on a
+    16-core machine and failed on a small CI runner until #330 and #331 were fixed."""
+    monkeypatch.setenv("BARCA_POOL_SIZE", str(request.param))
+    return request.param
+
+
 @pytest.fixture()
 def project(tmp_path) -> Path:
     (tmp_path / "barca.toml").write_text("")
@@ -238,6 +247,25 @@ def test_a_sensor_s_schedule_and_description_do_not_rerun_its_consumers(project)
         write(project, source(arguments))
         # The sensor always runs. It returns the same value, and its own code has not changed.
         assert ran(get(project, "data")) == {"version": True}, arguments
+
+
+def test_editing_a_sensor_s_code_reruns_its_consumers_even_with_the_same_value(project):
+    """The sensor's run hash covers its code and is part of its consumers' run hashes, next to
+    the hash of its output (`barca docs cache`, "External data that changes in place")."""
+
+    def source(body: str) -> str:
+        return (
+            "from barca import asset, sensor\n\n\n"
+            f"@sensor()\ndef version() -> tuple[bool, str]:\n    {body}\n\n\n"
+            '@asset(inputs={"v": version})\n'
+            "def data(v: str) -> dict:\n    return {'v': v}\n"
+        )
+
+    write(project, source("return True, 'v1'"))
+    get(project, "data")
+    assert ran(get(project, "data")) == {"version": True}
+    write(project, source("value = 'v1'\n    return True, value"))
+    assert ran(get(project, "data")) == {"version": True, "data": True}
 
 
 # ─── Arguments that count ─────────────────────────────────────────────────────
