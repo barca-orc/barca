@@ -59,7 +59,7 @@ pub async fn collect_jobs(files: &[String], python: &std::path::Path) -> Vec<Sch
     match queries::list_assets(files, python).await {
         Ok(summaries) => jobs_from_summaries(summaries),
         Err(e) => {
-            eprintln!("[barca] scheduler disabled: failed to analyze DAG: {e}");
+            crate::errln!("[barca] scheduler disabled: failed to analyze DAG: {e}");
             Vec::new()
         }
     }
@@ -80,9 +80,10 @@ pub fn jobs_from_summaries(summaries: Vec<AssetSummary>) -> Vec<ScheduledJob> {
                 cron_str: expr.0.clone(),
                 cron,
             }),
-            Err(e) => eprintln!(
+            Err(e) => crate::errln!(
                 "[barca] skipping '{}': invalid cron {:?}: {e}",
-                s.id, expr.0
+                s.id,
+                expr.0
             ),
         }
     }

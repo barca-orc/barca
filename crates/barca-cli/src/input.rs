@@ -39,7 +39,7 @@ pub(crate) fn cache_policy(
 ) -> barca_core::cache::CachePolicy {
     use barca_core::cache::CachePolicy;
     if no_cache {
-        eprintln!(
+        barca_core::errln!(
             "[barca] warning: --no-cache is deprecated and will be removed in a future minor \
              release; use --refresh-all"
         );
@@ -293,7 +293,7 @@ pub(crate) fn enter_project_root(cli: &mut Cli) -> Result<(), barca_core::BarcaE
                 root.display()
             ))
         })?;
-        eprintln!(
+        barca_core::errln!(
             "barca: project root: {} ({} found above the cwd)",
             root.display(),
             barca_core::config::CONFIG_FILE
