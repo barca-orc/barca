@@ -14,9 +14,10 @@
 //! worker dies mid-batch only its in-flight task consumes retry budget — the
 //! unstarted remainder returns to the queue front untouched.
 //!
-//! On parallel(), the requesting worker is SIGSTOP'd, a temp replacement is
+//! On parallel(), the requesting worker is SIGSTOP'd, a replacement is
 //! spawned, and children enter the ready queue. When all children complete,
-//! the temp is killed and the original is SIGCONT'd.
+//! the original is SIGCONT'd; the pool is then one worker over strength, and
+//! the next worker that has nothing leased is stopped.
 //!
 //! Everything runs on the caller's runtime — no runtime is constructed here.
 //! Cancellation is cooperative: `run_phase` returns early when the token
@@ -88,8 +89,10 @@ struct FrozenWorker {
     /// The worker_id used when this worker was originally spawned (matches
     /// the worker_io_task's worker_id, so events arrive with this key).
     original_worker_id: usize,
-    /// The active worker ID that replaced this frozen one.
-    replacement_id: usize,
+    /// What the worker had leased behind the step that called `parallel()`. It has those
+    /// steps in hand (a batch is sent whole) and runs them when it is resumed, so they stay
+    /// leased to it: returned to the queue they would run a second time on another worker.
+    rest: VecDeque<ItemId>,
 }
 
 // ─── Events ──────────────────────────────────────────────────────────────────
@@ -494,14 +497,14 @@ impl WorkerPool {
 
                         let (group_id, _child_ids) = coord.on_parallel_requested(item_id, specs);
 
-                        // The parent blocks frozen on its group; anything else
-                        // this worker had leased goes back to the queue.
+                        // The parent blocks frozen on its group. Whatever else this
+                        // worker had leased stays leased to it (see `FrozenWorker::rest`).
                         let mut handle = self
                             .workers
                             .remove(&worker_id)
                             .expect("worker existence checked above");
                         handle.leases.pop_front();
-                        Self::return_leases(&mut handle, coord);
+                        let rest = std::mem::take(&mut handle.leases);
 
                         // SIGSTOP the requesting worker, move it to frozen list
                         #[cfg(unix)]
@@ -538,7 +541,7 @@ impl WorkerPool {
                             parent_item: item_id,
                             group_id,
                             original_worker_id: worker_id,
-                            replacement_id,
+                            rest,
                         });
 
                         // Assign ready items (children are now in the ready queue)
@@ -704,6 +707,7 @@ impl WorkerPool {
         cost: &CostModel,
         cancel: &CancellationToken,
     ) {
+        self.retire_surplus();
         loop {
             // A cancelled run starts nothing more: no worker, no step.
             if coord.ready_count() == 0 || cancel.is_cancelled() {
@@ -826,6 +830,31 @@ impl WorkerPool {
         }
     }
 
+    /// Stop workers that have nothing leased while the pool is over strength.
+    ///
+    /// A worker that calls `parallel()` is frozen and another is started in its place. When
+    /// it is resumed there is one worker more than `pool_size`. The one that goes is whichever
+    /// has no step leased, now or when it next finishes its batch: never one in the middle of
+    /// a step.
+    fn retire_surplus(&mut self) {
+        while self.workers.len() > self.config.pool_size.max(1) {
+            let Some(idle) = self
+                .workers
+                .iter()
+                .find(|(_, w)| w.leases.is_empty())
+                .map(|(&id, _)| id)
+            else {
+                return;
+            };
+            if let Some(mut handle) = self.workers.remove(&idle) {
+                tokio::task::spawn_blocking(move || {
+                    let _ = handle.child.kill();
+                    let _ = handle.child.wait();
+                });
+            }
+        }
+    }
+
     /// Resume frozen workers whose parallel groups completed.
     async fn resume_frozen(&mut self, coord: &mut Coordinator) {
         // Partition: completed groups get drained out
@@ -834,19 +863,11 @@ impl WorkerPool {
             if coord.is_group_complete(self.frozen[i].group_id) {
                 let fw = self.frozen.swap_remove(i);
 
-                // Kill the replacement worker. Its in-flight item (if any) is
-                // deliberately returned rather than failed: the kill is ours,
-                // not the task's — re-running is safe under the pure-asset
-                // contract (at-least-once), and no retry budget is charged
-                // for an interruption the task didn't cause.
-                if let Some(mut replacement) = self.workers.remove(&fw.replacement_id) {
-                    if let Some(in_flight) = replacement.leases.pop_front() {
-                        coord.return_leased(in_flight);
-                    }
-                    Self::return_leases(&mut replacement, coord);
-                    let _ = replacement.child.kill();
-                    let _ = replacement.child.wait();
-                }
+                // The worker started in this one's place is not stopped here. It may be in
+                // the middle of a step, and it may itself be the parent of a group by now:
+                // killing it lost that step for good (nothing ran it again, and the run never
+                // ended). The pool is over strength by one until a worker has nothing leased
+                // (`retire_surplus`).
 
                 // SIGCONT the original worker
                 #[cfg(unix)]
@@ -909,8 +930,9 @@ impl WorkerPool {
                         child: fw.child,
                         cmd_tx: fw.cmd_tx,
                         _task: fw._task,
-                        // Still executing the parent task.
-                        leases: VecDeque::from([fw.parent_item]),
+                        // Still executing the parent task, with the rest of its batch
+                        // behind it.
+                        leases: std::iter::once(fw.parent_item).chain(fw.rest).collect(),
                         front_since: std::time::Instant::now(),
                     },
                 );
