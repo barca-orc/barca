@@ -536,7 +536,7 @@ describes the output contract for scripts and AI agents.
 | 1    | `step_failed` | a step of yours raised; the traceback is included and the run is recorded as failed |
 | 2    | `usage`       | bad flags or arguments, unknown target, `get` on a task or `run` on an asset, unreadable or invalid `.py` file, invalid `--env` or barca.toml |
 | 3    | `infra`       | barca or its environment failed: metadata DB, worker pool, remote state, I/O |
-| 130  | `cancelled`   | interrupted (Ctrl-C)                                                       |
+| 130  | `cancelled`   | stopped by Ctrl-C (SIGINT) or SIGTERM                                      |
 
 In JSON output mode (whenever results are JSON: piped or captured stdout, `--json`, `-o json` or
 `BARCA_OUTPUT=json`; `plan` always; `docs` with `--json`), an error is a single JSON line, the

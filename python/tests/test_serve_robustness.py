@@ -2,6 +2,7 @@
 
 import json
 import os
+import signal
 import socket
 import subprocess
 import time
@@ -229,3 +230,40 @@ def test_a_trigger_for_a_target_that_cannot_run_is_an_error_response(project):
         assert [r["status"] for r in history(project)] == ["success"]
     finally:
         server.stop()
+
+
+# ─── stopping the server ─────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("sig", [signal.SIGTERM, signal.SIGINT])
+def test_a_stop_signal_cancels_the_runs_and_exits_0(project, serve, sig):
+    """SIGTERM used to keep its default action (and was discarded when barca was process 1 of
+    a container); and an open /events stream kept a server stopped with SIGINT alive for ever."""
+    server = serve("--no-schedule")
+    base = f"http://127.0.0.1:{server.port}"
+
+    # A run that has finished and one that is in the middle of a step, each with a client
+    # that keeps its event stream open the way a browser tab on a run page does.
+    done = server.request("POST", "/get/quick")[1]["run_id"]
+    wait_for(
+        lambda: server.request("GET", f"/status/{done}")[1]["status"] == "complete",
+        "the quick run to complete",
+    )
+    going = server.request("POST", "/get/slow")[1]["run_id"]
+    wait_for(lambda: (project / "slow.started").exists(), "the slow step to start")
+    streams = [
+        urllib.request.urlopen(f"{base}/events/{run}", timeout=WAIT) for run in (done, going)
+    ]
+    for stream in streams:
+        assert stream.readline().startswith(b"data:"), "the stream has started"
+
+    server.proc.send_signal(sig)
+    assert server.proc.wait(timeout=WAIT) == 0, server.log.read_text()
+    assert f"[barca] {sig.name} received: stopping runs and shutting down" in server.log.read_text()
+
+    # Both streams ended, and the one of the cancelled run delivered its last event first.
+    tails = [stream.read().decode() for stream in streams]
+    assert f'{{"type":"run_finished","run_id":"{going}","ok":false}}' in tails[1]
+
+    # The run in flight recorded itself as cancelled; it was not left `running`.
+    assert [r["status"] for r in history(project)] == ["cancelled", "success"]

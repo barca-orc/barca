@@ -489,6 +489,10 @@ traceback. One exception, with or without a store: a Ctrl-C that reaches a worke
 still starting up (the first moments of a run) can print that worker's `KeyboardInterrupt`
 traceback, and the command then takes about 10 seconds to exit, still with 130.
 
+SIGTERM, which a supervisor, a CI timeout or `docker stop` sends, does what Ctrl-C does:
+everything below holds for it, a second SIGTERM counts as a second Ctrl-C (the line it prints
+says `stopped by a second Ctrl-C` for either), and the exit code is 130, not 143.
+
 1. **The first Ctrl-C cancels the run.** Steps and transfers in flight are stopped, what
    finished is recorded in this machine's history, the run as `cancelled`, and the run wraps
    up: it pushes that record to the shared history, so that other machines do not compute the

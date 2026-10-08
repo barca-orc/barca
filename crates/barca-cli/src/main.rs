@@ -1084,23 +1084,32 @@ fn print_failed_run(err: &barca_core::BarcaError, mode: OutputMode) {
     );
 }
 
-/// The run's stop signals, driven by Ctrl-C. The first one cancels the run: its workers and
-/// transfers are stopped and it is recorded as `cancelled` instead of lingering as `running`,
-/// then it wraps up (it shares its record, for a bounded time). A second one abandons the
-/// wrap-up. Every Ctrl-C counts, whether the terminal sent it to the whole job or something
-/// sent SIGINT to barca alone.
+/// The run's stop signals, driven by Ctrl-C (SIGINT) and by SIGTERM, which is what a
+/// supervisor, a CI runner's timeout or `docker stop` sends. Both mean the same. The first
+/// one cancels the run: its workers and transfers are stopped and it is recorded as
+/// `cancelled` instead of lingering as `running`, then it wraps up (it shares its record, for
+/// a bounded time). A second one, of either kind, abandons the wrap-up. Every signal counts,
+/// whether the terminal sent it to the whole job or something sent it to barca alone.
+///
+/// The handlers are installed here, before the run starts. SIGTERM used to keep its default
+/// action: the process died at once, its workers were left to notice, and the run stayed
+/// `running` until a later command reported it `interrupted`. As process 1 of a container
+/// (`docker run image barca get`) the kernel discarded the signal instead, because process 1
+/// only receives signals it has a handler for (#289).
 fn cancel_on_ctrl_c() -> barca_core::interrupt::Interrupt {
+    use tokio::signal::unix::{SignalKind, signal};
     let interrupt = barca_core::interrupt::Interrupt::new();
-    let seen = interrupt.clone();
-    tokio::spawn(async move {
-        use tokio::signal::unix::{SignalKind, signal};
-        let Ok(mut sigint) = signal(SignalKind::interrupt()) else {
-            return;
+    for kind in [SignalKind::interrupt(), SignalKind::terminate()] {
+        let Ok(mut stream) = signal(kind) else {
+            continue;
         };
-        while sigint.recv().await.is_some() {
-            seen.interrupt();
-        }
-    });
+        let seen = interrupt.clone();
+        tokio::spawn(async move {
+            while stream.recv().await.is_some() {
+                seen.interrupt();
+            }
+        });
+    }
     interrupt
 }
 

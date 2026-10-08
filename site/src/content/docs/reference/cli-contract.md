@@ -301,11 +301,21 @@ task/asset misuse, a `.py` file that does not parse, a DAG that cannot be built 
 names no definition, a cycle, a partitioned asset in an unpartitioned asset's `inputs=` without
 `collect()`, a `partitions_from()` the asset cannot mirror), invalid `--env` or `barca.toml`. `infra`:
 barca or its environment failed (metadata DB, workers, remote state, I/O); retrying may help.
-`cancelled`: interrupted with Ctrl-C, at any point of a `get` or `run`: while steps run, and
+`cancelled`: stopped by Ctrl-C (SIGINT) or by SIGTERM (what a supervisor, a CI timeout or
+`docker stop` sends), at any point of a `get` or `run`: while steps run, and
 with an artifact store also while artifacts upload or download or the shared history is pulled
 or pushed. The exit code is 130 whatever the store does: a cancelled run spends at most 10
-seconds sharing its record, a second Ctrl-C ends that at once, and a push that fails then is a
-line on stderr, not exit 3 (`barca docs remote`, "Ctrl-C").
+seconds sharing its record, a second Ctrl-C or SIGTERM ends that at once, and a push that fails
+then is a line on stderr, not exit 3 (`barca docs remote`, "Ctrl-C").
+
+The exit code is 130 for SIGTERM as well as for SIGINT. Barca handles both signals the same way
+(it stops the workers, records the run as `cancelled` and exits), and the exit code follows the
+error `kind`, which has one code. 143, which a shell reports for a process that SIGTERM killed,
+is never barca's own exit code. SIGKILL cannot be handled: the shell reports 137 and the run is
+later reported as `interrupted` (`barca docs cache`).
+
+`barca serve` is not a run: stopped by SIGINT or SIGTERM it cancels the runs in flight, records
+them as `cancelled` and exits 0 (`barca docs scheduling`, "Stopping the server").
 
 ## JSON output schemas
 

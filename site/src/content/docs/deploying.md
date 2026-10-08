@@ -46,7 +46,7 @@ services:
     volumes:
       - ./project:/project
       - barca-state:/project/.barca
-    stop_signal: SIGINT
+    stop_signal: SIGINT        # only for barca 0.18.1 and earlier, see below
     restart: unless-stopped
     ports:
       - "127.0.0.1:8080:8080"
@@ -105,9 +105,12 @@ What each part is for:
 - **`--timezone`.** Cron is evaluated in the container's local time unless you say otherwise,
   and that is usually UTC whatever the host uses. State it. A value barca does not know is a
   usage error: the server exits 2 and names it.
-- **`stop_signal: SIGINT`.** Barca shuts down cleanly on SIGINT (Ctrl-C). It has no SIGTERM
-  handler, and as process 1 in a container it ignores SIGTERM, so a default `docker stop`
-  waits out its timeout and then kills the process.
+- **`stop_signal: SIGINT`.** Needed for barca 0.18.1 and earlier, the version this example
+  pins included. Those releases shut down cleanly on SIGINT (Ctrl-C) but have no SIGTERM
+  handler, and as process 1 in a container they ignore SIGTERM, so a default `docker stop`
+  waits out its timeout and then kills the process. Later releases shut down the same way on
+  SIGTERM as on SIGINT, as process 1 too: with them the line can be removed, and leaving it in
+  changes nothing.
 - **The health check.** `GET /health` returns 200 with the JSON above when the server is up.
   The check runs inside the container, so it can use `127.0.0.1`. The slim image has no
   `curl`, so the check uses Python.
@@ -124,9 +127,15 @@ before you bind it to anything wider, add [authentication](#authentication) at t
 
 ### What happens on restart
 
-- **Stopped with SIGINT** (`docker compose stop` with the `stop_signal` above, or Ctrl-C):
-  runs in progress are cancelled, their workers are stopped, and they are recorded as
-  `cancelled`. The process exits with code 0 within a few seconds.
+- **Stopped with SIGINT or SIGTERM** (`docker compose stop`, `docker stop`, `systemctl stop`,
+  Ctrl-C; SIGTERM only after 0.18.1, see `stop_signal` above): runs in progress are cancelled,
+  their workers are stopped, and they are recorded as `cancelled`. The process exits with
+  code 0, normally in less than a second. After 0.18.1 the shutdown also ends open `/events`
+  streams (in 0.18.1 and earlier a browser tab left on a run page keeps a stopping server
+  alive until Docker kills it) and is bounded at about 12 seconds: runs get 10 seconds to
+  stop, open connections 2 more. Docker's default stop timeout is 10 seconds; a step that
+  does not stop when its worker is told to can outlast it, and Docker then kills the
+  container.
 - **Killed** (SIGKILL, out of memory, host lost): steps that had finished are already recorded
   and are served from cache next time. The run in progress is left in `barca history` with
   status `running`. Outside a container barca reports such a run as `interrupted` by checking

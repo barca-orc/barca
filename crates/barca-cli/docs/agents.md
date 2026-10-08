@@ -53,7 +53,7 @@ BARCA_OUTPUT=json barca get total pipeline.py
 | 1    | `step_failed` | a step of yours raised (traceback included); the run is recorded as failed      | fix the code, re-run          |
 | 2    | `usage`       | bad flags or arguments, unknown target, task/asset misuse, unreadable or invalid `.py` file, invalid `--env` or barca.toml | fix the command |
 | 3    | `infra`       | barca or its environment failed: metadata DB, worker pool, remote state, I/O    | not your code; retrying may help |
-| 130  | `cancelled`   | interrupted (Ctrl-C)                                                            | re-run                        |
+| 130  | `cancelled`   | stopped by Ctrl-C (SIGINT) or SIGTERM                                           | re-run                        |
 
 ```bash
 barca get total pipeline.py --agent > result.json 2> progress.log

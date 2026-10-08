@@ -83,3 +83,18 @@ UI. Endpoints are documented at https://barca.sh/reference/server-api/ and `GET 
 reports live schedule status. Behind nginx (any path prefix, live logs included):
 https://barca.sh/deploying/.
 Full model: https://barca.sh/scheduling/.
+
+## Stopping the server
+
+SIGINT (Ctrl-C) and SIGTERM (`kill`, `docker stop`, systemd) stop the server the same way. It
+prints `[barca] SIGTERM received: stopping runs and shutting down`, stops accepting
+connections, cancels the runs in flight (their workers are stopped and the runs are recorded as
+`cancelled` in `barca history`), ends the open `/events` streams and exits 0. That normally
+takes less than a second. It is bounded: runs get 10 seconds to stop, and connections still open
+after that get 2 more. This also holds when barca is process 1 of a container, so a plain
+`docker stop` works.
+
+SIGHUP and SIGQUIT are not handled. Outside a container they end the process at once, and a run
+in flight is then reported as `interrupted` (`barca docs cache`); `nohup barca serve` keeps
+ignoring SIGHUP. A process that is process 1 of a container never receives them. SIGKILL cannot
+be handled by any program.

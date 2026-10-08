@@ -152,7 +152,9 @@ WorkingDirectory=/srv/pipelines
 WantedBy=multi-user.target
 ```
 
-For a container, see [Deploying](/deploying/#in-a-container).
+`systemctl stop` sends SIGTERM. Barca then cancels the runs in flight, records them as
+`cancelled` and exits 0, normally in less than a second. For a container, see
+[Deploying](/deploying/#in-a-container).
 
 ## Inspecting the schedule
 
