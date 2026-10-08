@@ -597,3 +597,12 @@ location. See [Configuration](/reference/config/#environments---env).
   `reason: "refresh_cascade"`.
 - A sensor's value is part of its consumers' run hashes; it used not to be. Assets that read a
   sensor re-ran once after that upgrade.
+- After 0.18.1: SIGTERM stops `get`, `run` and `serve` the way Ctrl-C does. `get` and `run`
+  exit 130 (`cancelled`) and record the run as `cancelled`; before, SIGTERM killed barca at
+  once (a shell reported 143) and the run was later reported as `interrupted`. As process 1 of
+  a container barca used to ignore SIGTERM.
+- After 0.18.1: `barca serve --timezone` with a value barca does not know exits 2; it used to
+  print a warning and use local time.
+- After 0.18.1: `POST /run/{target}` and `POST /get/{target}` answer 404, 409 or 400 for a
+  target that cannot run; they used to answer 200 with a `run_id` of a run that then failed.
+- After 0.18.1: the `barca list` table column `NEXT FIRE` is `NEXT FIRE (LOCAL TIME)`.
