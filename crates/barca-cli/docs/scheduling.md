@@ -25,6 +25,8 @@ def heartbeat() -> None:
 - Cron has 5 fields (`minute hour day-of-month month day-of-week`) or 6 with a leading seconds
   field. The scheduler evaluates at 1-second resolution. There is no year field.
 - Schedules only fire while `barca serve` is running; `barca get` never fires them.
+- `Schedule` takes the cron expression by position. `Schedule(cron="0 5 * * *")` and any other
+  keyword are errors when the file is read, exit 2 (`barca docs assets`, "Accepted arguments").
 
 A tick brings the node up to date. It does not force it to recompute:
 
