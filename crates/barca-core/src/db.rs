@@ -1543,7 +1543,7 @@ fn interrupted_among(
                 let on_this_host = !this_host.is_empty() && run.host == this_host;
                 on_this_host && run.pid.is_some_and(|pid| !pid_alive(pid))
             } else {
-                judge_json(run.pid, &run.host, &run.owner, on) == Owner::Gone
+                judge_json(run.pid, &run.owner, on) == Owner::Gone
             }
         })
         .map(|run| run.run_id.clone())
@@ -3298,6 +3298,7 @@ mod tests {
                 host: "container-2".into(),
                 pidns: "pid:[4026532980]".into(),
                 timens: "time:[4026531834]".into(),
+                handles: true,
             },
             process: Process::Present(Some(9_000)),
             marker: Marker::Missing,
@@ -3318,6 +3319,8 @@ mod tests {
             dev: 5,
             ino: 6,
             handle: Some("1:00ff".into()),
+            fs: "volume".into(),
+            local: true,
         });
         let rows = [RunningRun {
             owner: json(&with_marker),
@@ -3330,7 +3333,8 @@ mod tests {
             ino: 6,
             handle: handle.map(String::from),
             reader: Some(reader),
-            local: false,
+            fs: "volume".into(),
+            local: true,
         };
         elsewhere.marker = seen(Some("1:00ff"), false);
         assert_eq!(interrupted_among(&rows, &elsewhere, |_| true), ["killed"]);
@@ -3355,14 +3359,15 @@ mod tests {
         let (fifo, _host_process) = run_owner::tests::other_process(&db_path);
         let marker = format!("{}.fifo", fifo.token);
         let mut host_run = this_process(Some(fifo));
-        // This test process stands for the container: the run is from another kernel.
+        // This test process stands for the container: the run is from another kernel. As
+        // in the review's attack, the reader has the owner's machine id and host name
+        // (`this_process` recorded this machine's), and the pid is dead here.
         host_run.boot = "the-host-kernel".into();
-        host_run.machine = "the-host".into();
         add_running(
             &db_path,
             "host-run",
             a_dead_pid(),
-            "the-host.local",
+            &local_host(),
             &json(&host_run),
         )
         .await;
@@ -3375,7 +3380,8 @@ mod tests {
         assert!(marker_files(&dir).contains(&marker));
 
         // The same with every answer the container's kernel could give about a process and
-        // a file it cannot see.
+        // a file it sees through a mount that is not a local disk: no such pid, nobody at
+        // the other end of the marker, whatever inode numbers and filesystem id it shows.
         let rows = {
             let _g = db_guard().await;
             let (_db, conn) = open_conn(&db_path).await.unwrap();
@@ -3386,33 +3392,37 @@ mod tests {
             .filter(|r| r.run_id == "host-run")
             .collect();
         let real = run_owner::System::for_db(&db_path);
+        let Marker::Present {
+            dev,
+            ino,
+            handle,
+            fs,
+            ..
+        } = real.marker(&host_run.fifo.as_ref().unwrap().token)
+        else {
+            panic!("the marker is there");
+        };
         for process in [
             Process::Absent,
             Process::Present(None),
             Process::Present(Some(1)),
         ] {
             for reader in [Some(false), None] {
-                let blind = run_owner::tests::Fake {
-                    here: real.here(),
-                    process,
-                    marker: match real.marker(&host_run.fifo.as_ref().unwrap().token) {
-                        Marker::Present {
-                            dev,
-                            ino,
-                            handle,
-                            local,
-                            ..
-                        } => Marker::Present {
+                for (handle, fs) in [(handle.clone(), fs.clone()), (None, String::new())] {
+                    let blind = run_owner::tests::Fake {
+                        here: real.here(),
+                        process,
+                        marker: Marker::Present {
                             dev,
                             ino,
                             handle,
                             reader,
-                            local,
+                            fs,
+                            local: false,
                         },
-                        Marker::Missing => panic!("the marker is there"),
-                    },
-                };
-                assert!(interrupted_among(&host_row, &blind, |_| false).is_empty());
+                    };
+                    assert!(interrupted_among(&host_row, &blind, |_| false).is_empty());
+                }
             }
         }
 
@@ -3450,7 +3460,11 @@ mod tests {
         let (fifo, process) = run_owner::tests::other_process(&db_path);
         // Where this filesystem gives no file handle (Linux), the marker proves nothing
         // and the run must simply stay `running`.
-        let provable = cfg!(target_os = "macos") || fifo.handle.is_some();
+        let provable = if cfg!(target_os = "macos") {
+            fifo.local
+        } else {
+            fifo.handle.is_some()
+        };
         let marker = format!("{}.fifo", fifo.token);
         let mut next_door = this_process(Some(fifo));
         next_door.pidns = "pid:[another-container]".into();
@@ -3477,7 +3491,7 @@ mod tests {
         }
         let system = run_owner::System::for_db(&db_path);
         run_owner::tests::eventually("the owner is seen to be gone", || {
-            run_owner::judge(None, "container-1", &next_door, &system) == Owner::Gone
+            run_owner::judge(None, &next_door, &system) == Owner::Gone
         });
         assert_eq!(reported(&db_path).await["theirs"], "interrupted");
         // Reading reported it and wrote nothing; the next run to start records it.
@@ -3505,6 +3519,42 @@ mod tests {
         }
         assert_eq!(marker_files(&dir).len(), 1, "this process's own marker");
         assert!(!marker_files(&dir).contains(&marker));
+    }
+
+    #[tokio::test]
+    async fn a_run_from_before_a_restart_of_this_machine_is_interrupted() {
+        // What main reports by host name and pid, established by observation instead: the
+        // marker is on this machine's local disk, the same filesystem and inode the owner
+        // recorded under another boot id, and nobody on this kernel holds it.
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = metadata_db(&dir).await;
+        let (fifo, process) = run_owner::tests::other_process(&db_path);
+        // A temp dir that is not on a local disk (a container's overlay) proves nothing.
+        let provable = fifo.local && !fifo.fs.is_empty();
+        let mut before = this_process(Some(fifo));
+        before.boot = "the-boot-before".into();
+        add_running(
+            &db_path,
+            "then",
+            std::process::id(),
+            "any-host",
+            &json(&before),
+        )
+        .await;
+
+        // While somebody holds the marker, the kernel it was created on is still running
+        // (this one, in the test): no restart can have happened.
+        assert_eq!(reported(&db_path).await["then"], "running");
+        drop(process);
+        let system = run_owner::System::for_db(&db_path);
+        if provable {
+            run_owner::tests::eventually("the marker has no reader", || {
+                run_owner::judge(None, &before, &system) == Owner::Gone
+            });
+            assert_eq!(reported(&db_path).await["then"], "interrupted");
+        } else {
+            assert_eq!(reported(&db_path).await["then"], "running");
+        }
     }
 
     #[tokio::test]
@@ -3554,10 +3604,7 @@ mod tests {
         let token = id.fifo.as_ref().expect("a marker").token.clone();
         assert_eq!(marker_files(&dir), [format!("{token}.fifo")]);
         let system = run_owner::System::for_db(&db_path);
-        assert_eq!(
-            run_owner::judge(rows[0].pid, &rows[0].host, &id, &system),
-            Owner::Alive
-        );
+        assert_eq!(run_owner::judge(rows[0].pid, &id, &system), Owner::Alive);
         assert_eq!(reported(&db_path).await["r1"], "running");
 
         finish_run(&db_path, "r1", "success", 1, 0, 0.1)

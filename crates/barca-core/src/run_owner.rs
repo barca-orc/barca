@@ -1,5 +1,5 @@
 //! Whether the process that started a `running` run is gone, decided only from what this
-//! process can observe for certain.
+//! process can observe.
 //!
 //! A run row records the coordinator's pid and host name (#220): a `running` row on this host
 //! whose pid is gone is `interrupted`. In a container that never fires (#290): the
@@ -7,44 +7,63 @@
 //! with every start ("another machine's run").
 //!
 //! The rule here has three answers ([`Owner`]), and the third is the default. A run is
-//! `interrupted` only when its process is known to be gone. Whenever that cannot be
-//! established, by this process, on this kernel, through this filesystem, the answer is
-//! [`Owner::Unknown`] and the run stays `running`. A run that is going is never reported or
-//! recorded as interrupted, whoever looks: a container at a run of its host, the host at a
-//! run in a container, two containers at each other, another machine through the shared
-//! history.
+//! `interrupted` only on an observation that can only be made when its process is gone.
+//! Whenever that observation cannot be made, by this process, on this kernel, through this
+//! filesystem, the answer is [`Owner::Unknown`] and the run stays `running`. Who the reader
+//! and the owner say they are (machine id, host name) never decides anything by itself.
 //!
-//! A run records who started it ([`Identity`], in `runs.owner`), and a reader compares that
-//! with itself ([`judge`]):
+//! Two things can be observed:
 //!
-//! 1. **Another kernel** (the boot ids differ). Nothing can be observed of a process on
-//!    another kernel. One inference is made: when the machine id and the host name are both
-//!    this machine's and the run's marker file is in this directory, the run was started
-//!    here before a restart of the machine, and no process survives that.
-//! 2. **This kernel, this pid namespace** (Linux; macOS has one). The process table is the
-//!    one the run's process was in, so its pid can be looked up. No such process: gone. A
-//!    process with that pid and another start time: gone, the pid was reused. The same start
-//!    time: alive. A container that is restarted gets a new pid namespace, which often has
-//!    the number of the one it replaces; a number is only handed out again after its
-//!    namespace, and every process in it, is gone, so the lookup is right then as well.
-//! 3. **This kernel, another pid namespace** (two containers, or a container and its Linux
-//!    host). The run's process cannot be looked up. What both sides do share is the project
-//!    directory: the owner holds the read end of a FIFO it created there
-//!    (`run-owners/<token>.fifo`) for as long as it lives, and the kernel closes it when the
-//!    process ends, however it ended. Opening a FIFO for writing without blocking fails with
-//!    `ENXIO` exactly when no process has it open for reading. That is the kernel's own
-//!    bookkeeping for one inode, so it is trusted only when the reader can show it reaches
-//!    the inode the owner held: same device, same inode number, and on Linux the same file
-//!    handle (`name_to_handle_at`), on macOS a local filesystem. Where that cannot be shown
-//!    (Docker Desktop's bind mounts give no file handle) the FIFO is not consulted.
+//! - **The process table**, when the reader is on the owner's kernel (same boot id) and in
+//!   its pid namespace: no process with the owner's pid, or one with another start time,
+//!   means the owner is gone. (A restarted container often gets the pid namespace number of
+//!   the one it replaces; a number is only handed out again after its namespace, and every
+//!   process in it, is gone, so the lookup is right then as well.)
+//! - **The marker**: a FIFO the owner created in the project directory
+//!   (`run-owners/<token>.fifo`) and holds open for reading for as long as it has a run in
+//!   flight. The kernel closes it when the process ends, however it ended, and opening a
+//!   FIFO for writing without blocking fails with `ENXIO` exactly when no process has it
+//!   open for reading. That is one kernel's bookkeeping for one inode, so "no reader" means
+//!   something only when the reader shows that it reaches the inode the owner held
+//!   ([`judge`] says how for each case).
 //!
-//! Nothing here depends on a clock, so a suspended laptop, a stopped process (it keeps its
-//! pid and its open files) or a clock step cannot make a live run look dead, and a killed
-//! run reads `interrupted` at once.
+//! The rules ([`judge`]):
 //!
-//! Readers never write: [`probe`] opens and closes, nothing else. The marker file is removed
-//! by its owner when its runs have ended, and otherwise by a starting run ([`sweep`]) once no
-//! `running` row names it, never on a judgement about liveness.
+//! 1. **Same kernel, same pid namespace.** The process table decides. The marker is not
+//!    asked to confirm it. Something other than the owner can hold a marker open (Docker
+//!    Desktop's file sharing does, on the host, once a container has looked at the file),
+//!    and that would keep a killed run `running` on the machine it ran on. Nor would
+//!    asking help in the one case where a boot id does not name one kernel: two machines
+//!    resumed from the same memory snapshot. Their process tables differ once a process
+//!    dies on one of them, and a FIFO on a directory they share over the network has its
+//!    readers counted by each kernel separately, so the marker agrees with the table on
+//!    both. That case is not decidable from either machine and is the stated limit.
+//! 2. **Same kernel, another pid namespace** (two containers, a container and its Linux
+//!    host). The marker decides, when it is the same inode: same device and inode number,
+//!    and the same file handle (Linux, `name_to_handle_at`) or a local disk (macOS, which
+//!    has no handles). Docker Desktop's bind mounts give no file handle: `Unknown`.
+//! 3. **Another kernel** (the boot ids differ). A process there cannot be observed, with one
+//!    exception: the kernel it ran on has shut down. That is established from the marker
+//!    alone: both the owner and the reader see it on a local disk filesystem (not a network
+//!    or VM-shared mount; "cannot tell" counts as not local), it is the same filesystem
+//!    and inode, and it has no reader. A local disk is mounted by one kernel at a time, so
+//!    the reader's kernel is the one that has it now, the owner's had it before, and the
+//!    owner's kernel, with every process on it, is gone. An owner still alive on another
+//!    machine, a clone or the host of this container, reached the directory through a
+//!    mount that is not local on one side or the other, and the rule does not apply.
+//!
+//! What rule 3 cannot tell apart is a block-for-block copy of the disk (a cloned or
+//! restored virtual machine) taken while the run was going: the copy has the marker, same
+//! filesystem and inode, with no reader. The copy's own history then says `interrupted`
+//! for that run, which in that copy of the history it is.
+//!
+//! Nothing depends on a clock, so a suspended laptop, a stopped process (it keeps its pid
+//! and its open files) or a clock step cannot make a live run look dead, and a killed run
+//! reads `interrupted` at once.
+//!
+//! Readers never write: [`System`] opens and closes the marker, nothing else. The marker is
+//! removed by its owner when its runs have ended, and otherwise by a starting run
+//! ([`sweep`]) once no `running` row names it, never on a judgement about liveness.
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -102,6 +121,13 @@ pub(crate) struct FifoId {
     /// The kernel's handle for the inode (Linux). `None` where the filesystem gives none.
     #[serde(default)]
     pub handle: Option<String>,
+    /// The filesystem it is on, by an id that outlasts a restart (the volume's UUID on
+    /// macOS, `statfs`'s id on Linux). Empty when there is none.
+    #[serde(default)]
+    pub fs: String,
+    /// Whether that is a local disk filesystem as far as the owner could tell.
+    #[serde(default)]
+    pub local: bool,
 }
 
 /// What the reading process is.
@@ -112,6 +138,10 @@ pub(crate) struct Here {
     pub host: String,
     pub pidns: String,
     pub timens: String,
+    /// Whether this system names inodes by file handles (Linux). Where it does, a marker
+    /// without one cannot be verified; where it does not (macOS), a local disk's device
+    /// and inode number have to do.
+    pub handles: bool,
 }
 
 /// What a lookup of a pid in the reader's process table shows.
@@ -133,10 +163,13 @@ pub(crate) enum Marker {
         dev: u64,
         ino: u64,
         handle: Option<String>,
-        /// Whether a process has it open for reading; `None` when that could not be asked.
+        /// Whether a process has it open for reading; `None` when that could not be asked
+        /// (it is not a FIFO, or it changed while it was asked).
         reader: Option<bool>,
-        /// Whether device and inode number identify one inode on this filesystem, when no
-        /// file handle is available (macOS: a local filesystem).
+        /// The filesystem's lasting id; empty when there is none.
+        fs: String,
+        /// Whether it is on a local disk filesystem: one that one kernel at a time has
+        /// mounted. False for network and VM-shared mounts and whenever it cannot be told.
         local: bool,
     },
 }
@@ -148,88 +181,141 @@ pub(crate) trait Observer {
     fn marker(&self, token: &str) -> Marker;
 }
 
-/// The rule (see the module docs). `pid` and `host` are the run row's.
-pub(crate) fn judge(pid: Option<i64>, host: &str, id: &Identity, on: &dyn Observer) -> Owner {
+/// What the reader's view of the marker establishes about the owner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Witness {
+    /// It is the owner's inode on this kernel and a process has it open for reading.
+    Held,
+    /// It is the owner's inode on this kernel and no process has it open for reading.
+    Free,
+    /// It is not there, not verifiably the owner's, or could not be asked.
+    Silent,
+}
+
+/// The marker as a witness on the owner's own kernel (rules 1 and 2): the same device and
+/// inode number, and the same file handle, or, where neither side has handles (macOS), a
+/// local disk.
+fn witness(fifo: Option<&FifoId>, seen: &Marker, handles: bool) -> Witness {
+    let (
+        Some(fifo),
+        Marker::Present {
+            dev,
+            ino,
+            handle,
+            reader,
+            local,
+            ..
+        },
+    ) = (fifo, seen)
+    else {
+        return Witness::Silent;
+    };
+    let same_inode = *dev == fifo.dev
+        && *ino == fifo.ino
+        && match (&fifo.handle, handle) {
+            (Some(theirs), Some(ours)) => theirs == ours,
+            (None, None) => !handles && *local && fifo.local,
+            _ => false,
+        };
+    match (same_inode, reader) {
+        (true, Some(true)) => Witness::Held,
+        (true, Some(false)) => Witness::Free,
+        _ => Witness::Silent,
+    }
+}
+
+/// Rule 3's observation: the kernel the owner ran on has shut down. Both sides see the
+/// marker on a local disk filesystem, it is the same filesystem and the same inode, and
+/// nobody on this kernel has it open. (The device number is not compared: it can change
+/// from one boot to the next.)
+fn owners_kernel_is_gone(fifo: Option<&FifoId>, seen: &Marker) -> bool {
+    let (
+        Some(fifo),
+        Marker::Present {
+            ino,
+            handle,
+            reader,
+            fs,
+            local,
+            ..
+        },
+    ) = (fifo, seen)
+    else {
+        return false;
+    };
+    fifo.local
+        && *local
+        && !fifo.fs.is_empty()
+        && fifo.fs == *fs
+        && fifo.ino == *ino
+        && fifo.handle == *handle
+        && *reader == Some(false)
+}
+
+/// The rule (see the module docs). `pid` is the run row's.
+///
+/// `Gone` is returned in three places, each on an observation: the process table of the
+/// owner's kernel and namespace shows no such process; the owner's marker has no reader on the owner's kernel; the owner's kernel
+/// has shut down.
+pub(crate) fn judge(pid: Option<i64>, id: &Identity, on: &dyn Observer) -> Owner {
     let here = on.here();
     if id.boot.is_empty() || here.boot.is_empty() {
         return Owner::Unknown;
     }
-    let marker = || match &id.fifo {
+    let fifo = id.fifo.as_ref();
+    let seen = match fifo {
         Some(fifo) => on.marker(&fifo.token),
         None => Marker::Missing,
     };
 
-    // 1. Another kernel.
+    // 3. Another kernel.
     if id.boot != here.boot {
-        let this_machine = !id.machine.is_empty()
-            && id.machine == here.machine
-            && !host.is_empty()
-            && host == here.host;
-        return if this_machine && marker() != Marker::Missing {
+        // Two different machines never have the same local disk; when both name
+        // themselves and the names differ, something is not as it seems.
+        let other_machine =
+            !id.machine.is_empty() && !here.machine.is_empty() && id.machine != here.machine;
+        return if !other_machine && owners_kernel_is_gone(fifo, &seen) {
             Owner::Gone
         } else {
             Owner::Unknown
         };
     }
 
-    // 2. This kernel and this pid namespace: the process table answers. A namespace that
+    let witness = witness(fifo, &seen, here.handles);
+
+    // 1. This kernel and this pid namespace: the process table answers. A namespace that
     // could not be read is not known to be the same one.
     if let Some(pid) = pid
         && !id.pidns.is_empty()
         && id.pidns == here.pidns
         && id.timens == here.timens
     {
-        match (on.process(pid), id.start) {
-            (Process::Absent, _) => return Owner::Gone,
-            (Process::Present(Some(now)), Some(then)) => {
-                return if now == then {
-                    Owner::Alive
-                } else {
-                    Owner::Gone
-                };
-            }
+        let gone = match (on.process(pid), id.start) {
+            (Process::Absent, _) => Some(true),
+            (Process::Present(Some(now)), Some(then)) => Some(now != then),
             // A process has the pid and it cannot be told whether it is the same one.
-            (Process::Present(_), _) => {}
+            (Process::Present(_), _) => None,
+        };
+        match gone {
+            Some(true) => return Owner::Gone,
+            Some(false) => return Owner::Alive,
+            None => {}
         }
     }
 
-    // 3. This kernel: the marker FIFO, when the reader reaches the inode the owner held.
-    let Some(fifo) = &id.fifo else {
-        return Owner::Unknown;
-    };
-    match marker() {
-        Marker::Present {
-            dev,
-            ino,
-            handle,
-            reader: Some(reader),
-            local,
-        } if dev == fifo.dev && ino == fifo.ino => {
-            let same_inode = match (&fifo.handle, &handle) {
-                (Some(theirs), Some(ours)) => theirs == ours,
-                (None, None) => local,
-                _ => false,
-            };
-            match (same_inode, reader) {
-                (true, true) => Owner::Alive,
-                (true, false) => Owner::Gone,
-                (false, _) => Owner::Unknown,
-            }
-        }
-        _ => Owner::Unknown,
+    // 2. This kernel: the marker.
+    match witness {
+        Witness::Held => Owner::Alive,
+        Witness::Free => Owner::Gone,
+        Witness::Silent => Owner::Unknown,
     }
 }
 
 /// Judge the owner recorded in `owner_json` (the `runs.owner` column). Anything that does
 /// not parse is [`Owner::Unknown`].
-pub(crate) fn judge_json(
-    pid: Option<i64>,
-    host: &str,
-    owner_json: &str,
-    on: &dyn Observer,
-) -> Owner {
+pub(crate) fn judge_json(pid: Option<i64>, owner_json: &str, on: &dyn Observer) -> Owner {
     match serde_json::from_str::<Identity>(owner_json) {
-        Ok(id) => judge(pid, host, &id, on),
+        Ok(id) => judge(pid, &id, on),
         Err(_) => Owner::Unknown,
     }
 }
@@ -283,6 +369,7 @@ impl Observer for System {
             host: crate::db::local_host(),
             pidns: sys::namespace("pid"),
             timens: sys::namespace("time"),
+            handles: cfg!(target_os = "linux"),
         }
     }
 
@@ -480,23 +567,93 @@ mod sys {
         None
     }
 
-    /// Whether `path` is on a filesystem of this machine's own disks (macOS), where a device
-    /// and inode number name one inode. Linux relies on the file handle instead.
-    #[cfg(target_os = "macos")]
-    pub(super) fn is_local(path: &Path) -> bool {
+    fn c_path(path: &Path) -> Option<std::ffi::CString> {
         use std::os::unix::ffi::OsStrExt;
-        let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
-            return false;
+        std::ffi::CString::new(path.as_os_str().as_bytes()).ok()
+    }
+
+    /// Whether `path` is on a local disk filesystem, and that filesystem's lasting id.
+    /// "Local" is a filesystem that one kernel at a time has mounted from a disk: not a
+    /// network mount, not a directory a virtual machine shares with its host. Anything
+    /// that is not known to be one is not local.
+    #[cfg(target_os = "macos")]
+    pub(super) fn filesystem(path: &Path) -> (bool, String) {
+        let Some(c_path) = c_path(path) else {
+            return (false, String::new());
         };
         // SAFETY: `statfs` fills the struct it is given; the path is NUL-terminated.
         let mut st: libc::statfs = unsafe { std::mem::zeroed() };
-        let rc = unsafe { libc::statfs(c_path.as_ptr(), &mut st) };
-        rc == 0 && (st.f_flags & libc::MNT_LOCAL as u32) != 0
+        if unsafe { libc::statfs(c_path.as_ptr(), &mut st) } != 0 {
+            return (false, String::new());
+        }
+        let local = (st.f_flags & libc::MNT_LOCAL as u32) != 0;
+
+        // The volume's UUID: the device number in `statfs` can change between boots.
+        #[repr(C)]
+        struct VolumeUuid {
+            length: u32,
+            uuid: [u8; 16],
+        }
+        // SAFETY: an all-zero `attrlist` is a valid one to fill in.
+        let mut attrs: libc::attrlist = unsafe { std::mem::zeroed() };
+        attrs.bitmapcount = libc::ATTR_BIT_MAP_COUNT;
+        attrs.volattr = libc::ATTR_VOL_INFO | libc::ATTR_VOL_UUID;
+        let mut out = VolumeUuid {
+            length: 0,
+            uuid: [0; 16],
+        };
+        // SAFETY: the buffer is as large as the size passed, and the attributes asked for
+        // (a length and one 16-byte UUID) fit it.
+        let rc = unsafe {
+            libc::getattrlist(
+                c_path.as_ptr(),
+                (&mut attrs as *mut libc::attrlist).cast(),
+                (&mut out as *mut VolumeUuid).cast(),
+                std::mem::size_of::<VolumeUuid>(),
+                0,
+            )
+        };
+        let complete = rc == 0 && out.length as usize >= std::mem::size_of::<VolumeUuid>();
+        if !complete || out.uuid == [0; 16] {
+            return (local, String::new());
+        }
+        let hex: String = out.uuid.iter().map(|b| format!("{b:02x}")).collect();
+        (local, hex)
     }
 
-    #[cfg(not(target_os = "macos"))]
-    pub(super) fn is_local(_path: &Path) -> bool {
-        false
+    #[cfg(target_os = "linux")]
+    pub(super) fn filesystem(path: &Path) -> (bool, String) {
+        // The disk filesystems: each is mounted from a block device by one kernel.
+        const LOCAL: [i64; 6] = [
+            0xEF53,      // ext2, ext3, ext4
+            0x5846_5342, // xfs
+            0x9123_683E, // btrfs
+            0xF2F5_2010, // f2fs
+            0x2FC1_2FC1, // zfs
+            0xCA45_1A4E, // bcachefs
+        ];
+        let Some(c_path) = c_path(path) else {
+            return (false, String::new());
+        };
+        // SAFETY: `statfs` fills the struct it is given; the path is NUL-terminated.
+        let mut st: libc::statfs = unsafe { std::mem::zeroed() };
+        if unsafe { libc::statfs(c_path.as_ptr(), &mut st) } != 0 {
+            return (false, String::new());
+        }
+        let local = LOCAL.contains(&(st.f_type as i64 & 0xFFFF_FFFF));
+        // SAFETY: `fsid_t` is two C ints on Linux.
+        let id: [libc::c_int; 2] = unsafe { std::mem::transmute(st.f_fsid) };
+        let fs = if id == [0, 0] {
+            String::new()
+        } else {
+            format!("{:08x}{:08x}", id[0] as u32, id[1] as u32)
+        };
+        (local, fs)
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    pub(super) fn filesystem(_path: &Path) -> (bool, String) {
+        (false, String::new())
     }
 
     pub(super) fn marker(path: &Path) -> Marker {
@@ -510,6 +667,7 @@ mod sys {
                 ino: before.ino(),
                 handle: None,
                 reader: None,
+                fs: String::new(),
                 local: false,
             };
         }
@@ -518,12 +676,14 @@ mod sys {
         // The same file before and after the question, or the answer is about another one.
         let unchanged = std::fs::symlink_metadata(path)
             .is_ok_and(|after| after.dev() == before.dev() && after.ino() == before.ino());
+        let (local, fs) = filesystem(path);
         Marker::Present {
             dev: before.dev(),
             ino: before.ino(),
             handle,
             reader: if unchanged { reader } else { None },
-            local: is_local(path),
+            fs,
+            local,
         }
     }
 }
@@ -593,11 +753,14 @@ fn hold_marker(dir: &Path) -> Option<(FifoId, File)> {
             return None;
         }
         let meta = fs::symlink_metadata(&path).ok()?;
+        let (local, fs) = sys::filesystem(&path);
         let id = FifoId {
             token,
             dev: meta.dev(),
             ino: meta.ino(),
             handle: sys::file_handle(&path),
+            fs,
+            local,
         };
         Some((id, reader))
     })();
@@ -736,6 +899,7 @@ pub(crate) mod tests {
         }
     }
 
+    /// A Linux reader in the owner's kernel and pid namespace.
     fn here() -> Here {
         Here {
             boot: "boot-1".into(),
@@ -743,10 +907,12 @@ pub(crate) mod tests {
             host: "host-1".into(),
             pidns: "pid:[1]".into(),
             timens: "time:[1]".into(),
+            handles: true,
         }
     }
 
-    /// A run started by pid 7, started at tick 500, in `here()`, holding marker `T`.
+    /// A run started by pid 7, started at tick 500, in `here()`, holding marker `T` on a
+    /// local disk.
     pub(crate) fn identity() -> Identity {
         Identity {
             boot: "boot-1".into(),
@@ -759,18 +925,50 @@ pub(crate) mod tests {
                 dev: 10,
                 ino: 20,
                 handle: Some("1:abcd".into()),
+                fs: "fs-1".into(),
+                local: true,
             }),
         }
     }
 
-    fn marker(reader: Option<bool>) -> Marker {
+    /// The owner's marker as a reader on the owner's kernel sees it.
+    pub(crate) fn marker(reader: Option<bool>) -> Marker {
         Marker::Present {
             dev: 10,
             ino: 20,
             handle: Some("1:abcd".into()),
             reader,
-            local: false,
+            fs: "fs-1".into(),
+            local: true,
         }
+    }
+
+    /// `marker(reader)` with one thing about it changed.
+    fn marker_but(reader: Option<bool>, change: impl Fn(&mut MarkerParts)) -> Marker {
+        let mut parts = MarkerParts {
+            dev: 10,
+            ino: 20,
+            handle: Some("1:abcd".into()),
+            fs: "fs-1".into(),
+            local: true,
+        };
+        change(&mut parts);
+        Marker::Present {
+            dev: parts.dev,
+            ino: parts.ino,
+            handle: parts.handle,
+            reader,
+            fs: parts.fs,
+            local: parts.local,
+        }
+    }
+
+    struct MarkerParts {
+        dev: u64,
+        ino: u64,
+        handle: Option<String>,
+        fs: String,
+        local: bool,
     }
 
     fn fake(process: Process, marker: Marker) -> Fake {
@@ -782,21 +980,45 @@ pub(crate) mod tests {
     }
 
     fn verdict(id: &Identity, on: &Fake) -> Owner {
-        judge(Some(7), "host-1", id, on)
+        judge(Some(7), id, on)
     }
+
+    const ABSENT: Process = Process::Absent;
+    const SAME: Process = Process::Present(Some(500));
+    const REUSED: Process = Process::Present(Some(900));
+
+    // ─── rule 1: the owner's kernel and pid namespace ─────────────────────────
 
     #[test]
     fn in_the_same_pid_namespace_the_process_table_decides() {
         let id = identity();
-        // Whatever the marker says: the lookup is the stronger evidence.
-        for m in [marker(Some(true)), marker(Some(false)), Marker::Missing] {
-            assert_eq!(verdict(&id, &fake(Process::Absent, m.clone())), Owner::Gone);
-            let same = Process::Present(Some(500));
-            assert_eq!(verdict(&id, &fake(same, m.clone())), Owner::Alive);
+        // Whatever the marker says. A marker that is held although the process is gone has
+        // another holder: on a macOS host, Docker Desktop's file sharing keeps a marker
+        // open once a container has looked at it.
+        for m in [
+            marker(Some(false)),
+            marker(Some(true)),
+            marker(None),
+            Marker::Missing,
+        ] {
+            assert_eq!(verdict(&id, &fake(ABSENT, m.clone())), Owner::Gone);
             // The pid belongs to a later process: in a container, the next pid 1.
-            let reused = Process::Present(Some(900));
-            assert_eq!(verdict(&id, &fake(reused, m)), Owner::Gone);
+            assert_eq!(verdict(&id, &fake(REUSED, m.clone())), Owner::Gone);
+            assert_eq!(verdict(&id, &fake(SAME, m)), Owner::Alive);
         }
+    }
+
+    #[test]
+    fn machines_resumed_from_one_memory_snapshot_are_one_machine_to_this_rule() {
+        // (e) The limit, pinned down so that it is not mistaken for a guarantee. Two
+        // machines resumed from the same snapshot have the same boot id, pid namespace
+        // numbers and processes. If the run's process is killed on one and they share the
+        // project directory over a network mount, that one sees: no such process, and no
+        // reader on a marker whose readers its own kernel counts. Every observation it can
+        // make says gone, while the process lives on the other machine.
+        let id = identity();
+        let seen = marker_but(Some(false), |m| m.local = false);
+        assert_eq!(verdict(&id, &fake(ABSENT, seen)), Owner::Gone);
     }
 
     #[test]
@@ -817,166 +1039,253 @@ pub(crate) mod tests {
         );
         // A run that recorded no start time (macOS) is alive as far as its pid goes.
         id.start = None;
-        let some = Process::Present(Some(900));
-        assert_eq!(verdict(&id, &fake(some, Marker::Missing)), Owner::Unknown);
-        assert_eq!(
-            verdict(&id, &fake(Process::Absent, Marker::Missing)),
-            Owner::Gone
-        );
+        assert_eq!(verdict(&id, &fake(REUSED, Marker::Missing)), Owner::Unknown);
+        assert_eq!(verdict(&id, &fake(ABSENT, Marker::Missing)), Owner::Gone);
     }
+
+    // ─── rule 2: the owner's kernel, another pid namespace ────────────────────
 
     #[test]
     fn in_another_pid_namespace_only_the_marker_can_decide() {
-        // Two containers on one kernel, or a container and its Linux host. The pid means
-        // nothing here, whatever the lookup would say.
+        // (d) Two containers on one kernel and one volume, or a container and its Linux
+        // host. The pid means nothing here, whatever the lookup would say.
         for other in ["pid:[2]", ""] {
-            let mut on = fake(Process::Absent, marker(Some(true)));
-            on.here.pidns = other.into();
-            let id = identity();
-            assert_eq!(verdict(&id, &on), Owner::Alive);
-            on.marker = marker(Some(false));
-            assert_eq!(verdict(&id, &on), Owner::Gone);
-            on.marker = marker(None);
-            assert_eq!(verdict(&id, &on), Owner::Unknown);
-            on.marker = Marker::Missing;
-            assert_eq!(verdict(&id, &on), Owner::Unknown);
+            for process in [ABSENT, SAME, REUSED] {
+                let mut on = fake(process, marker(Some(true)));
+                on.here.pidns = other.into();
+                let id = identity();
+                assert_eq!(verdict(&id, &on), Owner::Alive);
+                on.marker = marker(Some(false));
+                assert_eq!(verdict(&id, &on), Owner::Gone);
+                on.marker = marker(None);
+                assert_eq!(verdict(&id, &on), Owner::Unknown);
+                on.marker = Marker::Missing;
+                assert_eq!(verdict(&id, &on), Owner::Unknown);
+            }
         }
         // A reader and a run that both failed to read their namespace are not thereby in
         // the same one.
         let mut unread = identity();
         unread.pidns = String::new();
-        let mut on = fake(Process::Absent, Marker::Missing);
+        let mut on = fake(ABSENT, Marker::Missing);
         on.here.pidns = String::new();
         assert_eq!(verdict(&unread, &on), Owner::Unknown);
         // Another time namespace shows other start times: the pid is not compared either.
-        let mut on = fake(Process::Present(Some(900)), Marker::Missing);
+        let mut on = fake(REUSED, Marker::Missing);
         on.here.timens = "time:[2]".into();
         assert_eq!(verdict(&identity(), &on), Owner::Unknown);
     }
 
     #[test]
     fn the_marker_counts_only_when_it_is_the_inode_the_owner_held() {
-        let mut on = fake(Process::Absent, marker(Some(false)));
-        on.here.pidns = "pid:[2]".into();
         let id = identity();
-        let with = |change: &dyn Fn(&mut Marker)| {
-            let mut on = on.clone();
-            change(&mut on.marker);
-            verdict(&id, &on)
+        let next_door = |marker: Marker| {
+            let mut on = fake(ABSENT, marker);
+            on.here.pidns = "pid:[2]".into();
+            on
         };
-        assert_eq!(with(&|_| {}), Owner::Gone);
-        let set = |m: &mut Marker, d: u64, i: u64, h: Option<&str>, l: bool| {
-            *m = Marker::Present {
-                dev: d,
-                ino: i,
-                handle: h.map(String::from),
-                reader: Some(false),
-                local: l,
-            }
-        };
+        assert_eq!(verdict(&id, &next_door(marker(Some(false)))), Owner::Gone);
         // Another device, another inode number, another handle: another file.
-        assert_eq!(
-            with(&|m| set(m, 11, 20, Some("1:abcd"), false)),
-            Owner::Unknown
-        );
-        assert_eq!(
-            with(&|m| set(m, 10, 21, Some("1:abcd"), false)),
-            Owner::Unknown
-        );
-        assert_eq!(
-            with(&|m| set(m, 10, 20, Some("1:ffff"), false)),
-            Owner::Unknown
-        );
-        // No handle to compare on the reader's side (a filesystem that gives none), even
-        // if it calls itself local.
-        assert_eq!(with(&|m| set(m, 10, 20, None, true)), Owner::Unknown);
+        for other in [
+            marker_but(Some(false), |m| m.dev = 11),
+            marker_but(Some(false), |m| m.ino = 21),
+            marker_but(Some(false), |m| m.handle = Some("1:ffff".into())),
+            // No handle on the reader's side, even on a disk it calls local.
+            marker_but(Some(false), |m| m.handle = None),
+        ] {
+            assert_eq!(verdict(&id, &next_door(other)), Owner::Unknown);
+        }
 
-        // An owner that had no handle either (Docker Desktop's bind mounts): the same
-        // numbers are not proof there...
+        // An owner that had no handle either (Docker Desktop's bind mounts): on a system
+        // with handles the same numbers are not proof...
         let mut bare = identity();
         bare.fifo.as_mut().unwrap().handle = None;
-        let mut on = on.clone();
-        set(&mut on.marker, 10, 20, None, false);
-        assert_eq!(verdict(&bare, &on), Owner::Unknown);
-        // ...and they are on a local filesystem of a system without handles (macOS).
-        set(&mut on.marker, 10, 20, None, true);
-        assert_eq!(verdict(&bare, &on), Owner::Gone);
-    }
-
-    #[test]
-    fn two_observers_that_cannot_see_each_other_leave_the_run_running() {
-        // The review's failure: a run going on a macOS host, read from a container on a
-        // bind mount of the project. Another kernel: the container's process table has no
-        // such pid, and the marker FIFO has no reader as far as its kernel knows. Neither
-        // is evidence.
-        let mut container = fake(Process::Absent, marker(Some(false)));
-        container.here = Here {
-            boot: "the-vm".into(),
-            machine: String::new(),
-            host: "5142bad76cd8".into(),
-            pidns: "pid:[4026532980]".into(),
-            timens: "time:[4026531834]".into(),
-        };
-        let mut host_run = identity();
-        host_run.pidns = String::new();
-        host_run.timens = String::new();
-        host_run.start = None;
+        let no_handle = marker_but(Some(false), |m| m.handle = None);
         assert_eq!(
-            judge(Some(7), "host-1", &host_run, &container),
+            verdict(&bare, &next_door(no_handle.clone())),
             Owner::Unknown
         );
-        // The other way round: the host looking at a run in the container.
-        let mut host = fake(Process::Absent, marker(Some(false)));
-        host.here.pidns = String::new();
-        let mut container_run = identity();
-        container_run.boot = "the-vm".into();
-        container_run.machine = String::new();
-        assert_eq!(
-            judge(Some(1), "5142bad76cd8", &container_run, &host),
-            Owner::Unknown
-        );
-        // And a reader that cannot identify its own kernel knows nothing.
-        let mut blind = fake(Process::Absent, marker(Some(false)));
-        blind.here.boot = String::new();
-        assert_eq!(verdict(&identity(), &blind), Owner::Unknown);
+        // ...and on a system without them (macOS) they are, on a local disk only.
+        let mut mac = next_door(no_handle);
+        mac.here.handles = false;
+        assert_eq!(verdict(&bare, &mac), Owner::Gone);
+        mac.marker = marker_but(Some(false), |m| (m.handle, m.local) = (None, false));
+        assert_eq!(verdict(&bare, &mac), Owner::Unknown);
+        let mut network_owner = bare.clone();
+        network_owner.fifo.as_mut().unwrap().local = false;
+        mac.marker = marker_but(Some(false), |m| m.handle = None);
+        assert_eq!(verdict(&network_owner, &mac), Owner::Unknown);
     }
 
-    #[test]
-    fn after_a_restart_of_this_machine_a_run_started_here_is_gone() {
-        let mut on = fake(Process::Present(Some(500)), marker(Some(false)));
+    // ─── rule 3: another kernel ───────────────────────────────────────────────
+
+    /// A reader on another kernel: a later boot of the same machine unless changed.
+    fn after_reboot(process: Process, marker: Marker) -> Fake {
+        let mut on = fake(process, marker);
         on.here.boot = "boot-2".into();
+        on
+    }
+
+    #[test]
+    fn a_restarted_machine_sees_that_the_owners_kernel_is_gone() {
+        // (a) The same machine, restarted, the project on its local disk. The device number
+        // may have changed; filesystem, inode and handle have not, and nobody holds the
+        // marker.
         let id = identity();
-        assert_eq!(verdict(&id, &on), Owner::Gone);
-        // Not without the marker in this directory: the row came with the shared history.
-        let mut elsewhere = on.clone();
-        elsewhere.marker = Marker::Missing;
-        assert_eq!(verdict(&id, &elsewhere), Owner::Unknown);
-        // Not for another machine, another host name, or a run with no machine id.
-        let mut other = on.clone();
+        let seen = marker_but(Some(false), |m| m.dev = 99);
+        for process in [ABSENT, SAME, REUSED] {
+            assert_eq!(
+                verdict(&id, &after_reboot(process, seen.clone())),
+                Owner::Gone
+            );
+        }
+        // A container restarted with the machine has no machine id and a new host name:
+        // neither is needed, the observation is the marker's.
+        let mut container = after_reboot(ABSENT, seen.clone());
+        container.here.machine = String::new();
+        container.here.host = "5142bad76cd8".into();
+        assert_eq!(verdict(&id, &container), Owner::Gone);
+        // Each part of the observation is needed.
+        for (what, other) in [
+            ("somebody holds it", marker_but(Some(true), |_| {})),
+            ("it could not be asked", marker_but(None, |_| {})),
+            (
+                "the reader's mount is not local",
+                marker_but(Some(false), |m| m.local = false),
+            ),
+            (
+                "another filesystem",
+                marker_but(Some(false), |m| m.fs = "fs-2".into()),
+            ),
+            (
+                "a filesystem with no id",
+                marker_but(Some(false), |m| m.fs = String::new()),
+            ),
+            ("another inode", marker_but(Some(false), |m| m.ino = 21)),
+            (
+                "another handle",
+                marker_but(Some(false), |m| m.handle = Some("1:ffff".into())),
+            ),
+            ("no handle", marker_but(Some(false), |m| m.handle = None)),
+            ("no marker", Marker::Missing),
+        ] {
+            assert_eq!(
+                verdict(&id, &after_reboot(ABSENT, other)),
+                Owner::Unknown,
+                "{what}"
+            );
+        }
+        // The owner's own mount was not local, or it recorded no filesystem id.
+        let mut shared = id.clone();
+        shared.fifo.as_mut().unwrap().local = false;
+        assert_eq!(
+            verdict(&shared, &after_reboot(ABSENT, seen.clone())),
+            Owner::Unknown
+        );
+        let mut unnamed = id.clone();
+        unnamed.fifo.as_mut().unwrap().fs = String::new();
+        let blank = marker_but(Some(false), |m| m.fs = String::new());
+        assert_eq!(
+            verdict(&unnamed, &after_reboot(ABSENT, blank)),
+            Owner::Unknown
+        );
+        // Two machines that name themselves differently do not share a local disk.
+        let mut other = after_reboot(ABSENT, seen);
         other.here.machine = "machine-2".into();
         assert_eq!(verdict(&id, &other), Owner::Unknown);
-        assert_eq!(judge(Some(7), "host-2", &id, &on), Owner::Unknown);
-        assert_eq!(judge(Some(7), "", &id, &on), Owner::Unknown);
-        let mut anonymous = id.clone();
-        anonymous.machine = String::new();
-        let mut nameless = on.clone();
-        nameless.here.machine = String::new();
-        assert_eq!(verdict(&anonymous, &nameless), Owner::Unknown);
+    }
+
+    #[test]
+    fn who_the_reader_says_it_is_never_makes_a_run_gone() {
+        // The review's attack. (b) Two virtual machines cloned from one image, with the
+        // same machine id and host name, share the project over NFS or SMB; the owner is
+        // alive on the other one. (c) A container started with its host's machine id and
+        // host name on a bind mount of the project; either side has the live run. In each
+        // the reader is "the same machine" by every name, its process table has no such
+        // pid, and the marker has no reader on its kernel. None of that is an observation
+        // of the owner.
+        let id = identity();
+        // (b), and (c) read from the container: the reader's mount is not a local disk.
+        for seen in [
+            marker_but(Some(false), |m| m.local = false),
+            marker_but(Some(false), |m| (m.local, m.handle) = (false, None)),
+            marker_but(Some(false), |m| {
+                (m.local, m.dev, m.ino) = (false, 50, 33454)
+            }),
+            marker_but(Some(false), |m| (m.local, m.fs) = (false, String::new())),
+        ] {
+            for process in [ABSENT, REUSED, Process::Present(None)] {
+                assert_eq!(
+                    verdict(&id, &after_reboot(process, seen.clone())),
+                    Owner::Unknown
+                );
+            }
+        }
+        // (b) seen from the owner's side of the clone pair, and (c) read from the host
+        // while the run is in the container: the owner's mount was not local, whatever
+        // the reader's is.
+        let mut over_the_network = id.clone();
+        over_the_network.fifo.as_mut().unwrap().local = false;
+        for reader in [Some(false), Some(true), None] {
+            let seen = marker_but(reader, |_| {});
+            let on = after_reboot(ABSENT, seen);
+            assert_eq!(verdict(&over_the_network, &on), Owner::Unknown);
+        }
+    }
+
+    #[test]
+    fn a_directory_copied_to_another_machine_leaves_its_runs_running() {
+        // (f) A project copied or restored from a backup, `running` row and all. The
+        // marker is missing, or a regular file, or a new FIFO: another inode on another
+        // filesystem, with nobody holding it.
+        let id = identity();
+        let not_a_fifo = Marker::Present {
+            dev: 10,
+            ino: 20,
+            handle: None,
+            reader: None,
+            fs: String::new(),
+            local: false,
+        };
+        for seen in [
+            Marker::Missing,
+            not_a_fifo,
+            marker_but(Some(false), |m| (m.fs, m.ino) = ("fs-9".into(), 4711)),
+            marker_but(Some(false), |m| m.fs = "fs-9".into()),
+            marker_but(Some(false), |m| {
+                (m.ino, m.handle) = (4711, Some("1:0001".into()))
+            }),
+        ] {
+            let mut on = after_reboot(ABSENT, seen);
+            assert_eq!(verdict(&id, &on), Owner::Unknown);
+            on.here.machine = "machine-2".into();
+            on.here.host = "host-2".into();
+            assert_eq!(verdict(&id, &on), Owner::Unknown);
+        }
+    }
+
+    #[test]
+    fn a_reader_or_a_run_that_cannot_name_its_kernel_knows_nothing() {
+        let mut blind = fake(ABSENT, marker(Some(false)));
+        blind.here.boot = String::new();
+        assert_eq!(verdict(&identity(), &blind), Owner::Unknown);
+        let mut anonymous = identity();
+        anonymous.boot = String::new();
+        assert_eq!(
+            verdict(&anonymous, &fake(ABSENT, marker(Some(false)))),
+            Owner::Unknown
+        );
     }
 
     #[test]
     fn an_owner_value_that_is_not_an_identity_is_unknown() {
-        let on = fake(Process::Absent, marker(Some(false)));
+        let on = fake(ABSENT, marker(Some(false)));
         for junk in ["", "{", "[]", "\"x\"", "{}", "{\"boot\":\"\"}"] {
-            assert_eq!(
-                judge_json(Some(7), "host-1", junk, &on),
-                Owner::Unknown,
-                "{junk}"
-            );
+            assert_eq!(judge_json(Some(7), junk, &on), Owner::Unknown, "{junk}");
             assert_eq!(token_of(junk), None);
         }
         let json = serde_json::to_string(&identity()).unwrap();
-        assert_eq!(judge_json(Some(7), "host-1", &json, &on), Owner::Gone);
+        assert_eq!(judge_json(Some(7), &json, &on), Owner::Gone);
         assert_eq!(token_of(&json).as_deref(), Some(T));
         // A token that is not one names no file.
         let mut odd = identity();
@@ -986,6 +1295,8 @@ pub(crate) mod tests {
         let db = dir.path().join("metadata.db").display().to_string();
         assert_eq!(System::for_db(&db).marker("../x"), Marker::Missing);
     }
+
+    // ─── the real marker ──────────────────────────────────────────────────────
 
     fn db_in(dir: &tempfile::TempDir) -> String {
         dir.path().join("metadata.db").display().to_string()
@@ -1019,8 +1330,8 @@ pub(crate) mod tests {
         let seen = |want: bool| {
             matches!(
                 system.marker(&id.token),
-                Marker::Present { dev, ino, reader: Some(r), .. }
-                    if dev == id.dev && ino == id.ino && r == want
+                Marker::Present { dev, ino, reader: Some(r), ref fs, local, .. }
+                    if dev == id.dev && ino == id.ino && r == want && *fs == id.fs && local == id.local
             )
         };
         assert!(seen(true));
@@ -1032,6 +1343,17 @@ pub(crate) mod tests {
             marker_path(&dir_for(&db), &id.token).exists(),
             "asking removes nothing"
         );
+        // Something else under the marker's name answers nothing.
+        let path = marker_path(&dir_for(&db), T);
+        fs::write(&path, "a copy").unwrap();
+        assert!(matches!(
+            system.marker(T),
+            Marker::Present {
+                reader: None,
+                local: false,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -1042,8 +1364,7 @@ pub(crate) mod tests {
         let owner = claim(&db, "r1");
         assert_eq!(claim(&db, "r2"), owner, "one marker for the runs in flight");
         let pid = Some(i64::from(std::process::id()));
-        let host = crate::db::local_host();
-        assert_eq!(judge_json(pid, &host, &owner, &system), Owner::Alive);
+        assert_eq!(judge_json(pid, &owner, &system), Owner::Alive);
         let token = token_of(&owner).expect("a marker");
         let path = marker_path(&dir_for(&db), &token);
         assert!(path.exists());
