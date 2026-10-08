@@ -403,3 +403,26 @@ def test_renaming_a_node_runs_it_once_and_nothing_downstream(project):
     assert steps["renamed"]["status"] == "ran"
     assert steps["renamed"]["run_hash"] == first["pipeline.py:a"]["run_hash"]
     assert steps["pipeline.py:end"]["status"] == "cached"
+
+
+def test_wrapper_keyword_order_is_part_of_the_result(project):
+    """A custom decorator may observe Python's insertion order of keyword arguments."""
+    def source(arguments: str) -> str:
+        return (
+            "from barca import asset\n\n"
+            "def ordered(**options):\n"
+            "    def decorate(fn):\n"
+            "        def wrapped():\n"
+            "            return list(options)\n"
+            "        return wrapped\n"
+            "    return decorate\n\n"
+            f"@asset()\n@ordered({arguments})\n"
+            "def result():\n    return []\n"
+        )
+    write(project, source("first=1, second=2"))
+    assert get(project, "result")["final_output"] == ["first", "second"]
+    assert get(project, "result")["steps_executed"] == 0
+    write(project, source("second=2, first=1"))
+    changed = get(project, "result")
+    assert changed["steps_executed"] == 1
+    assert changed["final_output"] == ["second", "first"]

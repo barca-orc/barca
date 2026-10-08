@@ -16,96 +16,17 @@
 
 use crate::handlers;
 use crate::state::{AppState, JobStatus, RunStatus};
-use barca_core::commands::{self, AssetSummary};
-use barca_core::{CronExpr, Freshness, NodeKind, db};
+#[cfg(test)]
+use barca_core::results::AssetSummary;
+use barca_core::schedule::{ScheduledJob, collect_jobs};
+#[cfg(test)]
+use barca_core::schedule::{describe_schedule, jobs_from_summaries};
+use barca_core::{NodeKind, db};
 use chrono::{DateTime, FixedOffset, Local, TimeZone, Timelike, Utc};
 use croner::Cron;
-use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
-
-/// Static description of one scheduled job, for `barca schedule` (no server).
-#[derive(Debug, Clone, Serialize)]
-pub struct ScheduleInfo {
-    pub id: String,
-    pub cron: String,
-    pub kind: NodeKind,
-    /// Next fire time as unix epoch seconds (for programmatic use).
-    pub next_fire: Option<i64>,
-    /// Next fire time formatted in local time (for display).
-    pub next_fire_local: Option<String>,
-}
-
-/// Enumerate scheduled jobs from source and compute each one's next fire time.
-/// Pure static analysis — used by the `barca schedule` CLI, no running server.
-pub async fn describe_schedule(files: &[String], python: &std::path::Path) -> Vec<ScheduleInfo> {
-    let now = Local::now();
-    collect_jobs(files, python)
-        .await
-        .iter()
-        .map(|j| {
-            let next = j.cron.find_next_occurrence(&now, false).ok();
-            ScheduleInfo {
-                id: j.id.clone(),
-                cron: j.cron_str.clone(),
-                kind: j.kind,
-                next_fire: next.map(|t| t.timestamp()),
-                next_fire_local: next.map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string()),
-            }
-        })
-        .collect()
-}
-
-/// A parsed cron job discovered from the DAG at startup.
-struct ScheduledJob {
-    /// Full node id (e.g. `pipeline.py:daily_report`), used verbatim as the run target.
-    id: String,
-    /// Node kind decides the trigger path: asset/sensor → `get`, task → `run`.
-    kind: NodeKind,
-    /// The original cron string, kept for logging.
-    cron_str: String,
-    /// Parsed cron (5-field minute-granular, or 6-field seconds-granular),
-    /// evaluated in the scheduler's configured timezone.
-    cron: Cron,
-}
-
-/// Enumerate every node whose freshness is `Schedule(cron)` and parse each cron.
-/// A DAG-analysis failure disables the scheduler (returns empty); individual
-/// invalid/empty cron strings are logged and skipped rather than aborting.
-async fn collect_jobs(files: &[String], python: &std::path::Path) -> Vec<ScheduledJob> {
-    match commands::list_assets(files, python).await {
-        Ok(summaries) => jobs_from_summaries(summaries),
-        Err(e) => {
-            eprintln!("[barca] scheduler disabled: failed to analyze DAG: {e}");
-            Vec::new()
-        }
-    }
-}
-
-/// Pure summary → job mapping (split out from [`collect_jobs`] so it is testable
-/// without a Python interpreter). Drops entries whose cron fails to parse.
-fn jobs_from_summaries(summaries: Vec<AssetSummary>) -> Vec<ScheduledJob> {
-    let mut jobs = Vec::new();
-    for s in summaries {
-        let Freshness::Schedule(expr) = &s.freshness else {
-            continue;
-        };
-        match CronExpr::parse(&expr.0) {
-            Ok(cron) => jobs.push(ScheduledJob {
-                id: s.id,
-                kind: s.kind,
-                cron_str: expr.0.clone(),
-                cron,
-            }),
-            Err(e) => eprintln!(
-                "[barca] skipping '{}': invalid cron {:?}: {e}",
-                s.id, expr.0
-            ),
-        }
-    }
-    jobs
-}
 
 /// Pure eligibility check: which jobs fire at `now`? Split out so it can be
 /// unit-tested against fixed timestamps without a running server or wall clock.
@@ -323,7 +244,7 @@ fn publish_registry(
 }
 
 /// Re-run static analysis to enumerate scheduled jobs. The parse itself runs
-/// on the blocking pool inside `commands::list_assets`.
+/// on the blocking pool inside `barca_core::queries::list_assets`.
 async fn reload_jobs(state: &AppState) -> Vec<ScheduledJob> {
     collect_jobs(&state.config.files, &state.config.python).await
 }

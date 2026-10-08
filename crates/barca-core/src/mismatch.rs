@@ -13,9 +13,9 @@
 //! The key is absent everywhere else. It is a finding of this run, made when an artifact is
 //! fetched; a dry run, which does not contact the store, never has it.
 
-use crate::commands::StepReport;
 use crate::dag::Dag;
 use crate::recover::base_of;
+use crate::results::StepReport;
 use std::collections::HashMap;
 
 /// The finding in words, without the `[barca] warning: <step>:` prefix of the stderr line:
@@ -66,7 +66,7 @@ pub(crate) fn mark(dag: &Dag, reports: &mut [StepReport], mismatched: &HashMap<S
         if read_inputs {
             for up in data_inputs(dag, base) {
                 if let Some(w) = mismatched.get(up) {
-                    notes.push(format!("input {}: {w}", crate::commands::short_name(up)));
+                    notes.push(format!("input {}: {w}", crate::targets::short_name(up)));
                 }
             }
         }

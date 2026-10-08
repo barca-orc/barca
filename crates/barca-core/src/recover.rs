@@ -18,17 +18,19 @@
 //!   `artifact_missing`. Its run hash is unchanged, so the artifact lands at the same path and
 //!   nothing downstream is invalidated. Its own inputs are subject to the same rule.
 //!
-//! `commands::execute` applies it where a phase's inputs are made available;
-//! `commands::explain_dag` predicts it with [`predict_recomputes`].
+//! `execution::execute` applies it where a phase's inputs are made available;
+//! `execution::explain_dag` predicts it with [`predict_recomputes`].
 
-use crate::commands::{ExplainSummary, PartitionSummary, RunReason, StepReport, StoreSync};
+use crate::cache::RunReason;
 use crate::dispatch::{OutputRef, ProvidedInput, build_provided_inputs};
 use crate::model::NodeKind;
 use crate::planner::{ExecutionPlan, Phase, PhaseReason, StreamStep, WorkerStream};
+use crate::results::{ExplainSummary, PartitionSummary, StepReport};
+use crate::store_sync::StoreSync;
 use crate::transfer::ArtifactLayout;
 use std::collections::{HashMap, HashSet};
 
-/// What a run does next (see the loop in `commands::execute`).
+/// What a run does next (see the loop in `execution::execute`).
 pub(crate) enum Work<'p> {
     /// A phase of the plan: expand its partitions, decide each step, run what is not cached.
     Planned(&'p Phase),

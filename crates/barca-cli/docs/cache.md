@@ -121,9 +121,10 @@ def sales(region: str) -> dict:
   renamed step runs once. Its run hash is the same as before, so nothing downstream re-runs.
 
 A counted argument is compared by what it says, not how it is typed. Whitespace, line breaks,
-comments, single or double quotes, a trailing comma, the order of keyword arguments and the
-order of the entries in `inputs={...}` do not change the hash. Two things are compared as
-written: the function itself, from `def` on, and an f-string or `lambda` inside a counted
+comments, single or double quotes, a trailing comma, the order of barca's own decorator keyword
+arguments and the order of entries in `inputs={...}` do not change the hash. Other Python calls preserve keyword argument order: a wrapper
+decorator can observe it through `**kwargs`, so changing that order must invalidate the cache.
+Two things are compared as written: the function itself, from `def` on, and an f-string or `lambda` inside a counted
 argument.
 
 Names in a counted argument are followed into the cone exactly like names in the function body:

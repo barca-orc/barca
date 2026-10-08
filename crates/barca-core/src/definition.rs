@@ -377,7 +377,8 @@ fn def_start(func: &ast::StmtFunctionDef, source: &str) -> usize {
 ///
 /// Two expressions that differ only in whitespace, comments, line breaks, quote style, string
 /// prefix, implicit string concatenation, trailing commas, redundant parentheses, the spelling
-/// of a number (`0x10` and `16`) or the order of a call's keyword arguments give the same text.
+/// of a number (`0x10` and `16`) give the same text. Call keyword order is preserved: Python
+/// decorators and helper calls can observe it through `**kwargs`.
 /// Operators are fully parenthesised, so the text never depends on precedence.
 ///
 /// f-strings, t-strings and lambdas are the exception: they are copied from `source` as
@@ -411,25 +412,21 @@ fn write_list<'e>(
     out.push_str(close);
 }
 
-/// `(positional..., keyword=value sorted by keyword..., **mapping...)`.
+/// Positional arguments, then keyword arguments and `**mapping` in their original order.
+/// Sorting arbitrary calls would hide result changes in decorators that inspect `**kwargs`.
 fn write_arguments(arguments: &ast::Arguments, source: &str, out: &mut String) {
     let mut parts: Vec<String> = arguments
         .args
         .iter()
         .map(|arg| canonical_expr(arg, source))
         .collect();
-    let mut named: Vec<String> = Vec::new();
-    let mut spread: Vec<String> = Vec::new();
     for keyword in &arguments.keywords {
         let value = canonical_expr(&keyword.value, source);
-        match &keyword.arg {
-            Some(name) => named.push(format!("{name}={value}")),
-            None => spread.push(format!("**{value}")),
-        }
+        parts.push(match &keyword.arg {
+            Some(name) => format!("{name}={value}"),
+            None => format!("**{value}"),
+        });
     }
-    named.sort();
-    parts.extend(named);
-    parts.extend(spread);
     out.push('(');
     out.push_str(&parts.join(", "));
     out.push(')');
@@ -953,7 +950,6 @@ def f(a, b, c):
             ("'a' 'b'", "\"ab\""),
             ("r'a'", "'a'"),
             ("[1,2,]", "[ 1 , 2 ]"),
-            ("f(b=1, a=2)", "f(a=2, b=1)"),
             ("(x)", "x"),
             ("0x10", "16"),
             ("{'a':1}", "{ \"a\" : 1, }"),
@@ -977,6 +973,8 @@ def f(a, b, c):
             ("(1, 2)", "[1, 2]"),
             ("(1,)", "1"),
             ("f(1, 2)", "f(2, 1)"),
+            ("f(b=1, a=2)", "f(a=2, b=1)"),
+            ("f(a=1, **extras)", "f(**extras, a=1)"),
             ("f(a=1)", "f(1)"),
             ("a + b", "a - b"),
             ("(a + b) * c", "a + b * c"),
