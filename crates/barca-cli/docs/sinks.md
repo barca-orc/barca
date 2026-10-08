@@ -28,6 +28,9 @@ def summary() -> dict:
 - A parquet sink needs a DataFrame, Arrow table or DuckDB relation. Anything else is a sink
   failure: barca never writes pickle bytes under a `.parquet` name.
 - Several `@sink` decorators may be stacked on one asset.
+- A sink is written when its asset runs; an asset served from cache does not write its sinks.
+  Adding a `@sink` or editing one (its path or `serializer=`) therefore changes the asset's run
+  hash, so the next run executes the asset and writes the sink (`barca docs cache`).
 - Writes are staged and finalized atomically, so a crash never leaves a partial file.
 - A sink path is yours: barca writes the file there and changes nothing else. If the path is a
   symlink, the file it points to is written and the link stays. If a directory is at the path

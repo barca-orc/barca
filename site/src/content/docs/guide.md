@@ -297,10 +297,10 @@ region=latam  latam   500
 
 Limits on 0.18.0:
 
-- **Where the keys are written matters.** With the keys in a module-level constant, as
-  above, or coming from an expression or from `partitions_from(...)`, adding a key ran only
-  the new key. With a literal list inside the decorator
-  (`partitions(["emea", "amer", "apac"])`), adding a key ran every key again.
+- **Up to 0.18, where the keys were written mattered.** With a literal list inside the
+  decorator (`partitions(["emea", "amer", "apac"])`), adding a key ran every key again. From
+  0.19 a new key runs alone however the keys are written: a literal list, a module-level
+  constant as above, another expression, or `partitions_from(...)`.
 - **No single key can be targeted or refreshed.** `barca get sales` and `--refresh sales`
   act on every key.
 - **`barca get sales` prints one key's value** as `final_output`, not all of them. Read a

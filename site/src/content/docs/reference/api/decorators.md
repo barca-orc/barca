@@ -39,6 +39,13 @@ limit for one attempt. `description` and `tags` are metadata.
 `retries` is the total number of attempts on failure (1 = no retry). `retry_backoff` is the base
 delay in seconds between attempts (delay grows linearly: `retry_backoff * attempt`).
 
+Of these arguments, `inputs`, `serializer` and the dimension names in `partitions` are part of
+the run hash, with stacked `@sink` decorators and any decorator that is not barca's: changing
+one runs the asset again. `name`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`,
+`description`, `tags` and the partition keys are not, and neither is the formatting of the
+decorator: editing them re-runs nothing. `barca docs cache` has the full list with the reason
+for each (from 0.19; up to 0.18 any edit to the decorator re-ran the asset).
+
 `env` declares the environment variables the function reads. See
 [Declared environment variables](#declared-environment-variables-env) below.
 
@@ -161,10 +168,10 @@ $ barca get summary pipeline.py --json
   comprehension, a function call) is evaluated by Python when the run is planned.
 - A step's entry in the JSON result reports the keys: `"partitions": {"total": 3, "cached": 2,
   "will_run": 1, "will_run_keys": ["k=LATAM"]}`.
-- On 0.18.0, adding a key ran only the new key when the keys came from an expression (a module
-  constant, a comprehension) or from `partitions_from(...)`. Adding a key to a literal list
-  inside the decorator ran every key again, for the asset and for an asset derived from it
-  with `partitions_from`.
+- Adding a key runs only the new key, for the asset and for an asset derived from it with
+  `partitions_from`; removing or reordering keys runs no key. This is the same for a literal
+  list, a module constant, a comprehension, a function call and `partitions_from(...)`. (Up to
+  0.18, an edit to a literal list inside the decorator ran every key again.)
 
 ### `partitions_from(upstream)`
 

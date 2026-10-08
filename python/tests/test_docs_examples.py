@@ -178,10 +178,40 @@ def test_example_partitions(binary, topics, tmp_path):
     assert steps.count("pipeline.py:sales") == 3
     first = result(barca(binary, tmp_path, "get", "summary", "pipeline.py"))
     assert first["steps_executed"] == 4
-    assert first["final_output"] == {"regions": 3, "total": 400}
+    assert first["final_output"] == {"regions": 3, "total": 1200}
     second = result(barca(binary, tmp_path, "get", "summary", "pipeline.py"))
     assert second["steps_executed"] == 0  # every partition and the fan-in come from cache
     assert (tmp_path / ".barca" / "artifacts" / "pipeline.py--sales_region_emea").is_dir()
+
+    # "Add "latam" to the list in the decorator ...: 2 steps run, `sales` for `latam` and
+    # `summary`" (#283: up to 0.18 this ran all five).
+    example = tmp_path / "pipeline.py"
+    listed = 'partitions(["emea", "amer", "apac"])'
+    assert listed in example.read_text(), "the example lists its keys inside the decorator"
+    example.write_text(
+        example.read_text().replace(listed, listed.replace('"apac"', '"apac", "latam"'))
+    )
+    grown = result(barca(binary, tmp_path, "get", "summary", "pipeline.py"))
+    assert grown["steps_executed"] == 2
+    assert partition_keys_run(grown) == {"pipeline.py:sales": ["region=latam"]}
+    assert {s["id"]: s["status"] for s in grown["steps"]}["pipeline.py:summary"] == "ran"
+    assert grown["final_output"] == {"regions": 4, "total": 1700}
+
+    # "Remove a region and only `summary` runs."
+    example.write_text(example.read_text().replace('"amer", ', ""))
+    shrunk = result(barca(binary, tmp_path, "get", "summary", "pipeline.py"))
+    assert shrunk["steps_executed"] == 1
+    assert partition_keys_run(shrunk) == {}
+    assert shrunk["final_output"] == {"regions": 3, "total": 1300}
+
+
+def partition_keys_run(run: dict) -> dict:
+    """Partitioned step id -> the keys that executed in this run (steps with none left out)."""
+    return {
+        s["id"]: s["partitions"]["will_run_keys"]
+        for s in run["steps"]
+        if s.get("partitions", {}).get("will_run_keys")
+    }
 
 
 def test_partitions_topic_example(binary, topics, tmp_path):
@@ -205,6 +235,30 @@ def test_partitions_topic_example(binary, topics, tmp_path):
     assert summary["steps_executed"] == 1  # every partition of sales comes from cache
     assert summary["final_output"] == {"total": 1200}
     assert result(barca(binary, tmp_path, "get", "pipeline.py"))["steps_executed"] == 0
+
+    # "Changing the keys: adding a key runs that key and no other ... a `partitions_from`
+    # consumer runs for the new key only, and a `collect` fan-in runs again" (#283).
+    example = tmp_path / "pipeline.py"
+    listed = 'partitions(["emea", "amer", "apac"])'
+    assert listed in example.read_text(), "the example lists its keys inside the decorator"
+    example.write_text(
+        example.read_text().replace(listed, listed.replace('"apac"', '"apac", "latam"'))
+    )
+    grown = result(barca(binary, tmp_path, "get", "pipeline.py"))
+    assert partition_keys_run(grown) == {
+        "pipeline.py:sales": ["region=latam"],
+        "pipeline.py:margin": ["region=latam"],
+    }
+    assert {s["id"]: s["status"] for s in grown["steps"]}["pipeline.py:summary"] == "ran"
+    assert grown["steps_executed"] == 3
+
+    # "removing a key or reordering the list runs no key."
+    example.write_text(example.read_text().replace('["emea", "amer", ', '["amer", "emea", '))
+    assert result(barca(binary, tmp_path, "get", "pipeline.py"))["steps_executed"] == 0
+    example.write_text(example.read_text().replace('"amer", ', ""))
+    shrunk = result(barca(binary, tmp_path, "get", "pipeline.py"))
+    assert partition_keys_run(shrunk) == {}
+    assert shrunk["steps_executed"] == 1  # the fan-in
 
 
 def test_overview_topic_example(binary, topics, tmp_path):
