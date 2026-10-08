@@ -423,14 +423,18 @@ def deploy_all(model) -> None:
 
 Inside a barca worker, `parallel()` runs each branch in a separate worker process (the calling
 worker is stopped until they finish). Called outside a worker, it runs the callables one after
-another. Arguments and results must be JSON values.
+another. Arguments must be JSON values. A branch may return anything a step may return: its
+value is written as an artifact (json, pickle or parquet, by type) and read back by the caller,
+so a set, a date or a DataFrame arrives as it was returned, and a JSON value as JSON gives it
+back (a tuple as a list).
 
-A failed branch is returned as a `ParallelError`, whose `.error` holds the message and
+A branch that raises is returned as a `ParallelError`, whose `.error` holds the message and
 traceback, and nothing is raised: the calling task succeeds and the run exits 0 unless your code
-inspects the results and raises. Branches are not retried and not cached. On 0.18.0 a call from
-an `@asset` body also ran its branches, but the asset is then cached like any other, so a
-fan-out that should happen on every run belongs in a task. See
-[Parallel Tasks](/patterns/04-parallel-tasks/).
+inspects the results and raises. A branch whose return value cannot be passed back (an open
+file, a lambda) makes `parallel()` raise `BranchResultError`, which fails the calling step.
+Branches are not retried and not cached. A call from an `@asset` body also runs its branches,
+but the asset is then cached like any other, so a fan-out that should happen on every run
+belongs in a task. See [Parallel Tasks](/patterns/04-parallel-tasks/).
 
 ## @unsafe
 
@@ -463,7 +467,8 @@ seconds field. There is no year field. See [Scheduling](/scheduling/) for what a
 | Name | What it is |
 |---|---|
 | `duckdb_connection()` | The DuckDB connection barca binds `duckdb.DuckDBPyRelation` inputs to, one per worker process. Configure it at import time of your module. See `barca docs types`. |
-| `ParallelError` | What `parallel()` returns in place of a failed branch. |
+| `ParallelError` | What `parallel()` returns in place of a branch that raised. |
+| `BranchResultError` | Raised by `parallel()` when a branch returned a value that cannot be passed back to the caller. |
 | `get`, `run`, `plan`, `history`, `stats` | Python functions that start the `barca` binary and return parsed results. See `barca docs agents`, "Getting values, not pointers". |
 | `BarcaError` | Raised by those functions; carries `kind`, `code`, `remediation`, and for a failed step `node`, `traceback`, `artifact_dir`. |
 | `Client`, `Run` | HTTP client for `barca serve`. See [Server API](/reference/server-api/#python-client). |

@@ -82,9 +82,9 @@ results = parallel_map(deploy, ["us-east-1", "eu-west-1"], version=m["version"])
 
 ## Limits
 
-- **A failed branch does not raise in the caller.** `try`/`except` around `parallel()` catches
-  nothing. Check each result with `isinstance(result, ParallelError)`, and raise yourself if a
-  failed branch should fail the run.
+- **A branch that raises does not raise in the caller.** `try`/`except` around `parallel()`
+  does not catch it. Check each result with `isinstance(result, ParallelError)`, and raise
+  yourself if a failed branch should fail the run.
 - **Arguments must be partials.** A bare function, or a call such as `deploy("us-east-1", 1)`
   (which runs in the caller and passes its return value), fails the step:
 
@@ -95,12 +95,44 @@ results = parallel_map(deploy, ["us-east-1", "eu-west-1"], version=m["version"])
 - **Branches are not retried.** A branch runs once, whatever `retries=` its task declares
   (checked on 0.18.0 with a branch declared `retries=2`: one attempt).
 - **Branches are not cached.** They are tasks, and tasks always run.
-- **Use it in tasks.** On 0.18.0 a call from an `@asset` body also ran its branches, but the
-  asset is then cached like any other asset and the branches do not run again until its code
-  changes. If the fan-out should happen on every run, it belongs in a task.
-- **Arguments and results must be JSON values** (dict, list, str, number, bool, `None`).
-  Observed on 0.18.0: an argument that is not JSON-serializable, such as a `datetime.date`,
-  fails the calling step with `TypeError: Object of type date is not JSON serializable`. A
-  branch that returns a value that is not JSON-serializable (a set, a date, a DataFrame) does
-  not fail: the caller receives `None` in its place. Pass and return plain values, or have the
-  branch write its data somewhere and return the location.
+- **Use it in tasks.** A call from an `@asset` body also runs its branches, but the asset is
+  then cached like any other asset and the branches do not run again until the asset does. If
+  the fan-out should happen on every run, it belongs in a task.
+- **A branch may call `parallel()` itself.** Until 0.18.1 that could hang the run.
+- **Arguments must be JSON values** (dict, list, str, number, bool, `None`). They are sent to
+  the branch as JSON: a tuple arrives as a list, and a set fails the calling step with a
+  `TypeError`. So does a `datetime.date` (`TypeError: Object of type date is not JSON
+  serializable`), unless the `fast` extra (orjson) is installed, in which case the branch
+  receives its ISO string. Convert such values yourself (`d.isoformat()`) and the branch gets
+  the same thing either way.
+
+## What a branch may return
+
+Anything a step may return. The branch's worker writes its return value as an artifact, in the
+format barca picks for any step output (json, pickle or parquet, by type), and the calling step
+reads it back:
+
+| The branch returns | The caller receives |
+|---|---|
+| a set, a frozenset, a `date` or `datetime`, a `Decimal`, `bytes`, a dataclass, an object of your own class, a numpy array, or a container holding any of these | an equal value of the same type |
+| a pandas or polars DataFrame, a polars LazyFrame, a pyarrow Table, a DuckDB relation | a frame of the type the branch returned |
+| a value JSON can represent | what JSON gives back, as between steps: a tuple as a list, a dict's non-string keys as strings (`{1: "a"}` as `{"1": "a"}`) |
+| `None` | `None` |
+| nothing, because it raised | a `ParallelError` |
+| a value that cannot be written or read back (an open file, a lambda, a generator) | nothing: `parallel()` raises `BranchResultError`, the calling step fails and the run exits 1 |
+
+The error names the branch, the type and the reason:
+
+```
+BranchResultError: parallel() branch 1: pipeline.py:handle returned a _io.TextIOWrapper, which
+cannot be passed back to the step that called parallel(): TypeError: cannot pickle
+'TextIOWrapper' instances.
+```
+
+Until 0.18.1 only JSON values came back. Any other return value (a set, a date, a DataFrame)
+reached the caller as `None`, with no error or warning, and the run succeeded.
+
+A large result is not sent between processes: the caller reads it from the branch's artifact
+file. Branch artifacts are local files in the artifact directory, named after the branch's
+file, its function and a number; later runs overwrite them. They are not uploaded to an
+artifact store, with or without one configured.

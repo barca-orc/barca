@@ -165,12 +165,19 @@ def submit_and_wait(work_items: list[dict]) -> list[dict]:
         work_items: List of {"fn_ref": "mod:func", "args": [...], "kwargs": {...}}
 
     Returns:
-        List of {"status": "ok", "result": ...} or {"status": "error", "error": "..."}
+        One entry per item: {"status": "ok", "artifact": {"path", "format", "frame_type"?,
+        "json"?}} for a branch that returned (`barca._branches` reads the value from the
+        artifact, or from its text in "json" when the coordinator sent it along), or
+        {"status": "error", "error": "..."}. A coordinator from 0.18.1 or earlier answers
+        {"status": "ok", "result": <JSON value>} instead.
     """
     send_message(
         {
             "type": "submit",
             "items": work_items,
+            # This worker reads results from their artifacts: send where they are, not the
+            # values (crates/barca-core/src/protocol.rs, `Submit::artifact_results`).
+            "artifact_results": True,
         }
     )
     # Block until executor sends back the results

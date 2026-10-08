@@ -127,6 +127,25 @@ local disk — fails explicitly under a remote store) and `parallel()` return va
 remote store the parent gets `null` results with a warning). See
 [Remote Storage](/reference/remote-storage/) §"v1 limitations."
 
+> **Amended (after 0.18.1, issue #285):** `parallel()` return values are no longer an
+> exception. The second one above was worse than stated: the coordinator read a child's
+> artifact only when it was JSON, so a branch that returned anything else (a set, a date, a
+> DataFrame: written as pickle or parquet) resumed the parent with `null` for that branch,
+> with no warning, with or without a remote store. Checked on 0.18.1: the result was the
+> same in both cases, and no warning was printed in either.
+>
+> Now the coordinator tells the parent where each child's artifact is (`path`, `format`,
+> and for a frame the type the child returned), and the parent's worker reads it with the
+> reader steps use for their inputs. A branch may return whatever a step may return. A value
+> that cannot be written or read back fails the calling step with an error naming the
+> branch, the type and the reason. Child artifacts are local files whatever the store, so
+> nothing differs under a remote store.
+>
+> One narrowing remains, and it does not interpret anything: for a JSON child artifact of at
+> most 4 KB the coordinator reads the file and sends its text along, unparsed, so that the
+> parent does not open thousands of small files after a large fan-out. The parent parses
+> that text exactly as it would have parsed the file.
+
 ### 4.4 Node-Kind Semantics
 
 Sensors' `(update_detected, output)` tuple is serialized like any other output; tasks'
@@ -212,7 +231,8 @@ with a more pluggable (and more configuration-heavy) interface; see
 ## 10. Unresolved Questions
 
 Should dynamic-partition source reads and `parallel()` return values (§4.3) grow remote
-support, closing the two documented v1 local-disk-only exceptions?
+support, closing the two documented v1 local-disk-only exceptions? (`parallel()` return
+values: closed, see the amendment in §4.3. Dynamic-partition source reads remain.)
 
 ## 11. Future Possibilities
 

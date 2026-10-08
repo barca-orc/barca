@@ -86,8 +86,9 @@ When a step calls `parallel()`, the coordinator:
 1. sends SIGSTOP to that worker, which freezes it with its state in memory;
 2. starts a temporary worker so the number of active workers stays the same;
 3. puts the calls on the ready queue;
-4. when all of them have finished, sends SIGCONT to the original worker and sends it the
-   results. The pool then has one worker more than its size; the next worker that has no
+4. when all of them have finished, sends SIGCONT to the original worker and tells it where
+   each call's result is (the artifact its worker wrote), which the original worker reads. The
+   pool then has one worker more than its size; the next worker that has no
    step leased is stopped. (Until 0.18.1 the temporary worker itself was killed at this point,
    whatever it was doing. If it had called `parallel()` in the meantime, its step was lost and
    the run never ended.)

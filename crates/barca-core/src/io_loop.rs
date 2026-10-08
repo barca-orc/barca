@@ -93,6 +93,8 @@ struct FrozenWorker {
     /// steps in hand (a batch is sent whole) and runs them when it is resumed, so they stay
     /// leased to it: returned to the queue they would run a second time on another worker.
     rest: VecDeque<ItemId>,
+    /// Whether the worker reads branch results from their artifacts (`Submit::artifact_results`).
+    artifact_results: bool,
 }
 
 // ─── Events ──────────────────────────────────────────────────────────────────
@@ -452,7 +454,10 @@ impl WorkerPool {
                         self.resume_frozen(coord).await;
                         self.assign_ready(coord, cost, cancel).await;
                     }
-                    WorkerMessage::Submit { items } => {
+                    WorkerMessage::Submit {
+                        items,
+                        artifact_results,
+                    } => {
                         let Some(handle) = self.workers.get(&worker_id) else {
                             eprintln!("[barca] Submit from unknown worker {worker_id}, ignoring");
                             continue;
@@ -542,6 +547,7 @@ impl WorkerPool {
                             group_id,
                             original_worker_id: worker_id,
                             rest,
+                            artifact_results,
                         });
 
                         // Assign ready items (children are now in the ready queue)
@@ -875,46 +881,19 @@ impl WorkerPool {
                     libc::kill(fw.child.id() as i32, libc::SIGCONT);
                 }
 
-                // Build ParallelResponse with results for each child.
-                // Read actual JSON values from the artifact files so the parent
-                // task receives the real return values (not Null).
+                // Tell the parent how each branch ended (`branch_result`).
                 let group = coord.group(fw.group_id);
+                let failed: HashMap<ItemId, &str> = coord.failed_items().into_iter().collect();
                 let results: Vec<ParallelResult> = group
                     .items
                     .iter()
-                    .map(|&iid| {
-                        if coord.is_done(iid) {
-                            let val = coord
-                                .outputs()
-                                .get(&iid)
-                                .and_then(|artifact| {
-                                    let fmt = artifact
-                                        .get("format")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("");
-                                    let path =
-                                        artifact.get("path").and_then(|v| v.as_str()).unwrap_or("");
-                                    // Workers always write locally, so the
-                                    // child's artifact is on this disk.
-                                    if fmt == "json" && !path.is_empty() {
-                                        std::fs::read_to_string(path)
-                                            .ok()
-                                            .and_then(|s| serde_json::from_str(&s).ok())
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .unwrap_or(serde_json::Value::Null);
-                            ParallelResult::Ok { result: val }
+                    .map(|iid| {
+                        let outcome = if coord.is_done(*iid) {
+                            Ok(coord.outputs().get(iid))
                         } else {
-                            let error = coord
-                                .failed_items()
-                                .into_iter()
-                                .find(|(fid, _)| *fid == iid)
-                                .map(|(_, msg)| msg.to_string())
-                                .unwrap_or_else(|| "failed".to_string());
-                            ParallelResult::Error { error }
-                        }
+                            Err(failed.get(iid).copied().unwrap_or("failed"))
+                        };
+                        branch_result(outcome, fw.artifact_results)
                     })
                     .collect();
                 let response = CoordinatorMessage::ParallelResponse { results };
@@ -1167,7 +1146,92 @@ fn build_step_json(item: &crate::coordinator::Item, coord: &Coordinator) -> serd
             .map(|(k, v)| (k.clone(), v.as_str()))
             .collect::<HashMap<String, &str>>(),
         "return_type": item.spec.return_type.map(|t| t.as_str()),
+        // A `parallel()` branch: its result goes back to the step that called it.
+        "branch": item.group.is_some(),
     })
+}
+
+/// What the step that called `parallel()` is told about one branch.
+///
+/// `outcome` is the branch's recorded artifact when it finished, or its error when it failed.
+///
+/// A branch that finished is answered with where its artifact is, and the calling worker
+/// reads it with the code that reads any step's input: whatever a step can return, a branch
+/// can return. (For a small JSON artifact the file's text goes along, so the worker need not
+/// open it; the text is not interpreted here.) The coordinator used to read the file itself and pass the value inline, which
+/// it could do for JSON only: any other value (a set, a date, a DataFrame: written as pickle
+/// or parquet) reached the caller as `None`, with no error (#285), and a JSON value went
+/// through this process's JSON types on the way (an integer beyond 64 bits arrived as a
+/// float, a dict with its keys sorted, a NaN as `None`).
+///
+/// A worker that did not ask for artifact results (a barca Python package from before this
+/// change, run by this binary) still gets JSON values inline. A value that cannot be passed
+/// that way is an error for that worker, not `None`.
+fn branch_result(
+    outcome: Result<Option<&serde_json::Value>, &str>,
+    artifact_results: bool,
+) -> ParallelResult {
+    let artifact = match outcome {
+        Ok(artifact) => artifact,
+        Err(error) => {
+            return ParallelResult::Error {
+                error: error.to_string(),
+            };
+        }
+    };
+    let field = |name: &str| {
+        artifact
+            .and_then(|a| a.get(name))
+            .and_then(|v| v.as_str())
+            .filter(|v| !v.is_empty())
+    };
+    let (Some(path), Some(format)) = (field("path"), field("format")) else {
+        return ParallelResult::Error {
+            error: "the branch finished but reported no artifact for its result".to_string(),
+        };
+    };
+    if artifact_results {
+        // A small JSON artifact's text goes along, unparsed (`BranchArtifact::json`). If it
+        // cannot be read here the worker reads the file itself, and reports why it cannot.
+        let small = artifact
+            .and_then(|a| a.get("size_bytes"))
+            .and_then(|v| v.as_u64())
+            .is_some_and(|size| size <= crate::protocol::INLINE_JSON_MAX_BYTES);
+        let json = (format == "json" && small)
+            .then(|| std::fs::read_to_string(path).ok())
+            .flatten();
+        return ParallelResult::Ok {
+            result: None,
+            artifact: Some(crate::protocol::BranchArtifact {
+                path: path.to_string(),
+                format: format.to_string(),
+                frame_type: field("frame_type").map(str::to_string),
+                json,
+            }),
+        };
+    }
+    let inline = if format == "json" {
+        std::fs::read_to_string(path)
+            .map_err(|e| e.to_string())
+            .and_then(|text| {
+                serde_json::from_str::<serde_json::Value>(&text).map_err(|e| e.to_string())
+            })
+    } else {
+        Err(format!("it was written as {format}, not JSON"))
+    };
+    match inline {
+        Ok(value) => ParallelResult::Ok {
+            result: Some(value),
+            artifact: None,
+        },
+        Err(why) => ParallelResult::Error {
+            error: format!(
+                "the branch's return value cannot be passed to this worker ({why}). The barca \
+                 Python package this worker runs is older than the barca command; install \
+                 matching versions."
+            ),
+        },
+    }
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -1345,6 +1409,156 @@ mod tests {
                     {"path": "f--source_key_b.json", "format": "json"},
                 ],
             })
+        );
+    }
+
+    /// A small JSON artifact's text goes along exactly as it is on disk: nothing here parses
+    /// it (this text is not JSON a Rust parser accepts, and its key order is kept). A larger
+    /// one, and one that cannot be read, is named only.
+    #[test]
+    fn a_small_json_branch_artifact_is_sent_with_its_text_unparsed() {
+        let dir = tempfile::tempdir().unwrap();
+        let text = r#"{"b": 1, "a": NaN, "n": 1000000000000000000000000000000}"#;
+        let small = dir.path().join("small.json");
+        std::fs::write(&small, text).unwrap();
+        let answer = |path: &Path, size: u64| {
+            let artifact = serde_json::json!({
+                "path": path.to_str().unwrap(), "format": "json", "size_bytes": size
+            });
+            match branch_result(Ok(Some(&artifact)), true) {
+                ParallelResult::Ok {
+                    result: None,
+                    artifact: Some(a),
+                } => a,
+                other => panic!("expected an artifact answer, got {other:?}"),
+            }
+        };
+        let sent = answer(&small, text.len() as u64);
+        assert_eq!(sent.json.as_deref(), Some(text));
+        assert_eq!(sent.path, small.to_str().unwrap());
+
+        let limit = crate::protocol::INLINE_JSON_MAX_BYTES;
+        assert!(answer(&small, limit).json.is_some());
+        assert_eq!(answer(&small, limit + 1).json, None);
+        assert_eq!(answer(&dir.path().join("gone.json"), 10).json, None);
+    }
+
+    /// #285: a finished branch is answered with its artifact, whatever its format, and the
+    /// coordinator does not read a file it could not pass on as it is.
+    #[test]
+    fn a_finished_branch_is_answered_with_where_its_artifact_is() {
+        for (format, frame_type) in [
+            ("json", None),
+            ("pickle", None),
+            ("parquet", Some("polars")),
+        ] {
+            let mut artifact = serde_json::json!({
+                "path": "/nowhere/branch.out", "format": format, "size_bytes": 3
+            });
+            if let Some(t) = frame_type {
+                artifact["frame_type"] = serde_json::json!(t);
+            }
+            let ParallelResult::Ok { result, artifact } = branch_result(Ok(Some(&artifact)), true)
+            else {
+                panic!("a finished {format} branch must be ok");
+            };
+            assert_eq!(result, None);
+            assert_eq!(
+                artifact,
+                Some(crate::protocol::BranchArtifact {
+                    path: "/nowhere/branch.out".to_string(),
+                    format: format.to_string(),
+                    frame_type: frame_type.map(str::to_string),
+                    json: None,
+                })
+            );
+        }
+    }
+
+    /// A worker from an older Python package gets JSON values inline as before, and an error
+    /// (where it got `None`) for a value that cannot be passed that way.
+    #[test]
+    fn a_worker_that_did_not_ask_for_artifacts_gets_json_inline_or_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let json = dir.path().join("a.json");
+        std::fs::write(&json, r#"{"i": 1}"#).unwrap();
+        let artifact = serde_json::json!({"path": json.to_str().unwrap(), "format": "json"});
+        let ParallelResult::Ok { result, artifact } = branch_result(Ok(Some(&artifact)), false)
+        else {
+            panic!("a JSON result is passed inline");
+        };
+        assert_eq!(result, Some(serde_json::json!({"i": 1})));
+        assert_eq!(artifact, None);
+
+        let pickle = serde_json::json!({"path": "/nowhere/a.pkl", "format": "pickle"});
+        let ParallelResult::Error { error } = branch_result(Ok(Some(&pickle)), false) else {
+            panic!("a pickled result must not become a silent null");
+        };
+        assert!(
+            error.contains("written as pickle") && error.contains("older than"),
+            "{error}"
+        );
+
+        let nan = dir.path().join("nan.json");
+        std::fs::write(&nan, "NaN").unwrap();
+        let artifact = serde_json::json!({"path": nan.to_str().unwrap(), "format": "json"});
+        assert!(matches!(
+            branch_result(Ok(Some(&artifact)), false),
+            ParallelResult::Error { .. }
+        ));
+    }
+
+    #[test]
+    fn a_failed_branch_is_answered_with_its_error_and_a_missing_artifact_is_an_error() {
+        for artifact_results in [true, false] {
+            let ParallelResult::Error { error } =
+                branch_result(Err("ValueError: boom"), artifact_results)
+            else {
+                panic!("a failed branch is an error");
+            };
+            assert_eq!(error, "ValueError: boom");
+            assert!(matches!(
+                branch_result(Ok(None), artifact_results),
+                ParallelResult::Error { .. }
+            ));
+        }
+    }
+
+    /// The worker is told which steps are branches: it reports a result it cannot write as
+    /// an error for the caller, and records the frame type of one it can.
+    #[test]
+    fn build_step_json_marks_parallel_branches() {
+        let mut coord = Coordinator::new();
+        let spec = ItemSpec {
+            fn_ref: "f.py:a".to_string(),
+            function_name: "a".to_string(),
+            source_file: "f.py".to_string(),
+            direct_args: Vec::new(),
+            direct_kwargs: HashMap::new(),
+            dag_inputs: HashMap::new(),
+            timeout_seconds: 300,
+            retries: 1,
+            retry_backoff_seconds: 0.0,
+            serializer: None,
+            sinks: Vec::new(),
+            run_hash: None,
+            upstream_inputs: HashMap::new(),
+            collected_inputs: HashMap::new(),
+            param_types: HashMap::new(),
+            return_type: None,
+            kind: "task".to_string(),
+            is_dynamic: false,
+        };
+        let parent = coord.add_item(
+            crate::StepId::unpartitioned("f.py:a"),
+            spec.clone(),
+            Vec::new(),
+        );
+        assert_eq!(build_step_json(coord.item(parent), &coord)["branch"], false);
+        let (_, children) = coord.on_parallel_requested(parent, vec![spec]);
+        assert_eq!(
+            build_step_json(coord.item(children[0]), &coord)["branch"],
+            true
         );
     }
 

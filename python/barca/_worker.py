@@ -672,6 +672,11 @@ def _materialize(result, node_id, art_dir, step, elapsed, elapsed_in_artifact=Fa
     artifact: dict = {"path": str(path), "format": fmt, "size_bytes": size}
     if content_hash is not None:
         artifact["content_hash"] = content_hash
+    if step.get("branch") and fmt == "parquet":
+        # The caller of parallel() gets back the frame type the branch returned.
+        from barca import _branches
+
+        artifact["frame_type"] = _branches.frame_type(result, fmt)
     if elapsed_in_artifact:
         artifact["elapsed_seconds"] = elapsed
     if timing:
@@ -987,15 +992,24 @@ def _run_daemon_step(step, modules, art_dir, lru):
         result = _make_serializable(result)
 
         # Serialize result to artifact (and write any declared sinks).
-        artifact = _materialize(
-            result,
-            node_id,
-            art_dir,
-            step,
-            wall,
-            elapsed_in_artifact=True,
-            timing={"cpu_seconds": cpu, "max_rss_bytes": _peak_rss_bytes()},
-        )
+        try:
+            artifact = _materialize(
+                result,
+                node_id,
+                art_dir,
+                step,
+                wall,
+                elapsed_in_artifact=True,
+                timing={"cpu_seconds": cpu, "max_rss_bytes": _peak_rss_bytes()},
+            )
+        except Exception as exc:
+            if not step.get("branch"):
+                raise
+            # A parallel() branch whose return value cannot be written: say so in terms of
+            # the branch, for the step that called it (barca/_branches.py).
+            from barca import _branches
+
+            raise _branches.unwritable(step, result, exc) from exc
         # A downstream step in this worker may consume what we just produced, keyed by the
         # reader it is equivalent to so a consumer never gets a different frame type.
         result_type = _result_frame_type(result)
@@ -1024,9 +1038,15 @@ def _run_daemon_step(step, modules, art_dir, lru):
         note = _duckdb.explain_error(exc, bound_views)
         if note:
             message = f"{message}\n\n{note}"
+        from barca import BranchResultError, _branches
+
         _runtime.emit_step_error(
             node_id=node_id,
-            error_type=type(exc).__name__,
+            error_type=(
+                _branches.UNRETURNABLE
+                if isinstance(exc, BranchResultError) and step.get("branch")
+                else type(exc).__name__
+            ),
             message=message,
             traceback=_user_traceback(exc),
             elapsed=wall,
