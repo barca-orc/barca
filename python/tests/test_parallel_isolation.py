@@ -302,6 +302,21 @@ def test_branch_results_are_gone_after_ctrl_c(root):
     wait_until(lambda: not any(alive(w) for w in workers), "the workers to exit")
 
 
+def test_branch_results_are_gone_after_a_run_is_cancelled_under_barca_serve(root, server):
+    run = server.run("waits")
+    wait_until((root / "held.0.started").exists, "the held branch to start")
+    wait_until(lambda: len(branch_files(root)) >= 20, "twenty branch results on disk")
+    run.cancel()
+    status = run.wait(timeout=60, poll=0.05)
+    assert status["status"] == "cancelled", status
+    wait_until(lambda: branch_files(root) == [], "the cancelled run's branch results to go")
+    # The server is still there and its next run is not disturbed.
+    (root / "release").write_text("")
+    again = server.run("fan_a").wait(timeout=60, poll=0.05)
+    assert again["status"] == "complete", again
+    wait_until(lambda: branch_files(root) == [], "the next run's branch results to go")
+
+
 def test_branch_results_of_a_killed_run_are_swept_by_the_next_run(root):
     proc = held_group(root)
     os.killpg(proc.pid, signal.SIGKILL)  # barca and every worker, the frozen caller included
@@ -342,10 +357,14 @@ def test_a_caller_killed_while_its_branches_run_fails_its_step(root):
     proc = held_group(root)
     caller = int((root / "caller.pid").read_text())
     os.kill(caller, signal.SIGKILL)
+    # The coordinator has noticed once the dead caller's branch results are gone. Only then is
+    # the held branch let go: released at once, the group could finish first, and the caller
+    # would be found dead as a running worker (the same outcome, with a shorter message).
+    wait_until(lambda: branch_files(root) == [], "the dead caller's branch results to go", proc)
     (root / "release").write_text("")
     code, out, err = finish(proc, timeout=60)
     assert code == 1, (code, err)
     doc = json.loads(out)
     assert doc["failed_node"] == "pipeline.py:waits"
-    assert "worker disconnected while it waited for its parallel() branches" in doc["error"]
+    assert "worker disconnected while it waited for its parallel() branches" in doc["error"], err
     assert branch_files(root) == []
