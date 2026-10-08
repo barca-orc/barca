@@ -61,6 +61,14 @@ def summary(all_sales: list[dict]) -> dict:
 - Artifacts are stored per key, for example
   `.barca/artifacts/pipeline.py--sales_region_emea/<run_hash>.json`. `barca plan` lists one step
   per key, all under the same node id (`pipeline.py:sales`).
-- A fan-in (`collect`) runs in its own phase after every partition has finished.
+- A fan-in (`collect`) runs in its own phase after every partition has finished, also when the
+  asset has one key or barca has one worker.
+- Which keys run, and each key's run hash, do not depend on the number of workers
+  (`BARCA_POOL_SIZE`, by default the machine's core count). Up to 0.18.1 they could: with a
+  chain of `partitions_from` assets and fewer workers than keys, some keys of the second asset
+  were recorded under a run hash that depended on how the keys were split across workers, and
+  ran again when the split changed. Such a key, and a fan-in over it, runs once more after
+  upgrading; with at least as many workers as the two assets have keys together, nothing
+  changes.
 
 See also: `barca docs sinks` (one file per partition), `barca docs examples/partitions`.

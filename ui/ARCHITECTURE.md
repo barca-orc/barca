@@ -149,3 +149,10 @@ they arrive. The tests do not exercise that (fonts are local and fast).
   `tsc`); the production `build` keeps stable `tsc -b` as the authoritative gate.
 - Styling via the barca design-system CSS tokens; components reference `var(--…)`, never
   invented colors.
+
+Graph state presentation lives in `src/lib/graphState.ts`. Resting node
+colors come from `/state`: cached green, stale/partial yellow, never-run/unknown/always-run
+neutral, and the latest failed attempt red even if an older artifact exists. Active
+run events overlay that state; completion refreshes it. Selection uses a separate outline.
+The graph displays every asset and dependency in the selected pipeline. No nodes
+are grouped or collapsed automatically.
