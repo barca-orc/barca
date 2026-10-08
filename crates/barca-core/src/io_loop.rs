@@ -25,7 +25,9 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+#[cfg(test)]
+use std::process::Command;
+use std::process::{Child, Stdio};
 use std::time::Duration;
 
 use tokio::net::{UnixListener, UnixStream};
@@ -1100,8 +1102,12 @@ async fn spawn_worker(
     event_tx: &mpsc::Sender<IoEvent>,
     cancel: &CancellationToken,
 ) -> Result<WorkerHandle, SpawnError> {
-    let mut cmd = Command::new(&config.python);
-    cmd.args(["-m", "barca._worker", "--daemon"])
+    let mut cmd = crate::helper_proc::python_module_std(
+        &config.python,
+        "barca._worker",
+        config.storage_options_json.as_deref(),
+    );
+    cmd.arg("--daemon")
         .env("BARCA_SOCKET", socket_path.to_str().unwrap_or(""))
         .env("BARCA_WORKER", "1")
         .env("BARCA_WORKER_ID", worker_id.to_string())
@@ -1111,9 +1117,7 @@ async fn spawn_worker(
         .stdout(Stdio::from(std::io::stderr()))
         .stderr(Stdio::inherit())
         .stdin(Stdio::null());
-    if let Some(ref opts) = config.storage_options_json {
-        cmd.env("BARCA_STORAGE_OPTIONS", opts);
-    }
+
     // Ctrl-C means something to a worker only while it runs a step. It starts outside the
     // terminal's job, so that one arriving while the interpreter starts is not a traceback,
     // and joins the job once it handles the signal itself.
