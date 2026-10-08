@@ -27,6 +27,7 @@ Repository = "https://github.com/barca-orc/barca"
 [project.optional-dependencies]
 parquet = ["pyarrow", "pandas"]
 fast = ["orjson"]
+datadog = ["ddtrace>=3,<5"]
 azure = ["fsspec", "adlfs"]
 s3 = ["fsspec", "s3fs"]
 # Cloudflare R2 is S3-compatible: install the s3 extra and point
