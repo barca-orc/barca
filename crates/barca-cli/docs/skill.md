@@ -29,6 +29,8 @@ barca sql "select * from total"         # look at a cached result with DuckDB; r
   and shares its `.barca/` cache. File arguments are relative to where you are. Node ids
   (`pipelines/sources.py:ibp_model`) are relative to that root.
 - Unsure of a name? `barca list`. An unknown name exits 2 and lists the valid ones.
+- A decorator argument barca does not define (`@asset(after=x)`, `input=` for `inputs=`) exits 2
+  on every command that reads the file and names the accepted ones (`barca docs assets`).
 
 ## Argument order: target, then files
 
@@ -83,6 +85,8 @@ barca get total pipeline.py --refresh-all         # recompute an asset's whole c
 | 130  | `cancelled`   | interrupted                                     | re-run               |
 
 Steps that finished before a failure, a cancel or a kill stay cached: re-running resumes.
+Cutting the output short (`barca list | head -1`, `barca run deploy 2>&1 | head -20`) stops
+nothing and is not an error: the run finishes and is recorded, and the exit code is unchanged.
 While a run is going, `barca status` from another process shows the steps it has finished.
 
 ## Agent flags and jq

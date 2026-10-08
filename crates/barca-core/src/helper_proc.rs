@@ -299,7 +299,7 @@ mod tests {
             serde_json::from_slice::<serde_json::Value>(&worker_output.stdout).unwrap(),
             expected
         );
-        println!("helper options probe passed");
+        crate::outln!("helper options probe passed");
     }
 
     /// A shell child that prints its process group, then waits; `term` on SIGTERM.

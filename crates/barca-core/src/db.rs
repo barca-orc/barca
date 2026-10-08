@@ -469,7 +469,7 @@ async fn replace_locked(
         && let Err(e) = prev.publish()
     {
         // The swap is done and stands whatever happens to the name of the old file.
-        eprintln!(
+        crate::errln!(
             "[barca] warning: the local history was replaced, but the one it replaced could \
              not be kept as {}: {e}",
             state_prev::path(db_path)

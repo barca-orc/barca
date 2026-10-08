@@ -51,7 +51,7 @@ class Manual:
 class Schedule:
     """Runs on a cron schedule."""
 
-    def __init__(self, cron: str) -> None:
+    def __init__(self, cron: str, /) -> None:
         self.cron = cron
 
 
@@ -60,6 +60,7 @@ class Schedule:
 
 def asset(
     fn=None,
+    /,
     *,
     name=None,
     inputs=None,
@@ -72,9 +73,12 @@ def asset(
     description=None,
     tags=None,
     env: list[str] | None = None,
-    **kwargs,
 ):
     """Declare a cached asset node.
+
+    The arguments below are the only ones: the `barca` binary rejects any other when it
+    plans (exit 2, naming the argument), and this signature rejects it when the module
+    is imported.
 
     `freshness` controls when the asset is kept up to date — `Always` (default),
     `Manual`, or `Schedule("<cron>")`. The Rust binary reads it statically; a
@@ -105,8 +109,11 @@ def asset(
 
 def sensor(
     fn=None,
+    /,
     *,
     name=None,
+    partitions: dict | None = None,
+    serializer: str | None = None,
     freshness=Manual,
     timeout_seconds=300,
     retries=1,
@@ -114,13 +121,16 @@ def sensor(
     description=None,
     tags=None,
     env: list[str] | None = None,
-    **kwargs,
 ):
     """Declare a sensor node (observes external state).
 
     Sensors must use `Manual` or `Schedule(...)` freshness — `Always` is not
     valid for a sensor (its polling cadence must be declared explicitly). See
     `asset` for `env`, `retries` and `retry_backoff` semantics.
+
+    `partitions` runs the sensor once per key, with the key passed as the parameter
+    named in the dict, as on `asset`. `serializer` forces the format its value is
+    stored in ("json", "pickle" or "parquet").
     """
     if fn is not None:
         return fn
@@ -133,9 +143,12 @@ def sensor(
 
 def task(
     fn=None,
+    /,
     *,
     name=None,
     inputs=None,
+    partitions: dict | None = None,
+    serializer: str | None = None,
     freshness=Always,
     timeout_seconds=300,
     retries=1,
@@ -143,7 +156,6 @@ def task(
     description=None,
     tags=None,
     env: list[str] | None = None,
-    **kwargs,
 ):
     """Declare a task node (always re-runs; never cached).
 
@@ -156,6 +168,10 @@ def task(
     on a timer: leave `barca serve` running and it fires on each cron tick (see
     the Scheduling guide). See `asset` for `env`, `retries` and `retry_backoff`
     semantics; a task always runs, so `env` only records the values it used.
+
+    `partitions` runs the task once per key, with the key passed as the parameter
+    named in the dict, as on `asset`. `serializer` forces the format its return
+    value is stored in ("json", "pickle" or "parquet").
     """
     if fn is not None:
         return fn
@@ -166,7 +182,7 @@ def task(
     return decorator
 
 
-def sink(path: str, serializer: str | None = None, **kwargs):
+def sink(path: str, /, *, serializer: str | None = None):
     """Declare a sink output (stacked on @asset).
 
     path may be local or a remote URI (abfss://, s3://, gs://). serializer
@@ -188,22 +204,22 @@ def unsafe(fn):
 # ─── Marker functions ─────────────────────────────────────────────────────────
 
 
-def partitions(values):
+def partitions(values, /):
     """Declare static partition values."""
     return values
 
 
-def partitions_from(source):
+def partitions_from(source, /):
     """Derive partitions from an upstream asset."""
     return source
 
 
-def collect(asset_fn):
+def collect(asset_fn, /):
     """Aggregate all partitions of an upstream asset."""
     return asset_fn
 
 
-def asset_ref(ref_string: str) -> str:
+def asset_ref(ref_string: str, /) -> str:
     """Canonical asset reference."""
     return ref_string
 
