@@ -17,6 +17,7 @@ This page describes the code as of 0.18.0. The reasons behind the main choices a
 crates/
   barca-core/src/             library: no HTTP dependencies
     parse.rs, discover.rs     read decorated functions from source with ruff's parser; find the project's .py files
+    load.rs                   from source files to a DAG, with dynamic partitions resolved
     dag.rs, planner.rs        petgraph graph, validation, phases and streams of the plan
     hash.rs, cone.rs, envdeps.rs   run hash: the function, the helper code it reaches, declared env= variables
     cache.rs, recover.rs      cache lookups; recompute a cached step whose artifact file is gone
@@ -25,7 +26,9 @@ crates/
     cost.rs                   measured step cost and batch sizing
     db.rs, config.rs          the metadata database; project root, barca.toml, environment, flags
     transfer.rs, state_*.rs   remote store: artifact transfer, and shared history as one blob
-    status.rs, sql.rs, commands.rs   the commands
+    commands.rs               get and run: target resolution, cache decisions, executing a run
+    queries.rs, status.rs, sql.rs   read-only commands: plan, history, stats, list; status; sql
+    results.rs                what a command returns (serde types shared by the CLI and the server)
     telemetry/                run reports; one Datadog trace per run
   barca-server/src/           axum HTTP API, cron scheduler, file watcher, embedded web UI
   barca-cli/                  the `barca` binary: clap commands, output, error envelope; `serve` calls barca-server
