@@ -26,6 +26,8 @@ crates/
     cost.rs                   measured step cost and batch sizing
     db.rs, config.rs          the metadata database; project root, barca.toml, environment, flags
     transfer.rs, state_*.rs   remote store: artifact transfer, and shared history as one blob
+    store_sync.rs             a run's link to the store: upload results, fetch remote inputs, wait at the end
+    persist.rs                recording a run: run and step rows, the final write, the shared-history push
     commands.rs               get and run: target resolution, cache decisions, executing a run
     queries.rs, status.rs, sql.rs   read-only commands: plan, history, stats, list; status; sql
     results.rs                what a command returns (serde types shared by the CLI and the server)
