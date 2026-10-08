@@ -10,6 +10,7 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::response::Sse;
 use axum::response::sse::{Event, KeepAlive};
+use axum::response::{IntoResponse, Response};
 use barca_core::commands::{self, GetResult};
 use barca_core::{BarcaError, RunEvent, db};
 use futures::stream::{self, Stream, StreamExt};
@@ -325,8 +326,16 @@ async fn check_target(state: &AppState, name: &str, verb: &str) -> Result<(), Ap
         Ok(_) => Ok(()),
         Err(e @ commands::TargetError::NotFound { .. }) => Err(ApiError::NotFound(e.to_string())),
         Err(e @ commands::TargetError::Ambiguous { .. }) => Err(ApiError::Conflict(e.to_string())),
-        Err(e @ commands::TargetError::WrongKind { .. }) => {
-            Err(ApiError::BadRequest(e.to_string()))
+        // The resolver's own words name a command (`use `barca run` instead`); an HTTP
+        // client is told the endpoint.
+        Err(commands::TargetError::WrongKind { name, kind }) => {
+            let (what, endpoint) = match kind {
+                barca_core::NodeKind::Task => ("a task", "run"),
+                _ => ("an asset", "get"),
+            };
+            Err(ApiError::BadRequest(format!(
+                "'{name}' is {what}: use POST /{endpoint}/{name}"
+            )))
         }
     }
 }
@@ -760,6 +769,27 @@ pub async fn no_route(method: axum::http::Method, uri: axum::http::Uri) -> ApiEr
         ),
         _ => ApiError::NotFound(format!("no such endpoint: {method} {path}")),
     }
+}
+
+/// A known path asked with a method it does not take: `405` with the `{"error": ...}` body
+/// and the methods it does take, also in the `Allow` header.
+pub async fn wrong_method(method: axum::http::Method, uri: axum::http::Uri) -> Response {
+    let path = uri.path();
+    let allowed = if path == "/run" || path.starts_with("/get/") {
+        "POST"
+    } else if path.starts_with("/run/") {
+        "POST, DELETE"
+    } else {
+        "GET"
+    };
+    (
+        axum::http::StatusCode::METHOD_NOT_ALLOWED,
+        [(axum::http::header::ALLOW, allowed)],
+        Json(json!({
+            "error": format!("{method} is not allowed on {path}: use {}", allowed.replace(", ", " or "))
+        })),
+    )
+        .into_response()
 }
 
 #[cfg(test)]

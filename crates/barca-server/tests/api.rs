@@ -398,12 +398,12 @@ async fn a_trigger_with_a_target_that_cannot_run_is_refused_before_a_run_starts(
         (
             "/get/publish",
             StatusCode::BAD_REQUEST,
-            "'publish' is a task — use `barca run` instead",
+            "'publish' is a task: use POST /run/publish",
         ),
         (
             "/run/other.py:first",
             StatusCode::BAD_REQUEST,
-            "'other.py:first' is an asset — use `barca get` instead",
+            "'other.py:first' is an asset: use POST /get/other.py:first",
         ),
     ] {
         let (status, body) = send(&app, "POST", uri).await;
@@ -485,6 +485,63 @@ async fn a_target_may_contain_a_slash_and_a_missing_one_is_a_json_404() {
         assert_eq!(status, StatusCode::NOT_FOUND, "{method} {uri}");
         let error = body["error"].as_str().expect("an error message");
         assert!(error.starts_with(says), "{method} {uri}: {error}");
+    }
+}
+
+#[tokio::test]
+async fn the_wrong_method_on_an_endpoint_is_a_json_405_naming_the_right_ones() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app(trigger_config(dir.path()));
+    for (method, uri, allowed, says) in [
+        (
+            "GET",
+            "/get/first",
+            "POST",
+            "GET is not allowed on /get/first: use POST",
+        ),
+        (
+            "GET",
+            "/run",
+            "POST",
+            "GET is not allowed on /run: use POST",
+        ),
+        (
+            "PUT",
+            "/run/x",
+            "POST, DELETE",
+            "PUT is not allowed on /run/x: use POST or DELETE",
+        ),
+        (
+            "POST",
+            "/health",
+            "GET",
+            "POST is not allowed on /health: use GET",
+        ),
+        (
+            "DELETE",
+            "/assets/first",
+            "GET",
+            "DELETE is not allowed on /assets/first: use GET",
+        ),
+    ] {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::METHOD_NOT_ALLOWED,
+            "{method} {uri}"
+        );
+        assert_eq!(resp.headers()["allow"], allowed, "{method} {uri}");
+        assert_eq!(body_json(resp).await["error"], says);
     }
 }
 

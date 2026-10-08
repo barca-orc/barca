@@ -98,10 +98,11 @@ Poll `GET /status/{run_id}` until `status` reaches a terminal state (`complete`,
 inline; the server does not. Read the file at `path`, relative to the project root.
 
 `POST /run/{target}` and `POST /get/{target}` check the target before they start a run, with
-the check `barca run` and `barca get` make, so the messages are the command line's (a wrong-kind
-message names the command; over HTTP use the other endpoint). The check is made against the
-source as it is now: the server keeps the list of nodes between requests and reads the files
-again when one of them has changed size or modification time. When the target cannot run, no
+the check `barca run` and `barca get` make (one function decides for both; a wrong-kind answer
+names the other endpoint where the command line names the other command). The check is made
+against the source as it is now: the server keeps the list of nodes between requests and reads
+the files again when one of them has changed size, modification time or change time (the
+last moves even when an edit puts the old modification time back). When the target cannot run, no
 run is started, there is no `run_id`, and the response is an error with a JSON body
 `{ "error": "..." }`:
 
@@ -109,8 +110,8 @@ run is started, there is no `run_id`, and the response is an error with a JSON b
 |---|---|---|
 | a name that matches no node | `404` | `Asset 'nope' not found. Available: pipeline.py:orders, pipeline.py:total` |
 | a name that matches several nodes (the same function name in two files) | `409` | ``'orders' matches more than one node: a.py:orders, b.py:orders. Name one by its full id, e.g. `a.py:orders` `` |
-| `POST /get/{target}` naming a task | `400` | ``'publish' is a task — use `barca run` instead`` |
-| `POST /run/{target}` naming an asset | `400` | ``'orders' is an asset — use `barca get` instead`` |
+| `POST /get/{target}` naming a task | `400` | `'publish' is a task: use POST /run/publish` |
+| `POST /run/{target}` naming an asset | `400` | `'orders' is an asset: use POST /get/orders` |
 | source that does not parse, or a DAG that cannot be built | `400` | the parse or DAG error |
 
 `POST /run/{target}` accepts a task or a sensor and `POST /get/{target}` an asset or a sensor,
@@ -118,6 +119,11 @@ as on the command line. A target is a function name, a full node id (`pipeline.p
 path-suffixed id. An id with a directory in it works with its `/` as it is or percent-encoded
 (`sub/pipeline.py:orders`, `sub%2Fpipeline.py:orders`). A trigger with no target
 (`POST /get/`), like any path that is not an endpoint, is a `404` with an `error` body.
+
+The set of files is the one the server started with, as for a run: a pipeline file added
+under a served directory or the project is not read until a restart (its nodes are `404`), and
+after one is deleted every trigger is a `400` naming the missing file. Without the check both
+were a `200` whose run failed with the same message.
 
 A run that was started can still fail on its target if the source changes between the check
 and the run. It then has `"status": "failed"`, `"result": null` and the message in `error`,
@@ -314,7 +320,9 @@ Errors return a JSON body `{ "error": "..." }`: `404` for an unknown name in
 unknown run id; `400` for parse and DAG errors and for a target of the wrong kind for the
 endpoint; `403` for a run or cancel requested of a `--read-only` server; `409` for conflicts (a
 name that matches several nodes in `GET /assets/{name}` or in a trigger, or cancelling a run
-that already finished); and `500` for execution or database failures. The Python client raises
+that already finished); `405`, with the allowed methods in `error` and in the `Allow`
+header, for a known path asked with the wrong method; and `500` for execution or database
+failures. The Python client raises
 `BarcaError` carrying the status and the message for each of these.
 
 ## Limits

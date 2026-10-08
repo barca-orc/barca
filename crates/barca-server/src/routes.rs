@@ -38,5 +38,6 @@ pub fn router(state: AppState) -> Router {
         .route("/ui/{*path}", get(ui::asset))
         // Everything else is a JSON 404, like the errors of the routes above.
         .fallback(handlers::no_route)
+        .method_not_allowed_fallback(handlers::wrong_method)
         .with_state(state)
 }

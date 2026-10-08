@@ -108,9 +108,19 @@ pub struct TargetIndex {
     pub nodes: Arc<Vec<(String, barca_core::NodeKind)>>,
 }
 
-/// The size and modification time of each source file, in the order of `ServeConfig::files`.
+/// The size, modification time and change time of each source file, in the order of
+/// `ServeConfig::files`. The change time is the one a program cannot set: an edit that keeps
+/// the size and puts the old modification time back (`touch -r`, some sync tools) still
+/// moves it.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SourceStamp(Vec<(std::time::SystemTime, u64)>);
+pub struct SourceStamp(Vec<FileStamp>);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FileStamp {
+    modified: std::time::SystemTime,
+    changed: std::time::SystemTime,
+    len: u64,
+}
 
 impl SourceStamp {
     /// The current state of `files`. `None` when one of them is not a readable regular file
@@ -119,24 +129,36 @@ impl SourceStamp {
         files
             .iter()
             .map(|f| {
+                use std::os::unix::fs::MetadataExt;
                 let meta = std::fs::metadata(f).ok().filter(|m| m.is_file())?;
-                Some((meta.modified().ok()?, meta.len()))
+                let changed = std::time::UNIX_EPOCH
+                    + std::time::Duration::new(
+                        u64::try_from(meta.ctime()).ok()?,
+                        u32::try_from(meta.ctime_nsec()).ok()?,
+                    );
+                Some(FileStamp {
+                    modified: meta.modified().ok()?,
+                    changed,
+                    len: meta.len(),
+                })
             })
             .collect::<Option<Vec<_>>>()
             .map(Self)
     }
 
-    /// True when every file was last modified more than [`Self::SETTLED`] before `now`.
+    /// True when every file was last modified or changed more than [`Self::SETTLED`] before
+    /// `now`.
     ///
-    /// A file's modification time is only as fine as the filesystem's clock (a few
-    /// milliseconds on Linux). A file read just after it was written can be written again
+    /// A file's times are only as fine as the filesystem's clock (a few milliseconds on
+    /// Linux). A file read just after it was written can be written again
     /// within the same instant with the same size, and its stamp would not show it. So a
     /// stamp that recent is not kept: the files are read again next time, until they have
     /// been still for a moment.
     pub fn settled(&self, now: std::time::SystemTime) -> bool {
-        self.0.iter().all(|(modified, _)| {
-            now.duration_since(*modified)
-                .is_ok_and(|age| age > Self::SETTLED)
+        self.0.iter().all(|file| {
+            [file.modified, file.changed]
+                .iter()
+                .all(|at| now.duration_since(*at).is_ok_and(|age| age > Self::SETTLED))
         })
     }
 
@@ -160,6 +182,28 @@ mod stamp_tests {
         assert!(stamp.settled(now + Duration::from_secs(5)));
         // A clock that went backwards proves nothing either.
         assert!(!stamp.settled(now - Duration::from_secs(60)));
+        // An edit that keeps the size and puts the old modification time back is another
+        // stamp too: the change time moved. (The times are a few milliseconds coarse, so
+        // the edit is made a moment later.)
+        let before = SourceStamp::of(std::slice::from_ref(&file)).unwrap();
+        let modified = std::fs::metadata(&file).unwrap().modified().unwrap();
+        std::thread::sleep(Duration::from_millis(30));
+        std::fs::write(&file, "x = 2\n").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+        let after = SourceStamp::of(std::slice::from_ref(&file)).unwrap();
+        assert_eq!(
+            std::fs::metadata(&file).unwrap().modified().unwrap(),
+            modified
+        );
+        assert_ne!(
+            after, before,
+            "same size, same modification time, other content"
+        );
         // A change of size or time is another stamp; a directory or a missing file has none.
         std::fs::write(&file, "x = 12\n").unwrap();
         assert_ne!(SourceStamp::of(std::slice::from_ref(&file)).unwrap(), stamp);
