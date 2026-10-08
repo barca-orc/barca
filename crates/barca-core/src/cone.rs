@@ -23,6 +23,13 @@
 //!    not the module.
 //! 6. **Imports inside a function or class body** bind names for that body and the scopes
 //!    nested in it; uses of those names follow rules 3 to 5.
+//! 7. **Nodes.** For a function decorated with `@asset`, `@sensor` or `@task`, the names in the
+//!    decorator parts that count towards its definition hash ([`crate::definition::RULES`]) are
+//!    uses too, and follow rules 2 to 5: `serializer=FMT`, `@retry(times=N)`. Names in parts
+//!    that do not count (`description=TEXT`, the keys in `partitions(REGIONS)`) are not uses, and
+//!    neither is a reference to an upstream node (`inputs={"x": up}`). Where a node is reached
+//!    as a definition (rule 2), it contributes its definition text, not its decorators as
+//!    written.
 //!
 //! The hash is over the sorted `(label, source)` pairs collected, so it does not depend on the
 //! order definitions are visited in.
@@ -466,7 +473,21 @@ fn collect_definitions(source: &str, package: Option<&str>) -> HashMap<String, M
             Stmt::FunctionDef(func) => {
                 let mut uses = UseCollector::new(package);
                 uses.function(func);
-                defs.insert(func.name.to_string(), ModuleDef::Function(code(func, uses)));
+                // A node (`@asset`, `@sensor`, `@task`) contributes what its definition hash
+                // covers, wherever it is reached from: the decorator parts that count, in
+                // canonical form, and the names in them (rule 7). Any other function
+                // contributes its text as written, decorators included.
+                let function = match crate::definition::node_definition(func, source) {
+                    Some(definition) => {
+                        uses.exprs(definition.followed.iter().copied());
+                        Code {
+                            source_text: definition.text.into(),
+                            uses: uses.uses,
+                        }
+                    }
+                    None => code(func, uses),
+                };
+                defs.insert(func.name.to_string(), ModuleDef::Function(function));
             }
             Stmt::ClassDef(class) => {
                 let mut uses = UseCollector::new(package);
@@ -2177,5 +2198,174 @@ def shadowing(helpers, json):
                 "the cone hash of `{function}` changed"
             );
         }
+    }
+
+    // ─── Rule 7: nodes and their decorators (#283) ───────────────────────────
+
+    /// A pipeline file made of `constants` and one node `my_asset` under `decorators`.
+    fn decorated(constants: &str, decorators: &str) -> String {
+        format!("{constants}\n\n{decorators}\ndef my_asset(x=None):\n    return 1\n")
+    }
+
+    #[test]
+    fn a_name_in_a_counted_decorator_argument_is_followed() {
+        for decorators in [
+            "@asset(serializer=FMT)",
+            "@asset()\n@sink(PATH_PREFIX + \"out.json\", serializer=FMT)",
+            "@asset()\n@retry(times=FMT)",
+            "@asset(codec=make(FMT))",
+            "@asset(**FMT)",
+        ] {
+            let hash = |constants: &str| cone_hash(&decorated(constants, decorators), "my_asset");
+            let before = hash("FMT = 'json'\nPATH_PREFIX = 'a/'\nOTHER = 1");
+            assert!(!before.is_empty(), "{decorators}");
+            assert_ne!(
+                before,
+                hash("FMT = 'pickle'\nPATH_PREFIX = 'a/'\nOTHER = 1"),
+                "{decorators}: editing FMT"
+            );
+            assert_eq!(
+                before,
+                hash("FMT = 'json'\nPATH_PREFIX = 'a/'\nOTHER = 2"),
+                "{decorators}: editing a constant it does not use"
+            );
+        }
+    }
+
+    #[test]
+    fn a_name_in_an_argument_that_does_not_count_is_not_followed() {
+        for decorators in [
+            "@asset(partitions={\"region\": partitions(REGIONS)})",
+            "@asset(partitions={\"region\": partitions([r for r in REGIONS])})",
+            "@asset(partitions={\"region\": partitions(regions(REGIONS))})",
+            "@asset(description=REGIONS)",
+            "@asset(tags=REGIONS, retries=REGIONS, retry_backoff=REGIONS, timeout_seconds=REGIONS)",
+            "@asset(freshness=Schedule(REGIONS), name=REGIONS)",
+        ] {
+            let hash = |constants: &str| cone_hash(&decorated(constants, decorators), "my_asset");
+            assert_eq!(hash("REGIONS = ['us', 'eu']"), "", "{decorators}");
+            assert_eq!(hash("REGIONS = ['us', 'eu', 'apac']"), "", "{decorators}");
+        }
+    }
+
+    #[test]
+    fn another_decorator_s_definition_is_followed() {
+        let pipeline = |wrapper_body: &str| {
+            format!(
+                "def traced(fn):\n    {wrapper_body}\n\n\n@asset()\n@traced\ndef my_asset():\n    return 1\n"
+            )
+        };
+        assert_ne!(
+            cone_hash(&pipeline("return fn"), "my_asset"),
+            cone_hash(&pipeline("return lambda: fn() + 1"), "my_asset"),
+        );
+
+        // The same through a project module.
+        let entry = "from wrappers import traced\n\n\n@asset()\n@traced(level=2)\ndef my_asset():\n    return 1\n";
+        let module = |body: &str| {
+            one(
+                "wrappers",
+                &format!("def traced(level):\n    {body}\n\n\ndef other():\n    return 0\n"),
+            )
+        };
+        let before = hash_of(entry, &module("return lambda fn: fn"), &[]);
+        assert_ne!(
+            before,
+            hash_of(
+                entry,
+                &module("return lambda fn: (lambda: fn() + level)"),
+                &[]
+            )
+        );
+        let unrelated = one(
+            "wrappers",
+            "def traced(level):\n    return lambda fn: fn\n\n\ndef other():\n    return 1\n",
+        );
+        assert_eq!(before, hash_of(entry, &unrelated, &[]));
+    }
+
+    /// `inputs={"x": up}` names the upstream; the upstream's result reaches the consumer through
+    /// the run hash. Following it would also re-run every consumer of a sensor whenever the
+    /// sensor's code changed, whatever it returned.
+    #[test]
+    fn an_upstream_named_in_inputs_or_partitions_from_is_not_followed() {
+        for decorators in [
+            "@asset(inputs={\"x\": up})",
+            "@asset(inputs={\"x\": collect(up)})",
+            "@asset(partitions={\"region\": partitions_from(up)})",
+            "@asset(inputs={\"x\": asset_ref(\"pipeline.py:up\")})",
+        ] {
+            let pipeline = |up_body: &str| {
+                format!(
+                    "@sensor()\ndef up():\n    return {up_body}\n\n\n{decorators}\ndef my_asset(x=None, region=None):\n    return 1\n"
+                )
+            };
+            assert_eq!(cone_hash(&pipeline("1"), "my_asset"), "", "{decorators}");
+            assert_eq!(cone_hash(&pipeline("2"), "my_asset"), "", "{decorators}");
+        }
+    }
+
+    /// A parameter named after its upstream (`def margin(region, sales)`) counts as a use of the
+    /// module-level `sales` (rule 2), so `sales` is in `margin`'s cone. It is there as its
+    /// definition text: adding a key to `sales`, or editing its description, must not re-run
+    /// `margin`.
+    #[test]
+    fn a_node_reached_by_name_contributes_its_definition_not_its_decorator_text() {
+        let pipeline = |sales_decorator: &str, revenue: &str| {
+            format!(
+                "{sales_decorator}\ndef sales(region):\n    return {revenue}\n\n\n@asset(partitions={{\"region\": partitions_from(sales)}})\ndef margin(region, sales):\n    return sales * 0.2\n"
+            )
+        };
+        let hash =
+            |decorator: &str, revenue: &str| cone_hash(&pipeline(decorator, revenue), "margin");
+        let before = hash(
+            "@asset(partitions={\"region\": partitions([\"us\", \"eu\"])})",
+            "100",
+        );
+        assert!(!before.is_empty());
+        for same in [
+            "@asset(partitions={\"region\": partitions([\"us\", \"eu\", \"apac\"])})",
+            "@asset(partitions={\"region\": partitions([\"eu\"])})",
+            "@asset(partitions={'region': partitions(['us', 'eu'])}, description=\"sales\")",
+            "@asset(\n    partitions={\"region\": partitions([\"us\", \"eu\"])},  # keys\n    retries=3,\n)",
+        ] {
+            assert_eq!(before, hash(same, "100"), "{same}");
+        }
+        assert_ne!(
+            before,
+            hash(
+                "@asset(partitions={\"region\": partitions([\"us\", \"eu\"])})",
+                "200"
+            ),
+            "the upstream's body"
+        );
+        assert_ne!(
+            before,
+            hash(
+                "@asset(partitions={\"region\": partitions([\"us\", \"eu\"])}, serializer=\"pickle\")",
+                "100"
+            ),
+            "a counted argument of the upstream"
+        );
+    }
+
+    /// A helper that is not a node keeps contributing its text as written, decorators included,
+    /// as every earlier release hashed it; the names in its decorators are still not followed.
+    #[test]
+    fn a_helper_that_is_not_a_node_is_hashed_as_written() {
+        let pipeline = |decorator: &str, size: &str| {
+            format!(
+                "SIZE = {size}\n\n\n{decorator}\ndef helper():\n    return 1\n\n\n@asset()\ndef my_asset():\n    return helper()\n"
+            )
+        };
+        let before = cone_hash(&pipeline("@lru_cache(maxsize=SIZE)", "1"), "my_asset");
+        assert_ne!(
+            before,
+            cone_hash(&pipeline("@lru_cache( maxsize = SIZE )", "1"), "my_asset")
+        );
+        assert_eq!(
+            before,
+            cone_hash(&pipeline("@lru_cache(maxsize=SIZE)", "2"), "my_asset")
+        );
     }
 }

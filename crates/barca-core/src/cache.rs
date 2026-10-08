@@ -142,10 +142,11 @@ mod tests {
         );
     }
 
-    /// Run hashes of whole pipelines, pinned from barca 0.10.0 (before #178 taught the cone
-    /// analysis about bare filenames and `import module` + `module.attr`). Pipelines that use no
-    /// project helpers, or that import them with `from ... import` and were run as `./p.py` or by
-    /// absolute path, must keep exactly these hashes, or every existing cache is invalidated.
+    /// Run hashes of whole pipelines. Pinned from barca 0.10.0 (before #178 taught the cone
+    /// analysis about bare filenames and `import module` + `module.attr`) up to 0.18, and again
+    /// from 0.19.0, which changed what the definition hash covers of the decorator (#283) and
+    /// so, once, every run hash. Both sets are checked below: the first shows that nothing but
+    /// the decorator's part moved, the second pins what users' caches are keyed by now.
     #[test]
     fn run_hash_unchanged_for_pipelines_without_module_attribute_helpers() {
         let dir = tempfile::tempdir().unwrap();
@@ -213,25 +214,53 @@ def downstream(x: int) -> int:
             &std::path::PathBuf::from("python3"),
         )
         .unwrap();
-        let mut hashes: HashMap<String, String> = HashMap::new();
-        let mut by_name: Vec<(String, String)> = Vec::new();
-        for id in dag.topo_order() {
-            let node = dag.get_node(id).unwrap();
-            let h = compute_run_hash(
-                &node.definition_hash,
-                None,
-                dag.upstream(id).into_iter(),
-                &hashes,
-                &HashMap::new(),
-                None,
-            );
-            hashes.insert(id.to_string(), h.clone());
-            by_name.push((node.extracted.function_name.clone(), h));
-        }
-        by_name.sort();
-        let got: Vec<String> = by_name.iter().map(|(n, h)| format!("{n} {h}")).collect();
+        let source = std::fs::read_to_string(&file).unwrap();
+        // The definition hash as 0.10 to 0.18 computed it: over the function's text starting
+        // at its decorator, as written, with the freshness, the input parameter names, the
+        // sinks and the serializer added as JSON.
+        let definition_hash_before_0_19 = |node: &crate::model::DagNode| {
+            let n = &node.extracted;
+            let from_def = &n.source_text[n.source_text.find("def ").unwrap()..];
+            let def_at = n.byte_offset + source[n.byte_offset..].find("def ").unwrap();
+            let as_written = &source[n.byte_offset..def_at + from_def.len()];
+            let metadata = serde_json::json!({
+                "kind": n.kind,
+                "freshness": n.freshness,
+                "inputs": n.inputs.iter().map(|i| &i.param_name).collect::<Vec<_>>(),
+                "sinks": n.sinks,
+                "serializer": n.artifact_serializer,
+            })
+            .to_string();
+            crate::hash::definition_hash(as_written, &n.cone_hash, &metadata)
+        };
+        let run_hashes = |definition_hash: &dyn Fn(&crate::model::DagNode) -> String| {
+            let mut hashes: HashMap<String, String> = HashMap::new();
+            let mut by_name: Vec<(String, String)> = Vec::new();
+            for id in dag.topo_order() {
+                let node = dag.get_node(id).unwrap();
+                let h = compute_run_hash(
+                    &definition_hash(node),
+                    None,
+                    dag.upstream(id).into_iter(),
+                    &hashes,
+                    &HashMap::new(),
+                    None,
+                );
+                hashes.insert(id.to_string(), h.clone());
+                by_name.push((node.extracted.function_name.clone(), h));
+            }
+            by_name.sort();
+            by_name
+                .iter()
+                .map(|(n, h)| format!("{n} {h}"))
+                .collect::<Vec<String>>()
+        };
+
+        // 1. The values pinned from 0.10.0. They are still what comes out when the decorator
+        //    is hashed as text, so the function text from `def`, the dependency cone and the
+        //    run hash itself have not changed.
         assert_eq!(
-            got,
+            run_hashes(&definition_hash_before_0_19),
             [
                 "downstream 1c56f2327b95052d761eb9f938de94d7bf6ceb4963f94c5ae7269d8bb70c56e0",
                 "plain 951e243083668324e552a72ac14fdaa7a44643e4e3ef612bae42ca99a012f4cd",
@@ -239,6 +268,26 @@ def downstream(x: int) -> int:
                 "uses_local 20c98bdcb5158223e28ad33f1eb2374383b20e07b6241c31bb6c0d93d90191d9",
                 "uses_stdlib_module 38349c33e82697699115193940df0487e7ee4a242b747e20f7b2ddbc153052f4",
                 "uses_subdir 6ef456461f6549fe2b0b99a8cacd7ac5eb069530470b5574aac096cfb6b013de",
+            ]
+        );
+
+        // 2. The values from 0.19.0 on. Every one differs from its 0.10.0 value above for the
+        //    same single reason (#283): the definition hash no longer covers the decorator as
+        //    text (`@asset()`, `@asset(inputs={"x": uses_from})`) and the freshness, but the
+        //    decorator arguments that count, in canonical form (`crate::definition`).
+        //    `downstream` also differs because its upstream's run hash does. If one of these
+        //    moves, every cache entry is recomputed after upgrading: change them only on
+        //    purpose, with a release note.
+        let got = run_hashes(&|node| node.definition_hash.clone());
+        assert_eq!(
+            got,
+            [
+                "downstream 2739276cb72e94eeda531d3f2ffb89928270d6a2e0c3e39d0005196da140ef5e",
+                "plain 684e90afadfdefdce36277677510e35283f8593745acddca845bb7fb195fa333",
+                "uses_from b2c5f127fa312c98225a8c8ded3932aa22b1843bab930181956d294a60626baf",
+                "uses_local 04cb4b3a97b9ce588545f5e148c23504df582d91af40362d885b003f5275b31c",
+                "uses_stdlib_module a7487267e78586c6a8f3ffb45f56873a9e320e5d62307dbaff50933145f80012",
+                "uses_subdir 3da349ac7a54d3c29b091ac8ee2b1231de4f3678cf9123157da0e8448718ad8f",
             ]
         );
     }

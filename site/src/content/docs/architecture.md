@@ -19,6 +19,7 @@ crates/
     parse.rs, discover.rs     read decorated functions from source with ruff's parser; find the project's .py files
     dag.rs, planner.rs        petgraph graph, validation, phases and streams of the plan
     hash.rs, cone.rs, envdeps.rs   run hash: the function, the helper code it reaches, declared env= variables
+    definition.rs             which decorator arguments are part of the hash, and their canonical form
     cache.rs, recover.rs      cache lookups; recompute a cached step whose artifact file is gone
     coordinator.rs            ready queue, dependencies, retries, parallel groups (no I/O)
     io_loop.rs, protocol.rs   worker pool, leased batches, length-prefixed JSON over a Unix socket

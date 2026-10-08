@@ -30,4 +30,4 @@ entry there. Use the GitHub Releases page.
 Changes that affect how you call barca are also noted where the feature is documented, as
 "Behavior change" notes in the [CLI reference](/reference/cli/) and in the manual
 (`barca docs`). Run hashes that change on upgrade, which cause a one-time recompute, are
-listed in `barca docs cache` (for example "After upgrading to 0.18").
+listed in `barca docs cache` (for example "After upgrading to 0.19").

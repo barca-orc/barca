@@ -277,9 +277,9 @@ def test_a_sensor_whose_output_changes_every_run_re_runs_its_consumers_every_tim
     assert again["stamp"]["status"] == "ran"
 
 
-# Run hashes of a sensor-free pipeline, pinned from barca 0.11.0 (before sensor outputs were
-# hashed). Pipelines without sensors must keep exactly these hashes, or every existing cache is
-# invalidated on upgrade.
+# Run hashes of a sensor-free pipeline. A pipeline without sensors must hash as if sensor outputs
+# were never part of the run hash; if these move, every existing cache is invalidated on upgrade.
+# They were pinned to barca 0.11.0's values until 0.19.0 (`PINNED_0_19` below).
 SENSOR_FREE = """
 from barca import asset, partitions, task
 
@@ -304,6 +304,22 @@ def report(clean: dict) -> dict:
     return clean
 """
 
+# From barca 0.19.0 on. Every value differs from 0.11.0's (kept below) for one reason, which
+# has nothing to do with sensors: up to 0.18 the definition hash covered the decorator as text
+# (`@asset()`, `@asset(inputs={"clean": clean}, partitions={"region": partitions(["us", "eu"])})`)
+# plus the freshness; from 0.19 it covers the decorator arguments that count, in canonical form
+# (#283, "After upgrading to 0.19" in `barca docs cache`). The run hash itself is combined
+# exactly as before: `sensor_output_is_folded_into_the_consumer_run_hash` in `cache.rs`
+# pins that with a fixed definition hash and still has its 0.11.0 values.
+PINNED_0_19 = {
+    "raw": "77222093612df6e2953746d07a7260c34ff15db5ce9b934d88270571ad853f62",
+    "clean": "7658471fb30bd006846915082301236f27390fb65ecebee9588fa242a0cfc4e2",
+    "report": "accd334ed9cc7dac61f4bb7cbb7d3831766ec0a6c95725a829958aa38bb12fa5",
+    "by_region[us]": "c48078937a64d5451dceeaf2c4ccff4f94373d835a90c0eaf7fe704d41d7b279",
+    "by_region[eu]": "ee2a8c2e0a0d2a485ae6130d0782688c152a265bb93c18223407fed4d29e1fb8",
+}
+
+# What barca 0.11.0 to 0.18.1 computed for the same file. On record; no longer computed.
 PINNED_0_11 = {
     "raw": "6978869c8574f25c01e807d2efd97cb11cd062482e0ace8c5eb0cb1e6b40c1f0",
     "clean": "f986a8ebb90d71684e85fc317f48ed1baec59fef4f10c6b01722fd052481bf32",
@@ -313,12 +329,30 @@ PINNED_0_11 = {
 }
 
 
-def test_sensor_free_pipelines_keep_their_0_11_run_hashes(tmp_path):
-    (tmp_path / "pipeline.py").write_text(SENSOR_FREE)
-    run_steps = steps(barca(tmp_path, "run", "report", "pipeline.py"))
-    barca(tmp_path, "get", "by_region", "pipeline.py")
+def sensor_free_run_hashes(root, source: str) -> dict:
+    (root / "pipeline.py").write_text(source)
+    run_steps = steps(barca(root, "run", "report", "pipeline.py"))
+    barca(root, "get", "by_region", "pipeline.py")
     got = {name: run_steps[name]["run_hash"] for name in ("raw", "clean", "report")}
     for key in ("us", "eu"):
-        (art,) = (tmp_path / ".barca" / "artifacts").glob(f"*by_region_region_{key}/*.json")
+        (art,) = (root / ".barca" / "artifacts").glob(f"*by_region_region_{key}/*.json")
         got[f"by_region[{key}]"] = art.stem
-    assert got == PINNED_0_11
+    return got
+
+
+def test_sensor_free_pipelines_keep_their_0_19_run_hashes(tmp_path):
+    got = sensor_free_run_hashes(tmp_path, SENSOR_FREE)
+    assert got == PINNED_0_19
+    assert not set(got.values()) & set(PINNED_0_11.values())
+
+
+def test_sensor_free_run_hashes_do_not_depend_on_the_partition_keys_or_the_formatting(tmp_path):
+    """The same pipeline with a third key, the decorators reformatted and a description: the
+    keys that were there keep their pinned run hashes (#283)."""
+    edited = SENSOR_FREE.replace(
+        '@asset(inputs={"clean": clean}, partitions={"region": partitions(["us", "eu"])})',
+        "@asset(\n    partitions={'region': partitions(['us', 'eu', 'apac'])},  # one more\n"
+        "    description='By region',\n    inputs={'clean': clean},\n)",
+    ).replace("@asset()", '@asset(description="Raw", retries=2)')
+    assert "'apac'" in edited and 'description="Raw"' in edited
+    assert sensor_free_run_hashes(tmp_path, edited) == PINNED_0_19
