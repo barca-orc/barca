@@ -222,7 +222,7 @@ fn detect_chains(dag: &Dag) -> Vec<Chain> {
 pub fn plan(dag: &Dag, topology: &Topology, config: &ResourceConfig) -> ExecutionPlan {
     let phase_assignment = assign_phases(topology);
     let phases = build_phases(dag, topology, &phase_assignment, config);
-    let phases = merge_single_stream_phases(phases);
+    let phases = merge_single_stream_phases(dag, phases);
 
     let total_steps: usize = phases
         .iter()
@@ -276,7 +276,27 @@ fn reads_sensor_of(phase: &Phase, prev: &Phase) -> bool {
             .any(|up| sensors.contains(up.split('[').next().unwrap_or(up)))
 }
 
-fn merge_single_stream_phases(phases: Vec<Phase>) -> Vec<Phase> {
+/// True if a step in `phase` collects (`collect(upstream)`) a node that runs in `prev`. A
+/// fan-in is handed the outputs of every partition of its upstream when its phase starts, so
+/// the upstream's phase has to be over by then: fused into it, the fan-in would start with no
+/// collected input at all (#331, #325).
+fn collects_from(dag: &Dag, phase: &Phase, prev: &Phase) -> bool {
+    let produced: HashSet<&str> = prev
+        .streams
+        .iter()
+        .flat_map(|s| &s.steps)
+        .map(|st| st.step_id.base_id())
+        .collect();
+    phase
+        .streams
+        .iter()
+        .flat_map(|s| &s.steps)
+        .filter_map(|st| dag.get_node(st.step_id.base_id()))
+        .flat_map(|node| node.resolved_collected.values())
+        .any(|up| produced.contains(up.as_str()))
+}
+
+fn merge_single_stream_phases(dag: &Dag, phases: Vec<Phase>) -> Vec<Phase> {
     let mut merged: Vec<Phase> = Vec::new();
 
     for phase in phases {
@@ -292,6 +312,7 @@ fn merge_single_stream_phases(phases: Vec<Phase>) -> Vec<Phase> {
                 prev.streams.len() == 1
                     && !phase_has_pending(prev)
                     && !reads_sensor_of(&phase, prev)
+                    && !collects_from(dag, &phase, prev)
             });
 
         if can_merge {
@@ -1850,5 +1871,72 @@ mod tests {
                 .pending_partitions
                 .is_empty()
         );
+    }
+
+    /// #331, #325: a `collect()` fan-in is never in the same phase as the node it collects,
+    /// whatever the pool size and however many keys there are. With one worker, or with one
+    /// key, the producer's phase and the fan-in's phase are one stream each, and
+    /// `merge_single_stream_phases` used to fuse them: the fan-in then started with no
+    /// collected input (`TypeError: summary() missing 1 required positional argument`).
+    #[test]
+    fn a_fan_in_is_never_fused_into_the_phase_it_collects_from() {
+        for keys in 1..=5usize {
+            let listed: Vec<String> = (0..keys).map(|k| format!("\"k{k}\"")).collect();
+            let source = format!(
+                "@asset()\ndef base() -> int:\n    return 1\n\n\n\
+                 @asset(inputs={{\"b\": base}}, partitions={{\"k\": partitions([{}])}})\n\
+                 def part(k: str, b: int) -> dict:\n    return {{}}\n\n\n\
+                 @asset(partitions={{\"k\": partitions_from(part)}})\n\
+                 def per_key(k: str, part: dict) -> dict:\n    return part\n\n\n\
+                 @asset(inputs={{\"parts\": collect(part)}})\n\
+                 def summary(parts: list) -> int:\n    return len(parts)\n\n\n\
+                 @asset(inputs={{\"s\": summary, \"rows\": collect(per_key)}})\n\
+                 def report(s: int, rows: list) -> int:\n    return s\n",
+                listed.join(", ")
+            );
+            let nodes = crate::parse::extract_nodes(&source, "t.py").unwrap();
+            let dag = Dag::build(&nodes).unwrap();
+            for pool_size in 1..=8usize {
+                let config = ResourceConfig {
+                    pool_size,
+                    concurrency_groups: HashMap::new(),
+                };
+                let plan = plan_from_dag(&dag, &config);
+                let phase_of = |name: &str| -> Vec<usize> {
+                    plan.phases
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, phase)| {
+                            phase
+                                .streams
+                                .iter()
+                                .flat_map(|s| &s.steps)
+                                .any(|st| st.step_id.base_id() == format!("t.py:{name}"))
+                        })
+                        .map(|(i, _)| i)
+                        .collect()
+                };
+                let context = format!("{keys} keys, pool of {pool_size}");
+                for (fan_in, collected) in [
+                    ("summary", "part"),
+                    ("report", "per_key"),
+                    ("report", "summary"),
+                ] {
+                    let consumer = phase_of(fan_in);
+                    let producer = phase_of(collected);
+                    assert_eq!(consumer.len(), 1, "{context}: {fan_in}");
+                    assert!(!producer.is_empty(), "{context}: {collected}");
+                    if collected != "summary" {
+                        assert!(
+                            producer.iter().all(|p| *p < consumer[0]),
+                            "{context}: `{fan_in}` (phase {consumer:?}) collects `{collected}` \
+                             (phase {producer:?}) and must be in a later phase"
+                        );
+                    }
+                }
+                // Every step is planned exactly once per key.
+                assert_eq!(plan.total_steps, 3 + 2 * keys, "{context}");
+            }
+        }
     }
 }
