@@ -32,3 +32,25 @@ reenter while `mkstemp` has created a file and has not returned its name for
 registration. An actual-handler subprocess reproduction exits 143 with that
 empty stage remaining. Solving that creation interval requires separate lifecycle
 coordination; this finalization change must not claim that interval is repaired.
+
+## Approved creation interval repair (before implementation)
+
+The same lifecycle PR will also cover the demonstrated creation interruption.
+During main-thread creation only, a private context temporarily defers SIGTERM,
+restores the exact previous handler on every exit, then replays a pending signal
+through that handler. Default termination is re-sent after restoring SIG_DFL;
+SIG_IGN stays ignored. Non-main-thread creation retains the existing lock policy.
+
+An outer try/finally begins before creation, with no owned path initially. The
+creation, exact registration and fd close occur under the existing lock and the
+private deferral. Replay occurs afterward within the outer cleanup scope: the
+transfer handler discovers the registered path, and the state handler's SystemExit
+unwinds through concrete-path cleanup. Exceptions also restore the handler and
+remove only the path actually acquired by this call. No other handlers or callers
+change. Cross-thread lifeline cleanup continues to wait for the existing lock.
+
+Acceptance adds real transfer/state SIGTERM subprocesses at mkstemp return, plus
+normal/error handler restoration and SIG_DFL/SIG_IGN cases. Each signal regression
+must fail the old lifecycle and pass the repaired one. Repeat storage/transfer,
+state and actual cancellation acceptance, strict checks, independent final review,
+and both required fresh CI on the consolidated current-main head.
