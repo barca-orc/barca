@@ -1,8 +1,12 @@
 # Changelog
 
 Current release notes are published on [GitHub Releases](https://github.com/barca-orc/barca/releases).
-Recent tagged release notes include [v0.20.1](https://github.com/barca-orc/barca/releases/tag/v0.20.1)
-(2026-10-09): inspectable run history and triggered runs, shared-history cancellation
+Recent tagged release notes include [v0.21.0](https://github.com/barca-orc/barca/releases/tag/v0.21.0)
+(2026-10-09): SQL installation extra, remote-off override, storage startup checks,
+non-destructive metadata evolution, transactional terminal outcomes and genuine
+Barca decorator aliases. See its upgrade notes for the storage permission and
+binding compatibility requirements. The preceding [v0.20.1](https://github.com/barca-orc/barca/releases/tag/v0.20.1)
+(2026-10-09) shipped inspectable run history and triggered runs, shared-history cancellation
 reconciliation, and verified shared DuckDB worker lifetime. See
 [v0.20.0](https://github.com/barca-orc/barca/releases/tag/v0.20.0) for the preceding
 upgrade and breaking-change notes. Releases between the historical entries below

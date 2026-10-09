@@ -22,7 +22,7 @@ git cliff --config cliff.toml --unreleased
 
 [`CHANGELOG.md`](https://github.com/barca-orc/barca/blob/main/CHANGELOG.md) links the
 current tagged release notes through
-[v0.20.1](https://github.com/barca-orc/barca/releases/tag/v0.20.1) and preserves
+[v0.21.0](https://github.com/barca-orc/barca/releases/tag/v0.21.0) and preserves
 older notes as historical records. Its former "Unreleased" section is explicitly
 historical, not the pending-release queue. Use GitHub Releases for the complete
 release-by-release history and upgrade instructions.
