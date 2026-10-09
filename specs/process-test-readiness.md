@@ -65,3 +65,19 @@ The full Rust workspace passed 800 tests, and strict workspace/all-target Clippy
 passed. Cargo formatting, pinned Ruff 0.11.13 checks and formatting, lockfile,
 version consistency and diff whitespace checks passed. No production code,
 public contract, inherited SIGINT case or state-helper timeout changed.
+
+## Minute-checkpoint integration readiness
+
+On merged minute-checkpoint main `4ca4e2d`, a full Rust workspace run in the
+imports worktree failed `outage_keeps_committed_progress_dirty_until_a_later_tick_recovers`
+at `persist.rs:1281`: one completed external-Python attempt was observed after a
+fixed 450ms sleep, rather than the assumed two. Another full workspace and an
+isolated rerun passed; that does not resolve the timing guess under load.
+
+This test-only slice will wait for the actual attempts file to contain at least
+two complete, valid timestamp lines within the existing 10-second readiness bound.
+Retain the >=50ms spacing assertion proving no busy retry loop, dirty-progress
+recovery, actual shared rows and final recorder cleanup. Do not change production
+publication cadence, retries, deadlines or state-helper timeouts. Stress the old
+and corrected fixture on two CPUs with competing load when feasible; retain the
+original full-workspace failure as evidence even if constrained reruns pass.
