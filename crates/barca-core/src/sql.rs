@@ -2,8 +2,9 @@
 //!
 //! Every node with a result on disk becomes a view: assets and sensors at their cached artifact
 //! (or, when stale, their last successful one, with a note), tasks at their last result, and a
-//! partitioned asset as one view over its keys with a `partition` column. The view uses the declared
-//! name, or the function name when no explicit name is set. Duplicate names use full node IDs. The query runs
+//! partitioned asset as one view over its current known keys with a `partition` column.
+//! The view uses the declared name, or the function name when unset. Duplicate names use
+//! full node IDs. The query runs
 //! in `python -m barca._sql`, an in-memory DuckDB that opens artifact files only: user code is
 //! never imported and nothing is recorded. An artifact in remote storage is fetched, when the
 //! query names its view, into [`CACHE_DIR`] and queried from there.
@@ -117,7 +118,8 @@ pub async fn sql(
     python: &std::path::Path,
     limit: Option<usize>,
 ) -> Result<SqlResult, BarcaError> {
-    let st = status::status(cfg, &[], file_args, python, 0, false).await?;
+    let (st, membership) =
+        status::status_with_membership(cfg, &[], file_args, python, 0, false).await?;
 
     let mut by_name: HashMap<&str, Vec<&str>> = HashMap::new();
     for n in &st.nodes {
@@ -130,6 +132,7 @@ pub async fn sql(
     let mut views: Vec<View> = Vec::new();
     // View name -> (command that would produce it, node name) for nodes with no result yet.
     let mut missing: HashMap<String, String> = HashMap::new();
+    let mut unknown_membership: HashMap<String, String> = HashMap::new();
     let mut notes: Vec<String> = Vec::new();
     let mut stale: Vec<String> = Vec::new();
     for n in &st.nodes {
@@ -140,11 +143,17 @@ pub async fn sql(
         };
         let get = if n.kind == "task" { "run" } else { "get" };
         if n.partitioned {
-            let files = if Path::new(&cfg.db_path).exists() {
+            let Some(current) = membership.get(&n.id) else {
+                unknown_membership.insert(view_name.clone(), n.cache.detail.clone());
+                missing.insert(view_name, format!("barca {get} {}", n.name));
+                continue;
+            };
+            let mut files = if Path::new(&cfg.db_path).exists() {
                 crate::db::partition_artifacts_for_config(cfg, &n.id).await?
             } else {
                 Vec::new()
             };
+            files.retain(|(id, _, _)| current.contains(id));
             if files.is_empty() {
                 missing.insert(view_name, format!("barca {get} {}", n.name));
                 continue;
@@ -161,8 +170,10 @@ pub async fn sql(
                     .map(|(node_id, path, _)| ViewFile {
                         path,
                         partition: node_id
-                            .find('[')
-                            .map(|i| node_id[i + 1..].trim_end_matches(']').to_string()),
+                            .strip_prefix(&n.id)
+                            .and_then(|suffix| suffix.strip_prefix('['))
+                            .and_then(|suffix| suffix.strip_suffix(']'))
+                            .map(str::to_string),
                     })
                     .collect(),
             });
@@ -271,6 +282,12 @@ pub async fn sql(
             let unavailable: HashMap<String, String> =
                 out.unavailable.clone().into_iter().collect();
             if let Some((name, cmd)) = find(&missing) {
+                if let Some(why) = unknown_membership.get(&name) {
+                    return Err(BarcaError::Usage(format!(
+                        "'{name}' has no current partition view: {why}\n\
+                         Partition keys require source materialization. Run `{cmd}` first, then re-run this query."
+                    )));
+                }
                 BarcaError::Usage(format!(
                     "'{name}' has no result yet, so there is no view for it\n\
                      Run `{cmd}` first, then re-run this query."

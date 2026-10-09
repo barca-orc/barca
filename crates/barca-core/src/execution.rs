@@ -1464,6 +1464,29 @@ pub(crate) async fn explain_dag(
     no_cache: bool,
     command_label: &str,
 ) -> Result<ExplainResult, BarcaError> {
+    Ok(explain_dag_with_membership(
+        dag,
+        cfg,
+        target_names,
+        python,
+        policy,
+        no_cache,
+        command_label,
+    )
+    .await?
+    .0)
+}
+
+/// Full actual prediction membership, moved without changing public reports.
+pub(crate) async fn explain_dag_with_membership(
+    dag: &Dag,
+    cfg: &crate::config::ResolvedConfig,
+    target_names: &[String],
+    python: &std::path::Path,
+    policy: CachePolicy,
+    no_cache: bool,
+    command_label: &str,
+) -> Result<(ExplainResult, crate::cache::ExpandedMembership), BarcaError> {
     let targets = resolve_targets(dag, target_names, command_label)?;
     let target_ids: Vec<&str> = targets.iter().map(|(_, id)| id.as_str()).collect();
     let pool_size = default_pool_size();
@@ -1577,18 +1600,21 @@ pub(crate) async fn explain_dag(
     } else {
         Vec::new()
     };
-    Ok(ExplainResult {
-        dry_run: true,
-        command: command_label.to_string(),
-        target: match target_ids.as_slice() {
-            [one] => Some(short_name(one).to_string()),
-            _ => None,
+    Ok((
+        ExplainResult {
+            dry_run: true,
+            command: command_label.to_string(),
+            target: match target_ids.as_slice() {
+                [one] => Some(short_name(one).to_string()),
+                _ => None,
+            },
+            targets: per_target,
+            steps,
+            summary,
+            warnings,
         },
-        targets: per_target,
-        steps,
-        summary,
-        warnings,
-    })
+        state.into_membership(),
+    ))
 }
 
 struct Prediction<'a> {

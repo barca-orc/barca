@@ -18,7 +18,8 @@ function when no explicit name is set:
 - an asset or sensor at its cached result. If its code or inputs changed since it ran, the view
   still shows its last result, and stderr says it is stale and how to refresh it;
 - a task at its last successful result;
-- a partitioned asset as one view over every key's latest result, with a `partition` column
+- a partitioned asset as one view over its current keys' latest successful results,
+  with a `partition` column
   (`week=w1`).
 
 When two nodes share a name, both views are named by their full id instead, which you
@@ -30,11 +31,23 @@ Only parquet and json results can be queried: DataFrames, Arrow tables and DuckD
 stored as parquet; a dict or a list of dicts as json. A pickled result (any other Python object)
 is not a view.
 
+Partition membership comes from the same full cache-aware prediction as a dry run,
+including cached keys, all worker chunks, and derived keys whose source is cached.
+Removing a key excludes its rows from the current view; its materialization and
+artifact remain in history. Adding a key does not invent rows before it runs.
+Current keys can still show stale successful values until refreshed.
+
+If `partitions_from(...)` needs a source to run before its current keys are known,
+SQL leaves that view unavailable and explains which source must materialize.
+It does not guess membership from old results; unrelated views remain queryable.
+An asset with zero current keys has no partition result view, because SQL cannot
+infer a schema from absent current results.
+
 ## Remote storage
 
 With remote storage (`barca docs remote`) a result that exists only in the bucket is a view like
 any other. When a query names such a view, barca downloads its artifact (for a partitioned asset,
-every key's) into `.barca/sql-cache/` and queries the copy. stderr says what was downloaded:
+the current keys' artifacts) into `.barca/sql-cache/` and queries the copy. stderr says what was downloaded:
 
 ```
 barca: fetched 1 remote artifact (2.1 KB) into .barca/sql-cache/

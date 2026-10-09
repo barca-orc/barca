@@ -141,8 +141,24 @@ pub async fn status(
     sample: usize,
     shape: bool,
 ) -> Result<StatusResult, BarcaError> {
+    Ok(
+        status_with_membership(cfg, target_names, file_args, python, sample, shape)
+            .await?
+            .0,
+    )
+}
+
+/// SQL reuses this prediction instead of loading the DAG or interpreting keys again.
+pub(crate) async fn status_with_membership(
+    cfg: &crate::config::ResolvedConfig,
+    target_names: &[String],
+    file_args: &[String],
+    python: &std::path::Path,
+    sample: usize,
+    shape: bool,
+) -> Result<(StatusResult, crate::cache::ExpandedMembership), BarcaError> {
     let dag = crate::load::build_dag(file_args, python).await?;
-    status_from_dag(cfg, target_names, &dag, python, sample, shape).await
+    status_from_dag_with_membership(cfg, target_names, &dag, python, sample, shape).await
 }
 
 /// Inspect a validated graph; shares cache decisions with strict status.
@@ -154,7 +170,23 @@ pub async fn status_from_dag(
     sample: usize,
     shape: bool,
 ) -> Result<StatusResult, BarcaError> {
-    let explained = crate::execution::explain_dag(
+    Ok(
+        status_from_dag_with_membership(cfg, target_names, dag, python, sample, shape)
+            .await?
+            .0,
+    )
+}
+
+/// Preserve the given graph and move the prediction's private membership to SQL.
+async fn status_from_dag_with_membership(
+    cfg: &crate::config::ResolvedConfig,
+    target_names: &[String],
+    dag: &crate::dag::Dag,
+    python: &std::path::Path,
+    sample: usize,
+    shape: bool,
+) -> Result<(StatusResult, crate::cache::ExpandedMembership), BarcaError> {
+    let (explained, membership) = crate::execution::explain_dag_with_membership(
         dag,
         cfg,
         target_names,
@@ -258,12 +290,15 @@ pub async fn status_from_dag(
             _ => summary.unknown += 1,
         }
     }
-    Ok(StatusResult {
-        targets: explained.target_names(),
-        target: explained.target,
-        nodes,
-        summary,
-    })
+    Ok((
+        StatusResult {
+            targets: explained.target_names(),
+            target: explained.target,
+            nodes,
+            summary,
+        },
+        membership,
+    ))
 }
 
 fn cache(state: &str, reason: &str, detail: impl Into<String>) -> CacheStatus {

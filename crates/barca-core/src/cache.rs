@@ -150,7 +150,13 @@ pub(crate) struct DecideState {
     pub(crate) sensor_outputs: HashMap<String, String>,
 }
 
+pub(crate) type ExpandedMembership = BTreeMap<String, BTreeSet<String>>;
+
 impl DecideState {
+    pub(crate) fn into_membership(self) -> ExpandedMembership {
+        self.expected_steps
+    }
+
     pub(crate) fn run_hashes(&self) -> &HashMap<String, String> {
         &self.run_hashes
     }
