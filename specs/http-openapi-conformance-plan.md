@@ -129,3 +129,12 @@ all-target Clippy, Rust formatting, pinned Ruff and diff checks pass. Shipped
 load diagnostics, declared names and existing wire shapes remain synchronized.
 PR374 is admitted first; this branch will rebase onto its actual merge and repeat
 current-base acceptance before its fresh required CI. No intermediate CI push.
+
+Final admission after PR374: clean rebase onto authoritative main0f51c5a6
+preserved the reviewed contract and current health/name descriptions. All82
+server Rust tests and158 actual Python checks pass without skips, adding the
+newly shipped state-object guidance to the previous HTTP/client/CLI/manual/load/
+name/import/membership acceptance. Private native rebuild, official OpenAPI3.1
+validation, lock check and strict Clippy/fmt/Ruff/diff checks pass. There are no
+material conflicts or additional routes/fields. Both fresh actual-current-main
+CI gates are required before merge; spec version1 is independent of the release.
