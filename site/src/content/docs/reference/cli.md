@@ -307,6 +307,11 @@ Terminal status and successful/failed step rows commit together. Required databa
 failures report an infrastructure error and preserve previous progress/history and
 run state, which normally remains unfinished. Captured output is written separately after that transaction.
 
+Mid-run database writes commit completed-step rows and their progress count together.
+Failed batches are retained and retried without waiting for another step; replay does
+not count a completed step twice. Progress can be absent while the database cannot commit.
+The final write still records completed results not saved during execution.
+
 A run's `status` is `running`, `success`, `failed`, `cancelled` or `interrupted`. A run records
 each step as it finishes, so a `running` run already counts them in `steps_executed`, and
 `barca status` from another terminal shows them as `cached`. A run whose process was killed is

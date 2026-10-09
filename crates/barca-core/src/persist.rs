@@ -135,7 +135,7 @@ pub(crate) struct StepRow {
     sinks_json: Option<String>,
     cpu_seconds: Option<f64>,
     max_rss_bytes: Option<u64>,
-    /// A sensor's output content hash; None for everything else.
+    /// Worker sensor content hash, or the confirmed artifact-transfer hash.
     output_hash: Option<String>,
 }
 
@@ -171,10 +171,12 @@ impl StepRow {
         }
     }
 
-    async fn insert(&self, conn: &turso::Connection, run_id: &str) -> Result<(), turso::Error> {
+    async fn insert(&self, conn: &turso::Connection, run_id: &str) -> Result<u64, turso::Error> {
         let opt = |v: Option<String>| v.unwrap_or_default();
+        // Turso otherwise intersects the node and run indexes, scanning this run
+        // for each partition. Bound deduplication to the node's own history.
         conn.execute(
-            "INSERT INTO materializations (node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, elapsed_seconds, status, attempts, sinks_json, cpu_seconds, max_rss_bytes, output_hash, run_id) VALUES (?1, ?2, ?3, ?4, ?5, NULLIF(?6, ''), 'success', ?7, NULLIF(?8, ''), NULLIF(?9, ''), NULLIF(?10, ''), NULLIF(?11, ''), ?12)",
+            "INSERT INTO materializations (node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, elapsed_seconds, status, attempts, sinks_json, cpu_seconds, max_rss_bytes, output_hash, run_id) SELECT ?1, ?2, ?3, ?4, ?5, NULLIF(?6, ''), 'success', ?7, NULLIF(?8, ''), NULLIF(?9, ''), NULLIF(?10, ''), NULLIF(?11, ''), ?12 WHERE NOT EXISTS (SELECT 1 FROM materializations INDEXED BY idx_mat_node_run WHERE node_id = ?1 AND run_id = ?12)",
             [
                 self.node_id.clone(),
                 self.run_hash.clone(),
@@ -191,7 +193,6 @@ impl StepRow {
             ],
         )
         .await
-        .map(|_| ())
     }
 }
 
@@ -210,9 +211,9 @@ const RECORD_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50
 ///
 /// It is an optimisation of *when* rows land, never the only writer: the end-of-run
 /// [`persist_run`] writes every row of the run that is not already there (rows carry the run
-/// id). So a write that fails here and rows still queued at [`StepRecorder::finish`] are made
-/// good at the end. (A pull of the shared state by another process mid-run keeps the rows
-/// written here: see `state_carry`.)
+/// id). Failed batches are retained and retried at the existing interval. Rows still pending
+/// at [`StepRecorder::finish`] are made good at the end. A pull of shared state by another
+/// process mid-run keeps the written rows (see `state_carry`).
 pub(crate) struct StepRecorder {
     tx: tokio::sync::mpsc::UnboundedSender<StepRow>,
     stop: CancellationToken,
@@ -226,26 +227,32 @@ impl StepRecorder {
         let stopped = stop.clone();
         let task = tokio::spawn(async move {
             let mut next_write = tokio::time::Instant::now() + RECORD_INTERVAL;
+            let mut pending = Vec::new();
             loop {
-                let first = tokio::select! {
-                    biased;
-                    _ = stopped.cancelled() => break,
-                    row = rx.recv() => match row {
-                        Some(row) => row,
-                        None => break,
-                    },
-                };
+                if pending.is_empty() {
+                    let first = tokio::select! {
+                        biased;
+                        _ = stopped.cancelled() => break,
+                        row = rx.recv() => match row {
+                            Some(row) => row,
+                            None => break,
+                        },
+                    };
+                    pending.push(first);
+                }
                 tokio::select! {
                     biased;
                     _ = stopped.cancelled() => break,
                     _ = tokio::time::sleep_until(next_write) => {}
                 }
-                let mut batch = vec![first];
                 while let Ok(row) = rx.try_recv() {
-                    batch.push(row);
+                    pending.push(row);
                 }
-                // Best effort: see the type's doc comment for why a failure is not an error.
-                record_steps(&db_path, &run_id, &batch).await.ok();
+                // A failed transaction remains pending, even if no later step arrives.
+                // Terminal persistence still supplies the complete fallback on shutdown.
+                if record_steps(&db_path, &run_id, &pending).await.is_ok() {
+                    pending.clear();
+                }
                 next_write = tokio::time::Instant::now() + RECORD_INTERVAL;
             }
         });
@@ -286,29 +293,39 @@ impl StepRecorder {
 
 /// Append `rows` for a run that is still in progress, and advance its `steps_executed` so
 /// `barca history` shows how far it has got.
-async fn record_steps(db_path: &str, run_id: &str, rows: &[StepRow]) -> Result<(), BarcaError> {
+async fn record_steps(db_path: &str, run_id: &str, rows: &[StepRow]) -> Result<u64, BarcaError> {
     let _g = db::db_guard().await;
     let (_db, conn) = db::open_conn(db_path).await?;
-    // One transaction: one commit for the batch, and a reader sees all of it or none.
     conn.execute("BEGIN", ())
         .await
-        .map_err(|e| BarcaError::Db(format!("failed to begin: {e}")))?;
-    let mut written = 0usize;
-    for row in rows {
-        if row.insert(&conn, run_id).await.is_ok() {
-            written += 1;
+        .map_err(|e| BarcaError::Db(format!("failed to begin progress batch: {e}")))?;
+    let result = async {
+        let mut written = 0u64;
+        for row in rows {
+            written += row.insert(&conn, run_id).await.map_err(|e| {
+                BarcaError::Db(format!("failed to record progress step: {e}"))
+            })?;
         }
-    }
-    conn.execute(
-        "UPDATE runs SET steps_executed = steps_executed + ?1 WHERE run_id = ?2 AND status = 'running'",
-        [written.to_string(), run_id.to_string()],
-    )
-    .await
-    .ok();
-    conn.execute("COMMIT", ())
+        let updated = conn.execute(
+            "UPDATE runs SET steps_executed = steps_executed + ?1 WHERE run_id = ?2 AND status = 'running'",
+            [written.to_string(), run_id.to_string()],
+        )
         .await
-        .map_err(|e| BarcaError::Db(format!("failed to commit: {e}")))?;
-    Ok(())
+        .map_err(|e| BarcaError::Db(format!("failed to update progress count: {e}")))?;
+        if written > 0 && updated != 1 {
+            return Err(BarcaError::Db("cannot record new progress for a missing or finished run".to_string()));
+        }
+        conn.execute("COMMIT", ())
+            .await
+            .map_err(|e| BarcaError::Db(format!("failed to commit progress batch: {e}")))?;
+        Ok(written)
+    }.await;
+    if result.is_err() {
+        // Rollback cannot conceal the original failure. Dropping this short-lived
+        // connection also closes any transaction if rollback itself fails.
+        conn.execute("ROLLBACK", ()).await.ok();
+    }
+    result
 }
 
 /// The exception a step failure carries, as (type, message, traceback). A worker reports a
@@ -954,6 +971,170 @@ mod persist_tests {
     }
 
     #[tokio::test]
+    async fn progress_batch_replay_keeps_one_row_and_one_count_per_node() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = fresh_db(&dir, "m.db").await;
+        let fx = Fixture::new();
+        db::create_run(&db_path, "r1", "get", "[]", None, Some(2))
+            .await
+            .unwrap();
+        let batch = [fx.row("f.py:a"), fx.row("f.py:a"), fx.row("f.py:part[k=1]")];
+        record_steps(&db_path, "r1", &batch).await.unwrap();
+        record_steps(&db_path, "r1", &batch).await.unwrap();
+        assert_eq!(rows(&db_path).await.len(), 2);
+        assert_eq!(run_record(&db_path, "r1").await.steps_executed, 2);
+    }
+
+    #[tokio::test]
+    async fn a_failed_insert_rolls_back_the_entire_progress_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = fresh_db(&dir, "m.db").await;
+        let fx = Fixture::new();
+        db::create_run(&db_path, "r1", "get", "[]", None, Some(2))
+            .await
+            .unwrap();
+        {
+            let _g = db::db_guard().await;
+            let (_db, conn) = db::open_conn(&db_path).await.unwrap();
+            conn.execute(
+                "CREATE UNIQUE INDEX unique_progress_path ON materializations(artifact_path)",
+                (),
+            )
+            .await
+            .unwrap();
+        }
+        let first = fx.row("f.py:a");
+        let mut second = fx.row("f.py:part[k=1]");
+        second.path = first.path.clone();
+        let batch = [first, second];
+        assert!(record_steps(&db_path, "r1", &batch).await.is_err());
+        assert!(rows(&db_path).await.is_empty());
+        assert_eq!(run_record(&db_path, "r1").await.steps_executed, 0);
+        {
+            let _g = db::db_guard().await;
+            let (_db, conn) = db::open_conn(&db_path).await.unwrap();
+            conn.execute("DROP INDEX unique_progress_path", ())
+                .await
+                .unwrap();
+        }
+        record_steps(&db_path, "r1", &batch).await.unwrap();
+        assert_eq!(rows(&db_path).await.len(), 2);
+        assert_eq!(run_record(&db_path, "r1").await.steps_executed, 2);
+    }
+
+    #[tokio::test]
+    async fn a_failed_counter_update_rolls_back_progress_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = fresh_db(&dir, "m.db").await;
+        let fx = Fixture::new();
+        for id in ["r1", "other"] {
+            db::create_run(&db_path, id, "get", "[]", None, Some(2))
+                .await
+                .unwrap();
+        }
+        {
+            let _g = db::db_guard().await;
+            let (_db, conn) = db::open_conn(&db_path).await.unwrap();
+            conn.execute(
+                "UPDATE runs SET steps_executed = 1 WHERE run_id = 'other'",
+                (),
+            )
+            .await
+            .unwrap();
+            conn.execute(
+                "CREATE UNIQUE INDEX unique_progress_count ON runs(steps_executed)",
+                (),
+            )
+            .await
+            .unwrap();
+        }
+        let batch = [fx.row("f.py:a")];
+        let error = record_steps(&db_path, "r1", &batch).await.unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("failed to update progress count")
+        );
+        assert!(rows(&db_path).await.is_empty());
+        assert_eq!(run_record(&db_path, "r1").await.steps_executed, 0);
+        {
+            let _g = db::db_guard().await;
+            let (_db, conn) = db::open_conn(&db_path).await.unwrap();
+            conn.execute("DROP INDEX unique_progress_count", ())
+                .await
+                .unwrap();
+        }
+        assert_eq!(record_steps(&db_path, "r1", &batch).await.unwrap(), 1);
+        assert_eq!(run_record(&db_path, "other").await.steps_executed, 1);
+    }
+
+    #[tokio::test]
+    async fn new_progress_requires_a_running_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = fresh_db(&dir, "m.db").await;
+        let fx = Fixture::new();
+        assert!(
+            record_steps(&db_path, "absent", &[fx.row("f.py:a")])
+                .await
+                .is_err()
+        );
+        assert!(rows(&db_path).await.is_empty());
+        persist_run(&db_path, &fx.ledger("r1")).await.unwrap();
+        let before = rows(&db_path).await;
+        let mut late = fx.row("f.py:a");
+        late.node_id = "f.py:late".to_string();
+        assert!(record_steps(&db_path, "r1", &[late]).await.is_err());
+        assert_eq!(rows(&db_path).await, before);
+        assert_eq!(run_record(&db_path, "r1").await.status, "failed");
+    }
+
+    #[tokio::test]
+    async fn failed_progress_is_retried_without_another_worker_result() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = fresh_db(&dir, "m.db").await;
+        let fx = Fixture::new();
+        db::create_run(&db_path, "r1", "get", "[]", None, Some(2))
+            .await
+            .unwrap();
+        {
+            let _g = db::db_guard().await;
+            let (_db, conn) = db::open_conn(&db_path).await.unwrap();
+            // Any new row fails while this constraint is present.
+            conn.execute(
+                "CREATE UNIQUE INDEX blocked_progress ON materializations((1))",
+                (),
+            )
+            .await
+            .unwrap();
+            fx.row("f.py:part[k=1]")
+                .insert(&conn, "blocker")
+                .await
+                .unwrap();
+        }
+        let recorder = StepRecorder::start(db_path.clone(), "r1".to_string());
+        recorder.record(fx.row("f.py:a"));
+        tokio::time::sleep(RECORD_INTERVAL * 3).await;
+        assert_eq!(run_record(&db_path, "r1").await.steps_executed, 0);
+        {
+            let _g = db::db_guard().await;
+            let (_db, conn) = db::open_conn(&db_path).await.unwrap();
+            conn.execute("DROP INDEX blocked_progress", ())
+                .await
+                .unwrap();
+        }
+        let deadline = Instant::now() + std::time::Duration::from_secs(5);
+        while run_record(&db_path, "r1").await.steps_executed != 1 {
+            assert!(
+                Instant::now() < deadline,
+                "failed batch was discarded instead of retried"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        recorder.finish().await;
+        assert_eq!(rows(&db_path).await.len(), 2); // unrelated blocker remains intact
+    }
+
+    #[tokio::test]
     async fn the_ledger_adds_only_what_the_recorder_has_not_written() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = fresh_db(&dir, "m.db").await;
@@ -1012,6 +1193,11 @@ mod persist_tests {
         // A pulled DB that already holds part of this run (another process on this machine
         // pushed the shared local DB mid-run) gets the rest, and keeps another run's rows.
         let partial = fresh_db(&dir, "partial.db").await;
+        for id in ["other", "r1"] {
+            db::create_run(&partial, id, "get", "[]", None, Some(5))
+                .await
+                .unwrap();
+        }
         record_steps(&partial, "other", &[fx.row("f.py:a")])
             .await
             .unwrap();
@@ -1109,6 +1295,9 @@ mod persist_tests {
         for (name, by_recorder) in [("recorder.db", true), ("ledger.db", false)] {
             let db_path = fresh_db(&dir, name).await;
             if by_recorder {
+                db::create_run(&db_path, "r1", "get", "[]", None, Some(5))
+                    .await
+                    .unwrap();
                 record_steps(&db_path, "r1", &[fx.row("f.py:a")])
                     .await
                     .unwrap();
@@ -1141,6 +1330,9 @@ mod persist_tests {
         let db_path = fresh_db(&dir, "m.db").await;
         let fx = Fixture::new();
 
+        db::create_run(&db_path, "r1", "get", "[]", None, Some(5))
+            .await
+            .unwrap();
         let recorder = StepRecorder::start(db_path.clone(), "r1".to_string());
         recorder.record(fx.row("f.py:a"));
         recorder.record(fx.row("f.py:part[k=1]"));

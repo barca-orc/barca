@@ -653,6 +653,12 @@ barca status pipeline.py        # from another terminal: steps the running get h
 barca history --json            # the run is `running`; `steps_executed` is the steps recorded so far
 ```
 
+If a mid-run database write fails, barca retains the batch and retries at the same
+half-second interval, even if no further step finishes. A batch records its rows and
+progress count together; replay does not duplicate rows or count a step twice. Progress
+remains unrecorded while the database cannot commit. The final run write still includes
+completed results that the mid-run recorder has not saved.
+
 - **Progress.** `barca status` in a second terminal shows what a running `barca get` or
   `barca run` has finished: an asset is `cached`, a partitioned asset is `partial` with its
   `cached` / `missing` counts. A step that is still running shows its previous state.
