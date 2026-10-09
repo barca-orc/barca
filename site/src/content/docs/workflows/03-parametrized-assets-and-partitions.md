@@ -7,10 +7,15 @@ A partitioned asset is one function that barca runs once per key. Each key is a 
 own: it has its own run hash, its own artifact, and it is cached separately. Keys run in
 parallel across worker processes.
 
+Before checking a consumer's cache, barca verifies run hashes for every upstream
+partition in the selected expanded plan across all worker chunks. Missing hashes
+fail as an infrastructure error before a partial input set can produce a cache
+hit. Valid hashes and cache decisions remain independent of worker pool size.
+
 An earlier version of this page was a design document (identity model, proposed
 `materialize()` and `list_partitions()` helpers, a `.barcafiles/` layout). This page
-describes what barca 0.18.0 does. Everything on it was run with 0.18.0; the reference is
-`barca docs partitions`.
+describes the shipped workflow. The examples were first verified with 0.18.0;
+`barca docs partitions` is the current behavior reference.
 
 ## Example
 
