@@ -131,3 +131,19 @@ cases, strict workspace Clippy, Rust formatting, and Python Ruff pass. The
 new four-direction core test checks the selected upstream identity as well as
 quarantine; serve cases place a raising top-level statement in the healthy
 module to prove inspection does not import it.
+
+## Integration with merged partition validation and SQL installation
+
+Rebased onto main748479f after PR354 and PR352. The load conflict retains strict
+one-shot validation before dynamic evaluation; partial loading reaches the same
+validation through its initial isolated Dag construction before evaluating any
+healthy expressions. A real serve regression proves a mixed DerivedFrom/dynamic
+node is excluded, its diagnostic remains visible, healthy colocated nodes remain
+available and the top-level import marker is absent. The fixture passes the
+pipeline only once through the existing Server launcher.
+
+Current-base verification: all792 workspace Rust tests, strict workspace Clippy,
+49 actual CLI serve-isolation/partition-planning/contract checks, Rust formatting,
+pinned Ruff and whitespace checks passed. Earlier UI build/browser evidence
+remains applicable to the unchanged UI patch. No new product surface beyond the
+already reviewed additive load diagnostics.

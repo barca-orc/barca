@@ -208,3 +208,32 @@ def test_imported_reference_preserves_sibling_priority(project, sibling_healthy)
         assert "inspection imported user code" not in server.log.read_text()
     finally:
         server.stop()
+
+
+def test_mixed_partition_dimensions_are_isolated_before_expression_import(tmp_path):
+    (tmp_path / "barca.toml").write_text("")
+    (tmp_path / "pipeline.py").write_text("""from pathlib import Path
+from barca import asset, partitions, partitions_from
+Path("imported").touch()
+
+@asset()
+def keys(): return ["x"]
+
+@asset(partitions={"key": partitions_from(keys), "tier": partitions([str(i) for i in range(2)])})
+def mixed(key, tier): return key + tier
+
+@asset()
+def healthy(): return 7
+""")
+    server = Server(tmp_path)
+    try:
+        assert loaded(server) == {"pipeline.py:keys", "pipeline.py:healthy"}
+        diagnostics = errors(server)
+        assert any(
+            e["affected_nodes"] == ["pipeline.py:mixed"]
+            and "mixing partitions() and partitions_from()" in e["error"]
+            for e in diagnostics
+        )
+        assert not (tmp_path / "imported").exists()
+    finally:
+        server.stop()
