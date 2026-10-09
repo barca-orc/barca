@@ -147,3 +147,21 @@ Current-base verification: all792 workspace Rust tests, strict workspace Clippy,
 pinned Ruff and whitespace checks passed. Earlier UI build/browser evidence
 remains applicable to the unchanged UI patch. No new product surface beyond the
 already reviewed additive load diagnostics.
+
+## Startup generation repair plan (before implementation)
+
+Release-base actual CLI validation found repaired source diagnostics/inspection
+could become healthy while its schedule never appeared. A deterministic actual
+reproduction holds the metadata DB lock after the scheduler selects its initial
+healthy-only graph, repairs the source, verifies healthy diagnostics/assets, then
+releases the lock: five ticks still publish only the old job. Evidence is retained
+at /tmp/barca-p11-watch-evidence-qy_p5pvp (responses.json and serve.log).
+
+The scheduler currently samples its seen generation after initial DB initialization
+and catch-up awaits. That acknowledges edits its selected initial jobs never saw.
+Capture the generation before the initial graph load instead. Edits during loading
+or DB admission remain pending for the existing first-tick reload, which already
+runs before firing jobs. Keep reload sampling before its await; edits during a
+reload remain pending for the following tick. No new watcher owner, timer, API or
+configuration is required. Test with a held startup DB admission boundary and
+actual watch repair, preserving current test deadlines and registry assertions.
