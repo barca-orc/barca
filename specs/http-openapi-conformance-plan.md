@@ -119,3 +119,13 @@ merged schema changes; #195/#321 own future shape/command changes. UI assets can
 be absent in a source build, so conformance accepts the documented unavailable-UI
 response and validates built assets when present. Tests isolate metadata/artifacts
 inside temp directories and never need a remote provider.
+
+Admission preparation after explicit imports/current partition membership: clean
+rebase onto main b6497ede preserved all nine reviewed commits exactly. All 82
+server Rust tests and 156 actual Python HTTP-client/CLI/manual/load-isolation/
+naming/current-partition/explicit-import checks pass without skips on a private
+rebuilt binary. Official OpenAPI3.1 validation, uv lock check, strict workspace/
+all-target Clippy, Rust formatting, pinned Ruff and diff checks pass. Shipped
+load diagnostics, declared names and existing wire shapes remain synchronized.
+PR374 is admitted first; this branch will rebase onto its actual merge and repeat
+current-base acceptance before its fresh required CI. No intermediate CI push.
