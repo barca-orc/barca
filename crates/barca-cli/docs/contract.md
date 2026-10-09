@@ -943,7 +943,9 @@ counts every node even when `nodes` is truncated.
 Newest first. `files` is an array of the `.py` files the run was given. `target`,
 `steps_total`, `finished_at` and `elapsed_seconds` can be `null` (no target; a run still in
 progress or interrupted). `status` is `running`, `success`, `failed`, `cancelled` or
-`interrupted`: a `running` run counts the steps it has recorded so far in `steps_executed`, and
+`interrupted`: local history records completed steps during execution, after confirmed upload
+for remote results. Shared history is published at run end. A `running` run counts the steps
+it has recorded so far in `steps_executed`, and
 `interrupted` is a run whose process died without recording an outcome (`barca docs cache`,
 "While a run is going, and after one is killed").
 

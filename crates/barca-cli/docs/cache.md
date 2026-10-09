@@ -643,9 +643,10 @@ written separately after the outcome transaction.
 
 ## While a run is going, and after one is killed
 
-A run records each step in `.barca/metadata.db` as the step finishes, not only when the run
-ends. Finished steps are written in batches, at most twice a second, so a step is recorded
-within about half a second of finishing.
+A run records completed steps in `.barca/metadata.db` during execution. Local results are
+queued after their artifact is written; with a remote artifact store, they are queued only
+after the upload is confirmed. The local writer batches these rows at most twice a second,
+so progress normally appears within about half a second of that confirmation.
 
 ```bash
 barca status pipeline.py        # from another terminal: steps the running get has finished are `cached`
@@ -676,9 +677,9 @@ Known limits:
   the pull at the start of a command keeps what a run recorded locally, so progress and resume
   work whatever other machines upload in the meantime. Other machines see a run when it ends,
   and a killed run once a later run on its machine has ended.
-- With a remote artifact store, steps are not recorded as they finish: a row is written only
-  once the artifact's upload is confirmed, which happens when the run ends. Such a run shows no
-  progress in `barca status`, and a killed one records nothing.
+- With a remote artifact store, a failed or unfinished upload is never recorded as reusable
+  progress. Confirmed uploads are recorded locally while other steps are still running;
+  shared history is still published only when the run ends.
 - **When a run is `interrupted`.** For runs started with 0.20.0 or later, only on an observation
   that can only be made when the run's process is gone; whenever barca cannot make one, the run stays `running`. A run
   records which kernel its process ran on (the boot id), its pid namespace, its start time,

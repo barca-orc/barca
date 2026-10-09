@@ -257,6 +257,23 @@ impl StepRecorder {
         self.tx.send(row).ok();
     }
 
+    /// Prepare a nonblocking receipt handler. Only the transfer owner calls it after
+    /// confirming the stored bytes; an enqueued or abandoned upload records nothing.
+    pub(crate) fn after_upload(
+        &self,
+        mut row: StepRow,
+        store: String,
+    ) -> impl FnOnce(Option<String>) + Send + 'static {
+        let tx = self.tx.clone();
+        move |hash| {
+            row.path = store;
+            if hash.is_some() {
+                row.output_hash = hash;
+            }
+            tx.send(row).ok();
+        }
+    }
+
     /// Stop the background task and wait for it, so no connection is left open. Rows it had
     /// not written yet are left to [`persist_run`].
     pub(crate) async fn finish(self) {

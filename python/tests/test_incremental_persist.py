@@ -7,6 +7,7 @@ most twice a second), and the end-of-run write adds only what is missing.
 """
 
 import json
+import hashlib
 import os
 import signal
 import sqlite3
@@ -147,6 +148,92 @@ def test_status_from_a_second_process_shows_steps_a_running_get_has_finished(pro
     run = latest_run(project)
     assert (run["status"], run["steps_executed"], run["steps_cached"]) == ("success", 3, 0)
     assert set(states(project).values()) == {"cached"}
+
+
+def remote_progress(project, monkeypatch, state_mode):
+    for key in tuple(os.environ):
+        if key.startswith("BARCA_"):
+            monkeypatch.delenv(key)
+    store = project / "shared"
+    store.mkdir()
+    monkeypatch.setenv("BARCA_REMOTE_URI", str(store))
+    monkeypatch.setenv("BARCA_STATE", state_mode)
+    proc = start_get(project)
+    try:
+        wait_until_slow_is_running(project)
+        wait_for(
+            lambda: states(project)["second"] == "cached", "confirmed remote results to be saved"
+        )
+        assert proc.poll() is None
+        run = latest_run(project)
+        assert (run["status"], run["steps_executed"], run["finished_at"]) == ("running", 2, None)
+        with sqlite3.connect(project / ".barca" / "metadata.db") as conn:
+            rows = conn.execute(
+                "SELECT artifact_path, output_hash FROM materializations ORDER BY id"
+            ).fetchall()
+        conn.close()
+        assert len(rows) == 2
+        for path, digest in rows:
+            artifact = Path(path)
+            assert artifact.is_relative_to(store / "default" / "artifacts")
+            assert artifact.is_file()
+            assert digest == hashlib.sha256(artifact.read_bytes()).hexdigest()
+        # Receipt-only slice: minute publication is the next sequential PR.
+        assert not (store / "default" / "state" / "metadata.db").exists()
+        return proc, store
+    except BaseException:
+        (project / "release").touch()
+        if proc.poll() is None:
+            proc.kill()
+        proc.communicate(timeout=WAIT)
+        raise
+
+
+@pytest.mark.parametrize("state_mode", ["off", "optimistic"])
+def test_confirmed_remote_progress_is_visible_and_finalization_does_not_duplicate_it(
+    project, monkeypatch, state_mode
+):
+    proc = None
+    try:
+        proc, store = remote_progress(project, monkeypatch, state_mode)
+    finally:
+        if proc is not None:
+            finish(proc, project)
+    run = latest_run(project)
+    assert (run["status"], run["steps_executed"]) == ("success", 3)
+    with sqlite3.connect(project / ".barca" / "metadata.db") as conn:
+        rows = conn.execute(
+            "SELECT node_id, COUNT(*) FROM materializations GROUP BY node_id"
+        ).fetchall()
+    conn.close()
+    assert len(rows) == 3 and all(count == 1 for _, count in rows)
+    assert (store / "default" / "state" / "metadata.db").exists() == (state_mode == "optimistic")
+
+
+@pytest.mark.parametrize("state_mode", ["off", "optimistic"])
+def test_sigkill_reuses_confirmed_remote_results_before_final_publication(
+    project, monkeypatch, state_mode
+):
+    proc = None
+    try:
+        proc, _ = remote_progress(project, monkeypatch, state_mode)
+        os.kill(proc.pid, signal.SIGKILL)
+        assert proc.wait(timeout=WAIT) == -signal.SIGKILL
+        for pipe in (proc.stdout, proc.stderr):
+            pipe.close()
+    finally:
+        (project / "release").touch()
+        if proc is not None and proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=WAIT)
+    resumed = barca(project, "get", "pipeline.py", "--json")
+    assert resumed.returncode == 0, resumed.stderr
+    result = json.loads(resumed.stdout)
+    assert (result["steps_executed"], result["final_output"]) == (1, 3)
+    by_step = {step["id"].split(":")[-1]: step["status"] for step in result["steps"]}
+    assert by_step == {"first": "cached", "second": "cached", "slow": "ran"}
+    assert (project / "first.ran").read_text() == "x"
+    assert (project / "second.ran").read_text() == "x"
 
 
 def test_a_run_killed_with_sigkill_keeps_the_steps_it_finished(project):
