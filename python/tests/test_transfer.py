@@ -591,6 +591,176 @@ class TestStaging:
             raise RuntimeError("the transfer failed")
         assert list(tmp_path.iterdir()) == []
 
+    @pytest.mark.parametrize("handler", ["transfer", "state", "default", "ignored"])
+    def test_sigterm_during_finalizer_removes_partial_stage_only(self, tmp_path, handler):
+        destination = tmp_path / "artifact.json"
+        sentinel = tmp_path / ".unrelated.tmp"
+        destination.write_bytes(b"previous artifact")
+        sentinel.write_bytes(b"another owner")
+        child = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                """import os, signal, sys
+from pathlib import Path
+from barca import _storage, _transfer, _state
+signal.signal(signal.SIGTERM, {'transfer': _transfer._stop, 'state': _state._stop,
+                             'default': signal.SIG_DFL, 'ignored': signal.SIG_IGN}[sys.argv[2]])
+real_unlink = Path.unlink
+stage = None
+def interrupt_unlink(path, *args, **kwargs):
+    if path == stage:
+        assert path.read_bytes() == b'partial artifact'
+        os.kill(os.getpid(), signal.SIGTERM)
+    return real_unlink(path, *args, **kwargs)
+Path.unlink = interrupt_unlink
+with _storage.staged_beside(Path(sys.argv[1])) as temporary:
+    stage = temporary
+    temporary.write_bytes(b'partial artifact')
+""",
+                str(destination),
+                handler,
+            ],
+            capture_output=True,
+            timeout=30,
+        )
+        expected = {"transfer": 143, "state": 143, "default": -15, "ignored": 0}
+        assert child.returncode == expected[handler], child.stderr.decode()
+        assert destination.read_bytes() == b"previous artifact"
+        assert sentinel.read_bytes() == b"another owner"
+        assert sorted(p.name for p in tmp_path.iterdir()) == [sentinel.name, destination.name]
+
+    def test_failed_finalizer_keeps_stage_registered_for_shutdown(self, tmp_path, monkeypatch):
+        real_unlink = Path.unlink
+
+        def denied(path, *args, **kwargs):
+            raise PermissionError("temporary removal refused")
+
+        monkeypatch.setattr(Path, "unlink", denied)
+        with pytest.raises(PermissionError), _storage.staged_beside(tmp_path / "a.json") as tmp:
+            tmp.write_bytes(b"partial")
+        assert str(tmp) in _storage._staged
+        assert tmp.exists()
+        monkeypatch.setattr(Path, "unlink", real_unlink)
+        _storage.discard_staged()
+        assert not tmp.exists()
+
+    @pytest.mark.parametrize("handler", ["transfer", "state", "default", "ignored"])
+    def test_sigterm_after_creation_keeps_owned_cleanup(self, tmp_path, handler):
+        destination = tmp_path / "artifact.json"
+        sentinel = tmp_path / ".unrelated.tmp"
+        destination.write_bytes(b"previous artifact")
+        sentinel.write_bytes(b"another owner")
+        child = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                """import os, signal, sys
+from pathlib import Path
+from barca import _storage, _transfer, _state
+handlers = {'transfer': _transfer._stop, 'state': _state._stop,
+            'default': signal.SIG_DFL, 'ignored': signal.SIG_IGN}
+original_handler = handlers[sys.argv[2]]
+signal.signal(signal.SIGTERM, original_handler)
+real_mkstemp = _storage.tempfile.mkstemp
+def interrupt_creation(**kwargs):
+    fd, temporary = real_mkstemp(**kwargs)
+    os.write(fd, b'partial artifact')
+    os.kill(os.getpid(), signal.SIGTERM)
+    return fd, temporary
+_storage.tempfile.mkstemp = interrupt_creation
+with _storage.staged_beside(Path(sys.argv[1])) as temporary:
+    assert sys.argv[2] == 'ignored'
+    assert temporary.read_bytes() == b'partial artifact'
+assert signal.getsignal(signal.SIGTERM) == original_handler
+""",
+                str(destination),
+                handler,
+            ],
+            capture_output=True,
+            timeout=30,
+        )
+        expected = {"transfer": 143, "state": 143, "default": -15, "ignored": 0}
+        assert child.returncode == expected[handler], child.stderr.decode()
+        assert destination.read_bytes() == b"previous artifact"
+        assert sentinel.read_bytes() == b"another owner"
+        assert sorted(p.name for p in tmp_path.iterdir()) == [sentinel.name, destination.name]
+
+    @pytest.mark.parametrize("fails", [False, True])
+    def test_creation_restores_handler_and_replays_after_registration(
+        self, tmp_path, monkeypatch, fails
+    ):
+        real_mkstemp = _storage.tempfile.mkstemp
+        previous_handler = signal.getsignal(signal.SIGTERM)
+        calls, opened = [], []
+
+        def handler(signum, frame):
+            calls.append((signum, set(_storage._staged)))
+            if opened:
+                with pytest.raises(OSError):
+                    os.fstat(opened[0])
+
+        def creation(**kwargs):
+            if fails:
+                os.kill(os.getpid(), signal.SIGTERM)
+                raise OSError("creation refused")
+            fd, temporary = real_mkstemp(**kwargs)
+            opened.append(fd)
+            os.kill(os.getpid(), signal.SIGTERM)
+            return fd, temporary
+
+        signal.signal(signal.SIGTERM, handler)
+        monkeypatch.setattr(_storage.tempfile, "mkstemp", creation)
+        try:
+            if fails:
+                with pytest.raises(OSError, match="creation refused"):
+                    with _storage.staged_beside(tmp_path / "artifact.json"):
+                        pytest.fail("creation should fail")
+                assert calls == [(signal.SIGTERM, set())]
+            else:
+                with _storage.staged_beside(tmp_path / "artifact.json") as temporary:
+                    assert calls == [(signal.SIGTERM, {str(temporary)})]
+            assert signal.getsignal(signal.SIGTERM) is handler
+            assert list(tmp_path.iterdir()) == []
+        finally:
+            signal.signal(signal.SIGTERM, previous_handler)
+
+    @pytest.mark.parametrize("handler", ["transfer", "state", "default"])
+    def test_sigterm_at_handler_restoration_is_replayed(self, tmp_path, handler):
+        destination = tmp_path / "artifact.json"
+        destination.write_bytes(b"previous artifact")
+        child = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                """import os, signal, sys
+from pathlib import Path
+from barca import _storage, _transfer, _state
+original = {'transfer': _transfer._stop, 'state': _state._stop,
+            'default': signal.SIG_DFL}[sys.argv[2]]
+signal.signal(signal.SIGTERM, original)
+real_signal = signal.signal
+interrupted = False
+def at_restoration(signum, handler):
+    global interrupted
+    if signum == signal.SIGTERM and handler == original and not interrupted:
+        interrupted = True
+        os.kill(os.getpid(), signal.SIGTERM)
+    return real_signal(signum, handler)
+signal.signal = at_restoration
+with _storage.staged_beside(Path(sys.argv[1])):
+    pass
+""",
+                str(destination),
+                handler,
+            ],
+            capture_output=True,
+            timeout=30,
+        )
+        assert child.returncode == (-15 if handler == "default" else 143), child.stderr.decode()
+        assert destination.read_bytes() == b"previous artifact"
+        assert list(tmp_path.iterdir()) == [destination]
+
     def test_leaving_removes_what_is_staged_and_stages_nothing_more(self, tmp_path):
         with _storage.staged_beside(tmp_path / "h.json") as tmp:
             assert tmp.exists()

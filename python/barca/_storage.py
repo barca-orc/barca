@@ -23,6 +23,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import sys
 import tempfile
 import threading
@@ -180,6 +181,45 @@ _leaving = False
 
 
 @contextmanager
+def _defer_staging_sigterm(cleanup_owned):
+    """Delay main-thread termination only until a new stage has an owner."""
+    pending = []
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    original = signal.getsignal(signal.SIGTERM)
+    if original == signal.SIG_IGN or original is None:
+        yield
+        return
+
+    def defer(signum, frame):
+        if not pending:
+            pending.append((signum, frame))
+
+    signal.signal(signal.SIGTERM, defer)
+    try:
+        yield
+    finally:
+        default_cleaned = False
+        try:
+            if pending and original == signal.SIG_DFL:
+                # Default termination cannot unwind a Python finalizer.
+                cleanup_owned()
+                default_cleaned = True
+        finally:
+            signal.signal(signal.SIGTERM, original)
+            # A signal can arrive at restoration entry, after the check above.
+            if pending and original == signal.SIG_DFL:
+                try:
+                    if not default_cleaned:
+                        cleanup_owned()
+                finally:
+                    os.kill(os.getpid(), pending[0][0])
+            elif pending and callable(original):
+                original(*pending[0])
+
+
+@contextmanager
 def staged_beside(dest: Path):
     """Yield a new temp file in ``dest``'s directory, to be written and renamed over ``dest``.
 
@@ -187,24 +227,34 @@ def staged_beside(dest: Path):
     never seen half written. The temp file is removed when the block ends without having
     renamed it, and by ``discard_staged`` when the process is told to stop in the middle.
 
-    Creating the file and registering it happen under one lock, the one ``discard_staged``
-    takes: a process that is leaving either removes the file or was never given it. (The
-    thread that leaves is not the thread that stages, so without this a temp file created at
-    the wrong moment was left behind: twice in 180 runs of the Ctrl-C tests.)
+    Creation and registration share the lock used by ``discard_staged``. Main-thread
+    SIGTERM is deferred through registration and fd close, then replayed with the original
+    handler inside the cleanup scope. A lifeline thread waits for the same lock.
     """
     dest.parent.mkdir(parents=True, exist_ok=True)
-    with _staged_lock:
-        if _leaving:
-            raise InterruptedError(f"not staging {dest.name}: the process is exiting")
-        fd, tmp = tempfile.mkstemp(dir=dest.parent, prefix=f".{dest.name}.", suffix=".tmp")
-        _staged.add(tmp)
-    os.close(fd)
+    tmp = None
+
+    def remove_owned():
+        if tmp is not None:
+            with _staged_lock:
+                # Keep ownership visible to reentrant signal cleanup until removal succeeds.
+                Path(tmp).unlink(missing_ok=True)
+                _staged.discard(tmp)
+
+    def cleanup_owned():
+        with _defer_staging_sigterm(remove_owned):
+            remove_owned()
+
     try:
+        with _defer_staging_sigterm(cleanup_owned), _staged_lock:
+            if _leaving:
+                raise InterruptedError(f"not staging {dest.name}: the process is exiting")
+            fd, tmp = tempfile.mkstemp(dir=dest.parent, prefix=f".{dest.name}.", suffix=".tmp")
+            _staged.add(tmp)
+            os.close(fd)
         yield Path(tmp)
     finally:
-        with _staged_lock:
-            _staged.discard(tmp)
-        Path(tmp).unlink(missing_ok=True)
+        cleanup_owned()
 
 
 def discard_staged() -> None:
