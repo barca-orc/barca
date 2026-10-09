@@ -65,6 +65,16 @@ A decorator argument barca does not define (`@asset(after=other)`, `input=` for 
 `usage` error on every command that reads the file; the envelope names the node, the line, the
 argument and the accepted ones (`barca docs assets`, "Accepted arguments").
 
+A reader that stops early is not an error. `barca list | head -1` and
+`barca list | grep -q name` exit 0 (also under `set -o pipefail`), and a `get` or `run` whose
+output nobody reads still finishes and is recorded, so
+`barca run deploy pipeline.py 2>&1 | head -20` runs the whole deploy (`barca docs contract`,
+"A closed stdout or stderr").
+
+A decorator argument barca does not define (`@asset(after=other)`, `input=` for `inputs=`) is a
+`usage` error on every command that reads the file; the envelope names the node, the line, the
+argument and the accepted ones (`barca docs assets`, "Accepted arguments").
+
 ```bash
 barca get total pipeline.py --agent > result.json 2> progress.log
 echo $?
