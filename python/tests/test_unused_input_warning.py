@@ -762,12 +762,14 @@ def frame() -> pd.DataFrame:
 
 @asset(inputs={"orders": frame})
 def shadowed(orders: pd.DataFrame) -> int:
-    BODY
+    match duckdb:
+        case json:
+            return int(json.sql(QUERY).fetchone()[0])
 
 @asset(inputs={"orders": frame})
 def really_unused(orders: pd.DataFrame) -> int:
     return 7
-""".replace("BODY", bodies[binding])
+""".replace(bodies["capture"], bodies[binding])
     cwd = write(tmp_path, source)
     run = barca(cwd, "get", "shadowed", "pipeline.py", "--json")
     assert run.returncode == 0, run.stderr

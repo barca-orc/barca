@@ -87,6 +87,12 @@ const DELIBERATE: &[(&str, &str, &str)] = &[
         "raw",
     ),
     ("python/tests/test_unused_input_warning.py", "fan", "raw"),
+    // #300's shadowing regressions include a genuinely unused input as a control.
+    (
+        "python/tests/test_unused_input_warning.py",
+        "really_unused",
+        "orders",
+    ),
     ("python/tests/test_warning_dedupe.py", "fetch", "seed"),
 ];
 
