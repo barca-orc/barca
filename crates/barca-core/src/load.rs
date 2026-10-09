@@ -166,6 +166,10 @@ fn load_blocking(
             affected_nodes: vec![id],
         });
     }
+    let retained: Vec<_> = healthy
+        .into_iter()
+        .filter(|node| dag.get_node(&node.continuity_key()).is_some())
+        .collect();
     // Groups decorate only the retained definitions. An invalid hierarchy must not
     // suppress healthy execution or unrelated files' organizational metadata.
     let mut declarations_by_file = std::collections::BTreeMap::<String, Vec<_>>::new();
@@ -177,7 +181,7 @@ fn load_blocking(
     }
     let mut owners = std::collections::HashSet::new();
     for (file, declarations) in declarations_by_file {
-        match crate::groups::resolve(declarations, &healthy) {
+        match crate::groups::resolve(declarations, &retained) {
             Ok(groups) => {
                 if groups
                     .iter()

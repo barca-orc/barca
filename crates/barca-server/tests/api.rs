@@ -1085,3 +1085,49 @@ async fn groups_are_source_metadata_and_never_execution_nodes() {
     let (_, assets) = send(&router, "GET", "/assets").await;
     assert_eq!(assets.as_array().unwrap().len(), 2);
 }
+
+#[tokio::test]
+async fn groups_use_the_healthy_subset_beside_invalid_sources_and_definitions() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = isolated_config(dir.path(), true);
+    let path = config.files[0].clone();
+    std::fs::write(&path, format!("{FIXTURE}\nfrom barca import group\ng = group('Preparation', members=[first, second], output=second)\n")).unwrap();
+    let broken = dir.path().join("broken.py");
+    std::fs::write(&broken, "from barca import asset\n@asset\ndef broken(:\n").unwrap();
+    config.files.push(broken.display().to_string());
+    let router = app(config);
+    let (status, groups) = send(&router, "GET", "/groups").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(groups.as_array().unwrap().len(), 1);
+    assert_eq!(
+        send(&router, "GET", "/assets")
+            .await
+            .1
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    // A valid file can contain an excluded definition too. Its unusable group
+    // must disappear, without suppressing the same file's healthy nodes.
+    std::fs::write(&path, format!("{FIXTURE}\nfrom barca import group\n@asset(inputs={{'x': missing}})\ndef excluded(x): return x\ng = group('Preparation', members=[first, excluded], output=first)\n")).unwrap();
+    let (status, groups) = send(&router, "GET", "/groups").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(groups, serde_json::json!([]));
+    assert_eq!(
+        send(&router, "GET", "/assets")
+            .await
+            .1
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert!(
+        send(&router, "GET", "/health").await.1["load_errors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|error| error["error"].as_str().unwrap().contains("invalid group"))
+    );
+}

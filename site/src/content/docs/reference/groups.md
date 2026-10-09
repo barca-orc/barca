@@ -56,3 +56,8 @@ opens their contents on double click or Enter, retaining nesting across List/Gra
 Health aggregates all descendant nodes: any failed member makes its ancestors red,
 even when the output is cached successfully. CLI group listings show organization;
 use `barca status` to inspect execution health.
+
+In serve mode, group metadata uses the same retained graph as node inspection.
+Groups that reference excluded definitions are omitted and reported through
+`/health.load_errors`; healthy executable nodes and other files remain available.
+One-shot CLI commands continue to reject invalid group declarations.

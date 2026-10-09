@@ -81,8 +81,15 @@ pub(crate) fn extract_pipeline(
     source: &str,
     file: &str,
 ) -> Result<(Vec<ExtractedNode>, Vec<crate::groups::Declaration>), crate::BarcaError> {
-    let parsed =
-        parse_module(source).map_err(|e| crate::BarcaError::Parse(format!("{file}: {e}")))?;
+    let parsed = parse_module(source).map_err(|e| {
+        crate::BarcaError::Parse(
+            ParseError::SyntaxError {
+                file: file.to_string(),
+                message: e.to_string(),
+            }
+            .to_string(),
+        )
+    })?;
     let body = &parsed.syntax().body;
     let names = FileNames::collect(body);
     let mut nodes = Vec::new();
