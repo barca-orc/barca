@@ -47,7 +47,13 @@ unless `state = "off"` is set in `barca.toml` or `BARCA_STATE=off` in the enviro
 
 ## Endpoints (v1)
 
-All API responses are JSON, except the event stream and the UI.
+The normative [OpenAPI 3.1 contract](https://github.com/barca-orc/barca/blob/main/specs/server-api.openapi.yaml)
+defines the current routes, bodies and statuses and is checked against the real router and
+Python Client. This page explains that contract; it does not advertise proposed RFC routes.
+
+Handler API responses are JSON, except the event stream and UI. Axum request-extractor
+errors (for example, an invalid `/runs?limit=`) can instead return `400` plain text.
+GET routes also accept HEAD and return the corresponding headers without a body.
 
 | Method | Path | Description |
 |--------|------|-------------|

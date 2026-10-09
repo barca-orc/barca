@@ -1,5 +1,10 @@
 # Metadata schema compatibility
 
+Scope: metadata format compatibility, not the full table/DDL contract.
+Status: implemented. Specification version: 1 (database versions are described below).
+Conformance: `crates/barca-core/src/db_schema.rs`, `state_validate.rs`, and snapshot/carry
+tests in `db.rs`. See [boundary inventory](README.md).
+
 The metadata database contains durable run history, logs and schedules alongside
 rebuildable cache/cost data. A version mismatch never permits deleting or
 recreating it. Rust owns this boundary; no new CLI or Python configuration is
