@@ -13,8 +13,9 @@ pnpm only if you change it.
 git clone https://github.com/barca-orc/barca.git
 cd barca
 uv venv
+source .venv/bin/activate
 uv pip install maturin
-maturin develop --release --extras test   # builds the binary, installs it and the Python package into .venv
+maturin develop --uv --release --extras test   # builds the binary, installs it and the Python package into .venv
 cargo test                                # Rust tests
 ```
 

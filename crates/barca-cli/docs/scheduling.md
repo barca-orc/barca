@@ -1,12 +1,15 @@
 # Scheduling and `barca serve`
 
-Freshness says when a node should be kept up to date:
+Freshness is recorded on every node. Only `Schedule(...)` starts automatic runs:
 
 | Freshness | Meaning |
 |---|---|
-| `Always` (default) | Recomputed whenever stale and its upstreams are fresh. |
-| `Manual` | Only recomputed on an explicit refresh. A `Manual` upstream blocks `Always` downstream nodes from auto-updating. |
+| `Always` (default for assets/tasks) | Recorded and displayed; no automatic runs or special cache policy. |
+| `Manual` (default for sensors) | Recorded and displayed; no refresh barrier. A triggered command treats it like `Always`. |
 | `Schedule("<cron>")` | Fires on a cron schedule while `barca serve` is running. |
+
+Automatic `Always` reconciliation and `Manual` barriers are proposed in RFC-0008
+(https://github.com/barca-orc/barca/pull/276); they are not implemented.
 
 ```python
 from barca import asset, task, sensor, Schedule
@@ -36,7 +39,8 @@ A tick brings the node up to date. It does not force it to recompute:
   not run.
 - A scheduled **task** runs on every tick. Its upstream assets are checked the same way, as
   with `barca run <task>`.
-- A scheduled **sensor** is polled on every tick.
+- A scheduled **sensor** is polled on every tick. Its tick does not trigger consumers;
+  schedule or explicitly trigger the downstream asset/task to process its output.
 
 So outside data has to come in through a sensor (`barca docs cache`, "External data that changes
 in place"). A scheduled asset that fetches data in its own body, with no sensor upstream, has

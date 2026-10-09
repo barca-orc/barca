@@ -1,8 +1,18 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
+Current release notes are published on [GitHub Releases](https://github.com/barca-orc/barca/releases).
+Recent tagged release notes include [v0.20.1](https://github.com/barca-orc/barca/releases/tag/v0.20.1)
+(2026-10-09): inspectable run history and triggered runs, shared-history cancellation
+reconciliation, and verified shared DuckDB worker lifetime. See
+[v0.20.0](https://github.com/barca-orc/barca/releases/tag/v0.20.0) for the preceding
+upgrade and breaking-change notes. Releases between the historical entries below
+and these tags are available on the same releases page.
 
-## [Unreleased]
+The older notes below are preserved as historical records. Their former
+"Unreleased" section describes work that has already shipped; it is not the
+current pending-release queue.
+
+## Historical notes (formerly "Unreleased")
 
 ### Breaking changes
 

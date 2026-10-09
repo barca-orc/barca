@@ -16,9 +16,8 @@ the nodes below it. That design is not implemented. In barca 0.18.0:
   command or the server computes.
 
 Behavior for `Always` and `Manual` under `barca serve` is proposed in RFC-0008
-([PR #276](https://github.com/barca-orc/barca/pull/276)). `barca docs scheduling` and
-`barca docs assets` describe `Manual` as "only recomputed on an explicit refresh"; the runs below
-show that this is not what 0.18.0 does.
+([PR #276](https://github.com/barca-orc/barca/pull/276)); it remains a proposal.
+The manual describes the current behavior, and the historical runs below illustrate it.
 
 Everything on this page was run with barca 0.18.0.
 

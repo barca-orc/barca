@@ -35,7 +35,7 @@ Options:
           Force re-materialize EVERY asset in the target's cone (nothing comes from cache)
 
       --dry-run
-          Show what this command would do (each step cached or will-run, and why) without running or writing anything
+          Show what this command would do (each step cached or will-run, and why) without executing steps or recording a run (shared history may synchronize)
 
       --agent
           Agent-friendly output: plain structured progress lines instead of visual progress bar
@@ -63,7 +63,7 @@ Examples:
   barca get total pipeline.py --refresh-all        # recompute everything in that cone
   barca get total pipeline.py --refresh clean      # recompute clean and everything downstream of it
   barca get total pipeline.py --refresh clean --no-cascade   # recompute only clean
-  barca get total pipeline.py --dry-run    # what would run vs come from cache; changes nothing
+  barca get total pipeline.py --dry-run    # what would run vs come from cache; no steps execute
   barca get total pipeline.py --json       # JSON even in a terminal (the default when piped)
   barca get total pipeline.py --pretty     # summary and value for humans (the default in a terminal)
   barca get total pipeline.py -o value     # just the value, pretty-printed

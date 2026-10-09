@@ -72,7 +72,7 @@ Examples:
   barca get total pipeline.py --refresh-all        # recompute everything in that cone
   barca get total pipeline.py --refresh clean      # recompute clean and everything downstream of it
   barca get total pipeline.py --refresh clean --no-cascade   # recompute only clean
-  barca get total pipeline.py --dry-run    # what would run vs come from cache; changes nothing
+  barca get total pipeline.py --dry-run    # what would run vs come from cache; no steps execute
   barca get total pipeline.py --json       # JSON even in a terminal (the default when piped)
   barca get total pipeline.py --pretty     # summary and value for humans (the default in a terminal)
   barca get total pipeline.py -o value     # just the value, pretty-printed
@@ -172,7 +172,8 @@ plan-time warnings such as an input a step never uses, each also one `[barca] wa
 stderr (barca docs assets, \"Unused inputs\").
 `reason` is an object: {\"type\": \"initial\"} or {\"type\": \"fan_in\", \"node_id\": ...}.
 Planning uses the execution pool size (available cores, or BARCA_POOL_SIZE).
-Planning is static analysis: it never imports your code or reads state, so it takes no --env.
+Parsing is static; partitions(<expression>) evaluates Python while loading its keys.
+Planning reads no state and takes no --env.
 Experimental: the layout may change between releases (barca docs contract).
 More: barca docs agents";
 
@@ -267,7 +268,8 @@ gone and a run would read it: reason `artifact_missing`), never_run, partial
 (some partition keys cached), unknown (dynamic partitions not yet known) or always_runs (tasks,
 sensors), with a reason. JSON spells the states in snake_case, the same as the `summary` keys
 (the table prints never-run, always-runs). It is the same decision `--dry-run` makes.
-Read-only: never imports your code, never writes. Shape (rows, columns, type) is read from the
+No steps execute. Optimistic shared history may synchronize locally; partitions(<expression>)
+may import the source to resolve keys. Shape (rows, columns, type) is read from the
 artifact file only. With remote storage it is read from the bucket: a parquet footer by ranged
 requests, json and pickle by a download of up to 16 MB (larger ones get a `note`). A store that
 cannot be reached is a `note` on each shape, not a failed command.
@@ -289,13 +291,14 @@ Examples:
 Every asset, sensor and task with a result on disk is a view named after its function (or after its
 full id, quoted, when two nodes share a name; stderr says so). An asset whose code or inputs changed
 is still queryable at its last result, with a note on stderr. Only parquet and json results can be
-queried; pickles cannot. Runs in an in-memory DuckDB over the artifact files: your code is never
-imported and nothing is recorded. Install SQL support: uv add 'barca[sql]'.
+queried; pickles cannot. Runs in an in-memory DuckDB over artifact files; no pipeline step runs
+and no new run is recorded. Install SQL support: uv add 'barca[sql]'.
+partitions(<expression>) may evaluate Python while loading its keys.
 Partitioned views include current known keys only; removed keys stay in history. Unknown derived
 keys require their source to materialize first. Zero current keys have no result view.
 With remote storage, the artifacts of the views a query names are downloaded into
-.barca/sql-cache/ (stderr says so) and reused while the objects are unchanged; nothing else is
-written.
+.barca/sql-cache/ (stderr says so) and reused while the objects are unchanged. Optimistic shared
+history synchronizes locally; explicit SQL COPY ... TO writes the requested output file.
 Errors exit 2: a node with no result yet names the `barca get` to run first; an unknown view lists
 the views; a SQL error carries DuckDB's message. A remote artifact that cannot be fetched exits 3.
 Experimental: barca docs contract.
@@ -366,7 +369,7 @@ pub(crate) enum Cli {
         #[arg(long, hide = true, conflicts_with = "refresh_all")]
         no_cache: bool,
         /// Show what this command would do (each step cached or will-run, and why) without
-        /// running or writing anything
+        /// executing steps or recording a run (shared history may synchronize)
         #[arg(long)]
         dry_run: bool,
         /// Agent-friendly output: plain structured progress lines instead of visual progress bar
@@ -407,7 +410,7 @@ pub(crate) enum Cli {
         #[arg(long, hide = true, conflicts_with = "refresh_all")]
         no_cache: bool,
         /// Show what this command would do (each step cached or will-run, and why) without
-        /// running or writing anything
+        /// executing steps or recording a run (shared history may synchronize)
         #[arg(long)]
         dry_run: bool,
         /// Output format (kept for compatibility; --json / --pretty are the canonical spelling)
@@ -553,7 +556,8 @@ pub(crate) enum Cli {
     },
     /// Query cached results with SQL (DuckDB) — each asset is a named view
     ///
-    /// Reads artifact files only: no step runs, user code is never imported, nothing is recorded.
+    /// No pipeline step executes or new run is recorded. Shared history may synchronize;
+    /// partition expressions may evaluate Python; explicit SQL COPY can write files.
     #[command(after_help = SQL_HELP)]
     Sql {
         /// The SQL query (DuckDB dialect); quote it as one argument

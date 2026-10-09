@@ -1,6 +1,6 @@
 Query cached results with SQL (DuckDB) — each asset is a named view
 
-Reads artifact files only: no step runs, user code is never imported, nothing is recorded.
+No pipeline step executes or new run is recorded. Shared history may synchronize; partition expressions may evaluate Python; explicit SQL COPY can write files.
 
 Usage: barca sql [OPTIONS] <QUERY> [FILES]...
 
@@ -47,13 +47,14 @@ Examples:
 Every asset, sensor and task with a result on disk is a view named after its function (or after its
 full id, quoted, when two nodes share a name; stderr says so). An asset whose code or inputs changed
 is still queryable at its last result, with a note on stderr. Only parquet and json results can be
-queried; pickles cannot. Runs in an in-memory DuckDB over the artifact files: your code is never
-imported and nothing is recorded. Install SQL support: uv add 'barca[sql]'.
+queried; pickles cannot. Runs in an in-memory DuckDB over artifact files; no pipeline step runs
+and no new run is recorded. Install SQL support: uv add 'barca[sql]'.
+partitions(<expression>) may evaluate Python while loading its keys.
 Partitioned views include current known keys only; removed keys stay in history. Unknown derived
 keys require their source to materialize first. Zero current keys have no result view.
 With remote storage, the artifacts of the views a query names are downloaded into
-.barca/sql-cache/ (stderr says so) and reused while the objects are unchanged; nothing else is
-written.
+.barca/sql-cache/ (stderr says so) and reused while the objects are unchanged. Optimistic shared
+history synchronizes locally; explicit SQL COPY ... TO writes the requested output file.
 Errors exit 2: a node with no result yet names the `barca get` to run first; an unknown view lists
 the views; a SQL error carries DuckDB's message. A remote artifact that cannot be fetched exits 3.
 Experimental: barca docs contract.

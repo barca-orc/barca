@@ -142,8 +142,9 @@ recomputes a result whose artifact is missing (see "Failures"). In practice that
 history object needs delete permission there), and Storage Blob Data Contributor on Azure.
 
 Two machines finishing runs at the same time do not lose history: the second detects the
-conflict, re-reads and merges. Set `BARCA_STATE=off` to keep history on each machine and share
-only results.
+conflict, re-reads and merges. Set `BARCA_STATE=off` to keep history on each machine while uploading artifact
+files to the configured store. Another machine does not discover cache hits from those
+files alone: cache discovery needs materialization rows in shared history.
 
 The shared history is one object, replaced by every run, and barca keeps no earlier copies of
 it in the bucket. Turn on object versioning for the bucket (S3, GCS and Azure all have it): it
@@ -363,14 +364,16 @@ versions kept running on it (with errors such as `short read on page 33` now and
 
 (the second lists `row 29 missing from index idx_mat_run` among its problems).
 
-One machine may not get the message: the one that uploaded last holds the same bytes as the
-shared history, so its pull changes nothing and is let through. That stays so for its later
-commands too, for as long as nobody else uploads: `barca status` and `--dry-run` change
-neither copy, and each `barca get` or `barca run` ends by uploading the local copy, after which
-the two hold the same bytes again. Its copy is damaged all the same, and step 1 finds it. In what we reproduced with 0.17.1 the local copies were damaged in
-the same way as the shared history, so rebuilding the shared history from a local copy as
-described above uploads the damage again. Either salvage the copies or start the history again.
-Both keep every result file. Do this with no barca command running on any machine.
+A machine whose local main file is byte-for-byte identical to the download and whose
+write-ahead log has no frames skips the full page-integrity scan on that pull. The
+download still passes the header, schema and compatibility checks, so this is not a
+guarantee that a damaged identical copy is accepted. A successful pull can update local
+metadata and its retained copy; inspection is not a promise to leave those files untouched.
+In the 0.17.1 reproduction, local and shared copies had the same damage. Uploading that
+local copy again cannot repair the shared history. Verify a candidate backup before
+restoring it, or salvage readable history. Unsupported schema versions require a
+compatible release, rather than resetting history. Stop Barca commands on every machine
+before the manual repair procedure below.
 
 *Salvage what can be read.* This needs the `sqlite3` command, version 3.29 or later, built
 with `.recover` (the one shipped with macOS and with current Linux distributions is).

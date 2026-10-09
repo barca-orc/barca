@@ -10,6 +10,14 @@ description: 'barca serve — endpoints, the async run/poll contract, cron sched
 
 ---
 
+> **Historical design record:** the accepted baseline below describes the version
+> named in its status, with any amendments called out separately. It is not the
+> current executable contract. Use the [CLI contract](/reference/cli-contract/),
+> [decorator reference](/reference/api/decorators/),
+> [server API](/reference/server-api/) and [configuration reference](/reference/config/)
+> for implemented behavior. Open proposals remain proposals until separately accepted
+> and implemented.
+
 ## 1. Summary
 
 `barca serve` starts an axum-based HTTP/JSON API (`barca-server`) that exposes the same

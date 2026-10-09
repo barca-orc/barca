@@ -15,7 +15,7 @@ description: The test suites in the barca repository, how to run each, and what 
 | Manual and contract tests | `cargo test -p barca`, `python/tests/test_docs_examples.py`, `python/tests/test_cli_contract.py` | see below |
 
 The Python and shell tests run the installed `barca` binary, so build it first
-(`maturin develop --release --extras test`, see [Development Setup](/contributing/development/)).
+(`maturin develop --uv --release --extras test`, see [Development Setup](/contributing/development/)).
 
 ## Rust
 

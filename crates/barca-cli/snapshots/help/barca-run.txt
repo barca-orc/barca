@@ -19,7 +19,7 @@ Options:
           Force re-materialize EVERY asset in the task's cone (nothing comes from cache)
 
       --dry-run
-          Show what this command would do (each step cached or will-run, and why) without running or writing anything
+          Show what this command would do (each step cached or will-run, and why) without executing steps or recording a run (shared history may synchronize)
 
   -o, --output <OUTPUT>
           Output format (kept for compatibility; --json / --pretty are the canonical spelling)

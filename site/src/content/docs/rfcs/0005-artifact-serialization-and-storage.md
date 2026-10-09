@@ -36,6 +36,14 @@ description: 'json/pickle/parquet artifact formats, local and remote storage, st
 > title, §1, §4.1, §5) means "addressed by run hash", as §8 says, and "immutable" means
 > "not rewritten except by `--refresh` of a non-deterministic asset".
 
+> **Historical design record:** the accepted baseline below describes the version
+> named in its status, with any amendments called out separately. It is not the
+> current executable contract. Use the [CLI contract](/reference/cli-contract/),
+> [decorator reference](/reference/api/decorators/),
+> [server API](/reference/server-api/) and [configuration reference](/reference/config/)
+> for implemented behavior. Open proposals remain proposals until separately accepted
+> and implemented.
+
 ## 1. Summary
 
 Data never passes between worker processes in-memory — every asset/task output is

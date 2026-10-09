@@ -377,7 +377,7 @@ See `barca docs sinks`.
     name: str | None = None,
     partitions: dict[str, PartitionSpecLike] | None = None,
     serializer: SerializerKind | None = None,
-    freshness: Manual | Schedule = Manual,
+    freshness: Freshness = Manual,
     timeout_seconds: int = 300,
     retries: int = 1,
     retry_backoff: float = 0.0,
