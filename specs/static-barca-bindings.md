@@ -15,14 +15,20 @@ imports only when no competing binding is present. Provenance-dependent
 argument validation remains limited to proven Barca bindings. Namespace
 reflection and uncertain writes invalidate positive provenance conservatively;
 hashing retains the existing conservative module fallback where applicable.
-Module attribute writes also invalidate affected module aliases.
+Module export writes invalidate the affected canonical export across every module alias
+and direct import, including imports preceding the write. This deliberately conservative
+rule avoids a new statement-order model; unaffected exports through other module aliases
+remain recognized.
 
 All existing helpers read from decorators use the same resolver: sink, unsafe,
 freshness markers/Schedule, partitions/partitions_from, collect and asset_ref.
 Task-body parallel/parallel_map recognition uses module provenance restricted by
 function-local bindings so parameters and local assignments cannot masquerade
 as imported helpers. Arbitrary dynamically installed exports and runtime alias
-assignments are outside static recognition.
+assignments are outside static recognition. The local binding collector currently also
+treats comprehension targets and lambda parameters as shadows of the enclosing function;
+this can omit task helper metadata but does not alter task execution. Precise nested-scope
+resolution remains outside this bounded change.
 
 ## Implementation sequence
 
@@ -54,7 +60,7 @@ retains node discovery while validation/hashing keep their conservative fallback
 
 ## Verification
 
-- Workspace Rust tests: 777 passed, including the grammar and repository example sweeps.
+- Workspace Rust tests: 779 passed, including the grammar and repository example sweeps.
 - Workspace Clippy with warnings denied, Rust formatting and pinned Ruff passed.
 - Actual CLI/decorator/cache/manual/contract suites: 353 passed; the two examples
   initially skipped for optional Polars then passed after installing it (355 total).
@@ -63,3 +69,10 @@ retains node discovery while validation/hashing keep their conservative fallback
 - Explicit foreign/rebound fixtures now assert non-discovery; cache-safety fixtures
   stack their custom wrapper on a genuine imported Barca alias and retain their
   implementation/order/argument invalidation checks.
+
+Review follow-up: explicit export-mutation regressions cover two module aliases,
+imports after a write, and reuse of the original module alias for a competing import.
+Partition helpers lose Barca metadata/hash treatment across all aliases; a mutated
+foreign sink wrapper executes without creating a sink and invalidates cache when its
+implementation changes. The focused actual CLI resolver/foreign-decorator/cache suites
+passed 264 tests, and the final static-binding suite passed 11 tests after the final build.

@@ -1331,6 +1331,14 @@ def conditional():
     }
 
     #[test]
+    fn shared_module_export_writes_block_affected_helpers_and_aliases() {
+        let source = "import barca as b\nimport barca as c\nfrom barca import partitions as old_p\nb.partitions = foreign\nfrom barca import partitions as new_p\n@b.asset(partitions={\"a\": c.partitions([1], custom=True), \"b\": new_p([2], custom=True), \"c\": old_p([3], custom=True)})\ndef f(): return 1\n";
+        let nodes = extract_nodes(source, "pipeline.py").unwrap();
+        assert_eq!(nodes.len(), 1);
+        assert!(nodes[0].partitions.is_empty());
+    }
+
+    #[test]
     fn aliased_decorator_and_helper_arguments_receive_validation() {
         for source in [
             "import barca as b\n@b.asset(input={})\ndef f(): pass\n",

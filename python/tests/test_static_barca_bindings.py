@@ -12,7 +12,13 @@ def invoke(root, *args):
     env = {k: v for k, v in os.environ.items() if not k.startswith("BARCA_")}
     env["BARCA_POOL_SIZE"] = "2"
     return subprocess.run(
-        [_find_binary(), *args], cwd=root, env=env, capture_output=True, text=True, timeout=30
+        [_find_binary(), *args],
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
     )
 
 
@@ -80,3 +86,46 @@ def test_foreign_wrapper_stacked_on_genuine_node_still_executes(tmp_path):
     out = invoke(tmp_path, "get", "value", "pipeline.py")
     assert out.returncode == 0, out.stderr
     assert json.loads(out.stdout)["final_output"] == 7
+
+
+@pytest.mark.parametrize(
+    "imports,decorator",
+    [
+        ("import barca as c", "c.asset"),
+        ("from barca import asset as b\nimport barca as c", "c.asset"),
+        ("from barca import asset as a", "a"),
+        ("from barca import asset", "asset"),
+    ],
+)
+def test_module_export_write_invalidates_other_aliases_and_later_imports(
+    tmp_path, imports, decorator
+):
+    (tmp_path / "pipeline.py").write_text(
+        "import barca as b\nimport barca as c\n"
+        "def foreign(**options): return lambda fn: fn\n"
+        f"b.asset = foreign\n{imports}\n"
+        f"@{decorator}(input={{}})\ndef hidden(): return 1\n"
+    )
+    out = invoke(tmp_path, "list", "pipeline.py", "--json")
+    assert out.returncode == 0, out.stderr
+    assert json.loads(out.stdout)["nodes"] == []
+
+
+def test_mutated_module_wrapper_executes_and_invalidates_cache(tmp_path):
+    source = (
+        "import barca as b\nimport barca as c\n"
+        "def foreign(path, *, value):\n    return lambda fn: lambda: value\n"
+        "b.sink = foreign\n"
+        "@c.asset()\n@c.sink('ignored.json', value=7)\ndef value(): return 0\n"
+    )
+    (tmp_path / "pipeline.py").write_text(source)
+    (tmp_path / "barca.toml").write_text("")
+    first = invoke(tmp_path, "get", "value", "pipeline.py")
+    assert first.returncode == 0, first.stderr
+    assert json.loads(first.stdout)["final_output"] == 7
+    assert not (tmp_path / "ignored.json").exists()
+    (tmp_path / "pipeline.py").write_text(source.replace("lambda: value", "lambda: value + 2"))
+    changed = invoke(tmp_path, "get", "value", "pipeline.py")
+    assert changed.returncode == 0, changed.stderr
+    assert json.loads(changed.stdout)["steps_executed"] == 1
+    assert json.loads(changed.stdout)["final_output"] == 9

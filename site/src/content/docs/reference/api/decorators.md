@@ -26,7 +26,9 @@ def rows(key):
 Planning reads these bindings statically and never imports your module. A name
 reassigned or imported from another library does not define a Barca node; local
 parameters or assignments also shadow task-body helpers such as `parallel`.
-Dynamic alias assignments and conditional imports are not resolved.
+Dynamic alias assignments and conditional imports are not resolved. Explicit writes to a Barca module export
+conservatively disable recognition of that export through every module alias and
+direct import, including earlier copies; unaffected exports remain available.
 
 If a foreign decorator previously became a node merely because it was named
 `asset`, `sensor` or `task`, import the actual Barca decorator instead. To keep a

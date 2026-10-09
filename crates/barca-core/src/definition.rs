@@ -1161,6 +1161,33 @@ def f(a, b, c):
         assert_eq!(rows, expected);
     }
     #[test]
+    fn mutated_partition_helpers_keep_their_arguments_in_definition_hash() {
+        let definition = |keys: &str| {
+            let source = format!(
+                "import barca as b\nimport barca as c\nb.partitions = foreign\n@c.asset(partitions={{\"key\": c.partitions({keys})}})\ndef f(): return 1\n"
+            );
+            let parsed = parse_module(&source).unwrap();
+            let func = parsed
+                .syntax()
+                .body
+                .iter()
+                .find_map(|s| match s {
+                    Stmt::FunctionDef(f) => Some(f),
+                    _ => None,
+                })
+                .unwrap();
+            node_definition(
+                func,
+                &source,
+                &crate::decorator_args::BarcaNames::of(&parsed.syntax().body),
+            )
+            .unwrap()
+            .text
+        };
+        assert_ne!(definition("[1]"), definition("[2]"));
+    }
+
+    #[test]
     fn aliased_nodes_share_metadata_and_partition_hash_rules() {
         let definition = |imports: &str, decorator: &str| {
             let source = format!("{imports}\n{decorator}\ndef f(key): return key\n");

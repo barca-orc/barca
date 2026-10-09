@@ -456,6 +456,8 @@ pub struct BarcaNames {
     proven: std::collections::HashMap<String, &'static str>,
     candidates: std::collections::HashMap<String, &'static str>,
     bound: std::collections::HashSet<String>,
+    /// Explicit writes affect the shared module object, regardless of import spelling.
+    mutated_exports: std::collections::HashSet<&'static str>,
 }
 
 fn exported_names() -> impl Iterator<Item = &'static str> {
@@ -491,6 +493,7 @@ impl BarcaNames {
                 (self.proven.get(n.id.as_str()) == Some(&"module"))
                     .then(|| exported(a.attr.as_str()))
                     .flatten()
+                    .filter(|name| !self.mutated_exports.contains(name))
             }
             _ => None,
         }
@@ -512,6 +515,7 @@ impl BarcaNames {
                     (self.candidates.get(n.id.as_str()) == Some(&"module"))
                         .then(|| exported(a.attr.as_str()))
                         .flatten()
+                        .filter(|name| !self.mutated_exports.contains(name))
                 }
                 _ => None,
             })
@@ -620,6 +624,7 @@ impl BarcaNames {
 
         let mut imported: HashMap<String, (&'static str, usize)> = HashMap::new();
         let mut top_level_imports: HashSet<usize> = HashSet::new();
+        let mut module_aliases = HashSet::new();
         let mut conflicting = HashSet::new();
         let mut record = |local: String, canonical: &'static str, at: usize| {
             if imported
@@ -637,15 +642,13 @@ impl BarcaNames {
                     for alias in &imp.names {
                         if alias.name.as_str() == "barca" {
                             top_level_imports.insert(at);
-                            record(
-                                alias
-                                    .asname
-                                    .as_ref()
-                                    .map_or("barca", |n| n.as_str())
-                                    .to_string(),
-                                "module",
-                                at,
-                            );
+                            let local = alias
+                                .asname
+                                .as_ref()
+                                .map_or("barca", |n| n.as_str())
+                                .to_string();
+                            module_aliases.insert(local.clone());
+                            record(local, "module", at);
                         }
                     }
                 }
@@ -675,6 +678,8 @@ impl BarcaNames {
         /// Everything else that binds a name at module scope.
         struct Bindings<'s> {
             top_level_imports: &'s HashSet<usize>,
+            module_aliases: HashSet<String>,
+            mutated_exports: HashSet<&'static str>,
             /// Inside a `def` or `class`: only `global` reaches the module scope from there.
             nested: usize,
             rebound: HashSet<String>,
@@ -695,9 +700,15 @@ impl BarcaNames {
                     Expr::List(l) => l.elts.iter().for_each(|e| self.bind_target(e)),
                     Expr::Starred(s) => self.bind_target(&s.value),
                     Expr::Attribute(a) => {
-                        // Replacing a module export invalidates that module alias.
+                        // A known export is shared by every module alias and direct import.
                         if let Expr::Name(n) = a.value.as_ref() {
-                            self.rebound.insert(n.id.to_string());
+                            if self.module_aliases.contains(n.id.as_str())
+                                && let Some(export) = exported(a.attr.as_str())
+                            {
+                                self.mutated_exports.insert(export);
+                            } else {
+                                self.rebound.insert(n.id.to_string());
+                            }
                         }
                     }
                     _ => {}
@@ -850,6 +861,8 @@ impl BarcaNames {
 
         let mut bindings = Bindings {
             top_level_imports: &top_level_imports,
+            module_aliases,
+            mutated_exports: HashSet::new(),
             nested: 0,
             rebound: HashSet::new(),
             foreign_stars: Vec::new(),
@@ -860,13 +873,15 @@ impl BarcaNames {
 
         let mut bound = bindings.rebound.clone();
         bound.extend(imported.keys().cloned());
+        bound.extend(bindings.mutated_exports.iter().map(|name| name.to_string()));
         if !bindings.foreign_stars.is_empty() {
             bound.extend(exported_names().map(str::to_string));
         }
         let candidates: HashMap<String, &'static str> = imported
             .iter()
-            .filter(|(name, (_, at))| {
-                !bindings.rebound.contains(*name)
+            .filter(|(name, (canonical, at))| {
+                !bindings.mutated_exports.contains(canonical)
+                    && !bindings.rebound.contains(*name)
                     && !bindings.foreign_stars.iter().any(|star| star > at)
             })
             .map(|(name, (canonical, _))| (name.clone(), *canonical))
@@ -880,6 +895,7 @@ impl BarcaNames {
             proven,
             candidates,
             bound,
+            mutated_exports: bindings.mutated_exports,
         }
     }
 }
