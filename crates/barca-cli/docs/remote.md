@@ -700,9 +700,9 @@ the copies while the objects are unchanged (`barca docs sql`).
   local copy as it goes (`barca docs cache`, "While a run is going, and after one is killed"), but
   other machines see none of it until the run ends. A run that was killed is seen by other
   machines only after another `barca get` or `barca run` on the same machine has ended; if that
-  machine never runs again, they never see it. With a remote artifact store a run records
-  nothing early: a step is recorded once its upload is confirmed, when the run ends, so a
-  killed run leaves its run row and no steps.
+  machine never runs again, they never see it. With a remote artifact store, each confirmed
+  upload queues its step in local history during execution. Local progress and recovery can
+  reuse these recorded results after a kill; failed or unfinished uploads are not recorded.
 - Carried across a pull: runs, steps and captured output. Not carried: step rows written by
   barca before 0.17 that were never uploaded (they do not say which run wrote them), and the
   timing estimates used to size batches, which are rebuilt by running.

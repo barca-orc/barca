@@ -180,6 +180,15 @@ type Outcome = Result<Transferred, Failed>;
 type ReplyRx = oneshot::Receiver<Outcome>;
 type ReplyTx = oneshot::Sender<Outcome>;
 
+/// Coordinator-side upload observation; never runs for a failed/unconfirmed request.
+pub(crate) type UploadNotice = Box<dyn FnOnce(&Transferred) + Send>;
+
+struct Request {
+    frame: TransferRequest,
+    reply: ReplyTx,
+    uploaded: Option<UploadNotice>,
+}
+
 struct Pending {
     key: String,
     store: String,
@@ -286,7 +295,7 @@ pub struct TransferClient {
     child: Child,
     /// Open for as long as the helper should live (see [`Launching`]).
     _lifeline: Option<tokio::process::ChildStdin>,
-    req_tx: mpsc::UnboundedSender<(TransferRequest, ReplyTx)>,
+    req_tx: mpsc::UnboundedSender<Request>,
     io_task: JoinHandle<()>,
     socket_path: PathBuf,
     next_id: u64,
@@ -347,10 +356,23 @@ impl TransferClient {
     }
 
     fn send(&mut self, build: impl FnOnce(u64) -> TransferRequest) -> ReplyRx {
+        self.send_observed(build, None)
+    }
+
+    fn send_observed(
+        &mut self,
+        build: impl FnOnce(u64) -> TransferRequest,
+        uploaded: Option<UploadNotice>,
+    ) -> ReplyRx {
         self.next_id += 1;
         let (tx, rx) = oneshot::channel();
-        if let Err(mpsc::error::SendError((_, tx))) = self.req_tx.send((build(self.next_id), tx)) {
-            let _ = tx.send(Err(Failed {
+        let request = Request {
+            frame: build(self.next_id),
+            reply: tx,
+            uploaded,
+        };
+        if let Err(mpsc::error::SendError(request)) = self.req_tx.send(request) {
+            let _ = request.reply.send(Err(Failed {
                 message: "transfer helper is not running".to_string(),
                 attempts: 0,
                 missing: false,
@@ -362,12 +384,33 @@ impl TransferClient {
     /// Queue an upload of a worker-reported local artifact. Returns its store
     /// location, or None when `local` is not under the local artifact dir.
     pub fn upload(&mut self, key: &str, local: &str) -> Option<String> {
+        self.queue_upload(key, local, None)
+    }
+
+    pub(crate) fn upload_confirmed(
+        &mut self,
+        key: &str,
+        local: &str,
+        uploaded: UploadNotice,
+    ) -> Option<String> {
+        self.queue_upload(key, local, Some(uploaded))
+    }
+
+    fn queue_upload(
+        &mut self,
+        key: &str,
+        local: &str,
+        uploaded: Option<UploadNotice>,
+    ) -> Option<String> {
         let store = self.layout.store_for(local)?;
-        let rx = self.send(|id| TransferRequest::Put {
-            id,
-            local: local.to_string(),
-            remote: store.clone(),
-        });
+        let rx = self.send_observed(
+            |id| TransferRequest::Put {
+                id,
+                local: local.to_string(),
+                remote: store.clone(),
+            },
+            uploaded,
+        );
         self.uploads.push_back(Pending {
             key: key.to_string(),
             store: store.clone(),
@@ -506,9 +549,11 @@ impl TransferClient {
 
     /// Finish in-flight transfers and stop the helper.
     pub async fn shutdown(mut self) {
-        let _ = self
-            .req_tx
-            .send((TransferRequest::Shutdown, oneshot::channel().0));
+        let _ = self.req_tx.send(Request {
+            frame: TransferRequest::Shutdown,
+            reply: oneshot::channel().0,
+            uploaded: None,
+        });
         if tokio::time::timeout(Duration::from_secs(30), self.child.wait())
             .await
             .is_err()
@@ -525,6 +570,12 @@ impl TransferClient {
     /// complete — their artifacts may be missing from the store, so they
     /// must not be recorded — and the hash of each upload that was confirmed.
     pub async fn abort(mut self) -> (Vec<String>, HashMap<String, String>) {
+        crate::helper_proc::stop(&mut self.child).await;
+        // The socket owner may be finishing a successful notification as the helper
+        // stops. Await its cancellation before inspecting receipts, so every row it
+        // queued has its matching outcome available to terminal accounting.
+        self.io_task.abort();
+        let _ = (&mut self.io_task).await;
         let mut unconfirmed = Vec::new();
         let mut hashes = HashMap::new();
         let collected = self
@@ -548,8 +599,6 @@ impl TransferClient {
                 Err(_) => unconfirmed.push(key),
             }
         }
-        crate::helper_proc::stop(&mut self.child).await;
-        self.io_task.abort();
         std::fs::remove_file(&self.socket_path).ok();
         (unconfirmed, hashes)
     }
@@ -562,16 +611,14 @@ async fn settle(rx: ReplyRx) -> Outcome {
 /// Owns the socket: writes requests, routes replies to their waiters. On
 /// disconnect, every outstanding waiter is failed (dropping its sender), so
 /// no caller can hang on a dead helper.
-async fn io_task(
-    mut stream: tokio::net::UnixStream,
-    mut req_rx: mpsc::UnboundedReceiver<(TransferRequest, ReplyTx)>,
-) {
+async fn io_task(mut stream: tokio::net::UnixStream, mut req_rx: mpsc::UnboundedReceiver<Request>) {
     let trace = std::env::var("BARCA_TRACE_TIMING").is_ok();
-    let mut pending: HashMap<u64, (ReplyTx, Instant, String)> = HashMap::new();
+    let mut pending: HashMap<u64, (ReplyTx, Option<UploadNotice>, Instant, String)> =
+        HashMap::new();
     loop {
         tokio::select! {
             req = req_rx.recv() => {
-                let Some((req, tx)) = req else { break };
+                let Some(Request { frame: req, reply: tx, uploaded }) = req else { break };
                 let entry = match &req {
                     TransferRequest::Put { id, remote, .. } => Some((*id, format!("put {}", diagnostic_uri(remote)))),
                     TransferRequest::Get { id, remote, .. } => Some((*id, format!("get {}", diagnostic_uri(remote)))),
@@ -583,7 +630,7 @@ async fn io_task(
                     break;
                 }
                 if let Some((id, what)) = entry {
-                    pending.insert(id, (tx, Instant::now(), what));
+                    pending.insert(id, (tx, uploaded, Instant::now(), what));
                 }
             }
             reply = read_frame::<_, TransferReply>(&mut stream) => {
@@ -596,13 +643,16 @@ async fn io_task(
                     }
                     Ok(None) | Err(_) => break,
                 };
-                if let Some((tx, t0, what)) = pending.remove(&id) {
+                if let Some((tx, uploaded, t0, what)) = pending.remove(&id) {
                     if trace {
                         crate::errln!(
                             "[trace]  transfer {what} {} in {:.1}ms",
                             if result.is_ok() { "done" } else { "FAILED" },
                             t0.elapsed().as_secs_f64() * 1000.0
                         );
+                    }
+                    if let (Ok(transferred), Some(uploaded)) = (&result, uploaded) {
+                        uploaded(transferred);
                     }
                     let _ = tx.send(result);
                 }
@@ -612,7 +662,7 @@ async fn io_task(
     // Fail everything still waiting, plus requests that arrive later.
     drop(pending);
     req_rx.close();
-    while let Some((_, tx)) = req_rx.recv().await {
+    while let Some(Request { reply: tx, .. }) = req_rx.recv().await {
         let _ = tx.send(Err(Failed::helper_exited()));
     }
 }
@@ -946,6 +996,103 @@ for t in threads: t.join()
         assert!(!failures[0].missing);
         assert!(!local.exists());
         within(c.shutdown()).await;
+    }
+
+    #[tokio::test]
+    async fn confirmed_uploads_notify_before_an_earlier_stalled_upload_drains() {
+        let fx = Fixture::new();
+        let mut c = fx.client().await;
+        let held = fx.write_local("hold/h.json", b"1");
+        let done = fx.write_local("hashed/h.json", b"42");
+        c.upload("held", &held).unwrap();
+        let (tx, rx) = oneshot::channel();
+        c.upload_confirmed(
+            "done",
+            &done,
+            Box::new(move |receipt| {
+                tx.send((receipt.bytes, receipt.sha256.clone())).unwrap();
+            }),
+        )
+        .unwrap();
+        assert_eq!(within(rx).await.unwrap(), (2, Some("sha-of-hashed".into())));
+        assert_eq!(
+            c.pending_uploads(),
+            2,
+            "notification must not consume the drain report"
+        );
+        let (unconfirmed, hashes) = within(c.abort()).await;
+        assert_eq!(unconfirmed, ["held"]);
+        assert_eq!(
+            hashes.get("done").map(String::as_str),
+            Some("sha-of-hashed")
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_and_abandoned_uploads_never_notify_as_confirmed() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let fx = Fixture::new();
+        let mut c = fx.client().await;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let notify = || {
+            let calls = calls.clone();
+            Box::new(move |_: &Transferred| {
+                calls.fetch_add(1, Ordering::Relaxed);
+            }) as UploadNotice
+        };
+        let denied = fx.write_local("fail/h.json", b"1");
+        c.upload_confirmed("denied", &denied, notify()).unwrap();
+        assert_eq!(within(c.drain()).await.failures.len(), 1);
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
+        assert!(
+            c.upload_confirmed("outside", "/outside/h.json", notify())
+                .is_none()
+        );
+        let held = fx.write_local("hold/h.json", b"1");
+        c.upload_confirmed("held", &held, notify()).unwrap();
+        let (unconfirmed, _) = within(c.abort()).await;
+        assert_eq!(unconfirmed, ["held"]);
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn abort_includes_a_success_notified_before_its_reply_was_delivered() {
+        let fx = Fixture::new();
+        let mut c = fx.client().await;
+        let pid = c.child.id().unwrap();
+        let done = fx.write_local("hashed/h.json", b"42");
+        let (started_tx, started_rx) = oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        c.upload_confirmed(
+            "done",
+            &done,
+            Box::new(move |_| {
+                started_tx.send(()).unwrap();
+                // Pause exactly between notification and oneshot receipt delivery.
+                release_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            }),
+        )
+        .unwrap();
+        within(started_rx).await.unwrap();
+        let abort = tokio::spawn(c.abort());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while unsafe { libc::kill(pid as i32, 0) } == 0 {
+            assert!(Instant::now() < deadline, "abort never stopped the helper");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        release_tx.send(()).unwrap();
+        let (unconfirmed, hashes) = within(abort).await.unwrap();
+        assert!(
+            unconfirmed.is_empty(),
+            "a notified success must remain recorded"
+        );
+        assert_eq!(
+            hashes.get("done").map(String::as_str),
+            Some("sha-of-hashed")
+        );
     }
 
     #[tokio::test]

@@ -1998,8 +1998,7 @@ async fn dispatch_phase(
             // Hand the finished step to the recorder. The worker reports a step only after
             // its artifact is in place (an atomic rename), so the row never points at a
             // missing file. Steps without a run hash are parallel() children, which are
-            // never recorded. With a remote store nothing is recorded early: a row is
-            // written only once its upload is confirmed, which the end-of-run ledger does.
+            // never recorded. Remote rows are queued below only on confirmed upload.
             if store.is_none()
                 && let Some(run_hash) = run_hashes.get(node_id)
             {
@@ -2027,11 +2026,21 @@ async fn dispatch_phase(
             // continues. parallel() children (no run hash) are never
             // recorded, so they stay local.
             if let Some(s) = store.as_mut()
-                && decide_state.run_hashes.contains_key(node_id)
+                && let Some(run_hash) = decide_state.run_hashes.get(node_id)
                 && let Some(path) = artifact.get("path").and_then(|v| v.as_str())
-                && let Some(at) = s.client.upload(node_id, path)
+                && let Some(at) = s.layout.store_for(path)
             {
-                store_paths.insert(node_id.to_string(), at);
+                let record = recorder.after_upload(
+                    StepRow::from_artifact(node_id, run_hash, artifact, attempts),
+                    at.clone(),
+                );
+                if let Some(at) = s.client.upload_confirmed(
+                    node_id,
+                    path,
+                    Box::new(move |receipt| record(receipt.sha256.clone())),
+                ) {
+                    store_paths.insert(node_id.to_string(), at);
+                }
             }
             let elapsed_s = artifact.get("elapsed_seconds").and_then(|v| v.as_f64());
             if let Some(e) = elapsed_s {
