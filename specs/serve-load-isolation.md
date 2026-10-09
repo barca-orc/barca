@@ -179,3 +179,11 @@ load-isolation/partition/helper/schedule/client/contract cases with no skips, st
 workspace/all-target Clippy, Rust formatting, pinned Ruff and whitespace checks.
 The unchanged UI passed141 unit tests, typecheck/lint/build, generated type drift
 checking and the load diagnostics browser test using isolated API/UI ports.
+
+After receipt/recorder PR359/360 merged, rebasing onto 13a92a4 preserved all six
+reviewed commits exactly (range-diff). Integration passed 812 workspace Rust tests,
+99 actual CLI load/partition/helper/schedule/client/contract/progress/override
+checks without skips, strict workspace/all-target Clippy and formatting. The UI
+passed 141 tests, typecheck/lint/build and a fresh isolated-port load diagnostics
+browser test; generated TypeScript bindings showed no drift after the documented
+trailing-whitespace normalization. The unrelated preview remained running.
