@@ -267,7 +267,9 @@ impl StepRecorder {
         let tx = self.tx.clone();
         move |hash| {
             row.path = store;
-            if hash.is_some() {
+            // Match terminal persistence: a sensor already has its worker content hash.
+            // Transfer hashes fill ordinary outputs, never replace that sensor identity.
+            if row.output_hash.is_none() {
                 row.output_hash = hash;
             }
             tx.send(row).ok();
@@ -922,6 +924,33 @@ mod persist_tests {
         }
         persist_run(&db_path, &fx.ledger("r1")).await.unwrap();
         assert_eq!(rows(&db_path).await.len(), 2 * complete("r1").len());
+    }
+
+    #[tokio::test]
+    async fn upload_receipts_preserve_worker_hashes_and_fill_ordinary_outputs() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let recorder = StepRecorder {
+            tx,
+            stop: CancellationToken::new(),
+            task: tokio::spawn(async {}),
+        };
+        let fx = Fixture::new();
+        let mut sensor = fx.row("f.py:a");
+        sensor.output_hash = Some("worker-sensor-hash".to_string());
+        recorder.after_upload(sensor, "s3://store/sensor".to_string())(Some(
+            "later-local-file-hash".to_string(),
+        ));
+        let saved = rx.recv().await.unwrap();
+        assert_eq!(saved.path, "s3://store/sensor");
+        assert_eq!(saved.output_hash.as_deref(), Some("worker-sensor-hash"));
+
+        recorder.after_upload(fx.row("f.py:a"), "s3://store/asset".to_string())(Some(
+            "confirmed-asset-hash".to_string(),
+        ));
+        let saved = rx.recv().await.unwrap();
+        assert_eq!(saved.path, "s3://store/asset");
+        assert_eq!(saved.output_hash.as_deref(), Some("confirmed-asset-hash"));
+        recorder.finish().await;
     }
 
     #[tokio::test]

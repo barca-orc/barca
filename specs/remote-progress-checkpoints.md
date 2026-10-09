@@ -11,7 +11,8 @@ new storage mode or new user configuration is introduced.
    socket owner invokes an optional private success notification for each upload
    reply. The notification queues the already prepared StepRow in the existing
    StepRecorder, replacing its local path with the configured store location and
-   carrying the hash of the uploaded bytes. Transfer code never opens the DB and
+   retaining an existing worker sensor content hash or filling an ordinary
+   output hash from the confirmed receipt, matching terminal persistence. Transfer code never opens the DB and
    persistence does not infer success from an enqueued request, a local file, a
    timeout or an upload's position in the queue. A stalled earlier upload must
    not hide a later confirmed result. Preserve the final transfer report and
