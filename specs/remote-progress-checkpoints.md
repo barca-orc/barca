@@ -35,6 +35,14 @@ one-minute publication, conflict tests and traffic measurement remain in #214.
 
 ## Persistence and conflict discipline
 
+Before the publication slice, replace the existing best-effort batch behavior
+that discards failed inserts/counter updates. Require one validated transaction
+for rows and counts, run/node deduplication, and retained retry batches. Only a
+successful commit advances the publication generation; snapshot captures that
+exact generation before network awaits. The first receipt-only slice retains
+the current best-effort recorder and final-ledger fallback and does not claim
+these retry or minute-publication guarantees.
+
 Rows are identified by run ID and node ID, matching current ledger/carry logic.
 Retrying a batch or replay must not add duplicates or increment executed count
 again. Existing history is preserved. Recorder connection lifetimes remain short
@@ -46,8 +54,11 @@ Refactor the existing SharedPush conflict loop to accept recorded-progress repla
 without finalizing a running run. A checkpoint keeps status running and leaves
 finished_at unset. A pull carries already durable local rows and unrelated runs;
 there is no replacement independent progress database. On each acknowledged
-upload retain the returned token; don't manufacture a conflict with the token
-from startup at every subsequent checkpoint.
+upload retain the returned token immediately, including if a later pull/replay
+fails; don't manufacture a conflict with the token
+from startup at every subsequent checkpoint. A lost acknowledgement retains
+the last known token for conflict recovery: StateToken(None) means a confirmed
+absent remote object and must never mean an unknown upload outcome.
 
 A checkpoint gets the existing ten-second bounded publication budget and the
 run/recorder cancellation token. A failed checkpoint is an actionable sanitized
