@@ -91,3 +91,33 @@ No checkpoint holds a DB lock through network I/O.
 Update cache/remote manuals, site and contracts only for behavior exercised by
 this slice. Retention/GC/recovery policies remain #243/#83, and immutable saved
 partition-result references remain the separate #287/#57 design.
+
+## Minute-publisher implementation mechanics (2026-10-09)
+
+Prepared on terminal-durability main ff91122 with the reviewed receipt and
+transactional-recorder slices applied locally as explicit prerequisites. The
+publication PR must contain only its own slice after those prerequisites merge.
+
+Keep one recorder task. Its existing half-second transaction timer and a
+coalesced sixty-second publication timer share the same select loop, so a long
+phase checkpoints without new results arriving. Successful commits containing
+new run/node rows advance its generation; duplicate/no-op commits do not. Rows
+arriving during a push remain queued and commit afterward. The publication
+captures the current committed generation before awaiting network work; failure
+retains dirty state until the next minute, and no timer creates overlapping work.
+
+Share the existing SharedPush loop between terminal replay and recorded progress.
+The progress variant uses the existing pull/carry transaction to retain committed
+running-run rows and unrelated history, with no terminal ledger/status/log write.
+Do not keep a second in-memory copy of all completed rows. Test that exact carry
+contract during a conflict, including writes from another local process. Capture
+every acknowledged token before any retry/pull can fail. Unknown/lost acknowledgements
+retain the previous known token; None still means confirmed remote absence.
+
+A private owned publication context copies existing config/Python path and receives
+the startup token after successful worker/store initialization. It borrows the
+existing SharedPush owner only during publication and returns the latest token on
+recorder stop. Link its cancellation to run cancellation and recorder shutdown;
+stop and await it before terminal persistence. Keep the ten-second checkpoint
+budget already specified above and measure successful/outage behavior before
+claiming cadence or bounds. There are no additional config/API/wire/schema fields.
