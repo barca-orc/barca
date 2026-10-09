@@ -38,3 +38,14 @@ Resource bound: retained rows are at most the run's completed outcomes plus queu
 receipts, already retained by its terminal ledger. Database work remains batched;
 measure deduplication against realistic partition scale rather than add a schema
 migration solely for this change.
+
+## Verified deduplication bound
+
+An actual initialized Barca/Turso 0.7.0-pre.5 database selects a multi-index
+intersection for the unrestricted run/node lookup: 500/2k/5k inserts took
+0.605/4.837/23.015 seconds in the debug probe. Restricting that lookup to the
+existing `idx_mat_node_run` index searches the node's history instead of every
+row of the growing run. The same 2k/5k/20k insert transactions took
+1.885/4.892/19.824 seconds. This avoids a new schema migration and quadratic
+cold-partition work; the operation remains proportional to the node's prior
+history, so no claim of a history-independent constant bound is made.
