@@ -1103,6 +1103,7 @@ placeholders:
 ```
 [barca] <n>/<total> steps | done in <secs>s
 [barca] <n>/<total> steps | failed in <secs>s
+[barca] checking artifact store <store>/default/artifacts (timeout <secs>s)
 [barca] run failed: step 'pipeline.py:broken' failed (exit 1)
 [barca] step:pipeline.py:broken failed: ValueError: contract fixture failure
 [barca] step:pipeline.py:keys completed <secs>s (<n>/<total>)
@@ -1111,6 +1112,7 @@ placeholders:
 [barca] step:pipeline.py:per_key[k=b] completed <secs>s (<n>/<total>)
 [barca] step:pipeline.py:report completed <secs>s (<n>/<total>)
 [barca] step:pipeline.py:total cached env CONTRACT_API_TOKEN=<unset> CONTRACT_REGION=eu
+[barca] uploading <n> artifacts to <store>/default/artifacts (timeout <secs>s per attempt); waiting for confirmation
 [barca] warning: pipeline.py:report never uses its input `rows`. It is still loaded in full each time the step runs, and it counts toward the step's cache key. Use it, remove it from inputs=, or rename the parameter `_rows` if it is there for ordering only (a `_` input is not loaded and never flagged)
 ```
 <!-- END GENERATED agent-lines -->
@@ -1122,6 +1124,9 @@ placeholders:
 | `[barca] step:<id> failed: <first line of the error>` | a step raised | stable |
 | `[barca] run failed: step '<id>' failed (exit <code>)` | just before the error envelope of a failed step (every mode) | stable |
 | `[barca] <n>/<total> steps \| done in <secs>s` | end of a run that executed steps, with or without `--agent`; `failed in` when a step failed, `cancelled after` on a Ctrl-C that arrives while steps are running (never `done` then). The line is about the steps: with an artifact store, a Ctrl-C after the last step finished (while artifacts upload or the shared history is pushed) follows a `done` line, and the exit code (130) and the error envelope still say `cancelled` (`barca docs remote`, "Ctrl-C") | stable |
+| `[barca] checking artifact store <store> (timeout <secs>s)` | before workers start whenever a separate artifact store is configured, including state-off runs; requires bucket/container-root listing and backend existence access, verifies reachability rather than write permission | experimental |
+| `[barca] uploading <n> artifacts to <store> (timeout <secs>s per attempt); waiting for confirmation` | before awaiting queued artifact uploads (every mode) | experimental |
+| `[barca] still waiting for artifact uploads to <store> (<secs>s)` | every 10 seconds while the upload drain waits (every mode); destinations omit URI passwords and signed query parameters | experimental |
 | `[barca] still running (<n>s): <id>` | a step in flight for `BARCA_PROGRESS_SECS` (every mode) | experimental |
 | `[barca] <n> more: <first line of a warning>` | before the end-of-run line (every mode): a `logging` WARNING printed because logging is unconfigured, or a `warnings` warning, from a step's process was printed once and suppressed `<n>` more times in this run; beyond ten texts, one `[barca] <n> more: <k> other repeated warnings` (`barca docs agents`) | experimental |
 | `[barca] skipped N task(s) ...`, `[barca] nothing to get ...` | `get` with no target skipped tasks | experimental |

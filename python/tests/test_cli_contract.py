@@ -313,11 +313,17 @@ def runs(tmp_path_factory) -> dict:
         s = schema(doc)
         out[case] = (s, render_snapshot(argv, stream, code, s), proc)
 
-    proc = _artifact_mismatch_run(binary, tmp_path_factory.mktemp("contract_store"), env)
+    store_case = tmp_path_factory.mktemp("contract_store")
+    proc = _artifact_mismatch_run(binary, store_case, env)
     s = schema(json.loads(proc.stdout))
     out["get_artifact_mismatch"] = (s, render_snapshot(MISMATCH_ARGV, "stdout", 0, s), proc)
 
     agent: set[str] = set()
+    for line in proc.stderr.splitlines():
+        if line.startswith(("[barca] checking artifact store ", "[barca] uploading ")):
+            line = line.replace(str(store_case / "store"), "<store>")
+            line = re.sub(r"uploading \d+ artifacts", "uploading <n> artifacts", line)
+            agent.add(normalize_agent_line(line))
     for argv in AGENT_RUNS:
         proc = barca(argv)
         for line in proc.stderr.splitlines():
