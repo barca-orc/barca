@@ -150,10 +150,14 @@ def validate(r: dict, m: dict) -> dict:
 barca run validate               # from the root or any directory below it
 ```
 
-Every import form works: `from pipelines.sources import ibp_model`, `from .sources import
-ibp_model` (relative), `from sources import ibp_model` (a sibling file), `... import ibp_model as
-model`, and `module.ibp_model` after `import pipelines.sources [as module]`; also inside
-`collect(...)` and `partitions_from(...)`.
+Use ordinary imports that preserve the producer pipeline's root-relative module identity:
+`from pipelines.sources import ibp_model`, `from .sources import ibp_model` inside its
+package, `... import ibp_model as model`, or `module.ibp_model` after
+`import pipelines.sources [as module]`; also inside `collect(...)` and
+`partitions_from(...)`. A root `sources.py` uses `from sources import ibp_model`.
+For a pipeline under a subdirectory, use its qualified or package-relative name
+instead of a second bare-stem identity. Unambiguous non-pipeline sibling helper
+imports retain ordinary lookup.
 
 How a name in `inputs=` is resolved, most specific first:
 

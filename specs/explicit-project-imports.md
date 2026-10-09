@@ -304,3 +304,42 @@ load-isolation and lazy-input cases pass (48 import cases); the full 819-test
 Rust workspace and strict all-target Clippy pass. Real old-CLI plain and nested
 artifact proofs pass again with unchanged bytes. Formatting, pinned Ruff and
 whitespace checks pass.
+
+### #295 residual scope audit (minute-checkpoint base)
+
+#371 completes the accepted runtime import/identity/legacy-artifact slice; #358
+remains a separate conditional-binding slice. The full #295 issue must remain
+open for static-cone omissions until each is tracked or clearly diagnosed at
+plan time where detectable. Existing `cone.rs` tests deliberately pin these:
+
+- project star imports;
+- helper-only decorator/default/except-type/set/match/assignment-target/loop-else
+  references (node decorator handling is a separate implemented boundary);
+- tuple and augmented module-level constant bindings;
+- dynamically defined names and module-level control-flow definitions not
+  covered by #358's `if`/`try` conservative tracking;
+- modules re-exported through another module's plain `import`;
+- project helper chains deeper than six modules.
+
+Actual current-binary star-import and helper-default examples both computed 11
+cold, stayed cached at 11 after helper edit to 22, and produced 22 only with
+`--refresh-all`. These examples succeed without a plan-time diagnostic; the
+remaining issue expectation is therefore unmet. Dynamic imports/custom paths
+remain documented boundaries, not promises about arbitrary Python. No parser
+expansion is included in #371. The issue owner should retain or transfer this
+explicit checklist after the two bounded slices merge.
+
+The audit also found an old cache-manual paragraph claiming worker-history stem
+fallback remained supported. It now matches the approved ordinary qualified
+pipeline policy; the discovery manual/site examples distinguish pipeline
+identities from unambiguous non-pipeline sibling helper lookup.
+
+On minute-checkpoint main `4ca4e2d`, the fresh package passes 220 selected
+import/load-isolation/helper/DuckDB/lazy/LRU tests with five existing LRU expected
+failures. Updated manual/import/contract examples pass 112 cases and the site
+builds 51 pages. Strict Clippy passes. A full workspace exposed the unrelated
+minute-outage 450ms fixture guess; its exact isolated rerun passed, but that does
+not resolve the loaded-runner failure. The actual readiness correction is owned
+by test-only #377, prioritized before this PR. #371 makes no production or test
+change to the minute publication fixture and awaits #377 for a green combined
+workspace on the current integration base.
