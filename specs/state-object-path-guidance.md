@@ -12,3 +12,9 @@ Regression evidence must exercise actual CLI/helper startup for a local director
 and file:// directory, asserting no user import/work and unchanged directory.
 Provider-shaped URI error formatting is tested directly without claiming cloud
 acceptance. Preserve ordinary existing-object pull/push and CLI contract shapes.
+
+Actual directory rejection reproduces the old missing-setting diagnostic, then
+passes both plain/file cases with preserved directory contents and no user import.
+All 53 state helper/pull/object-path actual checks pass on release main f881a6d,
+as does the provider-shaped formatter regression, strict all-target Clippy and
+fmt. Rebased onto recorder main13a92a4 for exact-head CI acceptance.
