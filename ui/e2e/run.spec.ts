@@ -31,7 +31,7 @@ test.describe('topbar Run', () => {
     await page.goto('/ui/#/graph')
     await page.getByText('say_hello').first().click()
 
-    const started = page.waitForRequest((r) => r.method() === 'POST' && r.url().endsWith('/run/say_hello'))
+    const started = page.waitForRequest((r) => r.method() === 'POST' && decodeURIComponent(r.url()).endsWith('/run/pipeline.py:say_hello'))
     await topbarRun(page).click()
     await started
 
@@ -43,7 +43,7 @@ test.describe('topbar Run', () => {
     await page.goto('/ui/#/graph')
     await page.getByText('numbers').first().click()
 
-    const started = page.waitForRequest((r) => r.method() === 'POST' && r.url().endsWith('/get/numbers'))
+    const started = page.waitForRequest((r) => r.method() === 'POST' && decodeURIComponent(r.url()).endsWith('/get/pipeline.py:numbers'))
     await topbarRun(page).click()
     await started
   })

@@ -1,0 +1,12 @@
+.barca-run-table { min-width: 780px; }
+.barca-run-table td { white-space: nowrap; }
+.barca-run-target { display: block; max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
+.barca-run-link { border: 0; padding: 0; background: transparent; color: var(--signal); font: inherit; cursor: pointer; text-align: left; white-space: nowrap; }
+.barca-run-link:hover { text-decoration: underline; }
+.barca-run-steps { list-style: none; margin: 0; padding: 0; }
+.barca-run-steps li { padding: 10px 0; border-bottom: 1px solid var(--border-default); }
+.barca-run-steps code { display: block; overflow-wrap: anywhere; margin-bottom: 6px; }
+.barca-run-steps li > div { display: flex; align-items: center; gap: 10px; }
+.barca-run-error { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-default); }
+.barca-run-result { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-xs); }
+.barca-run-more { padding: 16px; }

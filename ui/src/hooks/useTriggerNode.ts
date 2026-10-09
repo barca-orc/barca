@@ -1,7 +1,6 @@
 import { useCallback } from 'react'
 import { useTriggerGet } from '@/hooks/useTriggerGet'
 import { useTriggerRun } from '@/hooks/useTriggerRun'
-import { shortName } from '@/lib/graph'
 import type { AssetSummary } from '@/lib/types'
 
 /**
@@ -20,7 +19,7 @@ export function useTriggerNode(
 
   const fire = useCallback(() => {
     if (!asset) return
-    mutate(shortName(asset.id), { onSuccess: (data) => onTrigger(data.run_id, asset.id) })
+    mutate(asset.id, { onSuccess: (data) => onTrigger(data.run_id, asset.id) })
   }, [asset, mutate, onTrigger])
 
   return {

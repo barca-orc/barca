@@ -1,4 +1,4 @@
-import { useMutation } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 
 /**
@@ -6,7 +6,9 @@ import { api } from '@/lib/api'
  * always re-execute (never cached). Returns the run handle.
  */
 export function useTriggerRun() {
+  const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (target: string) => api.runTarget(target),
+    onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ['runs'] }) },
   })
 }

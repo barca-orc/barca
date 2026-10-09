@@ -1,4 +1,4 @@
-import { useMutation } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 
 /**
@@ -6,7 +6,9 @@ import { api } from '@/lib/api'
  * Returns the run handle; status polling/streaming is wired separately.
  */
 export function useTriggerGet() {
+  const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (target: string) => api.getTarget(target),
+    onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ['runs'] }) },
   })
 }

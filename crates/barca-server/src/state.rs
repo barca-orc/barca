@@ -72,6 +72,13 @@ pub enum RunStatus {
 pub struct RunState {
     /// Server-side polling handle (see `/status/{run_id}`).
     pub handle: String,
+    /// Durable id assigned by the engine, including failed and cancelled runs.
+    #[serde(skip)]
+    pub db_run_id: Option<String>,
+    #[serde(skip)]
+    pub command: String,
+    #[serde(skip)]
+    pub target: Option<String>,
     pub status: RunStatus,
     /// Populated when `status == Complete`. Carries the DB run id, timing, output.
     pub result: Option<GetResult>,

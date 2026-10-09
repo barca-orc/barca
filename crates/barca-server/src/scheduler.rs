@@ -402,6 +402,9 @@ mod tests {
             handle.to_string(),
             RunState {
                 handle: handle.to_string(),
+                db_run_id: None,
+                command: "get".into(),
+                target: None,
                 status,
                 result: None,
                 error: None,

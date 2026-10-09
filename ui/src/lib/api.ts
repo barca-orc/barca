@@ -16,6 +16,8 @@ import type {
   RunState,
   RunHandle,
   Health,
+  RunList,
+  RunDetail,
 } from './types'
 
 
@@ -54,6 +56,8 @@ export const api = {
   assetSchema: (name: string) => request<NodeStatus[]>(`/assets/${encodeURIComponent(name)}/schema`),
   plan: () => request<PlanResult>('/plan'),
   state: () => request<NodeState[]>('/state'),
+  runs: (limit = 100) => request<RunList>(`/runs?limit=${limit}`),
+  runDetail: (id: string) => request<RunDetail>(`/runs/${encodeURIComponent(id)}`),
   status: (runId: string) => request<RunState>(`/status/${encodeURIComponent(runId)}`),
   run: () => request<RunHandle>('/run', { method: 'POST' }),
   runTarget: (target: string) =>
