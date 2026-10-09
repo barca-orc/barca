@@ -475,6 +475,69 @@ def test_a_push_that_landed_just_before_the_interrupt_is_followed_by_the_cancell
     assert shared_history(store, make, "other") == ["cancelled"]
 
 
+@pytest.mark.parametrize(
+    "corrective_landed", [False, True], ids=["before-correction", "after-correction"]
+)
+def test_abandoned_wrap_up_preserves_cancellation_on_next_pull_and_push(project, corrective_landed):
+    """#303: stop after publication but before acknowledgement, then abandon wrap-up.
+
+    Either the correction is not uploaded, or it lands before its helper exits.
+    An unrelated machine can extend shared history before the owner repairs it.
+    """
+    store, make = project
+    points = "pushed" if corrective_landed else "pushed,repush"
+    run = Run(make("m"), store, points, "get", "total", "--json", "--agent", stall=True)
+    run.held_at("pushed")
+    shared_db = store / "default" / "state" / "metadata.db"
+    run_id = history(run.root, store)[0]["run_id"]
+    run.sigint()
+    if corrective_landed:
+        wait_until(lambda: len(run.arrivals("pushed")) == 2, "corrective publication", run.proc)
+    else:
+        run.held_at("repush")
+    run.sigint()
+    run.end()
+    cancelled_cleanly(run)
+    assert "stopped by a second interrupt" in run.stderr
+    with sqlite3.connect(shared_db) as conn:
+        assert conn.execute("SELECT status FROM runs WHERE run_id = ?", (run_id,)).fetchone() == (
+            "cancelled" if corrective_landed else "success",
+        )
+
+    unrelated = make("unrelated")
+    added = cli(unrelated, store, "get", "numbers", "--json")
+    assert added.returncode == 0, added.stderr
+    unrelated_id = json.loads(added.stdout)["run_id"]
+    # Inspection pulls without uploading: the correction itself must survive the swap.
+    for _ in range(2):
+        pulled = cli(run.root, store, "status", "--json")
+        assert pulled.returncode == 0, pulled.stderr
+        assert {r["run_id"]: r["status"] for r in history(run.root, store)} == {
+            run_id: "cancelled",
+            unrelated_id: "success",
+        }
+    # Force a conflict after the repaired pull. Replay must keep cancellation and
+    # both unrelated runs while retaining completed materializations exactly once.
+    run.hold_dir.rename(run.hold_dir.with_name("completed-hold"))
+    recovery = Run(run.root, store, "push", "get", "total", "--json").held_at("push")
+    concurrent = cli(unrelated, store, "get", "total", "--json")
+    assert concurrent.returncode == 0, concurrent.stderr
+    concurrent_id = json.loads(concurrent.stdout)["run_id"]
+    recovery.release()
+    recovery.end()
+    assert recovery.proc.returncode == 0, recovery.stderr
+    assert "conflict retry" in recovery.stderr, recovery.stderr
+    with sqlite3.connect(shared_db) as conn:
+        rows = dict(conn.execute("SELECT run_id, status FROM runs"))
+        assert rows[run_id] == "cancelled" and rows[unrelated_id] == "success"
+        assert rows[concurrent_id] == "success"
+        assert len(rows) == 4
+        assert conn.execute("PRAGMA integrity_check").fetchall() == [("ok",)]
+        assert conn.execute(
+            "SELECT COUNT(*) FROM materializations WHERE run_id = ?", (run_id,)
+        ).fetchone() == (2,)
+
+
 def test_ctrl_c_after_a_failed_run_was_shared_leaves_its_record_as_it_is(project):
     """A run with a failed step is recorded and shared as `failed`, then downloads an earlier
     output to return. Interrupted there, the command is cancelled; the run already ended."""
