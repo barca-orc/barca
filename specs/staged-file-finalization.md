@@ -54,3 +54,10 @@ normal/error handler restoration and SIG_DFL/SIG_IGN cases. Each signal regressi
 must fail the old lifecycle and pass the repaired one. Repeat storage/transfer,
 state and actual cancellation acceptance, strict checks, independent final review,
 and both required fresh CI on the consolidated current-main head.
+
+The actual state helper also raises SystemExit during finalization, so registry
+visibility alone cannot complete an interrupted unlink. A forced actual-state
+SIGTERM at unlink entry proves this remaining interval. Apply the same private
+deferral to just the owned unlink/unregister critical section, replaying afterward;
+keep the raw owned remover available for SIG_DFL cleanup. This adds no caller or
+lifecycle policy and avoids deferring any user work or network operations.
