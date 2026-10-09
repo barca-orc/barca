@@ -120,3 +120,14 @@ unnamed bracketed-path identities remain covered separately. All 28 current
 membership/naming/load-isolation cases pass, and the existing SQL cases pass.
 The full 832-test Rust workspace and strict Clippy passed before the readiness
 prerequisite merge. Final publication/reverification follows #377 on latest main.
+
+## Latest-main acceptance after staging cleanup
+
+On actual main `881ffac`, after #377 and consolidated staging lifecycle #380,
+the rebuilt own package passes all 140 SQL/membership/API/declared-name/load-
+isolation/manual/contract cases. All 832 workspace Rust tests, strict all-target
+Clippy, formatting, pinned Ruff, lockfile and whitespace checks pass; the site
+builds 51 pages. The generated name descriptions remain identical to main.
+The declared-view regression confirms canonical explicit IDs and removed-row
+preservation; the remote regression excludes removed artifacts before download.
+Both required CI checks must pass on the exact published head before merge.
