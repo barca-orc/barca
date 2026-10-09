@@ -16,7 +16,9 @@ new route, configuration, runtime field or client code generation.
 
 1. Inventory route registration and handlers, shared Rust/result/UI models, and
    Python client requests. Record strict object schemas for stable response keys,
-   optional/null fields and current enums. Keep arbitrary user outputs as JSON;
+   optional/null fields and current enums. HTTP results serialize OutputRef artifact
+   pointers (the CLI's inline JSON rendering is a separate boundary); keep artifact
+   inspector shape values as JSON;
    document SSE framing/events and UI bytes as non-JSON representations. Query
    extraction errors remain their existing text format, not the HTTP JSON envelope.
 2. Add `specs/server-api.openapi.yaml` with status/scope/version/conformance metadata.
@@ -45,8 +47,8 @@ executable description, not generated server code or a new public protocol. The
 route parity check reads the existing wiring and verifies methods rather than
 adding a second production route registry. JSON validation uses local component
 references, with no network schema retrieval. Strict known-key schemas require an
-explicit contract update when API fields change; arbitrary outputs are unconstrained
-JSON. Status currently starts at pending, not the historical issue's queued state.
+explicit contract update when API fields change. Status currently starts at pending,
+not the historical issue's queued state.
 
 P11 owns an additive health load_errors field and partial loading. Coordinate its
 merged schema changes; #195/#321 own future shape/command changes. UI assets can

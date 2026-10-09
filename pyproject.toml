@@ -45,6 +45,8 @@ remote = ["fsspec", "adlfs", "s3fs", "gcsfs", "google-cloud-storage"]
 test = [
     "pytest",
     "pytest-xdist>=3.8,<4",
+    "jsonschema>=4,<5",
+    "PyYAML>=6,<7",
     "pandas",
     "pyarrow",
     "polars",

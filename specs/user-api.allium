@@ -1,6 +1,10 @@
 -- allium: 3
 -- user-api.allium
 
+-- Specification version: 1
+-- Status: implemented grammar plus explicit aspirations/design rules; see user-api-decisions.md
+-- Conformance: crates/barca-core/tests/grammar_spec.rs (ignored tests are aspirations)
+-- Inventory: specs/README.md
 -- Scope: Barca user-facing API contract
 -- Includes: Node declarations, DAG structure, execution commands, parallel dispatch
 -- Excludes:

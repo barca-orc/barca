@@ -28,3 +28,5 @@ ts = ["dep:ts-rs", "barca-core/ts"]
 [dev-dependencies]
 tower = { workspace = true }
 tempfile = "3"
+jsonschema = { version = "0.33", default-features = false }
+serde_yaml_ng = "0.10.0"

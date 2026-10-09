@@ -1,4 +1,5 @@
 //! Comprehensive grammar specification tests.
+//! Native boundary owner: `specs/user-api.allium`; status/decisions: `specs/README.md`.
 //!
 //! These tests define the complete set of Python decorator syntaxes that
 //! barca must parse. Tests marked `#[ignore]` are aspirational — they

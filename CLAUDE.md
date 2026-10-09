@@ -148,6 +148,14 @@ released. Merging to main never publishes anything; only pushing a `v*` tag does
   Release, PyPI). The `release/` prefix keeps branch and tag names from colliding, so
   `git push origin v<x.y.z>` and `git log v<x.y.z>..` are unambiguous
 
+## Boundary contracts
+
+[specs/README.md](specs/README.md) inventories native boundary specifications and
+conformance checks. A public boundary change must update its specification, executable
+conformance and explanatory documentation in the same PR. Proposals remain labeled as
+proposed until implemented; do not describe RFC routes or schemas as shipped. Existing
+CLI contract/snapshot ownership remains in place.
+
 ## Commit messages
 
 Use [conventional commits](https://www.conventionalcommits.org/): `type: description` or `type(scope): description`.
