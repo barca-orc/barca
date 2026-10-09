@@ -41,9 +41,12 @@ workers. Promote these reproductions into permanent regressions with each fix.
    needs no worker lifetime or public API change. Whole-module fallback preserves
    earlier bindings when a branch is inactive and fallback definitions when an
    import fails, without adding a new public binding variant. Preserve that
-   provenance through later assignments consuming the previous conditional value,
-   such as `value = wrap(value)`, instead of resolving a self-reference only
-   against its final assignment. Coordinate the existing Barca
+   provenance through every final binding kind: later assignments can consume
+   the prior value (`value = wrap(value)`), while earlier aliases can capture it
+   before a subsequent function, class or import replaces the original name.
+   Retain the fallback even after an unconditional replacement rather than add
+   order analysis. Preserve Function/Class kinds and include the module source
+   when the conditional name becomes an entry function. Coordinate the existing Barca
    recognition rules with P07 rather than duplicating them.
 2. **Deterministic import policy, decision before implementation.** A universal
    `sys.modules` reset/reload is ruled out: it loses supported import-time setup,
@@ -95,8 +98,8 @@ no project-wide helper crawl or additional Python process is introduced.
 ## First-slice evidence
 
 The conditional-binding slice passes 782 Rust workspace tests and workspace Clippy
-with warnings denied; 147 Python CLI/helper/import/DuckDB/manual/contract tests;
-Ruff and cargo fmt; and the 51-page site build. Eighteen new CLI cases run at pool
+with warnings denied; 157 Python CLI/helper/import/DuckDB/manual/contract tests;
+Ruff and cargo fmt; and the 51-page site build. Twenty-eight new CLI cases run at pool
 sizes one and two, including a missing primary helper appearing after a cached
 fallback. Conditional helper edits change actual run hashes, inactive branches
 invalidate conservatively, unrelated assets remain cached and planning produces
@@ -108,6 +111,10 @@ editing the helper, with distinct run hashes and warm cache reuse. Imports insid
 an unrelated conditional nested function retain their own scope and do not
 invalidate an asset using the different module-level binding. Both checks prove
 ordinary static planning leaves the user import marker and metadata absent.
+Capture-before-function/class/from-import/module-import replacement tests retain
+the helper's provenance after its original name is rebound. A conditional name
+later replaced by an asset retains its entry-function cone. Unrelated assets
+remain cached after these helper edits, with no user imports during planning.
 
 Build/install uses this worktree's target and editable wheel with the test extra in
 `/tmp/barca-p08-venv`. Conditional fallback source/reference collection is initialized

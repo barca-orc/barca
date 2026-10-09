@@ -207,8 +207,10 @@ a package, recompute with `--refresh-all` or `--refresh` (below).
 Names bound inside a module-level `if` or `try` are followed conservatively. Barca does not
 execute the condition to choose an import or fallback definition: a step reading such a name
 hashes the module's source and follows its statically visible imports and references. Editing
-an inactive branch's project helper can therefore re-run the step too. Later assignments such
-as `value = wrap(value)` retain this conditional provenance. Ordinary definitions
+an inactive branch's project helper can therefore re-run the step too. This provenance is
+retained through later assignments, functions, classes and imports: an earlier alias may have
+captured the conditional value before that replacement. Even an unconditional replacement can
+therefore retain conservative invalidation. Ordinary definitions
 that do not use these uncertain bindings keep their selective dependency cones.
 
 #### Not followed

@@ -637,15 +637,24 @@ fn collect_definitions(source: &str, package: Option<&str>) -> HashMap<String, M
             _ => {}
         }
     }
-    // A later assignment can consume the previous conditional value (`f = wrap(f)`).
-    // Its final binding alone cannot describe that provenance: following `f` again would
-    // just encounter the same assignment. Retain the conservative module/import cone.
+    // An assignment can consume the previous value (`f = wrap(f)`), or an earlier alias
+    // can capture it before any later function/class/import replaces `f`. The final binding
+    // alone cannot describe that provenance. Keep it for every conditional name, even when
+    // the final replacement would otherwise be independently resolvable.
     for name in conditional_names {
-        if let Some(ModuleDef::Assignment(code)) = defs.get_mut(&name) {
-            *code = conditional_module
+        if let Some(definition) = defs.get_mut(&name) {
+            let conservative = conditional_module
                 .get()
-                .expect("a conditional binding was collected")
-                .clone();
+                .expect("a conditional binding was collected");
+            match definition {
+                ModuleDef::Function(code) | ModuleDef::Class(code) => {
+                    *code = conservative.clone();
+                    // Preserve an entry function's kind and make its cone reach the source
+                    // too: cone_hash initially follows uses without adding the entry text.
+                    code.uses.names.insert(name);
+                }
+                _ => *definition = ModuleDef::Assignment(conservative.clone()),
+            }
         }
     }
     // Unproven node bindings may have changed in defaults, conditionals or global writes.

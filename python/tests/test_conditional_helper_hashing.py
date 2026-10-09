@@ -159,3 +159,63 @@ def test_conditional_nested_function_import_does_not_rebind_module_name(tmp_path
     (tmp_path / "other.py").write_text("def value(): return 200\n")
     changed = invoke(tmp_path, "get", "result", "p.py")
     assert (changed["steps_executed"], changed["final_output"]) == (1, 200)
+
+
+@pytest.mark.parametrize(
+    ("binding", "expression", "replacement"),
+    [
+        ("from helpers import value", "captured()", "def value(): return 0"),
+        ("from helpers import value", "captured()", "from other import value"),
+        ("import helpers as value", "captured.value()", "import other as value"),
+        ("from helpers import value", "captured()", "class value: pass"),
+    ],
+)
+def test_alias_captured_before_any_later_binding_retains_helper_provenance(
+    tmp_path, binding, expression, replacement
+):
+    (tmp_path / "barca.toml").write_text("")
+    (tmp_path / "helpers.py").write_text("def value(): return 11\n")
+    (tmp_path / "other.py").write_text("def value(): return 100\n")
+    (tmp_path / "p.py").write_text(
+        "from barca import asset\nfrom pathlib import Path\nPath('imported').touch()\n"
+        f"try:\n    {binding}\nexcept ImportError:\n    def value(): return -1\n"
+        f"captured = value\n{replacement}\n"
+        f"@asset()\ndef result(): return {expression}\n"
+        "@asset()\ndef unaffected(): return 100\n"
+    )
+    invoke(tmp_path, "plan", "p.py")
+    assert not (tmp_path / "imported").exists()
+    assert not (tmp_path / ".barca").exists()
+    first = invoke(tmp_path, "get", "result,unaffected", "p.py")
+    assert first["targets"]["result"]["final_output"] == 11
+    old_hash = next(step["run_hash"] for step in first["steps"] if step["id"].endswith(":result"))
+    assert invoke(tmp_path, "get", "result,unaffected", "p.py")["steps_executed"] == 0
+    (tmp_path / "helpers.py").write_text("def value(): return 22\n")
+    changed = invoke(tmp_path, "get", "result,unaffected", "p.py")
+    assert changed["steps_executed"] == 1
+    assert changed["targets"]["result"]["final_output"] == 22
+    assert (
+        next(step["run_hash"] for step in changed["steps"] if step["id"].endswith(":result"))
+        != old_hash
+    )
+    assert invoke(tmp_path, "get", "result,unaffected", "p.py")["steps_executed"] == 0
+
+
+def test_conditional_name_replaced_by_asset_preserves_entry_function_cone(tmp_path):
+    (tmp_path / "barca.toml").write_text("")
+    (tmp_path / "helpers.py").write_text("def value(): return 11\n")
+    (tmp_path / "p.py").write_text(
+        "from barca import asset\nfrom pathlib import Path\nPath('imported').touch()\n"
+        "from helpers import value\nif False:\n    result = None\n"
+        "@asset()\ndef result(): return value()\n"
+    )
+    invoke(tmp_path, "plan", "p.py")
+    assert not (tmp_path / "imported").exists()
+    assert not (tmp_path / ".barca").exists()
+    first = invoke(tmp_path, "get", "result", "p.py")
+    assert first["final_output"] == 11
+    assert invoke(tmp_path, "get", "result", "p.py")["steps_executed"] == 0
+    (tmp_path / "helpers.py").write_text("def value(): return 22\n")
+    changed = invoke(tmp_path, "get", "result", "p.py")
+    assert (changed["steps_executed"], changed["final_output"]) == (1, 22)
+    assert changed["steps"][0]["run_hash"] != first["steps"][0]["run_hash"]

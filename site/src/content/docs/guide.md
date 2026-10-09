@@ -185,8 +185,9 @@ More: `barca docs cache` has the complete list, under "Not followed".
 Module-level `if` and `try` imports are tracked conservatively without executing their
 conditions during static analysis. Reading a name bound there includes the module source and
 its statically visible imports and references in the dependency cone; editing an inactive
-branch's project helper can invalidate that step too. Later assignments such as
-`value = wrap(value)` retain that provenance. Steps that do not use these uncertain
+branch's project helper can invalidate that step too. Later assignments, functions, classes
+and imports retain that provenance because earlier aliases may have captured the conditional
+value; an unconditional replacement can therefore still invalidate conservatively. Steps that do not use these uncertain
 bindings retain their selective cones.
 
 ## 5. Tasks, and `get` versus `run`
