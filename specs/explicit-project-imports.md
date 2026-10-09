@@ -343,3 +343,18 @@ not resolve the loaded-runner failure. The actual readiness correction is owned
 by test-only #377, prioritized before this PR. #371 makes no production or test
 change to the minute publication fixture and awaits #377 for a green combined
 workspace on the current integration base.
+
+### Readiness and declared-name integration verification
+
+After test-only #377 merged, rebasing onto actual main `bfc3e52` was clean.
+The rebuilt own package passes all 832 workspace Rust tests and strict
+all-target Clippy. The combined actual import/load/helper/DuckDB/lazy/LRU/manual/
+contract suite passes 299 cases with five existing LRU expected failures. Both
+real old-CLI plain and nested-class pickle artifact examples still preserve
+artifact bytes, canonical class identity, cached producer setup once per process,
+and worker/Python API reads; the unrelated-producer setup-thread example passes.
+Formatting, pinned Ruff, lockfile and whitespace checks pass. This is preparation
+evidence, not a substitute for checks on the eventual latest main before merge.
+The approved discovery manual/site clarification also records that an explicit
+`name=` supplies the canonical identity, while unnamed definitions use the
+root-relative file/function identity; this changes documentation only.
