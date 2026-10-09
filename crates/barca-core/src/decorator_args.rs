@@ -588,7 +588,14 @@ impl BarcaNames {
 
             fn visit_expr(&mut self, expr: &'a Expr) {
                 if let Expr::Named(walrus) = expr {
+                    // Definition-time expressions can run outside the body scope that
+                    // the AST visitor currently walks (defaults, decorators and bases).
+                    // Treat every walrus target as uncertain, including local ones: a
+                    // conservative recompute is safer than hiding a module rebinding.
+                    let nested = self.nested;
+                    self.nested = 0;
                     self.bind_target(&walrus.target);
+                    self.nested = nested;
                 }
                 visitor::walk_expr(self, expr);
             }
@@ -863,6 +870,26 @@ mod tests {
             seen, sorted,
             "every entry of SIGNATURES needs a stub, and one only"
         );
+    }
+
+    #[test]
+    fn walrus_bindings_are_conservative_in_every_definition_scope() {
+        for statement in [
+            "def install(x=(asset := custom)): pass",
+            "@(asset := custom)\ndef install(): pass",
+            "class Install((asset := custom)): pass",
+            "@(asset := custom)\nclass Install: pass",
+            "def install():\n    (asset := custom)",
+            "def install():\n    global asset\n    asset = custom",
+            "def outer():\n    asset = custom\n    def inner():\n        nonlocal asset\n        (asset := custom)",
+        ] {
+            let source = format!("from barca import asset\n{statement}\n");
+            let parsed = ruff_python_parser::parse_module(&source).unwrap();
+            assert!(
+                !BarcaNames::of(&parsed.syntax().body).contains("asset"),
+                "{statement}"
+            );
+        }
     }
 
     /// The manual and the site list the accepted arguments in one table, generated from
