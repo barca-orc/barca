@@ -1,4 +1,4 @@
-//! Run telemetry: what a finished run looked like, handed to whichever
+//! Run and server lifecycle telemetry, handed to whichever
 //! integrations are switched on.
 //!
 //! The engine builds one [`RunReport`] per run and knows nothing about where it
@@ -13,7 +13,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
-/// How long one integration may take to deliver a run before it is abandoned.
+/// How long one integration may take to deliver a signal before it is abandoned.
 const EXPORT_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// What happened to one step of a run.
@@ -78,12 +78,47 @@ pub struct RunReport {
     pub steps: Vec<StepReport>,
 }
 
+/// A server lifecycle signal, independent of materialization runs.
+#[derive(Debug, Clone)]
+pub struct ServerReport {
+    pub phase: ServerPhase,
+    pub start_unix_ns: u64,
+    pub files: usize,
+    /// Present only when the server has already cached node metadata.
+    pub nodes: Option<usize>,
+    pub schedules: usize,
+    pub read_only: bool,
+    pub watch: bool,
+    pub scheduling: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServerPhase {
+    Start,
+    Heartbeat,
+    Stop,
+}
+
+impl ServerPhase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Start => "start",
+            Self::Heartbeat => "heartbeat",
+            Self::Stop => "stop",
+        }
+    }
+}
+
 pub(crate) type Export<'a> = Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>>;
 
-/// Somewhere a [`RunReport`] can be sent.
+/// Somewhere run reports and optional server lifecycle signals can be sent.
 pub trait Integration: Send + Sync {
     /// Deliver one finished run. An `Err` is reported as a warning; it never fails the run.
     fn export<'a>(&'a self, run: &'a RunReport) -> Export<'a>;
+    /// Optional server lifecycle support. Integrations can remain run-only.
+    fn export_server<'a>(&'a self, _server: &'a ServerReport) -> Export<'a> {
+        Box::pin(async { Ok(()) })
+    }
 }
 
 /// The table of integrations: `"name" => constructor`. A constructor reads its own settings
@@ -177,6 +212,36 @@ pub async fn export(integrations: &[(String, Box<dyn Integration>)], run: &RunRe
             crate::errln!(
                 "[barca] warning: telemetry '{name}' did not receive run {}: {problem}",
                 run.run_id
+            );
+        }
+    }
+}
+
+/// Lifecycle exports have the same bounded delivery as runs, with independent warning state.
+pub async fn export_server(integrations: &[(String, Box<dyn Integration>)], server: &ServerReport) {
+    for (name, integration) in integrations {
+        let key = format!("{name}:serve");
+        let problem = match tokio::time::timeout(EXPORT_TIMEOUT, integration.export_server(server))
+            .await
+        {
+            Ok(Ok(())) => {
+                if failing()
+                    .lock()
+                    .map(|mut f| f.remove(&key))
+                    .unwrap_or(false)
+                {
+                    crate::errln!("[barca] telemetry '{name}' is receiving server signals again");
+                }
+                continue;
+            }
+            // Integration error strings may contain addresses or credentials. Lifecycle
+            // diagnostics deliberately report only the failure category.
+            Ok(Err(_)) => "delivery failed",
+            Err(_) => "no reply within 3s",
+        };
+        if failing().lock().map(|mut f| f.insert(key)).unwrap_or(true) {
+            crate::errln!(
+                "[barca] warning: telemetry '{name}' did not receive server signal: {problem}"
             );
         }
     }

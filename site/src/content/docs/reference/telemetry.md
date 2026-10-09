@@ -164,3 +164,28 @@ tracebacks, SQL and HTTP metadata; the Rust exporter's error truncation does not
   brackets: `http://[::1]:8126`.
 
 See also: [Scheduling](/scheduling/) and the [CLI contract](/reference/cli-contract/).
+
+## Idle server visibility
+
+With telemetry configured, `barca serve` sends `barca.serve.start` after it binds its
+listener, `barca.serve.heartbeat` every five minutes (300 seconds), and a best-effort
+`barca.serve.stop` on SIGINT or SIGTERM. These are separate traces with resource `serve`;
+they do not create runs, import pipeline modules, or write materialization history.
+An idle or read-only server remains visible without running a job. Without telemetry
+configured, there are no lifecycle exports or heartbeat tasks.
+
+Each signal includes `barca.lifecycle`, `barca.version`, `barca.read_only`, `barca.watch`,
+and `barca.scheduling`, plus numeric `barca.files` and `barca.schedules`. `barca.nodes`
+is included only when node metadata is already cached by the server. Schedule counts
+reflect the scheduler's current loaded view; an initial signal can precede that view.
+Signals omit source paths, storage addresses, credentials, process ids, and run ids.
+Use the existing `DD_SERVICE`, `DD_ENV`, and `DD_TAGS` to identify your deployment;
+user-supplied tags are forwarded as usual.
+
+Delivery happens in the background and cannot delay readiness. A slow or unavailable
+Agent gets at most three seconds per delivery; missed heartbeat ticks are skipped
+without queuing retries. Stopping cancels an in-flight start or heartbeat export, and
+the final stop signal can add at most three seconds to shutdown. Dropping the server
+aborts lifecycle delivery. An abrupt process exit cannot guarantee a stop signal.
+Lifecycle delivery failures are warned once until recovery, separately from run
+telemetry failures, with diagnostics that omit the Agent address and response text.

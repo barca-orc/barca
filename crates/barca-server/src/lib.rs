@@ -20,6 +20,7 @@ mod routes;
 mod runs;
 mod scheduler;
 mod state;
+mod telemetry;
 mod ui;
 mod watch;
 
@@ -116,6 +117,7 @@ pub async fn serve(config: ServeConfig) -> Result<(), ServeError> {
     let app = routes::router(state.clone());
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
+    let mut telemetry = telemetry::ServerTelemetry::start(state.clone(), stopping.clone());
     barca_core::errln!(
         "[barca] serving on http://{addr}  ({n_files} file{}{})",
         if n_files == 1 { "" } else { "s" },
@@ -147,6 +149,9 @@ pub async fn serve(config: ServeConfig) -> Result<(), ServeError> {
         } => {}
     }
     runs_stopped.await;
+    if let Some(telemetry) = telemetry.as_mut() {
+        telemetry.finish().await;
+    }
     Ok(())
 }
 
