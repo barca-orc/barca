@@ -81,3 +81,12 @@ recovery, actual shared rows and final recorder cleanup. Do not change productio
 publication cadence, retries, deadlines or state-helper timeouts. Stress the old
 and corrected fixture on two CPUs with competing load when feasible; retain the
 original full-workspace failure as evidence even if constrained reruns pass.
+
+The corrected checkpoint-outage fixture passed 30 runs on two CPUs with two
+competing CPU processes (whole-test wall time 0.754–0.891s). The old fixture
+also passed 30 bounded constrained runs; the earlier actual full-workspace
+failure is the before-proof and is not dismissed by these successful reruns.
+The corrected full Rust workspace passes 832 tests and strict all-target Clippy.
+On minute main, all 69 transfer tests pass on actual 3.12.0 and 3.13.16; another
+100 shutdown repetitions under the same constrained load passed at 0.235–0.288s.
+No production code, cadence, retries or timeout changed.

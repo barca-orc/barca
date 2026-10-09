@@ -1271,17 +1271,23 @@ sys.exit(_state.main())
         let mut first = Fixture::new().row("f.py:a");
         first.path = super::super::state_carry::testing::artifact(&dir, "a.json");
         recorder.record(first);
-        wait_for_state_file(&dir.path().join("attempts")).await;
-        tokio::time::sleep(std::time::Duration::from_millis(450)).await;
-        let attempts: Vec<f64> = std::fs::read_to_string(dir.path().join("attempts"))
-            .unwrap()
-            .lines()
-            .map(|line| line.parse().unwrap())
-            .collect();
-        assert!(
-            attempts.len() >= 2,
-            "dirty progress retries without a new row"
-        );
+        let attempts = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                let text = std::fs::read_to_string(dir.path().join("attempts")).unwrap_or_default();
+                if text.ends_with('\n')
+                    && let Ok(attempts) = text
+                        .lines()
+                        .map(str::parse::<f64>)
+                        .collect::<Result<Vec<_>, _>>()
+                    && attempts.len() >= 2
+                {
+                    break attempts;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("dirty progress did not retry without a new row");
         assert!(
             attempts.windows(2).all(|pair| pair[1] - pair[0] >= 0.05),
             "failure must not cause busy retries: {attempts:?}"
