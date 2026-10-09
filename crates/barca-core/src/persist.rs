@@ -46,7 +46,9 @@ impl SharedPush<'_> {
         let mut attempt = 0u32;
         let mut pushed_again = false;
         loop {
-            let again = match state_sync::push_state(python, cfg, &self.token, until).await? {
+            let outcome =
+                state_sync::push_state_tracking(python, cfg, &mut self.token, until).await?;
+            let again = match outcome {
                 // Uploaded, but another process wrote to the local database (or replaced
                 // it) while the upload was on its way. Treated like a conflict, once: pull
                 // what was just uploaded, which keeps those rows, and push again. Only once,
@@ -82,8 +84,8 @@ impl SharedPush<'_> {
             // ledger then adds whatever is still missing (both are idempotent), so the run
             // is whole however much of it made the trip.
             self.token = state_sync::pull_state(python, cfg, until).await?.token;
-            db::init_db(self.db_path).await?;
             if let Some(ledger) = ledger {
+                db::init_db(self.db_path).await?;
                 persist_run(self.db_path, ledger).await?;
                 db::insert_logs(self.db_path, self.run_id, self.logs).await?;
             }
@@ -298,7 +300,10 @@ impl StepRecorder {
                     _ = tokio::time::sleep_until(next_write), if !pending.is_empty() => {
                         while let Ok(row) = rx.try_recv() { pending.push(row); }
                         // A successful no-op replay never marks unchanged state dirty.
-                        if let Ok(inserted) = record_steps(&db_path, &run_id, &pending).await {
+                        if let Ok(inserted) = record_steps_with_until(
+                            &db_path, &run_id, &pending,
+                            state_sync::Until::cancelled(&stopped),
+                        ).await {
                             generation += inserted;
                             pending.clear();
                         }
@@ -406,9 +411,21 @@ impl Drop for StepRecorder {
 
 /// Append `rows` for a run that is still in progress, and advance its `steps_executed` so
 /// `barca history` shows how far it has got.
+#[cfg(test)]
 async fn record_steps(db_path: &str, run_id: &str, rows: &[StepRow]) -> Result<u64, BarcaError> {
-    let _g = db::db_guard().await;
-    let (_db, conn) = db::open_conn(db_path).await?;
+    record_steps_with_until(db_path, run_id, rows, state_sync::Until::done()).await
+}
+
+async fn record_steps_with_until(
+    db_path: &str,
+    run_id: &str,
+    rows: &[StepRow],
+    until: state_sync::Until<'_>,
+) -> Result<u64, BarcaError> {
+    let _g = until.admit(db::db_guard()).await?;
+    let (_db, conn) = db::open_conn_with_until(db_path, until).await?;
+    until.check()?;
+    // Once admitted, finish the transaction even if cancellation arrives during it.
     conn.execute("BEGIN", ())
         .await
         .map_err(|e| BarcaError::Db(format!("failed to begin progress batch: {e}")))?;
@@ -1594,6 +1611,29 @@ sys.exit(_state.main())
         assert_eq!(token.unwrap().0.as_deref(), Some("known-before-checkpoint"));
         // Mid-run failure must not remove the complete terminal writer's fallback.
         let fx = Fixture::new();
+        persist_run(&db_path, &fx.ledger("r1")).await.unwrap();
+        assert_eq!(rows(&db_path).await, complete("r1"));
+        assert_eq!(run_record(&db_path, "r1").await.status, "failed");
+    }
+
+    #[tokio::test]
+    async fn recorder_stop_cancels_batch_admission_and_leaves_terminal_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = fresh_db(&dir, "m.db").await;
+        let fx = Fixture::new();
+        db::create_run(&db_path, "r1", "get", "[]", None, Some(5))
+            .await
+            .unwrap();
+        let held = db::db_guard().await;
+        let recorder = StepRecorder::start(db_path.clone(), "r1".into());
+        recorder.record(fx.row("f.py:a"));
+        // Run the real batch timer with the mutex held, so admission is pending.
+        tokio::time::sleep(RECORD_INTERVAL * 2).await;
+        tokio::time::timeout(std::time::Duration::from_secs(1), recorder.finish())
+            .await
+            .expect("recorder stop waited for an unrelated DB owner");
+        drop(held);
+        assert_eq!(run_record(&db_path, "r1").await.steps_executed, 0);
         persist_run(&db_path, &fx.ledger("r1")).await.unwrap();
         assert_eq!(rows(&db_path).await, complete("r1"));
         assert_eq!(run_record(&db_path, "r1").await.status, "failed");

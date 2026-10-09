@@ -349,7 +349,7 @@ def main(argv: "list[str] | None" = None) -> int:
         try:
             new_token = push(uri, local, token)
         except ConflictError as exc:
-            print(f"conflict: {exc}", file=sys.stderr)
+            print(f"conflict: {_storage.safe_error(str(exc))}", file=sys.stderr)
             return _EXIT_CONFLICT
         print(json.dumps({"token": new_token}))
         return 0
@@ -379,8 +379,8 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except ConflictError as exc:  # pull never raises this; belt and braces
-        print(f"conflict: {exc}", file=sys.stderr)
+        print(f"conflict: {_storage.safe_error(str(exc))}", file=sys.stderr)
         sys.exit(_EXIT_CONFLICT)
     except Exception as exc:
-        print(f"error: {type(exc).__name__}: {exc}", file=sys.stderr)
+        print(f"error: {_storage.safe_error(f'{type(exc).__name__}: {exc}')}", file=sys.stderr)
         sys.exit(1)

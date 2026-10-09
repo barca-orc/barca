@@ -51,6 +51,42 @@ pub struct Until<'a> {
 }
 
 impl<'a> Until<'a> {
+    pub(crate) fn check(self) -> Result<(), BarcaError> {
+        if self.cancel.is_some_and(CancellationToken::is_cancelled)
+            || self.remaining().is_some_and(|left| left.is_zero())
+        {
+            Err(BarcaError::Cancelled)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Only wrap cancellable admission, never an admitted database mutation.
+    pub(crate) async fn admit<T>(
+        self,
+        work: impl std::future::Future<Output = T>,
+    ) -> Result<T, BarcaError> {
+        self.check()?;
+        let cancelled = async {
+            match self.cancel {
+                Some(cancel) => cancel.cancelled().await,
+                None => std::future::pending().await,
+            }
+        };
+        let expired = async {
+            match self.remaining() {
+                Some(left) => tokio::time::sleep(left).await,
+                None => std::future::pending().await,
+            }
+        };
+        tokio::select! {
+            biased;
+            _ = cancelled => Err(BarcaError::Cancelled),
+            _ = expired => Err(BarcaError::Cancelled),
+            result = work => Ok(result),
+        }
+    }
+
     /// Never: the transfer runs to its end.
     pub fn done() -> Self {
         Self::default()
@@ -175,7 +211,7 @@ const UNLOCKED_ATTEMPTS: u32 = 2;
 /// untouched (the first push creates the shared state from it).
 ///
 /// There is one path, whatever the local database is: the blob is downloaded next to the
-/// database, with no lock held, and swapped in by [`crate::db::replace_db`], which carries
+/// database, with no lock held, and swapped in by [`crate::db::replace_db_holding`], which carries
 /// over the local rows the download lacks, never lets the old write-ahead log be applied to
 /// the new file (#221), and refuses a download that another process's pull or push has
 /// overtaken. The pull then starts again, the last time holding the lock throughout so that
@@ -190,14 +226,16 @@ pub async fn pull_state(
     cfg: &ResolvedConfig,
     until: Until<'_>,
 ) -> Result<Pulled, BarcaError> {
+    until.check()?;
     let uri = cfg
         .state_uri
         .as_deref()
         .ok_or_else(|| BarcaError::Other("pull_state called without a state uri".into()))?;
+    let display_uri = crate::transfer::diagnostic_uri(uri);
     remove_abandoned_pulls(&cfg.db_path);
     for attempt in 0..=UNLOCKED_ATTEMPTS {
         let lock = if attempt == UNLOCKED_ATTEMPTS {
-            Some(crate::db::lock_db(&cfg.db_path).await?)
+            Some(crate::db::lock_db_with_until(&cfg.db_path, until).await?)
         } else {
             None
         };
@@ -213,7 +251,7 @@ pub async fn pull_state(
         }
     }
     Err(BarcaError::Other(format!(
-        "shared state pull from {uri}: the local database {} changed while its lock was held",
+        "shared state pull from {display_uri}: the local database {} changed while its lock was held",
         cfg.db_path
     )))
 }
@@ -228,6 +266,7 @@ async fn pull_into(
     limit: Option<std::time::Duration>,
     until: Until<'_>,
 ) -> Result<Option<Pulled>, BarcaError> {
+    let display_uri = crate::transfer::diagnostic_uri(uri);
     // Read before the download begins: a change by the time of the swap means the download
     // may be older than the local database.
     let base_raw = crate::state_base::read_raw(&cfg.db_path);
@@ -249,7 +288,7 @@ async fn pull_into(
                 BarcaError::Other(format!("failed to spawn state helper: {e}"))
             }
             HelperFailed::TimedOut(limit) => BarcaError::Other(format!(
-                "shared state pull from {uri}: the download did not finish within {}s and was \
+                "shared state pull from {display_uri}: the download did not finish within {}s and was \
              stopped. Other barca commands in this project were changing the local history at \
              the same time, so this download was made while holding its lock, which cannot be \
              held for longer.\nThe local history {} was left as it was. Run the command again; \
@@ -262,12 +301,12 @@ async fn pull_into(
         let cause = helper_cause(&out.stderr);
         return Err(BarcaError::Other(match not_a_file(uri, &cause) {
             Some(what) => format!(
-                "shared state pull from {uri} failed: {what}\n\
+                "shared state pull from {display_uri} failed: {what}\n\
                  Remove or rename that directory in the store (barca does not change it), or \
                  set BARCA_STATE=off to run with local history only."
             ),
             None => format!(
-                "shared state pull from {uri} failed: {cause}\n\
+                "shared state pull from {display_uri} failed: {cause}\n\
                  Fix the connection or credentials (barca docs remote), or set \
                  BARCA_STATE=off to run with local history only."
             ),
@@ -284,7 +323,7 @@ async fn pull_into(
     // The helper writes the file exactly when the remote object exists (it then has a token).
     if !staged.exists() {
         return Err(BarcaError::Other(format!(
-            "shared state pull from {uri}: the helper reported a state object but wrote no file"
+            "shared state pull from {display_uri}: the helper reported a state object but wrote no file"
         )));
     }
     let incoming = crate::db::Incoming {
@@ -292,10 +331,17 @@ async fn pull_into(
         base_at_start: base_raw.as_deref(),
         version: Some(token),
     };
-    let replaced = match held {
-        Some(lock) => crate::db::replace_db_holding(lock, &cfg.db_path, incoming).await?,
-        None => crate::db::replace_db(&cfg.db_path, incoming).await?,
+    // Stop while waiting for admission, never midway through the atomic carry/swap.
+    let acquired;
+    let lock = match held {
+        Some(lock) => lock,
+        None => {
+            acquired = crate::db::lock_db_with_until(&cfg.db_path, until).await?;
+            &acquired
+        }
     };
+    until.check()?;
+    let replaced = crate::db::replace_db_holding(lock, &cfg.db_path, incoming).await?;
     Ok(match replaced {
         crate::db::Replaced::Swapped(carried) => Some(Pulled {
             token: StateToken(Some(token.to_string())),
@@ -321,9 +367,10 @@ fn invalid_shared_state(
     db_path: &str,
     invalid: &crate::state_validate::Invalid,
 ) -> BarcaError {
+    let display_uri = crate::transfer::diagnostic_uri(uri);
     if invalid.kind == crate::state_validate::InvalidKind::Compatibility {
         return BarcaError::Other(format!(
-            "the shared history {uri} has an incompatible metadata schema: {}.\n\
+            "the shared history {display_uri} has an incompatible metadata schema: {}.\n\
              The local history {db_path} and shared object were left in place; nothing was \
              uploaded. Use a compatible Barca release to access this history. A schema \
              mismatch is not a reason to reset durable history.",
@@ -331,7 +378,7 @@ fn invalid_shared_state(
         ));
     }
     let mut message = format!(
-        "the shared history {uri} is not a database barca can use: {}.\n\
+        "the shared history {display_uri} is not a database barca can use: {}.\n\
          The local history {db_path} was left as it was, and nothing was uploaded.\n\
          To repair it, follow `barca docs remote`, section \"If the shared history is damaged\": \
          put back an earlier copy of that object (a bucket version or a backup), or remove the \
@@ -433,9 +480,10 @@ async fn run_helper(
 /// (`cause` is its error), what to say instead of the cause: it is neither a connection nor a
 /// credentials problem.
 fn not_a_file(uri: &str, cause: &str) -> Option<String> {
+    let display_uri = crate::transfer::diagnostic_uri(uri);
     cause
         .starts_with("IsADirectoryError")
-        .then(|| format!("{uri} is a directory, not the shared history file ({cause})."))
+        .then(|| format!("{display_uri} is a directory, not the shared history file ({cause})."))
 }
 
 /// The reason a state helper failed: its last `error: ...` line (what `python -m barca._state`
@@ -460,7 +508,7 @@ fn helper_cause(stderr: &[u8]) -> String {
 /// Conditionally upload the local database over the shared state blob.
 ///
 /// What is uploaded is a copy taken under the database's lock, right after its write-ahead
-/// log was folded in ([`crate::db::copy_for_push`]). The upload itself holds no lock, so a
+/// log was folded in ([`crate::db::copy_for_push_with_until`]). The upload itself holds no lock, so a
 /// slow one keeps no other barca command waiting. [`PushOutcome::Pushed`] says whether the
 /// local database is still what was uploaded.
 ///
@@ -472,18 +520,35 @@ pub async fn push_state(
     token: &StateToken,
     until: Until<'_>,
 ) -> Result<PushOutcome, BarcaError> {
+    let mut tracked = token.clone();
+    push_state_tracking(python, cfg, &mut tracked, until).await
+}
+
+/// Retain a confirmed acknowledgement before potentially waiting on local bookkeeping.
+pub(crate) async fn push_state_tracking(
+    python: &Path,
+    cfg: &ResolvedConfig,
+    token: &mut StateToken,
+    until: Until<'_>,
+) -> Result<PushOutcome, BarcaError> {
     let uri = cfg
         .state_uri
         .as_deref()
         .ok_or_else(|| BarcaError::Other("push_state called without a state uri".into()))?;
-    let copy = crate::db::copy_for_push(&cfg.db_path, staged_path(&cfg.db_path, "push")).await?;
+    let copy =
+        crate::db::copy_for_push_with_until(&cfg.db_path, staged_path(&cfg.db_path, "push"), until)
+            .await?;
     let uploaded = upload(python, cfg, uri, &copy.path, token, until).await;
     let _ = std::fs::remove_file(&copy.path);
     Ok(match uploaded? {
-        Some(token) => PushOutcome::Pushed {
-            local_unchanged: crate::db::record_pushed(&cfg.db_path, &copy).await,
-            token,
-        },
+        Some(acknowledged) => {
+            token.0 = Some(acknowledged.clone());
+            PushOutcome::Pushed {
+                local_unchanged: crate::db::record_pushed_with_until(&cfg.db_path, &copy, until)
+                    .await,
+                token: acknowledged,
+            }
+        }
         None => PushOutcome::Conflict,
     })
 }
@@ -497,6 +562,8 @@ async fn upload(
     token: &StateToken,
     until: Until<'_>,
 ) -> Result<Option<String>, BarcaError> {
+    until.check()?;
+    let display_uri = crate::transfer::diagnostic_uri(uri);
     let mut cmd = state_cmd(python, cfg);
     cmd.arg("push").arg(uri).arg(file);
     if let Some(ref t) = token.0 {
@@ -517,13 +584,13 @@ async fn upload(
         let cause = helper_cause(&out.stderr);
         return Err(BarcaError::Other(match not_a_file(uri, &cause) {
             Some(what) => format!(
-                "shared state push to {uri} failed: {what}\n\
+                "shared state push to {display_uri} failed: {what}\n\
                  Results were computed but the shared history was not updated. Remove or \
                  rename that directory in the store (barca does not change it) and re-run, \
                  or set BARCA_STATE=off (barca docs remote)."
             ),
             None => format!(
-                "shared state push to {uri} failed: {cause}\n\
+                "shared state push to {display_uri} failed: {cause}\n\
                  Results were computed but the shared history was not updated: re-run, or \
                  set BARCA_STATE=off (barca docs remote)."
             ),
@@ -572,6 +639,242 @@ error: RefreshError: Reauthentication is needed.\n";
 
     use super::*;
     use turso::Builder;
+
+    fn checkpoint_config(dir: &Path) -> ResolvedConfig {
+        ResolvedConfig {
+            remote_off: false,
+            env: "default".into(),
+            db_path: dir.join("local.db").to_string_lossy().into(),
+            artifact_root: dir.join("artifacts").to_string_lossy().into(),
+            local_artifact_dir: dir.join("artifacts").to_string_lossy().into(),
+            transfer_concurrency: 1,
+            transfer_timeout_secs: 60,
+            state_uri: Some(dir.join("remote.db").to_string_lossy().into()),
+            state: crate::config::StateMode::Optimistic,
+            push_retries: 2,
+            storage_options_json: None,
+        }
+    }
+
+    #[cfg(unix)]
+    fn gated_state_helper(dir: &Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join("state-helper");
+        let python_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../python");
+        let ready = serde_json::to_string(&dir.join("ready")).unwrap();
+        let release = serde_json::to_string(&dir.join("release")).unwrap();
+        let script = format!(
+            "#!/usr/bin/env python3\nimport json, os, sys, time\nfrom pathlib import Path\n\
+             sys.path.insert(0, {})\nfrom barca import _state\n\
+             mode, uri, local = sys.argv[3:6]\n\
+             token = _state.push(uri, local, None) if mode == 'push' else _state.pull(uri, local)\n\
+             Path({ready}).write_text(str(os.getpid()))\n\
+             while not Path({release}).exists(): time.sleep(0.005)\n\
+             print(json.dumps({{'token': token}}))\n",
+            serde_json::to_string(&python_root).unwrap(),
+        );
+        std::fs::write(&path, script).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    async fn helper_exited(pid: i64) {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while crate::db::pid_alive(pid) {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("state helper did not exit");
+    }
+
+    fn no_stages(dir: &Path) {
+        for entry in std::fs::read_dir(dir).unwrap().flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            assert!(
+                !name.starts_with("local.db.push-") && !name.starts_with("local.db.pull-"),
+                "staged file remains: {name}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn checkpoint_deadline_stops_waiting_for_the_process_mutex() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = checkpoint_config(dir.path());
+        crate::db::init_db(&cfg.db_path).await.unwrap();
+        let held = crate::db::db_guard().await;
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            push_state(
+                Path::new("must-not-start"),
+                &cfg,
+                &StateToken(None),
+                Until {
+                    cancel: None,
+                    deadline: Some(
+                        std::time::Instant::now() + std::time::Duration::from_millis(100),
+                    ),
+                },
+            ),
+        )
+        .await
+        .expect("checkpoint ignored its deadline while waiting for the mutex");
+        assert!(matches!(result, Err(BarcaError::Cancelled)));
+        no_stages(dir.path());
+        drop(held);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn actual_helper_errors_display_only_the_safe_configured_uri() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = checkpoint_config(dir.path());
+        cfg.state_uri = Some("s3://user:uri-password@bucket/path?sig=uri-signature".into());
+        crate::db::init_db(&cfg.db_path).await.unwrap();
+        let helper = dir.path().join("failing-helper");
+        std::fs::write(
+            &helper,
+            "#!/bin/sh\necho 'error: SDK refused the operation' >&2\nexit 1\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let pushed = push_state(&helper, &cfg, &StateToken(None), Until::done())
+            .await
+            .unwrap_err();
+        let pulled = pull_state(&helper, &cfg, Until::done()).await.unwrap_err();
+        for error in [pushed, pulled] {
+            let message = error.to_string();
+            assert!(message.contains("s3://<redacted>@bucket/path"), "{message}");
+            assert!(message.contains("SDK refused the operation"));
+            assert!(!message.contains("uri-password") && !message.contains("uri-signature"));
+        }
+        no_stages(dir.path());
+    }
+
+    #[tokio::test]
+    async fn checkpoint_cancellation_stops_cross_process_snapshot_admission() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = checkpoint_config(dir.path());
+        crate::db::init_db(&cfg.db_path).await.unwrap();
+        let lock = std::fs::File::options()
+            .write(true)
+            .open(format!("{}.lock", cfg.db_path))
+            .unwrap();
+        lock.lock().unwrap();
+        let cancel = CancellationToken::new();
+        let work = push_state(
+            Path::new("must-not-start"),
+            &cfg,
+            &StateToken(None),
+            Until::cancelled(&cancel),
+        );
+        tokio::pin!(work);
+        // First poll enters lock admission; holding the real lock proves no helper starts.
+        tokio::select! {
+            biased;
+            _ = &mut work => panic!("snapshot ignored the held lock"),
+            _ = tokio::task::yield_now() => {},
+        }
+        cancel.cancel();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(1), &mut work)
+            .await
+            .expect("checkpoint could not cancel snapshot admission");
+        assert!(matches!(result, Err(BarcaError::Cancelled)));
+        no_stages(dir.path());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn acknowledged_upload_keeps_token_when_bookkeeping_cannot_take_the_lock() {
+        use sha2::{Digest, Sha256};
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = checkpoint_config(dir.path());
+        crate::db::init_db(&cfg.db_path).await.unwrap();
+        let python = gated_state_helper(dir.path());
+        let cancel = CancellationToken::new();
+        let stop = cancel.clone();
+        let owned = cfg.clone();
+        let work = tokio::spawn(async move {
+            let mut token = StateToken(None);
+            let result =
+                push_state_tracking(&python, &owned, &mut token, Until::cancelled(&stop)).await;
+            (result, token)
+        });
+        let pid = pid_in(&dir.path().join("ready")).await;
+        let remote = std::fs::read(cfg.state_uri.as_ref().unwrap()).unwrap();
+        let expected = format!("{:x}", Sha256::digest(&remote));
+        let lock = std::fs::File::options()
+            .write(true)
+            .open(format!("{}.lock", cfg.db_path))
+            .unwrap();
+        lock.lock().unwrap();
+        std::fs::write(dir.path().join("release"), b"go").unwrap();
+        helper_exited(pid).await;
+        // The helper has really published and exited. Drive post-ACK bookkeeping while
+        // the DB lock is still held, then cancel its admission.
+        tokio::task::yield_now().await;
+        cancel.cancel();
+        let (result, token) = tokio::time::timeout(std::time::Duration::from_secs(1), work)
+            .await
+            .expect("post-ACK bookkeeping ignored cancellation")
+            .unwrap();
+        assert_eq!(token.0.as_deref(), Some(expected.as_str()));
+        assert!(matches!(
+            result,
+            Ok(PushOutcome::Pushed {
+                local_unchanged: false,
+                ..
+            })
+        ));
+        assert_eq!(
+            std::fs::read(cfg.state_uri.as_ref().unwrap()).unwrap(),
+            remote
+        );
+        no_stages(dir.path());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cancelled_pull_admission_leaves_local_history_and_removes_download() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = checkpoint_config(dir.path());
+        crate::db::init_db(&cfg.db_path).await.unwrap();
+        crate::db::create_run(&cfg.db_path, "ours", "get", "[]", None, Some(1))
+            .await
+            .unwrap();
+        checkpoint_truncate(&cfg.db_path).await.unwrap();
+        let before = std::fs::read(&cfg.db_path).unwrap();
+        let remote = cfg.state_uri.as_ref().unwrap();
+        crate::db::init_db(remote).await.unwrap();
+        crate::db::create_run(remote, "theirs", "get", "[]", None, Some(1))
+            .await
+            .unwrap();
+        checkpoint_truncate(remote).await.unwrap();
+        let python = gated_state_helper(dir.path());
+        let cancel = CancellationToken::new();
+        let stop = cancel.clone();
+        let owned = cfg.clone();
+        let work =
+            tokio::spawn(async move { pull_state(&python, &owned, Until::cancelled(&stop)).await });
+        let pid = pid_in(&dir.path().join("ready")).await;
+        let lock = std::fs::File::options()
+            .write(true)
+            .open(format!("{}.lock", cfg.db_path))
+            .unwrap();
+        lock.lock().unwrap();
+        std::fs::write(dir.path().join("release"), b"go").unwrap();
+        helper_exited(pid).await;
+        cancel.cancel();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(1), work)
+            .await
+            .expect("pull admission ignored cancellation")
+            .unwrap();
+        assert!(matches!(result, Err(BarcaError::Cancelled)));
+        assert_eq!(std::fs::read(&cfg.db_path).unwrap(), before);
+        no_stages(dir.path());
+    }
 
     /// The last attempt of a pull downloads while holding the database's lock. A helper that
     /// stalls is stopped at the limit, so the lock is given back; one that finishes in time
