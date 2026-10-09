@@ -140,9 +140,10 @@ conflict/carry replay. A real aborted-recorder regression verifies token retenti
 and complete successful/failed terminal rows. All18 persistence checks and strict
 workspace Clippy pass after this fault-path correction.
 
-The publication slice remains unfinished pending conflict/continued-local-write,
-lost-ack, outage/cancellation/resource-bound tests and current-main integration.
-It is not included in release0.21.0 or claimed to close #214.
+At this initial stage, conflict/continued-local-write, lost-ack and outage/resource
+checks were still outstanding. The later evidence below completes those local
+checks; current-main acceptance and publication remain required. This slice is
+not included in release0.21.0.
 
 ## Running progress carry correction
 
@@ -188,3 +189,8 @@ After #359/#360 merge, strip those local prerequisites and rebase the minute
 slice onto their actual merge commits, rerun affected integration checks and
 require both repository CI jobs before merging/publishing. No unmerged minute
 code is included in released v0.21.0.
+
+The receipt and recorder prerequisites are now merged as #359/#360. Local
+prerequisite copies were removed with a clean rebase onto actual main13a92a4;
+the publication diff contains only the owned minute loop and its reviewed
+admission, conflict/count, token and diagnostic corrections.
