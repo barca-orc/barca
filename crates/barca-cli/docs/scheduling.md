@@ -53,6 +53,20 @@ something that identifies the version of the data, such as an etag or a last-mod
 A tick is skipped while the previous run of the same scheduled node is still going. Two
 scheduled nodes that share an upstream run separately, and both may compute it.
 
+Cron is evaluated in one timezone for the whole server, set with `--timezone`: `local` (the
+default: the zone of the machine or container), `utc`, or an IANA name such as
+`America/New_York`. `local` and `utc` are accepted in any letter case; IANA names are spelled as
+in the tz database. Any other value is a usage error: the server exits 2 and names the value.
+
+`barca list` talks to no server and does not know its `--timezone`. Its next fire times (the
+`NEXT FIRE (LOCAL TIME)` column, `next_fire` in JSON) are the next match of the cron expression
+in the local time of the machine `list` runs on. For a server started with another zone, ask the
+server: `GET /schedule` returns `next_fire` as unix epoch seconds, computed in the server's zone.
+
+```bash
+curl -s http://127.0.0.1:8274/schedule         # [{"id": ..., "cron": ..., "next_fire": 1791522000, ...}]
+```
+
 ```bash
 barca list pipeline.py                         # shows each schedule and its next fire time
 barca serve pipeline.py                        # HTTP API + scheduler + web UI on 127.0.0.1:8274
@@ -60,14 +74,33 @@ barca serve pipeline.py --timezone utc         # evaluate cron in UTC (default: 
 barca serve pipeline.py --no-schedule          # API only, no scheduler
 barca serve pipeline.py --watch                # dev: re-parse the DAG when files change
 barca serve pipeline.py --read-only            # inspect only: no runs, no scheduler
+barca serve pipeline.py --host 0.0.0.0         # listen on every interface (containers, VMs)
 ```
 
 `--read-only` serves the API without the ability to change anything: run and cancel endpoints
 return `403`, the scheduler never starts, and every read of the metadata DB goes through a
 private copy, so it is safe to point at a project another process is running.
 
-`serve` binds to `127.0.0.1` with no authentication. Open `http://127.0.0.1:8274/` for the web
-UI. Endpoints are documented at https://barca.sh/reference/server-api/ and `GET /schedule`
-reports live schedule status. Behind nginx (any path prefix, live logs included):
-https://barca.sh/deploying/.
+`serve` binds to `127.0.0.1` by default and has no authentication. `--host 0.0.0.0` (or `::`)
+listens on every interface, which a container or VM needs for the port to be reachable from
+outside; barca then prints a warning on stderr, because anyone who can reach the port can trigger
+runs. Keep it on a private network or behind a proxy that authenticates. Open
+`http://127.0.0.1:8274/` for the web UI. Endpoints are documented at
+https://barca.sh/reference/server-api/ and `GET /schedule` reports live schedule status. Behind
+nginx or Traefik (any path prefix, live logs included): https://barca.sh/deploying/.
 Full model: https://barca.sh/scheduling/.
+
+## Stopping the server
+
+SIGINT (Ctrl-C) and SIGTERM (`kill`, `docker stop`, systemd) stop the server the same way. It
+prints `[barca] SIGTERM received: stopping runs and shutting down`, stops accepting
+connections, cancels the runs in flight (their workers are stopped and the runs are recorded as
+`cancelled` in `barca history`), ends the open `/events` streams and exits 0. That normally
+takes less than a second. It is bounded: runs get 10 seconds to stop, and connections still open
+after that get 2 more. This also holds when barca is process 1 of a container, so a plain
+`docker stop` works.
+
+SIGHUP and SIGQUIT are not handled. Outside a container they end the process at once, and a run
+in flight is then reported as `interrupted` (`barca docs cache`); `nohup barca serve` keeps
+ignoring SIGHUP. A process that is process 1 of a container never receives them. SIGKILL cannot
+be handled by any program.

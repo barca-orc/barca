@@ -277,7 +277,7 @@ error (exit 2) that names the right one. `barca pipeline.py` is short for
 | `barca plan [files...]` | The execution plan as JSON (experimental). No flags. |
 | `barca history` | Recent runs. `--limit N` (default 10), `--all`, `--json`, `--pretty`, `--fields`, `--env` |
 | `barca stats <target> [files...]` | Timing and cache statistics for one asset. `--json`, `--pretty`, `--fields`, `--env` |
-| `barca serve [files...]` | HTTP API, cron scheduler and web UI. `--port N`, `--watch`, `--no-schedule`, `--timezone`, `--read-only`, `--env` |
+| `barca serve [files...]` | HTTP API, cron scheduler and web UI. `--port N`, `--host IP`, `--watch`, `--no-schedule`, `--timezone`, `--read-only`, `--env` |
 | `barca docs [topic]` | The manual, compiled into the binary. `--all`, `--json`, `--fields` |
 | `barca version` | Print the version (also `barca --version`). |
 
@@ -315,8 +315,9 @@ More: `barca docs partitions`.
 
 ## Schedules and the server
 
-`barca serve` runs a cron scheduler, an HTTP API and a web UI. It binds to `127.0.0.1`
-with no authentication.
+`barca serve` runs a cron scheduler, an HTTP API and a web UI. It binds to
+`127.0.0.1` by default. `--host 0.0.0.0` listens on every interface for containers and VMs. There is no authentication; keep a reachable server on a private
+network or behind an authenticating proxy.
 
 ```python
 # job.py
@@ -332,6 +333,7 @@ def refresh() -> None:
 barca list job.py                        # shows each schedule and its next fire time
 barca serve job.py                       # port 8274; the web UI is at /ui/
 barca serve job.py --timezone utc        # evaluate cron in UTC (default: local time)
+barca serve job.py --host 0.0.0.0         # every interface; authenticate at the proxy
 ```
 
 Schedules fire only while `barca serve` is running; `barca get` and `barca run` do not
@@ -345,7 +347,7 @@ Runs started over HTTP are asynchronous: `POST` returns a `run_id`, and you poll
 `/status/<run_id>`.
 
 ```bash
-curl localhost:8274/health                  # {"read_only":false,"scheduler":true,"status":"ok","version":"0.18.1"}
+curl localhost:8274/health                  # {"read_only":false,"scheduler":true,"status":"ok","version":"0.19.0"}
 curl localhost:8274/schedule                # each schedule: last and next fire, last status
 curl -XPOST localhost:8274/run              # every asset and sensor (tasks are skipped) -> {"run_id":"..."}
 curl -XPOST localhost:8274/get/summary      # one asset and what it depends on

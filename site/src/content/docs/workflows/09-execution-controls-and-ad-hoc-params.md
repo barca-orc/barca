@@ -102,7 +102,7 @@ took 2.1 seconds; `elapsed_seconds` in the JSON is the correct figure.
 
 ## Cancellation
 
-Ctrl-C (SIGINT) cancels a run. Barca stops its workers and records the run as `cancelled`.
+Ctrl-C (SIGINT) cancels a run, and so does SIGTERM. Barca stops its workers and records the run as `cancelled`.
 
 ```bash
 barca get long_running pipeline.py --agent     # then Ctrl-C after two seconds

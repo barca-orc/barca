@@ -105,8 +105,10 @@ actual transition. Cancelling an already-finished run returns `409`. Runs exceed
 server's 10-minute timeout are stopped the same way and reported as `failed`.
 
 **Errors.** `{"error": "..."}` body with: `404` (unknown asset/run), `400`
-(parse/DAG errors), `409` (ambiguous `{name}` match, or cancel-after-finish), `500`
-(execution/DB failure).
+(parse/DAG errors, or a trigger whose target is the wrong kind for the endpoint: a task on
+`/get/{target}`, an asset on `/run/{target}`), `409` (ambiguous `{name}` match, or
+cancel-after-finish), `500` (execution/DB failure). The trigger endpoints check their target
+before starting a run, so these are answered at once and no `run_id` is issued.
 
 **`barca.Client`** (`python/barca/client.py`, stdlib-only) — `health()`, `assets()`,
 `asset(name)`, `plan()`, `schedules()`, `status(run_id)`, `cancel(run_id)` (also

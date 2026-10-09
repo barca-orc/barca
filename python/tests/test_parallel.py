@@ -471,6 +471,112 @@ class TestParallelInvariants:
         assert result[1] == [100, 110, 120]
 
 
+# ─── A branch that calls parallel() itself ───────────────────────────────────
+
+
+def run_cli(tmp_path, target, *, pool, timeout=120):
+    """`barca run <target> pipeline.py` through the binary, with a fixed pool size and a time
+    limit: these tests are about runs that used to never end."""
+    import json
+    import os
+    import signal
+    import subprocess
+
+    from barca.api import _find_binary
+
+    env = {k: v for k, v in os.environ.items() if not k.startswith("BARCA_")}
+    env["BARCA_POOL_SIZE"] = str(pool)
+    proc = subprocess.Popen(
+        [_find_binary(), "run", target, "pipeline.py"],
+        cwd=tmp_path,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        # The whole job, frozen workers included: none may outlive the test.
+        os.killpg(proc.pid, signal.SIGKILL)
+        out, err = proc.communicate()
+        raise AssertionError(f"barca did not finish within {timeout}s\n{err}") from None
+    assert proc.returncode == 0, err
+    # The coordinator prints these when a worker reports a step it no longer has leased.
+    assert "ignoring" not in err, err
+    return json.loads(out)["final_output"]
+
+
+class TestNestedParallel:
+    @pytest.mark.parametrize("pool", [1, 2, 4])
+    def test_branches_that_call_parallel_all_finish(self, tmp_path, pool):
+        """Twelve branches each fan out again. The worker started in place of a frozen parent
+        used to be killed when that parent's group finished, even when it was by then the
+        frozen parent of a group of its own: its step was lost and the run never ended."""
+        write_module(
+            tmp_path,
+            "pipeline.py",
+            """
+            from functools import partial
+            from barca import task, parallel
+
+            @task()
+            def leaf(i: int) -> int:
+                return i * 10
+
+            @task()
+            def middle(group: int) -> list:
+                return parallel(*(partial(leaf, group * 10 + i) for i in range(3)))
+
+            @task()
+            def nested() -> list:
+                return parallel(*(partial(middle, g) for g in range(12)))
+            """,
+        )
+        result = run_cli(tmp_path, "nested", pool=pool)
+        assert result == [[(g * 10 + i) * 10 for i in range(3)] for g in range(12)]
+
+    def test_a_branch_that_fans_out_from_inside_a_batch_runs_once(self, tmp_path):
+        """Quick branches are sent to a worker several at a time. When one of them called
+        parallel(), the rest of its batch went back to the queue although the worker still had
+        them in hand: they ran twice, and a second parallel() from that worker was ignored, so
+        the run never ended."""
+        write_module(
+            tmp_path,
+            "pipeline.py",
+            """
+            import os
+            from functools import partial
+            from barca import task, parallel, parallel_map
+
+            @task()
+            def leaf(i: int) -> int:
+                return i * 10
+
+            @task()
+            def sometimes_fans_out(i: int) -> int:
+                # One line per execution: a branch that ran twice has two.
+                with open(f"runs/{i}", "a") as f:
+                    f.write(f"{os.getpid()}\\n")
+                if i >= 150:
+                    return sum(parallel(partial(leaf, i), partial(leaf, i + 1)))
+                return i
+
+            @task()
+            def outer() -> list:
+                os.makedirs("runs", exist_ok=True)
+                return parallel_map(sometimes_fans_out, list(range(160)))
+            """,
+        )
+        result = run_cli(tmp_path, "outer", pool=4)
+        assert result == [i if i < 150 else i * 10 + (i + 1) * 10 for i in range(160)]
+        executions = {
+            int(p.name): len(p.read_text().splitlines()) for p in (tmp_path / "runs").iterdir()
+        }
+        assert executions == {i: 1 for i in range(160)}
+
+
 # ─── Ordering-only deps ─────────────────────────────────────────────────────
 
 

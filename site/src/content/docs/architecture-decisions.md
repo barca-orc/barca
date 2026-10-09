@@ -86,8 +86,14 @@ When a step calls `parallel()`, the coordinator:
 1. sends SIGSTOP to that worker, which freezes it with its state in memory;
 2. starts a temporary worker so the number of active workers stays the same;
 3. puts the calls on the ready queue;
-4. when all of them have finished, stops the temporary worker, sends SIGCONT to the original
-   worker and sends it the results.
+4. when all of them have finished, sends SIGCONT to the original worker and tells it where
+   each call's result is (a file its worker wrote under `.barca/branches/`, in a directory of
+   this run and this call), which the original worker reads. The directory is removed when
+   the calling step ends. The
+   pool then has one worker more than its size; the next worker that has no
+   step leased is stopped. (Through 0.19.0 the temporary worker itself was killed at this point,
+   whatever it was doing. If it had called `parallel()` in the meantime, its step was lost and
+   the run never ended.)
 
 ### What we tried
 
@@ -113,6 +119,12 @@ parallel calls. That works and gives no parallelism.
 ### Limitations
 
 - Unix only. Barca does not run on Windows.
+- If barca itself is killed outright (`kill -9`, out of memory) while a worker is stopped, that
+  worker stays stopped: nothing is left to resume it. `kill -CONT <pid>` lets it notice that
+  barca is gone and exit.
+- If the stopped worker is killed while its calls run, its step fails with `worker
+  disconnected while it waited for its parallel() branches`; calls that have not started are
+  dropped. (Through 0.19.0 this went unnoticed and the run never ended.)
 - A stopped process keeps its memory. Deep nesting with large data in memory uses that much
   RAM for as long as the calls run.
 - Calls made through `parallel()` are not steps of the plan: they are not counted in a run's

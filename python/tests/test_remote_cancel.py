@@ -389,7 +389,7 @@ def test_a_second_ctrl_c_abandons_the_wrap_up_at_once(project, whole_group):
     run.end()
 
     cancelled_cleanly(run)
-    assert "the shared history was not updated (stopped by a second Ctrl-C)" in run.stderr
+    assert "the shared history was not updated (stopped by a second interrupt)" in run.stderr
     assert sorted(recorded(run.root)) == ["numbers", "total"]
     assert not (store / "default" / "state" / "metadata.db").exists()
     recovers(run, "total", {"sum": 6})

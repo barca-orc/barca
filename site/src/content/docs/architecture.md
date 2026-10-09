@@ -26,6 +26,7 @@ crates/
     io_loop.rs, protocol.rs   worker pool, leased batches, length-prefixed JSON over a Unix socket
     cost.rs                   measured step cost and batch sizing
     db.rs, config.rs          the metadata database; project root, barca.toml, environment, flags
+    run_owner.rs              conservative process-liveness evidence for interrupted runs
     transfer.rs, state_*.rs   remote store: artifact transfer, and shared history as one blob
     store_sync.rs             a run's link to the store: upload results, fetch remote inputs, wait at the end
     persist.rs                recording a run: run and step rows, the final write, the shared-history push

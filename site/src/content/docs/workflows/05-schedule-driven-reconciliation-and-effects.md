@@ -62,13 +62,13 @@ barca list pipeline.py
 ```
 
 ```
-NAME                     KIND   FRESHNESS             NEXT FIRE            DEPS
--------------------------------------------------------------------------------
-pipeline.py:standalone   asset  always                -                    -
-pipeline.py:prices       asset  cron: */5 * * * * *   2026-10-07 14:17:25  -
-pipeline.py:source       asset  manual                -                    -
-pipeline.py:report       asset  always                -                    pipeline.py:source
-pipeline.py:send_report  task   cron: */10 * * * * *  2026-10-07 14:17:30  pipeline.py:report
+NAME                     KIND   FRESHNESS             NEXT FIRE (LOCAL TIME)  DEPS
+----------------------------------------------------------------------------------
+pipeline.py:standalone   asset  always                -                       -
+pipeline.py:prices       asset  cron: */5 * * * * *   2026-10-07 14:17:25     -
+pipeline.py:source       asset  manual                -                       -
+pipeline.py:report       asset  always                -                       pipeline.py:source
+pipeline.py:send_report  task   cron: */10 * * * * *  2026-10-07 14:17:30     pipeline.py:report
 ```
 
 ## One-shot commands ignore freshness
@@ -121,7 +121,7 @@ barca serve pipeline.py --port 28431
 `source` was edited again (`{"rows": 5}`) before the server started. The server log:
 
 ```
-[barca] scheduling 2 assets:
+[barca] scheduling 1 asset and 1 task:
   pipeline.py:prices — */5 * * * * * (next 2026-10-07 14:12:55)
   pipeline.py:send_report — */10 * * * * * (next 2026-10-07 14:13:00)
 [barca] serving on http://127.0.0.1:28431  (1 file)

@@ -14,7 +14,7 @@ export type NodeState = {
  */
 durations: Durations | null,
 /**
- * Next cron fire time (local time, unix epoch seconds), if scheduled.
+ * Next cron fire time (unix epoch seconds) in the server's `--timezone`, if scheduled.
  */
 next_run: number | null,
 /**

@@ -377,6 +377,207 @@ async fn delete_cancels_in_flight_run() {
     }
 }
 
+/// A fixture with an asset, a task and (in a second file) a second asset named like the first.
+fn trigger_config(dir: &std::path::Path) -> ServeConfig {
+    let mut config = isolated_config(dir, false);
+    std::fs::write(
+        &config.files[0],
+        "from barca import asset, task\n\n\
+         @asset()\ndef first() -> int:\n    return 1\n\n\
+         @task()\ndef publish() -> None:\n    pass\n",
+    )
+    .unwrap();
+    let other = dir.join("other.py");
+    std::fs::write(
+        &other,
+        "from barca import asset\n\n@asset()\ndef first() -> int:\n    return 2\n",
+    )
+    .unwrap();
+    config.files.push(other.display().to_string());
+    config
+}
+
+#[tokio::test]
+async fn a_trigger_with_a_target_that_cannot_run_is_refused_before_a_run_starts() {
+    // These used to answer 200 with a run id; the failure only showed in /status (#289).
+    let dir = tempfile::tempdir().unwrap();
+    let app = app(trigger_config(dir.path()));
+    for (uri, want, says) in [
+        (
+            "/get/nope",
+            StatusCode::NOT_FOUND,
+            "Asset 'nope' not found. Available: ",
+        ),
+        (
+            "/run/nope",
+            StatusCode::NOT_FOUND,
+            "Asset 'nope' not found. Available: ",
+        ),
+        (
+            "/get/first",
+            StatusCode::CONFLICT,
+            "'first' matches more than one node: ",
+        ),
+        (
+            "/get/publish",
+            StatusCode::BAD_REQUEST,
+            "'publish' is a task: use POST /run/publish",
+        ),
+        (
+            "/run/other.py:first",
+            StatusCode::BAD_REQUEST,
+            "'other.py:first' is an asset: use POST /get/other.py:first",
+        ),
+    ] {
+        let (status, body) = send(&app, "POST", uri).await;
+        assert_eq!(status, want, "{uri}: {body}");
+        let error = body["error"].as_str().expect("an error message");
+        assert!(error.starts_with(says), "{uri}: {error}");
+        assert!(body.get("run_id").is_none(), "{uri} started a run: {body}");
+    }
+    // Nothing ran: a run would have created the metadata DB.
+    assert!(!dir.path().join("metadata.db").exists());
+}
+
+#[tokio::test]
+async fn a_trigger_is_checked_against_the_source_as_it_is_now() {
+    // The nodes are kept between requests, but only while the source files are unchanged:
+    // a run reads the source again, and the check must name what that run would find.
+    let dir = tempfile::tempdir().unwrap();
+    let config = trigger_config(dir.path());
+    let pipeline = config.files[0].clone();
+    let app = app(config);
+    let (status, _) = send(&app, "POST", "/get/later").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = send(&app, "POST", "/get/later").await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "the same answer from the kept nodes"
+    );
+
+    // A node is added: known at once (and refused for its kind, so nothing runs).
+    let mut source = std::fs::read_to_string(&pipeline).unwrap();
+    source.push_str("\n@task()\ndef later() -> None:\n    pass\n");
+    std::fs::write(&pipeline, &source).unwrap();
+    let (status, body) = send(&app, "POST", "/get/later").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+
+    // A node is removed: unknown at once.
+    let (status, _) = send(&app, "POST", "/get/publish").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    std::fs::write(
+        &pipeline,
+        source.replace("def publish", "def no_longer_publish"),
+    )
+    .unwrap();
+    let (status, body) = send(&app, "POST", "/get/publish").await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert!(!dir.path().join("metadata.db").exists());
+}
+
+#[tokio::test]
+async fn a_target_may_contain_a_slash_and_a_missing_one_is_a_json_404() {
+    // A full node id of a file in a directory. Unencoded, its `/` used to match no route:
+    // 404 with an empty body. So did a trigger with no target at all.
+    let dir = tempfile::tempdir().unwrap();
+    let app = app(trigger_config(dir.path()));
+    for uri in ["/get/sub/other.py:publish", "/get/sub%2Fother.py:publish"] {
+        let (status, body) = send(&app, "POST", uri).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{uri}");
+        let error = body["error"].as_str().expect("an error message");
+        assert!(
+            error.starts_with("Asset 'sub/other.py:publish' not found. Available: "),
+            "{uri}: {error}"
+        );
+    }
+    // A path-suffixed id resolves the same either way (a task on /get: refused, nothing runs).
+    let long = format!("{}:publish", dir.path().join("pipeline.py").display());
+    let tail: String = long.split('/').skip(2).collect::<Vec<_>>().join("/");
+    for target in [tail.clone(), tail.replace('/', "%2F")] {
+        let (status, body) = send(&app, "POST", &format!("/get/{target}")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{target}: {body}");
+    }
+    for (method, uri, says) in [
+        ("POST", "/get/", "POST /get/{target} needs a target"),
+        ("POST", "/run/", "POST /run/{target} needs a target"),
+        ("GET", "/nowhere", "no such endpoint: GET /nowhere"),
+        ("DELETE", "/run/", "no such endpoint: DELETE /run/"),
+    ] {
+        let (status, body) = send(&app, method, uri).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{method} {uri}");
+        let error = body["error"].as_str().expect("an error message");
+        assert!(error.starts_with(says), "{method} {uri}: {error}");
+    }
+}
+
+#[tokio::test]
+async fn the_wrong_method_on_an_endpoint_is_a_json_405_naming_the_right_ones() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app(trigger_config(dir.path()));
+    for (method, uri, allowed, says) in [
+        (
+            "GET",
+            "/get/first",
+            "POST",
+            "GET is not allowed on /get/first: use POST",
+        ),
+        (
+            "GET",
+            "/run",
+            "POST",
+            "GET is not allowed on /run: use POST",
+        ),
+        (
+            "PUT",
+            "/run/x",
+            "POST, DELETE",
+            "PUT is not allowed on /run/x: use POST or DELETE",
+        ),
+        (
+            "POST",
+            "/health",
+            "GET",
+            "POST is not allowed on /health: use GET",
+        ),
+        (
+            "DELETE",
+            "/assets/first",
+            "GET",
+            "DELETE is not allowed on /assets/first: use GET",
+        ),
+    ] {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::METHOD_NOT_ALLOWED,
+            "{method} {uri}"
+        );
+        assert_eq!(resp.headers()["allow"], allowed, "{method} {uri}");
+        assert_eq!(body_json(resp).await["error"], says);
+    }
+}
+
+#[tokio::test]
+async fn a_trigger_on_source_that_does_not_parse_is_400() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = isolated_config(dir.path(), false);
+    std::fs::write(&config.files[0], "def broken(:\n").unwrap();
+    let (status, body) = send(&app(config), "POST", "/get/first").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body["error"].is_string());
+}
+
 #[tokio::test]
 async fn cancel_for_unknown_run_returns_404() {
     let dir = tempfile::tempdir().unwrap();
@@ -444,6 +645,29 @@ async fn logs_for_unknown_run_returns_empty() {
     assert_eq!(resp.status(), StatusCode::OK);
     let json = body_json(resp).await;
     assert_eq!(json["logs"], serde_json::json!([]));
+}
+
+#[tokio::test]
+async fn state_reports_the_next_run_in_the_servers_timezone() {
+    // `0 5 * * *` in UTC is always 05:00 UTC; in Asia/Kolkata (UTC+5:30, no summer time) it
+    // is always 23:30 UTC. The next run used to be computed in the machine's local time
+    // whatever the server's `--timezone` (#289).
+    for (zone, seconds_into_the_utc_day) in [("utc", 5 * 3600), ("Asia/Kolkata", 23 * 3600 + 1800)]
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = isolated_config(dir.path(), false);
+        std::fs::write(
+            &config.files[0],
+            "from barca import asset, Schedule\n\n\
+             @asset(freshness=Schedule(\"0 5 * * *\"))\ndef daily() -> int:\n    return 1\n",
+        )
+        .unwrap();
+        config.timezone = zone.to_string();
+        let (status, json) = send(&app(config), "GET", "/state").await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        let next_run = json[0]["next_run"].as_i64().expect("a scheduled node");
+        assert_eq!(next_run % 86_400, seconds_into_the_utc_day, "{zone}");
+    }
 }
 
 #[tokio::test]
@@ -574,11 +798,13 @@ async fn ui_page_is_served_or_explains_it_was_not_built() {
 
 #[tokio::test]
 async fn run_events_are_not_buffered_by_proxies() {
-    // Start a run (it fails fast: the target doesn't exist) so a live event
-    // channel exists, then check the SSE response's headers.
+    // Start a run (it fails fast: the source does not parse, and `POST /run` takes no target
+    // to check first) so a live event channel exists, then check the SSE response's headers.
     let dir = tempfile::tempdir().unwrap();
-    let app = app(isolated_config(dir.path(), false));
-    let (status, body) = send(&app, "POST", "/get/does_not_exist").await;
+    let config = isolated_config(dir.path(), false);
+    std::fs::write(&config.files[0], "def broken(:\n").unwrap();
+    let app = app(config);
+    let (status, body) = send(&app, "POST", "/run").await;
     assert_eq!(status, StatusCode::OK);
     let handle = body["run_id"].as_str().unwrap().to_string();
     let resp = app

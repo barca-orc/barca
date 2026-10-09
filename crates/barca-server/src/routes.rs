@@ -18,11 +18,13 @@ pub fn router(state: AppState) -> Router {
         .route("/assets/{name}/schema", get(handlers::asset_schema))
         .route("/run", post(handlers::run))
         // POST starts a task run; DELETE cancels an in-flight run by handle.
+        // The target takes the rest of the path, so a full node id with a directory in it
+        // (`sub/pipeline.py:orders`) works with its `/` percent-encoded or not.
         .route(
-            "/run/{target}",
+            "/run/{*target}",
             post(handlers::run_target).delete(handlers::cancel_run),
         )
-        .route("/get/{target}", post(handlers::get_target))
+        .route("/get/{*target}", post(handlers::get_target))
         .route("/status/{run_id}", get(handlers::status))
         .route("/state", get(handlers::state))
         .route("/events/{run_id}", get(handlers::events))
@@ -34,5 +36,8 @@ pub fn router(state: AppState) -> Router {
         .route("/ui", get(ui::redirect_to_ui))
         .route("/ui/", get(ui::index))
         .route("/ui/{*path}", get(ui::asset))
+        // Everything else is a JSON 404, like the errors of the routes above.
+        .fallback(handlers::no_route)
+        .method_not_allowed_fallback(handlers::wrong_method)
         .with_state(state)
 }

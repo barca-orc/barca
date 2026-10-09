@@ -30,7 +30,7 @@ barca serve job.py
 
 ```
 [barca] serving on http://127.0.0.1:8274  (1 file)
-[barca] scheduling 1 asset:
+[barca] scheduling 1 task:
   job.py:refresh — */10 * * * * (next 2026-10-07 14:30:00)
 ```
 
@@ -152,21 +152,29 @@ WorkingDirectory=/srv/pipelines
 WantedBy=multi-user.target
 ```
 
-For a container, see [Deploying](/deploying/#in-a-container).
+`systemctl stop` sends SIGTERM. Barca then cancels the runs in flight, records them as
+`cancelled` and exits 0, normally in less than a second. For a container, see
+[Deploying](/deploying/#in-a-container).
 
 ## Inspecting the schedule
 
-`barca list job.py` shows each schedule and its next fire time, in the machine's local time,
-without a server. While the server is running, `GET /schedule` returns each job's next fire
-time, last fire time, last run id and last status
-([Server API](/reference/server-api/#scheduling)), and the web UI at `/ui/` shows the next
-scheduled run of each node.
+`barca list job.py` shows each schedule and its next fire time without a server. It evaluates
+the cron expression in the local time of the machine it runs on and says so in the column
+header, `NEXT FIRE (LOCAL TIME)`. It does not know what `--timezone` a server was started with:
+for `0 5 * * *` it shows 05:00 local, while a server running with `--timezone utc` fires at
+05:00 UTC.
+
+While the server is running, `GET /schedule` returns each job's next fire time, last fire time,
+last run id and last status ([Server API](/reference/server-api/#scheduling)), and the web UI at
+`/ui/` shows the next scheduled run of each node. Both are computed in the server's
+`--timezone`, so they are the times the job will fire at.
 
 ## Caveats
 
 - **Timezone.** Cron is evaluated in the machine's local time by default. Pass
-  `--timezone utc` or an IANA name (`--timezone America/New_York`). An unknown name is not an
-  error: the server prints `unknown timezone "...", using local time` and carries on.
+  `--timezone utc` or an IANA name (`--timezone America/New_York`). `local` and `utc` are
+  accepted in any letter case; IANA names are spelled as in the tz database. Any other value is
+  a usage error: the server exits 2 and does not start.
 - **Catch-up.** If a tick passed while the server was down, the job fires once at startup
   (`[barca] catch-up run job.py:refresh → ...`). Ticks missed during a long outage are not
   replayed one for one. A job seen for the first time waits for its next tick.

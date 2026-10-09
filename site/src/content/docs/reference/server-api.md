@@ -18,10 +18,11 @@ memory and can be cancelled with `DELETE /run/{run_id}`. Finished runs are writt
 
 ```bash
 barca serve pipeline.py                   # one file, default port 8274
+barca serve pipeline.py --host 0.0.0.0    # every interface (containers, VMs)
 barca serve --port 8400 --timezone utc    # every file in the project
 ```
 
-The flags (`--port`, `--watch`, `--no-schedule`, `--timezone`, `--read-only`, `--env`) are in
+The flags (`--host`, `--port`, `--watch`, `--no-schedule`, `--timezone`, `--read-only`, `--env`) are in
 the [CLI reference](/reference/cli/#serve). On start the server prints its address and the
 schedule on stderr:
 
@@ -30,6 +31,11 @@ schedule on stderr:
 [barca] scheduling 1 asset:
   pipeline.py:daily — 0 5 * * * (next 2026-10-08 05:00:00)
 ```
+
+The default bind address is `127.0.0.1`. `--host` takes an IP address, including `::` for
+IPv6; hostnames are rejected. `0.0.0.0` listens on every IPv4 interface. There is no
+authentication, so anyone who can reach the port can trigger runs. A non-loopback address
+prints a startup warning; use a private network or an authenticating proxy.
 
 `--watch` re-parses the DAG when a source file changes, so `/assets` and `/plan` reflect edits
 without a restart. Files added after the server started are not picked up until a restart, with
@@ -97,10 +103,37 @@ Poll `GET /status/{run_id}` until `status` reaches a terminal state (`complete`,
 `size_bytes`, `elapsed_seconds`), for json results too. The command line prints a json value
 inline; the server does not. Read the file at `path`, relative to the project root.
 
-The target name is checked when the run starts, not when it is requested. A `POST` with an
-unknown target, or with an asset on `/run/{target}` or a task on `/get/{target}`, still returns
-`200` and a `run_id`; the run then has `"status": "failed"`, `"result": null` and the message
-in `error`:
+`POST /run/{target}` and `POST /get/{target}` check the target before they start a run, with
+the check `barca run` and `barca get` make (one function decides for both; a wrong-kind answer
+names the other endpoint where the command line names the other command). The check is made
+against the source as it is now: the server keeps the list of nodes between requests and reads
+the files again when one of them has changed size, modification time or change time (the
+last moves even when an edit puts the old modification time back). When the target cannot run, no
+run is started, there is no `run_id`, and the response is an error with a JSON body
+`{ "error": "..." }`:
+
+| Request | Status | `error` |
+|---|---|---|
+| a name that matches no node | `404` | `Asset 'nope' not found. Available: pipeline.py:orders, pipeline.py:total` |
+| a name that matches several nodes (the same function name in two files) | `409` | ``'orders' matches more than one node: a.py:orders, b.py:orders. Name one by its full id, e.g. `a.py:orders` `` |
+| `POST /get/{target}` naming a task | `400` | `'publish' is a task: use POST /run/publish` |
+| `POST /run/{target}` naming an asset | `400` | `'orders' is an asset: use POST /get/orders` |
+| source that does not parse, or a DAG that cannot be built | `400` | the parse or DAG error |
+
+`POST /run/{target}` accepts a task or a sensor and `POST /get/{target}` an asset or a sensor,
+as on the command line. A target is a function name, a full node id (`pipeline.py:orders`) or a
+path-suffixed id. An id with a directory in it works with its `/` as it is or percent-encoded
+(`sub/pipeline.py:orders`, `sub%2Fpipeline.py:orders`). A trigger with no target
+(`POST /get/`), like any path that is not an endpoint, is a `404` with an `error` body.
+
+The set of files is the one the server started with, as for a run: a pipeline file added
+under a served directory or the project is not read until a restart (its nodes are `404`), and
+after one is deleted every trigger is a `400` naming the missing file. Without the check both
+were a `200` whose run failed with the same message.
+
+A run that was started can still fail on its target if the source changes between the check
+and the run. It then has `"status": "failed"`, `"result": null` and the message in `error`,
+like any other failed run:
 
 ```json
 { "handle": "52344f5c6f20", "status": "failed", "result": null,
@@ -146,7 +179,7 @@ GET /health
 ```
 
 ```json
-{ "status": "ok", "version": "0.18.1", "read_only": false, "scheduler": true }
+{ "status": "ok", "version": "0.19.0", "read_only": false, "scheduler": true }
 ```
 
 `scheduler` is `true` when this server fires `Schedule(...)` nodes: on by default, `false` with
@@ -252,7 +285,10 @@ Each `ScheduleEntry` is:
 }
 ```
 
-`next_fire` and `last_fired` are unix epoch seconds. A job the scheduler has not seen before
+`next_fire` and `last_fired` are unix epoch seconds. `next_fire` is the next match of the cron
+expression in the zone the server evaluates cron in (`--timezone`), so it is when the job will
+fire; `next_run` in `GET /state` is computed the same way. `barca list` cannot know a server's
+zone and always uses the local time of the machine it runs on. A job the scheduler has not seen before
 gets `last_fired` set to the time the server first started with it, so it is not `null` even
 though nothing has run. `last_run` is the most recent scheduled `run_id` and `last_status` its state
 (`pending`/`running`/`complete`/`failed`/`cancelled`, or `null` if none yet).
@@ -286,15 +322,19 @@ separate: they start the `barca` binary for one command and do not talk to a ser
 ## Errors
 
 Errors return a JSON body `{ "error": "..." }`: `404` for an unknown name in
-`GET /assets/{name}` or an unknown run id, `400` for parse and DAG errors, `403` for a run or cancel requested of a
-`--read-only` server, `409` for conflicts (an ambiguous `{name}` match
-in `GET /assets/{name}`, or cancelling a run that already finished), and `500` for execution or
-database failures.
+`GET /assets/{name}`, an unknown target in `POST /run/{target}` or `POST /get/{target}`, or an
+unknown run id; `400` for parse and DAG errors and for a target of the wrong kind for the
+endpoint; `403` for a run or cancel requested of a `--read-only` server; `409` for conflicts (a
+name that matches several nodes in `GET /assets/{name}` or in a trigger, or cancelling a run
+that already finished); `405`, with the allowed methods in `error` and in the `Allow`
+header, for a known path asked with the wrong method; and `500` for execution or database
+failures. The Python client raises
+`BarcaError` carrying the status and the message for each of these.
 
 ## Limits
 
-- No authentication and no TLS. The server listens on `127.0.0.1` only; there is no flag to
-  change the address.
+- No authentication and no TLS. The server listens on `127.0.0.1` by default; `--host` can
+  make it reachable from other machines. Authenticate at a proxy.
 - No shared history: `BARCA_STATE=off` is required with a remote store.
 - Runs in progress are not persisted. After a restart their handles return `404`; finished runs
   remain in `barca history`.
