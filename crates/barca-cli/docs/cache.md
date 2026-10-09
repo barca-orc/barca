@@ -635,6 +635,12 @@ process waits more than 60 seconds for the lock you get an error that names the 
 an `... File is locked by another process` error means something outside barca (a DB browser, a
 backup tool, an older barca) has `.barca/metadata.db` open.
 
+The final run status and its successful/failed step rows commit together. If a required
+database write fails, the command reports an infrastructure error (exit 3), preserves
+earlier committed progress, history and the previous run state (normally unfinished).
+It does not record a new terminal outcome for a partially written ledger. Captured output is still
+written separately after the outcome transaction.
+
 ## While a run is going, and after one is killed
 
 A run records each step in `.barca/metadata.db` as the step finishes, not only when the run

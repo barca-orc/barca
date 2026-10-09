@@ -303,6 +303,10 @@ When more runs exist than are shown, the JSON has `"truncated": true`, the `tota
 the table prints the same hint as one line on stderr. See [Bounded output](#bounded-output). Each
 run's `files` is an array of the `.py` files it was given.
 
+Terminal status and successful/failed step rows commit together. Required database-write
+failures report an infrastructure error and preserve previous progress/history and
+run state, which normally remains unfinished. Captured output is written separately after that transaction.
+
 A run's `status` is `running`, `success`, `failed`, `cancelled` or `interrupted`. A run records
 each step as it finishes, so a `running` run already counts them in `steps_executed`, and
 `barca status` from another terminal shows them as `cached`. A run whose process was killed is

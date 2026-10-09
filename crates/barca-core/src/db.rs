@@ -1617,7 +1617,7 @@ pub async fn finish_run(
 ) -> Result<(), BarcaError> {
     let _g = db_guard().await;
     let (_db, conn) = open_conn(db_path).await?;
-    conn.execute(
+    let updated = conn.execute(
         "UPDATE runs SET status = ?1, steps_executed = ?2, steps_cached = ?3, elapsed_seconds = ?4, finished_at = datetime('now') WHERE run_id = ?5",
         [
             status.to_string(),
@@ -1628,7 +1628,10 @@ pub async fn finish_run(
         ],
     )
     .await
-    .ok();
+    .map_err(|e| BarcaError::Db(format!("failed to finish run: {e}")))?;
+    if updated != 1 {
+        return Err(BarcaError::Db("cannot finish a missing run".to_string()));
+    }
     crate::run_owner::release(db_path, run_id);
     Ok(())
 }

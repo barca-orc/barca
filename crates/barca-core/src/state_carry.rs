@@ -239,23 +239,30 @@ fn column_index(columns: &[&str], name: &str) -> usize {
 /// The steps of `run_id` that have a row in this database. A step has one outcome per run, so
 /// this is what tells a writer (the end-of-run ledger, its replay after a push conflict, and
 /// a pull carrying local rows over) which of a run's steps are already there.
-pub(crate) async fn steps_of_run(conn: &Connection, run_id: &str) -> HashSet<String> {
+pub(crate) async fn steps_of_run(
+    conn: &Connection,
+    run_id: &str,
+) -> Result<HashSet<String>, BarcaError> {
     let mut out = HashSet::new();
-    let Ok(mut rows) = conn
+    let mut rows = conn
         .query(
             "SELECT node_id FROM materializations WHERE run_id = ?1",
             [run_id.to_string()],
         )
         .await
-    else {
-        return out;
-    };
-    while let Ok(Some(row)) = rows.next().await {
-        if let Ok(node_id) = row.get::<String>(0) {
-            out.insert(node_id);
-        }
+        .map_err(|e| BarcaError::Db(format!("failed to read recorded steps: {e}")))?;
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to read recorded steps: {e}")))?
+    {
+        out.insert(
+            row.get::<String>(0).map_err(|e| {
+                BarcaError::Db(format!("failed to read recorded step identity: {e}"))
+            })?,
+        );
     }
-    out
+    Ok(out)
 }
 
 /// True when a recorded artifact location can still be read from this machine: an object-store
@@ -496,7 +503,7 @@ async fn copy_runs(
         }
 
         // Its steps: the ones the pulled database has no row for.
-        let mut there = steps_of_run(pulled, run_id).await;
+        let mut there = steps_of_run(pulled, run_id).await?;
         for row in rows_of(local, &step_select, id(), "reading local steps").await? {
             let Some(node_id) = text(&row[step_node]).map(str::to_string) else {
                 continue;

@@ -112,6 +112,7 @@ Errors: in JSON mode the last stderr line is one JSON object {error, code, kind,
 plus node, traceback and artifact_dir when a step failed. Exit 1 step failed, 2 usage error,
 3 barca/infra failure, 130 cancelled. A failed step still prints a stdout result line with
 status \"failed\" and failed_node.
+A required history-write failure exits 3 and preserves previously committed history.
 More: barca docs cache, barca docs types, barca docs agents";
 
 const RUN_HELP: &str = "\

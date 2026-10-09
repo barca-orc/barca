@@ -947,6 +947,10 @@ progress or interrupted). `status` is `running`, `success`, `failed`, `cancelled
 `interrupted` is a run whose process died without recording an outcome (`barca docs cache`,
 "While a run is going, and after one is killed").
 
+Terminal status/counts and successful/failed step rows commit in one transaction. A required
+write failure reports the existing infrastructure error (exit 3) and preserves previous
+history/progress and run state; captured output is written separately afterward.
+
 ### stats
 
 <!-- BEGIN GENERATED schema stats -->
