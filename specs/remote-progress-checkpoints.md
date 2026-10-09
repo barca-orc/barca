@@ -171,3 +171,20 @@ local rows and removes its pull stage; outages retain dirty committed progress,
 retry at tick cadence without new rows, then make one successful upload and skip
 clean ticks. All19 persistence regressions pass. These supplement the real
 sixty-second recovery/traffic test; they do not replace provider acceptance.
+
+## Integrated pre-merge validation
+
+The repaired minute slice and its explicit receipt/transactional prerequisites
+pass all811 workspace Rust tests and strict Clippy, then133 actual Python/CLI
+checks (state helper, pulls, schema/repair/history preservation, incremental
+receipts, overrides and CLI contracts). The real125-second checkpoint test
+passes again with admission/copy/token/redaction fixes integrated: one69,632-byte
+snapshot, no clean second-tick write, and cross-root reuse after SIGKILL. Scoped
+pinned Ruff, formatting and contract/site parity pass. A second independent
+read-only review found no remaining concrete blocker.
+
+This evidence is for the prepared stack, not yet current-main PR acceptance.
+After #359/#360 merge, strip those local prerequisites and rebase the minute
+slice onto their actual merge commits, rerun affected integration checks and
+require both repository CI jobs before merging/publishing. No unmerged minute
+code is included in released v0.21.0.
