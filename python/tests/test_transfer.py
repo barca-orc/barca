@@ -591,6 +591,56 @@ class TestStaging:
             raise RuntimeError("the transfer failed")
         assert list(tmp_path.iterdir()) == []
 
+    def test_sigterm_during_finalizer_removes_partial_stage_only(self, tmp_path):
+        destination = tmp_path / "artifact.json"
+        sentinel = tmp_path / ".unrelated.tmp"
+        destination.write_bytes(b"previous artifact")
+        sentinel.write_bytes(b"another owner")
+        child = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                """import os, signal, sys
+from pathlib import Path
+from barca import _storage, _transfer
+signal.signal(signal.SIGTERM, _transfer._stop)
+real_unlink = Path.unlink
+stage = None
+def interrupt_unlink(path, *args, **kwargs):
+    if path == stage:
+        assert path.read_bytes() == b'partial artifact'
+        os.kill(os.getpid(), signal.SIGTERM)
+    return real_unlink(path, *args, **kwargs)
+Path.unlink = interrupt_unlink
+with _storage.staged_beside(Path(sys.argv[1])) as temporary:
+    stage = temporary
+    temporary.write_bytes(b'partial artifact')
+""",
+                str(destination),
+            ],
+            capture_output=True,
+            timeout=30,
+        )
+        assert child.returncode == 128 + signal.SIGTERM, child.stderr.decode()
+        assert destination.read_bytes() == b"previous artifact"
+        assert sentinel.read_bytes() == b"another owner"
+        assert sorted(p.name for p in tmp_path.iterdir()) == [sentinel.name, destination.name]
+
+    def test_failed_finalizer_keeps_stage_registered_for_shutdown(self, tmp_path, monkeypatch):
+        real_unlink = Path.unlink
+
+        def denied(path, *args, **kwargs):
+            raise PermissionError("temporary removal refused")
+
+        monkeypatch.setattr(Path, "unlink", denied)
+        with pytest.raises(PermissionError), _storage.staged_beside(tmp_path / "a.json") as tmp:
+            tmp.write_bytes(b"partial")
+        assert str(tmp) in _storage._staged
+        assert tmp.exists()
+        monkeypatch.setattr(Path, "unlink", real_unlink)
+        _storage.discard_staged()
+        assert not tmp.exists()
+
     def test_leaving_removes_what_is_staged_and_stages_nothing_more(self, tmp_path):
         with _storage.staged_beside(tmp_path / "h.json") as tmp:
             assert tmp.exists()

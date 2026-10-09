@@ -203,8 +203,9 @@ def staged_beside(dest: Path):
         yield Path(tmp)
     finally:
         with _staged_lock:
+            # Keep ownership visible to reentrant signal cleanup until removal succeeds.
+            Path(tmp).unlink(missing_ok=True)
             _staged.discard(tmp)
-        Path(tmp).unlink(missing_ok=True)
 
 
 def discard_staged() -> None:
