@@ -217,3 +217,32 @@ worker/public-API recovery with unchanged artifact SHA and setup once per PID.
 The rebuilt current-base package also passed all 337 combined actual
 import/artifact/worker/API/bytecode/parallel/input/helper/DuckDB tests, including
 all 44 focused import cases and the repaired historical-workflow regressions.
+
+### Partial-loader integration after #361 (main `1642da9`)
+
+Actual rebuilt combined-base server regressions show that the first global
+import-validation error aborts server startup (exit 3), hiding unrelated healthy
+assets and scheduled work. Both conflicting project sites and project-vs-stdlib
+sites reproduce this. Fix this within the shared existing loader/validator:
+
+1. Return private source-scoped import diagnostics from the existing validator,
+   retaining ordinary resolver, source cache, candidate priority and diagnostic
+   text. Strict loading still returns the first diagnostic as Usage (exit 2)
+   before user imports, expression expansion, workers or run metadata.
+2. For conflicting project bindings, mark both project importing sites. When
+   one site is external/unavailable, mark only the incompatible project site;
+   preserve the valid stdlib/installed import site. Canonical identity conflicts
+   and explicit off-path references mark their actual importing source. Keep
+   literal source-wide conservative validation; do not introduce a second
+   parser, loader, graph or public API.
+3. Partial loading converts diagnostics to existing LoadError entries, excludes
+   affected definitions, and passes their source files through existing failed
+   source/candidate-priority isolation so dependents cannot silently redirect.
+   Healthy unrelated definitions keep scheduling, inspection and execution.
+4. Prove qualified watch repair restores both sites and clears diagnostics,
+   real healthy scheduling beside conflicts, project-vs-external preservation,
+   failed higher-priority candidates, and all original load-isolation/scheduler
+   cases. Rerun strict and legacy/setup/import regressions on the merged base.
+
+Both new actual server regressions failed the uncorrected combined base at
+startup. This integration is approved and preserves the accepted import policy.
