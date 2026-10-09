@@ -189,3 +189,27 @@ _storage._fs_cache['memory']=Counted()
     assert downloaded == set(sources) - removed
     assert len(downloaded) == 3 and downloaded.isdisjoint(removed)
     assert records(tmp_path) == before
+
+
+def test_declared_view_name_keeps_current_membership_and_canonical_history(tmp_path):
+    file = "dir[old]/p[old].py"
+
+    def write(keys):
+        source = pipeline(tmp_path, keys, file=file)
+        source.write_text(source.read_text().replace("@asset(", "@asset(name='current_view', "))
+
+    write(["a", "b", "c"])
+    assert ok(cli(tmp_path, "get", "current_view"))["steps_executed"] == 3
+    before = records(tmp_path)
+    assert {row[1] for row in before} == {f"current_view[k={key}]" for key in ("a", "b", "c")}
+    removed = [row for row in before if row[1] == "current_view[k=b]"]
+    write(["a", "c", "new"])
+    (tmp_path / "imported").unlink()
+    result = ok(cli(tmp_path, "sql", "select partition,k from current_view order by k"))
+    assert result["rows"] == [{"partition": f"k={key}", "k": key} for key in ("a", "c")]
+    assert records(tmp_path) == before
+    assert not (tmp_path / "imported").exists()
+    assert ok(cli(tmp_path, "get", "current_view"))["steps_executed"] == 1
+    result = ok(cli(tmp_path, "sql", "select partition,k from current_view order by k"))
+    assert result["rows"] == [{"partition": f"k={key}", "k": key} for key in ("a", "c", "new")]
+    assert [row for row in records(tmp_path) if row[1] == "current_view[k=b]"] == removed

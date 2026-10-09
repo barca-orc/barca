@@ -110,3 +110,13 @@ public fields. Combine current-key documentation with declared SQL view names.
 Verify original load-isolation inspection/scheduling, existing naming cases and
 an actual declared-name partition view after removing/adding keys, preserving
 canonical row IDs and removed history. Publish only after readiness #377 merges.
+
+The shared-body rebase onto naming main `f4c4ab6` preserves the public validated
+status entrypoint and the generated name descriptions without a generated-file
+diff. Root independently reviewed the resolved status/SQL wrapper delta and
+found no blocker. The new declared-name test uses the existing explicit name
+as the canonical identity (`current_view[k=...]`), not file/function IDs;
+unnamed bracketed-path identities remain covered separately. All 28 current
+membership/naming/load-isolation cases pass, and the existing SQL cases pass.
+The full 832-test Rust workspace and strict Clippy passed before the readiness
+prerequisite merge. Final publication/reverification follows #377 on latest main.
