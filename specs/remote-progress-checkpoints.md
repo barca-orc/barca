@@ -143,3 +143,17 @@ workspace Clippy pass after this fault-path correction.
 The publication slice remains unfinished pending conflict/continued-local-write,
 lost-ack, outage/cancellation/resource-bound tests and current-main integration.
 It is not included in release0.21.0 or claimed to close #214.
+
+## Running progress carry correction
+
+A conflict may pull a checkpoint that already holds this running run. Carry
+merges missing run/node rows, then raises its executed counter to the distinct
+durable row union when necessary. It never copies the local running status over
+an interruption notice or changes owner, cached count or finished timestamp.
+Settled outcome replay retains its existing terminal-ledger semantics.
+
+A regression proves the old code carries three durable rows but leaves count one.
+The correction reports three, preserves seven cached steps and the active owner,
+keeps finished_at unset, leaves an unrelated completed run unchanged, and is
+idempotent on repeated carry. All13 carry tests pass, including cancellation
+corrections, interrupted owners, missing artifacts and indexed-history behavior.
