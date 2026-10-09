@@ -829,6 +829,12 @@ With remote storage, the artifacts of the views a query names are downloaded int
 the JSON is the same. A remote artifact that cannot be downloaded exits 3 (`infra`); a missing
 storage driver exits 2 (`usage`).
 
+Partitioned views include only current identities from full cache-aware prediction,
+including cached keys across worker chunks. Removed-key history is preserved. A
+current key may show its stale last successful result; an unknown derived key set
+requires its source to materialize first, and zero current keys have no result
+view. Excluded historical remote artifacts are not fetched for that view.
+
 <!-- BEGIN GENERATED schema sql -->
 | Key | Type | Present |
 |---|---|---|

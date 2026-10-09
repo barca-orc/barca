@@ -135,7 +135,8 @@ summary   asset  stale   changed       success 2026-10-07 18:14:53 0.00s  dict (
 
 `barca sql` makes every node with a json or parquet result a view named after its
 declared `name=`, or its function when unset, so you can inspect data without writing a step
-or a script:
+or a script. Partitioned views include current known keys; removed-key results
+remain in history:
 
 ```
 $ barca sql "select count(*) as n, sum(x) as total from raw_data"

@@ -49,6 +49,8 @@ full id, quoted, when two nodes share a name; stderr says so). An asset whose co
 is still queryable at its last result, with a note on stderr. Only parquet and json results can be
 queried; pickles cannot. Runs in an in-memory DuckDB over the artifact files: your code is never
 imported and nothing is recorded. Install SQL support: uv add 'barca[sql]'.
+Partitioned views include current known keys only; removed keys stay in history. Unknown derived
+keys require their source to materialize first. Zero current keys have no result view.
 With remote storage, the artifacts of the views a query names are downloaded into
 .barca/sql-cache/ (stderr says so) and reused while the objects are unchanged; nothing else is
 written.

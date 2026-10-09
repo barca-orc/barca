@@ -62,3 +62,51 @@ refresh, matching established SQL behavior. Unknown derived membership and empty
 membership have no result view. Existing expression-partition evaluation and
 remote-state/history side effects are unchanged; no new imports or data movement
 are introduced by membership filtering.
+
+## Verification evidence
+
+Implementation uses a private owned `ExpandedMembership` alias and consuming
+`DecideState` accessor. Private explanation/status wrappers return that existing
+map alongside unchanged public results; SQL performs an exact-ID intersection.
+Known-base prefix stripping fixes partition labels in bracketed source paths.
+
+All 11 new actual cases pass: remove/add/stale rows at pools 1/2/default and both
+plain/bracketed paths, derived cached-known versus changed-unknown sources, zero
+current keys, and excluded remote downloads. Four distinct cases fail against the
+previous installed CLI before this fix (historical membership, unknown derived,
+zero keys, and remote historical fetching). The remote case instruments the real
+SQL child using process-local fsspec memory objects: exactly three current objects
+download and neither removed URI does; all materialization rows stay unchanged.
+This proves the selection/download boundary, not a cloud provider acceptance test.
+
+On the released base plus explicit #365 prerequisite, all 803 Rust workspace tests,
+strict all-target Clippy, and 146 SQL/status/prediction/pool/remote-inspection tests
+pass. Eight existing cloud emulator cases skip because no emulator is running;
+the new actual remote-helper regression does not skip. All 64 real manual/CLI
+contract examples pass. Website builds 51 pages; help snapshot changes are only
+the two lines describing current/unknown/zero partition membership. Pinned Ruff,
+formatting, version sync and lock checks pass; type checking reports no errors
+(with existing dependency/environment warnings). No JSON/TS fields or history
+writes are introduced. Integration must remove the local prerequisite copies and
+rerun relevant checks after #365 lands on current main.
+
+After #365 merged at `e110f80`, the branch was rebased onto authoritative main
+and all local prerequisite copies dropped. Only this membership plan and change
+remain. The rebuilt package passed 123 actual SQL/membership/API/manual/contract
+tests; the full Rust workspace passed 812 tests and strict all-target Clippy.
+Formatting, pinned Ruff, lockfile and whitespace checks also passed. The prior
+remote-helper proof remains part of the 11 membership regressions and ran again.
+
+## Naming and partial-loader integration plan
+
+After main #361 and #373, status_from_dag is the existing public entrypoint for
+serve's validated source snapshot. Preserve its signature and StatusResult return,
+along with declared StatusNode names and generated descriptions. Move the shared
+status/prediction body into a private status_from_dag_with_membership helper;
+public status_from_dag discards the private membership, while SQL's private
+status_with_membership loads one DAG then delegates to the same helper. Do not
+reload a graph provided by serve, reinterpret keys, duplicate prediction or add
+public fields. Combine current-key documentation with declared SQL view names.
+Verify original load-isolation inspection/scheduling, existing naming cases and
+an actual declared-name partition view after removing/adding keys, preserving
+canonical row IDs and removed history. Publish only after readiness #377 merges.
