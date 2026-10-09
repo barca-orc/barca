@@ -282,6 +282,50 @@ mod source_dir_tests {
             && e.affected_nodes == vec![format!("{valid}:dependent")]));
     }
 
+    #[test]
+    fn partial_reference_guards_preserve_candidate_priority() {
+        use crate::{dag::Dag, parse::extract_nodes};
+        // Imports prefer siblings; canonical refs prefer their literal path.
+        for imported in [true, false] {
+            for earlier_healthy in [true, false] {
+                let (earlier, later) = if imported {
+                    ("sub/shared.py", "shared.py")
+                } else {
+                    ("shared.py", "sub/shared.py")
+                };
+                let (healthy, failed) = if earlier_healthy {
+                    (earlier, later)
+                } else {
+                    (later, earlier)
+                };
+                let mut nodes = extract_nodes(
+                    "from barca import asset\n@asset()\ndef value(): return 7\n",
+                    healthy,
+                )
+                .unwrap();
+                let declaration = if imported {
+                    "from shared import value\n@asset(inputs={'x': value})"
+                } else {
+                    "@asset(inputs={'x': asset_ref('shared.py:value')})"
+                };
+                nodes.extend(extract_nodes(&format!("from barca import asset, asset_ref\n{declaration}\ndef consumer(x): return x+1\n"), "sub/p.py").unwrap());
+                let (dag, errors) = Dag::isolate(&nodes, &[failed.to_string()]);
+                assert_eq!(
+                    dag.get_node("sub/p.py:consumer").is_some(),
+                    earlier_healthy,
+                    "imported={imported}, earlier_healthy={earlier_healthy}: {errors:?}"
+                );
+                assert_eq!(
+                    dag.get_node("sub/p.py:consumer")
+                        .map(|n| n.resolved_inputs["x"].as_str()),
+                    earlier_healthy
+                        .then_some(format!("{healthy}:value"))
+                        .as_deref()
+                );
+            }
+        }
+    }
+
     #[tokio::test]
     async fn partial_loading_removes_cycle_and_dependents_but_keeps_neighbour() {
         let dir = tempfile::tempdir().unwrap();

@@ -108,3 +108,26 @@ After rebasing onto c914711 (P06), all 791 Rust workspace tests and strict
 workspace Clippy pass. Actual server/client/CLI-contract integration passes 68
 checks. No source or dependency policy changed in the rebase. UI build/lint and
 Playwright remain validated for the same UI patch.
+
+### Independent review: preserve candidate priority
+
+An actual serve reproduction with broken `shared.py`, healthy
+`sub/shared.py:value`, and `sub/p.py` importing `from shared import value`
+incorrectly excluded the consumer. The unloaded-source guard checked every
+candidate, although the ordinary resolver selects the healthy sibling first.
+Evidence: `/tmp/barca-p11-shadow-review-zzrfuh2o` (inspection only, no imports).
+
+Bounded repair: visit candidate files in the resolver's existing priority order.
+An earlier healthy matching definition ends the check; an earlier failed source
+refuses the reference before it can redirect to a later matching definition.
+Apply the same literal-then-relative order to canonical references, preserving
+exact canonical-id priority. Add both-direction regression cases for imported
+and canonical references, proving healthy admission and genuine redirection
+refusal without starting Python. Run targeted core and serve checks. This does
+not change import policy or add configuration.
+
+Repair validation: 792 Rust workspace tests, all 12 actual serve-isolation CLI
+cases, strict workspace Clippy, Rust formatting, and Python Ruff pass. The
+new four-direction core test checks the selected upstream identity as well as
+quarantine; serve cases place a raising top-level statement in the healthy
+module to prove inspection does not import it.

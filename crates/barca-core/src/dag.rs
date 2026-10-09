@@ -491,28 +491,38 @@ impl Dag {
                     _ => None,
                 }));
             for (param, upstream, required) in inputs {
-                let failed = match upstream {
-                    crate::model::NodeRef::Canonical(value) => {
-                        value.rsplit_once(':').and_then(|(file, _)| {
-                            let relative = file_dir(&node.source_file).join(file);
-                            failed_files.iter().find(|failed| {
-                                norm_path(std::path::Path::new(failed))
-                                    == norm_path(std::path::Path::new(file))
-                                    || norm_path(std::path::Path::new(failed))
-                                        == norm_path(&relative)
-                            })
+                // Follow the resolver's priority: a failed lower-priority source
+                // cannot hide an earlier healthy binding, and an earlier failed
+                // source cannot redirect to a later healthy same-named node.
+                let candidates = match upstream {
+                    crate::model::NodeRef::Canonical(value) if !refs.by_id.contains_key(value) => {
+                        value.rsplit_once(':').map(|(file, name)| {
+                            (
+                                vec![
+                                    std::path::PathBuf::from(file),
+                                    file_dir(&node.source_file).join(file),
+                                ],
+                                name,
+                            )
                         })
                     }
-                    crate::model::NodeRef::Imported { module, .. } => {
-                        let candidates = Resolver::module_files(&node.source_file, module);
-                        failed_files.iter().find(|failed| {
-                            candidates.iter().any(|candidate| {
-                                norm_path(candidate) == norm_path(std::path::Path::new(failed))
-                            })
-                        })
-                    }
-                    crate::model::NodeRef::FunctionName(_) => None,
+                    crate::model::NodeRef::Imported { module, name } => Some((
+                        Resolver::module_files(&node.source_file, module),
+                        name.as_str(),
+                    )),
+                    _ => None,
                 };
+                let mut failed = None;
+                if let Some((candidates, name)) = candidates {
+                    for candidate in candidates {
+                        failed = failed_files.iter().find(|file| {
+                            norm_path(&candidate) == norm_path(std::path::Path::new(file))
+                        });
+                        if failed.is_some() || refs.in_file(&candidate, name).is_some() {
+                            break;
+                        }
+                    }
+                }
                 if let Some(file) = failed {
                     failures.push((
                         id.clone(),

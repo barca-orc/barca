@@ -184,3 +184,27 @@ def test_watched_inspection_reads_do_not_generate_reload_work(project):
         assert server.log.read_text().count("schedule reloaded:") == count
     finally:
         server.stop()
+
+
+@pytest.mark.parametrize("sibling_healthy", [True, False])
+def test_imported_reference_preserves_sibling_priority(project, sibling_healthy):
+    sub = project / "sub"
+    sub.mkdir()
+    (project / "pipeline.py").write_text(
+        "from barca import asset\n@asset()\ndef safe(): return 1\n"
+    )
+    (project / "broken.py").unlink()
+    healthy = "raise RuntimeError('inspection imported user code')\nfrom barca import asset\n@asset()\ndef value(): return 7\n"
+    (sub / "shared.py").write_text(healthy if sibling_healthy else BROKEN)
+    (project / "shared.py").write_text(BROKEN if sibling_healthy else healthy)
+    (sub / "p.py").write_text(
+        "from barca import asset\nfrom shared import value\n@asset(inputs={'x': value})\ndef consumer(x): return x+1\n"
+    )
+    server = Server(project, ".", "--no-schedule")
+    try:
+        assert ("sub/p.py:consumer" in loaded(server)) == sibling_healthy
+        affected = {n for e in errors(server) for n in e["affected_nodes"]}
+        assert ("sub/p.py:consumer" in affected) != sibling_healthy
+        assert "inspection imported user code" not in server.log.read_text()
+    finally:
+        server.stop()
