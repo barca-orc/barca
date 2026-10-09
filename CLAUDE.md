@@ -82,7 +82,9 @@ benchmarks/chain_100/bench.sh 5   # (coming soon)
 ## Design principles
 
 1. **Invisible** — the orchestrator should add zero perceptible overhead
-2. **Static analysis** — never import user code in the planning phase
+2. **Static analysis** — extract source without imports. The existing resolver imports user
+   modules to evaluate nonliteral partition key expressions; literal key lists need no import.
+   Add no other planning imports.
 3. **Rust for planning, Python for execution** — each does what it's best at
 4. **Single install** — `uv add barca` gives users everything
 5. **Turso for persistence** — Rust owns the DB; Python has no DB access

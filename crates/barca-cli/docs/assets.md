@@ -234,7 +234,9 @@ not warn about this; Python simply uses the later definition.
 
 ## Static analysis
 
-Planning never imports your code. The decorators, `inputs=` and `freshness=` must be written
+Static extraction reads source without importing user code. Literal partition key lists
+need no resolver import; a nonliteral `partitions(<expression>)` imports the pipeline
+module to evaluate its keys. The decorators, `inputs=` and `freshness=` must be written
 literally enough for barca to read them from the source. Dynamic decorator construction
 (building `inputs` in a loop, calling a decorator through a variable) is not visible to the
 planner. An argument barca does not define, and `**options` in a decorator call, are errors

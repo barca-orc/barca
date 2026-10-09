@@ -4,8 +4,9 @@ description: Arguments and behavior of @asset, @sensor, @task, @sink and @unsafe
 ---
 
 Everything here is imported from `barca`. The decorators return the function unchanged: the
-`barca` binary reads their arguments from the source text and never imports your module to plan
-a run. Arguments must therefore be written literally (a dict literal for `inputs=`, a list of
+`barca` binary extracts their arguments from source without importing your module. Literal
+partition key lists need no resolver import; a nonliteral `partitions(<expression>)` imports
+the pipeline module to evaluate its keys. Arguments must therefore be written literally (a dict literal for `inputs=`, a list of
 string literals for `env=`); a decorator built in a loop or installed through a runtime assignment is not
 seen. Qualified names and imported aliases are supported as described below. The signatures below are those of `python/barca/__init__.py`; unless a version is named,
 the behavior was checked by running 0.18.0.
