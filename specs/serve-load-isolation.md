@@ -103,3 +103,8 @@ for repair/removal, verify schedule registry restoration/removal and show repeat
 inspection reads do not generate reload work. Source-order preservation retains the
 existing ambiguity diagnostic order. Current-main rebase verification follows before
 publishing the PR; no release is claimed by this checkpoint.
+
+After rebasing onto c914711 (P06), all 791 Rust workspace tests and strict
+workspace Clippy pass. Actual server/client/CLI-contract integration passes 68
+checks. No source or dependency policy changed in the rebase. UI build/lint and
+Playwright remain validated for the same UI patch.
