@@ -261,7 +261,7 @@ def _error(msg: dict, exc: BaseException, attempts: int) -> dict:
     return {
         "type": "error",
         "id": msg["id"],
-        "message": f"{type(exc).__name__}: {exc}",
+        "message": _storage.safe_error(f"{type(exc).__name__}: {exc}"),
         "attempts": attempts,
         "missing": _is_missing(exc),
     }

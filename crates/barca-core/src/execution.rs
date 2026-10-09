@@ -457,7 +457,27 @@ async fn start_workers(
     // artifact dir; the transfer helper uploads finished artifacts in the
     // background and fetches cache hits recorded by other machines.
     let store: Option<StoreSync> = if let Some(start) = started.transfer_start.take() {
-        Some(StoreSync::new(start.connect().await?, cancel.clone()))
+        let mut client = start.connect().await?;
+        let limit = std::time::Duration::from_secs(cfg.transfer_timeout_secs.min(10));
+        let location = crate::transfer::diagnostic_uri(&cfg.artifact_root);
+        crate::errln!(
+            "[barca] checking artifact store {location} (timeout {}s)",
+            limit.as_secs()
+        );
+        let checked = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => Err(BarcaError::Cancelled),
+            checked = tokio::time::timeout(limit, client.preflight()) => match checked {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(why)) => Err(BarcaError::Other(format!("artifact store preflight at {location} failed: {why}"))),
+                Err(_) => Err(BarcaError::Other(format!("artifact store preflight at {location} timed out after {}s", limit.as_secs()))),
+            },
+        };
+        if let Err(error) = checked {
+            client.abort().await;
+            return Err(error);
+        }
+        Some(StoreSync::new(client, cancel.clone()))
     } else {
         None
     };
@@ -523,7 +543,35 @@ async fn open_run<'a, 'r>(
         &started.trace,
     )
     .await?;
-    let (store, pool, recorder) = start_workers(request, prepared, &mut started, &pb).await?;
+    let (store, pool, recorder) = match start_workers(request, prepared, &mut started, &pb).await {
+        Ok(workers) => workers,
+        Err(error) => {
+            if let Some(bar) = &pb {
+                bar.finish_and_clear();
+            }
+            let status = if matches!(error, BarcaError::Cancelled) {
+                "cancelled"
+            } else {
+                "failed"
+            };
+            db::insert_logs(
+                &request.cfg.db_path,
+                &started.run_id,
+                &[(String::new(), format!("[barca] {error}"))],
+            )
+            .await?;
+            db::finish_run(
+                &request.cfg.db_path,
+                &started.run_id,
+                status,
+                0,
+                0,
+                started.trace.start.elapsed().as_secs_f64(),
+            )
+            .await?;
+            return Err(error);
+        }
+    };
     let state = RunState {
         total_steps: prepared.exec_plan.total_steps,
         total_estimated,
@@ -2176,6 +2224,7 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
     let mut was_cancelled = drain_store(
         DrainStore {
             store,
+            timeout_secs: cfg.transfer_timeout_secs,
             cancel,
             all_outputs,
             store_paths,
@@ -2337,6 +2386,7 @@ async fn stop_workers(ctx: StopProgress<'_>, trace: &impl Fn(&str)) {
     }
 }
 struct DrainStore<'a> {
+    timeout_secs: u64,
     store: &'a mut Option<StoreSync>,
     cancel: &'a CancellationToken,
     all_outputs: &'a mut HashMap<String, OutputRef>,
@@ -2347,6 +2397,7 @@ struct DrainStore<'a> {
 }
 async fn drain_store(ctx: DrainStore<'_>, trace: &impl Fn(&str)) -> bool {
     let DrainStore {
+        timeout_secs,
         store,
         cancel,
         all_outputs,
@@ -2368,10 +2419,28 @@ async fn drain_store(ctx: DrainStore<'_>, trace: &impl Fn(&str)) -> bool {
         Some(s) if !was_cancelled => {
             let queued = s.client.pending_uploads();
             let t_drain = Instant::now();
-            let report = tokio::select! {
-                biased;
-                _ = cancel.cancelled() => None,
-                report = s.client.drain() => Some(report),
+            let location = crate::transfer::diagnostic_uri(s.layout.store_root());
+            if queued > 0 {
+                crate::errln!(
+                    "[barca] uploading {queued} artifacts to {location} (timeout {timeout_secs}s per attempt); waiting for confirmation"
+                );
+            }
+            let drain = s.client.drain();
+            tokio::pin!(drain);
+            let mut progress = tokio::time::interval_at(
+                tokio::time::Instant::now() + std::time::Duration::from_secs(10),
+                std::time::Duration::from_secs(10),
+            );
+            let report = loop {
+                tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => break None,
+                    report = &mut drain => break Some(report),
+                    _ = progress.tick(), if queued > 0 => crate::errln!(
+                        "[barca] still waiting for artifact uploads to {location} ({:.0}s)",
+                        t_drain.elapsed().as_secs_f64()
+                    ),
+                }
             };
             trace_point!("store_sync_drained ({queued} uploads)");
             was_cancelled = report.is_none();
@@ -2419,12 +2488,22 @@ async fn drain_store(ctx: DrainStore<'_>, trace: &impl Fn(&str)) -> bool {
                     node_id: f.key.clone(),
                     error: dispatch::StepError {
                         error_type: "UploadError".to_string(),
-                        message: format!("upload to {} failed: {}", f.store, f.message),
+                        message: format!(
+                            "upload to {} failed: {}",
+                            crate::transfer::diagnostic_uri(&f.store),
+                            f.message
+                        ),
                         traceback: String::new(),
                         attempts: f.attempts,
                     },
                 });
-                detail.push(format!("  {} ({}): {}", f.key, f.store, f.message));
+                detail.push(format!(
+                    "  {} ({}; {} attempt(s)): {}",
+                    f.key,
+                    crate::transfer::diagnostic_uri(&f.store),
+                    f.attempts,
+                    f.message
+                ));
             }
             let messages: Vec<&str> = report.failures.iter().map(|f| f.message.as_str()).collect();
             transfer_error.get_or_insert(format!(

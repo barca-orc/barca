@@ -21,6 +21,7 @@ import datetime
 import errno
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -86,6 +87,47 @@ def storage_options(protocol: str) -> dict:
     if not isinstance(opts, dict):
         raise ValueError(f"BARCA_STORAGE_OPTIONS[{protocol!r}] must be a JSON object")
     return opts
+
+
+def safe_error(message: str) -> str:
+    """Remove URI passwords/signed queries and configured credentials from diagnostics."""
+
+    def uri(match):
+        value = match.group().split("?", 1)[0].split("#", 1)[0]
+        return re.sub(r"(://)[^/@\s]*:[^/@\s]*@", r"\1<redacted>@", value)
+
+    message = re.sub(r"[a-zA-Z][a-zA-Z0-9+.-]*://[^\s'\"()]+", uri, message)
+    try:
+        options = json.loads(os.environ.get("BARCA_STORAGE_OPTIONS", "{}"))
+    except ValueError:
+        options = {}
+
+    def redact(values):
+        nonlocal message
+        if not isinstance(values, dict):
+            return
+        for key, value in values.items():
+            if isinstance(value, dict):
+                redact(value)
+            elif (
+                isinstance(value, str)
+                and value
+                and any(
+                    word in key.lower()
+                    for word in (
+                        "secret",
+                        "password",
+                        "token",
+                        "key",
+                        "credential",
+                        "connection_string",
+                    )
+                )
+            ):
+                message = message.replace(value, "<redacted>")
+
+    redact(options)
+    return message
 
 
 def get_fs(path: "str | Path"):
