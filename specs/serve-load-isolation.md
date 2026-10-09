@@ -187,3 +187,11 @@ checks without skips, strict workspace/all-target Clippy and formatting. The UI
 passed 141 tests, typecheck/lint/build and a fresh isolated-port load diagnostics
 browser test; generated TypeScript bindings showed no drift after the documented
 trailing-whitespace normalization. The unrelated preview remained running.
+
+Latest partition-guard integration rebased onto e110f80 with every reviewed
+commit unchanged. All 819 workspace Rust tests and 108 actual combined CLI
+checks passed without skips, including partition-result completeness guards,
+partial loading, scheduler startup/watch repair, receipt recording and storage
+overrides. Strict workspace/all-target Clippy, Rust formatting, pinned Ruff and
+whitespace checks passed. The previously verified UI/type/browser patch is
+unchanged by this private core integration.
