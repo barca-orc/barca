@@ -40,3 +40,12 @@ commits exactly. The same 12 Rust state-sync tests and 87 actual Python checks
 (state/pull/path/validation plus named inspection) passed without skips on a fresh
 private binary. Strict workspace/all-target Clippy, fmt, pinned Ruff and whitespace
 checks passed. URI sanitization and minute publication mechanics remain intact.
+
+Final admission after PR371: clean rebase onto actual main b6497ede preserved all
+six reviewed commits exactly, including sanitized display_uri and minute-state
+mechanics. All 12 focused state-sync Rust tests and 164 actual Python checks pass
+without skips: state/pull/path/validation/names, explicit project imports, current
+SQL partition membership, and all 17 staging lifecycle regressions. The private
+binary was rebuilt for this checkout; strict workspace/all-target Clippy, Rust
+formatting, pinned Ruff and diff checks pass. No material integration conflict or
+new public surface. Fresh current-base required CI remains the merge gate.
