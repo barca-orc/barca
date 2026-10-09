@@ -36,6 +36,8 @@ pub enum ServeError {
     /// `ServeConfig::timezone` is not a zone the scheduler knows.
     #[error("{0}")]
     Timezone(String),
+    #[error("source loading failed: {0}")]
+    Load(#[from] barca_core::BarcaError),
 }
 
 /// Check a `--timezone` value: `local`, `utc`, or an IANA name such as `America/New_York`.
@@ -78,6 +80,7 @@ pub async fn serve(config: ServeConfig) -> Result<(), ServeError> {
     let read_only = config.read_only;
 
     let state = AppState::new(config);
+    state.loaded_dag().await?;
 
     // Evict completed/failed runs older than 1 hour, checking every 5 minutes.
     tokio::spawn(handlers::evict_finished_runs(

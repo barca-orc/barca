@@ -32,6 +32,8 @@ export type { PartitionState } from './generated/PartitionState'
 export type { LastMaterialization } from './generated/LastMaterialization'
 export type { Durations } from './generated/Durations'
 
+import type { LoadError } from './generated/LoadError'
+
 import type { AssetSummary } from './generated/AssetSummary'
 import type { AssetStats } from './generated/AssetStats'
 
@@ -45,6 +47,8 @@ export interface Health {
   read_only: boolean
   /** Whether this server fires `Schedule(...)` nodes. */
   scheduler: boolean
+  /** Unloaded sources and graph-invalid definitions; healthy node routes remain available. */
+  load_errors: LoadError[]
 }
 
 /** POST /run, /run/{target}, /get/{target} — ad-hoc `{ run_id }`. */

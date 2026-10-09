@@ -144,6 +144,7 @@ impl Executed {
 }
 
 pub(crate) struct ExecuteRequest<'a> {
+    pub(crate) dag: Option<Dag>,
     pub(crate) cfg: &'a crate::config::ResolvedConfig,
     pub(crate) target_names: &'a [String],
     pub(crate) file_args: &'a [String],
@@ -264,9 +265,10 @@ struct RunSession<'a, 'r> {
     started: RunStart,
 }
 
-pub(crate) async fn execute(request: ExecuteRequest<'_>) -> Result<Executed, BarcaError> {
+pub(crate) async fn execute(mut request: ExecuteRequest<'_>) -> Result<Executed, BarcaError> {
     let started = RunStart::begin(&request)?;
     let prepared = prepare_run(
+        request.dag.take(),
         request.target_names,
         request.file_args,
         request.python,
@@ -1310,6 +1312,7 @@ struct Prepared {
 }
 
 async fn prepare_run(
+    supplied_dag: Option<Dag>,
     target_names: &[String],
     file_args: &[String],
     python: &std::path::Path,
@@ -1317,7 +1320,10 @@ async fn prepare_run(
     command_label: &str,
     trace: impl Fn(&str),
 ) -> Result<Prepared, BarcaError> {
-    let dag = build_dag(file_args, python).await?;
+    let dag = match supplied_dag {
+        Some(dag) => dag,
+        None => build_dag(file_args, python).await?,
+    };
     trace("dag_built");
 
     let targets = resolve_targets(&dag, target_names, command_label)?;

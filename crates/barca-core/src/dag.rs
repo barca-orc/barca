@@ -11,7 +11,7 @@ use crate::hash;
 use crate::model::{DagNode, EdgeKind, ExtractedNode, NodeKind};
 
 /// The constructed DAG — validated, acyclic, ready for plan generation.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Dag {
     pub graph: DiGraph<DagNode, EdgeKind>,
     index: HashMap<String, NodeIndex>,
@@ -467,6 +467,151 @@ impl Resolver {
 }
 
 impl Dag {
+    /// Isolate graph-invalid definitions while retaining their unrelated neighbours.
+    /// Dependency edges are resolved before removing anything, so removal cannot redirect
+    /// an input to a different same-named definition.
+    pub(crate) fn isolate(
+        nodes: &[ExtractedNode],
+        failed_files: &[String],
+    ) -> (Self, Vec<(String, String)>) {
+        use std::collections::HashSet;
+        let refs = Resolver::new(nodes);
+        let mut edges = Vec::new();
+        let mut failures = Vec::new();
+        for node in nodes {
+            let id = node.continuity_key();
+            let inputs = node
+                .inputs
+                .iter()
+                .map(|i| (&i.param_name, &i.upstream, true))
+                .chain(node.partitions.iter().filter_map(|(dim, p)| match p {
+                    crate::model::PartitionSpec::DerivedFrom { source_ref } => {
+                        Some((dim, source_ref, false))
+                    }
+                    _ => None,
+                }));
+            for (param, upstream, required) in inputs {
+                // Follow the resolver's priority: a failed lower-priority source
+                // cannot hide an earlier healthy binding, and an earlier failed
+                // source cannot redirect to a later healthy same-named node.
+                let candidates = match upstream {
+                    crate::model::NodeRef::Canonical(value) if !refs.by_id.contains_key(value) => {
+                        value.rsplit_once(':').map(|(file, name)| {
+                            (
+                                vec![
+                                    std::path::PathBuf::from(file),
+                                    file_dir(&node.source_file).join(file),
+                                ],
+                                name,
+                            )
+                        })
+                    }
+                    crate::model::NodeRef::Imported { module, name } => Some((
+                        Resolver::module_files(&node.source_file, module),
+                        name.as_str(),
+                    )),
+                    _ => None,
+                };
+                let mut failed = None;
+                if let Some((candidates, name)) = candidates {
+                    for candidate in candidates {
+                        failed = failed_files.iter().find(|file| {
+                            norm_path(&candidate) == norm_path(std::path::Path::new(file))
+                        });
+                        if failed.is_some() || refs.in_file(&candidate, name).is_some() {
+                            break;
+                        }
+                    }
+                }
+                if let Some(file) = failed {
+                    failures.push((
+                        id.clone(),
+                        format!("input '{param}' references unloaded source '{file}'"),
+                    ));
+                    continue;
+                }
+                match refs.resolve_input(node, param, upstream) {
+                    Ok(i) => edges.push((refs.ids[i].clone(), id.clone())),
+                    Err(DagError::UnresolvedInput { .. }) if !required => {}
+                    Err(e) => failures.push((id.clone(), e.to_string())),
+                }
+            }
+        }
+        let mut excluded: HashSet<String> = failures.iter().map(|(id, _)| id.clone()).collect();
+        loop {
+            // Close over the original bindings, never over newly selected names.
+            loop {
+                let before = excluded.len();
+                for (upstream, dependent) in &edges {
+                    if excluded.contains(upstream) && excluded.insert(dependent.clone()) {
+                        failures.push((
+                            dependent.clone(),
+                            format!("upstream '{upstream}' is not loaded"),
+                        ));
+                    }
+                }
+                if before == excluded.len() {
+                    break;
+                }
+            }
+            let selected: Vec<_> = nodes
+                .iter()
+                .filter(|n| !excluded.contains(&n.continuity_key()))
+                .cloned()
+                .collect();
+            match Self::build(&selected) {
+                Ok(dag) => return (dag, failures),
+                Err(error) => {
+                    let offenders: Vec<String> = match &error {
+                        DagError::UnresolvedInput { node, .. }
+                        | DagError::AmbiguousInput { node, .. }
+                        | DagError::UnresolvedImport { node, .. }
+                        | DagError::PartitionedInputToUnpartitioned { node, .. }
+                        | DagError::PartitionsFrom { node, .. } => vec![node.clone()],
+                        DagError::SensorWithInputs { sensor } => vec![sensor.clone()],
+                        DagError::TaskAsInput { downstream, .. } => vec![downstream.clone()],
+                        DagError::DuplicateKey { key, .. } => vec![key.clone()],
+                        DagError::CycleDetected => {
+                            let mut graph = DiGraph::<String, ()>::new();
+                            let indices: HashMap<_, _> = selected
+                                .iter()
+                                .map(|n| {
+                                    let id = n.continuity_key();
+                                    let idx = graph.add_node(id.clone());
+                                    (id, idx)
+                                })
+                                .collect();
+                            for (upstream, dependent) in &edges {
+                                if let (Some(&u), Some(&d)) =
+                                    (indices.get(upstream), indices.get(dependent))
+                                {
+                                    graph.add_edge(u, d, ());
+                                }
+                            }
+                            petgraph::algo::tarjan_scc(&graph)
+                                .into_iter()
+                                .filter(|component| {
+                                    component.len() > 1
+                                        || graph.contains_edge(component[0], component[0])
+                                })
+                                .flatten()
+                                .map(|i| graph[i].clone())
+                                .collect()
+                        }
+                    };
+                    assert!(
+                        !offenders.is_empty(),
+                        "DAG validation must identify its invalid definitions"
+                    );
+                    for id in offenders {
+                        assert!(excluded.insert(id.clone()), "isolation must make progress");
+                        failures.push((id, error.to_string()));
+                    }
+                }
+            }
+        }
+    }
+
     /// Build a DAG from extracted nodes. Validates all constraints.
     pub fn build(nodes: &[ExtractedNode]) -> Result<Self, DagError> {
         validate_partition_dimensions(nodes)?;

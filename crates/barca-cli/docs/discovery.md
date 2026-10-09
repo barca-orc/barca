@@ -33,8 +33,16 @@ A walk skips:
   `node_modules`, `site-packages`, `build`, `dist`, `tests`, `test`;
 - files named `test_*.py`, `*_test.py`, `conftest.py`, `setup.py`.
 
-A file that imports barca and fails to parse is an error (exit 2) naming the file. A walk that
-finds no file importing barca is an error (exit 2) that says so.
+One-shot commands report a file that imports barca and fails to parse as an error
+(exit 2) naming that file. `barca serve` keeps healthy definitions loaded and excludes
+invalid sources and graph-dependent definitions, including dependents in otherwise
+valid files. Unrelated definitions in those files remain available. Startup stderr,
+`GET /health`'s `load_errors` and the UI identify unloaded sources and affected node
+IDs. `/state` remains an array of loaded node states. With `--watch`, repairing or
+removing configured source refreshes these diagnostics and schedules; newly added
+files still need a restart. Arbitrary Python import failures remain run errors:
+static loading does not import modules to prove they execute successfully.
+A walk finding no file importing barca remains an error (exit 2).
 
 Files you name explicitly are always read, whatever their name or location, and need not import
 barca.

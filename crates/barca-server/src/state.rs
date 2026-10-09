@@ -101,18 +101,6 @@ pub struct RunState {
 pub struct DagCache {
     pub assets: Option<Vec<AssetSummary>>,
     pub plan: Option<PlanResult>,
-    /// The nodes a trigger's target is checked against, with the state of the source files
-    /// they were read from. Unlike the two above it is never older than the source: a check
-    /// uses it only while every file still has the size and modification time recorded here,
-    /// so it names exactly the nodes a run started now would find.
-    pub targets: Option<TargetIndex>,
-}
-
-/// Every node's id and kind, as read from source files in the state `stamp` describes.
-#[derive(Clone)]
-pub struct TargetIndex {
-    pub stamp: SourceStamp,
-    pub nodes: Arc<Vec<(String, barca_core::NodeKind)>>,
 }
 
 /// The size, modification time and change time of each source file, in the order of
@@ -308,6 +296,8 @@ pub struct JobStatus {
 /// Cloneable application state shared across all axum handlers.
 #[derive(Clone)]
 pub struct AppState {
+    pub loaded: Arc<tokio::sync::Mutex<Option<LoadedSources>>>,
+    pub load_errors: Arc<RwLock<Vec<barca_core::load::LoadError>>>,
     pub config: Arc<ServeConfig>,
     pub runs: Arc<DashMap<String, RunState>>,
     pub cache: Arc<RwLock<DagCache>>,
@@ -334,6 +324,8 @@ impl AppState {
     pub fn new(config: ServeConfig) -> Self {
         let run_slot_count = default_run_concurrency();
         Self {
+            loaded: Arc::new(tokio::sync::Mutex::new(None)),
+            load_errors: Arc::new(RwLock::new(Vec::new())),
             config: Arc::new(config),
             runs: Arc::new(DashMap::new()),
             cache: Arc::new(RwLock::new(DagCache::default())),
@@ -344,6 +336,90 @@ impl AppState {
             schedule: Arc::new(RwLock::new(Vec::new())),
             dag_generation: Arc::new(AtomicU64::new(0)),
         }
+    }
+}
+
+/// The single selected graph owner for inspection, schedule and execution.
+pub struct LoadedSources {
+    stamp: Vec<Option<SourceStamp>>,
+    dag: Arc<barca_core::dag::Dag>,
+}
+
+impl AppState {
+    fn source_stamp(&self) -> Vec<Option<SourceStamp>> {
+        self.config
+            .files
+            .iter()
+            .map(|file| SourceStamp::of(std::slice::from_ref(file)))
+            .collect()
+    }
+
+    pub async fn loaded_dag(&self) -> Result<Arc<barca_core::dag::Dag>, barca_core::BarcaError> {
+        self.refresh_dag(false).await
+    }
+
+    /// Execution/status must reread helper cones too; configured-file stamps alone
+    /// cannot prove the result hash is unchanged after a helper module edit.
+    pub async fn current_dag(&self) -> Result<Arc<barca_core::dag::Dag>, barca_core::BarcaError> {
+        self.refresh_dag(true).await
+    }
+
+    async fn refresh_dag(
+        &self,
+        force: bool,
+    ) -> Result<Arc<barca_core::dag::Dag>, barca_core::BarcaError> {
+        let mut loaded = self.loaded.lock().await;
+        let stamp = self.source_stamp();
+        if !force
+            && let Some(current) = loaded.as_ref()
+            && current.stamp == stamp
+            && stamp
+                .iter()
+                .flatten()
+                .all(|stamp| stamp.settled(std::time::SystemTime::now()))
+        {
+            return Ok(current.dag.clone());
+        }
+        for _ in 0..3 {
+            let before = self.source_stamp();
+            let (dag, errors) =
+                barca_core::load::build_partial_dag(&self.config.files, &self.config.python)
+                    .await?;
+            if before != self.source_stamp() {
+                continue;
+            }
+            {
+                let mut old_errors = self.load_errors.write().unwrap();
+                if *old_errors != errors {
+                    for error in &errors {
+                        barca_core::errln!(
+                            "[barca] not loaded: {}: {}{}",
+                            error.file,
+                            error.error,
+                            if error.affected_nodes.is_empty() {
+                                String::new()
+                            } else {
+                                format!(" ({})", error.affected_nodes.join(", "))
+                            }
+                        );
+                    }
+                }
+                *old_errors = errors;
+            }
+            let dag = Arc::new(dag);
+            *loaded = Some(LoadedSources {
+                stamp: before,
+                dag: dag.clone(),
+            });
+            let mut cache = self.cache.write().unwrap();
+            cache.assets = None;
+            cache.plan = None;
+
+            return Ok(dag);
+        }
+        Err(barca_core::BarcaError::Usage(
+            "source files changed during loading; retry after the edit completes".into(),
+        ))
     }
 }
 
