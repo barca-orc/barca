@@ -97,6 +97,11 @@ barca status pipeline.py --env prod
 
 More: `barca docs cache`, `barca docs remote`.
 
+For one process, `BARCA_REMOTE=off barca get total pipeline.py` uses local artifacts
+and history. `BARCA_STATE=off barca serve pipeline.py` keeps metadata local while
+retaining configured artifact sharing; optimistic shared metadata remains refused
+by `serve`.
+
 ## Seeing what barca sees
 
 Ask the CLI instead of reading source files or opening files under `.barca/`. None of

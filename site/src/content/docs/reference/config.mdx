@@ -140,6 +140,7 @@ Variables that override `barca.toml`:
 | Variable | Overrides | Notes |
 |---|---|---|
 | `BARCA_ENV` | `default_env` | Overridden by `--env`. |
+| `BARCA_REMOTE` | process override | `off` uses local artifacts/history and overrides all remote settings. Unset/empty keeps normal resolution; other values exit 2. |
 | `BARCA_REMOTE_URI` | `[remote].uri` | Enough on its own to turn remote storage on. |
 | `BARCA_STATE_URI` | `[remote].state_uri` | Used as written. |
 | `BARCA_STATE` | `[remote].state` | `optimistic` or `off`; any other value exits 2. |
@@ -150,7 +151,11 @@ Variables that override `barca.toml`:
 | `FSSPEC_<PROTOCOL>_<OPTION>` | one storage option | fsspec's own convention (`FSSPEC_S3_ENDPOINT_URL`, `FSSPEC_GCS_PROJECT`). Overridden by both of the above. |
 | `BARCA_ARTIFACT_URI` | the artifact location | Used as written, with no environment name added, and history stays local. Kept from 0.4.0. Warns when combined with a non-default environment. Prefer `BARCA_REMOTE_URI` with `BARCA_STATE=off`. |
 
-An empty value counts as unset.
+An empty value counts as unset. `BARCA_REMOTE=off` overrides the URI, state,
+transfer and storage-options settings above while preserving the selected local
+environment. `BARCA_STATE=off` disables only shared metadata and keeps artifact
+sharing; use it to start `barca serve` with a shared project configuration. Serve
+still refuses optimistic shared state unless explicitly disabled.
 
 Variables with no `barca.toml` key:
 

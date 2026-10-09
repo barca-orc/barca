@@ -418,7 +418,15 @@ async fn read_shapes_inner(
             if m.status != "success" {
                 return None;
             }
-            Some((i, m.artifact.clone()?, m.format.clone().unwrap_or_default()))
+            let path = if cfg.remote_off {
+                n.cache.artifact.as_ref().or(m.artifact.as_ref())?
+            } else {
+                m.artifact.as_ref()?
+            };
+            if !cfg.allows_artifact(path) {
+                return None;
+            }
+            Some((i, path.clone(), m.format.clone().unwrap_or_default()))
         })
         .collect();
     if wanted.is_empty() {

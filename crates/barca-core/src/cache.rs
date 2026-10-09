@@ -386,7 +386,7 @@ pub(crate) async fn lookup_cached(
         cache.conn().query(
             format!(
                 "SELECT {columns} FROM materializations WHERE node_id = ?1 AND run_hash = ?2 \
-                 AND status = 'success' ORDER BY id DESC LIMIT 1"
+                 AND status = 'success' ORDER BY id DESC"
             ),
             [node_id.to_string(), run_hash.to_string()],
         )
@@ -396,15 +396,22 @@ pub(crate) async fn lookup_cached(
         Ok(rows) => rows,
         Err(_) => query(COLUMNS.to_string()).await.unwrap(),
     };
-    rows.next().await.unwrap().and_then(|row| {
-        Some(dispatch::OutputRef {
-            path: row.get::<String>(0).ok()?,
+    while let Some(row) = rows.next().await.unwrap() {
+        let Some(path) = row.get::<String>(0).ok() else {
+            continue;
+        };
+        if !cache.allows_artifact(&path) {
+            continue;
+        }
+        return Some(dispatch::OutputRef {
+            path,
             format: row.get::<String>(1).ok()?,
             size_bytes: row.get::<i64>(2).ok()? as u64,
             elapsed_seconds: None,
             content_hash: row.get::<String>(3).ok().filter(|h| !h.is_empty()),
-        })
-    })
+        });
+    }
+    None
 }
 
 /// How a cache row's artifact is reached on this machine.

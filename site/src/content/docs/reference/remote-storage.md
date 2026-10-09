@@ -99,6 +99,38 @@ Keep secrets out of it: credentials still come from the environment. Precedence,
 `[remote.storage_options.*]` over `FSSPEC_*` variables. Every key is in the
 [configuration reference](/reference/config/).
 
+## Storage for one process
+
+Set `BARCA_REMOTE=off` to use local artifacts and local history without editing
+`barca.toml`. It overrides configured artifact/state URIs and remote options,
+including environment overrides. `--env` still selects the local environment.
+Unset or empty values keep the configured storage; other values are usage errors.
+
+```bash
+BARCA_REMOTE=off barca get total pipeline.py
+BARCA_REMOTE=off barca run deploy pipeline.py
+BARCA_REMOTE=off barca serve pipeline.py
+```
+
+Existing history is kept. Remote/shared-store results recorded in that history
+are not fetched or inspected while off. Barca uses a previously recorded local
+result when available, otherwise computes one locally; subsequent runs reuse it.
+`barca status --json` reports local cache paths. Historical materialization paths
+still describe where those earlier results were stored. User code can still
+perform its own network I/O.
+
+`BARCA_STATE=off` is the narrower existing override: keep metadata local while
+continuing to share artifacts. Use it with `serve` when project configuration
+normally enables optimistic shared state:
+
+```bash
+BARCA_STATE=off barca serve pipeline.py
+```
+
+`serve` continues to refuse optimistic shared metadata unless explicitly disabled.
+It does not silently discard that configuration. Empty URI overrides remain
+unset; `BARCA_REMOTE_URI=` does not turn off a TOML remote root.
+
 ## What barca keeps in the bucket
 
 ```

@@ -798,6 +798,7 @@ fn db_open_error(detail: impl std::fmt::Display) -> BarcaError {
 /// this run executes Python. (Fields drop in order: connection, database + file lock,
 /// then the in-process guard.)
 pub struct CacheReader {
+    local_artifact_dir: Option<String>,
     conn: turso::Connection,
     _handle: DbHandle,
     _guard: MutexGuard<'static, ()>,
@@ -809,10 +810,25 @@ impl CacheReader {
         let guard = db_guard().await;
         let (handle, conn) = open_conn(db_path).await?;
         Ok(Self {
+            local_artifact_dir: None,
             conn,
             _handle: handle,
             _guard: guard,
         })
+    }
+
+    pub(crate) async fn for_config(
+        cfg: &crate::config::ResolvedConfig,
+    ) -> Result<Self, BarcaError> {
+        let mut cache = Self::open(&cfg.db_path).await?;
+        cache.local_artifact_dir = cfg.remote_off.then(|| cfg.local_artifact_dir.clone());
+        Ok(cache)
+    }
+
+    pub(crate) fn allows_artifact(&self, path: &str) -> bool {
+        self.local_artifact_dir
+            .as_deref()
+            .is_none_or(|root| crate::config::local_artifact(path, root))
     }
 
     pub fn conn(&self) -> &turso::Connection {
@@ -1934,6 +1950,26 @@ pub async fn latest_partition_artifacts(
     db_path: &str,
     base_id: &str,
 ) -> Result<Vec<(String, String, String)>, BarcaError> {
+    latest_partition_artifacts_scoped(db_path, base_id, None).await
+}
+
+pub(crate) async fn partition_artifacts_for_config(
+    cfg: &crate::config::ResolvedConfig,
+    base_id: &str,
+) -> Result<Vec<(String, String, String)>, BarcaError> {
+    latest_partition_artifacts_scoped(
+        &cfg.db_path,
+        base_id,
+        cfg.remote_off.then_some(cfg.local_artifact_dir.as_str()),
+    )
+    .await
+}
+
+async fn latest_partition_artifacts_scoped(
+    db_path: &str,
+    base_id: &str,
+    local_dir: Option<&str>,
+) -> Result<Vec<(String, String, String)>, BarcaError> {
     let _g = db_guard().await;
     let (_db, conn) = open_conn(db_path).await?;
     let prefix = format!("{base_id}[");
@@ -1952,6 +1988,11 @@ pub async fn latest_partition_artifacts(
         .await
         .map_err(|e| BarcaError::Db(format!("failed to read row: {e}")))?
     {
+        if local_dir.is_some_and(|root| {
+            !crate::config::local_artifact(&row.get::<String>(1).unwrap_or_default(), root)
+        }) {
+            continue;
+        }
         let node_id = row.get::<String>(0).unwrap_or_default();
         seen.entry(node_id).or_insert_with(|| {
             (

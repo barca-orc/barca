@@ -52,6 +52,7 @@ Options:
           Print help (see a summary with '-h')
 
 Examples:
+  BARCA_REMOTE=off barca get total pipeline.py   # local artifacts and history for this process
   barca get total                          # find `total` anywhere in the project and get it
   barca get total pipelines/               # only read files under pipelines/
   barca get                                # every asset and sensor in the project, never tasks
