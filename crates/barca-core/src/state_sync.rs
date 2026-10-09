@@ -757,6 +757,40 @@ error: RefreshError: Reauthentication is needed.\n";
         no_stages(dir.path());
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn actual_directory_helper_errors_preserve_guidance_and_redact_uri_secrets() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = checkpoint_config(dir.path());
+        cfg.state_uri =
+            Some("s3://user:directory-password@bucket/prefix/?sig=directory-signature".into());
+        crate::db::init_db(&cfg.db_path).await.unwrap();
+        let helper = dir.path().join("directory-helper");
+        std::fs::write(
+            &helper,
+            "#!/bin/sh\necho 'error: IsADirectoryError: prefix' >&2\nexit 1\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let pushed = push_state(&helper, &cfg, &StateToken(None), Until::done())
+            .await
+            .unwrap_err();
+        let pulled = pull_state(&helper, &cfg, Until::done()).await.unwrap_err();
+        for error in [pushed, pulled] {
+            let message = error.to_string();
+            assert!(
+                message.contains("s3://<redacted>@bucket/prefix/"),
+                "{message}"
+            );
+            assert!(message.contains("BARCA_STATE_URI must name a file or object"));
+            assert!(message.contains("s3://bucket/history/metadata.db"));
+            assert!(!message.contains("directory-password"), "{message}");
+            assert!(!message.contains("directory-signature"), "{message}");
+        }
+        no_stages(dir.path());
+    }
+
     #[tokio::test]
     async fn checkpoint_cancellation_stops_cross_process_snapshot_admission() {
         let dir = tempfile::tempdir().unwrap();

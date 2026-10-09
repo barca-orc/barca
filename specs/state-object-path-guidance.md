@@ -19,10 +19,18 @@ All 53 state helper/pull/object-path actual checks pass on release main f881a6d,
 as does the provider-shaped formatter regression, strict all-target Clippy and
 fmt. Rebased onto recorder main13a92a4 for exact-head CI acceptance.
 
-Minute-publisher integration plan: rebase onto main4ca4e2d and retain its
+Minute-publisher integration plan: rebase onto main 4ca4e2d and retain its
 diagnostic_uri-derived display_uri in the directory-specific guidance. Add a
 real failing-helper pull/push regression with credential-bearing directory URI
 to prove that both the setting/object-path guidance and secret redaction survive
 the merge. Run focused state-sync admission/privacy tests and actual state
 helper/pull/path/validation tests with a private target and interpreter. Keep
 publication cancellation/token behavior unchanged and prepare fresh CI only.
+
+Integration preserves the sanitized display_uri and object-path guidance. The
+new actual failing-helper pull/push test fails when only the inner directory URI
+formatting is changed back to raw URI, then passes with the sanitized formatter.
+All 12 focused state-sync admission/lifetime/privacy tests and 85 actual Python
+state helper/pull/path/validation checks passed without skips. Private native
+build, strict workspace/all-target Clippy, Rust formatting, pinned Ruff and
+whitespace checks passed. No minute timer, token or publication behavior changed.
