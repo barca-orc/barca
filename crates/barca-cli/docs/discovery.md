@@ -87,7 +87,10 @@ files, or to a project file in one context and an external/unavailable module in
 are rejected with exit 2 before user imports and run metadata. For example, replace
 `from helpers import value` with `from east.helpers import value` or
 `from west.helpers import value`. An unrelated off-path file does not outlaw an installed
-or standard-library import.
+or standard-library import. With `serve`, the same validation isolates affected
+project source definitions into `/health` load errors; unrelated valid definitions
+remain inspectable, runnable and scheduled. Qualified-import repair restores those
+definitions on reload. One-shot commands remain strict and exit 2.
 
 Unambiguous root and sibling helper imports still work. Each task uses its own import
 path; another pipeline's directory does not become implicitly available after that

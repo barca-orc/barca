@@ -352,13 +352,21 @@ impl ProjectCones {
     pub(crate) fn validate_imports(
         &mut self,
         nodes: &[Vec<crate::model::ExtractedNode>],
-    ) -> Result<(), crate::BarcaError> {
-        let mut bindings: std::collections::BTreeMap<String, (Option<PathBuf>, PathBuf)> =
+    ) -> std::collections::BTreeMap<PathBuf, String> {
+        let mut errors = std::collections::BTreeMap::new();
+        type ImportSites =
+            std::collections::BTreeMap<Option<PathBuf>, std::collections::BTreeSet<PathBuf>>;
+        let mut bindings: std::collections::BTreeMap<String, ImportSites> =
             std::collections::BTreeMap::new();
-        let mut identities: std::collections::HashMap<PathBuf, String> = self
+        let mut identities: std::collections::HashMap<PathBuf, (String, Option<PathBuf>)> = self
             .pipelines
             .iter()
-            .map(|file| (file.path.clone(), qualified_path(&file.path, &self.root)))
+            .map(|file| {
+                (
+                    file.path.clone(),
+                    (qualified_path(&file.path, &self.root), None),
+                )
+            })
             .collect();
         for (index, source_nodes) in nodes.iter().enumerate() {
             let source = self.pipelines[index].path.clone();
@@ -373,23 +381,30 @@ impl ProjectCones {
                     let (selected, imported) = match pipeline.modules.find(&name) {
                         Found::Module(module, _, file) => {
                             let file = file.canonicalize().unwrap_or(file);
-                            if let Some(prior) = identities.get(&file) {
+                            if let Some((prior, prior_source)) = identities.get(&file) {
                                 if *prior != name {
-                                    return Err(crate::BarcaError::Usage(format!(
+                                    let error = format!(
                                         "project source '{}' has conflicting import identities '{prior}' and '{name}' from '{}'; use the explicit qualified import `from {} import <name>` so setup and pickle identity do not depend on worker history",
                                         file.display(),
                                         source.display(),
                                         qualified_path(&file, &pipeline.modules.root),
-                                    )));
+                                    );
+                                    errors
+                                        .entry(source.clone())
+                                        .or_insert_with(|| error.clone());
+                                    if let Some(prior_source) = prior_source {
+                                        errors.entry(prior_source.clone()).or_insert(error);
+                                    }
                                 }
                             } else {
-                                identities.insert(file.clone(), name.clone());
+                                identities
+                                    .insert(file.clone(), (name.clone(), Some(source.clone())));
                             }
                             (Some(file), Some(module))
                         }
                         _ => (None, None),
                     };
-                    if let Some((prior, prior_source)) = bindings.get(&name) {
+                    for (prior, prior_sources) in bindings.get(&name).into_iter().flatten() {
                         if *prior != selected {
                             let describe = |file: &Option<PathBuf>| {
                                 file.as_ref()
@@ -400,18 +415,35 @@ impl ProjectCones {
                                 .as_ref()
                                 .or(prior.as_ref())
                                 .expect("different bindings include a project source");
-                            return Err(crate::BarcaError::Usage(format!(
+                            let error = format!(
                                 "project import '{name}' resolves to '{}' from '{}' and '{}' from '{}'; use explicit qualified imports for the project source (for example `from {} import <name>`) instead of sharing a history-dependent module name",
                                 describe(prior),
-                                prior_source.display(),
+                                prior_sources
+                                    .first()
+                                    .expect("an import binding has a source")
+                                    .display(),
                                 describe(&selected),
                                 source.display(),
                                 qualified_path(project, &pipeline.modules.root),
-                            )));
+                            );
+                            if prior.is_some() {
+                                for prior_source in prior_sources {
+                                    errors
+                                        .entry(prior_source.clone())
+                                        .or_insert_with(|| error.clone());
+                                }
+                            }
+                            if selected.is_some() {
+                                errors.entry(source.clone()).or_insert(error);
+                            }
                         }
-                    } else {
-                        bindings.insert(name, (selected, source.clone()));
                     }
+                    bindings
+                        .entry(name)
+                        .or_default()
+                        .entry(selected)
+                        .or_default()
+                        .insert(source.clone());
                     if let Some(imported) = imported {
                         pending.push(imported);
                     }
@@ -431,17 +463,17 @@ impl ProjectCones {
                         )
                         && let Some(file) = pipeline.modules.pipelines_named(module).next()
                     {
-                        return Err(crate::BarcaError::Usage(format!(
+                        errors.entry(source.clone()).or_insert_with(|| format!(
                             "input '{name}' in '{}' imports off-path project source '{}' as '{module}'; use an explicit qualified import: `from {} import {name}`",
                             source.display(),
                             file.path.display(),
                             qualified_path(&file.path, &pipeline.modules.root),
-                        )));
+                        ));
                     }
                 }
             }
         }
-        Ok(())
+        errors
     }
 
     /// The files read from disk so far (pipeline files are given, not read).

@@ -108,10 +108,25 @@ fn load_blocking(
             .iter()
             .map(|(path, source)| (path.as_path(), source.clone())),
     );
-    cones.validate_imports(&nodes_by_file)?;
+    let import_errors = cones.validate_imports(&nodes_by_file);
+    if !partial && let Some(error) = import_errors.values().next() {
+        return Err(BarcaError::Usage(error.clone()));
+    }
     // Nodes in command-line order (the last asset is `get file.py`'s final value).
     let mut all_nodes: Vec<crate::model::ExtractedNode> = Vec::new();
     for (index, nodes) in nodes_by_file.into_iter().enumerate() {
+        if partial && !import_errors.is_empty() {
+            let path = &sources[index].0;
+            let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+            if let Some(error) = import_errors.get(&canonical) {
+                errors.push(LoadError {
+                    file: path.to_string_lossy().into_owned(),
+                    error: error.clone(),
+                    affected_nodes: nodes.iter().map(|node| node.continuity_key()).collect(),
+                });
+                continue;
+            }
+        }
         let pipeline = cones.pipeline(index);
         for mut node in nodes {
             node.cone_hash = pipeline.hash(&node.function_name);

@@ -638,3 +638,109 @@ assert all(value.Record.value==17 and value is values[0] for value in values)
     )
     assert result.returncode == 0, result.stderr
     assert len((tmp_path / "setup").read_text().splitlines()) == 1
+
+
+def test_partial_loading_isolates_conflicts_and_watch_repairs_qualified_imports(tmp_path):
+    from .test_serve_load_isolation import errors, finished, loaded
+    from .test_serve_robustness import Server, wait_for
+
+    write(
+        tmp_path,
+        "pipeline.py",
+        "from pathlib import Path\nfrom barca import asset, task, Schedule, asset_ref\n@asset(inputs={'v': asset_ref('a/p.py:result')})\ndef blocked(v): return v+1\n@asset()\ndef healthy(): return 7\n@task(freshness=Schedule('* * * * * *'))\ndef tick(): Path('ticks').touch()\n",
+    )
+    for directory, value in (("a", 11), ("b", 22)):
+        write(tmp_path, f"{directory}/helpers.py", f"def value(): return {value}\n")
+        write(
+            tmp_path,
+            f"{directory}/p.py",
+            "from barca import asset\nfrom helpers import value\n@asset()\ndef result(): return value()\n",
+        )
+    server = Server(tmp_path, ".", "--watch")
+    try:
+        assert loaded(server) == {"pipeline.py:healthy", "pipeline.py:tick"}
+        affected = {n for error in errors(server) for n in error["affected_nodes"]}
+        assert affected == {"a/p.py:result", "b/p.py:result", "pipeline.py:blocked"}
+        assert all(
+            "qualified" in error["error"]
+            for error in errors(server)
+            if error["file"] in {"a/p.py", "b/p.py"}
+        ), errors(server)
+        wait_for(lambda: (tmp_path / "ticks").exists(), "healthy schedule beside import errors")
+        code, handle = server.request("POST", "/get/healthy")
+        assert code == 200
+        assert finished(server, handle["run_id"])["status"] == "complete"
+        for directory in ("a", "b"):
+            file = tmp_path / directory / "p.py"
+            file.write_text(
+                file.read_text().replace(
+                    "from helpers import value", f"from {directory}.helpers import value"
+                )
+            )
+        wait_for(lambda: not errors(server), "qualified import repair")
+        assert loaded(server) == {
+            "pipeline.py:healthy",
+            "pipeline.py:tick",
+            "pipeline.py:blocked",
+            "a/p.py:result",
+            "b/p.py:result",
+        }
+        code, handle = server.request("POST", "/get/blocked")
+        assert code == 200
+        result = finished(server, handle["run_id"])
+        assert result["status"] == "complete"
+        assert json.loads((tmp_path / result["result"]["final_output"]["path"]).read_text()) == 12
+    finally:
+        server.stop()
+
+
+def test_partial_conflict_preserves_actual_external_import_site(tmp_path):
+    from .test_serve_load_isolation import errors, finished, loaded
+    from .test_serve_robustness import Server
+
+    write(
+        tmp_path,
+        "pipeline.py",
+        "import json\nfrom barca import asset\n@asset()\ndef healthy(): return json.loads('42')\n",
+    )
+    write(tmp_path, "sub/json.py", "def value(): return 11\n")
+    write(
+        tmp_path,
+        "sub/p.py",
+        "from json import value\nfrom barca import asset\n@asset()\ndef bad(): return value()\n",
+    )
+    server = Server(tmp_path, ".", "--no-schedule")
+    try:
+        assert loaded(server) == {"pipeline.py:healthy"}
+        assert {n for error in errors(server) for n in error["affected_nodes"]} == {"sub/p.py:bad"}
+        code, handle = server.request("POST", "/get/healthy")
+        assert code == 200
+        result = finished(server, handle["run_id"])
+        assert result["status"] == "complete"
+        assert json.loads((tmp_path / result["result"]["final_output"]["path"]).read_text()) == 42
+    finally:
+        server.stop()
+
+
+def test_partial_loading_keeps_unambiguous_nonpipeline_sibling_helper(tmp_path):
+    from .test_serve_load_isolation import errors, finished, loaded
+    from .test_serve_robustness import Server
+
+    write(tmp_path, "pipeline.py", "from barca import asset\n@asset()\ndef healthy(): return 7\n")
+    write(tmp_path, "sub/helpers.py", "def value(): return 11\n")
+    write(
+        tmp_path,
+        "sub/p.py",
+        "from barca import asset\nfrom helpers import value\n@asset()\ndef result(): return value()\n",
+    )
+    server = Server(tmp_path, ".", "--no-schedule")
+    try:
+        assert errors(server) == []
+        assert loaded(server) == {"pipeline.py:healthy", "sub/p.py:result"}
+        code, handle = server.request("POST", "/get/sub/p.py:result")
+        assert code == 200
+        result = finished(server, handle["run_id"])
+        assert result["status"] == "complete"
+        assert json.loads((tmp_path / result["result"]["final_output"]["path"]).read_text()) == 11
+    finally:
+        server.stop()

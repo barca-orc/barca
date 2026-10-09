@@ -246,3 +246,42 @@ sites reproduce this. Fix this within the shared existing loader/validator:
 
 Both new actual server regressions failed the uncorrected combined base at
 startup. This integration is approved and preserves the accepted import policy.
+
+### Backend fixture compatibility
+
+Current source reproduces the backend CI failure in both Polars cases of
+`test_a_cached_result_reaches_an_unannotated_consumer_as_pandas`: the fixture
+rewrites the same loaded module from a producer-only body to a consumer-only
+body within one worker, then cannot find `use` in its initialized module.
+The worker setup-once snapshot contract does not support this synthetic reload.
+Keep both functions defined before the first step and reuse identical source
+for both calls. Retain actual parquet, shared LRU and pandas-reader assertions;
+verify producer cache admission for eager versus lazy results. Run all lazy-input
+and artifact-LRU cases with actual Polars installed. No production reload or
+module-cache reset is needed or authorized.
+
+### Integrated evidence on main `1642da9`
+
+The corrected source-scoped validator preserves valid stdlib import sites and
+healthy colocated definitions/dependent isolation; qualified watch repair clears
+import diagnostics and restores dependent execution. Binding sites are grouped
+by resolved source, avoiding quadratic comparisons for normal shared imports.
+The historical bare sibling-pipeline case now honestly reports its duplicate
+identity, keeps the producer available, and proves qualified `sub.shared` repair;
+the failed preferred sibling still cannot redirect to a healthy root candidate.
+An actual server case also executes an unambiguous non-pipeline sibling helper.
+
+Validation: 47 final focused import tests passed; the combined original
+load-isolation/scheduler/catch-up/robustness and import suite passed 77 cases;
+293 artifact/worker/API/bytecode/parallel/input/helper/DuckDB cases passed;
+124 current-binary load/import/manual/contract cases passed. Both old-CLI pickle
+proofs and the original independent threaded-reader reproduction passed again.
+The complete Rust workspace passed 819 tests and strict all-target Clippy.
+Pinned Ruff, Cargo formatting, lockfile and whitespace checks passed; runtime
+`ty` has zero errors with six existing dependency/environment warnings. Website
+builds all 51 pages.
+
+Both lazy-input Polars failures reproduced before the fixture correction. Full
+lazy-input plus artifact-LRU coverage passes 109 cases with actual Polars 2.0,
+Pandas 3.0 and PyArrow 26. The five existing expected failures document unrelated
+LRU limitations; no new skip or expected failure was introduced.
