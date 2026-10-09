@@ -31,6 +31,9 @@ use tokio::task::JoinHandle;
 
 /// Display a location without URI passwords or signed query parameters.
 pub(crate) fn diagnostic_uri(uri: &str) -> String {
+    if local_path(uri).is_some() {
+        return uri.to_string();
+    }
     let plain = uri.split(['?', '#']).next().unwrap_or(uri);
     if let Some((scheme, rest)) = plain.split_once("://")
         && let Some((credentials, host)) = rest.split_once('@')
@@ -685,6 +688,7 @@ mod tests {
             "abfs://container@account/path"
         );
         assert_eq!(diagnostic_uri("/local/path"), "/local/path");
+        assert_eq!(diagnostic_uri("/local/path?part#1"), "/local/path?part#1");
     }
 
     #[test]

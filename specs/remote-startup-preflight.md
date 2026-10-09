@@ -57,12 +57,16 @@ conditions restricting the bucket-root listing do not satisfy this probe.
 - Workspace Rust tests: 770 passed, then added URI-redaction unit passed separately.
 - Workspace Clippy: passed with warnings denied.
 - CLI/manual/serve/preflight Python tests: 82 passed, 8 emulator-dependent skips.
-- Remote staging/verification/inspection/lazy tests: 41 passed, 11 backend skips.
+- Remote staging/verification/inspection/lazy/config tests with local emulators: 60 passed.
+- Real S3/Azure/GCS transfer fault tests: 30 passed; 1 expected skip because GCS emulator does not authenticate.
 - Transfer helper tests: 68 passed.
 - First Rust run exhausted tmpfs quota; repeat with task-local TMPDIR passed.
 - Initial CLI contract run lacked pandas; repeat after installing dependency passed.
 
 The new CLI/serve auth and timeout regressions inject faults at the storage
 boundary while using the real executable and coordinator/helper protocol.
-Emulator-dependent backend tests were unavailable locally; no claim of live-cloud
-credential testing is made.
+Pinned MinIO, Azurite and fake-gcs-server emulators were then started locally.
+Actual emulator credential failures, missing/denied store access, stalled stores
+and transfer retries passed. Transfer reset injection waits for healthy preflight
+before arming faults, so it exercises uploads/fetches rather than the startup
+check. No claim of live-cloud credential testing is made.

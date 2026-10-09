@@ -131,6 +131,8 @@ class FaultProxy:
         except OSError:
             conn.close()
             return
+        with self._lock:
+            self._held.extend((conn, upstream))
         for a, b, limit in ((conn, upstream, self.cut_after), (upstream, conn, None)):
             threading.Thread(target=self._pump, args=(a, b, limit), daemon=True).start()
 
@@ -154,6 +156,17 @@ class FaultProxy:
                 except OSError:
                     pass
 
+    def disconnect(self) -> None:
+        """Discard preflight keep-alive sockets before arming transfer-only faults."""
+        with self._lock:
+            sockets, self._held = self._held, []
+        for conn in sockets:
+            try:
+                conn.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            conn.close()
+
     def close(self) -> None:
         self._closed = True
         self._release.set()
@@ -166,7 +179,10 @@ class FaultProxy:
 # ─── Fixtures ────────────────────────────────────────────────────────────────
 
 PIPELINE = """
+from pathlib import Path
 from barca import asset
+
+Path("user.imported").touch()
 
 @asset()
 def numbers() -> list:
@@ -335,6 +351,51 @@ class Project:
         )
         return proc, time.monotonic() - t0
 
+    def get_with_transfer_resets(self, proxy: FaultProxy) -> subprocess.CompletedProcess:
+        """Finish healthy preflight first, then fault actual uploads/cache reads."""
+        shim = self.dir / "shim"
+        shim.mkdir()
+        (shim / "sitecustomize.py").write_text(
+            "import os, time\nfrom pathlib import Path\nfrom barca import _storage\n"
+            "real = _storage.check_store\n"
+            "def checked(root):\n"
+            "    real(root)\n"
+            "    marker = Path(os.environ['BARCA_TEST_PROBE'])\n"
+            "    marker.touch()\n"
+            "    while not marker.with_suffix('.release').exists():\n"
+            "        time.sleep(0.01)\n"
+            "_storage.check_store = checked\n"
+        )
+        marker = self.dir / "probe.ready"
+        env = {
+            **self.env,
+            "BARCA_TEST_PROBE": str(marker),
+            "PYTHONPATH": str(shim) + os.pathsep + self.env.get("PYTHONPATH", ""),
+        }
+        with subprocess.Popen(
+            [BARCA, "get", "pipeline.py", "--agent"],
+            cwd=self.dir,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        ) as proc:
+            try:
+                deadline = time.monotonic() + 15
+                while not marker.exists():
+                    assert proc.poll() is None, "run exited before its healthy preflight completed"
+                    assert time.monotonic() < deadline, "healthy preflight never completed"
+                    time.sleep(0.01)
+                proxy.resets_left = 4
+                proxy.disconnect()
+                marker.with_suffix(".release").touch()
+                out, err = proc.communicate(timeout=120)
+                return subprocess.CompletedProcess(proc.args, proc.returncode, out, err)
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.wait(timeout=10)
+
     def rows(self, like: str) -> list[dict]:
         conn = sqlite3.connect(self.state)
         conn.row_factory = sqlite3.Row
@@ -356,9 +417,8 @@ def _explain(proc: subprocess.CompletedProcess) -> str:
 
 
 def test_uploads_survive_connection_resets(tmp_path, backend, container, proxy):
-    proxy.resets_left = 4
     a = Project(tmp_path / "a", backend, container, proxy.endpoint, tmp_path / "state.db")
-    proc, _ = a.get()
+    proc = a.get_with_transfer_resets(proxy)
     assert proc.returncode == 0, _explain(proc)
     assert proxy.resets_left == 0, "faults were never hit — the test proves nothing"
     assert "uploaded 2 artifacts" in proc.stderr
@@ -376,9 +436,8 @@ def test_cross_machine_fetch_survives_connection_resets(tmp_path, backend, conta
     proc, _ = a.get()
     assert proc.returncode == 0, _explain(proc)
 
-    proxy.resets_left = 4
     b = Project(tmp_path / "b", backend, container, proxy.endpoint, state)
-    proc, _ = b.get()
+    proc = b.get_with_transfer_resets(proxy)
     assert proc.returncode == 0, _explain(proc)
     assert proxy.resets_left == 0, "faults were never hit — the test proves nothing"
     assert json.loads(proc.stdout)["steps_executed"] == 0
@@ -393,16 +452,10 @@ def test_bad_credentials_fail_fast_without_retries(tmp_path, backend, container,
         tmp_path / "a", backend, container, proxy.endpoint, tmp_path / "state.db", bad_auth=True
     )
     proc, took = a.get()
-    assert proc.returncode != 0, _explain(proc)
-    assert "upload" in proc.stderr, _explain(proc)
+    _assert_store_failure(proc, a)
     assert took < 30, f"auth failure took {took:.1f}s — retried a permanent error?"
-    rows = a.rows("")
-    assert {r["status"] for r in rows} == {"failed"}, rows
-    for r in rows:
-        assert r["error_type"] == "UploadError"
-        assert r["artifact_path"] is None
-        # Real auth errors must classify as permanent: one attempt.
-        assert r["attempts"] == 1, r
+    with sqlite3.connect(a.dir / ".barca/metadata.db") as db:
+        assert db.execute("SELECT count(*) FROM materializations").fetchone() == (0,)
 
 
 def test_stalled_store_times_out_instead_of_hanging(tmp_path, backend, container, proxy):
@@ -416,12 +469,11 @@ def test_stalled_store_times_out_instead_of_hanging(tmp_path, backend, container
         transfer_timeout=3,
     )
     proc, took = a.get(timeout=90)
-    assert proc.returncode != 0, _explain(proc)
-    assert "TimeoutError" in proc.stderr, _explain(proc)
-    assert took < 45, f"stalled store held the run for {took:.1f}s"
-    rows = a.rows("")
-    assert rows and all(r["status"] == "failed" for r in rows), rows
-    assert all("TimeoutError" in r["error_message"] for r in rows)
+    _assert_store_failure(proc, a)
+    assert "timed out" in proc.stderr or "TimeoutError" in proc.stderr, _explain(proc)
+    assert took < 15, f"stalled store held the run for {took:.1f}s"
+    with sqlite3.connect(a.dir / ".barca/metadata.db") as db:
+        assert db.execute("SELECT count(*) FROM materializations").fetchone() == (0,)
 
 
 BIG_PIPELINE = """
@@ -519,12 +571,21 @@ def _container_exists(backend, name: str) -> bool:
         return False
 
 
-def _assert_store_failure(proc: subprocess.CompletedProcess) -> None:
-    """Exit 3 with the fetch error and its hint, and nothing computed on the store's account."""
+def _assert_store_failure(proc: subprocess.CompletedProcess, project: Project) -> None:
+    """Fail startup before user imports or cache reads; retain the durable failure."""
     assert proc.returncode == 3, _explain(proc)
-    assert "could not fetch" in proc.stderr and "--refresh-all" in proc.stderr, _explain(proc)
+    assert "artifact store preflight" in proc.stderr, _explain(proc)
     assert _no_step_ran(proc), _explain(proc)
+    assert not (project.dir / "user.imported").exists(), _explain(proc)
     assert "the artifact of its cached result is missing" not in proc.stderr, _explain(proc)
+    with sqlite3.connect(project.dir / ".barca/metadata.db") as db:
+        assert db.execute(
+            "SELECT status, steps_executed FROM runs ORDER BY rowid DESC LIMIT 1"
+        ).fetchone() == ("failed", 0)
+        assert (
+            "artifact store preflight"
+            in db.execute("SELECT line FROM logs ORDER BY rowid DESC LIMIT 1").fetchone()[0]
+        )
 
 
 def test_a_deleted_bucket_is_a_failed_run_not_a_recompute(tmp_path, backend, container, proxy):
@@ -541,8 +602,8 @@ def test_a_deleted_bucket_is_a_failed_run_not_a_recompute(tmp_path, backend, con
 
     b = Project(tmp_path / "b", backend, container, proxy.endpoint, state)
     proc, took = b.get()
-    _assert_store_failure(proc)
-    assert "is not there or cannot be listed" in proc.stderr, _explain(proc)
+    _assert_store_failure(proc, b)
+    assert "was not found" in proc.stderr, _explain(proc)
     assert took < 30, f"a deleted bucket took {took:.1f}s to report"
     assert not _container_exists(backend, container), "the run re-created the bucket"
 
@@ -558,7 +619,7 @@ def test_a_wrong_bucket_name_is_a_failed_run_not_a_recompute(tmp_path, backend, 
     wrong = f"{container}-typo"
     b = Project(tmp_path / "b", backend, wrong, proxy.endpoint, state)
     proc, took = b.get()
-    _assert_store_failure(proc)
+    _assert_store_failure(proc, b)
     assert took < 30, f"a wrong bucket name took {took:.1f}s to report"
     assert not _container_exists(backend, wrong), "the run created the misspelled bucket"
     assert _stored(backend, container) == before
@@ -578,7 +639,7 @@ def test_an_unreachable_store_fails_a_fetch_in_bounded_time(tmp_path, backend, c
         dead = f"http://127.0.0.1:{unused.getsockname()[1]}"
     b = Project(tmp_path / "b", backend, container, dead, state, transfer_timeout=5)
     proc, took = b.get(timeout=110)
-    _assert_store_failure(proc)
+    _assert_store_failure(proc, b)
     # One attempt may run for transfer_timeout; it is then abandoned, not retried.
     assert took < 45, f"an unreachable store held the run for {took:.1f}s"
     assert len(_stored(backend, container)) == 2
@@ -593,9 +654,9 @@ def test_a_stalled_store_fails_a_fetch_instead_of_hanging(tmp_path, backend, con
     proxy.stall = True
     b = Project(tmp_path / "b", backend, container, proxy.endpoint, state, transfer_timeout=3)
     proc, took = b.get(timeout=90)
-    _assert_store_failure(proc)
-    assert "TimeoutError" in proc.stderr, _explain(proc)
-    assert took < 45, f"a stalled store held the run for {took:.1f}s"
+    _assert_store_failure(proc, b)
+    assert "timed out" in proc.stderr or "TimeoutError" in proc.stderr, _explain(proc)
+    assert took < 15, f"a stalled store held the run for {took:.1f}s"
 
 
 def test_credentials_that_cannot_list_say_so_instead_of_bucket_not_found(tmp_path):
@@ -638,7 +699,7 @@ def test_credentials_that_cannot_list_say_so_instead_of_bucket_not_found(tmp_pat
             f'client_kwargs = {{ endpoint_url = "{backend.endpoint}" }}\n'
         )
         proc, _ = b.get()
-        _assert_store_failure(proc)
+        _assert_store_failure(proc, b)
         assert "is not permitted" in proc.stderr and "s3:ListBucket" in proc.stderr, _explain(proc)
         assert "was not found" not in proc.stderr, _explain(proc)
         assert not any("total" in path for path in _stored(backend, container))
