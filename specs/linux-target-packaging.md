@@ -86,3 +86,14 @@ both native architectures and both libcs after that release before closing #107.
 References: https://depot.dev/docs/github-actions/runner-types;
 https://www.maturin.rs/distribution.html;
 https://github.com/PyO3/maturin-action .
+
+## First implementation slice
+
+This PR adds the native GNU arm64 release matrix entry and the shared Linux
+installed-artifact/runtime smoke. Musl is intentionally a following slice: the
+actual PyPA musllinux_1_2 x86_64 image reports musl 1.2.5 and GCC 14.2 but contains
+no cargo, rustc or maturin executable. Its build-toolchain installation needs
+separate proof, rather than pretending the existing manylinux action covers it.
+The shared script is validated locally against the published v0.21.0 x86_64 wheel
+and native archive in a clean Python slim container; ARM evidence comes from the
+new native CI job. Publication still uses only normal version tags.
