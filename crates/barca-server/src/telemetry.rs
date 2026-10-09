@@ -38,13 +38,7 @@ impl Drop for ServerTelemetry {
 
 fn report(state: &AppState, phase: ServerPhase) -> ServerReport {
     // Never wait for an inspection lock, parse files, or resolve dynamic partitions.
-    let nodes = state.cache.try_read().ok().and_then(|cache| {
-        cache
-            .targets
-            .as_ref()
-            .map(|t| t.nodes.len())
-            .or_else(|| cache.assets.as_ref().map(Vec::len))
-    });
+    let nodes = state.loaded_node_count();
     let schedules = state
         .schedule
         .try_read()
@@ -132,6 +126,31 @@ mod tests {
             read_only: true,
         })
     }
+    #[tokio::test]
+    async fn counts_selected_graph_without_refreshing_or_waiting() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state(dir.path());
+        let file = &state.config.files[0];
+        std::fs::write(
+            file,
+            "from barca import asset\n@asset\ndef first(): return 1\n@asset\ndef second(first): return first + 1\n",
+        )
+        .unwrap();
+        state.loaded_dag().await.unwrap();
+        assert!(state.cache.read().unwrap().assets.is_none());
+        assert_eq!(report(&state, ServerPhase::Start).nodes, Some(2));
+
+        // A heartbeat must neither inspect changed sources nor wait for a loader.
+        std::fs::write(file, "this is not valid Python !!!").unwrap();
+        assert_eq!(report(&state, ServerPhase::Heartbeat).nodes, Some(2));
+        let held = state.loaded.lock().await;
+        assert_eq!(report(&state, ServerPhase::Heartbeat).nodes, None);
+        drop(held);
+        assert_eq!(report(&state, ServerPhase::Stop).nodes, Some(2));
+        assert!(state.runs.is_empty());
+        assert!(!dir.path().join(".barca").exists());
+    }
+
     async fn settle() {
         for _ in 0..8 {
             tokio::task::yield_now().await;

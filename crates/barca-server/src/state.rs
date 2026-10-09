@@ -354,6 +354,14 @@ impl AppState {
             .collect()
     }
 
+    /// Observe the selected graph without refreshing sources or waiting for loading.
+    pub(crate) fn loaded_node_count(&self) -> Option<usize> {
+        self.loaded
+            .try_lock()
+            .ok()
+            .and_then(|loaded| loaded.as_ref().map(|sources| sources.dag.node_count()))
+    }
+
     pub async fn loaded_dag(&self) -> Result<Arc<barca_core::dag::Dag>, barca_core::BarcaError> {
         self.refresh_dag(false).await
     }
