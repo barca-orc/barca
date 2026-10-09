@@ -482,10 +482,18 @@ class ProcessHelper:
 
     def finish(self) -> tuple[int, str]:
         """Wait for the helper to exit; (exit code, stderr)."""
+        # Python 3.12.0 communicate() flushes a referenced stdin even after
+        # the lifeline was explicitly closed. EOF already reached the helper.
+        if self.proc.stdin is not None and self.proc.stdin.closed:
+            self.proc.stdin = None
         try:
             _, err = self.proc.communicate(timeout=30)
         finally:
             self.proc.kill()
+            self.proc.wait(timeout=30)
+            for stream in (self.proc.stdin, self.proc.stderr):
+                if stream is not None:
+                    stream.close()
             self.peer.close()
             shutil.rmtree(self._sockdir, ignore_errors=True)
         return self.proc.returncode, err
@@ -675,7 +683,27 @@ class TestCoordinatorGone:
         h.proc.stdin.close()  # the coordinator was killed
         code, err = h.finish()
         assert (code, err) == (0, "")
+        assert h.proc.poll() == 0
+        with pytest.raises(ChildProcessError):
+            os.waitpid(h.proc.pid, os.WNOHANG)  # already reaped, not a zombie
         assert list(local.parent.iterdir()) == []
+
+    def test_failed_communication_still_reaps_helper_and_closes_owned_resources(
+        self, process_helper, monkeypatch
+    ):
+        h = process_helper(lifeline=True)
+
+        def timed_out(**_kwargs):
+            raise subprocess.TimeoutExpired(h.proc.args, 0)
+
+        monkeypatch.setattr(h.proc, "communicate", timed_out)
+        with pytest.raises(subprocess.TimeoutExpired):
+            h.finish()
+        assert h.proc.returncode is not None
+        with pytest.raises(ChildProcessError):
+            os.waitpid(h.proc.pid, os.WNOHANG)
+        assert h.proc.stdin.closed and h.proc.stderr.closed
+        assert h.peer.fileno() == -1 and not Path(h._sockdir).exists()
 
     def test_the_helper_leaves_when_the_socket_closes_mid_download(self, process_helper, tmp_path):
         h = process_helper(hold="get")
