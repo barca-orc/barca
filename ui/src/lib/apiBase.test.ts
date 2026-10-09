@@ -22,6 +22,12 @@ describe('apiBase', () => {
   it('treats index.html as the UI page itself', () => {
     expect(apiBase('/barca/ui/index.html')).toBe('/barca')
   })
+
+  it('keeps API requests outside the UI on dev-server fallback paths', () => {
+    expect(apiUrl(apiBase('/ui/assets'), '/state')).toBe('/state')
+    expect(apiUrl(apiBase('/barca/ui/assets/'), '/state')).toBe('/barca/state')
+    expect(apiBase('/tools/barca/ui/graph')).toBe('/tools/barca')
+  })
 })
 
 describe('apiUrl', () => {
