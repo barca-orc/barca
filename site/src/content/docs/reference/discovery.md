@@ -78,10 +78,11 @@ barca run validate pipelines/    # target first, then the scope
 
 ## Node ids
 
-A node id is `<file>:<function>` with `<file>` relative to the root (`pipelines/sources.py:ibp_model`),
-however you named the file: `../sources.py` from a subdirectory or an absolute path give the
-same id, and so share the cache. A bare name (`ibp_model`) selects the node when exactly one
-file defines it; when two do, the error lists both full ids.
+An explicit `name=` is the node’s stable id. Otherwise, its id is `<file>:<function>` with
+`<file>` relative to the root (`pipelines/sources.py:ibp_model`), however you named the file:
+`../sources.py` from a subdirectory or an absolute path give the same id, and so share the
+cache. A bare function name (`ibp_model`) selects the node when exactly one file defines it;
+when two do, the error lists both full ids.
 
 Two files may share a name in different directories (`east/assets.py`, `west/assets.py`):
 use their qualified module names when importing them. Workers share imported modules for
