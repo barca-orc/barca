@@ -64,6 +64,9 @@ pub enum StateMode {
 
 #[derive(Debug, Clone)]
 pub struct ResolvedConfig {
+    /// Explicit process-wide remote-off override; historical remote results stay
+    /// recorded but cannot be read by this process.
+    pub remote_off: bool,
     /// Validated environment name (path/URI segment).
     pub env: String,
     /// Local metadata DB path for this env (state sync overwrites this file).
@@ -88,6 +91,10 @@ pub struct ResolvedConfig {
 }
 
 impl ResolvedConfig {
+    pub(crate) fn allows_artifact(&self, path: &str) -> bool {
+        !self.remote_off || local_artifact(path, &self.local_artifact_dir)
+    }
+
     /// True when the artifact store is separate from the local artifact dir,
     /// so artifacts are transferred in the background (upload after a step
     /// completes, download before a cached artifact is consumed).
@@ -96,6 +103,25 @@ impl ResolvedConfig {
             p.trim_start_matches("./").trim_end_matches('/')
         }
         norm(&self.artifact_root) != norm(&self.local_artifact_dir)
+    }
+}
+
+/// A path in this environment's local artifact directory, without accessing any store.
+pub(crate) fn local_artifact(path: &str, artifact_dir: &str) -> bool {
+    let Some(path) = crate::transfer::local_path(path) else {
+        return false;
+    };
+    let root = Path::new(artifact_dir);
+    if path.is_absolute() {
+        let Ok(cwd) = std::env::current_dir() else {
+            return false;
+        };
+        let path = normalize_lexically(path);
+        let root = normalize_lexically(&cwd.join(root));
+        path.starts_with(&root)
+            || std::fs::canonicalize(&root).is_ok_and(|real| path.starts_with(real))
+    } else {
+        normalize_lexically(path).starts_with(normalize_lexically(root))
     }
 }
 
@@ -204,6 +230,31 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
         )));
     }
 
+    match env_var("BARCA_REMOTE").as_deref() {
+        Some("off") => {
+            let local = crate::db::env_local_paths(&env);
+            return Ok(ResolvedConfig {
+                remote_off: true,
+                env,
+                db_path: local.db_path,
+                artifact_root: local.artifact_dir.clone(),
+                local_artifact_dir: local.artifact_dir,
+                transfer_concurrency: 4,
+                transfer_timeout_secs: 600,
+                state_uri: None,
+                state: StateMode::Off,
+                push_retries: 5,
+                storage_options_json: None,
+            });
+        }
+        Some(other) => {
+            return Err(BarcaError::Usage(format!(
+                "invalid BARCA_REMOTE '{other}' (expected \"off\" or an unset/empty value)"
+            )));
+        }
+        None => {}
+    }
+
     // remote root: BARCA_REMOTE_URI > [remote].uri
     let remote_uri = env_var("BARCA_REMOTE_URI").or(remote.uri);
 
@@ -300,6 +351,7 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
     let storage_options_json = merge_storage_options(remote.storage_options.as_ref())?;
 
     Ok(ResolvedConfig {
+        remote_off: false,
         env,
         db_path: local.db_path,
         artifact_root,
@@ -420,6 +472,7 @@ mod tests {
 
     const VARS: &[&str] = &[
         "BARCA_ENV",
+        "BARCA_REMOTE",
         "BARCA_REMOTE_URI",
         "BARCA_ARTIFACT_URI",
         "BARCA_STATE_URI",
@@ -456,6 +509,83 @@ mod tests {
 
     fn write_toml(dir: &Path, body: &str) {
         std::fs::write(dir.join(CONFIG_FILE), body).unwrap();
+    }
+
+    #[test]
+    fn remote_off_overrides_uris_state_and_remote_options() {
+        let _e = clean_env();
+        let dir = tempfile::tempdir().unwrap();
+        write_toml(
+            dir.path(),
+            "[remote]\nuri = \"s3://toml/p\"\nstate = \"optimistic\"\ntransfer_concurrency = 0\n",
+        );
+        unsafe {
+            std::env::set_var("BARCA_REMOTE", "off");
+            std::env::set_var("BARCA_REMOTE_URI", "s3://env/p");
+            std::env::set_var("BARCA_ARTIFACT_URI", "s3://literal/artifacts");
+            std::env::set_var("BARCA_STATE_URI", "s3://literal/state.db");
+            std::env::set_var("BARCA_STATE", "optimistic");
+            std::env::set_var("BARCA_STORAGE_OPTIONS", "invalid JSON");
+            std::env::set_var("BARCA_TRANSFER_TIMEOUT", "invalid");
+        }
+        let cfg = resolve_in(Some("dev"), dir.path()).unwrap();
+        assert!(cfg.remote_off);
+        assert!(!cfg.remote_artifacts());
+        assert!(cfg.state_uri.is_none());
+        assert_eq!(cfg.state, StateMode::Off);
+        assert!(cfg.storage_options_json.is_none());
+        assert!(cfg.artifact_root.contains(".barca/envs/dev/artifacts"));
+        assert!(cfg.db_path.contains(".barca/envs/dev/metadata.db"));
+    }
+
+    #[test]
+    fn empty_remote_and_uri_values_retain_configured_storage() {
+        let _e = clean_env();
+        let dir = tempfile::tempdir().unwrap();
+        write_toml(dir.path(), "[remote]\nuri = \"s3://toml/p\"\n");
+        unsafe {
+            std::env::set_var("BARCA_REMOTE", "");
+            std::env::set_var("BARCA_REMOTE_URI", "");
+            std::env::set_var("BARCA_ARTIFACT_URI", "");
+            std::env::set_var("BARCA_STATE_URI", "");
+            std::env::set_var("BARCA_STATE", "");
+        }
+        let cfg = resolve_in(None, dir.path()).unwrap();
+        assert!(!cfg.remote_off);
+        assert!(cfg.artifact_root.starts_with("s3://toml/p/"));
+        assert_eq!(cfg.state, StateMode::Optimistic);
+    }
+
+    #[test]
+    fn remote_switch_rejects_unrequested_modes() {
+        let _e = clean_env();
+        let dir = tempfile::tempdir().unwrap();
+        for value in ["on", "false", "OFF", "local"] {
+            unsafe { std::env::set_var("BARCA_REMOTE", value) };
+            assert!(matches!(
+                resolve_in(None, dir.path()),
+                Err(BarcaError::Usage(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn local_artifact_scope_handles_relative_absolute_file_and_parent_paths() {
+        let root = ".barca/artifacts";
+        assert!(local_artifact("./.barca/artifacts/n/h.json", root));
+        let abs = std::env::current_dir()
+            .unwrap()
+            .join(".barca/artifacts/n/h.json");
+        assert!(local_artifact(&abs.to_string_lossy(), root));
+        assert!(local_artifact(&format!("file://{}", abs.display()), root));
+        for path in [
+            "s3://b/a/n/h.json",
+            ".barca/artifacts-other/n/h.json",
+            ".barca/artifacts/../../remote.json",
+            "/store/n/h.json",
+        ] {
+            assert!(!local_artifact(path, root), "{path}");
+        }
     }
 
     #[test]

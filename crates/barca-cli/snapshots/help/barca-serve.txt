@@ -40,6 +40,8 @@ Options:
           Print help (see a summary with '-h')
 
 Examples:
+  BARCA_STATE=off barca serve pipeline.py    # local history; keep configured artifact sharing
+  BARCA_REMOTE=off barca serve pipeline.py   # local artifacts and history
   barca serve                                # every file in the project; files added later need a restart
   barca serve pipeline.py                    # HTTP API on 127.0.0.1:8274 plus the scheduler
   barca serve pipeline.py --port 8400        # custom port

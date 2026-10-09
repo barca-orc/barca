@@ -141,7 +141,7 @@ pub async fn sql(
         let get = if n.kind == "task" { "run" } else { "get" };
         if n.partitioned {
             let files = if Path::new(&cfg.db_path).exists() {
-                crate::db::latest_partition_artifacts(&cfg.db_path, &n.id).await?
+                crate::db::partition_artifacts_for_config(cfg, &n.id).await?
             } else {
                 Vec::new()
             };
@@ -170,7 +170,12 @@ pub async fn sql(
         }
         let (path, format) = match (&n.cache.artifact, &n.last_materialization) {
             (Some(path), _) if n.cache.state == "cached" => (path.clone(), format_of(path)),
-            (_, Some(m)) if m.status == "success" && m.artifact.is_some() => {
+            (_, Some(m))
+                if m.status == "success"
+                    && m.artifact
+                        .as_deref()
+                        .is_some_and(|path| cfg.allows_artifact(path)) =>
+            {
                 let path = m.artifact.clone().unwrap_or_default();
                 if n.cache.state == "stale" {
                     stale.push(view_name.clone());

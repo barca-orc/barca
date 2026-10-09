@@ -50,6 +50,7 @@ Options:
           Print help (see a summary with '-h')
 
 Examples:
+  BARCA_REMOTE=off barca run deploy pipeline.py   # local artifacts and history for this process
   barca run deploy                                     # find the task anywhere in the project and run it
   barca run deploy pipelines/                          # only read files under pipelines/
   barca run deploy pipeline.py                         # task runs; upstream assets come from cache

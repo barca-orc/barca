@@ -766,7 +766,7 @@ async fn expand_and_decide(
         dag: &session.prepared.dag,
         policy: &session.request.policy,
         no_cache: session.request.no_cache,
-        db_path: &session.request.cfg.db_path,
+        cfg: session.request.cfg,
         phase_ref,
         decide_state: &mut session.state.decide_state,
         store: &mut session.store,
@@ -1466,7 +1466,7 @@ pub(crate) async fn explain_dag(
 
     // No metadata DB yet means nothing is cached. Do not create one just to look.
     let cache = if std::path::Path::new(&cfg.db_path).exists() {
-        Some(db::CacheReader::open(&cfg.db_path).await?)
+        Some(db::CacheReader::for_config(cfg).await?)
     } else {
         None
     };
@@ -1805,7 +1805,7 @@ struct DecidePhase<'a> {
     dag: &'a Dag,
     policy: &'a CachePolicy,
     no_cache: bool,
-    db_path: &'a str,
+    cfg: &'a crate::config::ResolvedConfig,
     phase_ref: &'a Phase,
     decide_state: &'a mut DecideState,
     store: &'a mut Option<StoreSync>,
@@ -1823,7 +1823,7 @@ async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaError> {
         dag,
         policy,
         no_cache,
-        db_path,
+        cfg,
         phase_ref,
         decide_state,
         store,
@@ -1840,7 +1840,7 @@ async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaError> {
     // Open the DB only for this phase's cache lookups and release it before any
     // step runs, so other barca processes can use the metadata DB while Python
     // executes.
-    let cache = db::CacheReader::open(db_path).await?;
+    let cache = db::CacheReader::for_config(cfg).await?;
 
     // Decide all upstream chunks before any consumer, independently of the worker split.
     let mut uncached: Vec<Vec<crate::planner::StreamStep>> =

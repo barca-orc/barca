@@ -410,17 +410,56 @@ async fn read_shapes_inner(
     sample: usize,
     fields: bool,
 ) {
-    let wanted: Vec<(usize, String, String)> = nodes
-        .iter()
-        .enumerate()
-        .filter_map(|(i, n)| {
-            let m = n.last_materialization.as_ref()?;
-            if m.status != "success" {
-                return None;
+    // A remote-off cache hit can select an older local row than the historical latest
+    // materialization. Keep the selected artifact's metadata together rather than read
+    // its bytes with the latest row's (possibly different) format.
+    let cache = if cfg.remote_off
+        && nodes.iter().any(|n| {
+            n.cache.artifact.as_ref().is_some_and(|path| {
+                n.last_materialization
+                    .as_ref()
+                    .and_then(|m| m.artifact.as_ref())
+                    != Some(path)
+            })
+        }) {
+        db::CacheReader::for_config(cfg).await.ok()
+    } else {
+        None
+    };
+    let mut wanted: Vec<(usize, String, String)> = Vec::new();
+    for (i, n) in nodes.iter().enumerate() {
+        let Some(m) = n.last_materialization.as_ref() else {
+            continue;
+        };
+        if m.status != "success" {
+            continue;
+        }
+        let path = if cfg.remote_off {
+            n.cache.artifact.as_ref().or(m.artifact.as_ref())
+        } else {
+            m.artifact.as_ref()
+        };
+        let Some(path) = path.filter(|path| cfg.allows_artifact(path)) else {
+            continue;
+        };
+        if cfg.remote_off && m.artifact.as_ref() != Some(path) {
+            let (Some(cache), Some(hash)) = (&cache, &n.cache.run_hash) else {
+                continue;
+            };
+            let Some(selected) = crate::cache::lookup_cached(cache, &n.id, hash).await else {
+                continue;
+            };
+            // A concurrent write may have changed which result would now be selected.
+            // Do not attach unrelated metadata to the previously reported artifact.
+            if selected.path == *path {
+                wanted.push((i, selected.path, selected.format));
             }
-            Some((i, m.artifact.clone()?, m.format.clone().unwrap_or_default()))
-        })
-        .collect();
+        } else {
+            wanted.push((i, path.clone(), m.format.clone().unwrap_or_default()));
+        }
+    }
+    // The inspector only reads artifact files; release the database before launching it.
+    drop(cache);
     if wanted.is_empty() {
         return;
     }

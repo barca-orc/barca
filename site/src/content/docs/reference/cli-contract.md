@@ -271,6 +271,7 @@ follow the same rule: in JSON mode they are the envelope on stderr (see Errors).
 |---|---|---|
 | `BARCA_OUTPUT` | `json` or `pretty`: output format when no flag is given; any other value is a usage error (exit 2) | stable |
 | `BARCA_ENV` | environment name when `--env` is not given (beats `default_env` in `barca.toml`) | stable |
+| `BARCA_REMOTE` | `off` disables remote artifacts/history for this process; unset/empty retains normal config; other values are usage errors | stable |
 | `BARCA_REMOTE_URI` | remote root for artifacts and shared state (`[remote].uri`) | stable |
 | `BARCA_STATE_URI` | shared metadata DB location (`[remote].state_uri`) | stable |
 | `BARCA_STATE` | `optimistic` or `off` (`[remote].state`); any other value is a usage error | stable |

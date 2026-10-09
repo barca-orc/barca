@@ -15,6 +15,7 @@ from outside.
 
 Points:
 
+- ``remote-access`` any storage resolution below the configured remote root (observation)
 - ``put``     the transfer helper is about to upload an artifact (``_storage.put_file``)
 - ``get``     the transfer helper is about to download one (``_storage.get_file``); its temp
               file exists already
@@ -94,7 +95,10 @@ def _install(point: str, directory: Path) -> None:
     def transferring(*args) -> bool:
         return os.path.basename(sys.argv[0]) == "_transfer.py"
 
-    if point == "put":
+    if point == "remote-access":
+        root = os.environ["BARCA_REMOTE_URI"].rstrip("/")
+        wrap("local_path_of", lambda path: str(path) == root or str(path).startswith(root + "/"))
+    elif point == "put":
         wrap("put_file", transferring)
     elif point == "get":
         wrap("get_file", transferring)

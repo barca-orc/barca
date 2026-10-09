@@ -61,6 +61,7 @@ Scripts and AI agents: barca docs skill (short, start here), barca docs agents (
 
 const GET_HELP: &str = "\
 Examples:
+  BARCA_REMOTE=off barca get total pipeline.py   # local artifacts and history for this process
   barca get total                          # find `total` anywhere in the project and get it
   barca get total pipelines/               # only read files under pipelines/
   barca get                                # every asset and sensor in the project, never tasks
@@ -115,6 +116,7 @@ More: barca docs cache, barca docs types, barca docs agents";
 
 const RUN_HELP: &str = "\
 Examples:
+  BARCA_REMOTE=off barca run deploy pipeline.py   # local artifacts and history for this process
   barca run deploy                                     # find the task anywhere in the project and run it
   barca run deploy pipelines/                          # only read files under pipelines/
   barca run deploy pipeline.py                         # task runs; upstream assets come from cache
@@ -196,6 +198,8 @@ More: barca docs cache";
 
 const SERVE_HELP: &str = "\
 Examples:
+  BARCA_STATE=off barca serve pipeline.py    # local history; keep configured artifact sharing
+  BARCA_REMOTE=off barca serve pipeline.py   # local artifacts and history
   barca serve                                # every file in the project; files added later need a restart
   barca serve pipeline.py                    # HTTP API on 127.0.0.1:8274 plus the scheduler
   barca serve pipeline.py --port 8400        # custom port
