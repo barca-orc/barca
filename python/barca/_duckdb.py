@@ -10,6 +10,9 @@ included — without the author writing any bind code.
 
 ``barca.duckdb_connection()`` exposes the connection so an asset module can configure it once
 per worker process (extensions, credentials, settings, macros) at import time.
+User-created objects and session changes persist between sequential steps; only the input
+views bound by Barca are cleaned up after execution and materialization. Input names are not
+an isolated namespace, so avoid collisions with project-created catalog objects.
 """
 
 from __future__ import annotations

@@ -326,8 +326,10 @@ def duckdb_connection():
 
     Configure it once at import time of your asset module (``INSTALL``/``LOAD`` extensions,
     credentials, ``SET`` options, macros); every duckdb input, and ``duckdb.sql(...)`` inside
-    your steps, runs on this same connection, so relations always combine. See
-    ``barca docs types``.
+    your steps, runs on this same connection, so relations always combine. User-created
+    objects and session settings persist across sequential steps; Barca cleans up only
+    its temporary input views. Avoid catalog names that collide with input parameters.
+    See ``barca docs types``.
     """
     from barca import _duckdb
 
