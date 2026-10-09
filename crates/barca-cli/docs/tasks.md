@@ -169,7 +169,7 @@ cannot be passed back to the step that called parallel(): TypeError: cannot pick
 'TextIOWrapper' instances.
 ```
 
-A branch's result is never replaced by `None`. (Until 0.18.1 it was, for every value that is
+A branch's result is never replaced by `None`. (Through 0.19.0 it was, for every value that is
 not JSON: the caller received `None` and the run succeeded.)
 
 **Where it can be called.** In the body of a `@task`, and in the body of a branch (a branch may
@@ -196,7 +196,7 @@ happen on every run belongs in a task.
   artifact store. Barca removes a call's directory when the step that made the call ends, and
   the run's directory when the run ends, however it ends (success, a failed step, Ctrl-C). A
   run that was killed outright leaves its directory behind; the next `barca get` or
-  `barca run` in the project removes it. (Until 0.18.1 these files were written into the
+  `barca run` in the project removes it. (Through 0.19.0 these files were written into the
   artifact directory under the branch's name and never removed, and two runs of one pipeline
   at the same time could receive each other's branch results.)
 

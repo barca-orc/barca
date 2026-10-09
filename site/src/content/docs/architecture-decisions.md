@@ -91,7 +91,7 @@ When a step calls `parallel()`, the coordinator:
    this run and this call), which the original worker reads. The directory is removed when
    the calling step ends. The
    pool then has one worker more than its size; the next worker that has no
-   step leased is stopped. (Until 0.18.1 the temporary worker itself was killed at this point,
+   step leased is stopped. (Through 0.19.0 the temporary worker itself was killed at this point,
    whatever it was doing. If it had called `parallel()` in the meantime, its step was lost and
    the run never ended.)
 
@@ -124,7 +124,7 @@ parallel calls. That works and gives no parallelism.
   barca is gone and exit.
 - If the stopped worker is killed while its calls run, its step fails with `worker
   disconnected while it waited for its parallel() branches`; calls that have not started are
-  dropped. (Until 0.18.1 this went unnoticed and the run never ended.)
+  dropped. (Through 0.19.0 this went unnoticed and the run never ended.)
 - A stopped process keeps its memory. Deep nesting with large data in memory uses that much
   RAM for as long as the calls run.
 - Calls made through `parallel()` are not steps of the plan: they are not counted in a run's

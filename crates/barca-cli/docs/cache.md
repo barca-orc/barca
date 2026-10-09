@@ -257,6 +257,7 @@ output, so the next `--dry-run` or `barca status` shows its consumers as stale.
 .barca/metadata.db.base                     with shared history: a counter of pulls and uploads (`barca docs remote`)
 .barca/metadata.db.prev                     with shared history: the local DB as it was before the last pull that changed it
 .barca/metadata.db.pull-*, .push-*          with shared history: a download or upload in progress; what a killed command left is removed by the next pull
+.barca/run-owners/<token>.fifo              a marker a barca process holds open while it has a run in flight ("While a run is going, and after one is killed")
 .barca/artifacts/<node>/<run_hash>.<ext>    one file per result
 ```
 
@@ -532,9 +533,11 @@ barca history --json            # the run is `running`; `steps_executed` is the 
   runs again.
 - **History says so.** `barca history` reports a run whose process no longer exists as
   `interrupted`, with `finished_at` and `elapsed_seconds` `null` (nobody saw it end) and
-  `steps_executed` at what it had recorded. Ctrl-C is different, and so is SIGTERM (a
-  supervisor, `docker stop`): the run stops its workers, records itself and is `cancelled`
-  (exit 130). With an artifact store that also holds while
+  `steps_executed` at what it had recorded. It does so as soon as the process is gone, and
+  also for a run killed with its container, once a container starts again on the same
+  `.barca` (see the limits below). Ctrl-C and SIGTERM (a supervisor, `docker stop`) are
+  different: the run stops its workers, records itself and is `cancelled` (exit 130).
+  With an artifact store that also holds while
   artifacts upload, download or the shared history is pushed, and the cancelled run then shares
   its record for at most 10 seconds; a second Ctrl-C ends that (`barca docs remote`, "Ctrl-C").
 
@@ -547,9 +550,58 @@ Known limits:
 - With a remote artifact store, steps are not recorded as they finish: a row is written only
   once the artifact's upload is confirmed, which happens when the run ends. Such a run shows no
   progress in `barca status`, and a killed one records nothing.
-- `interrupted` is decided by looking for the run's process on this machine. A run started by an
-  older barca, or on another machine, stays `running`; so does a run whose process id has since
-  been reused by another program.
+- **When a run is `interrupted`.** For runs started with 0.20.0 or later, only on an observation
+  that can only be made when the run's process is gone; whenever barca cannot make one, the run stays `running`. A run
+  records which kernel its process ran on (the boot id), its pid namespace, its start time,
+  and a marker: a FIFO in `.barca/run-owners/` that the process holds open for as long as it
+  has a run in flight. Three observations count:
+  - On the same kernel and in the same pid namespace, the process table: no process with
+    that id, or one with another start time in the same known time namespace.
+  - On the same kernel in another pid namespace (another container), the marker: the
+    system refuses to open a FIFO for writing when no process has it open for reading, and
+    it closes the owner's end when the owner ends, however it ended. This counts only where
+    barca can show that the file is the one the owner held: same device and inode, and on
+    Linux the same file handle.
+  - On another kernel, that the owner's kernel has shut down: the marker is on a local
+    disk (not a network or VM-shared mount) for both the owner and the reader, it is the
+    same filesystem and inode, and nobody has it open. A local disk is mounted by one
+    kernel at a time, so this is a machine, or a container's machine, that was restarted.
+
+  Machine ids and host names decide nothing. No clock is involved either: a killed run
+  reads `interrupted` at once, and a suspended laptop or a stopped process (Ctrl-Z) does
+  not make a live run look dead.
+- A run that is going is therefore shown as `running` from everywhere that sees the project
+  directory. The one situation in which a history says `interrupted` for a run that is
+  going somewhere is a copy of the whole disk (a cloned or restored virtual machine) taken
+  during the run and started as another machine: the copy's history is a copy too, and in
+  it the run will never end. And two virtual machines resumed from the same memory
+  snapshot are one machine as far as anything observable goes (same boot id, same
+  processes): if they share a project directory, a run killed on one is shown as
+  `interrupted` there while its twin on the other is still going.
+- What stays `running` although its process is gone:
+  - a run another machine started (it came with the shared history), until that machine
+    records it;
+  - with Docker Desktop, a run killed on the host as seen from a container, and a run
+    killed in a container as seen from the host: they are different kernels and the
+    directory between them is not a local disk. The side the run was on shows
+    `interrupted`, and once it has recorded that, so does the other;
+  - a run killed with its container when `.barca` is on a Docker Desktop bind mount (which
+    gives no file handle) and another container was started before the replacement, so
+    that the replacement got another pid namespace number. Restarting one container gives
+    the same number in practice. A named volume for `.barca` does not depend on it;
+  - a run killed in a container by a restart of the machine or of Docker's virtual machine
+    when `.barca` is on a bind mount from a Docker Desktop host or on a network
+    filesystem;
+  - a run killed by a restart of the machine when the project is on a network filesystem
+    (0.18.1 reported this one, from the host name and process id);
+  - a run started by barca 0.19.0 or earlier, which is judged by its process id and host
+    name: in a container, on another machine, or once its process id has been reused.
+- `interrupted` is written to the history by the next `get` or `run`, under the same rule.
+- A marker is removed by its process when its runs have ended. One left by a killed
+  process stays while its run reads `running`, and is removed by a later `get` or `run`
+  once no `running` run names it and it is an hour old. A process killed in the instant
+  between creating its marker and recording its run leaves a marker no run names; it goes
+  the same way after an hour. Markers are empty files.
 - Failed steps are recorded when the run ends, so a killed run records its successes only.
 
 ## Environments
