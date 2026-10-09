@@ -29,6 +29,21 @@ use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
+/// Display a location without URI passwords or signed query parameters.
+pub(crate) fn diagnostic_uri(uri: &str) -> String {
+    if local_path(uri).is_some() {
+        return uri.to_string();
+    }
+    let plain = uri.split(['?', '#']).next().unwrap_or(uri);
+    if let Some((scheme, rest)) = plain.split_once("://")
+        && let Some((credentials, host)) = rest.split_once('@')
+        && credentials.contains(':')
+    {
+        return format!("{scheme}://<redacted>@{host}");
+    }
+    plain.to_string()
+}
+
 // ─── Path mapping ────────────────────────────────────────────────────────────
 
 /// Maps artifact paths between the local artifact dir and the store root.
@@ -425,7 +440,27 @@ impl TransferClient {
     /// directory exists and can be listed. `Err` carries the store's own error (or a timeout,
     /// or a helper that is gone). Nothing is created in the store.
     pub async fn probe(&mut self) -> Result<(), String> {
-        let root = self.layout.store_root().to_string();
+        self.probe_root(self.layout.store_root().to_string()).await
+    }
+
+    /// Startup permits a new directory store: check its existing ancestor without creating it.
+    pub(crate) async fn preflight(&mut self) -> Result<(), String> {
+        let root = match local_path(self.layout.store_root()) {
+            Some(path) => {
+                let mut path = path.to_path_buf();
+                while !path.exists() {
+                    if !path.pop() {
+                        break;
+                    }
+                }
+                path.to_string_lossy().into_owned()
+            }
+            None => self.layout.store_root().to_string(),
+        };
+        self.probe_root(root).await
+    }
+
+    async fn probe_root(&mut self, root: String) -> Result<(), String> {
         let rx = self.send(|id| TransferRequest::Probe { id, root });
         settle(rx).await.map(|_| ()).map_err(|f| f.message)
     }
@@ -538,9 +573,9 @@ async fn io_task(
             req = req_rx.recv() => {
                 let Some((req, tx)) = req else { break };
                 let entry = match &req {
-                    TransferRequest::Put { id, remote, .. } => Some((*id, format!("put {remote}"))),
-                    TransferRequest::Get { id, remote, .. } => Some((*id, format!("get {remote}"))),
-                    TransferRequest::Probe { id, root } => Some((*id, format!("probe {root}"))),
+                    TransferRequest::Put { id, remote, .. } => Some((*id, format!("put {}", diagnostic_uri(remote)))),
+                    TransferRequest::Get { id, remote, .. } => Some((*id, format!("get {}", diagnostic_uri(remote)))),
+                    TransferRequest::Probe { id, root } => Some((*id, format!("probe {}", diagnostic_uri(root)))),
                     TransferRequest::Shutdown => None,
                 };
                 if write_frame(&mut stream, &req).await.is_err() {
@@ -640,6 +675,20 @@ mod tests {
         assert!(l.local_for("/w/a/n/h.json").is_none()); // legacy local row
         assert!(l.local_for("s3://b/x/../../etc/passwd").is_none());
         assert!(l.local_for("s3://b/x//h").is_none());
+    }
+
+    #[test]
+    fn diagnostic_locations_hide_passwords_and_signed_queries() {
+        assert_eq!(
+            diagnostic_uri("s3://user:password@bucket/path?token=secret"),
+            "s3://<redacted>@bucket/path"
+        );
+        assert_eq!(
+            diagnostic_uri("abfs://container@account/path?sig=secret"),
+            "abfs://container@account/path"
+        );
+        assert_eq!(diagnostic_uri("/local/path"), "/local/path");
+        assert_eq!(diagnostic_uri("/local/path?part#1"), "/local/path?part#1");
     }
 
     #[test]

@@ -59,6 +59,17 @@ convention, so other fsspec tools on the machine read the same settings.
 2. On a second machine, or a fresh clone with no `.barca/`, run the same `barca get`: it reports
    `steps_executed: 0`, served from the bucket.
 
+Every execution checks the artifact store before starting workers, including with
+`state = "off"` and runs triggered through `barca serve`. The read-only startup
+probe is limited to 10 seconds, or `transfer_timeout` when shorter. Cloud stores
+must allow listing the bucket/container root and its backend's existence check;
+object read/write access or prefix-only listing is insufficient. This check
+verifies reachability, not upload permission. A new directory store checks its
+existing ancestor; the probe creates nothing.
+Before the end-of-run upload wait, barca reports the artifact count, destination
+and per-attempt timeout; longer waits report progress every 10 seconds. Failed
+uploads report their attempt count and remain unrecorded.
+
 A failure to reach the bucket stops the run before any step: exit 3, naming the location, with
 the cloud's own error (expired login, access denied). A missing extra says which one to install.
 
