@@ -41,7 +41,7 @@ pub enum WorkerMessage {
         items: Vec<SubmitItem>,
         /// The worker reads each branch's result from its artifact, so the response names
         /// the artifacts ([`ParallelResult::Ok::artifact`]) and carries no values. A worker
-        /// from an older barca Python package (0.18.1 or earlier) does not send this and gets the
+        /// from an older barca Python package (0.19.0 or earlier) does not send this and gets the
         /// values inline, as it expects.
         #[serde(default)]
         artifact_results: bool,
@@ -757,7 +757,7 @@ mod tests {
     // shapes; pin them.
     #[test]
     fn parallel_wire_shapes() {
-        // A worker from 0.18.1 or earlier sends no `artifact_results`: it gets values inline.
+        // A worker from 0.19.0 or earlier sends no `artifact_results`: it gets values inline.
         let old: WorkerMessage = serde_json::from_str(r#"{"type":"submit","items":[]}"#).unwrap();
         assert!(matches!(
             old,

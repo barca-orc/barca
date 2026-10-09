@@ -168,7 +168,7 @@ def submit_and_wait(work_items: list[dict]) -> list[dict]:
         One entry per item: {"status": "ok", "artifact": {"path", "format", "frame_type"?,
         "json"?}} for a branch that returned (`barca._branches` reads the value from the
         artifact, or from its text in "json" when the coordinator sent it along), or
-        {"status": "error", "error": "..."}. A coordinator from 0.18.1 or earlier answers
+        {"status": "error", "error": "..."}. A coordinator from 0.19.0 or earlier answers
         {"status": "ok", "result": <JSON value>} instead.
     """
     send_message(

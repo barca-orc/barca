@@ -127,7 +127,7 @@ local disk — fails explicitly under a remote store) and `parallel()` return va
 remote store the parent gets `null` results with a warning). See
 [Remote Storage](/reference/remote-storage/) §"v1 limitations."
 
-> **Amended (after 0.18.1, issue #285):** `parallel()` return values are no longer an
+> **Amended (0.20.0, issue #285):** `parallel()` return values are no longer an
 > exception. The second one above was worse than stated: the coordinator read a child's
 > artifact only when it was JSON, so a branch that returned anything else (a set, a date, a
 > DataFrame: written as pickle or parquet) resumed the parent with `null` for that branch,

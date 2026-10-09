@@ -57,7 +57,7 @@ services:
     volumes:
       - ./project:/project
       - barca-state:/project/.barca
-    stop_signal: SIGINT        # only for barca 0.18.1 and earlier, see below
+    stop_signal: SIGINT        # only for barca 0.19.0 and earlier, see below
     restart: unless-stopped
     ports:
       - "127.0.0.1:8080:8080"
@@ -116,7 +116,7 @@ What each part is for:
 - **`--timezone`.** Cron is evaluated in the container's local time unless you say otherwise,
   and that is usually UTC whatever the host uses. State it. A value barca does not know is a
   usage error: the server exits 2 and names it.
-- **`stop_signal: SIGINT`.** Needed for barca 0.18.1 and earlier, the version this example
+- **`stop_signal: SIGINT`.** Needed for barca 0.19.0 and earlier, the version this example
   pins included. Those releases shut down cleanly on SIGINT (Ctrl-C) but have no SIGTERM
   handler, and as process 1 in a container they ignore SIGTERM, so a default `docker stop`
   waits out its timeout and then kills the process. Later releases shut down the same way on
@@ -140,19 +140,19 @@ before you bind it to anything wider, add [authentication](#authentication) at t
 ### What happens on restart
 
 - **Stopped with SIGINT or SIGTERM** (`docker compose stop`, `docker stop`, `systemctl stop`,
-  Ctrl-C; SIGTERM only after 0.18.1, see `stop_signal` above): runs in progress are cancelled,
+  Ctrl-C; SIGTERM from 0.20.0, see `stop_signal` above): runs in progress are cancelled,
   their workers are stopped, and they are recorded as `cancelled`. The process exits with
-  code 0, normally in less than a second. After 0.18.1 the shutdown also ends open `/events`
-  streams (in 0.18.1 and earlier a browser tab left on a run page keeps a stopping server
+  code 0, normally in less than a second. From 0.20.0 the shutdown also ends open `/events`
+  streams (in 0.19.0 and earlier a browser tab left on a run page keeps a stopping server
   alive until Docker kills it) and is bounded at about 12 seconds: runs get 10 seconds to
   stop, open connections 2 more. Docker's default stop timeout is 10 seconds; a step that
   does not stop when its worker is told to can outlast it, and Docker then kills the
   container.
 - **Killed** (SIGKILL, out of memory, host lost): steps that had finished are already recorded
-  and are served from cache next time. In 0.18.1 and earlier the run in progress stays in
+  and are served from cache next time. In 0.19.0 and earlier the run in progress stays in
   `barca history` with status `running` for good: those versions look for the run's process
   by its id and host name, and in a container the new server has the same process id and
-  another host name. Later versions report it as `interrupted` once a container starts again
+  another host name. From 0.20.0, barca reports it as `interrupted` once a container starts again
   on the same `.barca` volume, and the first run after the restart writes that to the
   history. That holds for a `.barca` on a named volume, as here. With `.barca` on a bind mount from a Docker Desktop
   host the run can stay `running`: after a restart of the machine, or when another

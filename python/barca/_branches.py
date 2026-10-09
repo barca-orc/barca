@@ -135,7 +135,7 @@ def collect(results: list[dict], items: list[dict]) -> list:
             continue
         artifact = result.get("artifact")
         if artifact is None:
-            # A coordinator from 0.18.1 or earlier: JSON values inline.
+            # A coordinator from 0.19.0 or earlier: JSON values inline.
             out.append(result.get("result"))
             continue
         try:

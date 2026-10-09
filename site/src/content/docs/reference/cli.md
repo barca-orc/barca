@@ -305,7 +305,7 @@ each step as it finishes, so a `running` run already counts them in `steps_execu
 `barca status` from another terminal shows them as `cached`. A run whose process was killed is
 `interrupted` (no `finished_at`); the next `barca get` reuses the steps it had recorded. A run
 killed in a container is `interrupted` too, once a container starts again on the same `.barca`
-volume (after 0.18.1; earlier versions left it `running`). For runs started after 0.18.1, a run stays `running`
+volume (from 0.20.0; earlier versions left it `running`). For runs started with 0.20.0 or later, a run stays `running`
 whenever barca cannot establish that its process is gone. Earlier runs retain their legacy
 process-id and host-name checks. See
 `barca docs cache`, "While a run is going, and after one is killed", and the shared-state
@@ -611,12 +611,12 @@ location. See [Configuration](/reference/config/#environments---env).
   `reason: "refresh_cascade"`.
 - A sensor's value is part of its consumers' run hashes; it used not to be. Assets that read a
   sensor re-ran once after that upgrade.
-- After 0.18.1: SIGTERM stops `get`, `run` and `serve` the way Ctrl-C does. `get` and `run`
+- From 0.20.0: SIGTERM stops `get`, `run` and `serve` the way Ctrl-C does. `get` and `run`
   exit 130 (`cancelled`) and record the run as `cancelled`; before, SIGTERM killed barca at
   once (a shell reported 143) and the run was later reported as `interrupted`. As process 1 of
   a container barca used to ignore SIGTERM.
-- After 0.18.1: `barca serve --timezone` with a value barca does not know exits 2; it used to
+- From 0.20.0: `barca serve --timezone` with a value barca does not know exits 2; it used to
   print a warning and use local time.
-- After 0.18.1: `POST /run/{target}` and `POST /get/{target}` answer 404, 409 or 400 for a
+- From 0.20.0: `POST /run/{target}` and `POST /get/{target}` answer 404, 409 or 400 for a
   target that cannot run; they used to answer 200 with a `run_id` of a run that then failed.
-- After 0.18.1: the `barca list` table column `NEXT FIRE` is `NEXT FIRE (LOCAL TIME)`.
+- From 0.20.0: the `barca list` table column `NEXT FIRE` is `NEXT FIRE (LOCAL TIME)`.

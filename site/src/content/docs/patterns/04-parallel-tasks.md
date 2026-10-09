@@ -103,7 +103,7 @@ results = parallel_map(deploy, ["us-east-1", "eu-west-1"], version=m["version"])
 - **Use it in tasks.** A call from an `@asset` body also runs its branches, but the asset is
   then cached like any other asset and the branches do not run again until the asset does. If
   the fan-out should happen on every run, it belongs in a task.
-- **A branch may call `parallel()` itself.** Until 0.18.1 that could hang the run.
+- **A branch may call `parallel()` itself.** Through 0.19.0 that could hang the run.
 - **Arguments must be JSON values** (dict, list, str, number, bool, `None`). They are sent to
   the branch as JSON: a tuple arrives as a list, and a set fails the calling step with a
   `TypeError`. So does a `datetime.date` (`TypeError: Object of type date is not JSON
@@ -134,7 +134,7 @@ cannot be passed back to the step that called parallel(): TypeError: cannot pick
 'TextIOWrapper' instances.
 ```
 
-Until 0.18.1 only JSON values came back. Any other return value (a set, a date, a DataFrame)
+Through 0.19.0 only JSON values came back. Any other return value (a set, a date, a DataFrame)
 reached the caller as `None`, with no error or warning, and the run succeeded.
 
 A small JSON result (up to 4 KB of JSON text) is passed in a message and never written to
@@ -147,6 +147,6 @@ call ends and the run's directory when the run ends, however it ends; a run that
 outright leaves its directory, and the next `barca get` or `barca run` in the project removes
 it. Branch results are not uploaded to an artifact store, with or without one configured.
 
-Until 0.18.1 these files were written into the artifact directory under the branch's name and
+Through 0.19.0 these files were written into the artifact directory under the branch's name and
 never removed, and two runs of one pipeline at the same time could receive each other's branch
 results.

@@ -550,7 +550,7 @@ Known limits:
 - With a remote artifact store, steps are not recorded as they finish: a row is written only
   once the artifact's upload is confirmed, which happens when the run ends. Such a run shows no
   progress in `barca status`, and a killed one records nothing.
-- **When a run is `interrupted`.** For runs started after 0.18.1, only on an observation
+- **When a run is `interrupted`.** For runs started with 0.20.0 or later, only on an observation
   that can only be made when the run's process is gone; whenever barca cannot make one, the run stays `running`. A run
   records which kernel its process ran on (the boot id), its pid namespace, its start time,
   and a marker: a FIFO in `.barca/run-owners/` that the process holds open for as long as it
@@ -594,7 +594,7 @@ Known limits:
     filesystem;
   - a run killed by a restart of the machine when the project is on a network filesystem
     (0.18.1 reported this one, from the host name and process id);
-  - a run started by barca 0.18.1 or earlier, which is judged by its process id and host
+  - a run started by barca 0.19.0 or earlier, which is judged by its process id and host
     name: in a container, on another machine, or once its process id has been reused.
 - `interrupted` is written to the history by the next `get` or `run`, under the same rule.
 - A marker is removed by its process when its runs have ended. One left by a killed
