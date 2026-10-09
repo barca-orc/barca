@@ -3,8 +3,9 @@
 test_remote_verify.py and test_transfer.py pin the checks on a plain-directory store and fsspec's
 memory filesystem. The check hashes the local file, so it should not depend on the backend; this
 runs the same cases through s3fs, gcsfs and adlfs against the local emulators the state-backend
-suite uses (MinIO, fake-gcs-server, Azurite): the mismatch, stale-local-copy and killed-download
-cases the issue lists.
+suite uses (MinIO, fake-gcs-server, Azurite): mismatch, stale-local-copy and injected-download
+failure cases. test_remote_crash_backends.py adds real coordinator SIGKILL during refresh and
+an actual SDK's staged write; this suite's injected ConnectionResetError is not that evidence.
 
 On a machine without the emulators each backend skips. On CI, where the `backends` job starts
 them and sets `BARCA_TEST_*`, an unreachable emulator fails the test (`emulators.require`).

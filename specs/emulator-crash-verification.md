@@ -107,3 +107,30 @@ and minute publication (#214) remain separate. The benchmark already exposes an
 optional threshold; selecting an automatic CI performance gate is an independent
 measurement decision and is not required to close the current canonical #248
 scope.
+
+## Prepared implementation and execution evidence
+
+Implementation prepared on main ff91122, following this committed plan. The
+child-only hold shim adds `uploaded` and `partial-get`; production package code
+is unchanged. The partial-write gate selects one concrete destination from the
+artifact helper's first get, flushes at most 64 KiB of actual SDK bytes, and
+preserves the original write count on release. A concurrent unrelated download
+and metadata-file write proceed without being intercepted. Fresh child clients
+perform object verification because fsspec captures environment configuration
+when first imported; inherited cloud options are scrubbed by the backend fixture.
+
+All nine marker-controlled real coordinator SIGKILL cases pass against explicitly
+declared MinIO/fake-gcs/Azurite endpoints, with no skipped backends. The child-only
+normal-release/scoping regression also passes (10 cases in 39 seconds). Existing
+backend SHA/mismatch/injected-failure coverage, transfer signals/staging/lifeline
+and concurrent-fetch tests, and the four directory-store coordinator-kill cases
+pass (31 cases). These are 41 distinct checks; the standalone initial shim
+regression rerun is not counted again. Pinned Ruff 0.11.13 check/format and
+whitespace checks pass. The correct checkout binary was built in this worktree's
+dedicated target, never another worktree's shared target.
+
+No new runtime integrity defect appeared. Keep #248 open until required backend
+CI executes the nine new cases and the inventory is accepted as its completion
+evidence. This patch leaves the existing optional benchmark threshold unchanged;
+an automatic CI performance gate and real-cloud-provider acceptance remain
+separate from the canonical real-process-interruption scope.
