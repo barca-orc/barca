@@ -1,6 +1,6 @@
 # Explicit project imports and stable module identity (#295)
 
-Status: mechanics proposal before implementation. Base: main 8194fb8. The user
+Status: approved mechanics before implementation. Rebased to current main after PR355/362. The user
 accepted ordinary qualified/explicit imports for ambiguous and history-dependent
 layouts: "yeah I think so - we can also require explicit imports". This is a
 breaking workflow clarification requiring a minor release; no flags, setup API,
@@ -62,35 +62,43 @@ project. Do not infer a producer from an artifact basename.
    source identity. Missing/ambiguous legacy identity retains data and reports
    the existing explicit refresh remedy.
 
-## Mechanics to settle before identity code
+## Selected mechanics (approved by root before code)
 
-Fail-fast validation must not mistake an installed/stdlib import for an off-path
-project stem. Example: a configured `pipelines/json.py` must not outlaw root
-`import json`. Static project lookup cannot establish installed-package intent.
-Preferred boundary: refuse demonstrated conflicting project resolutions and
-explicit node-input import references that rely on off-path project resolution;
-remove all implicit path retention and cone fallback. A helper-only off-path
-import then behaves like ordinary Python (ImportError if unavailable), rather
-than adding an installed-package inspection subsystem. Review this boundary
-against the intended fail-fast contract before implementing it.
+Reject demonstrated conflicting project resolutions and explicit node-input
+import references that rely on off-path project resolution. An unrelated
+configured `pipelines/json.py` must not outlaw root `import json`. Remove all
+implicit directory retention and cone fallback. Otherwise-unavailable helper-only
+imports fail like ordinary Python; there is no installed-package discovery
+subsystem or arbitrary restriction on Python import syntax.
 
-For legacy identity, a no-scan resolver can probe root `<suffix>.py` and the
-historical `__`-separated relative path, plus package `__init__.py` variants, at
-most four candidates per legacy lookup. Canonicalize and deduplicate candidates;
-accept only one file whose recomputed legacy name equals the requested name and
-whose ordinary identity resolves to that exact file. Multiple matches refuse,
-never guess. This covers ordinary root and nested historical pipeline names.
-Historical filenames containing `__` within intermediate directory names can
-encode additional ambiguous layouts: this proposal must not claim complete
-recovery of those without an actual source registry. The static source cache
-could provide a private mapping, but threading it into worker and Python API
-readers is larger; choose explicitly rather than introducing a second scan.
+Historical names are `_barca_` plus every source path component (without the
+`.py` suffix) joined with `__`; outside-root paths historically used just the
+stem. A legacy name cannot prove one component boundary by splitting at `__`:
+`a__b__p` could refer to `a/b/p.py`, `a__b/p.py`, `a/b__p.py`, or `a__b__p.py`.
 
-Cache successful compatibility resolutions within the process. A cached-only
-producer may import once when its class is needed, through existing checked
-source loading; a later worker task or qualified user import reuses the same
-module/object/connection. Concurrent collected pickle reads must share normal
-Python import locking rather than racing manual `exec_module` calls.
+The compatibility reader enumerates every delimiter grouping using path-pruned
+traversal under the already known project root. At each existing directory,
+probe a remaining literal filename and every possible next-directory prefix
+ending at a delimiter. Never enumerate directory contents or walk the project.
+Canonicalize/deduplicate candidate files and recompute their historical names.
+Use a fixed private work budget of 256 filesystem candidate probes per lookup;
+if the budget is exhausted before enumeration finishes, refuse even if one
+candidate was already found. Uniqueness requires exhaustive proof. Any missing,
+ambiguous, outside-root or unprovable legacy identity preserves artifacts and
+history and gives existing explicit refresh guidance. Normal Python module
+references use ordinary pickle behavior. Reuse planner source caches in static
+validation; no new reader registry plumbing is introduced.
+
+A narrow private `pickle.Unpickler.find_class` compatibility reader invokes the
+existing checked source import path for a uniquely proven legacy source. Reuse
+successful module identity in the process, preserving one setup and DuckDB
+connection. A cached-only producer imports once when its class is first needed;
+later execution and qualified imports reuse it. Concurrent collected reads use
+ordinary Python import locking, rather than racing manual exec_module calls.
+Root and namespace/package imports have ordinary canonical identities. Files
+without an ordinary importable identity retain existing path loading; no file
+naming restrictions are added. Existing source/path claims capture project root
+once, so user `chdir` cannot change legacy interpretation.
 
 ## Required evidence before completion
 
