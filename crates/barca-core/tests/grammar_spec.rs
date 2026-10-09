@@ -1021,9 +1021,7 @@ def real_asset() -> dict:
 }
 
 #[test]
-fn aliased_import_not_detected() {
-    // Documented limitation: parser matches exact decorator names.
-    // Aliased imports are not supported.
+fn aliased_import_is_detected() {
     let src = r#"
 from barca import asset as a
 
@@ -1032,7 +1030,8 @@ def aliased() -> dict:
     return {}
 "#;
     let nodes = extract_nodes(src, "test.py").unwrap();
-    assert!(nodes.is_empty()); // not detected — known limitation
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0].kind, NodeKind::Asset);
 }
 
 #[test]
@@ -1558,7 +1557,7 @@ fn barcas_name_is_checked_however_it_reaches_the_file() {
 }
 
 /// Every way a module-level name can be bound to something that is not barca's turns the
-/// check off for that name (`BarcaNames`). The same sources, and what 0.18.1 lists for them,
+/// check and discovery off for that name (`BarcaNames`). The same sources
 /// are run through the binary in `python/tests/test_decorator_names_not_barcas.py`.
 #[test]
 fn a_name_bound_by_anything_but_the_barca_import_is_not_checked() {
@@ -1592,18 +1591,17 @@ fn a_name_bound_by_anything_but_the_barca_import_is_not_checked() {
     ] {
         let src = format!("from barca import task\n{binding}{use_it}");
         let nodes = extract_nodes(&src, "test.py").unwrap_or_else(|e| panic!("{binding}: {e}"));
-        assert_eq!(nodes.last().unwrap().function_name, "t", "{binding}");
+        assert!(nodes.is_empty(), "{binding}");
         // The same binding before the import turns it off too: when in doubt, no check.
         let src = format!("{binding}\nfrom barca import task{use_it}");
         if !binding.contains("import *") {
             assert!(extract_nodes(&src, "test.py").is_ok(), "{binding} (before)");
         }
     }
-    // Not at the top level, or under another name: not a positive import.
+    // Conditional and foreign imports are not positive provenance.
     for import in [
         "try:\n    from barca import task\nexcept ImportError:\n    raise",
         "if True:\n    from barca import task",
-        "from barca import asset as task",
         "from .barca import task",
         "from barca.api import task",
     ] {
@@ -1651,11 +1649,9 @@ def t():
     );
 }
 
-/// `import barca as b` / `from barca import asset as a`: the parser has never read these as
-/// nodes (the file then defines none), so there is nothing to check. Recorded here so that a
-/// change to alias handling has to decide what the check does.
+/// Qualified and imported aliases receive the original decorator signature.
 #[test]
-fn aliased_decorators_are_not_nodes_and_so_not_checked() {
+fn aliased_decorators_are_nodes_and_receive_argument_checks() {
     let src = r#"
 import barca as b
 from barca import asset as a
@@ -1668,7 +1664,7 @@ def one():
 def two():
     return 2
 "#;
-    assert_eq!(extract_nodes(src, "test.py").unwrap().len(), 0);
+    assert!(rejected(src).contains("`bogus` is not an argument of @asset"));
 }
 
 /// `@sensor(inputs=...)` keeps its own message, from the DAG (`dag_rejects_sensor_with_inputs`).

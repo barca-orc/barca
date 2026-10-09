@@ -1169,3 +1169,10 @@ error envelope or an `--agent` line updates, in the same PR:
    warning.
 
 See also: `barca docs agents` (how to drive barca from scripts and agents), `barca docs skill`.
+
+### Static decorator bindings
+
+Qualified and imported aliases of Barca decorators/helpers receive the same node
+semantics and argument validation as direct imports. Explicit foreign or rebound
+names do not define Barca nodes. For a foreign wrapper intended to remain a node,
+stack it with a genuine Barca decorator; see `barca docs assets`.

@@ -26,6 +26,31 @@ def daily() -> dict:
     return {"x": 2}
 ```
 
+## Qualified and aliased imports
+
+Barca recognizes top-level imports such as `import barca`, `import barca as b`
+and `from barca import asset as a`, for decorators and their helpers:
+
+```python
+import barca as b
+
+@b.asset(partitions={"key": b.partitions(["a", "b"])})
+def rows(key):
+    return {"key": key}
+```
+
+Planning reads these bindings statically and never imports your module. A name
+reassigned or imported from another library does not define a Barca node; local
+parameters or assignments also shadow task-body helpers such as `parallel`.
+Dynamic alias assignments and conditional imports are not resolved.
+
+If a foreign decorator previously became a node merely because it was named
+`asset`, `sensor` or `task`, import the actual Barca decorator instead. To keep a
+foreign wrapper on a node, stack it with a genuine Barca decorator (qualified or
+aliased imports work). Bare names with no competing binding retain legacy
+source-snippet recognition. Namespace reflection retains conservative discovery,
+but disables provenance-based validation and uses conservative hashing.
+
 ## Options on `@asset`
 
 | Option | Meaning |
