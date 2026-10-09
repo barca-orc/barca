@@ -358,13 +358,18 @@ impl ProjectCones {
             std::collections::BTreeMap<Option<PathBuf>, std::collections::BTreeSet<PathBuf>>;
         let mut bindings: std::collections::BTreeMap<String, ImportSites> =
             std::collections::BTreeMap::new();
-        let mut identities: std::collections::HashMap<PathBuf, (String, Option<PathBuf>)> = self
+        type IdentitySites =
+            std::collections::BTreeMap<String, std::collections::BTreeSet<PathBuf>>;
+        let mut identities: std::collections::HashMap<PathBuf, IdentitySites> = self
             .pipelines
             .iter()
             .map(|file| {
                 (
                     file.path.clone(),
-                    (qualified_path(&file.path, &self.root), None),
+                    std::collections::BTreeMap::from([(
+                        qualified_path(&file.path, &self.root),
+                        std::collections::BTreeSet::new(),
+                    )]),
                 )
             })
             .collect();
@@ -381,7 +386,9 @@ impl ProjectCones {
                     let (selected, imported) = match pipeline.modules.find(&name) {
                         Found::Module(module, _, file) => {
                             let file = file.canonicalize().unwrap_or(file);
-                            if let Some((prior, prior_source)) = identities.get(&file) {
+                            for (prior, prior_sources) in
+                                identities.get(&file).into_iter().flatten()
+                            {
                                 if *prior != name {
                                     let error = format!(
                                         "project source '{}' has conflicting import identities '{prior}' and '{name}' from '{}'; use the explicit qualified import `from {} import <name>` so setup and pickle identity do not depend on worker history",
@@ -392,14 +399,19 @@ impl ProjectCones {
                                     errors
                                         .entry(source.clone())
                                         .or_insert_with(|| error.clone());
-                                    if let Some(prior_source) = prior_source {
-                                        errors.entry(prior_source.clone()).or_insert(error);
+                                    for prior_source in prior_sources {
+                                        errors
+                                            .entry(prior_source.clone())
+                                            .or_insert_with(|| error.clone());
                                     }
                                 }
-                            } else {
-                                identities
-                                    .insert(file.clone(), (name.clone(), Some(source.clone())));
                             }
+                            identities
+                                .entry(file.clone())
+                                .or_default()
+                                .entry(name.clone())
+                                .or_default()
+                                .insert(source.clone());
                             (Some(file), Some(module))
                         }
                         _ => (None, None),

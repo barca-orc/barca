@@ -285,3 +285,22 @@ Both lazy-input Polars failures reproduced before the fixture correction. Full
 lazy-input plus artifact-LRU coverage passes 109 cases with actual Polars 2.0,
 Pandas 3.0 and PyArrow 26. The five existing expected failures document unrelated
 LRU limitations; no new skip or expected failure was introduced.
+
+### Multi-site identity attribution correction
+
+An actual server with explicit consumer file arguments (helper excluded from
+pipeline entrypoints) reproduced incomplete identity attribution: two consumers
+use bare `h`, a third uses `pkg.h` for the same helper, but only the first and
+third are isolated; the second incorrectly remains available. Preserve every
+import site in a grouped set for each source-file/identity pair, as with resolved
+binding sites. Report all conflicting project sites; unrelated healthy work
+remains available. Normal same-identity imports compare one group and insert one
+site, avoiding quadratic comparisons. No new resolver or public policy.
+
+The explicit-file-selection regression failed the prior implementation with
+`pkg/b.py:result` still loaded. After correction, all three importing sites are
+isolated and the unrelated healthy asset executes. All 70 focused import,
+load-isolation and lazy-input cases pass (48 import cases); the full 819-test
+Rust workspace and strict all-target Clippy pass. Real old-CLI plain and nested
+artifact proofs pass again with unchanged bytes. Formatting, pinned Ruff and
+whitespace checks pass.

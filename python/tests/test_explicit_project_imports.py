@@ -744,3 +744,39 @@ def test_partial_loading_keeps_unambiguous_nonpipeline_sibling_helper(tmp_path):
         assert json.loads((tmp_path / result["result"]["final_output"]["path"]).read_text()) == 11
     finally:
         server.stop()
+
+
+def test_partial_identity_conflict_includes_every_prior_import_site(tmp_path):
+    from .test_serve_load_isolation import errors, finished, loaded
+    from .test_serve_robustness import Server
+
+    write(tmp_path, "pipeline.py", "from barca import asset\n@asset()\ndef healthy(): return 7\n")
+    write(tmp_path, "pkg/h.py", "def value(): return 11\n")
+    for name in ("a", "b"):
+        write(
+            tmp_path,
+            f"pkg/{name}.py",
+            "from h import value\nfrom barca import asset\n@asset()\ndef result(): return value()\n",
+        )
+    write(
+        tmp_path,
+        "third.py",
+        "from pkg.h import value\nfrom barca import asset\n@asset()\ndef result(): return value()\n",
+    )
+    # Select only the consumers: h.py must be discovered through ordinary
+    # imports, not preseeded as a canonical pipeline identity.
+    server = Server(tmp_path, "pkg/a.py", "pkg/b.py", "third.py", "--no-schedule")
+    try:
+        assert loaded(server) == {"pipeline.py:healthy"}
+        assert {node for error in errors(server) for node in error["affected_nodes"]} == {
+            "pkg/a.py:result",
+            "pkg/b.py:result",
+            "third.py:result",
+        }
+        code, handle = server.request("POST", "/get/healthy")
+        assert code == 200
+        result = finished(server, handle["run_id"])
+        assert result["status"] == "complete"
+        assert json.loads((tmp_path / result["result"]["final_output"]["path"]).read_text()) == 7
+    finally:
+        server.stop()
