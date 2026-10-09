@@ -14,10 +14,18 @@ MAX_BYTES = 4 * 1024 * 1024
 def fetch_json(url, timeout):
     accept = "application/json" if url.endswith("/json") else "application/vnd.pypi.simple.v1+json"
     request = urllib.request.Request(url, headers={"Accept": accept})
+    deadline = monotonic() + timeout
+    data = bytearray()
     with urllib.request.urlopen(request, timeout=min(10, timeout)) as response:
-        data = response.read(MAX_BYTES + 1)
-    if len(data) > MAX_BYTES:
-        raise ValueError("PyPI metadata exceeds the bounded response size")
+        while True:
+            if monotonic() >= deadline:
+                raise TimeoutError("PyPI metadata response exceeded the availability deadline")
+            chunk = response.read1(min(65536, MAX_BYTES + 1 - len(data)))
+            if not chunk:
+                break
+            data.extend(chunk)
+            if len(data) > MAX_BYTES:
+                raise ValueError("PyPI metadata exceeds the bounded response size")
     value = json.loads(data)
     if not isinstance(value, dict):
         raise ValueError("PyPI returned invalid project metadata")

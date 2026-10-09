@@ -89,3 +89,22 @@ def test_only_transient_availability_errors_retry(monkeypatch, clock, code, retr
     with pytest.raises(expected):
         HELPER.wait_for_wheel("0.21.0", "aarch64", "musl")
     assert clock[0] == (4 if retry else 0)
+
+
+def test_trickling_response_cannot_outlive_the_availability_budget(monkeypatch, clock):
+    class SlowResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            pass
+
+        def read(self, _amount):
+            clock[0] += 3
+            return b"{}"
+
+        read1 = read
+
+    monkeypatch.setattr(HELPER.urllib.request, "urlopen", lambda *_args, **_kwargs: SlowResponse())
+    with pytest.raises(TimeoutError, match="availability deadline"):
+        HELPER.fetch_json("https://pypi.org/simple/barca/", 2)
