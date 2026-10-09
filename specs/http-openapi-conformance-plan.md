@@ -40,6 +40,29 @@ new route, configuration, runtime field or client code generation.
    current code and generated UI types. Rebase in queue; update for additive health
    fields only after P11 ships. No unmerged load_errors field is advertised.
 
+## P11 integration sequence (before schema changes)
+
+Prepare the reviewed schema/test patch on current main13a92a4 first. After PR361
+merges, rebase onto that exact main and add its shipped required health field:
+`load_errors` is an array of closed `LoadError` objects with required string
+`file`, string `error`, and string-array `affected_nodes`; healthy loads return
+an empty array. Existing status/version/read_only/scheduler fields and the /state
+array remain unchanged.
+
+Document the existing POST /run JSON400 admission refusals (no loaded assets or
+sensors, or source generation not settled) and JSON500 loader infrastructure
+failure alongside existing200/403/405 responses. Use actual router fixtures for
+a broken sibling with healthy colocated asset and blocked dependent, an entirely
+unloaded graph, and loader infrastructure failure. Validate health diagnostics and
+run refusal bodies against the schema; verify the healthy selected assets remain
+inspectable/runnable rather than adding fake nodes. Extend actual Python Client
+health coverage to the same shapes. Route/method inventory remains unchanged.
+
+Run current-base router conformance and existing Python HTTP/client/manual/CLI
+contracts using this worktree's own target and interpreter, then rerun the changed
+partial-load/admission cases after361 with strict Clippy/fmt/Ruff and schema drift
+checks. Publish no unmerged health fields and add no product routes or controls.
+
 ## Compatibility and ownership
 
 Core result/error definitions remain the source of runtime behavior. This is an
