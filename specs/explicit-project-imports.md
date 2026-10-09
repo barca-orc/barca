@@ -358,3 +358,18 @@ evidence, not a substitute for checks on the eventual latest main before merge.
 The approved discovery manual/site clarification also records that an explicit
 `name=` supplies the canonical identity, while unnamed definitions use the
 root-relative file/function identity; this changes documentation only.
+
+### Final membership/staging integration acceptance
+
+After #380 and #378 merged, rebasing onto actual main `b11a0c7` was clean.
+The rebuilt own package passes 456 combined import/load-isolation/helper/DuckDB/
+lazy/LRU/manual/contract/SQL-membership/declared-name/API/worker/parallel cases
+with five existing expected LRU failures. All 832 workspace Rust tests and strict
+all-target Clippy pass. Both actual old-CLI pickle examples and the setup-thread
+reader example still pass; producer setup and canonical identity are preserved,
+with artifact SHA256 unchanged. Formatting, pinned Ruff, lockfile, whitespace
+and runtime typing checks pass (zero errors, six existing dependency warnings);
+the site builds 51 pages. Re-running the two documented #295 residual examples
+still shows stale cached 11 after helper edit to 22, with refresh yielding 22:
+this PR does not close the static-cone scope. Both required fresh CI checks on
+the exact published head remain mandatory before merge.
