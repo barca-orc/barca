@@ -67,3 +67,16 @@ be lost if pending state was checked only beforehand. The real restoration-entry
 signal regression proves exit 0 instead of default termination. Recheck pending
 state after restoring, perform any still-needed owned cleanup, and re-send the
 signal; preserve restoration and termination even if cleanup fails.
+
+## Final acceptance evidence
+
+On current main bfc3e52, unchanged final runtime passed 415 transfer/storage/
+artifact/state/worker/cancellation tests (134.99s), including all 105 actual CLI
+remote-cancellation cases and the exact original failing fetch case. The dedicated
+rebuilt binary was resolved from this worktree's target/debug, not an installed
+package. All 17 staging regressions pass; forced-old actual transfer/state creation,
+state finalization, failed-removal ownership and late SIG_DFL restoration cases
+fail for their demonstrated reasons. Strict workspace/all-target Clippy, Rust
+formatting, pinned Ruff checks/formatting and diff checks pass. Independent root
+review reran the staging regressions and found no remaining demonstrated blocker.
+Fresh required CI and exact current-main/head verification remain merge gates.
