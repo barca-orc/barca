@@ -544,6 +544,7 @@ fn collect_definitions(source: &str, package: Option<&str>) -> HashMap<String, M
         uses: Vec::new(),
     };
     visitor::walk_body(&mut static_imports, &parsed.syntax().body);
+    let conditional_module = OnceCell::new();
 
     for stmt in &parsed.syntax().body {
         match stmt {
@@ -606,6 +607,31 @@ fn collect_definitions(source: &str, package: Option<&str>) -> HashMap<String, M
                 }
             }
             Stmt::ImportFrom(_) => defs.extend(import_bindings(stmt, package)),
+            Stmt::If(_) | Stmt::Try(_) => {
+                // Do not select a conditional binding by executing Python or by guessing
+                // which branch runs. The module may retain an earlier binding, install a
+                // different import or define a fallback function. Represent each possible
+                // bound name using the existing conservative Code path: the module's source
+                // plus its references and all statically visible imports. Ordinary names
+                // that do not reach these bindings retain their selective cones.
+                let mut binder = Binder::new(package);
+                binder.visit_stmt(stmt);
+                let names = binder.finish().bindings;
+                if !names.is_empty() {
+                    let conservative = conditional_module.get_or_init(|| {
+                        let mut uses = UseCollector::new(package);
+                        uses.stmts(&parsed.syntax().body);
+                        uses.uses.local.extend(static_imports.uses.iter().cloned());
+                        Code {
+                            source_text: source.into(),
+                            uses: uses.uses,
+                        }
+                    });
+                    for name in names.keys().filter(|name| name.as_str() != "*") {
+                        defs.insert(name.clone(), ModuleDef::Assignment(conservative.clone()));
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -2009,7 +2035,10 @@ def my_asset():
                 "{what} is followed now: update `barca docs cache`"
             );
         }
-        // A name defined below the top level of its module.
+    }
+
+    #[test]
+    fn a_function_bound_in_module_level_conditional_is_tracked() {
         let entry = "from helpers import compute\n\ndef my_asset():\n    return compute()\n";
         let nested = |n: u32| {
             one(
@@ -2017,7 +2046,7 @@ def my_asset():
                 &format!("if True:\n    def compute():\n        return {n}\n"),
             )
         };
-        assert_eq!(
+        assert_ne!(
             hash_of(entry, &nested(1), &[]),
             hash_of(entry, &nested(2), &[])
         );
