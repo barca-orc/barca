@@ -510,9 +510,11 @@ pub(crate) fn mark_recomputed(reports: &mut [StepReport], id: &str, dry: bool) -
         let p: &mut PartitionSummary = r.partitions.as_mut().expect("matched on its partitions");
         p.cached -= 1;
         p.will_run += 1;
-        if p.will_run_keys.len() < 20 {
-            p.will_run_keys.push(key.to_string());
-        }
+        p.will_run_keys = crate::report::key_preview(
+            std::mem::take(&mut p.will_run_keys)
+                .into_iter()
+                .chain([key.to_string()]),
+        );
         let word = if p.cached == 0 { run } else { "partial" };
         if r.reason.is_none() {
             r.reason = Some(reason.code().to_string());

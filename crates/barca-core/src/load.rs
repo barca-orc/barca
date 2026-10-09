@@ -72,6 +72,7 @@ pub(crate) fn build_dag_blocking(
         }
     }
 
+    crate::dag::validate_partition_dimensions(&all_nodes)?;
     resolve_dynamic_partitions(&mut all_nodes, python);
 
     Ok(Dag::build(&all_nodes)?)

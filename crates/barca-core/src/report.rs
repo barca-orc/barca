@@ -359,6 +359,21 @@ pub(crate) fn reconcile_total(total_steps: usize, completed_steps: usize) -> usi
     total_steps.max(completed_steps)
 }
 
+/// Select the first twenty keys in lexical order, without retaining every key.
+/// Taking a preview of each chunk and then previewing their union has the same result
+/// as previewing all keys, independently of worker chunk boundaries.
+pub(crate) fn key_preview(keys: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut preview = Vec::new();
+    for key in keys {
+        let pos = preview.binary_search(&key).unwrap_or_else(|pos| pos);
+        if pos < 20 {
+            preview.insert(pos, key);
+            preview.truncate(20);
+        }
+    }
+    preview
+}
+
 /// A partitioned asset plans one step per key; report it as one line with a partition summary.
 pub(crate) fn merge_partition_reports(reports: Vec<StepReport>) -> Vec<StepReport> {
     let mut out: Vec<StepReport> = Vec::new();
@@ -379,11 +394,11 @@ pub(crate) fn merge_partition_reports(reports: Vec<StepReport>) -> Vec<StepRepor
                 mp.total += p.total;
                 mp.cached += p.cached;
                 mp.will_run += p.will_run;
-                for k in p.will_run_keys {
-                    if mp.will_run_keys.len() < 20 {
-                        mp.will_run_keys.push(k);
-                    }
-                }
+                mp.will_run_keys = key_preview(
+                    std::mem::take(&mut mp.will_run_keys)
+                        .into_iter()
+                        .chain(p.will_run_keys),
+                );
                 if m.reason.is_none() {
                     m.reason = r.reason;
                     m.detail = r.detail;
@@ -494,12 +509,7 @@ pub(crate) fn report_for(
                     total: step.partition_keys.len(),
                     cached: 0,
                     will_run: step.partition_keys.len(),
-                    will_run_keys: step
-                        .partition_keys
-                        .iter()
-                        .take(20)
-                        .map(|k| k.suffix())
-                        .collect(),
+                    will_run_keys: key_preview(step.partition_keys.iter().map(|k| k.suffix())),
                 });
                 word_run
             }
@@ -518,7 +528,7 @@ pub(crate) fn report_for(
                 total,
                 cached: cached.len(),
                 will_run: missing.len(),
-                will_run_keys: missing.iter().take(20).map(|k| k.suffix()).collect(),
+                will_run_keys: key_preview(missing.iter().map(|k| k.suffix())),
             });
             if !missing.is_empty() {
                 r.reason = Some(RunReason::NotMaterialized.code().to_string());

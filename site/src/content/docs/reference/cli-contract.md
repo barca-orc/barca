@@ -413,7 +413,7 @@ Each item is an object with exactly these keys, all strings and always present:
 | `message` | the warning in words, with what to do about it. The wording is not contract |
 
 The list covers the steps the command planned (the targets' cones; the whole project for `plan`
-or `get` with no target), one item per step and parameter, in plan order. It is a function of the
+or `get` with no target), one item per step and parameter, sorted by node, parameter and kind. It is a function of the
 source files and the targets only: cache state, `--refresh*`, `--env` and the output mode do not
 change it, so a dry run reports exactly what the real run will. Each item is also printed once on
 stderr as `[barca] warning: <message>` before any step runs, in every output mode. Warnings never
@@ -496,7 +496,7 @@ For a parquet or pickle artifact, `final_output` is a pointer instead of the val
 | `warnings` | array | always |
 <!-- END GENERATED schema get_artifact_pointer -->
 
-A partitioned step carries `partitions` (counted in keys; `will_run_keys` is capped at 20):
+A partitioned step carries `partitions` (counted in keys; `will_run_keys` lists the first 20 keys in lexical order):
 
 <!-- BEGIN GENERATED schema get_partitioned -->
 | Key | Type | Present |
@@ -981,6 +981,9 @@ are `null` when the asset never ran; `recent_runs[].error_message` is a string f
 `phases[].reason` is `{"type": "initial"}` for the first phase or `{"type": "fan_in", "node_id":
 "<id>"}` for a phase that waits on a node gathering several upstream results. `plan` reads no
 state and takes no `--env`.
+
+The phase/stream layout uses the same pool as execution: available cores, or a positive
+`BARCA_POOL_SIZE`.
 
 `warnings` is the plan-warnings array described under "Plan warnings" above.
 

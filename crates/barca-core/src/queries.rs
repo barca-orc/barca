@@ -19,7 +19,7 @@ pub async fn plan(
 ) -> Result<PlanResult, BarcaError> {
     let dag = build_dag(file_args, python).await?;
     let config = ResourceConfig {
-        pool_size: 10,
+        pool_size: crate::execution::default_pool_size(),
         concurrency_groups: HashMap::new(),
     };
     let plan = planner::plan_from_dag(&dag, &config);

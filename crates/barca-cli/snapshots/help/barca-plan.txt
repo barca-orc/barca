@@ -18,6 +18,7 @@ warnings}. `warnings` is always an array ([] when there are none) of {kind, node
 plan-time warnings such as an input a step never uses, each also one `[barca] warning: ...` line on
 stderr (barca docs assets, "Unused inputs").
 `reason` is an object: {"type": "initial"} or {"type": "fan_in", "node_id": ...}.
+Planning uses the execution pool size (available cores, or BARCA_POOL_SIZE).
 Planning is static analysis: it never imports your code or reads state, so it takes no --env.
 Experimental: the layout may change between releases (barca docs contract).
 More: barca docs agents
