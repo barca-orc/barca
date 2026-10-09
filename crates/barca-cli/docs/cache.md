@@ -111,7 +111,11 @@ to a decorator name anywhere in the module makes it uncertain, even inside a loc
 this can cause an extra recompute rather than risk a stale result. Any unproven decorator on a node (including a wrapper stacked with a known barca decorator)
 counts the whole module source and all dependencies available to the existing static cone,
 so even unrelated edits in that module can recompute it. This does not add tracking for
-dynamically imported modules.
+dynamically imported modules. Explicit references to `globals`, `locals`, `vars`, `exec`,
+`eval` or `__builtins__` also make every imported barca name uncertain, including aliases and qualified
+or shadowed references. These checks cover the explicit syntax, not arbitrary reflective
+indirection or runtime side effects. Ordinary static imports and dependencies
+remain the tracking boundary; this is not a guarantee about arbitrary dynamic Python.
 
 What this means in practice:
 

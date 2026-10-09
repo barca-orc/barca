@@ -544,3 +544,10 @@ seconds field. There is no year field. See [Scheduling](/scheduling/) for what a
 | `get`, `run`, `plan`, `history`, `stats` | Python functions that start the `barca` binary and return parsed results. See `barca docs agents`, "Getting values, not pointers". |
 | `BarcaError` | Raised by those functions; carries `kind`, `code`, `remediation`, and for a failed step `node`, `traceback`, `artifact_dir`. |
 | `Client`, `Run` | HTTP client for `barca serve`. See [Server API](/reference/server-api/#python-client). |
+
+Explicit references to `globals`, `locals`, `vars`, `exec`, `eval` or `__builtins__`
+make imported barca names uncertain, including imported aliases and qualified or shadowed
+references. Argument validation then follows Python at runtime, and nodes with an uncertain
+decorator conservatively hash their entire module and statically tracked dependencies.
+These checks cover explicit syntax; they do not resolve arbitrary reflective indirection,
+runtime side effects or dynamically imported dependencies.

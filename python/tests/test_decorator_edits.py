@@ -642,3 +642,47 @@ def value():
         assert changed["final_output"] == result
         assert changed["steps_executed"] == 1
         assert get(project, "value")["steps_executed"] == 0
+
+
+@pytest.mark.parametrize("rebinding", [
+    'globals()["asset"] = custom',
+    'namespace = globals\nnamespace()["asset"] = custom',
+    'import builtins as bi\nnamespace = bi.globals\nnamespace()["asset"] = custom',
+    'def install(default=globals().__setitem__("asset", custom)): pass',
+    'def install():\n    globals()["asset"] = custom\ninstall()',
+    'locals()["asset"] = custom',
+    'import sys\nvars(sys.modules[__name__])["asset"] = custom',
+    'exec("asset = custom")',
+    "eval('globals().__setitem__(\"asset\", custom)')",
+    'from builtins import globals as namespace\nnamespace()["asset"] = custom',
+    '__builtins__["globals"]()["asset"] = custom',
+
+])
+def test_explicit_namespace_reflection_defers_foreign_arguments_and_invalidates_cache(project, rebinding):
+    template = '''from barca import asset
+
+def custom(**kwargs):
+    def decorate(fn):
+        def wrapped():
+            return {{"description": kwargs["description"], "mode": kwargs["mode"], "wrapper": {implementation!r}}}
+        return wrapped
+    return decorate
+
+{rebinding}
+
+@asset(description={description!r}, mode={mode!r})
+def value():
+    return 0
+'''
+    for description, mode, implementation in [
+        ("one", "fast", "before"),
+        ("two", "fast", "before"),
+        ("two", "fast", "after"),
+        ("two", "slow", "after"),
+    ]:
+        write(project, template.format(rebinding=rebinding, description=description,
+                                       mode=mode, implementation=implementation))
+        result = get(project, "value")
+        assert result["final_output"] == {"description": description, "mode": mode, "wrapper": implementation}
+        assert result["steps_executed"] == 1
+        assert get(project, "value")["steps_executed"] == 0

@@ -349,3 +349,9 @@ every sensor, including one nothing depends on: a sensor is something `get` can 
 observing is read-only. Tasks are the only nodes a bare `get` skips.
 
 See also: `barca docs tasks`, `barca docs cache`, `barca docs scheduling`.
+
+Explicit references to `globals`, `locals`, `vars`, `exec`, `eval` or `__builtins__` make imported barca
+names uncertain, even when the reference is aliased, qualified or shadowed. Such names are
+left to Python's argument checks and their nodes conservatively hash the whole module
+(`barca docs cache`). The static checks do not resolve arbitrary reflective indirection
+or runtime side effects.

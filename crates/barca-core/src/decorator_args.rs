@@ -455,7 +455,10 @@ fn check_call(call: &ast::ExprCall, sig: &Signature) -> Option<Problem> {
 /// no such statement inside `if` / `try` / `with` / loops, no `global NAME` in a function, and
 /// no `from other import *` after the barca import. A barca import that is itself nested
 /// (`try: from barca import task`) or renames (`from barca import task as asset`) does not
-/// count either. When in doubt the name is not barca's, and its arguments are not checked.
+/// count either. Explicit references to namespace-reflection builtins make all imports
+/// uncertain, including aliases or qualified/shadowed references. This is a bounded static
+/// check; arbitrary reflective indirection and runtime side effects are not resolved.
+/// When in doubt the name is not barca's, and its arguments are not checked.
 #[derive(Debug, Default)]
 pub struct BarcaNames(std::collections::HashSet<&'static str>);
 
@@ -507,6 +510,7 @@ impl BarcaNames {
             rebound: HashSet<String>,
             /// Offsets of `from <not barca> import *`.
             foreign_stars: Vec<usize>,
+            reflective_namespace: bool,
         }
         impl Bindings<'_> {
             fn bind(&mut self, name: &str) {
@@ -526,6 +530,16 @@ impl BarcaNames {
         }
         impl<'a> Visitor<'a> for Bindings<'_> {
             fn visit_stmt(&mut self, stmt: &'a Stmt) {
+                if let Stmt::ImportFrom(import) = stmt
+                    && import.names.iter().any(|alias| {
+                        matches!(
+                            alias.name.as_str(),
+                            "globals" | "locals" | "vars" | "exec" | "eval" | "__builtins__"
+                        )
+                    })
+                {
+                    self.reflective_namespace = true;
+                }
                 match stmt {
                     Stmt::FunctionDef(f) => {
                         self.bind(f.name.as_str());
@@ -590,6 +604,22 @@ impl BarcaNames {
             }
 
             fn visit_expr(&mut self, expr: &'a Expr) {
+                // Explicit namespace reflection can escape through aliases and mutate any
+                // imported name. Even a local/shadowed or qualified reference is treated
+                // conservatively; resolving arbitrary runtime lookup is outside this rule.
+                let name = match expr {
+                    Expr::Name(name) => Some(name.id.as_str()),
+                    Expr::Attribute(attribute) => Some(attribute.attr.as_str()),
+                    _ => None,
+                };
+                if name.is_some_and(|name| {
+                    matches!(
+                        name,
+                        "globals" | "locals" | "vars" | "exec" | "eval" | "__builtins__"
+                    )
+                }) {
+                    self.reflective_namespace = true;
+                }
                 if let Expr::Named(walrus) = expr {
                     // Definition-time expressions can run outside the body scope that
                     // the AST visitor currently walks (defaults, decorators and bases).
@@ -639,6 +669,7 @@ impl BarcaNames {
             nested: 0,
             rebound: HashSet::new(),
             foreign_stars: Vec::new(),
+            reflective_namespace: false,
         };
         visitor::walk_body(&mut bindings, body);
 
@@ -646,7 +677,8 @@ impl BarcaNames {
             imported
                 .into_iter()
                 .filter(|(name, at)| {
-                    !bindings.rebound.contains(*name)
+                    !bindings.reflective_namespace
+                        && !bindings.rebound.contains(*name)
                         && !bindings.foreign_stars.iter().any(|star| star > at)
                 })
                 .map(|(name, _)| name)
@@ -892,6 +924,28 @@ mod tests {
                 !BarcaNames::of(&parsed.syntax().body).contains("asset"),
                 "{statement}"
             );
+        }
+    }
+
+    #[test]
+    fn explicit_namespace_reflection_makes_every_imported_name_uncertain() {
+        for expression in ["globals", "locals", "vars", "exec", "eval", "__builtins__"] {
+            for use_ in [
+                format!("namespace = {expression}"),
+                format!("from builtins import {expression} as namespace"),
+                format!("namespace = builtins.{expression}"),
+                format!("def install(default={expression}): pass"),
+                format!("def install():\n    return {expression}"),
+                format!("def install():\n    return foreign.{expression}"),
+            ] {
+                let source =
+                    format!("from barca import asset, sensor, task, collect, unsafe\n{use_}\n");
+                let parsed = ruff_python_parser::parse_module(&source).unwrap();
+                let names = BarcaNames::of(&parsed.syntax().body);
+                for name in ["asset", "sensor", "task", "collect", "unsafe"] {
+                    assert!(!names.contains(name), "{use_}: {name}");
+                }
+            }
         }
     }
 
