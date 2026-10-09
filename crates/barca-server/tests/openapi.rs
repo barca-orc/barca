@@ -571,3 +571,53 @@ async fn run_loader_infrastructure_failure_matches_contract() {
             .contains("DAG analysis task failed")
     );
 }
+
+#[tokio::test]
+async fn declared_asset_name_matches_schema_state_and_get_target() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = config(dir.path(), false);
+    std::fs::write(
+        dir.path().join("pipeline.py"),
+        "from barca import asset\n@asset(name='published')\ndef implementation(): return 7\n@asset()\ndef ordinary(): return 8\n",
+    )
+    .unwrap();
+    let router = app(cfg);
+    let asset = checked(&router, "GET", "/assets/published", "/assets/{name}", 200).await;
+    let id = asset["asset"]["id"].as_str().unwrap();
+    assert_eq!(id, "published");
+    let schema = checked(
+        &router,
+        "GET",
+        "/assets/published/schema",
+        "/assets/{name}/schema",
+        200,
+    )
+    .await;
+    assert_eq!(schema[0]["id"], id);
+    assert_eq!(schema[0]["name"], "published");
+    let state = checked(&router, "GET", "/state", "/state", 200).await;
+    let named = state
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["id"] == id)
+        .unwrap();
+    assert_eq!(named["name"], "published");
+    let ordinary = state
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["name"] == "ordinary")
+        .unwrap();
+    assert!(
+        ordinary["id"]
+            .as_str()
+            .unwrap()
+            .ends_with("pipeline.py:ordinary")
+    );
+    let handle = checked(&router, "POST", "/get/published", "/get/{target}", 200).await;
+    assert_eq!(
+        wait(&router, handle["run_id"].as_str().unwrap()).await["status"],
+        "complete"
+    );
+}

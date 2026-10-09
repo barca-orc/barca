@@ -1548,7 +1548,9 @@ components:
       - env
       properties:
         id: *id002
-        name: *id002
+        name:
+          type: string
+          description: The declared name, or function name when no explicit name is set.
         kind: &id030
           type: string
           enum:
@@ -1601,7 +1603,9 @@ components:
       - next_run
       properties:
         id: *id002
-        name: *id002
+        name:
+          type: string
+          description: The declared name, or function name when no explicit name is set.
         kind: *id030
         inputs: *id031
         partitioned: *id026

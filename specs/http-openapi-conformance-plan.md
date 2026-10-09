@@ -91,8 +91,18 @@ NodeStatus.name and flattened NodeState.name as the declared name, or function
 name when no explicit name is set, matching the Rust/generated-type owner. Add
 real GET asset/schema and state assertions for an explicitly named asset whose
 implementation function has a different name; run it through the declared target
-and retain the source-qualified ID. Recheck conformance, actual HTTP/client/manual
+and retain existing identity rules: explicit names are continuity IDs, while an
+unnamed sibling retains its source-qualified ID. Recheck actual HTTP/client/manual
 and named-inspection contracts without changing routes, fields or runtime code.
+
+Naming integration on f4c4ab6 matches both schema name descriptions to Rust/TS.
+Actual GET asset/schema, flattened state and target execution prove an explicitly
+named asset uses its declared continuity ID/name while an unnamed sibling retains
+its source-qualified ID and function name. All 82 server/router/conformance Rust
+tests and 96 actual HTTP/client/CLI/manual/isolation/named-inspection checks passed
+without skips. Strict workspace/all-target Clippy, fmt, pinned Ruff, dependency
+lock, whitespace and standard OpenAPI3.1 validation passed. No runtime code or
+new wire fields are introduced by this naming integration.
 
 ## Compatibility and ownership
 
