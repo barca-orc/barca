@@ -86,6 +86,14 @@ passed its focused router test. Strict workspace/all-target Clippy, Rust
 formatting, pinned Ruff, dependency lock and whitespace checks passed. Route and
 method inventory remains unchanged, and no unmerged API fields are advertised.
 
+Naming integration plan: rebase onto shipped PR373 main f4c4ab6. Document both
+NodeStatus.name and flattened NodeState.name as the declared name, or function
+name when no explicit name is set, matching the Rust/generated-type owner. Add
+real GET asset/schema and state assertions for an explicitly named asset whose
+implementation function has a different name; run it through the declared target
+and retain the source-qualified ID. Recheck conformance, actual HTTP/client/manual
+and named-inspection contracts without changing routes, fields or runtime code.
+
 ## Compatibility and ownership
 
 Core result/error definitions remain the source of runtime behavior. This is an
