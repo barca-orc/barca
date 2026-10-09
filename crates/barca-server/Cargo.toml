@@ -26,6 +26,7 @@ ts-rs = { version = "12", optional = true }
 ts = ["dep:ts-rs", "barca-core/ts"]
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 tower = { workspace = true }
 tempfile = "3"
 jsonschema = { version = "0.33", default-features = false }

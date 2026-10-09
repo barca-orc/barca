@@ -278,7 +278,15 @@ def test_scheduled_runs_under_serve_are_reported(tmp_path, agent):
     )
     try:
         deadline = time.monotonic() + 60
-        while len(agent.requests) < 2 and time.monotonic() < deadline:
+        while (
+            sum(
+                span["name"] == "barca.run"
+                for request in agent.requests
+                for span in request["body"][0]
+            )
+            < 2
+            and time.monotonic() < deadline
+        ):
             time.sleep(0.25)
     finally:
         serve.send_signal(signal.SIGTERM)
@@ -288,8 +296,8 @@ def test_scheduled_runs_under_serve_are_reported(tmp_path, agent):
             serve.kill()
             serve.communicate()
 
-    assert len(agent.requests) >= 2, "each tick's run should send its own trace"
     roots = [s for r in agent.requests for s in r["body"][0] if s["name"] == "barca.run"]
+    assert len(roots) >= 2, "each tick's run should send its own trace"
     assert len({r["trace_id"] for r in roots}) == len(roots)
     assert all(r["service"] == "scheduler" and r["resource"].startswith("run ") for r in roots)
 
@@ -477,3 +485,137 @@ def test_disabled_tracing_sends_no_python_executions(project, agent):
     assert proc.returncode == 0, proc.stderr
     assert agent.requests == []
     assert agent.python_spans == []
+
+
+@pytest.mark.parametrize("mode", ["enabled", "unconfigured", "disabled"])
+def test_idle_serve_lifecycle_does_not_import_or_create_runs(tmp_path, agent, mode):
+    import signal
+    import socket
+    import urllib.request
+
+    (tmp_path / "pipeline.py").write_text(
+        'raise RuntimeError("idle telemetry must not import this module")\n'
+    )
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    base = {key: value for key, value in os.environ.items() if not key.startswith(SCRUB)}
+    enabled = mode == "enabled"
+    options = (
+        datadog(agent, **({"DD_TRACE_ENABLED": "false"} if mode == "disabled" else {}))
+        if mode != "unconfigured"
+        else {"DD_TRACE_AGENT_URL": agent.url}
+    )
+    serve = subprocess.Popen(
+        [_find_binary(), "serve", "pipeline.py", "--no-schedule", "--port", str(port)],
+        cwd=tmp_path,
+        env={**base, **options},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            try:
+                with urllib.request.urlopen(
+                    f"http://127.0.0.1:{port}/health", timeout=1
+                ) as response:
+                    assert response.status == 200
+                break
+            except OSError:
+                time.sleep(0.05)
+        else:
+            pytest.fail("idle server did not become ready")
+        if enabled:
+            while not agent.requests and time.monotonic() < deadline:
+                time.sleep(0.05)
+            assert agent.requests, "idle start should be visible without a run"
+        else:
+            time.sleep(0.2)
+    finally:
+        serve.send_signal(signal.SIGTERM)
+        _, stderr = serve.communicate(timeout=10)
+    assert serve.returncode == 0, stderr
+    assert not (tmp_path / ".barca" / "metadata.db").exists()
+    spans = [span for request in agent.requests for span in request["body"][0]]
+    if enabled:
+        assert [span["name"] for span in spans] == ["barca.serve.start", "barca.serve.stop"]
+        assert all(span["resource"] == "serve" for span in spans)
+        assert all("barca.run_id" not in span["meta"] for span in spans)
+    else:
+        assert spans == []
+
+
+def test_failed_listener_bind_does_not_export_start(tmp_path, agent):
+    import socket
+
+    (tmp_path / "pipeline.py").write_text("raise RuntimeError('not imported')\n")
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        sock.listen()
+        result = cli(
+            tmp_path,
+            "serve",
+            "pipeline.py",
+            "--no-schedule",
+            "--port",
+            str(sock.getsockname()[1]),
+            **datadog(agent),
+        )
+    assert result.returncode != 0
+    assert agent.requests == []
+
+
+def test_stalled_idle_export_does_not_delay_readiness_or_shutdown(tmp_path):
+    import signal
+    import socket
+    import urllib.request
+
+    (tmp_path / "pipeline.py").write_text("raise RuntimeError('not imported')\n")
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    # The intake accepts TCP connections but never answers HTTP. A second
+    # connection for stop can enter the backlog without a serving thread.
+    with socket.socket() as intake:
+        intake.bind(("127.0.0.1", 0))
+        intake.listen(8)
+        base = {key: value for key, value in os.environ.items() if not key.startswith(SCRUB)}
+        serve = subprocess.Popen(
+            [_find_binary(), "serve", "pipeline.py", "--no-schedule", "--port", str(port)],
+            cwd=tmp_path,
+            env={
+                **base,
+                "BARCA_TELEMETRY": "datadog",
+                "DD_TRACE_AGENT_URL": f"http://127.0.0.1:{intake.getsockname()[1]}",
+            },
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline:
+                try:
+                    with urllib.request.urlopen(
+                        f"http://127.0.0.1:{port}/health", timeout=0.2
+                    ) as response:
+                        assert response.status == 200
+                    break
+                except OSError:
+                    time.sleep(0.05)
+            else:
+                pytest.fail("Agent delivery delayed server readiness")
+        finally:
+            started = time.monotonic()
+            serve.send_signal(signal.SIGTERM)
+            try:
+                _, stderr = serve.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                serve.kill()
+                serve.communicate()
+                pytest.fail("stalled Agent prevented bounded shutdown")
+        assert time.monotonic() - started < 5
+        assert serve.returncode == 0, stderr
+        assert not (tmp_path / ".barca" / "metadata.db").exists()

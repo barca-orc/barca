@@ -16,7 +16,7 @@
 //! - `DD_SERVICE` (default `barca`), `DD_ENV`, `DD_VERSION`;
 //! - `DD_TAGS` (`key:value` pairs separated by commas or spaces), added to every span.
 
-use super::{Integration, RunReport, StepOutcome};
+use super::{Integration, RunReport, ServerReport, StepOutcome};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -75,7 +75,7 @@ fn env_var(name: &str) -> Option<String> {
 fn agent_from(url: Option<&str>, host: Option<&str>, port: Option<&str>) -> Result<Agent, String> {
     let parse_port = |raw: &str| {
         raw.parse::<u16>()
-            .map_err(|_| format!("'{raw}' is not a port number"))
+            .map_err(|_| "Agent port is not a port number".to_string())
     };
     if let Some(url) = url {
         if let Some(path) = url.strip_prefix("unix://") {
@@ -90,9 +90,10 @@ fn agent_from(url: Option<&str>, host: Option<&str>, port: Option<&str>) -> Resu
             .get(..7)
             .is_some_and(|p| p.eq_ignore_ascii_case("http://"))
         {
-            return Err(format!(
-                "DD_TRACE_AGENT_URL={url} is not supported: use http://host:port or unix:///path"
-            ));
+            return Err(
+                "DD_TRACE_AGENT_URL is not supported: use http://host:port or unix:///path"
+                    .to_string(),
+            );
         }
         let authority = url[7..].split(['/', '?', '#']).next().unwrap_or("");
         if authority.contains('@') {
@@ -102,15 +103,13 @@ fn agent_from(url: Option<&str>, host: Option<&str>, port: Option<&str>) -> Resu
         // An IPv6 literal is written in brackets: http://[::1]:8126.
         let (host, port) = if let Some(rest) = authority.strip_prefix('[') {
             let Some((host, after)) = rest.split_once(']') else {
-                return Err(format!("DD_TRACE_AGENT_URL={url} has an unclosed '['"));
+                return Err("DD_TRACE_AGENT_URL has an unclosed '['".to_string());
             };
             match after.strip_prefix(':') {
                 Some(p) => (host, parse_port(p)?),
                 None if after.is_empty() => (host, 8126),
                 None => {
-                    return Err(format!(
-                        "DD_TRACE_AGENT_URL={url}: unexpected '{after}' after ']'"
-                    ));
+                    return Err("DD_TRACE_AGENT_URL has unexpected text after ']'".to_string());
                 }
             }
         } else {
@@ -120,7 +119,7 @@ fn agent_from(url: Option<&str>, host: Option<&str>, port: Option<&str>) -> Resu
             }
         };
         if host.is_empty() {
-            return Err(format!("DD_TRACE_AGENT_URL={url} names no host"));
+            return Err("DD_TRACE_AGENT_URL names no host".to_string());
         }
         return Ok(Agent::Tcp {
             host: host.to_string(),
@@ -187,7 +186,7 @@ impl Datadog {
     }
 
     /// Tags every span of the trace carries.
-    fn common_meta(&self, run: &RunReport) -> Map<String, Value> {
+    fn deployment_meta(&self) -> Map<String, Value> {
         let mut meta = Map::new();
         for (k, v) in &self.tags {
             meta.insert(k.clone(), json!(v));
@@ -198,6 +197,11 @@ impl Datadog {
         if let Some(version) = &self.version {
             meta.insert("version".to_string(), json!(version));
         }
+        meta
+    }
+
+    fn common_meta(&self, run: &RunReport) -> Map<String, Value> {
+        let mut meta = self.deployment_meta();
         meta.insert("barca.run_id".to_string(), json!(run.run_id));
         meta.insert("barca.job".to_string(), json!(run.job));
         meta
@@ -329,31 +333,68 @@ async fn put<S: AsyncRead + AsyncWrite + Unpin>(
     }
 }
 
+impl Datadog {
+    fn server_trace(&self, server: &ServerReport) -> Value {
+        let phase = server.phase.as_str();
+        let id = span_id(&["serve", phase, &server.start_unix_ns.to_string()]);
+        let mut meta = self.deployment_meta();
+        meta.insert("barca.lifecycle".into(), json!(phase));
+        meta.insert("barca.version".into(), json!(env!("CARGO_PKG_VERSION")));
+        meta.insert(
+            "barca.read_only".into(),
+            json!(server.read_only.to_string()),
+        );
+        meta.insert("barca.watch".into(), json!(server.watch.to_string()));
+        meta.insert(
+            "barca.scheduling".into(),
+            json!(server.scheduling.to_string()),
+        );
+        let mut metrics = json!({"_sampling_priority_v1": 1, "barca.files": server.files,
+            "barca.schedules": server.schedules});
+        if let Some(nodes) = server.nodes {
+            metrics["barca.nodes"] = json!(nodes);
+        }
+        json!([[{"trace_id": id, "span_id": id, "name": format!("barca.serve.{phase}"),
+            "resource": "serve", "service": self.service, "type": "custom",
+            "start": server.start_unix_ns, "duration": 1, "error": 0,
+            "meta": meta, "metrics": metrics}]])
+    }
+
+    async fn send(&self, body: &[u8]) -> Result<(), String> {
+        match &self.agent {
+            Agent::Tcp { host, port } => {
+                let stream = tokio::net::TcpStream::connect((host.as_str(), *port))
+                    .await
+                    .map_err(|e| format!("cannot reach the Datadog Agent at {host}:{port}: {e}"))?;
+                let authority = if host.contains(':') {
+                    format!("[{host}]:{port}")
+                } else {
+                    format!("{host}:{port}")
+                };
+                put(stream, &authority, body).await
+            }
+            Agent::Unix { path } => {
+                let stream = tokio::net::UnixStream::connect(path)
+                    .await
+                    .map_err(|e| format!("cannot reach the Datadog Agent at {path}: {e}"))?;
+                put(stream, "localhost", body).await
+            }
+        }
+    }
+}
+
 impl Integration for Datadog {
+    fn export_server<'a>(&'a self, server: &'a ServerReport) -> super::Export<'a> {
+        Box::pin(async move {
+            let body = serde_json::to_vec(&self.server_trace(server)).map_err(|e| e.to_string())?;
+            self.send(&body).await
+        })
+    }
+
     fn export<'a>(&'a self, run: &'a RunReport) -> super::Export<'a> {
         Box::pin(async move {
             let body = serde_json::to_vec(&self.trace(run)).map_err(|e| e.to_string())?;
-            match &self.agent {
-                Agent::Tcp { host, port } => {
-                    let stream = tokio::net::TcpStream::connect((host.as_str(), *port))
-                        .await
-                        .map_err(|e| {
-                            format!("cannot reach the Datadog Agent at {host}:{port}: {e}")
-                        })?;
-                    let authority = if host.contains(':') {
-                        format!("[{host}]:{port}")
-                    } else {
-                        format!("{host}:{port}")
-                    };
-                    put(stream, &authority, &body).await
-                }
-                Agent::Unix { path } => {
-                    let stream = tokio::net::UnixStream::connect(path)
-                        .await
-                        .map_err(|e| format!("cannot reach the Datadog Agent at {path}: {e}"))?;
-                    put(stream, "localhost", &body).await
-                }
-            }
+            self.send(&body).await
         })
     }
 }
@@ -362,6 +403,59 @@ impl Integration for Datadog {
 mod tests {
     use super::super::StepReport;
     use super::*;
+
+    #[test]
+    fn server_signals_have_fixed_names_and_no_run_or_source_identity() {
+        let integration = Datadog {
+            agent: Agent::Tcp {
+                host: "localhost".into(),
+                port: 8126,
+            },
+            service: "deployment".into(),
+            env: Some("production".into()),
+            version: None,
+            tags: vec![],
+        };
+        for phase in [
+            super::super::ServerPhase::Start,
+            super::super::ServerPhase::Heartbeat,
+            super::super::ServerPhase::Stop,
+        ] {
+            let report = ServerReport {
+                phase,
+                start_unix_ns: 123,
+                files: 2,
+                nodes: None,
+                schedules: 0,
+                read_only: true,
+                watch: false,
+                scheduling: false,
+            };
+            let trace = integration.server_trace(&report);
+            let span = &trace[0][0];
+            assert_eq!(span["name"], format!("barca.serve.{}", phase.as_str()));
+            assert_eq!(span["resource"], "serve");
+            assert_eq!(span["meta"]["env"], "production");
+            assert!(span["meta"].get("barca.run_id").is_none());
+            assert!(span["meta"].get("barca.job").is_none());
+            assert!(span["metrics"].get("barca.nodes").is_none());
+            assert_eq!(span["metrics"]["barca.files"], 2);
+            assert_eq!(trace[0].as_array().unwrap().len(), 1);
+        }
+    }
+
+    #[test]
+    fn malformed_agent_url_diagnostics_do_not_echo_secret_values() {
+        for url in [
+            "https://user:secret@host/?token=secret",
+            "http://[broken?token=secret",
+            "http://host:secret",
+            "http://?token=secret",
+        ] {
+            let error = agent_from(Some(url), None, None).unwrap_err();
+            assert!(!error.contains("secret"), "{error}");
+        }
+    }
 
     fn datadog() -> Datadog {
         Datadog {
