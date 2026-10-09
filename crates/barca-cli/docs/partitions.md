@@ -27,6 +27,13 @@ def summary(all_sales: list[dict]) -> dict:
 - `partitions([...])` declares keys. A literal list is read statically; any other expression
   (a list comprehension, a function call) is evaluated by the Python runtime at plan time.
 - The partition key is passed to the function as the parameter named in `partitions={...}`.
+- Changing the keys: adding a key runs that key and no other; removing a key or reordering the
+  list runs no key. Downstream, a `partitions_from` consumer runs for the new key only, and a
+  `collect` fan-in runs again whenever a key is added or removed. This is the same however the
+  keys are written: a literal list, a module-level constant, any other expression, or
+  `partitions_from`. The keys are not part of the function's definition (`barca docs cache`,
+  "Which decorator arguments count"); renaming the dimension is, and re-runs every key. (Up to
+  0.18, editing a list written inside the decorator re-ran every key.)
 - `partitions()`, `partitions_from()` and `collect()` take exactly one argument, by position. A
   keyword (`partitions(values=[...])`, `collect(asset_fn=sales)`), no argument or two are
   errors when the file is read, exit 2 (`barca docs assets`, "Accepted arguments").

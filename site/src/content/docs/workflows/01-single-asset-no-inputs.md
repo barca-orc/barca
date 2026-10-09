@@ -120,8 +120,9 @@ table (a string here) is one row with one column named `json`. `barca history` l
 
 ## When the function runs again
 
-The run hash covers the function's source, its decorator arguments, and the module-level names
-it uses. Each of these was run in order after the steps above:
+The run hash covers the function's source, the decorator arguments that affect its result
+(`barca docs cache` lists them), and the module-level names it uses. Each of these was run in
+order after the steps above:
 
 | Change | Result |
 |---|---|

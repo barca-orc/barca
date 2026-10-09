@@ -155,6 +155,14 @@ def branch_files(root: Path) -> list[str]:
     return sorted(str(p.relative_to(barca)) for p in found)
 
 
+def branch_results(root: Path) -> list[str]:
+    """Published results only: atomic-write staging files may disappear by renaming."""
+    return [
+        name for name in branch_files(root)
+        if not (Path(name).name.startswith(".") and name.endswith(".tmp"))
+    ]
+
+
 def files(root: Path) -> list[str]:
     """Every file under `.barca` except the database (its side files come and go), barca's
     own `.gitignore` and the workers' staging directories (swept by the next worker)."""
@@ -287,7 +295,7 @@ def held_group(root: Path) -> subprocess.Popen:
     group is still open."""
     proc = start(root, "run", "waits", "pipeline.py", pool=4)
     wait_until((root / "held.0.started").exists, "the held branch to start", proc)
-    wait_until(lambda: len(branch_files(root)) >= 20, "twenty branch results on disk", proc)
+    wait_until(lambda: len(branch_results(root)) >= 20, "twenty branch results on disk", proc)
     return proc
 
 
@@ -305,7 +313,7 @@ def test_branch_results_are_gone_after_ctrl_c(root):
 def test_branch_results_are_gone_after_a_run_is_cancelled_under_barca_serve(root, server):
     run = server.run("waits")
     wait_until((root / "held.0.started").exists, "the held branch to start")
-    wait_until(lambda: len(branch_files(root)) >= 20, "twenty branch results on disk")
+    wait_until(lambda: len(branch_results(root)) >= 20, "twenty branch results on disk")
     run.cancel()
     status = run.wait(timeout=60, poll=0.05)
     assert status["status"] == "cancelled", status
@@ -335,11 +343,11 @@ def test_a_live_runs_branch_results_are_not_swept_by_another_run_starting(root):
     """The sweep removes the results of dead runs only: a run that starts while another has a
     group open leaves that group's results alone, and the first run then reads them."""
     first = held_group(root)
-    before = branch_files(root)
+    before = branch_results(root)
     code, out, err = finish(start(root, "run", "fan_b", "pipeline.py"))
     assert code == 0, err
     assert json.loads(out)["final_output"]["wrong"] == []
-    assert set(before) <= set(branch_files(root))
+    assert set(before) <= set(branch_results(root))
 
     (root / "release").write_text("")
     code, out, err = finish(first)

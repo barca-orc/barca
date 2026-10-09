@@ -11,10 +11,18 @@ only the affected subgraph re-runs.
 
 ### What the definition covers
 
-The definition part of the hash is the function's source, its decorator arguments, and its
-**dependency cone**: every module-level function, class, constant and import the function uses,
-followed transitively. That includes **helper modules in your project**. Both import styles are
-followed, at the same precision:
+The definition part of the hash covers what determines the step's result:
+
+- the function, from `def` to its last line, as written (comments and formatting included);
+- the decorator arguments that affect the result or what is stored, listed under "Which
+  decorator arguments count" below. Arguments that do not, such as `description=`, `tags=`,
+  `retries=` and the keys of a `partitions([...])` list, are not part of it: editing them
+  re-runs nothing;
+- its **dependency cone**: every module-level function, class, constant and import the function
+  uses, followed transitively.
+
+The cone includes **helper modules in your project**. Both import styles are followed, at the
+same precision:
 
 ```python
 # helpers.py
@@ -69,6 +77,92 @@ For functions, classes, constants and `module.attr`, barca does not work out loc
 parameter called `rate` counts as a use of a module-level `rate`. That can only cause an extra
 re-run, never a stale result.
 
+#### Which decorator arguments count
+
+| Part of the decorators | Counts | Why |
+|---|---|---|
+| `inputs=` | yes | decides which upstream feeds which parameter |
+| `serializer=` | yes | changes the bytes that are stored |
+| `partitions=` | the shape, not the keys | the dimension names and a `partitions_from` source decide how the function is called; the keys do not count, because each key is part of its own run hash |
+| `@sink(...)` | yes | a cached step does not write its sinks, so a new or edited sink has to run the asset to be written |
+| any other decorator | yes | it wraps the function and can change what it returns |
+| any other argument | yes | conservative fallback for unvalidated calls; recognized barca calls reject it |
+| `env=` | no | the declared names and their values are already part of the run hash |
+| `name=` | no | it is the node's id, under which results are looked up, not part of the result |
+| `freshness=` | no | decides when the step runs, not what it returns |
+| `retries=` | no | decides how often a failing step is tried, not what it returns |
+| `retry_backoff=` | no | decides how long to wait between attempts, not what the step returns |
+| `timeout_seconds=` | no | decides how long the step may take, not what it returns |
+| `description=` | no | documentation |
+| `tags=` | no | labels for people and tools |
+| `@unsafe` | no | a marker barca reads and does not act on |
+
+The same list applies to `@asset`, `@sensor` and `@task`. "Any other decorator" is one that is
+not barca's: `@functools.cache`, a wrapper of your own. "Any other argument" is a keyword barca
+does not define, a positional argument, or `**options`, only in a call that barca cannot
+positively identify from its imports. Positively identified barca node calls reject all of
+these at plan time (`barca docs assets`, "Accepted arguments"); the fallback is conservative
+hashing for unvalidated syntax, not an accepted argument. The hash rules are keyed to the
+same accepted signatures and a test checks every `(decorator, argument)` pair. A decorator
+whose name is not positively bound to a barca import counts in full, even if it is named
+`asset`, `sensor`, `task`, `sink` or `unsafe`: its arguments, their order and the wrapper
+implementation can change the result. Binding proof is conservative: a walrus assignment
+to a decorator name anywhere in the module makes it uncertain, even inside a local scope;
+this can cause an extra recompute rather than risk a stale result. Any unproven decorator on a node (including a wrapper stacked with a known barca decorator)
+counts the whole module source and all dependencies available to the existing static cone,
+so even unrelated edits in that module can recompute it. This does not add tracking for
+dynamically imported modules. Explicit references to `globals`, `locals`, `vars`, `exec`,
+`eval` or `__builtins__` also make every imported barca name uncertain, including aliases and qualified
+or shadowed references. These checks cover the explicit syntax, not arbitrary reflective
+indirection or runtime side effects. Ordinary static imports and dependencies
+remain the tracking boundary; this is not a guarantee about arbitrary dynamic Python.
+
+What this means in practice:
+
+```python
+@asset(partitions={"region": partitions(["emea", "amer"])}, description="Sales by region")
+def sales(region: str) -> dict:
+    return {"region": region}
+```
+
+- Add `"apac"` to the list: only `sales[region=apac]` runs. Remove a key or reorder the list:
+  nothing runs. This holds however the keys are written: a literal list, a module-level
+  constant, a comprehension, a function call, or `partitions_from`
+  (`barca docs partitions`).
+- Edit the description, add `tags=` or `retries=`, change `freshness=`: nothing runs.
+- Change `serializer=`, add or edit a `@sink`, change which upstream an `inputs=` entry names,
+  rename the partition dimension, or put another decorator on the function: the step runs
+  again, and its downstream steps with it.
+- Renaming a node with `name=` gives it a new id, and a result is looked up under its id, so the
+  renamed step runs once. Its run hash is the same as before, so nothing downstream re-runs.
+
+A counted argument is compared by what it says, not how it is typed. Whitespace, line breaks,
+comments, single or double quotes, a trailing comma, the order of barca's own decorator keyword
+arguments and the order of entries in `inputs={...}` do not change the hash. Other Python calls preserve keyword argument order: a wrapper
+decorator can observe it through `**kwargs`, so changing that order must invalidate the cache.
+Two things are compared as written: the function itself, from `def` on, and an f-string or `lambda` inside a counted
+argument.
+
+Names in a counted argument are followed into the cone exactly like names in the function body:
+with `@asset(serializer=FMT)` or `@retry(times=ATTEMPTS)`, editing `FMT` or `ATTEMPTS` re-runs
+the step, and so does editing `retry` itself if it is defined in your project. Names in an
+argument that does not count are not followed: with `partitions(REGIONS)` or
+`description=SUMMARY`, editing `REGIONS` or `SUMMARY` re-runs nothing (a new key in `REGIONS`
+runs that key). An upstream named in `inputs=`, `collect(...)` or `partitions_from(...)` is not
+followed either, and does not need to be: the upstream's run hash, which covers its code, is
+already part of the step's run hash.
+
+Known limits:
+
+- The keys of `partitions(<expression>)` are whatever the expression returns when the plan is
+  made. Barca does not hash the expression or the helpers it calls, so if a helper starts
+  returning the same keys with a different meaning, nothing re-runs.
+- A step whose function reads a constant that the decorator also uses for its keys
+  (`partitions(REGIONS)` and `REGIONS` in the body) re-runs every key when the constant is
+  edited: the body's use puts the constant in the cone.
+- A sink is written only when its asset runs. Removing a `@sink` also re-runs the asset once,
+  although nothing new has to be written.
+
 #### Which file a module name means
 
 A module name is looked up exactly where the worker's `import` looks: for a pipeline file inside
@@ -121,12 +215,35 @@ An edit in one of these does not change the hash; recompute with `--refresh-all`
 - what a helper refers to only in a decorator, a default argument value, an `except` clause's
   exception type, a `match` pattern, a set literal (`{f()}`), an assignment target
   (`table[key()] = ...`) or a loop's `else:` block. The helper's own text is hashed, but those
-  references are not followed;
+  references are not followed. (This is about helper functions. The decorators of a step
+  itself are covered by "Which decorator arguments count" above; its default argument values
+  are hashed as part of the function but the names in them are not followed);
 - helpers more than six project modules away along an import chain.
 
 Two pipeline directories that each have a `helpers.py` are hashed correctly, each against its
 own, but share one `sys.path` in a worker (`barca docs discovery`, "Node ids"): give such
 helpers distinct names.
+
+#### After upgrading to 0.19
+
+Barca 0.19 changed what the definition covers of a step's decorators. Up to 0.18 it was the
+decorators' text as written, so any edit there (a new partition key, a description, a comment,
+a reformat) re-ran the step for every key, and everything downstream. From 0.19 it is the list
+under "Which decorator arguments count".
+
+The hash of every step is computed differently, so **every step recomputes once** on the first
+run after upgrading, in every project and every environment (`--env`). The run after that is
+served from cache as usual. Nothing has to be done by hand; plan for the time and cost of one
+full run.
+
+- Results written by 0.18 stay in `.barca/metadata.db` and their artifacts stay on disk, under
+  their old run hashes. Barca 0.19 does not read them and does not delete them.
+- With a shared history and artifact store (`barca docs remote`), the first machine that runs
+  0.19 computes every step once and the other machines on 0.19 reuse those results. A machine
+  still on 0.18 keeps finding its 0.18 results in the same store. The two versions do not
+  reuse each other's results, so upgrade the machines that share a store together.
+- Run hashes appear in the JSON of `barca get`, `barca run` (also with `--dry-run`) and
+  `barca status`; their values change with this upgrade. No command, flag or JSON key changed.
 
 #### After upgrading to 0.18
 
@@ -213,8 +330,14 @@ How it works:
   SHA-256 of those bytes is folded into the run hash of every asset that reads the sensor
   directly. Everything downstream of those assets changes with them, through their run hashes.
   Assets that do not depend on the sensor are not affected.
-- The same output gives the same run hash, so the consumer is served from cache. Going back to
-  an earlier output (an etag that was current before) serves the materialization made then.
+- The sensor's own code counts too. A sensor's run hash covers its function and the helpers it
+  reaches, and is part of its consumers' run hashes next to the hash of its output. Editing
+  the sensor's function re-runs the assets that read it, even when it returns the same value.
+  Editing its `freshness=`, `description=` or another decorator argument that does not count
+  ("Which decorator arguments count" above) re-runs nothing.
+- The same code and the same output give the same run hash, so the consumer is served from
+  cache. Going back to an earlier output (an etag that was current before) serves the
+  materialization made then.
 - Sensors run in a phase of their own, before their consumers, so a consumer's cache decision
   always uses the value the sensor returned in this run.
 - The `bool` in the sensor's `(update_detected, value)` return is not used for caching; only

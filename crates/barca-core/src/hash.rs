@@ -1,7 +1,8 @@
 //! Hashing — content-addressed identity for nodes and materializations.
 //!
 //! Hash protocol:
-//! - definition_hash: identity of the code (function source + deps + metadata)
+//! - definition_hash: identity of the code (what determines the result: the function from `def`
+//!   on, the decorator parts that count, the dependency cone; see `crate::definition`)
 //! - run_hash: identity of a specific execution (definition + inputs + partition)
 
 use sha2::{Digest, Sha256};
@@ -12,10 +13,15 @@ pub const PROTOCOL_VERSION: &str = "1.0.0";
 /// Compute the definition hash for a node.
 ///
 /// Inputs:
-/// - function source text
-/// - dependency cone source (helpers, constants)
-/// - decorator metadata (freshness, partitions, inputs declarations)
+/// - the node's definition text ([`crate::definition::node_definition`]): the decorator parts
+///   that count, in canonical form, then the function from `def` on
+/// - the dependency cone hash (helpers, constants)
+/// - the node kind, as JSON
 /// - protocol version
+///
+/// [`PROTOCOL_VERSION`] was not bumped when 0.19 changed the first input (#283): how the
+/// inputs are combined is the same, and the run hash, which also carries the version, did not
+/// change at all.
 pub fn definition_hash(function_source: &str, cone_source: &str, metadata_json: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"definition:");

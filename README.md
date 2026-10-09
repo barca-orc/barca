@@ -305,9 +305,9 @@ def total(all_sales: list[dict]) -> dict:
 ```
 
 `barca get total pipeline.py` runs 4 steps, then 0 on a second run. After `"latam"` is
-added to `REGIONS` it runs 2: `sales` for `latam`, then `total`. On 0.18.0 that holds when
-the keys are in a module-level constant, as above; adding a key to a literal list written
-inside the decorator ran every key again. No single key can be targeted or refreshed, and
+added to `REGIONS` it runs 2: `sales` for `latam`, then `total`. The same holds when the keys
+are a literal list written inside the decorator (up to 0.18 that form ran every key again).
+No single key can be targeted or refreshed, and
 `barca get sales` returns one key's value. In `barca sql` a partitioned asset is one view
 with a `partition` column (`region=emea`).
 

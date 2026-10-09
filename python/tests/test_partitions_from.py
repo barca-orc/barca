@@ -196,6 +196,8 @@ def test_runtime_list_upstream(project):
 
 
 def test_cached_per_key(project):
+    # The keys come from an env var here. Editing a key list in the file, which #283 was about,
+    # is tested for every way of writing the keys in `test_decorator_edits.py`.
     first = get(project, "all_dyn", regions="eu,us")
     assert first["steps_executed"] == 5  # two dyn_sales keys, two dyn_margin keys, the fan-in
     assert get(project, "all_dyn", regions="eu,us")["steps_executed"] == 0

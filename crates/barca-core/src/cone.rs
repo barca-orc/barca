@@ -23,6 +23,13 @@
 //!    not the module.
 //! 6. **Imports inside a function or class body** bind names for that body and the scopes
 //!    nested in it; uses of those names follow rules 3 to 5.
+//! 7. **Nodes.** For a function decorated with `@asset`, `@sensor` or `@task`, the names in the
+//!    decorator parts that count towards its definition hash ([`crate::definition::RULES`]) are
+//!    uses too, and follow rules 2 to 5: `serializer=FMT`, `@retry(times=N)`. Names in parts
+//!    that do not count (`description=TEXT`, the keys in `partitions(REGIONS)`) are not uses, and
+//!    neither is a reference to an upstream node (`inputs={"x": up}`). Where a node is reached
+//!    as a definition (rule 2), it contributes its definition text, not its decorators as
+//!    written.
 //!
 //! The hash is over the sorted `(label, source)` pairs collected, so it does not depend on the
 //! order definitions are visited in.
@@ -460,13 +467,66 @@ fn collect_definitions(source: &str, package: Option<&str>) -> HashMap<String, M
         uses: uses.uses,
     };
     let mut defs: HashMap<String, ModuleDef> = HashMap::new();
+    let barca = crate::decorator_args::BarcaNames::of(&parsed.syntax().body);
+    let mut conservative_functions = Vec::new();
+    struct StaticImports<'p> {
+        package: Option<&'p str>,
+        uses: Vec<LocalUse>,
+    }
+    impl<'a> Visitor<'a> for StaticImports<'_> {
+        fn visit_stmt(&mut self, stmt: &'a Stmt) {
+            self.uses
+                .extend(
+                    import_bindings(stmt, self.package)
+                        .into_iter()
+                        .map(|(bound, binding)| {
+                            // A star import can install any decorator/helper from this module.
+                            let binding = match binding {
+                                ModuleDef::FromImport { module, name } if name == "*" => {
+                                    ModuleDef::ModuleImport { module }
+                                }
+                                other => other,
+                            };
+                            LocalUse {
+                                bound,
+                                binding,
+                                attrs: Vec::new(),
+                            }
+                        }),
+                );
+            visitor::walk_stmt(self, stmt);
+        }
+    }
+    let mut static_imports = StaticImports {
+        package,
+        uses: Vec::new(),
+    };
+    visitor::walk_body(&mut static_imports, &parsed.syntax().body);
 
     for stmt in &parsed.syntax().body {
         match stmt {
             Stmt::FunctionDef(func) => {
                 let mut uses = UseCollector::new(package);
                 uses.function(func);
-                defs.insert(func.name.to_string(), ModuleDef::Function(code(func, uses)));
+                // A node (`@asset`, `@sensor`, `@task`) contributes what its definition hash
+                // covers, wherever it is reached from: the decorator parts that count, in
+                // canonical form, and the names in them (rule 7). Any other function
+                // contributes its text as written, decorators included.
+                let function = match crate::definition::node_definition(func, source, &barca) {
+                    Some(definition) => {
+                        uses.exprs(definition.followed.iter().copied());
+                        if definition.conservative_module {
+                            conservative_functions.push(func.name.to_string());
+                            uses.stmts(&parsed.syntax().body);
+                        }
+                        Code {
+                            source_text: definition.text.into(),
+                            uses: uses.uses,
+                        }
+                    }
+                    None => code(func, uses),
+                };
+                defs.insert(func.name.to_string(), ModuleDef::Function(function));
             }
             Stmt::ClassDef(class) => {
                 let mut uses = UseCollector::new(package);
@@ -505,6 +565,17 @@ fn collect_definitions(source: &str, package: Option<&str>) -> HashMap<String, M
             }
             Stmt::ImportFrom(_) => defs.extend(import_bindings(stmt, package)),
             _ => {}
+        }
+    }
+    // Unproven node bindings may have changed in defaults, conditionals or global writes.
+    // Include all statically collected module definitions and imports; resolving just the
+    // original import could miss the implementation actually installed at evaluation time.
+    let names: Vec<_> = defs.keys().cloned().collect();
+    for name in conservative_functions {
+        if let Some(ModuleDef::Function(code)) = defs.get_mut(&name) {
+            code.uses.names.extend(names.iter().cloned());
+            code.uses.values.extend(names.iter().cloned());
+            code.uses.local.extend(static_imports.uses.iter().cloned());
         }
     }
     defs
@@ -2177,5 +2248,197 @@ def shadowing(helpers, json):
                 "the cone hash of `{function}` changed"
             );
         }
+    }
+
+    #[test]
+    fn foreign_node_decorator_implementations_are_followed() {
+        for name in ["asset", "task", "sensor", "unsafe", "sink"] {
+            let pipeline = |result: &str| {
+                format!(
+                    "from barca import asset as actual_asset\ndef {name}(**kwargs):\n    return lambda fn: {result}\n\n@asset()\n@{name}()\ndef my_asset():\n    return 0\n"
+                )
+            };
+            let first = cone_hash(&pipeline("1"), "my_asset");
+            assert!(!first.is_empty(), "{name}");
+            assert_ne!(first, cone_hash(&pipeline("2"), "my_asset"), "{name}");
+        }
+    }
+
+    // ─── Rule 7: nodes and their decorators (#283) ───────────────────────────
+
+    /// A pipeline file made of `constants` and one node `my_asset` under `decorators`.
+    fn decorated(constants: &str, decorators: &str) -> String {
+        format!(
+            "from barca import asset, sensor, sink, partitions, partitions_from, collect, asset_ref\n{constants}\n\n{decorators}\ndef my_asset(x=None):\n    return 1\n"
+        )
+    }
+
+    #[test]
+    fn a_name_in_a_counted_decorator_argument_is_followed() {
+        for decorators in [
+            "@asset(serializer=FMT)",
+            "@asset()\n@sink(PATH_PREFIX + \"out.json\", serializer=FMT)",
+            "@asset()\n@retry(times=FMT)",
+            "@asset(codec=make(FMT))",
+            "@asset(**FMT)",
+        ] {
+            let hash = |constants: &str| cone_hash(&decorated(constants, decorators), "my_asset");
+            let before = hash("FMT = 'json'\nPATH_PREFIX = 'a/'\nOTHER = 1");
+            assert!(!before.is_empty(), "{decorators}");
+            assert_ne!(
+                before,
+                hash("FMT = 'pickle'\nPATH_PREFIX = 'a/'\nOTHER = 1"),
+                "{decorators}: editing FMT"
+            );
+            let unrelated = hash("FMT = 'json'\nPATH_PREFIX = 'a/'\nOTHER = 2");
+            if decorators.contains("@retry") {
+                assert_ne!(before, unrelated, "foreign wrappers count the whole module");
+            } else {
+                assert_eq!(
+                    before, unrelated,
+                    "{decorators}: editing an unused constant"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_name_in_an_argument_that_does_not_count_is_not_followed() {
+        for decorators in [
+            "@asset(partitions={\"region\": partitions(REGIONS)})",
+            "@asset(partitions={\"region\": partitions([r for r in REGIONS])})",
+            "@asset(partitions={\"region\": partitions(regions(REGIONS))})",
+            "@asset(description=REGIONS)",
+            "@asset(tags=REGIONS, retries=REGIONS, retry_backoff=REGIONS, timeout_seconds=REGIONS)",
+            "@asset(freshness=Schedule(REGIONS), name=REGIONS)",
+        ] {
+            let hash = |constants: &str| cone_hash(&decorated(constants, decorators), "my_asset");
+            assert_eq!(hash("REGIONS = ['us', 'eu']"), "", "{decorators}");
+            assert_eq!(hash("REGIONS = ['us', 'eu', 'apac']"), "", "{decorators}");
+        }
+    }
+
+    #[test]
+    fn another_decorator_s_definition_is_followed() {
+        let pipeline = |wrapper_body: &str| {
+            format!(
+                "def traced(fn):\n    {wrapper_body}\n\n\n@asset()\n@traced\ndef my_asset():\n    return 1\n"
+            )
+        };
+        assert_ne!(
+            cone_hash(&pipeline("return fn"), "my_asset"),
+            cone_hash(&pipeline("return lambda: fn() + 1"), "my_asset"),
+        );
+
+        // The same through a project module.
+        let entry = "from wrappers import traced\n\n\n@asset()\n@traced(level=2)\ndef my_asset():\n    return 1\n";
+        let module = |body: &str| {
+            one(
+                "wrappers",
+                &format!("def traced(level):\n    {body}\n\n\ndef other():\n    return 0\n"),
+            )
+        };
+        let before = hash_of(entry, &module("return lambda fn: fn"), &[]);
+        assert_ne!(
+            before,
+            hash_of(
+                entry,
+                &module("return lambda fn: (lambda: fn() + level)"),
+                &[]
+            )
+        );
+        let unrelated = one(
+            "wrappers",
+            "def traced(level):\n    return lambda fn: fn\n\n\ndef other():\n    return 1\n",
+        );
+        assert_eq!(before, hash_of(entry, &unrelated, &[]));
+    }
+
+    /// `inputs={"x": up}` names the upstream. The upstream's code already reaches the consumer:
+    /// its run hash, which covers its definition, is part of the consumer's run hash (for a
+    /// sensor, next to the hash of its output). Following the reference would put the same
+    /// code in the consumer's definition hash a second time and change nothing about what
+    /// re-runs. (An edit to a sensor's code does re-run its consumers, through the run hash,
+    /// whatever the sensor returns.)
+    #[test]
+    fn an_upstream_named_in_inputs_or_partitions_from_is_not_followed() {
+        for decorators in [
+            "@asset(inputs={\"x\": up})",
+            "@asset(inputs={\"x\": collect(up)})",
+            "@asset(partitions={\"region\": partitions_from(up)})",
+            "@asset(inputs={\"x\": asset_ref(\"pipeline.py:up\")})",
+        ] {
+            let pipeline = |up_body: &str| {
+                format!(
+                    "from barca import asset, sensor, collect, partitions_from, asset_ref\n@sensor()\ndef up():\n    return {up_body}\n\n\n{decorators}\ndef my_asset(x=None, region=None):\n    return 1\n"
+                )
+            };
+            assert_eq!(cone_hash(&pipeline("1"), "my_asset"), "", "{decorators}");
+            assert_eq!(cone_hash(&pipeline("2"), "my_asset"), "", "{decorators}");
+        }
+    }
+
+    /// A parameter named after its upstream (`def margin(region, sales)`) counts as a use of the
+    /// module-level `sales` (rule 2), so `sales` is in `margin`'s cone. It is there as its
+    /// definition text: adding a key to `sales`, or editing its description, must not re-run
+    /// `margin`.
+    #[test]
+    fn a_node_reached_by_name_contributes_its_definition_not_its_decorator_text() {
+        let pipeline = |sales_decorator: &str, revenue: &str| {
+            format!(
+                "from barca import asset, partitions, partitions_from\n{sales_decorator}\ndef sales(region):\n    return {revenue}\n\n\n@asset(partitions={{\"region\": partitions_from(sales)}})\ndef margin(region, sales):\n    return sales * 0.2\n"
+            )
+        };
+        let hash =
+            |decorator: &str, revenue: &str| cone_hash(&pipeline(decorator, revenue), "margin");
+        let before = hash(
+            "@asset(partitions={\"region\": partitions([\"us\", \"eu\"])})",
+            "100",
+        );
+        assert!(!before.is_empty());
+        for same in [
+            "@asset(partitions={\"region\": partitions([\"us\", \"eu\", \"apac\"])})",
+            "@asset(partitions={\"region\": partitions([\"eu\"])})",
+            "@asset(partitions={'region': partitions(['us', 'eu'])}, description=\"sales\")",
+            "@asset(\n    partitions={\"region\": partitions([\"us\", \"eu\"])},  # keys\n    retries=3,\n)",
+        ] {
+            assert_eq!(before, hash(same, "100"), "{same}");
+        }
+        assert_ne!(
+            before,
+            hash(
+                "@asset(partitions={\"region\": partitions([\"us\", \"eu\"])})",
+                "200"
+            ),
+            "the upstream's body"
+        );
+        assert_ne!(
+            before,
+            hash(
+                "@asset(partitions={\"region\": partitions([\"us\", \"eu\"])}, serializer=\"pickle\")",
+                "100"
+            ),
+            "a counted argument of the upstream"
+        );
+    }
+
+    /// A helper that is not a node keeps contributing its text as written, decorators included,
+    /// as every earlier release hashed it; the names in its decorators are still not followed.
+    #[test]
+    fn a_helper_that_is_not_a_node_is_hashed_as_written() {
+        let pipeline = |decorator: &str, size: &str| {
+            format!(
+                "from barca import asset\nSIZE = {size}\n\n\n{decorator}\ndef helper():\n    return 1\n\n\n@asset()\ndef my_asset():\n    return helper()\n"
+            )
+        };
+        let before = cone_hash(&pipeline("@lru_cache(maxsize=SIZE)", "1"), "my_asset");
+        assert_ne!(
+            before,
+            cone_hash(&pipeline("@lru_cache( maxsize = SIZE )", "1"), "my_asset")
+        );
+        assert_eq!(
+            before,
+            cone_hash(&pipeline("@lru_cache(maxsize=SIZE)", "2"), "my_asset")
+        );
     }
 }

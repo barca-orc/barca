@@ -455,18 +455,11 @@ impl Dag {
                 return Err(DagError::SensorWithInputs { sensor: id.clone() });
             }
 
-            // Compute definition_hash from source text + dependency cone + metadata.
-            // Sinks and serializer are included so that changing a @sink or
-            // @asset(serializer=) re-materializes the node — cached steps never
-            // reach a worker, so their sinks would otherwise silently not run.
-            let metadata = serde_json::json!({
-                "kind": node.kind,
-                "freshness": node.freshness,
-                "inputs": node.inputs.iter().map(|i| &i.param_name).collect::<Vec<_>>(),
-                "sinks": node.sinks,
-                "serializer": node.artifact_serializer,
-            })
-            .to_string();
+            // The definition hash: what determines the node's result. `source_text` is the
+            // function from `def` on plus the decorator parts that count, in canonical form
+            // (`crate::definition::RULES` is the list: inputs, serializer, sinks, ...), and
+            // `cone_hash` is the helper code both reach. The kind is the one thing added here.
+            let metadata = serde_json::json!({ "kind": node.kind }).to_string();
             let def_hash = hash::definition_hash(&node.source_text, &node.cone_hash, &metadata);
 
             let dag_node = DagNode {
@@ -696,7 +689,6 @@ impl Dag {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{SerializerKind, SinkDecl};
 
     fn node(name: &str) -> ExtractedNode {
         ExtractedNode {
@@ -1040,55 +1032,118 @@ def margin(region: str, tier: str, sales: dict) -> dict:\n    return sales\n"
         assert!(dag.subgraph_many(&["t.py:nope"]).is_empty());
     }
 
+    /// The definition hash of `a` in a one-file pipeline, through the parser.
+    fn definition_hash_of(source: &str) -> String {
+        let source = &format!(
+            "from barca import asset, sensor, task, sink, partitions, partitions_from\n{source}"
+        );
+        let nodes = crate::parse::extract_nodes(source, "test.py").unwrap();
+        let dag = Dag::build(&nodes).unwrap();
+        dag.get_node("test.py:a").unwrap().definition_hash.clone()
+    }
+
+    const A: &str = "def a():\n    return 1\n";
+
+    // Cached steps never reach a worker, so a new or edited sink has to change the hash, or it
+    // would silently not be written.
     #[test]
     fn definition_hash_changes_when_sink_added() {
-        let plain = node("a");
-        let mut sinked = node("a");
-        sinked.sinks.push(SinkDecl {
-            path: "exports/a.parquet".to_string(),
-            serializer: None,
-        });
-
-        let dag_plain = Dag::build(std::slice::from_ref(&plain)).unwrap();
-        let dag_sinked = Dag::build(std::slice::from_ref(&sinked)).unwrap();
         assert_ne!(
-            dag_plain.get_node("test.py:a").unwrap().definition_hash,
-            dag_sinked.get_node("test.py:a").unwrap().definition_hash,
+            definition_hash_of(&format!("@asset()\n{A}")),
+            definition_hash_of(&format!("@asset()\n@sink(\"exports/a.parquet\")\n{A}")),
         );
     }
 
     #[test]
     fn definition_hash_changes_when_sink_edited() {
-        let mut s1 = node("a");
-        s1.sinks.push(SinkDecl {
-            path: "exports/a.parquet".to_string(),
-            serializer: None,
-        });
-        let mut s2 = node("a");
-        s2.sinks.push(SinkDecl {
-            path: "exports/a.parquet".to_string(),
-            serializer: Some(SerializerKind::Pickle),
-        });
-
-        let d1 = Dag::build(std::slice::from_ref(&s1)).unwrap();
-        let d2 = Dag::build(std::slice::from_ref(&s2)).unwrap();
+        let hash = |sink: &str| definition_hash_of(&format!("@asset()\n@sink({sink})\n{A}"));
         assert_ne!(
-            d1.get_node("test.py:a").unwrap().definition_hash,
-            d2.get_node("test.py:a").unwrap().definition_hash,
+            hash("\"exports/a.parquet\""),
+            hash("\"exports/a.parquet\", serializer=\"pickle\""),
         );
+        assert_ne!(hash("\"exports/a.parquet\""), hash("\"exports/b.parquet\""));
     }
 
     #[test]
     fn definition_hash_changes_when_serializer_changed() {
-        let plain = node("a");
-        let mut with_ser = node("a");
-        with_ser.artifact_serializer = Some(SerializerKind::Parquet);
-
-        let d1 = Dag::build(std::slice::from_ref(&plain)).unwrap();
-        let d2 = Dag::build(std::slice::from_ref(&with_ser)).unwrap();
         assert_ne!(
+            definition_hash_of(&format!("@asset()\n{A}")),
+            definition_hash_of(&format!("@asset(serializer=\"parquet\")\n{A}")),
+        );
+    }
+
+    /// The definition hash is over `source_text` (the canonical definition, see
+    /// `crate::definition`), the cone and the kind. The fields the parser reads from arguments
+    /// that do not count (`freshness`, `retries`, `description`, ...) are not part of it.
+    #[test]
+    fn definition_hash_ignores_what_does_not_count() {
+        let plain = node("a");
+        let mut other = node("a");
+        other.freshness = crate::model::Freshness::Manual;
+        other.retries = 5;
+        other.retry_backoff_seconds = 2.0;
+        other.timeout_seconds = 10;
+        other.description = Some("d".to_string());
+        other.tags.insert("team".to_string(), "a".to_string());
+        other.env.push("HOME".to_string());
+        let d1 = Dag::build(std::slice::from_ref(&plain)).unwrap();
+        let d2 = Dag::build(std::slice::from_ref(&other)).unwrap();
+        assert_eq!(
             d1.get_node("test.py:a").unwrap().definition_hash,
             d2.get_node("test.py:a").unwrap().definition_hash,
+        );
+
+        let mut sensor = node("a");
+        sensor.kind = NodeKind::Sensor;
+        let d3 = Dag::build(std::slice::from_ref(&sensor)).unwrap();
+        assert_ne!(
+            d1.get_node("test.py:a").unwrap().definition_hash,
+            d3.get_node("test.py:a").unwrap().definition_hash,
+            "the kind counts"
+        );
+    }
+
+    /// Issue #283, end to end through the parser: decorator edits that do not change the
+    /// result leave the definition hash alone; edits that can change it do not.
+    #[test]
+    fn definition_hash_covers_the_result_and_nothing_else() {
+        let base = definition_hash_of(&format!(
+            "@asset(partitions={{\"region\": partitions([\"us\", \"eu\"])}})\n{A}"
+        ));
+        for same in [
+            "@asset(partitions={\"region\": partitions([\"us\", \"eu\", \"apac\"])})\n",
+            "@asset(partitions={\"region\": partitions([\"eu\"])})\n",
+            "@asset(partitions={\"region\": partitions([\"eu\", \"us\"])})\n",
+            "@asset(partitions={\"region\": partitions(REGIONS)})\n",
+            "@asset(partitions={\"region\": partitions(regions())})\n",
+            "@asset(partitions={\"region\": partitions([r for r in REGIONS])})\n",
+            "@asset(\n    partitions = {'region': partitions(['us', 'eu',]),},  # keys\n)\n",
+            "@asset(description=\"d\", partitions={\"region\": partitions([\"us\", \"eu\"])})\n",
+            "@asset(partitions={\"region\": partitions([\"us\", \"eu\"])}, tags={\"a\": \"b\"}, retries=3)\n",
+            "@asset(partitions={\"region\": partitions([\"us\", \"eu\"])}, freshness=Manual)\n",
+            "@asset(partitions={\"region\": partitions([\"us\", \"eu\"])}, timeout_seconds=5, retry_backoff=1.5)\n",
+        ] {
+            assert_eq!(base, definition_hash_of(&format!("{same}{A}")), "{same}");
+        }
+        for different in [
+            "@asset(partitions={\"area\": partitions([\"us\", \"eu\"])})\n",
+            "@asset(partitions={\"region\": partitions([\"us\", \"eu\"])}, serializer=\"pickle\")\n",
+            "@asset(partitions={\"region\": partitions([\"us\", \"eu\"])})\n@sink(\"a.json\")\n",
+            "@asset(partitions={\"region\": partitions([\"us\", \"eu\"])})\n@functools.cache\n",
+            "@asset()\n",
+        ] {
+            assert_ne!(
+                base,
+                definition_hash_of(&format!("{different}{A}")),
+                "{different}"
+            );
+        }
+        assert_ne!(
+            base,
+            definition_hash_of(
+                "@asset(partitions={\"region\": partitions([\"us\", \"eu\"])})\ndef a():\n    return 2\n"
+            ),
+            "the body counts"
         );
     }
 }

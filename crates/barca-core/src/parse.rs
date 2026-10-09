@@ -255,8 +255,11 @@ fn try_extract_function(
         });
 
     let start = func.range().start().to_usize();
-    let end = func.range().end().to_usize();
-    let source_text = source[start..end].to_string();
+    // What the definition hash covers: the function from `def` on and the decorator parts that
+    // count, in canonical form. Never the decorators as written (`crate::definition`).
+    let source_text = crate::definition::node_definition(func, source, &names.barca)
+        .map(|definition| definition.text)
+        .unwrap_or_default();
 
     Ok(Some(ExtractedNode {
         kind,
@@ -360,11 +363,11 @@ fn classify_type(module: &str, name: &str) -> Option<ValueType> {
     }
 }
 
-fn is_unsafe_decorator(expr: &Expr) -> bool {
+pub(crate) fn is_unsafe_decorator(expr: &Expr) -> bool {
     matches!(expr, Expr::Name(n) if n.id.as_str() == "unsafe")
 }
 
-fn try_extract_sink(expr: &Expr) -> Option<SinkDecl> {
+pub(crate) fn try_extract_sink(expr: &Expr) -> Option<SinkDecl> {
     if let Expr::Call(call) = expr
         && let Expr::Name(n) = call.func.as_ref()
         && n.id.as_str() == "sink"
@@ -401,7 +404,7 @@ fn extract_serializer_kind(expr: &Expr) -> Option<SerializerKind> {
     }
 }
 
-fn match_node_decorator(expr: &Expr) -> Option<(NodeKind, Vec<&Keyword>)> {
+pub(crate) fn match_node_decorator(expr: &Expr) -> Option<(NodeKind, Vec<&Keyword>)> {
     match expr {
         Expr::Name(name) => {
             let kind = match name.id.as_str() {

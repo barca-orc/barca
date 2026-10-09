@@ -41,6 +41,11 @@ def daily() -> dict:
 | `env=["NAME", ...]` | Environment variables the function reads. Their values are part of the cache key and are reported per step. See below. |
 | `description=`, `tags=` | Metadata. |
 
+`inputs=`, `serializer=` and the dimension names in `partitions=` are part of the asset's run
+hash: changing one runs the asset again. The other options, the partition keys and the
+formatting of the decorator are not: editing them re-runs nothing. `barca docs cache` ("Which
+decorator arguments count") has the full list and the reason for each.
+
 These are the only options: any other is an error ("Accepted arguments" below).
 
 ## Accepted arguments
@@ -344,3 +349,9 @@ every sensor, including one nothing depends on: a sensor is something `get` can 
 observing is read-only. Tasks are the only nodes a bare `get` skips.
 
 See also: `barca docs tasks`, `barca docs cache`, `barca docs scheduling`.
+
+Explicit references to `globals`, `locals`, `vars`, `exec`, `eval` or `__builtins__` make imported barca
+names uncertain, even when the reference is aliased, qualified or shadowed. Such names are
+left to Python's argument checks and their nodes conservatively hash the whole module
+(`barca docs cache`). The static checks do not resolve arbitrary reflective indirection
+or runtime side effects.

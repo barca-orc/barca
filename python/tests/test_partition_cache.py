@@ -14,8 +14,10 @@ import pytest
 
 from barca.api import _find_binary
 
-# Keys come from an env var so a test can change the key set without changing any source (the
-# definition hash must stay the same for cached keys to remain valid).
+# Keys come from an env var here, so these tests change the key set without changing any
+# source. That is one way to write keys; it hid #283, where editing a list written inside the
+# decorator re-ran every key. `test_decorator_edits.py` edits the file between runs, for every
+# way of writing the keys.
 PIPELINE = """
 import os
 from barca import asset, collect, partitions

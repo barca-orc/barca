@@ -187,11 +187,17 @@ More on sensors: [Sensors and External Observations](/workflows/06-sensors-and-e
 
 ## Adding and removing keys
 
-On 0.18.0, what runs when the set of keys changes depends on where the keys are written.
-`barca docs partitions` and `barca docs examples/partitions` say that adding a key runs only
-the new key; with a literal list that is not what 0.18.0 did.
+Adding a key runs the new key, and no other key of that asset, however the keys are written.
+Removing a key or reordering them runs no key. The keys are not part of the function's
+definition, so editing them never changes the run hash of a key that is already cached
+(`barca docs cache`, "Which decorator arguments count").
 
-### A literal list in the decorator: every key runs again
+This section was run with 0.19. Up to 0.18 it held only when the keys were written outside
+the decorator: adding a key to a literal list inside it re-ran every key of the asset and
+everything downstream, because the decorator's text was part of every key's hash
+([#283](https://github.com/barca-orc/barca/issues/283)).
+
+### A literal list in the decorator
 
 Add `"NVDA"` to the list in the example above:
 
@@ -200,20 +206,32 @@ partitions={"ticker": partitions(["AAPL", "MSFT", "GOOG", "NVDA"])}
 ```
 
 ```
-$ barca get report pipeline.py --dry-run
+$ barca get report pipeline.py --dry-run --pretty
 ...
-will run  4 keys; no cached result for this code and these inputs; assumes sensor 'feed_version' returns the same value as its last run  pipeline.py:prices
-will run  4 keys; no cached result for this code and these inputs                 pipeline.py:signal
-will run  no cached result for this code and these inputs                         pipeline.py:report
+STATUS    WHY                                              STEP
+will run  sensors always re-run                            pipeline.py:feed_version
+partial   3 of 4 keys cached; will run: ticker=NVDA        pipeline.py:prices
+partial   3 of 4 keys cached; will run: ticker=NVDA        pipeline.py:signal
+will run  no cached result for this code and these inputs  pipeline.py:report
 
-10 will run, 0 cached, 0 unknown
+4 will run, 6 cached, 0 unknown
 ```
 
-All four keys of `prices` and of `signal` ran (`10/10 steps`). Removing a key from the
-literal list did the same for the keys that remained. The same happened with the manual's
-own example, which has no sensor and no inputs.
+```
+$ barca get report pipeline.py --agent
+[barca] step:pipeline.py:feed_version completed 0.0s (1/10)
+[barca] step:pipeline.py:prices[ticker=NVDA] completed 0.0s (2/10)
+[barca] step:pipeline.py:signal[ticker=NVDA] completed 0.0s (3/10)
+[barca] step:pipeline.py:report completed 0.0s (4/10)
+[barca] 4/10 steps | done in 0.0s
+```
 
-### A module-level constant: only the new key runs
+The sensor always runs. `prices` and `signal` ran for `NVDA` only, and `report` ran because
+the list it collects has one more entry. After removing `"MSFT"` from the list, the sensor
+and `report` ran (`2/8 steps`) and no key did. Adding `description="Closing prices"` to the
+same decorator ran only the sensor (`1/8 steps`).
+
+### A module-level constant
 
 ```python
 REGIONS = ["emea", "amer", "apac"]
@@ -242,7 +260,7 @@ After removing `"amer"` from `REGIONS`, only `summary` ran (`1/4 steps`).
 Any expression that is not a literal list (a name, a comprehension, a function call) is
 evaluated by Python when barca plans the run.
 
-### Keys from an upstream asset: only the new key runs
+### Keys from an upstream asset
 
 `partitions_from(upstream)` on an unpartitioned asset that returns a list uses the list's
 values as keys. Here the list comes from a file, through a sensor:
@@ -363,8 +381,10 @@ per key, not what your functions cost.
 ## Limits
 
 - **No single-key target or refresh** (above). `get` and `--refresh` address the whole asset.
-- **Editing a literal key list re-ran every key on 0.18.0** (above). With the keys in a
-  module-level constant or an upstream asset, only new keys ran.
+- **Up to 0.18, editing a literal key list re-ran every key** (above). From 0.19 a new key
+  runs alone wherever the keys are written, and editing `description=`, `tags=` or `retries=`
+  on a partitioned asset re-runs nothing. Changing `serializer=`, `inputs=`, a `@sink` or the
+  dimension name re-runs every key.
 - **Any change to the function's code, or to an unpartitioned input or sensor it reads,
   re-runs every key.**
 - **A removed key's results remain** on disk and in the `barca sql` view.
