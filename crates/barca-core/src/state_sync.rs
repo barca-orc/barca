@@ -481,9 +481,13 @@ async fn run_helper(
 /// credentials problem.
 fn not_a_file(uri: &str, cause: &str) -> Option<String> {
     let display_uri = crate::transfer::diagnostic_uri(uri);
-    cause
-        .starts_with("IsADirectoryError")
-        .then(|| format!("{display_uri} is a directory, not the shared history file ({cause})."))
+    cause.starts_with("IsADirectoryError").then(|| {
+        format!(
+            "{display_uri} is a directory, not the shared history file ({cause}). \
+             BARCA_STATE_URI must name a file or object, not an artifact prefix; \
+             for example, /shared/history/metadata.db or s3://bucket/history/metadata.db."
+        )
+    })
 }
 
 /// The reason a state helper failed: its last `error: ...` line (what `python -m barca._state`
@@ -1056,5 +1060,20 @@ error: RefreshError: Reauthentication is needed.\n";
         let copy = dir.path().join("uploaded.db").to_string_lossy().to_string();
         std::fs::copy(&db_path, &copy).unwrap();
         assert_eq!(open_and_count(&copy, "t").await, 200);
+    }
+}
+
+#[cfg(test)]
+mod object_path_tests {
+    #[test]
+    fn provider_directory_error_explains_the_object_setting_without_listing() {
+        let message =
+            super::not_a_file("s3://bucket/prefix/", "IsADirectoryError: prefix").unwrap();
+        assert!(message.contains("BARCA_STATE_URI must name a file or object"));
+        assert!(message.contains("s3://bucket/history/metadata.db"));
+        assert!(
+            super::not_a_file("s3://bucket/history/metadata.db", "PermissionError: denied")
+                .is_none()
+        );
     }
 }

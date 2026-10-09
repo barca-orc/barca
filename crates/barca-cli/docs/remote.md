@@ -695,6 +695,15 @@ up to 16 MB; a store it cannot read is a `note` on each shape, not a failed comm
 (`barca docs status`). `barca sql` downloads the artifacts of the views a query names and reuses
 the copies while the objects are unchanged (`barca docs sql`).
 
+## State object paths
+
+`BARCA_REMOTE_URI` names an artifact/state root or prefix. `BARCA_STATE_URI` instead
+names the shared history file or object itself: for example,
+`/shared/history/metadata.db` or `s3://bucket/history/metadata.db`. If it points to a
+directory, startup exits 3 before importing user code and explains the object-path
+setting. Barca leaves that directory and its contents unchanged; choose a file/object
+path or set `BARCA_STATE=off` to use local history.
+
 ## Limitations
 
 - `barca serve` does not share history yet; set `BARCA_STATE=off` for it.
