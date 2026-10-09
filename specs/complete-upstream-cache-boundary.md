@@ -130,3 +130,12 @@ worktree's rebuilt binary and source. Workspace Clippy with warnings denied,
 Rust formatting, lock consistency and whitespace checks pass; the site builds
 all 51 pages. Cold/warm/edit and dry-run cases cover pools one, two and default
 (existing pool-independence cases also cover 3/5/16). No hash-format migration.
+
+Review correction: StreamStep.inputs already contains canonical base IDs copied
+from DagNode.resolved_inputs/resolved_collected. The guard must compare these
+exactly, without splitting '[' (valid in source filenames/directories). An actual
+pre-fix bracketed filename dry run returned infra exit 3; regression cases cover
+bracketed file/directory combinations at pools 1/2/default across cold/warm/get/run
+and dry-run execution. A boundary regression additionally retains full bracketed
+canonical IDs for partition manifests, diagnoses the missing b key and preserves
+the complete historical low-level hash. No public hash or filename contract change.

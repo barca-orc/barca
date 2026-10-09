@@ -182,11 +182,9 @@ impl DecideState {
         &mut self,
         step: &crate::planner::StreamStep,
     ) -> Result<(), crate::BarcaError> {
-        let upstreams: BTreeSet<&str> = step
-            .inputs
-            .values()
-            .map(|up| up.split('[').next().unwrap_or(up))
-            .collect();
+        // Planner inputs are resolved canonical base IDs, not partition display IDs.
+        // A '[' may be part of a legitimate source filename or directory.
+        let upstreams: BTreeSet<&str> = step.inputs.values().map(String::as_str).collect();
         for upstream in upstreams {
             if self.complete_upstreams.contains(upstream) {
                 continue;
@@ -1425,6 +1423,65 @@ def report(values: list) -> int:
                     reference = Some(hashes);
                 }
             }
+        }
+    }
+    #[tokio::test]
+    async fn bracketed_canonical_paths_register_complete_partition_identities() {
+        for file in [
+            "pipeline[old].py",
+            "folder[old]/pipeline.py",
+            "folder[old]/pipeline[old].py",
+        ] {
+            let nodes = crate::parse::extract_nodes(STATIC, file).unwrap();
+            let dag = Dag::build(&nodes).unwrap();
+            let plan = crate::planner::plan_from_dag(
+                &dag,
+                &ResourceConfig {
+                    pool_size: 2,
+                    concurrency_groups: HashMap::new(),
+                },
+            );
+            let upstream = format!("{file}:part");
+            let consumer_id = format!("{file}:report");
+            let consumer = step(&plan.phases, &consumer_id);
+            assert_eq!(consumer.inputs["values"], upstream);
+            let mut state = registered(&plan.phases);
+            for key in ["a", "c"] {
+                state
+                    .run_hashes
+                    .insert(format!("{upstream}[k={key}]"), format!("hash-{key}"));
+            }
+            let error = state
+                .require_upstream_hashes(&consumer)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains(&format!("missing upstream run hash '{upstream}[k=b]'")),
+                "{error}"
+            );
+            state
+                .run_hashes
+                .insert(format!("{upstream}[k=b]"), "hash-b".into());
+            let expected = compute_run_hash(
+                &dag.get_node(&consumer_id).unwrap().definition_hash,
+                None,
+                consumer.inputs.values(),
+                state.run_hashes(),
+                &HashMap::new(),
+                None,
+            );
+            let (decided, _) = decide_step(
+                &dag,
+                &CachePolicy::CacheAware,
+                false,
+                None,
+                &mut state,
+                &consumer,
+            )
+            .await
+            .unwrap();
+            assert_eq!(decided.run_hashes[&consumer_id], expected);
+            assert!(state.complete_upstreams.contains(&upstream));
         }
     }
 }

@@ -143,3 +143,47 @@ def finish(values): return values
     assert "partitions([...])" in envelope["remediation"]
     assert not (tmp_path / "imported").exists()
     assert not (tmp_path / ".barca").exists()
+
+
+@pytest.mark.parametrize("pool", [1, 2, None])
+@pytest.mark.parametrize(
+    "file", ["pipeline[old].py", "folder[old]/pipeline.py", "folder[old]/pipeline[old].py"]
+)
+def test_complete_hash_boundary_preserves_bracketed_source_paths(tmp_path, pool, file):
+    (tmp_path / "barca.toml").write_text("")
+    source = tmp_path / file
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(
+        """from barca import asset, task
+from pathlib import Path
+Path("imported").touch()
+@asset()
+def producer() -> int:
+    return 41
+@asset(inputs={"value": producer})
+def answer(value: int) -> int:
+    return value + 1
+@task(inputs={"value": answer})
+def publish(value: int) -> None:
+    assert value == 42
+"""
+    )
+    cold = result(tmp_path, pool, "get", "answer", file, "--dry-run")
+    assert cold["summary"]["will_run"] == 2
+    assert not (tmp_path / "imported").exists()
+    first = result(tmp_path, pool, "get", "answer", file)
+    assert first["final_output"] == 42
+    assert first["steps_executed"] == 2
+    warm = result(tmp_path, pool, "get", "answer", file)
+    assert warm["final_output"] == 42
+    assert warm["steps_executed"] == 0
+    assert [(s["id"], s["run_hash"]) for s in first["steps"]] == [
+        (s["id"], s["run_hash"]) for s in warm["steps"]
+    ]
+    assert result(tmp_path, pool, "get", "answer", file, "--dry-run")["summary"] == {
+        "cached": 2,
+        "unknown": 0,
+        "will_run": 0,
+    }
+    assert result(tmp_path, pool, "run", "publish", file, "--dry-run")["summary"]["unknown"] == 0
+    assert result(tmp_path, pool, "run", "publish", file)["status"] == "success"
