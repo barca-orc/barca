@@ -42,7 +42,7 @@ pub mod state_sync;
 pub(crate) mod state_validate;
 pub mod status;
 mod store_sync;
-pub(crate) mod targets;
+pub mod targets;
 pub mod telemetry;
 pub mod term;
 pub mod transfer;

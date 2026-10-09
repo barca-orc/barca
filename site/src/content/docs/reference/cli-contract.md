@@ -190,7 +190,7 @@ default, and any aliases.
 | `--host` | `HOST` | default `127.0.0.1` | experimental (with the command) | IP address to bind on; 0.0.0.0 (or ::) listens on every interface. The API has no authentication |
 | `--watch` | - | default `false` | experimental (with the command) | Dev mode: re-parse the DAG when source files change |
 | `--no-schedule` | - | default `false` | experimental (with the command) | Disable the cron scheduler (Schedule(...) assets will not auto-fire) |
-| `--timezone` | `TIMEZONE` | default `local` | experimental (with the command) | Timezone for cron evaluation: local (default), utc, or an IANA name |
+| `--timezone` | `TIMEZONE` | default `local` | experimental (with the command) | Timezone for cron evaluation: local (this machine's zone) or utc, in any letter case, or an IANA name such as America/New_York, which is case-sensitive. Any other value is a usage error |
 | `--read-only` | - | default `false` | experimental (with the command) | Inspect only: refuse runs, never schedule, read the metadata DB from snapshots |
 | `--env` | `ENV` | - | experimental (with the command) | Environment name (separates cache/state per environment) |
 
@@ -308,11 +308,21 @@ not define (`@asset(after=x)`, `input=` for `inputs=`, `@asset(**options)`; `bar
 names no definition, a cycle, a partitioned asset in an unpartitioned asset's `inputs=` without
 `collect()`, a `partitions_from()` the asset cannot mirror), invalid `--env` or `barca.toml`. `infra`:
 barca or its environment failed (metadata DB, workers, remote state, I/O); retrying may help.
-`cancelled`: interrupted with Ctrl-C, at any point of a `get` or `run`: while steps run, and
+`cancelled`: stopped by Ctrl-C (SIGINT) or by SIGTERM (what a supervisor, a CI timeout or
+`docker stop` sends), at any point of a `get` or `run`: while steps run, and
 with an artifact store also while artifacts upload or download or the shared history is pulled
 or pushed. The exit code is 130 whatever the store does: a cancelled run spends at most 10
-seconds sharing its record, a second Ctrl-C ends that at once, and a push that fails then is a
-line on stderr, not exit 3 (`barca docs remote`, "Ctrl-C").
+seconds sharing its record, a second Ctrl-C or SIGTERM ends that at once, and a push that fails
+then is a line on stderr, not exit 3 (`barca docs remote`, "Ctrl-C").
+
+The exit code is 130 for SIGTERM as well as for SIGINT. Barca handles both signals the same way
+(it stops the workers, records the run as `cancelled` and exits), and the exit code follows the
+error `kind`, which has one code. 143, which a shell reports for a process that SIGTERM killed,
+is never barca's own exit code. SIGKILL cannot be handled: the shell reports 137 and the run is
+later reported as `interrupted` (`barca docs cache`).
+
+`barca serve` is not a run: stopped by SIGINT or SIGTERM it cancels the runs in flight, records
+them as `cancelled` and exits 0 (`barca docs scheduling`, "Stopping the server").
 
 An error in a pipeline file (a syntax error, a decorator argument barca does not define, an
 invalid `env=` or cron) fails every command that reads that file, whatever the target: `list`,
@@ -806,7 +816,10 @@ Truncated (`--limit 1`):
 
 `nodes[].kind` is `asset`, `task` or `sensor`; `nodes[].freshness` is `always`, `manual` or
 `schedule`, lowercase like `kind`. A scheduled node also has `schedule` (the cron expression) and
-`next_fire` (string, local time). `list` reads no state, so it takes no `--env`.
+`next_fire` (string, `YYYY-MM-DD HH:MM:SS`): the next match of the cron expression in the local
+time of the machine `list` runs on. `list` talks to no server, so the value does not follow a
+server's `--timezone`; `GET /schedule` on the running server does (`barca docs scheduling`).
+`list` reads no state, so it takes no `--env`.
 
 ### sql (experimental)
 

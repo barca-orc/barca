@@ -26,7 +26,7 @@ Options:
           Disable the cron scheduler (Schedule(...) assets will not auto-fire)
 
       --timezone <TIMEZONE>
-          Timezone for cron evaluation: local (default), utc, or an IANA name
+          Timezone for cron evaluation: local (this machine's zone) or utc, in any letter case, or an IANA name such as America/New_York, which is case-sensitive. Any other value is a usage error
 
           [default: local]
 
@@ -47,6 +47,7 @@ Examples:
   barca serve pipeline.py --watch            # dev: re-parse the DAG when files change
   barca serve pipeline.py --no-schedule      # API only; Schedule(...) nodes do not fire
   barca serve pipeline.py --timezone utc     # evaluate cron in UTC (default: local)
+  barca serve pipeline.py --timezone America/New_York   # an IANA zone name
   barca serve pipeline.py --read-only        # inspect only: no runs, no scheduler, DB never written
 
 Binds to 127.0.0.1 by default. There is no authentication: with --host 0.0.0.0, anyone who

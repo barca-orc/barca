@@ -203,6 +203,7 @@ Examples:
   barca serve pipeline.py --watch            # dev: re-parse the DAG when files change
   barca serve pipeline.py --no-schedule      # API only; Schedule(...) nodes do not fire
   barca serve pipeline.py --timezone utc     # evaluate cron in UTC (default: local)
+  barca serve pipeline.py --timezone America/New_York   # an IANA zone name
   barca serve pipeline.py --read-only        # inspect only: no runs, no scheduler, DB never written
 
 Binds to 127.0.0.1 by default. There is no authentication: with --host 0.0.0.0, anyone who
@@ -225,6 +226,10 @@ Examples:
 An ENV column (and `env` in JSON) lists the environment variables each node declares with
 @asset(env=[...]); their values are part of the run hash. `freshness` is `always`, `manual` or
 `schedule`; a scheduled node also has `schedule` (the cron expression) and `next_fire`.
+`next_fire` (NEXT FIRE (LOCAL TIME) in the table) is the next match of the cron expression in
+this machine's local time, which is when `barca serve` fires it unless the server was started
+with --timezone. `list` does not know a server's zone: GET /schedule on the running server
+reports the times it will fire at (barca docs scheduling).
 `list` reads no state, so it takes no --env.
 
 Node ids are relative to the project root (`root` in JSON; barca docs discovery).
@@ -470,8 +475,8 @@ pub(crate) enum Cli {
         /// Disable the cron scheduler (Schedule(...) assets will not auto-fire)
         #[arg(long)]
         no_schedule: bool,
-        /// Timezone for cron evaluation: local (default), utc, or an IANA name
-        #[arg(long, default_value = "local")]
+        /// Timezone for cron evaluation: local (this machine's zone) or utc, in any letter case, or an IANA name such as America/New_York, which is case-sensitive. Any other value is a usage error
+        #[arg(long, default_value = "local", value_parser = parse_timezone)]
         timezone: String,
         /// Inspect only: refuse runs, never schedule, read the metadata DB from snapshots
         #[arg(long)]
@@ -482,7 +487,8 @@ pub(crate) enum Cli {
     },
     /// List all discovered definitions (assets, tasks, sensors) with their deps
     ///
-    /// Scheduled definitions also show their next fire time in local time.
+    /// Scheduled definitions also show their next fire time, computed in this
+    /// machine's local time (a server started with --timezone fires in that zone).
     #[command(after_help = LIST_HELP)]
     List {
         /// Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`)
@@ -574,4 +580,8 @@ pub(crate) enum Cli {
     },
     /// Print version information
     Version,
+}
+
+fn parse_timezone(value: &str) -> Result<String, String> {
+    barca_core::schedule::Zone::parse(value).map(|_| value.to_string())
 }

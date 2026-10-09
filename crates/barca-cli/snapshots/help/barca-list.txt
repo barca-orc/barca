@@ -1,6 +1,6 @@
 List all discovered definitions (assets, tasks, sensors) with their deps
 
-Scheduled definitions also show their next fire time in local time.
+Scheduled definitions also show their next fire time, computed in this machine's local time (a server started with --timezone fires in that zone).
 
 Usage: barca list [OPTIONS] [FILES]...
 
@@ -46,6 +46,10 @@ Examples:
 An ENV column (and `env` in JSON) lists the environment variables each node declares with
 @asset(env=[...]); their values are part of the run hash. `freshness` is `always`, `manual` or
 `schedule`; a scheduled node also has `schedule` (the cron expression) and `next_fire`.
+`next_fire` (NEXT FIRE (LOCAL TIME) in the table) is the next match of the cron expression in
+this machine's local time, which is when `barca serve` fires it unless the server was started
+with --timezone. `list` does not know a server's zone: GET /schedule on the running server
+reports the times it will fire at (barca docs scheduling).
 `list` reads no state, so it takes no --env.
 
 Node ids are relative to the project root (`root` in JSON; barca docs discovery).

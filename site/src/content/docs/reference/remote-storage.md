@@ -488,6 +488,10 @@ of the job or something sent SIGINT to barca alone. Barca, its workers and its h
 print no traceback, with or without a store and from the first moment of a run: a Ctrl-C while
 the workers are still starting exits as promptly as any other.
 
+SIGTERM, which a supervisor, a CI timeout or `docker stop` sends, does what Ctrl-C does:
+everything below holds for it, a second SIGTERM counts as a second Ctrl-C, and the exit code
+is 130, not 143.
+
 1. **The first Ctrl-C cancels the run.** Steps and transfers in flight are stopped, what
    finished is recorded in this machine's history, the run as `cancelled`, and the run wraps
    up: it pushes that record to the shared history, so that other machines do not compute the
@@ -498,7 +502,7 @@ the workers are still starting exits as promptly as any other.
    `[barca] the shared history was not updated (the upload did not finish within 10s). This run
    is recorded on this machine; the next barca get or barca run here uploads it.`
 3. **A second Ctrl-C abandons the wrap-up at once** (the same line, with `stopped by a second
-   Ctrl-C`). A third changes nothing.
+   interrupt`, whichever signal it was). A third changes nothing.
 
 Stopping a helper process can take up to 2 seconds, so the command ends within a few seconds of
 the last of these. The exit code is 130 in every case, never 3: a push that fails during the
