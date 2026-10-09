@@ -31,10 +31,22 @@ pub async fn describe_schedule_in(
     python: &std::path::Path,
     zone: &Zone,
 ) -> Vec<ScheduleInfo> {
+    match crate::load::build_dag(files, python).await {
+        Ok(dag) => describe_schedule_from_dag(Some(&dag), zone),
+        Err(error) => {
+            crate::errln!("[barca] scheduler disabled: failed to analyze DAG: {error}");
+            Vec::new()
+        }
+    }
+}
+
+/// Describe schedules in an already validated graph.
+pub fn describe_schedule_from_dag(dag: Option<&crate::dag::Dag>, zone: &Zone) -> Vec<ScheduleInfo> {
     let now = Utc::now();
-    collect_jobs(files, python)
-        .await
-        .iter()
+    let jobs = dag
+        .map(|dag| jobs_from_summaries(queries::list_assets_from_dag(dag)))
+        .unwrap_or_default();
+    jobs.iter()
         .map(|j| {
             let next = next_fire(&j.cron, zone, now);
             ScheduleInfo {

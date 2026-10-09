@@ -18,10 +18,10 @@ use crate::handlers;
 use crate::state::{AppState, JobStatus, RunStatus};
 #[cfg(test)]
 use barca_core::results::AssetSummary;
+use barca_core::schedule::ScheduledJob;
 pub(crate) use barca_core::schedule::Zone;
 #[cfg(test)]
 use barca_core::schedule::next_fire;
-use barca_core::schedule::{ScheduledJob, collect_jobs};
 #[cfg(test)]
 use barca_core::schedule::{describe_schedule, jobs_from_summaries};
 use barca_core::{NodeKind, db};
@@ -211,7 +211,15 @@ fn publish_registry(
 /// Re-run static analysis to enumerate scheduled jobs. The parse itself runs
 /// on the blocking pool inside `barca_core::queries::list_assets`.
 async fn reload_jobs(state: &AppState) -> Vec<ScheduledJob> {
-    collect_jobs(&state.config.files, &state.config.python).await
+    match state.loaded_dag().await {
+        Ok(dag) => barca_core::schedule::jobs_from_summaries(
+            barca_core::queries::list_assets_from_dag(&dag),
+        ),
+        Err(error) => {
+            barca_core::errln!("[barca] scheduler load failed: {error}");
+            Vec::new()
+        }
+    }
 }
 
 /// How many nodes of each kind are scheduled, in words: `1 task`, `2 assets and 1 task`,
@@ -975,7 +983,7 @@ mod tests {
         )
         .unwrap();
 
-        let jobs = collect_jobs(
+        let jobs = barca_core::schedule::collect_jobs(
             &[path.display().to_string()],
             &barca_core::commands::find_python(),
         )

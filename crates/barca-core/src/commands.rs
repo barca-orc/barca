@@ -51,6 +51,7 @@ pub async fn get(
 ) -> Result<GetResult, BarcaError> {
     let names: Vec<String> = target_name.map(str::to_string).into_iter().collect();
     execute(ExecuteRequest {
+        dag: None,
         cfg,
         target_names: &names,
         file_args,
@@ -78,6 +79,7 @@ pub async fn run(
     cancel: impl Into<crate::interrupt::Interrupt>,
 ) -> Result<GetResult, BarcaError> {
     execute(ExecuteRequest {
+        dag: None,
         cfg,
         target_names: &[target_name.to_string()],
         file_args,
@@ -108,6 +110,7 @@ pub async fn get_streaming(
 ) -> Result<GetResult, BarcaError> {
     let names: Vec<String> = target_name.map(str::to_string).into_iter().collect();
     execute(ExecuteRequest {
+        dag: None,
         cfg,
         target_names: &names,
         file_args,
@@ -136,6 +139,7 @@ pub async fn run_streaming(
     event_tx: Option<UnboundedSender<crate::RunEvent>>,
 ) -> Result<GetResult, BarcaError> {
     execute(ExecuteRequest {
+        dag: None,
         cfg,
         target_names: &[target_name.to_string()],
         file_args,
@@ -164,6 +168,7 @@ pub async fn get_many(
     cancel: impl Into<crate::interrupt::Interrupt>,
 ) -> Result<MultiResult, BarcaError> {
     execute(ExecuteRequest {
+        dag: None,
         cfg,
         target_names,
         file_args,
@@ -191,6 +196,7 @@ pub async fn run_many(
     cancel: impl Into<crate::interrupt::Interrupt>,
 ) -> Result<MultiResult, BarcaError> {
     execute(ExecuteRequest {
+        dag: None,
         cfg,
         target_names,
         file_args,
@@ -204,4 +210,65 @@ pub async fn run_many(
     })
     .await
     .map(Executed::into_multi)
+}
+
+/// Execute a served asset graph without reparsing excluded definitions.
+#[allow(clippy::too_many_arguments)]
+pub async fn get_streaming_from_dag(
+    dag: crate::dag::Dag,
+    cfg: &crate::config::ResolvedConfig,
+    target_name: Option<&str>,
+    file_args: &[String],
+    python: &std::path::Path,
+    policy: CachePolicy,
+    agent_mode: bool,
+    cancel: CancellationToken,
+    event_tx: Option<UnboundedSender<crate::RunEvent>>,
+) -> Result<GetResult, BarcaError> {
+    let names: Vec<String> = target_name.map(str::to_string).into_iter().collect();
+    execute(ExecuteRequest {
+        dag: Some(dag),
+        cfg,
+        target_names: &names,
+        file_args,
+        python,
+        no_cache: false,
+        agent_mode,
+        policy,
+        command_label: "get",
+        interrupt: cancel.into(),
+        event_tx,
+    })
+    .await?
+    .into_single()
+}
+
+/// Execute a served task graph without reparsing excluded definitions.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_streaming_from_dag(
+    dag: crate::dag::Dag,
+    cfg: &crate::config::ResolvedConfig,
+    target_name: &str,
+    file_args: &[String],
+    python: &std::path::Path,
+    policy: CachePolicy,
+    agent_mode: bool,
+    cancel: CancellationToken,
+    event_tx: Option<UnboundedSender<crate::RunEvent>>,
+) -> Result<GetResult, BarcaError> {
+    execute(ExecuteRequest {
+        dag: Some(dag),
+        cfg,
+        target_names: &[target_name.to_string()],
+        file_args,
+        python,
+        no_cache: false,
+        agent_mode,
+        policy,
+        command_label: "run",
+        interrupt: cancel.into(),
+        event_tx,
+    })
+    .await?
+    .into_single()
 }

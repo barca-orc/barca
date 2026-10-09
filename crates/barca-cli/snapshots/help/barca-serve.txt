@@ -54,4 +54,7 @@ Examples:
 
 Binds to 127.0.0.1 by default. There is no authentication: with --host 0.0.0.0, anyone who
 can reach the port can trigger runs, so keep it on a private network or behind a proxy.
+Invalid sources and their graph dependents are excluded; healthy definitions and schedules
+continue. Startup logs, /health load_errors and the UI show unloaded files and affected nodes.
+--watch restores repaired configured sources; one-shot commands remain strict.
 More: barca docs scheduling

@@ -33,6 +33,7 @@ pub async fn health(State(state): State<AppState>) -> Json<Value> {
         "status": "ok",
         "version": env!("CARGO_PKG_VERSION"),
         "read_only": state.config.read_only,
+        "load_errors": *state.load_errors.read().unwrap(),
         // Whether this server fires `Schedule(...)` nodes: the same rule `serve`
         // uses to start the scheduler (on unless --no-schedule or --read-only).
         "scheduler": state.config.schedule && !state.config.read_only,
@@ -88,8 +89,9 @@ pub(crate) async fn snapshot_db(state: &AppState) -> Result<SnapshotDb, ApiError
 pub async fn state(State(state): State<AppState>) -> Result<Json<Vec<NodeState>>, ApiError> {
     let cfg = &state.config;
     let zone = crate::scheduler::zone_of(cfg);
+    let dag = state.current_dag().await?;
     Ok(Json(
-        node_states_in(&cfg.resolved, &cfg.files, &cfg.python, &zone).await?,
+        node_states_in(&cfg.resolved, &dag, &cfg.python, &zone).await?,
     ))
 }
 
@@ -107,13 +109,14 @@ pub async fn node_states(
     files: &[String],
     python: &std::path::Path,
 ) -> Result<Vec<NodeState>, BarcaError> {
-    node_states_in(cfg, files, python, &crate::scheduler::Zone::Local).await
+    let dag = barca_core::load::build_dag(files, python).await?;
+    node_states_in(cfg, &dag, python, &crate::scheduler::Zone::Local).await
 }
 
 /// [`node_states`] with cron evaluated in `zone`.
 async fn node_states_in(
     cfg: &barca_core::config::ResolvedConfig,
-    files: &[String],
+    dag: &barca_core::dag::Dag,
     python: &std::path::Path,
     zone: &crate::scheduler::Zone,
 ) -> Result<Vec<NodeState>, BarcaError> {
@@ -128,11 +131,8 @@ async fn node_states_in(
         None => scratch.path().join("metadata.db").display().to_string(),
     };
 
-    let python_buf = python.to_path_buf();
-    let (status, schedule) = tokio::join!(
-        barca_core::status::status(&snap_cfg, &[], files, python, 0, false),
-        barca_core::schedule::describe_schedule_in(files, &python_buf, zone),
-    );
+    let status = barca_core::status::status_from_dag(&snap_cfg, &[], dag, python, 0, false).await;
+    let schedule = barca_core::schedule::describe_schedule_from_dag(Some(dag), zone);
     let history = match &snapshot {
         Some(s) => db::materialization_history(s.path()).await?,
         None => Vec::new(),
@@ -200,20 +200,16 @@ fn percentile(sorted: &[f64], q: f64) -> f64 {
 
 /// `GET /plan` — execution plan for the server's files (cache-aware).
 pub async fn plan(State(state): State<AppState>) -> Result<Json<PlanResult>, ApiError> {
-    if let Some(cached) = state.cache.read().unwrap().plan.clone() {
-        return Ok(Json(cached));
-    }
-    let result = queries::plan(&state.config.files, &state.config.python).await?;
+    let dag = state.loaded_dag().await?;
+    let result = queries::plan_from_dag(&dag);
     state.cache.write().unwrap().plan = Some(result.clone());
     Ok(Json(result))
 }
 
 /// `GET /assets` — list every node with kind/freshness/inputs (cache-aware).
 pub async fn assets(State(state): State<AppState>) -> Result<Json<Vec<AssetSummary>>, ApiError> {
-    if let Some(cached) = state.cache.read().unwrap().assets.clone() {
-        return Ok(Json(cached));
-    }
-    let result = queries::list_assets(&state.config.files, &state.config.python).await?;
+    let dag = state.loaded_dag().await?;
+    let result = queries::list_assets_from_dag(&dag);
     state.cache.write().unwrap().assets = Some(result.clone());
     Ok(Json(result))
 }
@@ -225,7 +221,8 @@ pub async fn asset_schema(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<Json<Vec<barca_core::status::NodeStatus>>, ApiError> {
-    let summaries = queries::list_assets(&state.config.files, &state.config.python).await?;
+    let dag = state.current_dag().await?;
+    let summaries = queries::list_assets_from_dag(&dag);
     let matches: Vec<_> = summaries
         .iter()
         .filter(|s| s.id == name || s.id.ends_with(&format!(":{name}")))
@@ -240,10 +237,10 @@ pub async fn asset_schema(
     let snapshot = snapshot_db(&state).await?;
     let mut cfg = state.config.resolved.clone();
     cfg.db_path = snapshot.path.clone();
-    let mut result = barca_core::status::status(
+    let mut result = barca_core::status::status_from_dag(
         &cfg,
         std::slice::from_ref(&id),
-        &state.config.files,
+        &dag,
         &state.config.python,
         0,
         false,
@@ -261,14 +258,9 @@ pub async fn asset_detail(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    // Use cached assets if available, otherwise fetch and cache them.
-    let summaries = if let Some(cached) = state.cache.read().unwrap().assets.clone() {
-        cached
-    } else {
-        let result = queries::list_assets(&state.config.files, &state.config.python).await?;
-        state.cache.write().unwrap().assets = Some(result.clone());
-        result
-    };
+    state.loaded_dag().await?;
+    let dag = state.loaded_dag().await?;
+    let summaries = queries::list_assets_from_dag(&dag);
 
     // Exact match first, then colon-prefixed match. No unbounded ends_with.
     let matches: Vec<_> = summaries
@@ -292,13 +284,9 @@ pub async fn asset_detail(
         let snap = snapshot_db(&state).await?;
         db::get_asset_stats(&snap.path, &summary.id).await?
     } else {
-        queries::stats(
-            &state.config.resolved,
-            &summary.id,
-            &state.config.files,
-            &state.config.python,
-        )
-        .await?
+        db::ensure_env_dirs(&state.config.resolved.env)?;
+        db::init_db(&state.config.resolved.db_path).await?;
+        db::get_asset_stats(&state.config.resolved.db_path, &summary.id).await?
     };
 
     Ok(Json(json!({
@@ -311,6 +299,15 @@ pub async fn asset_detail(
 /// skipped); returns a polling handle immediately.
 pub async fn run(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
     refuse_if_read_only(&state)?;
+    let dag = state.loaded_dag().await?;
+    if !queries::list_assets_from_dag(&dag)
+        .iter()
+        .any(|n| n.kind != barca_core::NodeKind::Task)
+    {
+        return Err(ApiError::BadRequest(
+            "no loaded assets or sensors to run; inspect /health load_errors".into(),
+        ));
+    }
     let handle = start_run(state, None);
     Ok(Json(json!({ "run_id": handle })))
 }
@@ -353,29 +350,13 @@ async fn check_target(state: &AppState, name: &str, verb: &str) -> Result<(), Ap
 async fn target_nodes(
     state: &AppState,
 ) -> Result<std::sync::Arc<Vec<(String, barca_core::NodeKind)>>, ApiError> {
-    // Taken before reading: if a file changes while it is read, the nodes are stored under
-    // the older stamp and the next check reads again.
-    let stamp = crate::state::SourceStamp::of(&state.config.files);
-    if let Some(stamp) = &stamp
-        && let Some(index) = state.cache.read().unwrap().targets.as_ref()
-        && index.stamp == *stamp
-    {
-        return Ok(index.nodes.clone());
-    }
-    let nodes: Vec<(String, barca_core::NodeKind)> =
-        queries::list_assets(&state.config.files, &state.config.python)
-            .await?
+    let dag = state.loaded_dag().await?;
+    let nodes = std::sync::Arc::new(
+        queries::list_assets_from_dag(&dag)
             .into_iter()
             .map(|n| (n.id, n.kind))
-            .collect();
-    let nodes = std::sync::Arc::new(nodes);
-    // Kept only when the files have been still for a moment (see `SourceStamp::settled`).
-    state.cache.write().unwrap().targets = stamp
-        .filter(|stamp| stamp.settled(std::time::SystemTime::now()))
-        .map(|stamp| crate::state::TargetIndex {
-            stamp,
-            nodes: nodes.clone(),
-        });
+            .collect(),
+    );
     Ok(nodes)
 }
 
@@ -668,9 +649,11 @@ fn spawn_run(state: AppState, kind: RunKind) -> String {
         let mut timed_out = false;
         let outcome: Result<GetResult, BarcaError> = {
             let fut = async {
+                let dag = st.current_dag().await?;
                 match &kind {
                     RunKind::Get(target) => {
-                        commands::get_streaming(
+                        commands::get_streaming_from_dag(
+                            (*dag).clone(),
                             &cfg,
                             target.as_deref(),
                             &files,
@@ -683,7 +666,8 @@ fn spawn_run(state: AppState, kind: RunKind) -> String {
                         .await
                     }
                     RunKind::Task(target, policy) => {
-                        commands::run_streaming(
+                        commands::run_streaming_from_dag(
+                            (*dag).clone(),
                             &cfg,
                             target,
                             &files,
@@ -825,6 +809,59 @@ mod duration_tests {
             elapsed_seconds: Some(e),
             error_message: None,
         }
+    }
+
+    #[tokio::test]
+    async fn a_queued_run_revalidates_source_before_any_worker_starts() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("p.py").display().to_string();
+        std::fs::write(
+            &file,
+            "from barca import asset\n@asset()\ndef target(): return 1\n",
+        )
+        .unwrap();
+        let mut cfg = barca_core::config::resolve_in(None, dir.path()).unwrap();
+        cfg.db_path = dir.path().join("metadata.db").display().to_string();
+        let mut state = AppState::new(crate::ServeConfig {
+            files: vec![file.clone()],
+            host: "127.0.0.1".parse().unwrap(),
+            port: 0,
+            watch: false,
+            schedule: false,
+            timezone: "utc".into(),
+            // A stale graph would try spawning this nonexistent interpreter.
+            python: "/nonexistent-barca-python".into(),
+            resolved: cfg,
+            read_only: false,
+        });
+        state.run_slots = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+        assert!(check_target(&state, "target", "get").await.is_ok());
+        let held = state.run_slots.acquire().await.unwrap();
+        let handle = start_run(state.clone(), Some("target".into()));
+        assert_eq!(state.runs.get(&handle).unwrap().status, RunStatus::Pending);
+        std::fs::write(&file, "from barca import asset\ndef broken(: pass\n").unwrap();
+        drop(held);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if state.runs.get(&handle).unwrap().status == RunStatus::Failed {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let run = state.runs.get(&handle).unwrap();
+        assert!(
+            run.error.as_ref().unwrap().contains("not found"),
+            "{:?}",
+            run.error
+        );
+        assert!(
+            state.load_errors.read().unwrap()[0]
+                .error
+                .contains("syntax error")
+        );
     }
 
     #[test]

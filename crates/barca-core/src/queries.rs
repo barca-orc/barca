@@ -18,15 +18,21 @@ pub async fn plan(
     python: &std::path::Path,
 ) -> Result<PlanResult, BarcaError> {
     let dag = build_dag(file_args, python).await?;
+    let result = plan_from_dag(&dag);
+    crate::warnings::print(&result.warnings);
+    Ok(result)
+}
+
+/// Render a previously validated graph using the same planner as strict commands.
+pub fn plan_from_dag(dag: &crate::dag::Dag) -> PlanResult {
     let config = ResourceConfig {
         pool_size: crate::execution::default_pool_size(),
         concurrency_groups: HashMap::new(),
     };
-    let plan = planner::plan_from_dag(&dag, &config);
+    let plan = planner::plan_from_dag(dag, &config);
 
-    let warnings = crate::warnings::for_plan(&dag, &plan);
-    crate::warnings::print(&warnings);
-    Ok(PlanResult {
+    let warnings = crate::warnings::for_plan(dag, &plan);
+    PlanResult {
         warnings,
         total_steps: plan.total_steps,
         phases: plan
@@ -44,7 +50,7 @@ pub async fn plan(
                     .collect(),
             })
             .collect(),
-    })
+    }
 }
 
 // ─── history ──────────────────────────────────────────────────────────────────
@@ -88,8 +94,12 @@ pub async fn list_assets(
     python: &std::path::Path,
 ) -> Result<Vec<AssetSummary>, BarcaError> {
     let dag = build_dag(file_args, python).await?;
-    let summaries = dag
-        .topo_order()
+    Ok(list_assets_from_dag(&dag))
+}
+
+/// Describe a previously validated graph without reading/importing source again.
+pub fn list_assets_from_dag(dag: &crate::dag::Dag) -> Vec<AssetSummary> {
+    dag.topo_order()
         .into_iter()
         .filter_map(|id| dag.get_node(id))
         .map(|node| {
@@ -109,8 +119,7 @@ pub async fn list_assets(
                 env: node.extracted.env.clone(),
             }
         })
-        .collect();
-    Ok(summaries)
+        .collect()
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

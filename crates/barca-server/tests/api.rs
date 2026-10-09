@@ -140,27 +140,34 @@ async fn plan_returns_phases() {
     assert!(json["phases"].is_array());
 }
 
-/// A decorator argument barca does not define (#284) is a source error like a syntax error:
-/// the server starts, and every route that reads the pipeline answers 400 with the message.
+/// Invalid source is isolated from inspection, with its actual diagnostic on health.
 #[tokio::test]
-async fn an_unknown_decorator_argument_is_a_400_on_the_routes_that_read_the_pipeline() {
+async fn an_unknown_decorator_argument_is_reported_without_fake_nodes() {
     let dir = tempfile::tempdir().unwrap();
     let config = fixture_config(dir.path());
     std::fs::write(
-        dir.path().join("pipeline.py"),
-        "from barca import asset\n\n@asset(after=None)\ndef first() -> dict:\n    return {}\n",
+        &config.files[0],
+        "from barca import asset\n\n@asset(after=None)\ndef first(): return {}\n",
     )
     .unwrap();
     let app = app(config);
-    for uri in ["/assets", "/plan"] {
-        let (status, body) = send(&app, "GET", uri).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}");
-        let error = body["error"].as_str().unwrap();
-        assert!(
-            error.contains("first (line 3): `after` is not an argument of @asset"),
-            "{uri}: {error}"
-        );
-    }
+    let (status, assets) = send(&app, "GET", "/assets").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(assets, serde_json::json!([]));
+    let (status, plan) = send(&app, "GET", "/plan").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(plan["total_steps"], 0);
+    let (_, health) = send(&app, "GET", "/health").await;
+    assert!(
+        health["load_errors"][0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("first (line 3): `after` is not an argument of @asset")
+    );
+    assert_eq!(
+        health["load_errors"][0]["affected_nodes"],
+        serde_json::json!([])
+    );
 }
 
 #[tokio::test]
@@ -569,12 +576,20 @@ async fn the_wrong_method_on_an_endpoint_is_a_json_405_naming_the_right_ones() {
 }
 
 #[tokio::test]
-async fn a_trigger_on_source_that_does_not_parse_is_400() {
+async fn an_unloaded_target_is_refused_before_run_admission() {
     let dir = tempfile::tempdir().unwrap();
     let config = isolated_config(dir.path(), false);
     std::fs::write(&config.files[0], "def broken(:\n").unwrap();
-    let (status, body) = send(&app(config), "POST", "/get/first").await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let app = app(config);
+    let (status, body) = send(&app, "POST", "/get/first").await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(
+        send(&app, "GET", "/health").await.1["load_errors"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
     assert!(body["error"].is_string());
 }
 
@@ -798,11 +813,14 @@ async fn ui_page_is_served_or_explains_it_was_not_built() {
 
 #[tokio::test]
 async fn run_events_are_not_buffered_by_proxies() {
-    // Start a run (it fails fast: the source does not parse, and `POST /run` takes no target
-    // to check first) so a live event channel exists, then check the SSE response's headers.
+    // A valid definition that fails in execution still owns a live event channel.
     let dir = tempfile::tempdir().unwrap();
     let config = isolated_config(dir.path(), false);
-    std::fs::write(&config.files[0], "def broken(:\n").unwrap();
+    std::fs::write(
+        &config.files[0],
+        "from barca import asset\n@asset()\ndef broken(): raise RuntimeError('execution failed')\n",
+    )
+    .unwrap();
     let app = app(config);
     let (status, body) = send(&app, "POST", "/run").await;
     assert_eq!(status, StatusCode::OK);

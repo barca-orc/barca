@@ -51,7 +51,7 @@ All API responses are JSON, except the event stream and the UI.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET`  | `/health` | Liveness, version, whether the server is read-only, and whether it runs the scheduler. |
+| `GET`  | `/health` | Liveness, version, whether the server is read-only, and whether it runs the scheduler, and unloaded source/definition diagnostics. |
 | `GET`  | `/state` | Every node: its `barca status` entry plus typical durations and next run. |
 | `GET`  | `/assets` | List every node with kind, freshness, upstream inputs and declared environment variables. |
 | `GET`  | `/assets/{name}` | One asset's summary joined with timing/cache stats. |
@@ -154,7 +154,7 @@ run is started, there is no `run_id`, and the response is an error with a JSON b
 | a name that matches several nodes (the same function name in two files) | `409` | ``'orders' matches more than one node: a.py:orders, b.py:orders. Name one by its full id, e.g. `a.py:orders` `` |
 | `POST /get/{target}` naming a task | `400` | `'publish' is a task: use POST /run/publish` |
 | `POST /run/{target}` naming an asset | `400` | `'orders' is an asset: use POST /get/orders` |
-| source that does not parse, or a DAG that cannot be built | `400` | the parse or DAG error |
+| excluded target from invalid source/graph | `404` | target not found; inspect `/health` `load_errors` |
 
 `POST /run/{target}` accepts a task or a sensor and `POST /get/{target}` an asset or a sensor,
 as on the command line. A target is a function name, a full node id (`pipeline.py:orders`) or a
@@ -215,11 +215,22 @@ GET /health
 ```
 
 ```json
-{ "status": "ok", "version": "0.21.0", "read_only": false, "scheduler": true }
+{ "status": "ok", "version": "0.21.0", "read_only": false, "scheduler": true, "load_errors": [] }
 ```
 
 `scheduler` is `true` when this server fires `Schedule(...)` nodes: on by default, `false` with
 `--no-schedule` or `--read-only`.
+
+`load_errors` is an additive array of `{file, error, affected_nodes}`. `file` names
+an unloaded source, `error` describes the failure, and `affected_nodes` names the
+actual excluded node IDs (empty if syntax failure prevents identifying definitions).
+Healthy source/definitions and their schedules remain available; unrelated nodes
+in a valid file with a blocked dependent are retained. `/state` keeps its array
+shape and contains only loaded nodes, with no synthetic error rows. These are
+source/graph diagnostics; arbitrary Python import/execution failures remain run
+errors. `--watch` repairs and removals refresh source diagnostics and scheduling.
+`POST /run` refuses an empty loaded asset/sensor set with 400; excluded targets are
+404. The UI displays these diagnostics above the normal healthy graph.
 
 ### State
 

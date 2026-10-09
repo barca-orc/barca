@@ -8,23 +8,38 @@
 use crate::state::AppState;
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::Path;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 
 // The scheduler observes `AppState.dag_generation` to reload its job set.
 
 /// Minimum interval between cache invalidations (milliseconds).
 const DEBOUNCE_MS: u64 = 250;
 
-/// Spawn a watcher over the parent directories of the configured source files.
-/// The returned `RecommendedWatcher` must be kept alive for watching to continue.
-pub fn spawn(state: AppState) -> notify::Result<RecommendedWatcher> {
+/// Owns both native notifications and the one coalesced async refresh task.
+pub struct SourceWatcher {
+    _watcher: RecommendedWatcher,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for SourceWatcher {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+/// Watch original configured sources, including files currently excluded from the graph.
+pub fn spawn(state: AppState) -> notify::Result<SourceWatcher> {
     let cache = state.cache.clone();
     let generation = state.dag_generation.clone();
-    let last_invalidation = Arc::new(AtomicU64::new(0));
-
+    // A watch channel stores one pending refresh, regardless of editor event volume.
+    let (changed, mut changes) = tokio::sync::watch::channel(());
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
         let Ok(event) = res else { return };
+        // Reading source during reload is not another edit: ignore access events
+        // to prevent the loader and watcher continuously waking one another.
+        if matches!(event.kind, notify::EventKind::Access(_)) {
+            return;
+        }
 
         // Only invalidate on changes to .py files.
         let has_py = event
@@ -35,24 +50,13 @@ pub fn spawn(state: AppState) -> notify::Result<RecommendedWatcher> {
             return;
         }
 
-        // Simple debounce: skip if we invalidated less than DEBOUNCE_MS ago.
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
-        let prev = last_invalidation.load(Ordering::Relaxed);
-        if now_ms.saturating_sub(prev) < DEBOUNCE_MS {
-            return;
-        }
-        last_invalidation.store(now_ms, Ordering::Relaxed);
-
         if let Ok(mut c) = cache.write() {
             c.assets = None;
             c.plan = None;
-            c.targets = None;
         }
         // Signal the scheduler to re-read its job set on its next tick.
         generation.fetch_add(1, Ordering::Relaxed);
+        changed.send_replace(());
     })?;
 
     // Watch each file's parent directory (non-recursively). Editors frequently
@@ -67,5 +71,16 @@ pub fn spawn(state: AppState) -> notify::Result<RecommendedWatcher> {
         watched.push(dir);
     }
 
-    Ok(watcher)
+    let task = tokio::spawn(async move {
+        while changes.changed().await.is_ok() {
+            tokio::time::sleep(std::time::Duration::from_millis(DEBOUNCE_MS)).await;
+            if let Err(error) = state.loaded_dag().await {
+                barca_core::errln!("[barca] source reload failed: {error}");
+            }
+        }
+    });
+    Ok(SourceWatcher {
+        _watcher: watcher,
+        task,
+    })
 }

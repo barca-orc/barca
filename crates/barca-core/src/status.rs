@@ -142,8 +142,20 @@ pub async fn status(
     shape: bool,
 ) -> Result<StatusResult, BarcaError> {
     let dag = crate::load::build_dag(file_args, python).await?;
+    status_from_dag(cfg, target_names, &dag, python, sample, shape).await
+}
+
+/// Inspect a validated graph; shares cache decisions with strict status.
+pub async fn status_from_dag(
+    cfg: &crate::config::ResolvedConfig,
+    target_names: &[String],
+    dag: &crate::dag::Dag,
+    python: &std::path::Path,
+    sample: usize,
+    shape: bool,
+) -> Result<StatusResult, BarcaError> {
     let explained = crate::execution::explain_dag(
-        &dag,
+        dag,
         cfg,
         target_names,
         python,

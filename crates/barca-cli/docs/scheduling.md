@@ -112,3 +112,11 @@ SIGHUP and SIGQUIT are not handled. Outside a container they end the process at 
 in flight is then reported as `interrupted` (`barca docs cache`); `nohup barca serve` keeps
 ignoring SIGHUP. A process that is process 1 of a container never receives them. SIGKILL cannot
 be handled by any program.
+
+## Source load failures
+
+A broken source does not disable unrelated schedules. Serve excludes its definitions
+and graph-dependent nodes while retaining healthy definitions, even in a file with a
+blocked sibling node. Startup logs and the UI report unloaded sources and affected
+node IDs; `GET /health` exposes the same `load_errors`. With `--watch`, repaired
+configured sources and schedules rejoin automatically. One-shot commands stay strict.
