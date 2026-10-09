@@ -33,7 +33,7 @@ Options:
           Print help (see a summary with '-h')
 
 Examples:
-  barca sql "select * from revenue"                       # one view per asset, named after the function
+  barca sql "select * from revenue"                       # one view per asset, using its declared name or function fallback
   barca sql "select region, sum(amount) from orders group by 1"   # any DuckDB SQL over cached results
   barca sql "select * from orders o join revenue r using (region)" # join assets
   barca sql "select * from weekly where partition = 'week=w1'"   # partitioned: one view, a partition column
@@ -44,11 +44,11 @@ Examples:
   barca sql "select * from orders" --json                   # {columns, rows, total, truncated, hint?}
   barca sql "select * from orders" --env dev                # results cached in another environment
 
-Every asset, sensor and task with a result on disk is a view named after its function (or after its
-full id, quoted, when two nodes share a name; stderr says so). An asset whose code or inputs changed
-is still queryable at its last result, with a note on stderr. Only parquet and json results can be
-queried; pickles cannot. Runs in an in-memory DuckDB over artifact files; no pipeline step runs
-and no new run is recorded. Install SQL support: uv add 'barca[sql]'.
+Every asset, sensor and task with a result on disk is a view named after its declared name
+(or its function name when unnamed; full id, quoted, when two nodes share a name; stderr says so).
+An asset whose code or inputs changed is still queryable at its last result, with a note on stderr.
+Only parquet and json results can be queried; pickles cannot. Runs in an in-memory DuckDB over
+artifact files; no pipeline step runs and no new run is recorded. Install SQL support: uv add 'barca[sql]'.
 partitions(<expression>) may evaluate Python while loading its keys.
 Partitioned views include current known keys only; removed keys stay in history. Unknown derived
 keys require their source to materialize first. Zero current keys have no result view.
