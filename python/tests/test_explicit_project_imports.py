@@ -522,3 +522,119 @@ def test_legacy_producer_missing_dependency_preserves_original_error(tmp_path):
     assert "No module named 'unavailable_barca_test_dependency'" in result.stderr
     assert "legacy project identity" not in result.stderr
     assert artifact.exists()
+
+
+@pytest.mark.parametrize("protocol", [2, 3, 4, 5])
+def test_legacy_nested_class_uses_ordinary_pickle_qualified_name_resolution(tmp_path, protocol):
+    source = write(
+        tmp_path,
+        "p.py",
+        """from pathlib import Path
+import os
+with Path('setup').open('a') as f: f.write(str(os.getpid())+'\\n')
+class Outer:
+    class Record:
+        value=17
+""",
+    )
+    writer = """from barca._source_import import load_source_module
+import pickle,sys
+p=load_source_module(sys.argv[1],'_barca_p')
+with open('old.pkl','wb') as f: pickle.dump(p.Outer.Record(),f,protocol=int(sys.argv[2]))
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", writer, str(source), str(protocol)],
+        cwd=tmp_path,
+        env=env(),
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    original = (tmp_path / "old.pkl").read_bytes()
+    assert b"_barca_p" in original
+    reader = """from barca.api import _read_output
+from barca._source_import import load_pipeline_module
+x=_read_output({'_barca_artifact':{'path':'old.pkl','format':'pickle'}})
+p=load_pipeline_module('p.py')
+assert x.value==17 and type(x) is p.Outer.Record
+assert type(x).__module__=='p' and type(x).__qualname__=='Outer.Record'
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", reader],
+        cwd=tmp_path,
+        env=env(),
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "old.pkl").read_bytes() == original
+    pids = (tmp_path / "setup").read_text().splitlines()
+    assert len(pids) == len(set(pids)), "nested-class recovery repeated setup"
+
+
+def test_import_setup_thread_can_read_an_unrelated_legacy_producer(tmp_path):
+    artifact = legacy_artifact(tmp_path, "p.py", "_barca_p")
+    original = artifact.read_bytes()
+    write(tmp_path, "consumer/helpers.py", "value=3\n")
+    write(
+        tmp_path,
+        "consumer/pipeline.py",
+        """from threading import Thread
+from barca import asset
+from barca.api import _read_output
+values=[]
+def setup():
+    values.append(_read_output({'_barca_artifact':{'path':'old.pkl','format':'pickle'}}))
+thread=Thread(target=setup,daemon=True)
+thread.start()
+thread.join(2)
+assert not thread.is_alive(), 'unrelated legacy producer recovery deadlocked during setup'
+from helpers import value
+assert value==3
+@asset()
+def result():
+    from p import Record
+    assert type(values[0]) is Record
+    return values[0].value
+""",
+    )
+    assert success(cli(tmp_path, "get", "result", ".", pool=1))["final_output"] == 17
+    assert artifact.read_bytes() == original
+    pids = (tmp_path / "setup").read_text().splitlines()
+    assert len(pids) == len(set(pids)), "threaded legacy recovery repeated setup"
+
+
+def test_concurrent_explicit_path_loads_never_return_a_partial_alias_object(tmp_path):
+    source = write(
+        tmp_path,
+        "p.py",
+        """from pathlib import Path
+import os,time
+with Path('setup').open('a') as f: f.write(str(os.getpid())+'\\n')
+time.sleep(0.05)
+class Record:
+    value=17
+""",
+    )
+    script = """from concurrent.futures import ThreadPoolExecutor
+from barca._source_import import load_source_module
+import sys
+with ThreadPoolExecutor(max_workers=8) as ex:
+    values=list(ex.map(lambda _:load_source_module(sys.argv[1],'_barca_p'),range(16)))
+assert all(value.Record.value==17 and value is values[0] for value in values)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(source)],
+        cwd=tmp_path,
+        env=env(),
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert len((tmp_path / "setup").read_text().splitlines()) == 1

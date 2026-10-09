@@ -337,7 +337,9 @@ class _ProjectUnpickler(pickle.Unpickler):
         if module.startswith("_barca_"):
             from barca._source_import import legacy_pickle_module
 
-            return getattr(legacy_pickle_module(module), name)
+            loaded = legacy_pickle_module(module)
+            # Let pickle resolve protocol-specific names (including Outer.Record).
+            return super().find_class(loaded.__name__, name)
         return super().find_class(module, name)
 
 

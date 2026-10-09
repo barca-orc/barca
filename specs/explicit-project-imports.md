@@ -168,3 +168,33 @@ qualified imports. Ordinary installed/stdlib imports and unambiguous sibling
 helpers remain supported. An external module with an `_barca_` name retains normal
 pickle importing only after exhaustive proof finds no matching legacy project
 source; missing dependencies in a proven producer retain their original error.
+
+Independent review found that protocol 4/5 encode nested class names such as
+`Outer.Record`; a plain `getattr(module, name)` is not ordinary pickle lookup.
+The compatibility reader must recover the proven module, then delegate to the
+existing superclass `find_class` with that module's actual identity. This keeps
+pickle's protocol-specific qualified-name resolution, including protocols 2/3,
+without a custom attribute parser or changes to source proof/permissions. New
+actual legacy nested-class artifacts cover protocols 2 through 5, class identity,
+setup once and byte preservation; protocol 4/5 fail before this correction.
+
+A second independent setup-thread regression reads an unrelated cached producer
+through the existing API while the parent waits for that thread. The global path
+bookkeeping lock must cover only path/name bookkeeping, never user imports or
+waiting for setup. Ordinary import locks and per-source setup ownership retain
+setup-once behavior; explicit path-loader registration also holds only that
+source's ownership to avoid exposing another partial alias object. This case fails
+against the prior global pipeline lock, then must pass with identity and artifact
+preservation. Concurrent readers, source paths, canonical names and DuckDB setup
+remain part of the complete regression suite.
+
+Review correction evidence: all 44 focused cases pass, with 168 combined
+artifact/API/stale-bytecode/parallel cases passing. Protocol 4/5 nested legacy
+class cases and the setup-thread API reader fail before their corrections;
+protocol 2/3 remain supported. Concurrent explicit path loads also fail the prior
+registration boundary, then return one fully initialized object/setup after the
+fix. Actual old-CLI nested `Outer.Record` artifacts additionally pass new worker
+and public API consumption with one consumer execution, normal class identity,
+unchanged bytes and setup once per PID. Legacy recovery restores the caller's
+prior path after producer setup; the threaded consumer can then import its
+unambiguous sibling helper. No global lock spans user imports/setup.

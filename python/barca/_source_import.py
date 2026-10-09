@@ -46,6 +46,11 @@ _loaded_sources: dict[str, ModuleType] = {}
 _LEGACY_PROBE_LIMIT = 256
 
 
+def _setup_lock(path: str):
+    with _source_lock:
+        return _setup_locks.setdefault(path, threading.RLock())
+
+
 class SourceHashLoader(_machinery.SourceFileLoader):
     """A SourceFileLoader whose bytecode cache is keyed by the source bytes, not mtime.
 
@@ -57,9 +62,7 @@ class SourceHashLoader(_machinery.SourceFileLoader):
 
     def exec_module(self, module):
         path = os.path.realpath(self.path)
-        with _source_lock:
-            setup_lock = _setup_locks.setdefault(path, threading.RLock())
-        with setup_lock:
+        with _setup_lock(path):
             loaded = _loaded_sources.get(path)
             if loaded is not None and loaded is not module:
                 # importlib returns the registered module after exec_module.
@@ -190,20 +193,27 @@ def load_source_module(source_file: str, mod_name: str) -> ModuleType:
     this search order: the file's directory, then the root).
     """
     path = os.path.realpath(source_file)
-    module_dir = os.path.dirname(path)
-    if module_dir not in sys.path:
-        sys.path.insert(0, module_dir)
-    _claim(module_dir)
-    _claim_project_root()
-    loader = SourceHashLoader(mod_name, path)
-    spec = importlib.util.spec_from_file_location(mod_name, path, loader=loader)
-    if spec is None:
-        raise RuntimeError(f"Could not load module spec for {path}")
-    mod = importlib.util.module_from_spec(spec)
-    # Register before executing so pickle and dataclasses can find the module.
-    sys.modules[mod_name] = mod
-    loader.exec_module(mod)
-    return sys.modules[mod_name]
+    with _pipeline_lock:
+        module_dir = os.path.dirname(path)
+        if module_dir not in sys.path:
+            sys.path.insert(0, module_dir)
+        _claim(module_dir)
+        _claim_project_root()
+    # Registration and setup share source ownership. No global lock spans user code.
+    with _setup_lock(path):
+        loaded = _loaded_sources.get(path)
+        if loaded is not None:
+            sys.modules[mod_name] = loaded
+            return loaded
+        loader = SourceHashLoader(mod_name, path)
+        spec = importlib.util.spec_from_file_location(mod_name, path, loader=loader)
+        if spec is None:
+            raise RuntimeError(f"Could not load module spec for {path}")
+        mod = importlib.util.module_from_spec(spec)
+        # Register before executing so pickle and dataclasses can find the module.
+        sys.modules[mod_name] = mod
+        loader.exec_module(mod)
+        return sys.modules[mod_name]
 
 
 def load_package_module(dotted: str) -> ModuleType:
@@ -293,40 +303,51 @@ def load_pipeline_module(source_file: str) -> ModuleType:
         activate_source_path(str(path))
         name = _pipeline_name(path)
         legacy = _legacy_name(path)
-        loaded = _loaded_sources.get(str(path))
-        if loaded is not None:
-            # A normal import may have registered this object before finishing setup.
-            # Wait for that source only; imports of other helpers remain independent.
-            with _setup_locks[str(path)]:
-                loaded = _loaded_sources.get(str(path))
-        if loaded is None:
-            if name is not None and _ordinary_source(name) == str(path):
-                occupied = sys.modules.get(name)
-                if occupied is not None and os.path.realpath(
-                    getattr(occupied, "__file__", "")
-                ) != str(path):
-                    raise ImportError(
-                        f"project module '{name}' from '{path}' conflicts with an already imported module; use an explicit qualified project import"
-                    )
-                loaded = importlib.import_module(name)
-            else:
-                # Files that ordinary imports cannot name retain their path identity.
-                loaded = load_source_module(str(path), legacy)
-        if os.path.realpath(getattr(loaded, "__file__", "")) != str(path):
-            raise ImportError(f"project module source mismatch for '{path}'")
-        previous = sys.modules.get(legacy)
-        ordinary_legacy = _ordinary_source(legacy)
-        # Compatibility aliases cannot occupy a real ordinary module name or
-        # replace another source's alias. Normal qualified identities still work;
-        # ambiguous old pickles refuse in the exhaustive compatibility reader.
-        if (previous is None or previous is loaded) and (
-            ordinary_legacy is None or ordinary_legacy == str(path)
-        ):
-            sys.modules[legacy] = loaded
-        return loaded
+    loaded = _loaded_sources.get(str(path))
+    if loaded is not None:
+        # A normal import may have registered this object before finishing setup.
+        # Wait for that source only; imports of other helpers remain independent.
+        with _setup_locks[str(path)]:
+            loaded = _loaded_sources.get(str(path))
+    if loaded is None:
+        if name is not None and _ordinary_source(name) == str(path):
+            occupied = sys.modules.get(name)
+            if occupied is not None and os.path.realpath(getattr(occupied, "__file__", "")) != str(
+                path
+            ):
+                raise ImportError(
+                    f"project module '{name}' from '{path}' conflicts with an already imported module; use an explicit qualified project import"
+                )
+            loaded = importlib.import_module(name)
+        else:
+            # Files that ordinary imports cannot name retain their path identity.
+            loaded = load_source_module(str(path), legacy)
+    if os.path.realpath(getattr(loaded, "__file__", "")) != str(path):
+        raise ImportError(f"project module source mismatch for '{path}'")
+    previous = sys.modules.get(legacy)
+    ordinary_legacy = _ordinary_source(legacy)
+    # Compatibility aliases cannot occupy a real ordinary module name or
+    # replace another source's alias. Normal qualified identities still work;
+    # ambiguous old pickles refuse in the exhaustive compatibility reader.
+    if (previous is None or previous is loaded) and (
+        ordinary_legacy is None or ordinary_legacy == str(path)
+    ):
+        sys.modules[legacy] = loaded
+    return loaded
 
 
 def legacy_pickle_module(name: str) -> ModuleType:
+    """Recover a source without retaining its import path in the caller's scope."""
+    with _pipeline_lock:
+        previous_paths = sys.path.copy()
+    try:
+        return _recover_legacy_pickle_module(name)
+    finally:
+        with _pipeline_lock:
+            sys.path[:] = previous_paths
+
+
+def _recover_legacy_pickle_module(name: str) -> ModuleType:
     """Prove one legacy source by exhaustive bounded, path-pruned probes."""
     _claim_project_root()
     assert _project_root is not None
