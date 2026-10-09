@@ -272,6 +272,9 @@ pub async fn run_scheduler(state: AppState) {
         }
     };
 
+    // Associate the initial jobs with the generation before loading them. Edits during
+    // loading, DB initialization or catch-up must remain pending for the first tick.
+    let mut seen_gen = state.dag_generation.load(Ordering::Relaxed);
     let mut jobs = reload_jobs(&state).await;
 
     if jobs.is_empty() && !state.config.watch {
@@ -316,8 +319,6 @@ pub async fn run_scheduler(state: AppState) {
         None => (HashMap::new(), HashMap::new()),
     };
     publish_registry(&state, &jobs, &last_handle, &last_fired);
-
-    let mut seen_gen = state.dag_generation.load(Ordering::Relaxed);
 
     loop {
         sleep_to_next_second(&zone).await;
@@ -434,6 +435,59 @@ mod tests {
                 cancel: barca_core::CancellationToken::new(),
             },
         );
+    }
+
+    #[tokio::test]
+    async fn startup_db_admission_cannot_acknowledge_a_source_generation_it_did_not_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("pipeline.py");
+        let initial = "from barca import task, Schedule\n@task(freshness=Schedule('0 5 1 1 *'))\ndef healthy(): pass\n";
+        std::fs::write(&source, initial).unwrap();
+        let mut config = app_state().config.as_ref().clone();
+        config.files = vec![source.to_string_lossy().into()];
+        config.watch = true;
+        config.resolved.db_path = dir.path().join("metadata.db").to_string_lossy().into();
+        let state = AppState::new(config);
+        let held = db::db_guard().await;
+        let task = tokio::spawn(run_scheduler(state.clone()));
+        // The initial selected graph is published before scheduler DB admission.
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while state.loaded.lock().await.is_none() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("initial graph not loaded");
+        std::fs::write(
+            &source,
+            format!("{initial}\n@task(freshness=Schedule('0 5 1 1 *'))\ndef repaired(): pass\n"),
+        )
+        .unwrap();
+        // This is the existing watch event signal, while startup still waits for the DB.
+        state.dag_generation.fetch_add(1, Ordering::Relaxed);
+        assert_eq!(
+            barca_core::queries::list_assets_from_dag(&state.loaded_dag().await.unwrap()).len(),
+            2
+        );
+        drop(held);
+        let repaired = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if state
+                    .schedule
+                    .read()
+                    .unwrap()
+                    .iter()
+                    .any(|job| job.id.ends_with(":repaired"))
+                {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        task.abort();
+        let _ = task.await;
+        repaired.expect("startup swallowed the repaired source generation");
     }
 
     #[test]

@@ -1,5 +1,6 @@
 """Serve keeps valid definitions runnable beside unloaded sources (#312)."""
 
+import fcntl
 import json
 import subprocess
 
@@ -116,6 +117,34 @@ def test_watch_repair_and_break_refresh_one_selected_graph(project):
         assert loaded(server) == {"pipeline.py:safe", "pipeline.py:healthy"}
     finally:
         server.stop()
+
+
+def test_watch_repair_during_scheduler_startup_db_admission_is_not_lost(project):
+    metadata = project / ".barca"
+    metadata.mkdir()
+    server = None
+    with (metadata / "metadata.db.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            server = Server(project, ".", "--watch")
+            wait_for(
+                lambda: "scheduling 1 task:" in server.log.read_text(),
+                "initial schedule selected before DB admission",
+            )
+            (project / "broken.py").write_text(REPAIRED)
+            wait_for(lambda: errors(server) == [], "repair while scheduler DB admission is blocked")
+            assert "broken.py:bad" in loaded(server)
+            fcntl.flock(lock, fcntl.LOCK_UN)
+            wait_for(
+                lambda: any(
+                    job["id"] == "broken.py:bad" for job in server.request("GET", "/schedule")[1]
+                ),
+                "startup repair reaches scheduler on its next tick",
+            )
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+            if server is not None:
+                server.stop()
 
 
 def test_all_broken_sources_are_inspectable_without_fake_nodes(project):

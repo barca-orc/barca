@@ -165,3 +165,17 @@ runs before firing jobs. Keep reload sampling before its await; edits during a
 reload remain pending for the following tick. No new watcher owner, timer, API or
 configuration is required. Test with a held startup DB admission boundary and
 actual watch repair, preserving current test deadlines and registry assertions.
+
+Implemented the generation sampling repair. The held-global-DB-admission Rust
+regression fails the old sampling order and passes the corrected order. An actual
+CLI regression holds the metadata file lock until the initial schedule is selected,
+repairs the broken sibling, verifies healthy diagnostics/assets while admission
+remains blocked, then releases the lock and observes the repaired schedule on the
+existing next tick. The original watch repair/removal regression also passes.
+
+Released-base integration passed all802 workspace Rust tests before this narrow
+repair, then all75 server tests including the new regression,79 actual CLI
+load-isolation/partition/helper/schedule/client/contract cases with no skips, strict
+workspace/all-target Clippy, Rust formatting, pinned Ruff and whitespace checks.
+The unchanged UI passed141 unit tests, typecheck/lint/build, generated type drift
+checking and the load diagnostics browser test using isolated API/UI ports.
