@@ -107,9 +107,9 @@ What each part is for:
   wheel pip falls back to the sdist, which needs a Rust toolchain to build. That is why the
   service sets `platform: linux/amd64`; on an x86-64 host the line changes nothing. Add your
   pipeline's own dependencies to the same `pip install`.
-  Linux arm64 GNU builds are being verified in native packaging CI; keep this amd64
-  fallback until a tagged release publishes that wheel. Alpine/musl has a separate
-  build and runtime gate in #107. A successful source build or cross-compile does
+  Additional native packaging CI jobs test Linux arm64 GNU and x86-64/arm64 musl
+  artifacts. Keep this amd64 fallback until a tagged release publishes those wheels
+  and #107 records fresh PyPI installation evidence. A successful source build or cross-compile does
   not establish that a compatible wheel is available from PyPI.
 - **The project mount.** The project is mounted at the working directory. Barca reads the
   source again for every run, so an edit to a function takes effect at the next run. A new
