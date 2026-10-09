@@ -91,3 +91,112 @@ No checkpoint holds a DB lock through network I/O.
 Update cache/remote manuals, site and contracts only for behavior exercised by
 this slice. Retention/GC/recovery policies remain #243/#83, and immutable saved
 partition-result references remain the separate #287/#57 design.
+
+## Minute-publisher implementation mechanics (2026-10-09)
+
+Prepared on terminal-durability main ff91122 with the reviewed receipt and
+transactional-recorder slices applied locally as explicit prerequisites. The
+publication PR must contain only its own slice after those prerequisites merge.
+
+Keep one recorder task. Its existing half-second transaction timer and a
+coalesced sixty-second publication timer share the same select loop, so a long
+phase checkpoints without new results arriving. Successful commits containing
+new run/node rows advance its generation; duplicate/no-op commits do not. Rows
+arriving during a push remain queued and commit afterward. The publication
+captures the current committed generation before awaiting network work; failure
+retains dirty state until the next minute, and no timer creates overlapping work.
+
+Share the existing SharedPush loop between terminal replay and recorded progress.
+The progress variant uses the existing pull/carry transaction to retain committed
+running-run rows and unrelated history, with no terminal ledger/status/log write.
+Do not keep a second in-memory copy of all completed rows. Test that exact carry
+contract during a conflict, including writes from another local process. Capture
+every acknowledged token before any retry/pull can fail. Unknown/lost acknowledgements
+retain the previous known token; None still means confirmed remote absence.
+
+A private owned publication context copies existing config/Python path and receives
+the startup token after successful worker/store initialization. It borrows the
+existing SharedPush owner only during publication and returns the latest token on
+recorder stop. Link its cancellation to run cancellation and recorder shutdown;
+stop and await it before terminal persistence. Keep the ten-second checkpoint
+budget already specified above and measure successful/outage behavior before
+claiming cadence or bounds. There are no additional config/API/wire/schema fields.
+
+## Local implementation evidence (unmerged)
+
+The initial fixed-minute implementation passes the real125.28-second integration:
+one69,632-byte running-run snapshot publishes two confirmed rows during a held
+step; its inode/mtime/size remain unchanged across a second clean minute tick;
+SIGKILL followed by a fresh project root reuses both results and executes only
+the remaining step. No claim of real-cloud-provider acceptance is made.
+
+Independent review found unexpected recorder-task failure could bypass terminal
+persistence while losing its token. Keep an immutable startup-token fallback in
+the session: it remains conflict-safe after newer acknowledged uploads because
+its stale CAS cannot overwrite them. Normal recorder stop returns the evolving
+token. Unexpected stop still permits full local terminal persistence and surfaces
+a note afterward; terminal publication uses the retained token and existing
+conflict/carry replay. A real aborted-recorder regression verifies token retention
+and complete successful/failed terminal rows. All18 persistence checks and strict
+workspace Clippy pass after this fault-path correction.
+
+At this initial stage, conflict/continued-local-write, lost-ack and outage/resource
+checks were still outstanding. The later evidence below completes those local
+checks; current-main acceptance and publication remain required. This slice is
+not included in release0.21.0.
+
+## Running progress carry correction
+
+A conflict may pull a checkpoint that already holds this running run. Carry
+merges missing run/node rows, then raises its executed counter to the distinct
+durable row union when necessary. It never copies the local running status over
+an interruption notice or changes owner, cached count or finished timestamp.
+Settled outcome replay retains its existing terminal-ledger semantics.
+
+A regression proves the old code carries three durable rows but leaves count one.
+The correction reports three, preserves seven cached steps and the active owner,
+keeps finished_at unset, leaves an unrelated completed run unchanged, and is
+idempotent on repeated carry. All13 carry tests pass, including cancellation
+corrections, interrupted owners, missing artifacts and indexed-history behavior.
+
+## Private-cadence actual state helper regressions
+
+Four Rust integration regressions use the real stdlib directory-state backend,
+with private recorder intervals and child-only fault gates. No production flag
+or environment variable changes cadence. They verify: rows queued behind an
+upload publish on a later tick with exactly two writes and no overlap; a real
+write followed by malformed/lost acknowledgement retains unknown outcome then
+conflict-replays two running rows alongside unrelated completed history; an
+acknowledged upload followed by failed real download keeps the new CAS token and
+local rows and removes its pull stage; outages retain dirty committed progress,
+retry at tick cadence without new rows, then make one successful upload and skip
+clean ticks. All19 persistence regressions pass. These supplement the real
+sixty-second recovery/traffic test; they do not replace provider acceptance.
+
+## Integrated pre-merge validation
+
+The repaired minute slice and its explicit receipt/transactional prerequisites
+pass all811 workspace Rust tests and strict Clippy, then133 actual Python/CLI
+checks (state helper, pulls, schema/repair/history preservation, incremental
+receipts, overrides and CLI contracts). The real125-second checkpoint test
+passes again with admission/copy/token/redaction fixes integrated: one69,632-byte
+snapshot, no clean second-tick write, and cross-root reuse after SIGKILL. Scoped
+pinned Ruff, formatting and contract/site parity pass. A second independent
+read-only review found no remaining concrete blocker.
+
+This evidence is for the prepared stack, not yet current-main PR acceptance.
+After #359/#360 merge, strip those local prerequisites and rebase the minute
+slice onto their actual merge commits, rerun affected integration checks and
+require both repository CI jobs before merging/publishing. No unmerged minute
+code is included in released v0.21.0.
+
+The receipt and recorder prerequisites are now merged as #359/#360. Local
+prerequisite copies were removed with a clean rebase onto actual main13a92a4;
+the publication diff contains only the owned minute loop and its reviewed
+admission, conflict/count, token and diagnostic corrections.
+
+After clean prerequisite removal and rebase onto actual main13a92a4, all818 Rust
+workspace tests, strict all-target Clippy, and133 actual CLI/Python cases pass.
+The fixed-minute SIGKILL/fresh-root recovery test passes again in that sweep.
+Pinned Ruff/fmt and the51-page documentation build pass. No prerequisite commits
+or unrelated user-workspace changes are present in this PR.

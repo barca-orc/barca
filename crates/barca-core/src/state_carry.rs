@@ -526,6 +526,25 @@ async fn copy_runs(
             carried.steps += 1;
         }
 
+        // A running checkpoint can contain rows from both copies. Reconcile its
+        // executed count from that union rather than copy one side's counter or
+        // increment again on replay. Preserve published status/owner/cached
+        // counts: a local running process cannot undo an interruption notice.
+        if run.in_pulled && !SETTLED.contains(&local_status.as_str()) {
+            let updated = pulled
+                .execute(
+                    "UPDATE runs SET steps_executed = ?1 WHERE run_id = ?2 \
+                 AND COALESCE(steps_executed, 0) < ?1",
+                    vec![
+                        Value::Integer(there.len() as i64),
+                        Value::Text(run_id.clone()),
+                    ],
+                )
+                .await
+                .map_err(db_err("reconciling a running run's progress"))?;
+            corrected_outcome |= updated > 0;
+        }
+
         // Its captured output, all or nothing: lines are written once, when a run ends.
         let has_log = !rows_of(
             pulled,
@@ -786,11 +805,11 @@ mod tests {
             )
             .await,
             [
-                "died\trunning\t1\t0\tNULL\tNULL",
+                "died\trunning\t2\t0\tNULL\tNULL",
                 // The outcome the run recorded for itself replaces `running`.
                 "ended\tfailed\t2\t3\t1.5\t2026-01-01 00:00:00",
                 // A local `running` never overwrites what the shared copy says.
-                "noticed\tinterrupted\t1\t0\tNULL\tNULL",
+                "noticed\tinterrupted\t2\t0\tNULL\tNULL",
             ]
         );
         let mut want = Vec::new();
@@ -809,11 +828,88 @@ mod tests {
         let fresh = fresh_db(&dir, "fresh.db").await;
         for run in ["died", "noticed"] {
             add_step(&fresh, run, "f.py:a", &file).await;
+            add_step(&fresh, run, "f.py:b", &file).await;
         }
         add_run(&fresh, "died", "running").await;
         add_run(&fresh, "noticed", "interrupted").await;
         // (`ended` is not in the fresh copy at all, so it is carried whole.)
         assert_eq!(carry(&pulled, &fresh).await.kept_runs, ["ended"]);
+    }
+
+    #[tokio::test]
+    async fn running_progress_carry_counts_the_union_without_finalizing() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = artifact(&dir, "a.json");
+        let local = fresh_db(&dir, "local.db").await;
+        let pulled = fresh_db(&dir, "pulled.db").await;
+        for path in [&local, &pulled] {
+            add_step(path, "active", "f.py:a", &file).await;
+        }
+        add_step(&local, "active", "f.py:b", &file).await;
+        add_run(&local, "active", "running").await;
+        add_run(&pulled, "active", "running").await;
+        // A third result reached the shared copy through another local writer.
+        // Its historical counter remains one until carry reconciles durable rows.
+        add_step(&pulled, "active", "f.py:c", &file).await;
+        exec(
+            &pulled,
+            "UPDATE runs SET steps_cached = 7, steps_total = 10, owner = 'lease' \
+             WHERE run_id = 'active'",
+            vec![],
+        )
+        .await;
+        add_step(&pulled, "unrelated", "f.py:z", &file).await;
+        add_run(&pulled, "unrelated", "success").await;
+        let unrelated_before = query(
+            &pulled,
+            &format!(
+                "SELECT {} FROM runs WHERE run_id = 'unrelated'",
+                RUN_COLUMNS.join(", ")
+            ),
+        )
+        .await;
+
+        let carried = carry(&local, &pulled).await;
+        assert_eq!((carried.runs, carried.steps), (0, 1));
+        assert_eq!(
+            query(
+                &pulled,
+                "SELECT status, steps_executed, steps_cached, steps_total, finished_at, owner \
+             FROM runs WHERE run_id = 'active'"
+            )
+            .await,
+            ["running\t3\t7\t10\tNULL\tlease"]
+        );
+        assert_eq!(
+            steps(&pulled).await,
+            [
+                "active\tf.py:a\tsuccess",
+                "active\tf.py:b\tsuccess",
+                "active\tf.py:c\tsuccess",
+                "unrelated\tf.py:z\tsuccess"
+            ]
+        );
+        assert_eq!(
+            query(
+                &pulled,
+                &format!(
+                    "SELECT {} FROM runs WHERE run_id = 'unrelated'",
+                    RUN_COLUMNS.join(", ")
+                )
+            )
+            .await,
+            unrelated_before
+        );
+        let again = carry(&local, &pulled).await;
+        assert!(!again.wrote(), "replay must not increase the count again");
+        assert_eq!(
+            query(
+                &pulled,
+                "SELECT steps_executed FROM runs WHERE run_id = 'active'"
+            )
+            .await,
+            ["3"]
+        );
     }
 
     #[tokio::test]

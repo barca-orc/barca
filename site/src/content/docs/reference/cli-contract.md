@@ -949,7 +949,8 @@ Newest first. `files` is an array of the `.py` files the run was given. `target`
 `steps_total`, `finished_at` and `elapsed_seconds` can be `null` (no target; a run still in
 progress or interrupted). `status` is `running`, `success`, `failed`, `cancelled` or
 `interrupted`: local history records completed steps during execution, after confirmed upload
-for remote results. Shared history is published at run end. A `running` run counts the steps
+for remote results. New committed shared progress is published every minute in healthy
+operation, followed by the final outcome at run end. A `running` run counts the steps
 it has recorded so far in `steps_executed`, and
 `interrupted` is a run whose process died without recording an outcome (`barca docs cache`,
 "While a run is going, and after one is killed").
@@ -1137,6 +1138,7 @@ placeholders:
 | `[barca] checking artifact store <store> (timeout <secs>s)` | before workers start whenever a separate artifact store is configured, including state-off runs; requires bucket/container-root listing and backend existence access, verifies reachability rather than write permission | experimental |
 | `[barca] uploading <n> artifacts to <store> (timeout <secs>s per attempt); waiting for confirmation` | before awaiting queued artifact uploads (every mode) | experimental |
 | `[barca] still waiting for artifact uploads to <store> (<secs>s)` | every 10 seconds while the upload drain waits (every mode); destinations omit URI passwords and signed query parameters | experimental |
+| `[barca] progress checkpoint failed; recorded results remain local: <cause>` | a mid-run shared-state publication failed; committed local results are retained and retried at the next minute tick, without changing successful user work into a failed step | experimental |
 | `[barca] still running (<n>s): <id>` | a step in flight for `BARCA_PROGRESS_SECS` (every mode) | experimental |
 | `[barca] <n> more: <first line of a warning>` | before the end-of-run line (every mode): a `logging` WARNING printed because logging is unconfigured, or a `warnings` warning, from a step's process was printed once and suppressed `<n>` more times in this run; beyond ten texts, one `[barca] <n> more: <k> other repeated warnings` (`barca docs agents`) | experimental |
 | `[barca] skipped N task(s) ...`, `[barca] nothing to get ...` | `get` with no target skipped tasks | experimental |

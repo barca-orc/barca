@@ -198,7 +198,7 @@ async fn acquire_file_lock(db_path: &str, wait: Duration) -> Result<fs::File, Ba
     }
 }
 
-/// Where [`replace_db`] can be cut short. Each is a point at which the process may die; the
+/// Where [`replace_db_holding`] can be cut short. Each is a point at which the process may die; the
 /// tests stop there and check that the next pull still ends with nothing lost.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ReplaceStage {
@@ -223,7 +223,7 @@ pub(crate) struct Incoming<'a> {
     pub version: Option<&'a str>,
 }
 
-/// What [`replace_db`] did.
+/// What [`replace_db_holding`] did.
 #[derive(Debug)]
 pub(crate) enum Replaced {
     /// The download is now the local database, with what was carried over from the old one.
@@ -272,6 +272,7 @@ pub(crate) enum Replaced {
 /// [`Carried::unreadable`](crate::state_carry::Carried) says why. A local database that cannot
 /// be opened for any other reason (held open by another program, permissions, I/O) is an
 /// error and stays as it was; so does everything when the download is not valid.
+#[cfg(test)]
 pub(crate) async fn replace_db(
     db_path: &str,
     incoming: Incoming<'_>,
@@ -279,7 +280,7 @@ pub(crate) async fn replace_db(
     replace_db_until(db_path, incoming, None).await
 }
 
-/// [`replace_db`] for a caller that took the database's lock before it began the download,
+/// [`replace_db_holding`] for a caller that took the database's lock before it began the download,
 /// so that nothing can overtake it.
 pub(crate) async fn replace_db_holding(
     _lock: &DbLock,
@@ -289,6 +290,7 @@ pub(crate) async fn replace_db_holding(
     replace_locked(db_path, incoming, None).await
 }
 
+#[cfg(test)]
 async fn replace_db_until(
     db_path: &str,
     incoming: Incoming<'_>,
@@ -306,15 +308,27 @@ pub(crate) struct DbLock {
 }
 
 pub(crate) async fn lock_db(db_path: &str) -> Result<DbLock, BarcaError> {
-    let guard = db_guard().await;
-    let lock = acquire_file_lock(db_path, DB_FILE_LOCK_WAIT).await?;
+    lock_db_with_until(db_path, crate::state_sync::Until::done()).await
+}
+
+/// Cancellation applies only to lock admission. The caller must finish any admitted
+/// atomic database mutation before releasing this lock.
+pub(crate) async fn lock_db_with_until(
+    db_path: &str,
+    until: crate::state_sync::Until<'_>,
+) -> Result<DbLock, BarcaError> {
+    let guard = until.admit(db_guard()).await?;
+    let lock = until
+        .admit(acquire_file_lock(db_path, DB_FILE_LOCK_WAIT))
+        .await??;
+    until.check()?;
     Ok(DbLock {
         _lock: lock,
         _guard: guard,
     })
 }
 
-/// The body of [`replace_db`]; the caller holds [`lock_db`].
+/// The body of [`replace_db_holding`]; the caller holds [`lock_db`].
 async fn replace_locked(
     db_path: &str,
     incoming: Incoming<'_>,
@@ -493,24 +507,69 @@ pub(crate) struct PushCopy {
     base_raw: Option<Vec<u8>>,
 }
 
+impl Drop for PushCopy {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
 /// Fold the local database's write-ahead log into its main file and copy the result next to
 /// it, under the lock: the copy is one consistent database (turso keeps most data in the log;
 /// the main file alone, without a checkpoint, would be an old or empty database), and it
 /// stays that whatever other barca processes do to the database during the upload, which
 /// therefore needs no lock.
+#[cfg(test)]
 pub(crate) async fn copy_for_push(db_path: &str, copy: PathBuf) -> Result<PushCopy, BarcaError> {
-    let _lock = lock_db(db_path).await?;
+    copy_for_push_with_until(db_path, copy, crate::state_sync::Until::done()).await
+}
+
+pub(crate) async fn copy_for_push_with_until(
+    db_path: &str,
+    copy: PathBuf,
+    until: crate::state_sync::Until<'_>,
+) -> Result<PushCopy, BarcaError> {
+    let _lock = lock_db_with_until(db_path, until).await?;
+    // Finish the admitted WAL checkpoint safely, then observe cancellation again.
     fold_log(db_path).await?;
-    fs::copy(db_path, &copy).map_err(|e| {
-        BarcaError::Db(format!(
-            "failed to copy {db_path} to {} for upload: {e}",
-            copy.display()
-        ))
-    })?;
-    Ok(PushCopy {
+    until.check()?;
+    let copy = PushCopy {
         path: copy,
         base_raw: crate::state_base::read_raw(db_path),
-    })
+    };
+    copy_snapshot_bytes(db_path, &copy.path, until).await?;
+    Ok(copy)
+}
+
+async fn copy_snapshot_bytes(
+    db_path: &str,
+    target_path: &Path,
+    until: crate::state_sync::Until<'_>,
+) -> Result<(), BarcaError> {
+    use std::io::{Read, Write};
+    let failed = |e| {
+        BarcaError::Db(format!(
+            "failed to copy {db_path} to {} for upload: {e}",
+            target_path.display(),
+        ))
+    };
+    let mut source = fs::File::open(db_path).map_err(failed)?;
+    let mut target = fs::File::create(target_path).map_err(failed)?;
+    target
+        .set_permissions(source.metadata().map_err(failed)?.permissions())
+        .map_err(failed)?;
+    let mut bytes = [0u8; 64 * 1024];
+    loop {
+        until.check()?;
+        let count = source.read(&mut bytes).map_err(failed)?;
+        if count == 0 {
+            break;
+        }
+        target.write_all(&bytes[..count]).map_err(failed)?;
+        // No background filesystem worker may outlive the lock or partial-copy cleanup.
+        tokio::task::yield_now().await;
+    }
+    until.check()?;
+    Ok(())
 }
 
 /// After the upload of `copy` succeeded: advance the base record, so that a download begun
@@ -518,9 +577,18 @@ pub(crate) async fn copy_for_push(db_path: &str, copy: PathBuf) -> Result<PushCo
 /// is still what was uploaded: false when something was written to it during the upload (every
 /// write goes to the write-ahead log, which was empty when the copy was taken) or a pull
 /// replaced it. Those rows are local only; the caller pushes again.
+#[cfg(test)]
 pub(crate) async fn record_pushed(db_path: &str, copy: &PushCopy) -> bool {
+    record_pushed_with_until(db_path, copy, crate::state_sync::Until::done()).await
+}
+
+pub(crate) async fn record_pushed_with_until(
+    db_path: &str,
+    copy: &PushCopy,
+    until: crate::state_sync::Until<'_>,
+) -> bool {
     use crate::state_base;
-    let Ok(_lock) = lock_db(db_path).await else {
+    let Ok(_lock) = lock_db_with_until(db_path, until).await else {
         return false;
     };
     let base_raw = state_base::read_raw(db_path);
@@ -697,7 +765,7 @@ async fn fold_pulled(
     remove_sidecars(staged_path)
 }
 
-/// Steps 2 and 3 of [`replace_db`], on the validated download `pulled` (the file at
+/// Steps 2 and 3 of [`replace_db_holding`], on the validated download `pulled` (the file at
 /// `staged_path`, with the current schema). Afterwards `staged_path` and (when it is a
 /// database) `db_path` are each one self-contained file with an empty or absent log.
 async fn carry_and_fold(
@@ -854,7 +922,17 @@ async fn connect(path: &str) -> Result<(turso::Database, turso::Connection), Bar
 /// for the duration of their work on the returned connection; the returned
 /// handle holds the cross-process lock until it is dropped.
 pub(crate) async fn open_conn(db_path: &str) -> Result<(DbHandle, turso::Connection), BarcaError> {
-    let lock = acquire_file_lock(db_path, DB_FILE_LOCK_WAIT).await?;
+    open_conn_with_until(db_path, crate::state_sync::Until::done()).await
+}
+
+pub(crate) async fn open_conn_with_until(
+    db_path: &str,
+    until: crate::state_sync::Until<'_>,
+) -> Result<(DbHandle, turso::Connection), BarcaError> {
+    let lock = until
+        .admit(acquire_file_lock(db_path, DB_FILE_LOCK_WAIT))
+        .await??;
+    until.check()?;
     let (db, conn) = connect(db_path).await?;
     Ok((
         DbHandle {
@@ -2094,6 +2172,46 @@ pub async fn get_avg_elapsed_for_partitioned(
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn cancelled_snapshot_copy_stops_between_chunks_and_cleans_partial_stage() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.db");
+        std::fs::File::create(&source)
+            .unwrap()
+            .set_len(4 * 1024 * 1024)
+            .unwrap();
+        let stage = super::PushCopy {
+            path: dir.path().join("stage.db"),
+            base_raw: None,
+        };
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let source_path = source.to_string_lossy();
+        let target_path = stage.path.clone();
+        let work = super::copy_snapshot_bytes(
+            &source_path,
+            &target_path,
+            crate::state_sync::Until::cancelled(&cancel),
+        );
+        tokio::pin!(work);
+        tokio::select! {
+            biased;
+            _ = &mut work => panic!("copy finished without yielding between chunks"),
+            _ = async {
+                loop {
+                    if std::fs::metadata(&stage.path).is_ok_and(|m| m.len() > 0) {break;}
+                    tokio::task::yield_now().await;
+                }
+            } => {},
+        }
+        let copied = std::fs::metadata(&stage.path).unwrap().len();
+        assert!(copied > 0 && copied < std::fs::metadata(&source).unwrap().len());
+        cancel.cancel();
+        assert!(matches!(work.await, Err(crate::BarcaError::Cancelled)));
+        let path = stage.path.clone();
+        drop(stage);
+        assert!(!path.exists());
+        assert_eq!(std::fs::metadata(&source).unwrap().len(), 4 * 1024 * 1024);
+    }
     #[tokio::test]
     async fn run_inspection_selects_its_recorded_steps_and_failure_details() {
         let dir = tempfile::tempdir().unwrap();

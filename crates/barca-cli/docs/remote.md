@@ -153,7 +153,8 @@ put a good one back, is under "If the shared history is damaged" below.
 ### The local copy of the history
 
 Each machine works on a local copy, `.barca/metadata.db`. `barca get` and `barca run` bring it up
-to the shared history when they start (a pull) and upload it when they end; `--dry-run` and
+to the shared history when they start (a pull), publish newly recorded progress every minute,
+and upload their final outcome when they end; `--dry-run` and
 `barca status` pull before they look, and upload nothing. `barca history` and `barca stats` read
 the local copy as it is.
 
@@ -172,9 +173,10 @@ After a pull the local copy is the shared history plus what was recorded only on
   `[barca] kept 1 run and 2 finished steps recorded only on this machine (not yet in the shared history)`.
   So after a kill the next `barca get` serves the steps the killed run finished from cache
   (`barca docs cache`, "While a run is going, and after one is killed").
-- **They are shared by the next upload.** When the next `barca get` or `barca run` on this
-  machine ends, those runs and steps are in the shared history; a killed run shows there as
-  `interrupted`. `--dry-run` and `barca status` keep them locally and upload nothing, and the
+- **They are shared by the next upload.** A running `barca get` or `barca run` publishes
+  newly recorded progress on its next healthy minute checkpoint, including history kept by
+  a pull. Its final upload also shares that history. A killed run can still appear `running`
+  on a machine that cannot establish that its original process has gone. `--dry-run` and `barca status` keep them locally and upload nothing, and the
   `kept` line is printed once, not by every command until then.
 - **Nothing is there twice.** A run is identified by its run id and a step by its run id and
   node, so a row both copies hold appears once, however many pulls happen before an upload.
@@ -696,13 +698,16 @@ the copies while the objects are unchanged (`barca docs sql`).
 ## Limitations
 
 - `barca serve` does not share history yet; set `BARCA_STATE=off` for it.
-- The shared history is updated once, when a run ends. A run records each finished step in the
-  local copy as it goes (`barca docs cache`, "While a run is going, and after one is killed"), but
-  other machines see none of it until the run ends. A run that was killed is seen by other
-  machines only after another `barca get` or `barca run` on the same machine has ended; if that
-  machine never runs again, they never see it. With a remote artifact store, each confirmed
-  upload queues its step in local history during execution. Local progress and recovery can
-  reuse these recorded results after a kill; failed or unfinished uploads are not recorded.
+- During `barca get` and `barca run`, newly recorded progress is published every minute
+  in healthy operation, and the final outcome is published when the run ends. A shared
+  checkpoint keeps the run `running`, with its recorded step count and no finish timestamp.
+  With a remote artifact store, only confirmed uploads become reusable progress; failed or
+  unfinished uploads do not. A fresh project root can reuse the shared confirmed results
+  after the original process is killed. Unchanged progress does not upload another snapshot.
+- A failed checkpoint leaves committed local history intact and retries on the next minute
+  tick. Failed uploads or database/storage failures can delay publication beyond a minute;
+  this cadence is not a guaranteed recovery point during an outage. Checkpoints replace the
+  current shared object; they do not create retained snapshots or delete history.
 - Carried across a pull: runs, steps and captured output. Not carried: step rows written by
   barca before 0.17 that were never uploaded (they do not say which run wrote them), and the
   timing estimates used to size batches, which are rebuilt by running.

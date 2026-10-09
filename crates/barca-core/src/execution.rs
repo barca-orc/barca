@@ -33,8 +33,8 @@ use crate::results::{
 };
 
 use crate::persist::{
-    RunLedger, SharedPush, StepRecorder, StepRow, cancel_recorded_run, canonical_job, persist_run,
-    telemetry_report,
+    ProgressPublication, RunLedger, SharedPush, StepRecorder, StepRow, cancel_recorded_run,
+    canonical_job, persist_run, telemetry_report,
 };
 use crate::store_sync::{StoreSync, transfer_remedy};
 
@@ -446,6 +446,7 @@ async fn start_workers(
     prepared: &Prepared,
     started: &mut RunStart,
     pb: &Option<indicatif::ProgressBar>,
+    state_token: &mut Option<state_sync::StateToken>,
 ) -> Result<(Option<StoreSync>, crate::io_loop::WorkerPool, StepRecorder), BarcaError> {
     let cfg = request.cfg;
     let python = request.python;
@@ -511,7 +512,14 @@ async fn start_workers(
     };
     let mut pool = crate::io_loop::WorkerPool::start(io_config).map_err(BarcaError::Other)?;
     // Finished steps are written to the local metadata DB while the run goes on (#214).
-    let recorder = StepRecorder::start(db_path.clone(), run_id.clone());
+    let publication = state_token.as_ref().map(|token| ProgressPublication {
+        python: python.to_path_buf(),
+        cfg: cfg.clone(),
+        token: token.clone(),
+        cancel: cancel.clone(),
+    });
+    let recorder =
+        StepRecorder::start_with_publication(db_path.clone(), run_id.clone(), publication);
     {
         // A step that runs for a while must not look hung: report it periodically.
         let bar = pb.clone();
@@ -537,7 +545,7 @@ async fn open_run<'a, 'r>(
     prepared: &'a Prepared,
     mut started: RunStart,
 ) -> Result<RunSession<'a, 'r>, BarcaError> {
-    let (state_token, cost_model) = open_state(request, prepared, &mut started).await?;
+    let (mut state_token, cost_model) = open_state(request, prepared, &mut started).await?;
     let (pb, total_estimated) = prepare_progress(
         &prepared.exec_plan,
         &request.cfg.db_path,
@@ -545,35 +553,36 @@ async fn open_run<'a, 'r>(
         &started.trace,
     )
     .await?;
-    let (store, pool, recorder) = match start_workers(request, prepared, &mut started, &pb).await {
-        Ok(workers) => workers,
-        Err(error) => {
-            if let Some(bar) = &pb {
-                bar.finish_and_clear();
+    let (store, pool, recorder) =
+        match start_workers(request, prepared, &mut started, &pb, &mut state_token).await {
+            Ok(workers) => workers,
+            Err(error) => {
+                if let Some(bar) = &pb {
+                    bar.finish_and_clear();
+                }
+                let status = if matches!(error, BarcaError::Cancelled) {
+                    "cancelled"
+                } else {
+                    "failed"
+                };
+                db::insert_logs(
+                    &request.cfg.db_path,
+                    &started.run_id,
+                    &[(String::new(), format!("[barca] {error}"))],
+                )
+                .await?;
+                db::finish_run(
+                    &request.cfg.db_path,
+                    &started.run_id,
+                    status,
+                    0,
+                    0,
+                    started.trace.start.elapsed().as_secs_f64(),
+                )
+                .await?;
+                return Err(error);
             }
-            let status = if matches!(error, BarcaError::Cancelled) {
-                "cancelled"
-            } else {
-                "failed"
-            };
-            db::insert_logs(
-                &request.cfg.db_path,
-                &started.run_id,
-                &[(String::new(), format!("[barca] {error}"))],
-            )
-            .await?;
-            db::finish_run(
-                &request.cfg.db_path,
-                &started.run_id,
-                status,
-                0,
-                0,
-                started.trace.start.elapsed().as_secs_f64(),
-            )
-            .await?;
-            return Err(error);
-        }
-    };
+        };
     let state = RunState {
         total_steps: prepared.exec_plan.total_steps,
         total_estimated,
@@ -2269,7 +2278,9 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
     // Stop the step recorder before persistence: the ledger below writes whatever it had not
     // written yet, and the state push checkpoints the WAL, which requires no other open handle
     // on the file.
-    recorder.finish().await;
+    // Keep the startup token as a conflict-safe fallback if the task ends unexpectedly.
+    // Its stale CAS token cannot overwrite a newer acknowledged checkpoint.
+    let recorder_error = recorder.finish_with_token(state_token).await.err();
     trace_point!("recorder_stopped");
 
     // Persist all executed outputs (including partial results on failure) —
@@ -2307,6 +2318,9 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
         cost_snapshot: &cost_snapshot,
     };
     persist_run(db_path, &ledger).await?;
+    if let Some(error) = recorder_error {
+        crate::errln!("[barca] {error}; terminal results have been recorded");
+    }
     // Persist captured output. Rust owns persistence — logs land in the DB
     // regardless of how the run was triggered (CLI or server).
     db::insert_logs(db_path, run_id, logs_buffer).await?;

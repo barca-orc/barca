@@ -92,7 +92,8 @@ install SQL support with `uv add 'barca[sql]'`.
 - Required history writes commit terminal status and step outcomes together. A write failure
   reports an infrastructure error and preserves earlier history and recorded progress.
 - Completed results are recorded locally during a run, after confirmed upload when using a
-  remote store. A killed run can reuse recorded results; shared history is published at run end.
+  remote store. A killed run can reuse recorded results; new shared progress is published every
+  minute in healthy operation, then the final outcome at run end.
 - `--env <name>` (or `BARCA_ENV`) keeps a separate cache and history, so dev and prod do
   not share results.
 
