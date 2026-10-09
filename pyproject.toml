@@ -26,6 +26,7 @@ Repository = "https://github.com/barca-orc/barca"
 
 [project.optional-dependencies]
 parquet = ["pyarrow", "pandas"]
+sql = ["duckdb"]
 fast = ["orjson"]
 datadog = ["ddtrace>=3,<5"]
 azure = ["fsspec", "adlfs"]

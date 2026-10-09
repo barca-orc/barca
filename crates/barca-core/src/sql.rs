@@ -303,7 +303,7 @@ pub async fn sql(
             }
         }
         "no_duckdb" => BarcaError::Usage(format!(
-            "{}\nInstall it: `pip install duckdb` (or `uv add duckdb`).",
+            "{}\nInstall it: `uv add 'barca[sql]'`.",
             err.message
         )),
         _ => BarcaError::Usage(format!(

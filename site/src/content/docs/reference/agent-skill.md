@@ -46,7 +46,7 @@ The skill is short on purpose. Three things an agent working with data should al
 
 - `barca sql` returns at most 100 rows unless you pass `--limit N` or `--all`, and its JSON is
   one indented document (`columns`, `rows`, `total`, `truncated`), not one line. Only parquet and
-  json results are views; a pickled result exits 2. It needs `duckdb` installed.
+  json results are views; a pickled result exits 2. Install SQL support with `uv add 'barca[sql]'`.
 - The skill does not mention `--env`. Results cached with `--env dev` are visible only to
   commands that pass `--env dev` (or run with `BARCA_ENV=dev`); without it `barca status` reports
   `never_run` and `barca sql` says the node has no result yet.

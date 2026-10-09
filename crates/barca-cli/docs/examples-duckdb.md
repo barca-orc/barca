@@ -1,7 +1,7 @@
 # Example: DuckDB relations as a DAG
 
 Every step returns a DuckDB relation; barca writes each one as parquet and hands the next step
-a relation over that file. Requires `pip install duckdb`.
+a relation over that file. Install with `uv add 'barca[sql]'`.
 
 ```
 orders ──┐
