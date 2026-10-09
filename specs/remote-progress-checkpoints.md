@@ -157,3 +157,17 @@ The correction reports three, preserves seven cached steps and the active owner,
 keeps finished_at unset, leaves an unrelated completed run unchanged, and is
 idempotent on repeated carry. All13 carry tests pass, including cancellation
 corrections, interrupted owners, missing artifacts and indexed-history behavior.
+
+## Private-cadence actual state helper regressions
+
+Four Rust integration regressions use the real stdlib directory-state backend,
+with private recorder intervals and child-only fault gates. No production flag
+or environment variable changes cadence. They verify: rows queued behind an
+upload publish on a later tick with exactly two writes and no overlap; a real
+write followed by malformed/lost acknowledgement retains unknown outcome then
+conflict-replays two running rows alongside unrelated completed history; an
+acknowledged upload followed by failed real download keeps the new CAS token and
+local rows and removes its pull stage; outages retain dirty committed progress,
+retry at tick cadence without new rows, then make one successful upload and skip
+clean ticks. All19 persistence regressions pass. These supplement the real
+sixty-second recovery/traffic test; they do not replace provider acceptance.
