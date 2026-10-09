@@ -129,7 +129,12 @@ def test_real_client_requests_and_terminal_parsing_match_openapi(server, monkeyp
     assert server.assets()
     assert server.asset("value")["asset"]["id"].endswith(":value")
     assert server.plan()["total_steps"] > 0
-    assert server.schedules()[0]["cron"] == "0 0 1 1 *"
+    # Health is liveness; the scheduler initializes history asynchronously.
+    deadline = time.monotonic() + 10
+    while not (schedules := server.schedules()):
+        assert time.monotonic() < deadline, "scheduler did not publish the configured job"
+        time.sleep(0.02)
+    assert schedules[0]["cron"] == "0 0 1 1 *"
     assert server.get("value").wait(timeout=20, poll=0.02)["status"] == "complete"
     assert server.get("sub/pipeline.py:value").wait(timeout=20, poll=0.02)["status"] == "complete"
     assert server.run("publish").wait(timeout=20, poll=0.02)["status"] == "complete"
