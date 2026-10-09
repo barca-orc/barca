@@ -1,7 +1,7 @@
 # P09 second slice: complete upstream cache decisions
 
-Status: implementation plan, specification version 1. First slice PR #354 is merged.
-Prepared on main 748479ff. Refs #337, specs/partition-planning-correctness.md.
+Status: implemented second slice, specification version 1. First slice PR #354 is merged.
+Plan recorded before implementation on main 748479ff; integrated onto ff911226. Refs #337, specs/partition-planning-correctness.md.
 Conformance: cache boundary Rust regressions and existing actual CLI partition suites.
 
 ## Concrete current-code counterexample
@@ -56,10 +56,14 @@ sensors whose output is unknown and existing empty-key behavior; do not invent
 empty-key semantics to implement this guard. Run existing pool-size/partitions_from
 cold/warm/edit fan-in suites at one, two and default pools against the new binary.
 
-The manifest costs one bounded-by-plan set of key identities per run. Check each
-upstream manifest once per decided chunk, not once per consumer key, to avoid
-turning an N-key chunk into N squared validation. More ambitious caching indexes
-or 20k-key profiling belong to #345. This is an invariant guard, not an Engine
+The manifest costs one bounded-by-plan set of key identities per run. Run hashes are private and monotonic within DecideState, with an immutable accessor
+for other coordinator components. Cache successful completeness checks by upstream;
+registration of new identities invalidates that upstream memo. Thus consumers and
+chunks share one full scan per unchanged manifest, with no manifest clones per
+consumer or per-key scans. Manifest storage is O(actual expanded identities), and
+registration visits those identities once per actual phase. Recovery subset union
+never removes identities. General hash lookup indexes and 20k-key profiling belong
+to #345. This is an invariant guard, not an Engine
 refactor or new cache interface.
 
 ## Current-code refinements before implementation
@@ -98,3 +102,31 @@ No public compute_run_hash, command, Python or result signature changes. No flag
 new error classes, storage ownership or version bumps. Manual/site may explain the
 internal completeness guarantee; output contracts remain unchanged. The 20k-key
 profiling/indexing work remains #345.
+
+## Reproduction and implementation evidence
+
+The pre-change real decide_step/CacheReader test returned Cached for a persisted
+consumer under partial hash
+`10edaca246636b32f1d0198914c528ff9412d97197482de66540f50d72c2731b`
+while `t.py:part[k=b]` was absent. The complete low-level hash was
+`6e4115c856f3fefd9a13bfce530e1c6e0aa6e6acd5284271c006d4766b14a9f1`.
+The regression now requires an infra error naming b, an absent consumer hash,
+and independently confirms that the tempting partial cache row still exists.
+This remains a private boundary fault injection, not a reproduction of key loss
+from the dependency-ordered current CLI.
+
+`cache::upstream_boundary_tests` also proves missing registration versus wholly
+absent upstreams, sorted first-missing identity, selected subset completeness,
+recovery union and added-key memo invalidation, aligned chunk refusal despite
+refresh/no-cache, complete hash equality across pools 1/2/64, actual runtime
+expansion with previous-phase keys, and preserved zero-key base-step identity.
+The expected manifest is independent of map contents and unions actual expanded
+phase identities; it is private, as is the monotonic run-hash map.
+
+Validation on ff911226: all 795 Rust workspace tests pass, including six new
+boundary regressions. The actual CLI passes 127 partition/pool/runtime-key/cache/
+sensor/missing-artifact tests and 64 manual/CLI-contract tests against this
+worktree's rebuilt binary and source. Workspace Clippy with warnings denied,
+Rust formatting, lock consistency and whitespace checks pass; the site builds
+all 51 pages. Cold/warm/edit and dry-run cases cover pools one, two and default
+(existing pool-independence cases also cover 3/5/16). No hash-format migration.

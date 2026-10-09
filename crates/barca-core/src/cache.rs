@@ -1,6 +1,6 @@
 //! Cache checking — run_hash computation and partition-aligned lookups.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 /// Compute the run_hash for a step given its context. `env` is the step's declared env values
 /// ([`crate::envdeps::hash_input`]); `None` leaves the hash exactly as a node without `env=`.
@@ -135,7 +135,10 @@ pub(crate) enum Decision {
 /// refreshed in this run, and cached assets downstream of a refreshed one.
 #[derive(Default)]
 pub(crate) struct DecideState {
-    pub(crate) run_hashes: HashMap<String, String>,
+    // Monotonic: only this component can insert, and no key is removed during a run.
+    run_hashes: HashMap<String, String>,
+    expected_steps: BTreeMap<String, BTreeSet<String>>,
+    complete_upstreams: HashSet<String>,
     pub(crate) refreshed_ids: std::collections::HashSet<String>,
     /// Refreshed asset -> the `--refresh` name it was refreshed for (itself, or the named
     /// upstream it cascaded from).
@@ -145,6 +148,74 @@ pub(crate) struct DecideState {
     /// hash (#183). A real run fills it as sensors finish (they run in an earlier phase than
     /// their consumers); a dry run seeds it from each sensor's last recorded output.
     pub(crate) sensor_outputs: HashMap<String, String>,
+}
+
+impl DecideState {
+    pub(crate) fn run_hashes(&self) -> &HashMap<String, String> {
+        &self.run_hashes
+    }
+
+    /// Register the actual expanded plan, including all worker chunks, before deciding it.
+    /// Recovery subsets cannot shrink the identities required by a previous phase.
+    pub(crate) fn register_phase(&mut self, phase: &Phase) {
+        for step in phase.streams.iter().flat_map(|stream| &stream.steps) {
+            if !step.pending_partitions.is_empty() {
+                continue;
+            }
+            let base = step.step_id.base_id();
+            let expected = self.expected_steps.entry(base.to_string()).or_default();
+            let mut added = false;
+            if step.partition_keys.is_empty() {
+                added |= expected.insert(step.step_id.display());
+            } else {
+                for key in &step.partition_keys {
+                    added |= expected.insert(key.display_id(base));
+                }
+            }
+            if added {
+                self.complete_upstreams.remove(base);
+            }
+        }
+    }
+
+    fn require_upstream_hashes(
+        &mut self,
+        step: &crate::planner::StreamStep,
+    ) -> Result<(), crate::BarcaError> {
+        let upstreams: BTreeSet<&str> = step
+            .inputs
+            .values()
+            .map(|up| up.split('[').next().unwrap_or(up))
+            .collect();
+        for upstream in upstreams {
+            if self.complete_upstreams.contains(upstream) {
+                continue;
+            }
+            let expected = self.expected_steps.get(upstream).ok_or_else(|| {
+                crate::BarcaError::Other(format!(
+                    "cannot decide '{}': upstream '{upstream}' has no registered expanded steps",
+                    step.step_id.display()
+                ))
+            })?;
+            if let Some(missing) = expected
+                .iter()
+                .find(|id| !self.run_hashes.contains_key(*id))
+            {
+                let detail = if expected.iter().all(|id| !self.run_hashes.contains_key(id)) {
+                    "no upstream run hashes are available; first missing"
+                } else {
+                    "missing upstream run hash"
+                };
+                return Err(crate::BarcaError::Other(format!(
+                    "cannot decide '{}': {detail} '{missing}'",
+                    step.step_id.display()
+                )));
+            }
+            // Hash keys cannot disappear; check a complete manifest once, shared by consumers.
+            self.complete_upstreams.insert(upstream.to_string());
+        }
+        Ok(())
+    }
 }
 
 /// The sensors `step` reads directly (base ids).
@@ -227,7 +298,8 @@ pub(crate) async fn decide_step(
     cache: Option<&db::CacheReader>,
     state: &mut DecideState,
     step: &crate::planner::StreamStep,
-) -> (crate::planner::StreamStep, Decision) {
+) -> Result<(crate::planner::StreamStep, Decision), crate::BarcaError> {
+    state.require_upstream_hashes(step)?;
     let base_id = step.step_id.base_id();
     let display_id = step.step_id.display();
     let base_node = dag.get_node(base_id);
@@ -275,12 +347,12 @@ pub(crate) async fn decide_step(
     let kind = base_node.map(|n| n.kind());
     // Sensors and tasks always re-run — never cached.
     match kind {
-        Some(crate::NodeKind::Task) => return (step, Decision::Run(RunReason::Task)),
-        Some(crate::NodeKind::Sensor) => return (step, Decision::Run(RunReason::Sensor)),
+        Some(crate::NodeKind::Task) => return Ok((step, Decision::Run(RunReason::Task))),
+        Some(crate::NodeKind::Sensor) => return Ok((step, Decision::Run(RunReason::Sensor))),
         _ => {}
     }
     if no_cache {
-        return (step, Decision::Run(RunReason::NoCache));
+        return Ok((step, Decision::Run(RunReason::NoCache)));
     }
 
     // Refresh policy (`barca run`): force-rerun assets named in the refresh set and, when
@@ -315,7 +387,7 @@ pub(crate) async fn decide_step(
         };
         state.refreshed_ids.insert(base_id.to_string());
         state.cascade_roots.insert(base_id.to_string(), root);
-        return (step, Decision::Run(reason));
+        return Ok((step, Decision::Run(reason)));
     }
 
     // A consumer of a sensor is only cache-checked against that sensor's output. The planner
@@ -325,7 +397,7 @@ pub(crate) async fn decide_step(
         .iter()
         .any(|s| !has_sensor_output(state, s))
     {
-        return (step, Decision::Run(RunReason::NotMaterialized));
+        return Ok((step, Decision::Run(RunReason::NotMaterialized)));
     }
 
     // Partitioned steps are checked per key: each partition has its own run hash, so keys
@@ -345,7 +417,7 @@ pub(crate) async fn decide_step(
                 None => missing.push(pk.clone()),
             }
         }
-        return (step, Decision::Partitioned { cached, missing });
+        return Ok((step, Decision::Partitioned { cached, missing }));
     }
 
     let run_h = step
@@ -353,7 +425,7 @@ pub(crate) async fn decide_step(
         .get(&display_id)
         .cloned()
         .expect("unpartitioned step has a precomputed run hash");
-    match lookup_in(cache, &display_id, &run_h).await {
+    Ok(match lookup_in(cache, &display_id, &run_h).await {
         None => (step, Decision::Run(RunReason::NotMaterialized)),
         Some(oref) => {
             // Cached, but does it depend on something refreshed in this run?
@@ -370,7 +442,7 @@ pub(crate) async fn decide_step(
             }
             (step, Decision::Cached { oref, stale_root })
         }
-    }
+    })
 }
 
 /// The most recent successful materialization of `node_id` with this run hash, if any. The row
@@ -1010,5 +1082,349 @@ def report(m: list) -> int:
             "stream order gave the reference hashes at every pool size: this test no longer \
              covers #330"
         );
+    }
+}
+
+#[cfg(test)]
+mod upstream_boundary_tests {
+    use super::*;
+    use crate::planner::{ResourceConfig, StreamStep};
+
+    const STATIC: &str = r#"
+from barca import asset, collect, partitions
+@asset(partitions={"k": partitions(["a", "b", "c"])})
+def part(k: str) -> str:
+    return k
+@asset(inputs={"values": collect(part)})
+def report(values: list) -> int:
+    return len(values)
+"#;
+
+    fn planned(pool: usize) -> (Dag, Vec<Phase>) {
+        let nodes = crate::parse::extract_nodes(STATIC, "t.py").unwrap();
+        let dag = Dag::build(&nodes).unwrap();
+        let plan = crate::planner::plan_from_dag(
+            &dag,
+            &ResourceConfig {
+                pool_size: pool,
+                concurrency_groups: HashMap::new(),
+            },
+        );
+        (dag, plan.phases)
+    }
+    fn step(phases: &[Phase], base: &str) -> StreamStep {
+        phases
+            .iter()
+            .flat_map(|p| &p.streams)
+            .flat_map(|s| &s.steps)
+            .find(|s| s.step_id.base_id() == base)
+            .unwrap()
+            .clone()
+    }
+    fn partial_hashes() -> HashMap<String, String> {
+        HashMap::from([
+            ("t.py:part[k=a]".into(), "hash-a".into()),
+            ("t.py:part[k=c]".into(), "hash-c".into()),
+        ])
+    }
+
+    #[tokio::test]
+    async fn partial_upstream_cannot_hit_a_persisted_partial_cache_row() {
+        let (dag, phases) = planned(2);
+        let consumer = step(&phases, "t.py:report");
+        let mut state = DecideState {
+            run_hashes: partial_hashes(),
+            ..Default::default()
+        };
+        for phase in &phases {
+            state.register_phase(phase);
+        }
+        let missing = "t.py:part[k=b]";
+        assert!(!state.run_hashes.contains_key(missing));
+        let definition = &dag.get_node("t.py:report").unwrap().definition_hash;
+        let partial = compute_run_hash(
+            definition,
+            None,
+            consumer.inputs.values(),
+            &state.run_hashes,
+            &HashMap::new(),
+            None,
+        );
+        let mut complete = state.run_hashes.clone();
+        complete.insert(missing.into(), "hash-b".into());
+        let full = compute_run_hash(
+            definition,
+            None,
+            consumer.inputs.values(),
+            &complete,
+            &HashMap::new(),
+            None,
+        );
+        assert_ne!(partial, full);
+        let dir = tempfile::tempdir().unwrap();
+        let artifact = dir.path().join("incomplete.json");
+        std::fs::write(&artifact, "2").unwrap();
+        let output = OutputRef {
+            path: artifact.display().to_string(),
+            format: "json".into(),
+            size_bytes: 1,
+            elapsed_seconds: None,
+            content_hash: None,
+        };
+        let db_path = dir.path().join("metadata.db").display().to_string();
+        db::init_db(&db_path).await.unwrap();
+        db::persist_outputs(
+            &db_path,
+            &HashMap::from([("t.py:report".into(), output.clone())]),
+            &HashMap::from([("t.py:report".into(), partial.clone())]),
+        )
+        .await
+        .unwrap();
+        let cache = db::CacheReader::open(&db_path).await.unwrap();
+        let result = decide_step(
+            &dag,
+            &CachePolicy::CacheAware,
+            false,
+            Some(&cache),
+            &mut state,
+            &consumer,
+        )
+        .await;
+        let error = match result {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("partial upstream hashes must not reach the cache"),
+        };
+        assert!(
+            error.contains("missing upstream run hash 't.py:part[k=b]'"),
+            "{error}"
+        );
+        assert!(!state.run_hashes.contains_key("t.py:report"));
+        assert!(!state.run_hashes.contains_key(missing));
+        // The tempting row exists; refusal happens before a consumer hash/cache decision.
+        assert_eq!(
+            lookup_in(Some(&cache), "t.py:report", &partial)
+                .await
+                .unwrap()
+                .path,
+            output.path
+        );
+    }
+    fn registered(phases: &[Phase]) -> DecideState {
+        let mut state = DecideState::default();
+        for phase in phases {
+            state.register_phase(phase);
+        }
+        state
+    }
+
+    #[test]
+    fn missing_registration_and_wholly_absent_hashes_are_distinct() {
+        let (_, phases) = planned(2);
+        let consumer = step(&phases, "t.py:report");
+        let error = DecideState::default()
+            .require_upstream_hashes(&consumer)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("no registered expanded steps"), "{error}");
+        let mut state = registered(&phases);
+        let error = state
+            .require_upstream_hashes(&consumer)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("no upstream run hashes are available; first missing 't.py:part[k=a]'"),
+            "{error}"
+        );
+        state.run_hashes.insert("t.py:part[k=c]".into(), "c".into());
+        let error = state
+            .require_upstream_hashes(&consumer)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("missing upstream run hash 't.py:part[k=a]'"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn recovery_subsets_cannot_shrink_manifest_and_new_keys_invalidate_completeness() {
+        let (_, phases) = planned(1);
+        let consumer = step(&phases, "t.py:report");
+        let mut subset = phases.clone();
+        for st in subset
+            .iter_mut()
+            .flat_map(|p| &mut p.streams)
+            .flat_map(|s| &mut s.steps)
+        {
+            st.partition_keys.retain(|key| key.suffix() != "k=b");
+        }
+        // A legitimately selected subset defines its own complete manifest.
+        let mut selected = registered(&subset);
+        selected.run_hashes = partial_hashes();
+        selected.require_upstream_hashes(&consumer).unwrap();
+        assert!(selected.complete_upstreams.contains("t.py:part"));
+        // Additional expanded identities invalidate that memo; subset registration cannot undo it.
+        for phase in &phases {
+            selected.register_phase(phase);
+        }
+        for phase in &subset {
+            selected.register_phase(phase);
+        }
+        let error = selected
+            .require_upstream_hashes(&consumer)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("t.py:part[k=b]"), "{error}");
+        selected
+            .run_hashes
+            .insert("t.py:part[k=b]".into(), "b".into());
+        selected.require_upstream_hashes(&consumer).unwrap();
+    }
+
+    #[tokio::test]
+    async fn complete_decisions_retain_hashes_across_worker_chunks() {
+        let mut reference = None;
+        for pool in [1, 2, 64] {
+            let (dag, phases) = planned(pool);
+            let mut state = DecideState::default();
+            for phase in &phases {
+                state.register_phase(phase);
+                for (_, st) in in_dependency_order(&dag, phase) {
+                    decide_step(&dag, &CachePolicy::CacheAware, false, None, &mut state, st)
+                        .await
+                        .unwrap();
+                }
+            }
+            let consumer = step(&phases, "t.py:report");
+            let expected = compute_run_hash(
+                &dag.get_node("t.py:report").unwrap().definition_hash,
+                None,
+                consumer.inputs.values(),
+                state.run_hashes(),
+                &HashMap::new(),
+                None,
+            );
+            assert_eq!(state.run_hashes["t.py:report"], expected);
+            let mut hashes: Vec<_> = state.run_hashes.into_iter().collect();
+            hashes.sort();
+            if let Some(previous) = &reference {
+                assert_eq!(&hashes, previous);
+            } else {
+                reference = Some(hashes);
+            }
+        }
+    }
+
+    const DERIVED: &str = r#"
+from barca import asset, collect, partitions_from
+@asset()
+def keys() -> list:
+    return ["a", "b", "c"]
+@asset(partitions={"k": partitions_from(keys)})
+def part(k: str) -> str:
+    return k
+@asset(partitions={"k": partitions_from(keys)}, inputs={"part": part})
+def aligned(k: str, part: str) -> str:
+    return part
+@asset(inputs={"values": collect(aligned)})
+def report(values: list) -> int:
+    return len(values)
+"#;
+
+    fn derived(keys: &[&str], pool: usize) -> (Dag, Vec<Phase>) {
+        let dag = Dag::build(&crate::parse::extract_nodes(DERIVED, "t.py").unwrap()).unwrap();
+        let plan = crate::planner::plan_from_dag(
+            &dag,
+            &ResourceConfig {
+                pool_size: pool,
+                concurrency_groups: HashMap::new(),
+            },
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let artifact = dir.path().join("keys.json");
+        std::fs::write(&artifact, serde_json::to_string(keys).unwrap()).unwrap();
+        let outputs = HashMap::from([(
+            "t.py:keys".into(),
+            OutputRef {
+                path: artifact.display().to_string(),
+                format: "json".into(),
+                size_bytes: 0,
+                elapsed_seconds: None,
+                content_hash: None,
+            },
+        )]);
+        let phases = plan
+            .phases
+            .iter()
+            .map(|phase| {
+                dispatch::expand_pending_partitions(phase, &outputs, pool)
+                    .unwrap_or_else(|| phase.clone())
+            })
+            .collect();
+        (dag, phases)
+    }
+
+    #[tokio::test]
+    async fn aligned_key_present_does_not_allow_another_expanded_chunk_to_be_missing() {
+        for pool in [1, 2, 64] {
+            let (dag, phases) = derived(&["a", "b", "c"], pool);
+            let mut state = registered(&phases);
+            state.run_hashes = partial_hashes();
+            state.run_hashes.insert("t.py:keys".into(), "keys".into());
+            let consumer = step(&phases, "t.py:aligned");
+            let error = match decide_step(
+                &dag,
+                &CachePolicy::RefreshAll,
+                true,
+                None,
+                &mut state,
+                &consumer,
+            )
+            .await
+            {
+                Err(error) => error.to_string(),
+                Ok(_) => panic!("partial chunk accepted"),
+            };
+            assert!(error.contains("t.py:part[k=b]"), "{error}");
+            assert!(
+                !state
+                    .run_hashes
+                    .keys()
+                    .any(|id| id.starts_with("t.py:aligned"))
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn expanded_previous_phases_and_zero_keys_preserve_actual_identities() {
+        for keys in [vec!["a", "b", "c"], vec![]] {
+            let mut reference = None;
+            for pool in [1, 2, 64] {
+                let (dag, phases) = derived(&keys, pool);
+                let mut state = DecideState::default();
+                for phase in &phases {
+                    state.register_phase(phase);
+                    for (_, st) in in_dependency_order(&dag, phase) {
+                        decide_step(&dag, &CachePolicy::CacheAware, false, None, &mut state, st)
+                            .await
+                            .unwrap();
+                    }
+                }
+                if keys.is_empty() {
+                    assert_eq!(
+                        state.expected_steps["t.py:part"],
+                        BTreeSet::from(["t.py:part".into()])
+                    );
+                    assert!(state.run_hashes.contains_key("t.py:part"));
+                }
+                let mut hashes: Vec<_> = state.run_hashes.into_iter().collect();
+                hashes.sort();
+                if let Some(previous) = &reference {
+                    assert_eq!(&hashes, previous);
+                } else {
+                    reference = Some(hashes);
+                }
+            }
+        }
     }
 }

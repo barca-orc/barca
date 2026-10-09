@@ -997,7 +997,11 @@ fn collect_outputs(
             .dag
             .get_node(item.step_id.base_id())
             .is_some_and(|n| n.kind() == crate::NodeKind::Sensor)
-            && session.state.decide_state.run_hashes.contains_key(&node_id)
+            && session
+                .state
+                .decide_state
+                .run_hashes()
+                .contains_key(&node_id)
             && let Some(h) = artifact_val.get("content_hash").and_then(|v| v.as_str())
         {
             session
@@ -1105,7 +1109,12 @@ fn merge_outputs(session: &mut RunSession<'_, '_>, phase_outputs: &HashMap<Strin
     // with a known hash are plan steps; the rest are parallel() children,
     // which are never persisted.
     for (node_id, oref) in phase_outputs {
-        if session.state.decide_state.run_hashes.contains_key(node_id) {
+        if session
+            .state
+            .decide_state
+            .run_hashes()
+            .contains_key(node_id)
+        {
             session
                 .state
                 .all_outputs
@@ -1517,7 +1526,7 @@ pub(crate) async fn explain_dag(
         summary: &mut summary,
     };
     for phase in &exec_plan.phases {
-        predict_phase(&mut prediction, phase).await;
+        predict_phase(&mut prediction, phase).await?;
     }
     drop(cache);
 
@@ -1645,7 +1654,8 @@ fn expand_prediction(ctx: &mut Prediction<'_>, phase: &Phase) -> Phase {
 async fn predict_steps(
     ctx: &mut Prediction<'_>,
     phase_ref: &Phase,
-) -> Vec<crate::planner::StreamStep> {
+) -> Result<Vec<crate::planner::StreamStep>, BarcaError> {
+    ctx.state.register_phase(phase_ref);
     let mut to_run = Vec::new();
     for (_, step) in in_dependency_order(ctx.dag, phase_ref) {
         let base = step.step_id.base_id();
@@ -1690,7 +1700,7 @@ async fn predict_steps(
             ctx.state,
             step,
         )
-        .await;
+        .await?;
         // Forced to run whatever the cache holds (task, sensor, refresh, --no-cache).
         let forced = matches!(
             &decision,
@@ -1775,15 +1785,15 @@ async fn predict_steps(
         }
     }
 
-    to_run
+    Ok(to_run)
 }
-async fn predict_phase(ctx: &mut Prediction<'_>, phase: &Phase) {
+async fn predict_phase(ctx: &mut Prediction<'_>, phase: &Phase) -> Result<(), BarcaError> {
     let ready = expand_prediction(ctx, phase);
     let expanded = dispatch::expand_pending_partitions(&ready, ctx.all_outputs, ctx.pool_size);
     let phase_ref = expanded.as_ref().unwrap_or(&ready);
     // The steps of this phase that would execute: what they read has to be there.
 
-    let to_run = predict_steps(ctx, phase_ref).await;
+    let to_run = predict_steps(ctx, phase_ref).await?;
     let running = Phase {
         reason: phase_ref.reason.clone(),
         streams: vec![crate::planner::WorkerStream {
@@ -1800,6 +1810,7 @@ async fn predict_phase(ctx: &mut Prediction<'_>, phase: &Phase) {
         ctx.steps,
         ctx.summary,
     );
+    Ok(())
 }
 struct DecidePhase<'a> {
     dag: &'a Dag,
@@ -1835,6 +1846,7 @@ async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaError> {
         pb,
         agent_mode,
     } = ctx;
+    decide_state.register_phase(phase_ref);
     let mut uncached_streams: Vec<crate::planner::WorkerStream> = Vec::new();
 
     // Open the DB only for this phase's cache lookups and release it before any
@@ -1848,7 +1860,7 @@ async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaError> {
     for (stream_idx, step) in in_dependency_order(dag, phase_ref) {
         let uncached_steps = &mut uncached[stream_idx];
         let (step, decision) =
-            decide_step(dag, policy, no_cache, Some(&cache), decide_state, step).await;
+            decide_step(dag, policy, no_cache, Some(&cache), decide_state, step).await?;
         let decision = localize_decision(decision, &step, store);
         step_reports.push(report_for(dag, &step, &decision, false));
         let display_id = step.step_id.display();
@@ -1992,7 +2004,7 @@ async fn dispatch_phase(
     );
 
     // Progress callback — update bar as each step completes.
-    let run_hashes = &decide_state.run_hashes;
+    let run_hashes = decide_state.run_hashes();
     let on_step_cb: crate::io_loop::StepCallback<'_> = Box::new(
         |node_id: &str, artifact: &serde_json::Value, attempts: u32| {
             // Hand the finished step to the recorder. The worker reports a step only after
@@ -2026,7 +2038,7 @@ async fn dispatch_phase(
             // continues. parallel() children (no run hash) are never
             // recorded, so they stay local.
             if let Some(s) = store.as_mut()
-                && let Some(run_hash) = decide_state.run_hashes.get(node_id)
+                && let Some(run_hash) = decide_state.run_hashes().get(node_id)
                 && let Some(path) = artifact.get("path").and_then(|v| v.as_str())
                 && let Some(at) = s.layout.store_for(path)
             {
@@ -2283,7 +2295,7 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
         all_attempts,
         all_timings,
         cached_node_ids,
-        run_hashes: &decide_state.run_hashes,
+        run_hashes: decide_state.run_hashes(),
         output_hashes: &decide_state.sensor_outputs,
         store_paths,
         cost_snapshot: &cost_snapshot,

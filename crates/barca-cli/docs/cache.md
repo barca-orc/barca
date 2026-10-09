@@ -9,6 +9,13 @@ materialization, the artifact is reused and the function does not run. Change th
 code, any upstream, a sensor's output or a declared environment variable and the hash changes, so
 only the affected subgraph re-runs.
 
+Before deciding a consumer, barca checks that every upstream step in the expanded
+plan has a run hash, including all upstream partition keys across worker chunks.
+An incomplete coordinator hash map fails as an infrastructure error before any
+consumer hash or cache lookup; it cannot reuse a result hashed from a partial set.
+The expected keys come from the selected expanded plan, and worker pool size does
+not change valid hashes or cache decisions.
+
 ### What the definition covers
 
 The definition part of the hash covers what determines the step's result:
