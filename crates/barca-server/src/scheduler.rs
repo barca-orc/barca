@@ -147,8 +147,8 @@ async fn catch_up(
     zone: &Zone,
     now: &DateTime<FixedOffset>,
     db_path: &str,
-) -> (HashMap<String, String>, HashMap<String, i64>) {
-    let saved = db::get_schedule_state(db_path).await.unwrap_or_default();
+) -> Result<(HashMap<String, String>, HashMap<String, i64>), barca_core::BarcaError> {
+    let saved = db::get_schedule_state(db_path).await?;
     let mut last_handle: HashMap<String, String> = HashMap::new();
     let mut last_fired = saved.clone();
     for job in jobs {
@@ -175,7 +175,7 @@ async fn catch_up(
             }
         }
     }
-    (last_handle, last_fired)
+    Ok((last_handle, last_fired))
 }
 
 /// Record that `node_id` fired at `epoch` seconds. Best-effort durability.
@@ -277,7 +277,12 @@ pub async fn run_scheduler(state: AppState) {
     let db_path = match db::ensure_env_dirs(&state.config.resolved.env) {
         Ok(_) => {
             let path = state.config.resolved.db_path.clone();
-            let _ = db::init_db(&path).await;
+            if let Err(error) = db::init_db(&path).await {
+                barca_core::errln!(
+                    "[barca] scheduler disabled: metadata initialization failed: {error}"
+                );
+                return;
+            }
             Some(path)
         }
         Err(_) => {
@@ -291,7 +296,15 @@ pub async fn run_scheduler(state: AppState) {
     // the `/schedule` view. Entries for jobs removed on reload are harmless.
     // Catch-up requires durability; it is skipped entirely if the DB is unavailable.
     let (mut last_handle, mut last_fired) = match &db_path {
-        Some(dbp) => catch_up(&state, &jobs, &zone, &zone.now(), dbp).await,
+        Some(dbp) => match catch_up(&state, &jobs, &zone, &zone.now(), dbp).await {
+            Ok(caught_up) => caught_up,
+            Err(error) => {
+                barca_core::errln!(
+                    "[barca] scheduler disabled: cannot read schedule history: {error}"
+                );
+                return;
+            }
+        },
         None => (HashMap::new(), HashMap::new()),
     };
     publish_registry(&state, &jobs, &last_handle, &last_fired);
@@ -784,13 +797,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unreadable_schedule_history_never_becomes_an_empty_first_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = app_state();
+        let jobs = [job("f.py:daily", NodeKind::Asset, "0 6 * * *")];
+        // A directory cannot be opened as metadata. A failed read must not anchor
+        // or trigger jobs as if the durable schedule history were simply absent.
+        let error = catch_up(
+            &st,
+            &jobs,
+            &Zone::Utc,
+            &utc(2, 9, 0),
+            &dir.path().display().to_string(),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(error, barca_core::BarcaError::Db(_)));
+        assert!(st.runs.is_empty());
+        assert!(st.schedule.read().unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn a_first_start_anchors_every_job_to_now_and_runs_nothing() {
         let (_dir, db_path) = schedule_db().await;
         let st = app_state();
         let jobs = [job("f.py:daily", NodeKind::Asset, "0 6 * * *")];
         let now = utc(2, 9, 0);
 
-        let (handles, fired) = catch_up(&st, &jobs, &Zone::Utc, &now, &db_path).await;
+        let (handles, fired) = catch_up(&st, &jobs, &Zone::Utc, &now, &db_path)
+            .await
+            .unwrap();
 
         assert!(handles.is_empty());
         assert!(st.runs.is_empty(), "nothing may run on a first start");
@@ -814,11 +850,11 @@ mod tests {
         // search incorrectly treated the next 05:00 as 09:00 UTC.
         let early = zone.at(Utc.with_ymd_and_hms(2026, 11, 1, 9, 30, 0).unwrap());
         let st = app_state();
-        let (handles, fired) = catch_up(&st, &jobs, &zone, &early, &db_path).await;
+        let (handles, fired) = catch_up(&st, &jobs, &zone, &early, &db_path).await.unwrap();
         assert!(handles.is_empty() && st.runs.is_empty());
         assert_eq!(fired["f.py:daily"], before.timestamp());
         let due = zone.at(Utc.with_ymd_and_hms(2026, 11, 1, 10, 0, 0).unwrap());
-        let (handles, _) = catch_up(&st, &jobs, &zone, &due, &db_path).await;
+        let (handles, _) = catch_up(&st, &jobs, &zone, &due, &db_path).await.unwrap();
         assert_eq!(handles.len(), 1);
     }
 
@@ -831,12 +867,16 @@ mod tests {
         ];
         // Running at 05:10: both jobs are anchored. The server then stops.
         let stopped = utc(2, 5, 10);
-        catch_up(&app_state(), &jobs, &Zone::Utc, &stopped, &db_path).await;
+        catch_up(&app_state(), &jobs, &Zone::Utc, &stopped, &db_path)
+            .await
+            .unwrap();
 
         // Back at 05:50: no tick of either job has passed.
         let st = app_state();
         let early = utc(2, 5, 50);
-        let (handles, fired) = catch_up(&st, &jobs, &Zone::Utc, &early, &db_path).await;
+        let (handles, fired) = catch_up(&st, &jobs, &Zone::Utc, &early, &db_path)
+            .await
+            .unwrap();
         assert!(handles.is_empty() && st.runs.is_empty());
         assert_eq!(
             fired["f.py:daily"],
@@ -848,7 +888,9 @@ mod tests {
         // exactly once, and its record moves to the restart time.
         let st = app_state();
         let back = utc(5, 9, 30);
-        let (handles, fired) = catch_up(&st, &jobs, &Zone::Utc, &back, &db_path).await;
+        let (handles, fired) = catch_up(&st, &jobs, &Zone::Utc, &back, &db_path)
+            .await
+            .unwrap();
         assert_eq!(handles.len(), 2);
         assert_eq!(
             st.runs.len(),
@@ -864,7 +906,9 @@ mod tests {
         // A restart right after has nothing left to catch up: the catch-up does not repeat.
         let st = app_state();
         let again = utc(5, 9, 31);
-        let (handles, fired) = catch_up(&st, &jobs, &Zone::Utc, &again, &db_path).await;
+        let (handles, fired) = catch_up(&st, &jobs, &Zone::Utc, &again, &db_path)
+            .await
+            .unwrap();
         assert!(handles.is_empty() && st.runs.is_empty());
         assert_eq!(fired["f.py:hourly"], back.timestamp());
     }
@@ -880,12 +924,15 @@ mod tests {
             &utc(2, 5, 0),
             &db_path,
         )
-        .await;
+        .await
+        .unwrap();
 
         let st = app_state();
         let jobs = [old, job("f.py:new", NodeKind::Asset, "0 6 * * *")];
         let back = utc(4, 9, 0);
-        let (handles, fired) = catch_up(&st, &jobs, &Zone::Utc, &back, &db_path).await;
+        let (handles, fired) = catch_up(&st, &jobs, &Zone::Utc, &back, &db_path)
+            .await
+            .unwrap();
 
         assert_eq!(handles.keys().collect::<Vec<_>>(), ["f.py:daily"]);
         assert_eq!(st.runs.len(), 1);

@@ -9,6 +9,7 @@ pub mod coordinator;
 pub mod cost;
 pub mod dag;
 pub mod db;
+mod db_schema;
 pub mod decorator_args;
 pub mod definition;
 pub mod discover;
