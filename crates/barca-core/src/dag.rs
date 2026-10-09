@@ -115,6 +115,42 @@ impl DagError {
     }
 }
 
+/// Reject mixed static/evaluated and runtime-derived dimensions before Python evaluation.
+pub(crate) fn validate_partition_dimensions(nodes: &[ExtractedNode]) -> Result<(), DagError> {
+    use crate::model::PartitionSpec;
+    for node in nodes {
+        let derived = node
+            .partitions
+            .iter()
+            .filter_map(|(dim, spec)| match spec {
+                PartitionSpec::DerivedFrom { source_ref } => Some((dim, source_ref)),
+                _ => None,
+            })
+            .min_by_key(|(dim, _)| *dim);
+        if let Some((_, source_ref)) = derived
+            && node
+                .partitions
+                .values()
+                .any(|spec| !matches!(spec, PartitionSpec::DerivedFrom { .. }))
+        {
+            return Err(DagError::PartitionsFrom {
+                node: node.continuity_key(),
+                upstream: source_ref.resolution_name().to_string(),
+                problem: "must be the asset's only partition dimension when combined with \
+                          partitions(): mixing partitions() and partitions_from() dimensions \
+                          is not supported"
+                    .to_string(),
+                fix: format!(
+                    "Use only partitions_from() dimensions on '{}', or declare every \
+                     dimension explicitly with partitions([...]).",
+                    node.function_name
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Resolve `partitions_from(upstream)` where `upstream` is itself partitioned (#189).
 ///
 /// The consumer takes the upstream's partition spec (so the same keys, static or resolved at
@@ -155,6 +191,8 @@ fn resolve_partitions_from(nodes: &[ExtractedNode]) -> Result<Vec<ExtractedNode>
                 _ => None,
             })
             .collect();
+        let mut derived = derived;
+        derived.sort_by(|a, b| a.0.cmp(&b.0));
         for (dim, source_ref) in derived {
             let source = source_ref.resolution_name().to_string();
             let j = match refs.resolve_input(&nodes[i], &source, &source_ref) {
@@ -431,6 +469,7 @@ impl Resolver {
 impl Dag {
     /// Build a DAG from extracted nodes. Validates all constraints.
     pub fn build(nodes: &[ExtractedNode]) -> Result<Self, DagError> {
+        validate_partition_dimensions(nodes)?;
         let resolved = resolve_partitions_from(nodes)?;
         let nodes = resolved.as_slice();
         let mut graph = DiGraph::new();

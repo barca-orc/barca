@@ -396,3 +396,9 @@ per key, not what your functions cost.
 - With `@sink`, each key writes its own file: `barca docs sinks`.
 - To fan work out at run time from inside a task, without caching, see
   [Parallel Tasks](/patterns/04-parallel-tasks/).
+
+Mixing `partitions()` and `partitions_from()` dimensions on one asset is unsupported
+and returns exit 2 before execution. Use only derived dimensions or declare every
+dimension explicitly with `partitions([...])`. `barca plan` uses the execution pool
+size (available cores or `BARCA_POOL_SIZE`). Warnings sort by node, parameter and kind;
+partition key previews list the first twenty keys in lexical order.

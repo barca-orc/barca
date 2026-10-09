@@ -49,6 +49,9 @@ def summary(all_sales: list[dict]) -> dict:
 - The dimension must keep the upstream's name (`"region"` above), `upstream` must have a single
   dimension, and `partitions_from(upstream)` must be the asset's only dimension. Anything else is
   a usage error (exit 2) when the DAG is built.
+- Mixing `partitions()` and `partitions_from()` dimensions on one asset is unsupported
+  and fails before execution with exit 2. Use only derived dimensions or declare every
+  dimension explicitly with `partitions([...])`.
 - `partitions_from(keys)` on an *unpartitioned* asset that returns a list uses the list's values
   as keys. They are only known once `keys` has run (a dry run reports the asset as `unknown`
   until then), and the list itself is not passed to the function.
@@ -76,3 +79,7 @@ def summary(all_sales: list[dict]) -> dict:
   changes.
 
 See also: `barca docs sinks` (one file per partition), `barca docs examples/partitions`.
+
+`barca plan` uses the same worker-pool size as execution: available cores, overridden
+by a positive `BARCA_POOL_SIZE`. Warnings sort by node, parameter and kind. Key previews
+list the first twenty keys in lexical order, independently of worker chunking.

@@ -279,7 +279,7 @@ error (exit 2) that names the right one. `barca pipeline.py` is short for
 | `barca list [files...]` | Every definition with its kind, freshness, inputs and declared `env`. `--json`, `--pretty`, `--limit N`, `--all`, `--fields` |
 | `barca status [target] [files...]` | Per node: cache state and why, last run, artifact rows and columns. `--sample N`, `--json`, `--pretty`, `--limit N`, `--all`, `--fields`, `--env` |
 | `barca sql "<query>" [files...]` | Query cached results with DuckDB (experimental). `--json`, `--pretty`, `--limit N`, `--all`, `--env` |
-| `barca plan [files...]` | The execution plan as JSON (experimental). No flags. |
+| `barca plan [files...]` | The execution plan as JSON (experimental), using the execution pool size. No flags. |
 | `barca history` | Recent runs. `--limit N` (default 10), `--all`, `--json`, `--pretty`, `--fields`, `--env` |
 | `barca stats <target> [files...]` | Timing and cache statistics for one asset. `--json`, `--pretty`, `--fields`, `--env` |
 | `barca serve [files...]` | HTTP API, cron scheduler and web UI. `--port N`, `--host IP`, `--watch`, `--no-schedule`, `--timezone`, `--read-only`, `--env` |
