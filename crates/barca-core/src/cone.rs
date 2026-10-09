@@ -545,6 +545,7 @@ fn collect_definitions(source: &str, package: Option<&str>) -> HashMap<String, M
     };
     visitor::walk_body(&mut static_imports, &parsed.syntax().body);
     let conditional_module = OnceCell::new();
+    let mut conditional_names = HashSet::new();
 
     for stmt in &parsed.syntax().body {
         match stmt {
@@ -628,11 +629,23 @@ fn collect_definitions(source: &str, package: Option<&str>) -> HashMap<String, M
                         }
                     });
                     for name in names.keys().filter(|name| name.as_str() != "*") {
+                        conditional_names.insert(name.clone());
                         defs.insert(name.clone(), ModuleDef::Assignment(conservative.clone()));
                     }
                 }
             }
             _ => {}
+        }
+    }
+    // A later assignment can consume the previous conditional value (`f = wrap(f)`).
+    // Its final binding alone cannot describe that provenance: following `f` again would
+    // just encounter the same assignment. Retain the conservative module/import cone.
+    for name in conditional_names {
+        if let Some(ModuleDef::Assignment(code)) = defs.get_mut(&name) {
+            *code = conditional_module
+                .get()
+                .expect("a conditional binding was collected")
+                .clone();
         }
     }
     // Unproven node bindings may have changed in defaults, conditionals or global writes.

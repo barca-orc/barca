@@ -111,3 +111,51 @@ def test_missing_primary_helper_then_available_changes_cached_fallback(tmp_path)
     assert changed["final_output"] == 11
     assert changed["steps_executed"] == 1
     assert changed["steps"][0]["run_hash"] != first["steps"][0]["run_hash"]
+
+
+@pytest.mark.parametrize("assignment", ["value = wrap(value)", "value: object = wrap(value)"])
+def test_later_rebinding_keeps_conditional_helper_provenance(tmp_path, assignment):
+    (tmp_path / "barca.toml").write_text("")
+    (tmp_path / "helpers.py").write_text("def value(): return 11\n")
+    (tmp_path / "p.py").write_text(
+        "from barca import asset\nfrom pathlib import Path\nPath('imported').touch()\n"
+        "try:\n    from helpers import value\nexcept ImportError:\n"
+        "    def value(): return -1\n"
+        "def wrap(fn): return lambda: fn() + 1\n"
+        f"{assignment}\n@asset()\ndef result(): return value()\n"
+    )
+    invoke(tmp_path, "plan", "p.py")
+    assert not (tmp_path / "imported").exists()
+    assert not (tmp_path / ".barca").exists()
+    first = invoke(tmp_path, "get", "result", "p.py")
+    assert first["final_output"] == 12
+    assert invoke(tmp_path, "get", "result", "p.py")["steps_executed"] == 0
+    (tmp_path / "helpers.py").write_text("def value(): return 22\n")
+    changed = invoke(tmp_path, "get", "result", "p.py")
+    assert (changed["steps_executed"], changed["final_output"]) == (1, 23)
+    assert changed["steps"][0]["run_hash"] != first["steps"][0]["run_hash"]
+    assert invoke(tmp_path, "get", "result", "p.py")["steps_executed"] == 0
+
+
+def test_conditional_nested_function_import_does_not_rebind_module_name(tmp_path):
+    (tmp_path / "barca.toml").write_text("")
+    (tmp_path / "helpers.py").write_text("def value(): return 11\n")
+    (tmp_path / "other.py").write_text("def value(): return 100\n")
+    (tmp_path / "p.py").write_text(
+        "from barca import asset\nfrom pathlib import Path\nPath('imported').touch()\n"
+        "from other import value\nif True:\n    def unrelated():\n"
+        "        from helpers import value\n        return value()\n"
+        "@asset()\ndef result(): return value()\n"
+    )
+    invoke(tmp_path, "plan", "p.py")
+    assert not (tmp_path / "imported").exists()
+    assert not (tmp_path / ".barca").exists()
+    first = invoke(tmp_path, "get", "result", "p.py")
+    assert first["final_output"] == 100
+    (tmp_path / "helpers.py").write_text("def value(): return 22\n")
+    cached = invoke(tmp_path, "get", "result", "p.py")
+    assert (cached["steps_executed"], cached["final_output"]) == (0, 100)
+    assert cached["steps"][0]["run_hash"] == first["steps"][0]["run_hash"]
+    (tmp_path / "other.py").write_text("def value(): return 200\n")
+    changed = invoke(tmp_path, "get", "result", "p.py")
+    assert (changed["steps_executed"], changed["final_output"]) == (1, 200)

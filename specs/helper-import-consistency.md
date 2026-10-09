@@ -40,7 +40,10 @@ workers. Promote these reproductions into permanent regressions with each fix.
    plus unrelated unconditional helpers remaining cached. This bounded slice
    needs no worker lifetime or public API change. Whole-module fallback preserves
    earlier bindings when a branch is inactive and fallback definitions when an
-   import fails, without adding a new public binding variant. Coordinate the existing Barca
+   import fails, without adding a new public binding variant. Preserve that
+   provenance through later assignments consuming the previous conditional value,
+   such as `value = wrap(value)`, instead of resolving a self-reference only
+   against its final assignment. Coordinate the existing Barca
    recognition rules with P07 rather than duplicating them.
 2. **Deterministic import policy, decision before implementation.** A universal
    `sys.modules` reset/reload is ruled out: it loses supported import-time setup,
@@ -92,14 +95,19 @@ no project-wide helper crawl or additional Python process is introduced.
 ## First-slice evidence
 
 The conditional-binding slice passes 782 Rust workspace tests and workspace Clippy
-with warnings denied; 141 Python CLI/helper/import/DuckDB/manual/contract tests;
-Ruff and cargo fmt; and the 51-page site build. Twelve new CLI cases run at pool
+with warnings denied; 147 Python CLI/helper/import/DuckDB/manual/contract tests;
+Ruff and cargo fmt; and the 51-page site build. Eighteen new CLI cases run at pool
 sizes one and two, including a missing primary helper appearing after a cached
 fallback. Conditional helper edits change actual run hashes, inactive branches
 invalidate conservatively, unrelated assets remain cached and planning produces
 no module-import marker or metadata directory. Existing historical hash tests and
 accepted shared DuckDB setup/input-cleanup tests pass. The former limitation test
 for a function defined inside a module-level `if` is now a positive tracking test.
+Plain and annotated later rebindings return twelve cold and twenty-three after
+editing the helper, with distinct run hashes and warm cache reuse. Imports inside
+an unrelated conditional nested function retain their own scope and do not
+invalidate an asset using the different module-level binding. Both checks prove
+ordinary static planning leaves the user import marker and metadata absent.
 
 Build/install uses this worktree's target and editable wheel with the test extra in
 `/tmp/barca-p08-venv`. Conditional fallback source/reference collection is initialized

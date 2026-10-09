@@ -207,7 +207,8 @@ a package, recompute with `--refresh-all` or `--refresh` (below).
 Names bound inside a module-level `if` or `try` are followed conservatively. Barca does not
 execute the condition to choose an import or fallback definition: a step reading such a name
 hashes the module's source and follows its statically visible imports and references. Editing
-an inactive branch's project helper can therefore re-run the step too. Ordinary definitions
+an inactive branch's project helper can therefore re-run the step too. Later assignments such
+as `value = wrap(value)` retain this conditional provenance. Ordinary definitions
 that do not use these uncertain bindings keep their selective dependency cones.
 
 #### Not followed
