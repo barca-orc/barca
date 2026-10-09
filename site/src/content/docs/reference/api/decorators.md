@@ -550,6 +550,13 @@ seconds field. There is no year field. See [Scheduling](/scheduling/) for what a
 | `BarcaError` | Raised by those functions; carries `kind`, `code`, `remediation`, and for a failed step `node`, `traceback`, `artifact_dir`. |
 | `Client`, `Run` | HTTP client for `barca serve`. See [Server API](/reference/server-api/#python-client). |
 
+DuckDB steps share one default connection per worker process and execute sequentially.
+Import-time setup remains available to later steps. User-created objects and session settings
+persist, including after failures; Barca cleans up its bound input views after materialization.
+Avoid project catalog names that collide with input parameters: existing tables are skipped
+during binding, and existing views can be replaced and then dropped. For naming and cleanup
+patterns, see [Anti-Patterns](/patterns/07-anti-patterns/#fixed-names-on-duckdbs-shared-connection).
+
 Explicit references to `globals`, `locals`, `vars`, `exec`, `eval` or `__builtins__`
 make imported barca names uncertain, including imported aliases and qualified or shadowed
 references. Argument validation then follows Python at runtime, and nodes with an uncertain
