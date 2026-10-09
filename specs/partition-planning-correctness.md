@@ -58,3 +58,13 @@ match across pools. Ordinary, forced and missing-artifact previews select the sa
 first twenty lexical keys. Static and evaluated mixed dimensions fail with exit
 two before module side effects or metadata directories for plan, get and run.
 Complete-upstream enforcement is still pending in the second slice.
+
+## CI backend follow-up
+
+The first backend run failed three legacy example/derived-partition tests that
+assumed a three-key plan always contains three physical steps. With the planning
+pool fix, a two-worker runner correctly emits two chunks while executing every
+key. Those tests now exercise explicit pools one, two and three, asserting chunk
+counts and retaining full result/materialization checks. All 55 affected manual,
+derived-partition and planning-contract CLI cases pass. This changes test
+expectations only; complete-upstream enforcement remains the pending second slice.

@@ -171,11 +171,14 @@ def test_example_duckdb_dag(binary, topics, tmp_path):
     assert ptr["final_output"]["_barca_artifact"]["format"] == "parquet"
 
 
-def test_example_partitions(binary, topics, tmp_path):
+@pytest.mark.parametrize("pool", [1, 2, 3])
+def test_example_partitions(binary, topics, tmp_path, monkeypatch, pool):
+    monkeypatch.setenv("BARCA_POOL_SIZE", str(pool))
     write_example(topics, "examples/partitions", tmp_path)
     plan = result(barca(binary, tmp_path, "plan", "pipeline.py"))
     steps = [s for p in plan["phases"] for st in p["streams"] for s in st["steps"]]
-    assert steps.count("pipeline.py:sales") == 3
+    # A physical plan step holds a chunk of keys; execution still covers all three.
+    assert steps.count("pipeline.py:sales") == pool
     first = result(barca(binary, tmp_path, "get", "summary", "pipeline.py"))
     assert first["steps_executed"] == 4
     assert first["final_output"] == {"regions": 3, "total": 1200}
@@ -214,14 +217,17 @@ def partition_keys_run(run: dict) -> dict:
     }
 
 
-def test_partitions_topic_example(binary, topics, tmp_path):
+@pytest.mark.parametrize("pool", [1, 2, 3])
+def test_partitions_topic_example(binary, topics, tmp_path, monkeypatch, pool):
     """The partitions topic's main example, as written (#189): `partitions_from(sales)` gives
     `margin` the keys of `sales`, and each key receives the key and that key's `sales` output."""
+    monkeypatch.setenv("BARCA_POOL_SIZE", str(pool))
     write_example(topics, "partitions", tmp_path)
     plan = result(barca(binary, tmp_path, "plan", "pipeline.py"))
     steps = [s for p in plan["phases"] for st in p["streams"] for s in st["steps"]]
-    assert steps.count("pipeline.py:sales") == 3
-    assert steps.count("pipeline.py:margin") == 3
+    # Chains are divided into worker-sized chunks, independently of key coverage.
+    assert steps.count("pipeline.py:sales") == pool
+    assert steps.count("pipeline.py:margin") == pool
     assert steps.count("pipeline.py:summary") == 1
 
     margin = result(barca(binary, tmp_path, "get", "margin", "pipeline.py"))

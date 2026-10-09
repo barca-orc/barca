@@ -150,13 +150,19 @@ def test_static_upstream(project):
     assert res["steps_executed"] == 7  # three sales keys, three margin keys, the fan-in
 
 
-def test_plan_lists_one_step_per_upstream_key(project):
+@pytest.mark.parametrize("pool", [1, 2, 3])
+def test_plan_chunks_upstream_keys_by_worker_pool(project, monkeypatch, pool):
+    monkeypatch.setenv("BARCA_POOL_SIZE", str(pool))
     proc = run(project, "plan", "p.py")
     assert proc.returncode == 0, proc.stderr
     plan = json.loads(proc.stdout)
     steps = [s for p in plan["phases"] for st in p["streams"] for s in st["steps"]]
-    assert steps.count("p.py:margin") == 3
-    assert steps.count("p.py:margin_pct") == 3
+    assert steps.count("p.py:margin") == pool
+    assert steps.count("p.py:margin_pct") == pool
+    # Fewer physical work units must not hide keys from materialization.
+    materialized = get(project, "all_margin")
+    assert materialized["final_output"] == [["amer", 80.0], ["apac", 80.0], ["emea", 80.0]]
+    assert materialized["steps_executed"] == 7
 
 
 def test_chained_partitions_from(project):
