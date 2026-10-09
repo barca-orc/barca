@@ -1921,24 +1921,32 @@ mod tests {
     fn shutdown_terminates_all_workers_in_one_shared_grace_window() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let n = 4;
-            let socket_path = std::env::temp_dir().join(format!(
-                "barca_test_shutdown_{}_{}.sock",
-                std::process::id(),
-                n
-            ));
+            let n = 16;
+            let resources = tempfile::tempdir().unwrap();
+            let socket_path = resources.path().join("worker.sock");
+            let branch_root = resources.path().join("branches");
+            std::fs::create_dir(&branch_root).unwrap();
+            std::fs::write(branch_root.join("owned-result"), "result").unwrap();
             let _ = std::fs::remove_file(&socket_path);
             let listener = UnixListener::bind(&socket_path).unwrap();
             let (event_tx, event_rx) = mpsc::channel(8);
 
             let mut workers = HashMap::new();
             let mut pids = Vec::new();
+            let mut readiness = Vec::new();
             for i in 0..n {
                 // `exec`: the process that ignores SIGTERM is the child itself. Without it
                 // the shell forks `sleep`, and killing the shell leaves the `sleep` running
                 // for its 30 seconds with every descriptor it inherited.
                 let mut cmd = Command::new("sh");
-                cmd.args(["-c", "trap '' TERM; exec sleep 30"]);
+                let ready = resources.path().join(format!("worker-{i}.ready"));
+                cmd.args([
+                    "-c",
+                    "trap '' TERM; : > \"$1\"; exec sleep 30",
+                    "barca-shutdown",
+                ])
+                .arg(&ready);
+                readiness.push(ready);
                 let child = crate::helper_proc::spawn_std(&mut cmd).unwrap();
                 pids.push(child.id());
                 let (cmd_tx, _cmd_rx) = mpsc::channel(1);
@@ -1954,18 +1962,32 @@ mod tests {
                 );
             }
 
-            // Let every shell finish installing its `trap '' TERM` before we
-            // start signaling — without this, a SIGTERM landing mid-startup
-            // (default disposition, trap not yet installed) can kill the
-            // process instantly and silently turn this into a no-op test.
-            std::thread::sleep(Duration::from_millis(100));
-            for &pid in &pids {
-                let alive = unsafe { libc::kill(pid as i32, 0) } == 0;
-                assert!(
-                    alive,
-                    "worker pid {pid} died before shutdown() was even called"
-                );
+            // The shell acknowledges readiness only after installing its ignore
+            // disposition. exec keeps its PID/disposition; startup is not timed.
+            let ready_deadline = std::time::Instant::now() + Duration::from_secs(10);
+            let ready = loop {
+                if std::time::Instant::now() >= ready_deadline
+                    || workers
+                        .values_mut()
+                        .any(|worker| !matches!(worker.child.try_wait(), Ok(None)))
+                {
+                    break false;
+                }
+                if readiness.iter().all(|marker| marker.exists()) {
+                    break true;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            };
+            if !ready {
+                for worker in workers.values_mut() {
+                    worker.child.kill().ok();
+                    worker.child.wait().ok();
+                }
             }
+            assert!(
+                ready,
+                "workers did not acknowledge SIGTERM-ignore readiness"
+            );
 
             let pool = WorkerPool {
                 config: IoConfig {
@@ -1988,7 +2010,7 @@ mod tests {
                 progress_interval: Duration::ZERO,
                 running_hook: None,
                 repeated_warnings: Vec::new(),
-                branch_root: std::env::temp_dir().join("barca_test_shutdown_branches"),
+                branch_root: branch_root.clone(),
                 next_branch_group: 0,
                 branch_dirs: HashMap::new(),
             };
@@ -1997,19 +2019,17 @@ mod tests {
             pool.shutdown().await;
             let elapsed = start.elapsed();
 
-            // Old code: n * 200ms sequential sleeps (~800ms for 4 workers
-            // that never die on their own). New code: one shared ~200ms
-            // grace window regardless of worker count, plus SIGKILL
-            // overhead. Lower bound guards against the exact race this test
-            // is designed to catch: if a worker died before its trap took
-            // effect, shutdown would return almost instantly without ever
-            // exercising the shared-grace-window path at all.
+            // Sixteen ready workers make a sequential grace loop take 3.2s.
+            // One quarter of that allows loaded two-CPU scheduling while still
+            // rejecting per-worker waits. The lower bound proves ignore/fallback.
+            let sequential = Duration::from_millis(n as u64 * 200);
             assert!(
-                elapsed >= Duration::from_millis(150) && elapsed < Duration::from_millis(500),
-                "shutdown of {n} SIGTERM-ignoring workers took {elapsed:?} — expected one \
-                 shared ~200ms grace window, not ~0 (race) or ~{}ms (one window per worker)",
-                n * 200
+                elapsed >= Duration::from_millis(150) && elapsed < sequential / 4,
+                "shutdown of {n} ready SIGTERM-ignoring workers took {elapsed:?} — expected one \
+                 shared ~200ms grace window, not ~0 (race) or {sequential:?} (one per worker)"
             );
+            assert!(!socket_path.exists(), "owned worker socket remains");
+            assert!(!branch_root.exists(), "owned branch results remain");
 
             for pid in pids {
                 // kill(pid, 0) sends no signal, just checks liveness/permission;

@@ -44,3 +44,24 @@ constrained shutdown repetitions and meaningful restoration of the sequential
 implementation proving the regression still fails. Run transfer process tests,
 relevant Rust tests and required formatting/lint/workspace checks. Preserve
 clean import and SQL membership branches. No merge/release from this task.
+
+## Recorded evidence
+
+Actual CPython 3.12.0 failed the unchanged lifeline-mid-download test at
+`subprocess.communicate()` flushing the closed stdin reference. The corrected
+fixture passes all 69 transfer tests on both 3.12.0 and 3.13.16. A separate
+communication-timeout regression proves finalization kills and reaps the actual
+helper and closes its streams, socket and temporary socket directory; restoring
+the prior finalizer makes this regression fail.
+
+The final shutdown regression passed 100 repetitions pinned to two CPUs with
+two competing CPU processes. Whole-test wall time was 0.240–0.278 seconds, and
+each repetition checked every child was reaped and owned resources removed.
+Temporarily restoring sequential per-worker grace periods makes the same test
+fail at 3.209 seconds, proving the 800ms bound still detects the original defect.
+Readiness validates live children after their ignore handler is installed.
+
+The full Rust workspace passed 800 tests, and strict workspace/all-target Clippy
+passed. Cargo formatting, pinned Ruff 0.11.13 checks and formatting, lockfile,
+version consistency and diff whitespace checks passed. No production code,
+public contract, inherited SIGINT case or state-helper timeout changed.
