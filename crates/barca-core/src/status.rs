@@ -33,7 +33,7 @@ pub struct StatusResult {
 pub struct NodeStatus {
     /// Node id, e.g. `pipeline.py:clean`.
     pub id: String,
-    /// The function name (what `get`, `run` and `--refresh` accept).
+    /// The declared name, or function name when no explicit name is set.
     pub name: String,
     /// `asset`, `task` or `sensor`.
     #[cfg_attr(feature = "ts", ts(type = "\"asset\" | \"task\" | \"sensor\""))]
@@ -223,7 +223,12 @@ pub async fn status_from_dag(
         });
         nodes.push(NodeStatus {
             id: id.to_string(),
-            name: node.function_name().to_string(),
+            name: node
+                .extracted
+                .explicit_name
+                .as_deref()
+                .unwrap_or(node.function_name())
+                .to_string(),
             kind: serde_json::to_value(node.kind())
                 .ok()
                 .and_then(|v| v.as_str().map(String::from))

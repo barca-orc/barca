@@ -15,7 +15,8 @@ barca sql "select o.region, count(*) from orders o join revenue r using (region)
 
 ## Views
 
-Every node with a result on disk is a view named after its function:
+Every node with a result on disk is a view named after its declared `name=`, or its
+function when no explicit name is set:
 
 - an asset or sensor at its cached result. If its code or inputs changed since it ran, the view
   still shows its last result, and stderr says it is stale and how to refresh it;
@@ -23,7 +24,7 @@ Every node with a result on disk is a view named after its function:
 - a partitioned asset as one view over every key's latest result, with a `partition` column
   (`week=w1`).
 
-When two nodes share a function name, both views are named by their full id instead, which you
+When two nodes share a name, both views are named by their full id instead, which you
 quote in SQL (`select * from "pipelines/a.py:orders"`); stderr lists them. Pass files or
 directories after the query to limit the views to those files
 (`barca sql "select * from orders" pipeline.py`).

@@ -189,3 +189,7 @@ in its `partition` field (for example `k=a`), and `shape` describes that one key
 
 Keys inside a `sample` row are printed in alphabetical order; `columns` keeps the file's column
 order. `--env <name>` reads another environment's state (`barca docs cache`).
+
+An explicit `@asset(name="orders_clean")` uses `orders_clean` in status and as its SQL
+view name, matching `list`, `get` and `stats`. Inspection reads the existing artifact
+without importing or rerunning its producer.

@@ -504,7 +504,8 @@ is a usage error (exit 2). See `barca docs status`.
 ## sql
 
 Query cached results with DuckDB. Every asset, sensor and task with a result on disk is a view
-named after its function; a partitioned asset is one view with a `partition` column. No step
+named after its declared `name=`, or its function when unset; a partitioned asset is one
+view with a `partition` column. No step
 runs, your code is not imported, and no run is recorded. Only parquet and json results are
 views; a pickled result cannot be queried. Install SQL support with `uv add 'barca[sql]'`. With a remote store it first pulls the shared history into `.barca/`, and the
 artifacts of the views a query names are downloaded into `.barca/sql-cache/` and reused.
