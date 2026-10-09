@@ -797,6 +797,14 @@ pub async fn wrong_method(method: axum::http::Method, uri: axum::http::Uri) -> R
         .into_response()
 }
 
+/// Organizational metadata; never part of the execution graph.
+pub async fn groups(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<barca_core::groups::NodeGroup>>, ApiError> {
+    let dag = state.loaded_dag().await?;
+    Ok(Json(dag.groups.clone()))
+}
+
 #[cfg(test)]
 mod duration_tests {
     use super::*;
@@ -889,12 +897,4 @@ mod duration_tests {
         assert_eq!(d["p.py:f"].samples, 2, "partitions fold into the base node");
         assert!(!d.contains_key("p.py:missing"));
     }
-}
-
-/// Organizational metadata; never part of the execution graph.
-pub async fn groups(
-    State(state): State<AppState>,
-) -> Result<Json<Vec<barca_core::groups::NodeGroup>>, ApiError> {
-    let dag = state.loaded_dag().await?;
-    Ok(Json(dag.groups.clone()))
 }
