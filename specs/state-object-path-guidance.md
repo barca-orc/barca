@@ -34,3 +34,9 @@ All 12 focused state-sync admission/lifetime/privacy tests and 85 actual Python
 state helper/pull/path/validation checks passed without skips. Private native
 build, strict workspace/all-target Clippy, Rust formatting, pinned Ruff and
 whitespace checks passed. No minute timer, token or publication behavior changed.
+
+After declared-name PR373 merged, clean rebase onto f4c4ab6 preserved all reviewed
+commits exactly. The same 12 Rust state-sync tests and 87 actual Python checks
+(state/pull/path/validation plus named inspection) passed without skips on a fresh
+private binary. Strict workspace/all-target Clippy, fmt, pinned Ruff and whitespace
+checks passed. URI sanitization and minute publication mechanics remain intact.
