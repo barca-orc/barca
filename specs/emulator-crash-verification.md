@@ -134,3 +134,7 @@ CI executes the nine new cases and the inventory is accepted as its completion
 evidence. This patch leaves the existing optional benchmark threshold unchanged;
 an automatic CI performance gate and real-cloud-provider acceptance remain
 separate from the canonical real-process-interruption scope.
+
+After rebase onto alias merge a12a281, the dedicated binary was rebuilt and all
+41 distinct checks passed again: the nine emulator kill cases plus shim regression
+in 42 seconds, and the 31 existing focused checks in 14 seconds. No backend skips.
