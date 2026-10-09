@@ -198,3 +198,22 @@ and public API consumption with one consumer execution, normal class identity,
 unchanged bytes and setup once per PID. Legacy recovery restores the caller's
 prior path after producer setup; the threaded consumer can then import its
 unambiguous sibling helper. No global lock spans user imports/setup.
+
+### Current-main integration and earlier helper regressions
+
+Rebased cleanly onto main `e110f80` after the complete-upstream prerequisite
+merged. The expanded existing helper suite exposed two assertions explicitly
+requiring the removed worker-directory history fallback. Those tests now prove
+an off-path bare pipeline import is refused before metadata, its qualified
+replacement works and hashes the actual source, and a consumer's root helper
+is independent of its upstream's previously loaded directory. Both revised
+regressions fail the old installed CLI and pass the corrected CLI. All 33
+helper-tracking cases pass; unrelated helper and input cones stay selective.
+
+The current-base full Rust workspace passed 812 tests and strict all-target
+Clippy. Both real old-CLI artifact proofs passed again, including nested class
+worker/public-API recovery with unchanged artifact SHA and setup once per PID.
+
+The rebuilt current-base package also passed all 337 combined actual
+import/artifact/worker/API/bytecode/parallel/input/helper/DuckDB tests, including
+all 44 focused import cases and the repaired historical-workflow regressions.
