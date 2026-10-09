@@ -36,7 +36,7 @@ UPDATE_HINT = (
 
 PIPELINE = """
 import pandas as pd
-from barca import asset, collect, partitions, task
+from barca import asset, collect, partitions, task, group
 
 
 @asset()
@@ -74,6 +74,10 @@ def report(t: dict, rows: list) -> dict:
 @task(inputs={"t": total})
 def broken(t: dict) -> None:
     raise ValueError("contract fixture failure")
+
+preparation = group("Preparation", members=[numbers], output=numbers)
+training = group("Training", members=[preparation, total, report], output=total)
+
 """
 
 # (case, argv, which stream holds the JSON, expected exit code). Run in this order on one
@@ -81,6 +85,7 @@ def broken(t: dict) -> None:
 CASES: list[tuple[str, list[str], str, int]] = [
     ("plan", ["plan", "pipeline.py"], "stdout", 0),
     ("list", ["list", "pipeline.py", "--json"], "stdout", 0),
+    ("list_groups", ["list", "pipeline.py", "--groups", "--json"], "stdout", 0),
     ("list_truncated", ["list", "pipeline.py", "--json", "--limit", "1"], "stdout", 0),
     ("get_dry_run", ["get", "total", "pipeline.py", "--dry-run", "--json"], "stdout", 0),
     ("get", ["get", "total", "pipeline.py", "--json"], "stdout", 0),

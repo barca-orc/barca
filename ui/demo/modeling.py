@@ -14,7 +14,7 @@ import math
 import random
 import statistics
 
-from barca import asset, task
+from barca import asset, group, task
 
 
 def _generate(spec: dict) -> list[dict]:
@@ -1214,3 +1214,431 @@ def validate__release__model_card(value):
     assert value["training_rows"] == 240 and value["test_rows"] == 60
     assert value["cross_validation"]["folds"] == 5 and value["test_accuracy"] >= 0.5
     return _passed("release__model_card")
+
+
+# Organizational hierarchy: never changes dependencies or cache keys.
+source = group(
+    'Source data',
+    members=[
+        data__source_spec,
+        validate__data__source_spec,
+        data__raw_rows,
+        validate__data__raw_rows,
+        data__schema_profile,
+        validate__data__schema_profile,
+        data__clean_rows,
+        validate__data__clean_rows,
+        data__feature_contract,
+        validate__data__feature_contract,
+    ],
+    output=data__clean_rows,
+    description='Generate, profile and clean the synthetic source rows.',
+)
+
+split = group(
+    'Train / test split',
+    members=[
+        data__split_manifest,
+        validate__data__split_manifest,
+        data__train_rows,
+        validate__data__train_rows,
+        data__test_rows,
+        validate__data__test_rows,
+        data__training_labels,
+        validate__data__training_labels,
+        data__test_labels,
+        validate__data__test_labels,
+        data__fold_assignments,
+        validate__data__fold_assignments,
+    ],
+    output=data__train_rows,
+    description='Hold out the test set and assign training rows to five folds.',
+)
+
+preparation = group(
+    'Training preparation',
+    members=[
+        data__training_profile,
+        validate__data__training_profile,
+        data__imputation_values,
+        validate__data__imputation_values,
+        data__training_configuration,
+        validate__data__training_configuration,
+    ],
+    output=data__imputation_values,
+    description='Profile training data and prepare the final training configuration.',
+)
+
+training_data = group(
+    'Training data',
+    members=[
+        source,
+        split,
+        preparation,
+    ],
+    output=split,
+    description='Shared preparation and checks. Its primary output is the training rows; the test split remains available to downstream evaluation.',
+)
+
+fold_01__preprocessing = group(
+    'Preprocessing',
+    members=[
+        cv__fold_01__train_rows,
+        validate__cv__fold_01__train_rows,
+        cv__fold_01__validation_rows,
+        validate__cv__fold_01__validation_rows,
+        cv__fold_01__scaler,
+        validate__cv__fold_01__scaler,
+        cv__fold_01__train_features,
+        validate__cv__fold_01__train_features,
+        cv__fold_01__validation_features,
+        validate__cv__fold_01__validation_features,
+    ],
+    output=cv__fold_01__train_features,
+    description='Split this fold, fit preprocessing on its training rows, then transform both partitions.',
+)
+
+fold_01__fitting = group(
+    'Model fitting',
+    members=[
+        cv__fold_01__initial_weights,
+        validate__cv__fold_01__initial_weights,
+        cv__fold_01__fitted_weights,
+        validate__cv__fold_01__fitted_weights,
+        cv__fold_01__trained_model,
+        validate__cv__fold_01__trained_model,
+    ],
+    output=cv__fold_01__trained_model,
+    description='Initialize, fit and package the fold model. Every asset has a validation task.',
+)
+
+fold_01__evaluation = group(
+    'Evaluation',
+    members=[
+        cv__fold_01__predictions,
+        validate__cv__fold_01__predictions,
+        cv__fold_01__metrics,
+        validate__cv__fold_01__metrics,
+    ],
+    output=cv__fold_01__metrics,
+    description='Predict on this fold’s validation partition and compute metrics.',
+)
+
+fold_01 = group(
+    'Fold 1',
+    members=[
+        fold_01__preprocessing,
+        fold_01__fitting,
+        fold_01__evaluation,
+    ],
+    output=fold_01__evaluation,
+    description='One cross-validation fold, including all preprocessing, fitting, evaluation and validation tasks.',
+)
+
+fold_02__preprocessing = group(
+    'Preprocessing',
+    members=[
+        cv__fold_02__train_rows,
+        validate__cv__fold_02__train_rows,
+        cv__fold_02__validation_rows,
+        validate__cv__fold_02__validation_rows,
+        cv__fold_02__scaler,
+        validate__cv__fold_02__scaler,
+        cv__fold_02__train_features,
+        validate__cv__fold_02__train_features,
+        cv__fold_02__validation_features,
+        validate__cv__fold_02__validation_features,
+    ],
+    output=cv__fold_02__train_features,
+    description='Split this fold, fit preprocessing on its training rows, then transform both partitions.',
+)
+
+fold_02__fitting = group(
+    'Model fitting',
+    members=[
+        cv__fold_02__initial_weights,
+        validate__cv__fold_02__initial_weights,
+        cv__fold_02__fitted_weights,
+        validate__cv__fold_02__fitted_weights,
+        cv__fold_02__trained_model,
+        validate__cv__fold_02__trained_model,
+    ],
+    output=cv__fold_02__trained_model,
+    description='Initialize, fit and package the fold model. Every asset has a validation task.',
+)
+
+fold_02__evaluation = group(
+    'Evaluation',
+    members=[
+        cv__fold_02__predictions,
+        validate__cv__fold_02__predictions,
+        cv__fold_02__metrics,
+        validate__cv__fold_02__metrics,
+    ],
+    output=cv__fold_02__metrics,
+    description='Predict on this fold’s validation partition and compute metrics.',
+)
+
+fold_02 = group(
+    'Fold 2',
+    members=[
+        fold_02__preprocessing,
+        fold_02__fitting,
+        fold_02__evaluation,
+    ],
+    output=fold_02__evaluation,
+    description='One cross-validation fold, including all preprocessing, fitting, evaluation and validation tasks.',
+)
+
+fold_03__preprocessing = group(
+    'Preprocessing',
+    members=[
+        cv__fold_03__train_rows,
+        validate__cv__fold_03__train_rows,
+        cv__fold_03__validation_rows,
+        validate__cv__fold_03__validation_rows,
+        cv__fold_03__scaler,
+        validate__cv__fold_03__scaler,
+        cv__fold_03__train_features,
+        validate__cv__fold_03__train_features,
+        cv__fold_03__validation_features,
+        validate__cv__fold_03__validation_features,
+    ],
+    output=cv__fold_03__train_features,
+    description='Split this fold, fit preprocessing on its training rows, then transform both partitions.',
+)
+
+fold_03__fitting = group(
+    'Model fitting',
+    members=[
+        cv__fold_03__initial_weights,
+        validate__cv__fold_03__initial_weights,
+        cv__fold_03__fitted_weights,
+        validate__cv__fold_03__fitted_weights,
+        cv__fold_03__trained_model,
+        validate__cv__fold_03__trained_model,
+    ],
+    output=cv__fold_03__trained_model,
+    description='Initialize, fit and package the fold model. Every asset has a validation task.',
+)
+
+fold_03__evaluation = group(
+    'Evaluation',
+    members=[
+        cv__fold_03__predictions,
+        validate__cv__fold_03__predictions,
+        cv__fold_03__metrics,
+        validate__cv__fold_03__metrics,
+    ],
+    output=cv__fold_03__metrics,
+    description='Predict on this fold’s validation partition and compute metrics.',
+)
+
+fold_03 = group(
+    'Fold 3',
+    members=[
+        fold_03__preprocessing,
+        fold_03__fitting,
+        fold_03__evaluation,
+    ],
+    output=fold_03__evaluation,
+    description='One cross-validation fold, including all preprocessing, fitting, evaluation and validation tasks.',
+)
+
+fold_04__preprocessing = group(
+    'Preprocessing',
+    members=[
+        cv__fold_04__train_rows,
+        validate__cv__fold_04__train_rows,
+        cv__fold_04__validation_rows,
+        validate__cv__fold_04__validation_rows,
+        cv__fold_04__scaler,
+        validate__cv__fold_04__scaler,
+        cv__fold_04__train_features,
+        validate__cv__fold_04__train_features,
+        cv__fold_04__validation_features,
+        validate__cv__fold_04__validation_features,
+    ],
+    output=cv__fold_04__train_features,
+    description='Split this fold, fit preprocessing on its training rows, then transform both partitions.',
+)
+
+fold_04__fitting = group(
+    'Model fitting',
+    members=[
+        cv__fold_04__initial_weights,
+        validate__cv__fold_04__initial_weights,
+        cv__fold_04__fitted_weights,
+        validate__cv__fold_04__fitted_weights,
+        cv__fold_04__trained_model,
+        validate__cv__fold_04__trained_model,
+    ],
+    output=cv__fold_04__trained_model,
+    description='Initialize, fit and package the fold model. Every asset has a validation task.',
+)
+
+fold_04__evaluation = group(
+    'Evaluation',
+    members=[
+        cv__fold_04__predictions,
+        validate__cv__fold_04__predictions,
+        cv__fold_04__metrics,
+        validate__cv__fold_04__metrics,
+    ],
+    output=cv__fold_04__metrics,
+    description='Predict on this fold’s validation partition and compute metrics.',
+)
+
+fold_04 = group(
+    'Fold 4',
+    members=[
+        fold_04__preprocessing,
+        fold_04__fitting,
+        fold_04__evaluation,
+    ],
+    output=fold_04__evaluation,
+    description='One cross-validation fold, including all preprocessing, fitting, evaluation and validation tasks.',
+)
+
+fold_05__preprocessing = group(
+    'Preprocessing',
+    members=[
+        cv__fold_05__train_rows,
+        validate__cv__fold_05__train_rows,
+        cv__fold_05__validation_rows,
+        validate__cv__fold_05__validation_rows,
+        cv__fold_05__scaler,
+        validate__cv__fold_05__scaler,
+        cv__fold_05__train_features,
+        validate__cv__fold_05__train_features,
+        cv__fold_05__validation_features,
+        validate__cv__fold_05__validation_features,
+    ],
+    output=cv__fold_05__train_features,
+    description='Split this fold, fit preprocessing on its training rows, then transform both partitions.',
+)
+
+fold_05__fitting = group(
+    'Model fitting',
+    members=[
+        cv__fold_05__initial_weights,
+        validate__cv__fold_05__initial_weights,
+        cv__fold_05__fitted_weights,
+        validate__cv__fold_05__fitted_weights,
+        cv__fold_05__trained_model,
+        validate__cv__fold_05__trained_model,
+    ],
+    output=cv__fold_05__trained_model,
+    description='Initialize, fit and package the fold model. Every asset has a validation task.',
+)
+
+fold_05__evaluation = group(
+    'Evaluation',
+    members=[
+        cv__fold_05__predictions,
+        validate__cv__fold_05__predictions,
+        cv__fold_05__metrics,
+        validate__cv__fold_05__metrics,
+    ],
+    output=cv__fold_05__metrics,
+    description='Predict on this fold’s validation partition and compute metrics.',
+)
+
+fold_05 = group(
+    'Fold 5',
+    members=[
+        fold_05__preprocessing,
+        fold_05__fitting,
+        fold_05__evaluation,
+    ],
+    output=fold_05__evaluation,
+    description='One cross-validation fold, including all preprocessing, fitting, evaluation and validation tasks.',
+)
+
+cv_summary = group(
+    'Fold summary',
+    members=[
+        cv__summary__fold_metrics,
+        validate__cv__summary__fold_metrics,
+        cv__summary__report,
+        validate__cv__summary__report,
+    ],
+    output=cv__summary__report,
+    description='Aggregate all five folds into the cross-validation report.',
+)
+
+cross_validation = group(
+    'Cross-validation',
+    members=[
+        fold_01,
+        fold_02,
+        fold_03,
+        fold_04,
+        fold_05,
+        cv_summary,
+    ],
+    output=cv_summary,
+    description='Five independently cached folds. Any failed check makes this entire group unhealthy.',
+)
+
+final_preparation = group(
+    'Final preprocessing',
+    members=[
+        train__validated_configuration,
+        validate__train__validated_configuration,
+        train__final_scaler,
+        validate__train__final_scaler,
+        train__final_features,
+        validate__train__final_features,
+    ],
+    output=train__final_features,
+    description='Use cross-validation results and fit preprocessing on the full training partition.',
+)
+
+final_fitting = group(
+    'Model fitting',
+    members=[
+        train__initial_weights,
+        validate__train__initial_weights,
+        train__fitted_weights,
+        validate__train__fitted_weights,
+        train__trained_model,
+        validate__train__trained_model,
+    ],
+    output=train__trained_model,
+    description='Fit and package the final model, alongside its validation checks.',
+)
+
+final_training = group(
+    'Final training',
+    members=[
+        final_preparation,
+        final_fitting,
+    ],
+    output=final_fitting,
+    description='Train the final model using the training partition only.',
+)
+
+test_evaluation = group(
+    'Test evaluation',
+    members=[
+        test__features,
+        validate__test__features,
+        test__predictions,
+        validate__test__predictions,
+        test__metrics,
+        validate__test__metrics,
+    ],
+    output=test__metrics,
+    description='Transform and evaluate the held-out test set.',
+)
+
+release = group(
+    'Model card',
+    members=[
+        release__model_card,
+        validate__release__model_card,
+    ],
+    output=release__model_card,
+    description='Summarize the trained model, training data, cross-validation and test performance.',
+)

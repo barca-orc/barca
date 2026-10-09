@@ -8,6 +8,7 @@
 import { API_BASE, apiUrl } from './apiBase'
 
 import type {
+  NodeGroup,
   AssetSummary,
   AssetDetail,
   NodeState,
@@ -51,6 +52,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   health: () => request<Health>('/health'),
+  groups: () => request<NodeGroup[]>('/groups'),
   assets: () => request<AssetSummary[]>('/assets'),
   asset: (name: string) => request<AssetDetail>(`/assets/${encodeURIComponent(name)}`),
   assetSchema: (name: string) => request<NodeStatus[]>(`/assets/${encodeURIComponent(name)}/schema`),

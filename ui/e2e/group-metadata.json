@@ -1,0 +1,428 @@
+[
+  {
+    "id": "group:modeling.py:source",
+    "name": "Source data",
+    "members": [
+      "modeling.py:data__source_spec",
+      "modeling.py:validate__data__source_spec",
+      "modeling.py:data__raw_rows",
+      "modeling.py:validate__data__raw_rows",
+      "modeling.py:data__schema_profile",
+      "modeling.py:validate__data__schema_profile",
+      "modeling.py:data__clean_rows",
+      "modeling.py:validate__data__clean_rows",
+      "modeling.py:data__feature_contract",
+      "modeling.py:validate__data__feature_contract"
+    ],
+    "output": "modeling.py:data__clean_rows",
+    "description": "Generate, profile and clean the synthetic source rows."
+  },
+  {
+    "id": "group:modeling.py:split",
+    "name": "Train / test split",
+    "members": [
+      "modeling.py:data__split_manifest",
+      "modeling.py:validate__data__split_manifest",
+      "modeling.py:data__train_rows",
+      "modeling.py:validate__data__train_rows",
+      "modeling.py:data__test_rows",
+      "modeling.py:validate__data__test_rows",
+      "modeling.py:data__training_labels",
+      "modeling.py:validate__data__training_labels",
+      "modeling.py:data__test_labels",
+      "modeling.py:validate__data__test_labels",
+      "modeling.py:data__fold_assignments",
+      "modeling.py:validate__data__fold_assignments"
+    ],
+    "output": "modeling.py:data__train_rows",
+    "description": "Hold out the test set and assign training rows to five folds."
+  },
+  {
+    "id": "group:modeling.py:preparation",
+    "name": "Training preparation",
+    "members": [
+      "modeling.py:data__training_profile",
+      "modeling.py:validate__data__training_profile",
+      "modeling.py:data__imputation_values",
+      "modeling.py:validate__data__imputation_values",
+      "modeling.py:data__training_configuration",
+      "modeling.py:validate__data__training_configuration"
+    ],
+    "output": "modeling.py:data__imputation_values",
+    "description": "Profile training data and prepare the final training configuration."
+  },
+  {
+    "id": "group:modeling.py:training_data",
+    "name": "Training data",
+    "members": [
+      "group:modeling.py:source",
+      "group:modeling.py:split",
+      "group:modeling.py:preparation"
+    ],
+    "output": "group:modeling.py:split",
+    "description": "Shared preparation and checks. Its primary output is the training rows; the test split remains available to downstream evaluation."
+  },
+  {
+    "id": "group:modeling.py:fold_01__preprocessing",
+    "name": "Preprocessing",
+    "members": [
+      "modeling.py:cv__fold_01__train_rows",
+      "modeling.py:validate__cv__fold_01__train_rows",
+      "modeling.py:cv__fold_01__validation_rows",
+      "modeling.py:validate__cv__fold_01__validation_rows",
+      "modeling.py:cv__fold_01__scaler",
+      "modeling.py:validate__cv__fold_01__scaler",
+      "modeling.py:cv__fold_01__train_features",
+      "modeling.py:validate__cv__fold_01__train_features",
+      "modeling.py:cv__fold_01__validation_features",
+      "modeling.py:validate__cv__fold_01__validation_features"
+    ],
+    "output": "modeling.py:cv__fold_01__train_features",
+    "description": "Split this fold, fit preprocessing on its training rows, then transform both partitions."
+  },
+  {
+    "id": "group:modeling.py:fold_01__fitting",
+    "name": "Model fitting",
+    "members": [
+      "modeling.py:cv__fold_01__initial_weights",
+      "modeling.py:validate__cv__fold_01__initial_weights",
+      "modeling.py:cv__fold_01__fitted_weights",
+      "modeling.py:validate__cv__fold_01__fitted_weights",
+      "modeling.py:cv__fold_01__trained_model",
+      "modeling.py:validate__cv__fold_01__trained_model"
+    ],
+    "output": "modeling.py:cv__fold_01__trained_model",
+    "description": "Initialize, fit and package the fold model. Every asset has a validation task."
+  },
+  {
+    "id": "group:modeling.py:fold_01__evaluation",
+    "name": "Evaluation",
+    "members": [
+      "modeling.py:cv__fold_01__predictions",
+      "modeling.py:validate__cv__fold_01__predictions",
+      "modeling.py:cv__fold_01__metrics",
+      "modeling.py:validate__cv__fold_01__metrics"
+    ],
+    "output": "modeling.py:cv__fold_01__metrics",
+    "description": "Predict on this fold\u2019s validation partition and compute metrics."
+  },
+  {
+    "id": "group:modeling.py:fold_01",
+    "name": "Fold 1",
+    "members": [
+      "group:modeling.py:fold_01__preprocessing",
+      "group:modeling.py:fold_01__fitting",
+      "group:modeling.py:fold_01__evaluation"
+    ],
+    "output": "group:modeling.py:fold_01__evaluation",
+    "description": "One cross-validation fold, including all preprocessing, fitting, evaluation and validation tasks."
+  },
+  {
+    "id": "group:modeling.py:fold_02__preprocessing",
+    "name": "Preprocessing",
+    "members": [
+      "modeling.py:cv__fold_02__train_rows",
+      "modeling.py:validate__cv__fold_02__train_rows",
+      "modeling.py:cv__fold_02__validation_rows",
+      "modeling.py:validate__cv__fold_02__validation_rows",
+      "modeling.py:cv__fold_02__scaler",
+      "modeling.py:validate__cv__fold_02__scaler",
+      "modeling.py:cv__fold_02__train_features",
+      "modeling.py:validate__cv__fold_02__train_features",
+      "modeling.py:cv__fold_02__validation_features",
+      "modeling.py:validate__cv__fold_02__validation_features"
+    ],
+    "output": "modeling.py:cv__fold_02__train_features",
+    "description": "Split this fold, fit preprocessing on its training rows, then transform both partitions."
+  },
+  {
+    "id": "group:modeling.py:fold_02__fitting",
+    "name": "Model fitting",
+    "members": [
+      "modeling.py:cv__fold_02__initial_weights",
+      "modeling.py:validate__cv__fold_02__initial_weights",
+      "modeling.py:cv__fold_02__fitted_weights",
+      "modeling.py:validate__cv__fold_02__fitted_weights",
+      "modeling.py:cv__fold_02__trained_model",
+      "modeling.py:validate__cv__fold_02__trained_model"
+    ],
+    "output": "modeling.py:cv__fold_02__trained_model",
+    "description": "Initialize, fit and package the fold model. Every asset has a validation task."
+  },
+  {
+    "id": "group:modeling.py:fold_02__evaluation",
+    "name": "Evaluation",
+    "members": [
+      "modeling.py:cv__fold_02__predictions",
+      "modeling.py:validate__cv__fold_02__predictions",
+      "modeling.py:cv__fold_02__metrics",
+      "modeling.py:validate__cv__fold_02__metrics"
+    ],
+    "output": "modeling.py:cv__fold_02__metrics",
+    "description": "Predict on this fold\u2019s validation partition and compute metrics."
+  },
+  {
+    "id": "group:modeling.py:fold_02",
+    "name": "Fold 2",
+    "members": [
+      "group:modeling.py:fold_02__preprocessing",
+      "group:modeling.py:fold_02__fitting",
+      "group:modeling.py:fold_02__evaluation"
+    ],
+    "output": "group:modeling.py:fold_02__evaluation",
+    "description": "One cross-validation fold, including all preprocessing, fitting, evaluation and validation tasks."
+  },
+  {
+    "id": "group:modeling.py:fold_03__preprocessing",
+    "name": "Preprocessing",
+    "members": [
+      "modeling.py:cv__fold_03__train_rows",
+      "modeling.py:validate__cv__fold_03__train_rows",
+      "modeling.py:cv__fold_03__validation_rows",
+      "modeling.py:validate__cv__fold_03__validation_rows",
+      "modeling.py:cv__fold_03__scaler",
+      "modeling.py:validate__cv__fold_03__scaler",
+      "modeling.py:cv__fold_03__train_features",
+      "modeling.py:validate__cv__fold_03__train_features",
+      "modeling.py:cv__fold_03__validation_features",
+      "modeling.py:validate__cv__fold_03__validation_features"
+    ],
+    "output": "modeling.py:cv__fold_03__train_features",
+    "description": "Split this fold, fit preprocessing on its training rows, then transform both partitions."
+  },
+  {
+    "id": "group:modeling.py:fold_03__fitting",
+    "name": "Model fitting",
+    "members": [
+      "modeling.py:cv__fold_03__initial_weights",
+      "modeling.py:validate__cv__fold_03__initial_weights",
+      "modeling.py:cv__fold_03__fitted_weights",
+      "modeling.py:validate__cv__fold_03__fitted_weights",
+      "modeling.py:cv__fold_03__trained_model",
+      "modeling.py:validate__cv__fold_03__trained_model"
+    ],
+    "output": "modeling.py:cv__fold_03__trained_model",
+    "description": "Initialize, fit and package the fold model. Every asset has a validation task."
+  },
+  {
+    "id": "group:modeling.py:fold_03__evaluation",
+    "name": "Evaluation",
+    "members": [
+      "modeling.py:cv__fold_03__predictions",
+      "modeling.py:validate__cv__fold_03__predictions",
+      "modeling.py:cv__fold_03__metrics",
+      "modeling.py:validate__cv__fold_03__metrics"
+    ],
+    "output": "modeling.py:cv__fold_03__metrics",
+    "description": "Predict on this fold\u2019s validation partition and compute metrics."
+  },
+  {
+    "id": "group:modeling.py:fold_03",
+    "name": "Fold 3",
+    "members": [
+      "group:modeling.py:fold_03__preprocessing",
+      "group:modeling.py:fold_03__fitting",
+      "group:modeling.py:fold_03__evaluation"
+    ],
+    "output": "group:modeling.py:fold_03__evaluation",
+    "description": "One cross-validation fold, including all preprocessing, fitting, evaluation and validation tasks."
+  },
+  {
+    "id": "group:modeling.py:fold_04__preprocessing",
+    "name": "Preprocessing",
+    "members": [
+      "modeling.py:cv__fold_04__train_rows",
+      "modeling.py:validate__cv__fold_04__train_rows",
+      "modeling.py:cv__fold_04__validation_rows",
+      "modeling.py:validate__cv__fold_04__validation_rows",
+      "modeling.py:cv__fold_04__scaler",
+      "modeling.py:validate__cv__fold_04__scaler",
+      "modeling.py:cv__fold_04__train_features",
+      "modeling.py:validate__cv__fold_04__train_features",
+      "modeling.py:cv__fold_04__validation_features",
+      "modeling.py:validate__cv__fold_04__validation_features"
+    ],
+    "output": "modeling.py:cv__fold_04__train_features",
+    "description": "Split this fold, fit preprocessing on its training rows, then transform both partitions."
+  },
+  {
+    "id": "group:modeling.py:fold_04__fitting",
+    "name": "Model fitting",
+    "members": [
+      "modeling.py:cv__fold_04__initial_weights",
+      "modeling.py:validate__cv__fold_04__initial_weights",
+      "modeling.py:cv__fold_04__fitted_weights",
+      "modeling.py:validate__cv__fold_04__fitted_weights",
+      "modeling.py:cv__fold_04__trained_model",
+      "modeling.py:validate__cv__fold_04__trained_model"
+    ],
+    "output": "modeling.py:cv__fold_04__trained_model",
+    "description": "Initialize, fit and package the fold model. Every asset has a validation task."
+  },
+  {
+    "id": "group:modeling.py:fold_04__evaluation",
+    "name": "Evaluation",
+    "members": [
+      "modeling.py:cv__fold_04__predictions",
+      "modeling.py:validate__cv__fold_04__predictions",
+      "modeling.py:cv__fold_04__metrics",
+      "modeling.py:validate__cv__fold_04__metrics"
+    ],
+    "output": "modeling.py:cv__fold_04__metrics",
+    "description": "Predict on this fold\u2019s validation partition and compute metrics."
+  },
+  {
+    "id": "group:modeling.py:fold_04",
+    "name": "Fold 4",
+    "members": [
+      "group:modeling.py:fold_04__preprocessing",
+      "group:modeling.py:fold_04__fitting",
+      "group:modeling.py:fold_04__evaluation"
+    ],
+    "output": "group:modeling.py:fold_04__evaluation",
+    "description": "One cross-validation fold, including all preprocessing, fitting, evaluation and validation tasks."
+  },
+  {
+    "id": "group:modeling.py:fold_05__preprocessing",
+    "name": "Preprocessing",
+    "members": [
+      "modeling.py:cv__fold_05__train_rows",
+      "modeling.py:validate__cv__fold_05__train_rows",
+      "modeling.py:cv__fold_05__validation_rows",
+      "modeling.py:validate__cv__fold_05__validation_rows",
+      "modeling.py:cv__fold_05__scaler",
+      "modeling.py:validate__cv__fold_05__scaler",
+      "modeling.py:cv__fold_05__train_features",
+      "modeling.py:validate__cv__fold_05__train_features",
+      "modeling.py:cv__fold_05__validation_features",
+      "modeling.py:validate__cv__fold_05__validation_features"
+    ],
+    "output": "modeling.py:cv__fold_05__train_features",
+    "description": "Split this fold, fit preprocessing on its training rows, then transform both partitions."
+  },
+  {
+    "id": "group:modeling.py:fold_05__fitting",
+    "name": "Model fitting",
+    "members": [
+      "modeling.py:cv__fold_05__initial_weights",
+      "modeling.py:validate__cv__fold_05__initial_weights",
+      "modeling.py:cv__fold_05__fitted_weights",
+      "modeling.py:validate__cv__fold_05__fitted_weights",
+      "modeling.py:cv__fold_05__trained_model",
+      "modeling.py:validate__cv__fold_05__trained_model"
+    ],
+    "output": "modeling.py:cv__fold_05__trained_model",
+    "description": "Initialize, fit and package the fold model. Every asset has a validation task."
+  },
+  {
+    "id": "group:modeling.py:fold_05__evaluation",
+    "name": "Evaluation",
+    "members": [
+      "modeling.py:cv__fold_05__predictions",
+      "modeling.py:validate__cv__fold_05__predictions",
+      "modeling.py:cv__fold_05__metrics",
+      "modeling.py:validate__cv__fold_05__metrics"
+    ],
+    "output": "modeling.py:cv__fold_05__metrics",
+    "description": "Predict on this fold\u2019s validation partition and compute metrics."
+  },
+  {
+    "id": "group:modeling.py:fold_05",
+    "name": "Fold 5",
+    "members": [
+      "group:modeling.py:fold_05__preprocessing",
+      "group:modeling.py:fold_05__fitting",
+      "group:modeling.py:fold_05__evaluation"
+    ],
+    "output": "group:modeling.py:fold_05__evaluation",
+    "description": "One cross-validation fold, including all preprocessing, fitting, evaluation and validation tasks."
+  },
+  {
+    "id": "group:modeling.py:cv_summary",
+    "name": "Fold summary",
+    "members": [
+      "modeling.py:cv__summary__fold_metrics",
+      "modeling.py:validate__cv__summary__fold_metrics",
+      "modeling.py:cv__summary__report",
+      "modeling.py:validate__cv__summary__report"
+    ],
+    "output": "modeling.py:cv__summary__report",
+    "description": "Aggregate all five folds into the cross-validation report."
+  },
+  {
+    "id": "group:modeling.py:cross_validation",
+    "name": "Cross-validation",
+    "members": [
+      "group:modeling.py:fold_01",
+      "group:modeling.py:fold_02",
+      "group:modeling.py:fold_03",
+      "group:modeling.py:fold_04",
+      "group:modeling.py:fold_05",
+      "group:modeling.py:cv_summary"
+    ],
+    "output": "group:modeling.py:cv_summary",
+    "description": "Five independently cached folds. Any failed check makes this entire group unhealthy."
+  },
+  {
+    "id": "group:modeling.py:final_preparation",
+    "name": "Final preprocessing",
+    "members": [
+      "modeling.py:train__validated_configuration",
+      "modeling.py:validate__train__validated_configuration",
+      "modeling.py:train__final_scaler",
+      "modeling.py:validate__train__final_scaler",
+      "modeling.py:train__final_features",
+      "modeling.py:validate__train__final_features"
+    ],
+    "output": "modeling.py:train__final_features",
+    "description": "Use cross-validation results and fit preprocessing on the full training partition."
+  },
+  {
+    "id": "group:modeling.py:final_fitting",
+    "name": "Model fitting",
+    "members": [
+      "modeling.py:train__initial_weights",
+      "modeling.py:validate__train__initial_weights",
+      "modeling.py:train__fitted_weights",
+      "modeling.py:validate__train__fitted_weights",
+      "modeling.py:train__trained_model",
+      "modeling.py:validate__train__trained_model"
+    ],
+    "output": "modeling.py:train__trained_model",
+    "description": "Fit and package the final model, alongside its validation checks."
+  },
+  {
+    "id": "group:modeling.py:final_training",
+    "name": "Final training",
+    "members": [
+      "group:modeling.py:final_preparation",
+      "group:modeling.py:final_fitting"
+    ],
+    "output": "group:modeling.py:final_fitting",
+    "description": "Train the final model using the training partition only."
+  },
+  {
+    "id": "group:modeling.py:test_evaluation",
+    "name": "Test evaluation",
+    "members": [
+      "modeling.py:test__features",
+      "modeling.py:validate__test__features",
+      "modeling.py:test__predictions",
+      "modeling.py:validate__test__predictions",
+      "modeling.py:test__metrics",
+      "modeling.py:validate__test__metrics"
+    ],
+    "output": "modeling.py:test__metrics",
+    "description": "Transform and evaluate the held-out test set."
+  },
+  {
+    "id": "group:modeling.py:release",
+    "name": "Model card",
+    "members": [
+      "modeling.py:release__model_card",
+      "modeling.py:validate__release__model_card"
+    ],
+    "output": "modeling.py:release__model_card",
+    "description": "Summarize the trained model, training data, cross-validation and test performance."
+  }
+]

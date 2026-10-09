@@ -1,6 +1,7 @@
+import metadata from '../../e2e/group-metadata.json'
 import { describe, expect, it } from 'vitest'
 import {
-  MODELING_GROUPS as tree,
+  groupTree,
   PREVIEW_FAILURE,
   groupHealth,
   groupLeaves,
@@ -9,6 +10,8 @@ import {
   projectGroups,
   memberHealth,
 } from './groups'
+const tree = groupTree(metadata)
+
 import type { AssetSummary, NodeState } from './types'
 
 function state(id: string): NodeState {
@@ -47,7 +50,7 @@ describe('organizational groups', () => {
     expect(new Set(leaves).size).toBe(152)
     for (const group of tree.groups.values())
       expect(groupLeaves(group.id, tree)).toContain(groupOutput(group.id, tree))
-    expect(groupOutput('group:training_data', tree)).toBe(
+    expect(groupOutput('group:modeling.py:training_data', tree)).toBe(
       'modeling.py:data__train_rows',
     )
   })
@@ -58,25 +61,25 @@ describe('organizational groups', () => {
     const failure = states.get(PREVIEW_FAILURE)!
     failure.last_materialization!.status = 'failed'
     for (const id of [
-      'group:fold_03/fitting',
-      'group:fold_03',
-      'group:cross_validation',
+      'group:modeling.py:fold_03__fitting',
+      'group:modeling.py:fold_03',
+      'group:modeling.py:cross_validation',
     ]) {
       expect(groupHealth(groupLeaves(id, tree), states).status).toBe('failed')
       expect(memberHealth(states.get(groupOutput(id, tree))).status).toBe(
         'success',
       )
     }
-    expect(groupHealth(groupLeaves('group:fold_02', tree), states).status).toBe(
+    expect(groupHealth(groupLeaves('group:modeling.py:fold_02', tree), states).status).toBe(
       'success',
     )
-    expect(groupPath('group:fold_03/fitting', tree).map((g) => g.name)).toEqual(
+    expect(groupPath('group:modeling.py:fold_03__fitting', tree).map((g) => g.name)).toEqual(
       ['Cross-validation', 'Fold 3', 'Model fitting'],
     )
   })
 
   it('treats successful always-run checks as healthy, and missing state as unknown', () => {
-    const ids = groupLeaves('group:final_training', tree)
+    const ids = groupLeaves('group:modeling.py:final_training', tree)
     const states = new Map(ids.map((id) => [id, state(id)]))
     expect(groupHealth(ids, states).status).toBe('success')
     states.delete(ids[0]!)
@@ -115,9 +118,9 @@ describe('organizational groups', () => {
     const original = structuredClone(assets)
     const root = projectGroups(assets, tree, null)
     expect(
-      root.entries.find((e) => e.id === 'group:cross_validation')?.inputs,
-    ).toEqual(['group:training_data'])
-    const fold = projectGroups(assets, tree, 'group:fold_01')
+      root.entries.find((e) => e.id === 'group:modeling.py:cross_validation')?.inputs,
+    ).toEqual(['group:modeling.py:training_data'])
+    const fold = projectGroups(assets, tree, 'group:modeling.py:fold_01')
     expect(fold.external).toContain('modeling.py:data__raw_rows')
     expect(assets).toEqual(original)
   })

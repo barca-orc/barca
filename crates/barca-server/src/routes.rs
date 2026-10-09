@@ -13,6 +13,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(handlers::health))
         .route("/plan", get(handlers::plan))
+        .route("/groups", get(handlers::groups))
         .route("/assets", get(handlers::assets))
         .route("/assets/{name}", get(handlers::asset_detail))
         .route("/assets/{name}/schema", get(handlers::asset_schema))

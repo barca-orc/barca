@@ -42,14 +42,16 @@ validation. The seed script verifies a second identical get executes zero steps
 and runs all 76 validators, leaving branch-specific runs in the history. Select
 `modeling.py` in the sidebar to explore its List and Graph views.
 
-The modeling UI also has a group navigation spike. Its 152 nodes appear as five
+The modeling UI demonstrates Python-declared organizational groups. Its 152 nodes appear as five
 top-level groups; double-click or press Enter to open nested groups, and use the
 breadcrumb to move up. List/Graph keeps the current group and selection in the
 URL. Group health includes every descendant, including validation tasks; the
 output's cache state is shown separately. “Preview failed check” simulates a
 fold 3 validation failure entirely in the browser, and “All nodes” restores the
-original flat view. Definitions live in `src/lib/groups.ts` for this prototype;
-no Python API, execution, cache or CLI behavior is changed.
+original flat view. Definitions live in `demo/modeling.py` using `group(...)`; the static parser
+serves metadata through `/groups`. Any pipeline with groups uses this view.
+`barca list --groups` exposes the same hierarchy in the terminal. Execution and
+cache behavior stay unchanged.
 
 ## Check
 

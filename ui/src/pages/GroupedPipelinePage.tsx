@@ -26,6 +26,7 @@ import {
   type GraphCanvasHandle,
 } from '@/components/graph/GraphCanvas'
 import { NodePanel } from '@/components/assets/NodePanel'
+import { useGroups } from '@/hooks/useGroups'
 import { useAssets } from '@/hooks/useAssets'
 import { useAssetStates } from '@/hooks/useAssetStates'
 import { useHealth } from '@/hooks/useHealth'
@@ -34,7 +35,7 @@ import { inPipeline } from '@/lib/pipeline'
 import { shortName, type LayoutDir, type GraphEntry } from '@/lib/graph'
 import { UNKNOWN_GRAPH_STATE, type GraphState } from '@/lib/graphState'
 import {
-  MODELING_GROUPS as tree,
+  groupTree,
   PREVIEW_FAILURE,
   groupHealth,
   groupLeaves,
@@ -49,6 +50,8 @@ import './groups.css'
 export function GroupedPipelinePage() {
   const [params, setParams] = useSearchParams()
   const pipeline = params.get('pipeline')
+  const groupsQuery = useGroups()
+  const tree = useMemo(() => groupTree((groupsQuery.data ?? []).filter(g => !pipeline || g.id.startsWith(`group:${pipeline}:`))), [groupsQuery.data, pipeline])
   const graph = params.get('view') === 'graph'
   const flat = params.get('flat') === '1'
   const selected = params.get(graph ? 'focus' : 'node')
@@ -57,7 +60,8 @@ export function GroupedPipelinePage() {
     : tree.parents.get(selected ?? '')
   const scope = !flat && requestedScope ? String(requestedScope) : null
   const query = params.get('q') ?? ''
-  const preview = params.get('preview') === 'failed'
+  const hasDemoPreview = (groupsQuery.data ?? []).some(g => g.members.includes(PREVIEW_FAILURE)) && (!pipeline || pipeline === 'modeling.py')
+  const preview = hasDemoPreview && params.get('preview') === 'failed'
   const attention = params.get('attention') === '1'
   const assetQuery = useAssets()
   const stateQuery = useAssetStates()
@@ -316,7 +320,7 @@ export function GroupedPipelinePage() {
                 All nodes
               </button>
             </div>
-            <button
+            {hasDemoPreview && <button
               type="button"
               className="barca-preview-toggle"
               aria-pressed={preview}
@@ -324,7 +328,7 @@ export function GroupedPipelinePage() {
             >
               <StatusDot status={preview ? 'failed' : 'skipped'} size={6} />
               Preview failed check
-            </button>
+            </button>}
           </div>
         </div>
         <div className="barca-group-context">

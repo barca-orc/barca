@@ -230,6 +230,7 @@ Examples:
   barca list .                       # the current directory and below
   barca list pipeline.py             # nodes, including qualified/aliased Barca decorators
   barca list pipeline.py --json      # {nodes: [{id, kind, freshness, schedule?, inputs, env, next_fire?}], total, truncated, root}
+  barca list pipeline.py --groups --json  # organizational groups, separate from executable nodes
   barca list pipeline.py --pretty    # the table, even when piped
   barca list pipeline.py --fields id,inputs   # JSON with only these keys per node
   barca list big.py --limit 20       # first 20 nodes (topological order)
@@ -512,6 +513,9 @@ pub(crate) enum Cli {
         files: Vec<PathBuf>,
         #[command(flatten)]
         format: FormatFlags,
+        /// Show the organizational hierarchy (groups are never executable nodes)
+        #[arg(long, conflicts_with_all = ["limit", "all", "fields"])]
+        groups: bool,
         /// Maximum number of nodes to show, in topological order
         #[arg(short, long, default_value_t = bounded::LIST_DEFAULT_LIMIT)]
         limit: usize,

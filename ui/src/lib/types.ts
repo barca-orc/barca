@@ -6,6 +6,8 @@
    Do not hand-edit anything under ./generated.
    ============================================================ */
 
+export type { NodeGroup } from './generated/NodeGroup'
+
 // ── Generated from Rust (single source of truth) ──────────────────────────────
 export type { NodeKind } from './generated/NodeKind'
 export type { Freshness } from './generated/Freshness'

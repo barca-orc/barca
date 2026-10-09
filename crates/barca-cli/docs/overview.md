@@ -81,3 +81,5 @@ that; see `barca docs agents`.
 - `barca docs examples` — runnable example pipelines (`examples/duckdb`, `examples/partitions`, ...)
 
 Run `barca docs` for one-line summaries of every topic.
+
+Use `barca docs groups` for organizational nesting in the UI and CLI.

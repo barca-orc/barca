@@ -13,6 +13,7 @@ use crate::model::{DagNode, EdgeKind, ExtractedNode, NodeKind};
 /// The constructed DAG — validated, acyclic, ready for plan generation.
 #[derive(Debug, Clone)]
 pub struct Dag {
+    pub groups: Vec<crate::groups::NodeGroup>,
     pub graph: DiGraph<DagNode, EdgeKind>,
     index: HashMap<String, NodeIndex>,
 }
@@ -299,7 +300,7 @@ fn resolve_partitions_from(nodes: &[ExtractedNode]) -> Result<Vec<ExtractedNode>
 ///
 /// Several candidates and nothing more specific is an error, never a guess (#202): before,
 /// the last file read silently won.
-struct Resolver {
+pub(crate) struct Resolver {
     ids: Vec<String>,
     by_id: HashMap<String, usize>,
     by_file: HashMap<(String, String), usize>,
@@ -326,7 +327,7 @@ fn file_dir(file: &str) -> std::path::PathBuf {
 }
 
 impl Resolver {
-    fn new(nodes: &[ExtractedNode]) -> Self {
+    pub(crate) fn new(nodes: &[ExtractedNode]) -> Self {
         let mut r = Resolver {
             ids: Vec::with_capacity(nodes.len()),
             by_id: HashMap::new(),
@@ -350,6 +351,16 @@ impl Resolver {
                 .push(i);
         }
         r
+    }
+
+    pub(crate) fn resolve_id(
+        &self,
+        file: &str,
+        reference: &crate::model::NodeRef,
+    ) -> Option<String> {
+        self.resolve(file, reference)
+            .ok()
+            .map(|i| self.ids[i].clone())
     }
 
     fn in_file(&self, file: &std::path::Path, name: &str) -> Option<usize> {
@@ -730,7 +741,11 @@ impl Dag {
             }
         }
 
-        let dag = Dag { graph, index };
+        let dag = Dag {
+            graph,
+            index,
+            groups: Vec::new(),
+        };
 
         // Verify acyclicity.
         if toposort(&dag.graph, None).is_err() {

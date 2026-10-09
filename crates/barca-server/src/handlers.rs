@@ -890,3 +890,11 @@ mod duration_tests {
         assert!(!d.contains_key("p.py:missing"));
     }
 }
+
+/// Organizational metadata; never part of the execution graph.
+pub async fn groups(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<barca_core::groups::NodeGroup>>, ApiError> {
+    let dag = state.loaded_dag().await?;
+    Ok(Json(dag.groups.clone()))
+}

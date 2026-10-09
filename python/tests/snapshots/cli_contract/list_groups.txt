@@ -1,0 +1,9 @@
+# barca list pipeline.py --groups --json  (stdout, exit 0)
+groups : array
+groups[] : object
+groups[].description : string
+groups[].id : string
+groups[].members : array
+groups[].members[] : string
+groups[].name : string
+groups[].output : string

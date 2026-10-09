@@ -250,6 +250,7 @@ async fn run_cli(cli: Cli, ctx: &Context) -> Result<(), CliError> {
             .map_err(engine)
         }
         Cli::List {
+            groups,
             files,
             format,
             limit,
@@ -258,7 +259,7 @@ async fn run_cli(cli: Cli, ctx: &Context) -> Result<(), CliError> {
         } => {
             let json = fields_json(format, fields.as_deref())?;
             let limit = (!all).then_some(limit);
-            list_cmd(files, json, limit, fields.as_deref(), &python)
+            list_cmd(files, groups, json, limit, fields.as_deref(), &python)
                 .await
                 .map_err(engine)
         }

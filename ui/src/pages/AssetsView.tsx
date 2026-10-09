@@ -2,13 +2,13 @@ import { Navigate, useSearchParams } from 'react-router'
 import { AssetsPage } from './AssetsPage'
 import { GraphPage } from './GraphPage'
 import { GroupedPipelinePage } from './GroupedPipelinePage'
-import { useAssets } from '@/hooks/useAssets'
+import { useGroups } from '@/hooks/useGroups'
 
 export function AssetsView() {
   const [params] = useSearchParams()
-  const assets = useAssets()
+  const groups = useGroups()
   const pipeline = params.get('pipeline')
-  if (pipeline === 'modeling.py' || (!pipeline && !assets.isPlaceholderData && assets.data?.some(a => a.id.startsWith('modeling.py:')))) return <GroupedPipelinePage />
+  if (groups.data?.some(g => !pipeline || g.id.startsWith(`group:${pipeline}:`))) return <GroupedPipelinePage />
   return params.get('view') === 'graph' ? <GraphPage /> : <AssetsPage />
 }
 

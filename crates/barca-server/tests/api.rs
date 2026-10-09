@@ -1023,3 +1023,65 @@ async fn runs_inspection_without_a_database_does_not_create_one() {
         assert!(!std::path::Path::new(&path).exists());
     }
 }
+
+#[tokio::test]
+async fn groups_are_source_metadata_and_never_execution_nodes() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = isolated_config(dir.path(), true);
+    let path = &config.files[0];
+    std::fs::write(path, format!("{FIXTURE}\nfrom barca import group\npreparation = group('Preparation', members=[first], output=first)\ntraining = group('Training', members=[preparation, second], output=second)\n")).unwrap();
+    let router = app(config.clone());
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/groups")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let groups = body_json(resp).await;
+    assert_eq!(groups.as_array().unwrap().len(), 2);
+    assert_eq!(groups[1]["members"][0], format!("group:{path}:preparation"));
+    assert_eq!(groups[1]["output"], format!("{path}:second"));
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/assets")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let assets = body_json(resp).await;
+    assert_eq!(assets.as_array().unwrap().len(), 2);
+    assert!(!std::path::Path::new(&config.resolved.db_path).exists());
+    // Fresh metadata on the next request, including invalid declarations.
+    std::fs::write(
+        path,
+        format!(
+            "{FIXTURE}\nfrom barca import group\ng = group('g', members=[first], output=second)\n"
+        ),
+    )
+    .unwrap();
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/groups")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(body_json(resp).await, serde_json::json!([]));
+    let (status, health) = send(&router, "GET", "/health").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!health["load_errors"].as_array().unwrap().is_empty());
+    let (_, assets) = send(&router, "GET", "/assets").await;
+    assert_eq!(assets.as_array().unwrap().len(), 2);
+}

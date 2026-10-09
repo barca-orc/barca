@@ -1,3 +1,4 @@
+const metadata = JSON.parse(readFileSync(new URL('./group-metadata.json', import.meta.url), 'utf8'))
 import { readFileSync } from 'node:fs'
 import { expect, test } from '@playwright/test'
 
@@ -23,6 +24,7 @@ const assets = names.map((name) => ({
 }))
 
 test.beforeEach(async ({ page }) => {
+  await page.route('**/groups', route => route.fulfill({ json: metadata }))
   await page.route('**/assets', (route) => route.fulfill({ json: assets }))
   await page.route('**/state', (route) =>
     route.fulfill({
@@ -58,13 +60,13 @@ test('double-click navigates nested groups and List keeps the current scope afte
   await page.goto('/ui/#/assets?pipeline=modeling.py&view=graph')
   await expect(page.locator('.react-flow__node')).toHaveCount(5)
   await page
-    .locator('.react-flow__node[data-id="group:cross_validation"]')
+    .locator('.react-flow__node[data-id="group:modeling.py:cross_validation"]')
     .dblclick()
   await expect(page.locator('.react-flow__node')).toHaveCount(6)
-  await page.locator('.react-flow__node[data-id="group:fold_03"]').dblclick()
+  await page.locator('.react-flow__node[data-id="group:modeling.py:fold_03"]').dblclick()
   await expect(page.locator('.react-flow__node')).toHaveCount(3)
   await page
-    .locator('.react-flow__node[data-id="group:fold_03/fitting"]')
+    .locator('.react-flow__node[data-id="group:modeling.py:fold_03__fitting"]')
     .focus()
   await page.keyboard.press('Enter')
   await expect(page.locator('.react-flow__node')).toHaveCount(6)
@@ -93,7 +95,7 @@ test('failed validation makes ancestors red while their output remains cached; n
     if (request.method() !== 'GET') mutations.push(request.url())
   })
   await page.goto('/ui/#/assets?pipeline=modeling.py&view=graph')
-  const cv = page.locator('.react-flow__node[data-id="group:cross_validation"]')
+  const cv = page.locator('.react-flow__node[data-id="group:modeling.py:cross_validation"]')
   await expect(cv.locator('[data-status="success"]')).toBeVisible()
   await page
     .getByRole('button', { name: 'Preview failed check', exact: true })
@@ -163,4 +165,25 @@ test('flat comparison exposes all 152 original nodes and group mode restores fiv
   await expect(page.locator('.react-flow__node')).toHaveCount(152)
   await page.getByRole('button', { name: 'Groups', exact: true }).click()
   await expect(page.locator('.react-flow__node')).toHaveCount(5)
+})
+
+test('a different Python pipeline uses server groups and keeps ungrouped nodes visible', async ({ page }) => {
+  const nodes = [
+    { id: 'forecast.py:rows', kind: 'asset', inputs: [], freshness: { type: 'Always' }, env: [] },
+    { id: 'forecast.py:model', kind: 'asset', inputs: ['forecast.py:rows'], freshness: { type: 'Always' }, env: [] },
+    { id: 'forecast.py:other', kind: 'asset', inputs: [], freshness: { type: 'Always' }, env: [] },
+  ]
+  await page.route('**/assets', route => route.fulfill({ json: nodes }))
+  await page.route('**/groups', route => route.fulfill({ json: [
+    { id: 'group:forecast.py:training', name: 'Forecast training', description: '', members: ['forecast.py:rows', 'forecast.py:model'], output: 'forecast.py:model' },
+  ] }))
+  await page.route('**/state', route => route.fulfill({ json: [] }))
+  await page.goto('/ui/#/assets?pipeline=forecast.py&view=graph')
+  await expect(page.locator('.react-flow__node')).toHaveCount(2)
+  await expect(page.getByRole('button', { name: 'Preview failed check' })).toHaveCount(0)
+  await page.locator('.react-flow__node[data-id="group:forecast.py:training"]').dblclick()
+  await expect(page.locator('.react-flow__node')).toHaveCount(2)
+  await expect(page.getByRole('navigation', { name: 'Group breadcrumb' })).toContainText('Forecast training')
+  await page.getByRole('button', { name: 'List', exact: true }).click()
+  await expect(page.locator('.barca-group-table tbody tr')).toHaveCount(2)
 })
