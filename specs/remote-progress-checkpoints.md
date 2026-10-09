@@ -194,3 +194,9 @@ The receipt and recorder prerequisites are now merged as #359/#360. Local
 prerequisite copies were removed with a clean rebase onto actual main13a92a4;
 the publication diff contains only the owned minute loop and its reviewed
 admission, conflict/count, token and diagnostic corrections.
+
+After clean prerequisite removal and rebase onto actual main13a92a4, all818 Rust
+workspace tests, strict all-target Clippy, and133 actual CLI/Python cases pass.
+The fixed-minute SIGKILL/fresh-root recovery test passes again in that sweep.
+Pinned Ruff/fmt and the51-page documentation build pass. No prerequisite commits
+or unrelated user-workspace changes are present in this PR.
