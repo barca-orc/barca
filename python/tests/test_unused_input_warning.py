@@ -17,7 +17,6 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
 from barca.api import _find_binary
 
 PREFIX = "[barca] warning: "
@@ -272,7 +271,13 @@ def barca(cwd: Path, *args: str) -> subprocess.CompletedProcess:
     env = {k: v for k, v in os.environ.items() if not k.startswith("BARCA_")}
     env["BARCA_PROGRESS_SECS"] = "0"
     return subprocess.run(
-        [_find_binary(), *args], cwd=cwd, env=env, capture_output=True, text=True, timeout=120
+        [_find_binary(), *args],
+        cwd=cwd,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=120,
     )
 
 
@@ -725,3 +730,52 @@ def test_the_manual_lists_exactly_the_packages_the_check_knows_to_be_unrelated(t
         pytest.skip("the Rust sources are not in this checkout")
     block = source.read_text().split("pub const THIRD_PARTY: &[&str] = &[")[1].split("];")[0]
     assert documented == [n.strip().strip('"') for n in block.split(",") if n.strip()]
+
+
+@pytest.mark.parametrize("binding", ["capture", "as_capture", "def", "async_def", "class"])
+def test_match_and_nested_definitions_shadow_unrelated_imports(tmp_path, binding):
+    """A dynamic SQL query reads the input despite its receiver shadowing stdlib json."""
+    bodies = {
+        "capture": "match duckdb:\n        case json:\n            return int(json.sql(QUERY).fetchone()[0])",
+        "as_capture": "match duckdb:\n        case object() as json:\n            return int(json.sql(QUERY).fetchone()[0])",
+        "def": "def json():\n        pass\n    attach_query(json)\n    return int(json.sql(QUERY).fetchone()[0])",
+        "async_def": "async def json():\n        pass\n    attach_query(json)\n    return int(json.sql(QUERY).fetchone()[0])",
+        "class": "class json(Engine):\n        pass\n    return int(json.sql(QUERY).fetchone()[0])",
+    }
+    source = """
+import duckdb
+import json
+import pandas as pd
+from barca import asset
+
+QUERY = "select sum(amount) from orders"
+
+class Engine:
+    sql = staticmethod(duckdb.sql)
+
+def attach_query(fn):
+    fn.sql = duckdb.sql
+
+@asset()
+def frame() -> pd.DataFrame:
+    return pd.DataFrame({"amount": [10, 20, 30]})
+
+@asset(inputs={"orders": frame})
+def shadowed(orders: pd.DataFrame) -> int:
+    BODY
+
+@asset(inputs={"orders": frame})
+def really_unused(orders: pd.DataFrame) -> int:
+    return 7
+""".replace("BODY", bodies[binding])
+    cwd = write(tmp_path, source)
+    run = barca(cwd, "get", "shadowed", "pipeline.py", "--json")
+    assert run.returncode == 0, run.stderr
+    output = json.loads(run.stdout)
+    assert output["final_output"] == 60
+    assert output["warnings"] == []
+    assert stderr_warnings(run) == []
+    control = barca(cwd, "get", "really_unused", "pipeline.py", "--json")
+    assert control.returncode == 0, control.stderr
+    assert json.loads(control.stdout)["final_output"] == 7
+    assert pairs(json_warnings(control)) == [("pipeline.py:really_unused", "orders")]

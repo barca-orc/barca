@@ -102,7 +102,9 @@ A library warning that a step's process repeats is printed once per run and then
 line each on stderr, and a `warnings` array in their JSON output (`[]` when there are none).
 The one warning so far is `unused_input`: a step declares an input its function never uses,
 which is still loaded and still part of the cache key. Warnings do not change the exit code
-(`barca docs assets`, "Unused inputs").
+(`barca docs assets`, "Unused inputs"). A query receiver shadowed by a `match` capture
+or nested function/class definition is treated conservatively, so dynamic SQL access does
+not cause a false unused-input warning.
 
 ## get
 

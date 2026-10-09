@@ -196,7 +196,7 @@ fn mentions_identifier(text: &str, name: &str) -> bool {
 }
 
 /// What the body binds: the imports made inside it, and every name that is a parameter or is
-/// assigned somewhere in it (so an imported module name may not be that module any more).
+/// assigned, captured or defined somewhere in it (so an imported name may have changed).
 #[derive(Default)]
 struct Bindings<'a> {
     imports: Vec<(&'a str, Imported<'a>)>,
@@ -206,6 +206,14 @@ struct Bindings<'a> {
 impl<'a> Visitor<'a> for Bindings<'a> {
     fn visit_stmt(&mut self, stmt: &'a Stmt) {
         match stmt {
+            Stmt::FunctionDef(definition) => {
+                self.rebound.push(definition.name.as_str());
+                visitor::walk_stmt(self, stmt);
+            }
+            Stmt::ClassDef(definition) => {
+                self.rebound.push(definition.name.as_str());
+                visitor::walk_stmt(self, stmt);
+            }
             Stmt::ImportFrom(import) => {
                 let module = import.module.as_ref().map_or("", |m| m.as_str());
                 for alias in &import.names {
@@ -232,6 +240,21 @@ impl<'a> Visitor<'a> for Bindings<'a> {
             self.rebound.push(n.id.as_str());
         }
         visitor::walk_expr(self, expr);
+    }
+
+    fn visit_pattern(&mut self, pattern: &'a ast::Pattern) {
+        // Capture/as names, sequence stars and mapping rest names bind identifiers.
+        // Value/class patterns merely read names, so continue into their children.
+        let captured = match pattern {
+            ast::Pattern::MatchAs(p) => p.name.as_ref(),
+            ast::Pattern::MatchStar(p) => p.name.as_ref(),
+            ast::Pattern::MatchMapping(p) => p.rest.as_ref(),
+            _ => None,
+        };
+        if let Some(name) = captured {
+            self.rebound.push(name.as_str());
+        }
+        visitor::walk_pattern(self, pattern);
     }
 
     fn visit_parameter(&mut self, parameter: &'a ast::Parameter) {
@@ -834,6 +857,35 @@ mod tests {
             "    with connect() as plt:\n        return plt.table(name)",
         ] {
             assert!(with(body).is_empty(), "{body}");
+        }
+    }
+
+    #[test]
+    fn lexical_captures_and_definition_names_rebind_imported_modules() {
+        let with = |body: &str| {
+            let src = step("orders", body, "\"orders\": up");
+            unused_in(&format!("import json\n{src}"))
+        };
+        for body in [
+            "    match engine:\n        case json:\n            return json.table(name)",
+            "    match engine:\n        case object() as json:\n            return json.table(name)",
+            "    match engines:\n        case [*json]:\n            return json.table(name)",
+            "    match engines:\n        case {\"first\": first, **json}:\n            return json.table(name)",
+            "    def json():\n        pass\n    return json.table(name)",
+            "    async def json():\n        pass\n    return json.table(name)",
+            "    class json:\n        pass\n    return json.table(name)",
+            "    def inner():\n        match engine:\n            case json:\n                return json.table(name)\n    return inner()",
+        ] {
+            assert!(with(body).is_empty(), "{body}");
+        }
+        // Value patterns read a name; they do not bind it. Non-shadowing definitions
+        // likewise must not suppress a genuinely unused-input warning.
+        for body in [
+            "    match engine:\n        case json.VALUE:\n            return json.table(name)",
+            "    def helper():\n        pass\n    return json.table(name)",
+            "    class Helper:\n        pass\n    return json.table(name)",
+        ] {
+            assert_eq!(with(body), ["orders"], "{body}");
         }
     }
 
