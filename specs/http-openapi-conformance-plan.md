@@ -42,7 +42,7 @@ new route, configuration, runtime field or client code generation.
 
 ## P11 integration sequence (before schema changes)
 
-Prepare the reviewed schema/test patch on current main13a92a4 first. After PR361
+Prepare the reviewed schema/test patch on current main 13a92a4 first. After PR361
 merges, rebase onto that exact main and add its shipped required health field:
 `load_errors` is an array of closed `LoadError` objects with required string
 `file`, string `error`, and string-array `affected_nodes`; healthy loads return
@@ -62,6 +62,14 @@ Run current-base router conformance and existing Python HTTP/client/manual/CLI
 contracts using this worktree's own target and interpreter, then rerun the changed
 partial-load/admission cases after361 with strict Clippy/fmt/Ruff and schema drift
 checks. Publish no unmerged health fields and add no product routes or controls.
+
+Preparation on 13a92a4 passed 77 server/router/conformance Rust tests, strict
+workspace/all-target Clippy, formatting and pinned Ruff. All 78 distinct actual
+HTTP/client/CLI/manual cases passed after supplying their documented optional
+Polars dependency. A first interpreter setup used Nix Python whose NumPy wheel
+could not load libstdc++.so.6; direct import reproduced that environment failure.
+The isolated Linuxbrew Python environment passed the tests without product edits.
+No health schema additions are published before PR361 merges.
 
 ## Compatibility and ownership
 
