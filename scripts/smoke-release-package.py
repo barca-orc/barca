@@ -9,6 +9,7 @@ import re
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.error
@@ -24,7 +25,8 @@ def main():
     import barca
 
     assert barca.__version__ == importlib.metadata.version("barca") == args.version
-    assert not shutil.which("cargo") and not shutil.which("rustc")
+    assert Path(barca.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
+    assert all(not shutil.which(tool) for tool in ("cargo", "rustc", "cc", "gcc", "clang"))
     wheel_cli = Path(shutil.which("barca"))
     env = {k: v for k, v in os.environ.items() if not k.startswith(("BARCA_", "DD_"))}
     env.pop("PYTHONPATH", None)
