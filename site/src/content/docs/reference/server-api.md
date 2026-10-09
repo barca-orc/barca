@@ -62,11 +62,47 @@ All API responses are JSON, except the event stream and the UI.
 | `POST` | `/get/{target}` | Trigger a run scoped to one target asset. Returns a `run_id`. |
 | `DELETE` | `/run/{run_id}` | Cancel an in-flight run (workers terminated, status → `cancelled`). |
 | `GET`  | `/status/{run_id}` | Poll the status and result of a run. |
+| `GET`  | `/runs?limit=100` | Recent durable runs, joined with queued and live server runs. |
+| `GET`  | `/runs/{id}` | Inspect a durable run or live polling handle, with steps and captured logs. |
 | `GET`  | `/schedule` | List scheduled jobs with next fire time and last run status. |
 | `GET`  | `/events/{run_id}` | Server-Sent Events: a run's live log lines and step/run lifecycle. |
 | `GET`  | `/logs/{run_id}` | A run's captured output lines, persisted after it finishes. |
 | `GET`  | `/`, `/ui` | Redirect (relative `Location: ui/`) to the web UI. |
 | `GET`  | `/ui/` | The web UI, compiled into the binary. |
+
+### Run history and inspection
+
+The UI's **Runs** view lists this history and opens each run's status, timing, steps,
+errors and logs. After starting a node from the graph, **View run** opens its live details.
+The detail URL switches to the durable run ID once assigned, so it can be bookmarked
+and reopened after a server restart.
+
+`GET /runs?limit=100` returns `{ "runs": [...], "total": 12, "truncated": false }`,
+newest first. `limit` defaults to 100 and is bounded to 1–1000. It includes runs from the CLI,
+HTTP triggers and the scheduler in this environment's local metadata DB, plus queued server
+runs that have not yet received a durable ID. There is no source filter: a historical run
+remains visible even when its pipeline is no longer served.
+
+Each summary has `id`, `run_id` (the durable DB ID, or `null` while queued), `handle`
+(the server polling handle, or `null` after restart/eviction), `command`, `files`, `target`,
+`status`, UTC `started_at` and `finished_at`, `elapsed_seconds`, `steps_total`,
+`steps_executed`, `steps_cached`, and `error`. Durable statuses are `running`, `success`,
+`failed`, `cancelled` and `interrupted`; an accepted run not yet persisted can be `pending`.
+A failure before the engine records a run remains visible only in this server's memory.
+
+`GET /runs/{id}` accepts either ID while the server retains the handle and returns
+`{ "run": {...}, "steps": [...], "logs": [...], "result": null }`. A step has `node_id`,
+`status`, `elapsed_seconds` and `error`; a log line has `node_id`, `seq` and `line`.
+Logs and materialized steps survive a restart under the durable ID. While running, captured
+live logs and completed steps are included. `result` is the completed engine result while
+its server handle is retained. Its step reports supplement cached steps; cached inputs
+have no new materialization row, so those per-step reports and final output are unavailable
+after a server restart, although durable run-level cached counts remain. An unknown ID
+returns JSON `404`.
+
+These inspection endpoints always read a private DB snapshot. They do not create or migrate
+the project's database, change run status, or execute Python, including on a read-only server.
+Existing `/status/{handle}`, cancellation and live SSE endpoints keep their handle contract.
 
 ### Async runs
 

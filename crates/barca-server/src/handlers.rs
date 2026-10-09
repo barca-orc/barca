@@ -54,13 +54,13 @@ fn refuse_if_read_only(state: &AppState) -> Result<(), ApiError> {
 /// one, or — when there is no DB yet — an empty scratch DB, so the absence is
 /// preserved. Either way the schema is ensured on the copy, never on the
 /// original. Dropping it deletes the copy.
-struct SnapshotDb {
+pub(crate) struct SnapshotDb {
     _snapshot: Option<db::DbSnapshot>,
     _scratch: Option<tempfile::TempDir>,
-    path: String,
+    pub(crate) path: String,
 }
 
-async fn snapshot_db(state: &AppState) -> Result<SnapshotDb, ApiError> {
+pub(crate) async fn snapshot_db(state: &AppState) -> Result<SnapshotDb, ApiError> {
     let (snapshot, scratch, path) =
         match db::DbSnapshot::take(&state.config.resolved.db_path).await? {
             Some(s) => {
@@ -537,7 +537,11 @@ pub async fn logs(
     let db_run_id = state
         .runs
         .get(&run_id)
-        .and_then(|r| r.result.as_ref().map(|res| res.run_id.clone()))
+        .and_then(|r| {
+            r.db_run_id
+                .clone()
+                .or_else(|| r.result.as_ref().map(|res| res.run_id.clone()))
+        })
         .unwrap_or(run_id);
 
     let entries = if state.config.read_only {
@@ -591,6 +595,16 @@ fn spawn_run(state: AppState, kind: RunKind) -> String {
         handle.clone(),
         RunState {
             handle: handle.clone(),
+            db_run_id: None,
+            command: match &kind {
+                RunKind::Get(_) => "get",
+                RunKind::Task(_, _) => "run",
+            }
+            .into(),
+            target: match &kind {
+                RunKind::Get(target) => target.clone(),
+                RunKind::Task(target, _) => Some(target.clone()),
+            },
             status: RunStatus::Pending,
             result: None,
             error: None,
@@ -633,9 +647,17 @@ fn spawn_run(state: AppState, kind: RunKind) -> String {
         // run's broadcast/backlog channel.
         let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<RunEvent>();
         let drain_ch = channel.clone();
+        let drain_state = st.clone();
+        let drain_handle = h.clone();
         let drain = tokio::spawn(async move {
             while let Some(ev) = event_rx.recv().await {
-                drain_ch.emit(ev);
+                if let RunEvent::RunStarted { run_id } = ev {
+                    if let Some(mut run) = drain_state.runs.get_mut(&drain_handle) {
+                        run.db_run_id = Some(run_id);
+                    }
+                } else {
+                    drain_ch.emit(ev);
+                }
             }
         });
 

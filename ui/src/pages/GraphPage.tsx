@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useOutletContext, useSearchParams } from 'react-router'
+import { Link, useOutletContext, useSearchParams } from 'react-router'
 import { Maximize, ArrowRight, ArrowDown } from 'lucide-react'
 import { ConnectionBadge, IconButton, StatusDot } from '@/components'
 import { GraphCanvas, type GraphCanvasHandle } from '@/components/graph/GraphCanvas'
@@ -107,6 +107,7 @@ export function GraphPage() {
             <h1>{title}</h1>
           </div>
           <div className="barca-view-actions">
+            {run && <Link className="barca-clear" to={`/runs?run=${encodeURIComponent(run.handle)}`}>View run</Link>}
             <ConnectionBadge
               connection={connection(health, healthError)}
               offlineLabel="offline"

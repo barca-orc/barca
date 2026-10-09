@@ -344,6 +344,11 @@ async fn open_state(
         Some(exec_plan.total_steps),
     )
     .await?;
+    if let Some(tx) = &request.event_tx {
+        let _ = tx.send(crate::RunEvent::RunStarted {
+            run_id: run_id.clone(),
+        });
+    }
     trace_point!(started.trace, "db_create_run");
 
     // Measured-cost model: seed from persisted estimates so batch sizing is

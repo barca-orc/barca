@@ -1604,6 +1604,22 @@ pub async fn finish_run(
 
 /// Retrieve recent run records, newest first.
 pub async fn get_recent_runs(db_path: &str, limit: usize) -> Result<Vec<RunRecord>, BarcaError> {
+    read_runs(db_path, None, limit).await
+}
+
+/// Read a durable run by id, including the same interrupted-owner diagnosis as history.
+pub async fn get_run(db_path: &str, run_id: &str) -> Result<Option<RunRecord>, BarcaError> {
+    Ok(read_runs(db_path, Some(run_id), 1)
+        .await?
+        .into_iter()
+        .next())
+}
+
+async fn read_runs(
+    db_path: &str,
+    run_id: Option<&str>,
+    limit: usize,
+) -> Result<Vec<RunRecord>, BarcaError> {
     let _g = db_guard().await;
     let (_db, conn) = open_conn(db_path).await?;
     // A run whose process died is reported as `interrupted`, not as still `running`. Reported,
@@ -1611,8 +1627,8 @@ pub async fn get_recent_runs(db_path: &str, limit: usize) -> Result<Vec<RunRecor
     let interrupted = interrupted_runs(&conn, db_path).await;
     let mut rows = conn
         .query(
-            "SELECT run_id, command, files, target, status, steps_total, steps_executed, steps_cached, started_at, finished_at, elapsed_seconds FROM runs ORDER BY id DESC LIMIT ?1",
-            [limit.to_string()],
+            "SELECT run_id, command, files, target, status, steps_total, steps_executed, steps_cached, started_at, finished_at, elapsed_seconds FROM runs WHERE (?1 = '' OR run_id = ?1) ORDER BY id DESC LIMIT ?2",
+            [run_id.unwrap_or_default().to_string(), limit.to_string()],
         )
         .await
         .map_err(|e| BarcaError::Db(format!("failed to query runs: {e}")))?;
@@ -1649,6 +1665,39 @@ pub async fn get_recent_runs(db_path: &str, limit: usize) -> Result<Vec<RunRecor
         });
     }
     Ok(records)
+}
+
+/// A step recorded by this run. Cached inputs have no new materialization row.
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct RunStep {
+    pub node_id: String,
+    pub status: String,
+    pub elapsed_seconds: Option<f64>,
+    pub error: Option<String>,
+}
+
+pub async fn get_run_steps(db_path: &str, run_id: &str) -> Result<Vec<RunStep>, BarcaError> {
+    let _g = db_guard().await;
+    let (_db, conn) = open_conn(db_path).await?;
+    let mut rows = conn.query(
+        "SELECT node_id, status, elapsed_seconds, error_message FROM materializations WHERE run_id = ?1 ORDER BY id",
+        [run_id],
+    ).await.map_err(|e| BarcaError::Db(format!("failed to query run steps: {e}")))?;
+    let mut steps = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to read run step: {e}")))?
+    {
+        steps.push(RunStep {
+            node_id: row.get::<String>(0).unwrap_or_default(),
+            status: row.get::<String>(1).unwrap_or_default(),
+            elapsed_seconds: row.get::<f64>(2).ok(),
+            error: row.get::<String>(3).ok(),
+        });
+    }
+    Ok(steps)
 }
 
 /// Total number of recorded runs (for `barca history` truncation reporting).
@@ -1986,6 +2035,36 @@ pub async fn get_avg_elapsed_for_partitioned(
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn run_inspection_selects_its_recorded_steps_and_failure_details() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metadata.db").display().to_string();
+        super::init_db(&path).await.unwrap();
+        {
+            let _guard = super::db_guard().await;
+            let (_db, conn) = super::open_conn(&path).await.unwrap();
+            for (id, node, status, error) in [
+                ("first", "p.py:ok", "success", ""),
+                ("first", "p.py:bad", "failed", "bad input"),
+                ("other", "p.py:other", "success", ""),
+            ] {
+                conn.execute("INSERT INTO materializations (run_id,node_id,status,error_message,elapsed_seconds) VALUES (?1,?2,?3,NULLIF(?4,''),1.25)", [id,node,status,error]).await.unwrap();
+            }
+        }
+        let steps = super::get_run_steps(&path, "first").await.unwrap();
+        assert_eq!(steps.len(), 2);
+        assert_eq!(steps[0].node_id, "p.py:ok");
+        assert_eq!(steps[1].status, "failed");
+        assert_eq!(steps[1].error.as_deref(), Some("bad input"));
+        assert_eq!(steps[1].elapsed_seconds, Some(1.25));
+        assert!(
+            super::get_run_steps(&path, "unknown")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
     use super::*;
 
     #[tokio::test]

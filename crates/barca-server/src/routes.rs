@@ -17,6 +17,8 @@ pub fn router(state: AppState) -> Router {
         .route("/assets/{name}", get(handlers::asset_detail))
         .route("/assets/{name}/schema", get(handlers::asset_schema))
         .route("/run", post(handlers::run))
+        .route("/runs", get(crate::runs::list))
+        .route("/runs/{id}", get(crate::runs::detail))
         // POST starts a task run; DELETE cancels an in-flight run by handle.
         // The target takes the rest of the path, so a full node id with a directory in it
         // (`sub/pipeline.py:orders`) works with its `/` percent-encoded or not.

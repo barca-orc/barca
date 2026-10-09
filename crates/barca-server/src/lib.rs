@@ -17,6 +17,7 @@
 mod error;
 mod handlers;
 mod routes;
+mod runs;
 mod scheduler;
 mod state;
 mod ui;

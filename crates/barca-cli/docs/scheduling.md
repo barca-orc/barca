@@ -90,6 +90,14 @@ https://barca.sh/reference/server-api/ and `GET /schedule` reports live schedule
 nginx or Traefik (any path prefix, live logs included): https://barca.sh/deploying/.
 Full model: https://barca.sh/scheduling/.
 
+The UI's Runs view shows persisted CLI, scheduled and HTTP runs, plus queued/live server
+runs. Select a run to inspect its status, timing, steps, errors and logs. After triggering a
+node in the graph, use View run to open its details; even a cache hit records a new run.
+The detail URL switches to the durable run ID so it can be reopened after a server restart.
+The same inspection is available through `GET /runs?limit=100` and `GET /runs/{id}` and
+uses private DB snapshots. Logs and materialized steps survive restart; cached counts
+remain, but cached per-step reports and final output require the server's retained result.
+
 ## Stopping the server
 
 SIGINT (Ctrl-C) and SIGTERM (`kill`, `docker stop`, systemd) stop the server the same way. It

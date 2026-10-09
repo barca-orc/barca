@@ -3,7 +3,8 @@ import { AppShell } from '@/layouts/AppShell'
 import { GraphPage } from '@/pages/GraphPage'
 import { AssetsPage } from '@/pages/AssetsPage'
 import { SchedulesPage } from '@/pages/SchedulesPage'
-import { RunsPage, DocsPage } from '@/pages/placeholders'
+import { DocsPage } from '@/pages/placeholders'
+import { RunsPage } from '@/pages/RunsPage'
 import { KitPage } from '@/pages/KitPage'
 
 // Hash routing: the page itself is always `<prefix>/ui/`, so relative asset URLs

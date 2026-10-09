@@ -938,3 +938,70 @@ async fn schema_reads_materialized_columns_and_reports_missing_artifacts() {
     let (_, json) = send(&app, "GET", "/assets/second/schema").await;
     assert_eq!(json[0]["shape"]["note"], "artifact file not found");
 }
+
+#[tokio::test]
+async fn runs_inspection_survives_server_restart_and_never_mutates_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = isolated_config(dir.path(), true);
+    let path = &config.resolved.db_path;
+    barca_core::db::init_db(path).await.unwrap();
+    for (id, command, target, status) in [
+        ("cli", "get", "first", "success"),
+        ("scheduled", "run", "second", "failed"),
+    ] {
+        barca_core::db::create_run(path, id, command, "[\"old.py\"]", Some(target), Some(2))
+            .await
+            .unwrap();
+        barca_core::db::insert_logs(path, id, &[("old.py:first".into(), format!("from {id}"))])
+            .await
+            .unwrap();
+        barca_core::db::finish_run(path, id, status, 1, 1, 0.25)
+            .await
+            .unwrap();
+    }
+    let original = std::fs::read(path).unwrap();
+    let modified = std::fs::metadata(path).unwrap().modified().unwrap();
+    for _ in 0..2 {
+        let router = app(config.clone()); // fresh server state has no polling handles
+        let (status, list) = send(&router, "GET", "/runs?limit=1").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(list["total"], 2);
+        assert_eq!(list["truncated"], true);
+        assert_eq!(list["runs"][0]["id"], "scheduled");
+        assert_eq!(list["runs"][0]["handle"], serde_json::Value::Null);
+        assert_eq!(list["runs"][0]["status"], "failed");
+        let (status, detail) = send(&router, "GET", "/runs/cli").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(detail["run"]["files"], serde_json::json!(["old.py"]));
+        assert_eq!(detail["run"]["steps_cached"], 1);
+        assert_eq!(detail["logs"][0]["line"], "from cli");
+        assert!(detail["run"]["started_at"].as_str().unwrap().ends_with('Z'));
+        assert_eq!(
+            send(&router, "GET", "/runs/missing").await.0,
+            StatusCode::NOT_FOUND
+        );
+    }
+    assert_eq!(std::fs::read(path).unwrap(), original);
+    assert_eq!(
+        std::fs::metadata(path).unwrap().modified().unwrap(),
+        modified
+    );
+}
+
+#[tokio::test]
+async fn runs_inspection_without_a_database_does_not_create_one() {
+    let dir = tempfile::tempdir().unwrap();
+    for read_only in [false, true] {
+        let config = isolated_config(dir.path(), read_only);
+        let path = config.resolved.db_path.clone();
+        let router = app(config);
+        let (status, list) = send(&router, "GET", "/runs").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(list["runs"], serde_json::json!([]));
+        assert_eq!(
+            send(&router, "GET", "/runs/missing").await.0,
+            StatusCode::NOT_FOUND
+        );
+        assert!(!std::path::Path::new(&path).exists());
+    }
+}
