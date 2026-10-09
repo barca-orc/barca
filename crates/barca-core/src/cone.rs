@@ -78,6 +78,48 @@ impl Module {
         }
     }
 
+    /// Literal import targets for project-resolution validation. Reuse the same
+    /// relative import binding rules as cone hashing, including nested imports.
+    pub(crate) fn import_modules(&self) -> BTreeSet<String> {
+        struct Imports<'p> {
+            package: Option<&'p str>,
+            names: BTreeSet<String>,
+        }
+        impl<'a> Visitor<'a> for Imports<'_> {
+            fn visit_stmt(&mut self, stmt: &'a Stmt) {
+                for (_, binding) in import_bindings(stmt, self.package) {
+                    match binding {
+                        ModuleDef::ModuleImport { module } => {
+                            self.names.insert(module);
+                        }
+                        ModuleDef::FromImport { module, name } => {
+                            if name != "*" {
+                                self.names.insert(format!("{module}.{name}"));
+                            }
+                            self.names.insert(module);
+                        }
+                        _ => {}
+                    }
+                }
+                // `import pkg.child` also imports the child when no alias is
+                // supplied, although the local binding is just `pkg`.
+                if let Stmt::Import(import) = stmt {
+                    self.names
+                        .extend(import.names.iter().map(|alias| alias.name.to_string()));
+                }
+                visitor::walk_stmt(self, stmt);
+            }
+        }
+        let mut imports = Imports {
+            package: self.package.as_deref(),
+            names: BTreeSet::new(),
+        };
+        if let Ok(parsed) = parse_module(&self.source) {
+            visitor::walk_body(&mut imports, &parsed.syntax().body);
+        }
+        imports.names
+    }
+
     /// The module's top-level definitions, parsed on first use and then kept.
     pub fn definitions(&self) -> &HashMap<String, ModuleDef> {
         self.definitions

@@ -227,9 +227,12 @@ An edit in one of these does not change the hash; recompute with `--refresh-all`
   are hashed as part of the function but the names in them are not followed);
 - helpers more than six project modules away along an import chain.
 
-Two pipeline directories that each have a `helpers.py` are hashed correctly, each against its
-own, but share one `sys.path` in a worker (`barca docs discovery`, "Node ids"): give such
-helpers distinct names.
+Conflicting ordinary project imports are rejected before user code runs. If two pipeline
+directories each have `helpers.py`, qualify the imports (`from east.helpers import value`,
+`from west.helpers import value`) so both hashing and workers select the same files.
+Unambiguous sibling helpers still work; previous tasks do not add implicit import paths.
+Literal imports in inactive branches and unused functions may conservatively require
+qualification. Dynamic imports and user mutations of import paths are not statically proven.
 
 #### After upgrading to 0.19
 

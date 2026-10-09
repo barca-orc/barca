@@ -119,3 +119,52 @@ once, so user `chdir` cannot change legacy interpretation.
   with actionable refresh guidance. Include concurrent collected reads.
 - Required workspace checks and meaningful CLI tests; keep #295 open until this
   evidence and any remaining explicitly documented limitations are reviewed.
+
+## Implementation evidence and precise boundaries
+
+Actual-site validation also compares a project binding with another actual site's
+external/unavailable binding, because resetting sys.path alone does not remove
+warm sys.modules objects. Unrelated off-path stems remain allowed. A selected
+pipeline and imports of it must share one ordinary root-relative identity;
+importing the same file as both a bare stem and a qualified path requires the
+qualified form. Unambiguous non-pipeline sibling helpers remain supported.
+
+Validation follows literal imports transitively through existing source caches,
+including inactive branches and unused functions. It can conservatively refuse
+those imports; dynamic imports and user mutations of sys.path/sys.modules are
+not statically proven. Files already loaded by the existing checked path loader
+outside the root retain ordinary registered-module pickle behavior when their
+source identity is directly known. Cold outside-root legacy recovery still
+refuses, because no root-relative historical identity can prove that source.
+
+The actual old CLI created a `_barca_p` artifact at
+`/tmp/barca-explicit-real-old-vq9sashl`; new cached-only producer consumption ran
+only the consumer step, matched normal `p.Record`, and the fresh public Python
+API reader returned the same value/module. Producer execution stayed absent,
+artifact SHA256 stayed b29ef0c1d021becb3102c50bfe6ae5b3026f04b674e69daeb44a0311a67bf8f6,
+and setup happened once per PID. Reproduction script/log:
+`/tmp/barca-explicit-real-old-pickle.py` and `.log`.
+
+Final lifecycle review added per-source setup locks: no global source lock is held
+across arbitrary user setup, so a setup thread can ordinarily import a different
+helper while the parent waits. Concurrent compatibility reads wait for the same
+source's setup to finish. Worker execution restores the consumer's import path
+after cached-input recovery imports a producer. Focused actual worker tests cover
+threaded setup, cold legacy input followed by sibling and qualified imports, and
+setup-once identity; existing DuckDB connection/relation coverage remains required.
+
+Final verification: 796 workspace Rust tests and strict all-target Clippy passed;
+205 combined CLI/API/parallel/artifact tests passed, then all 38 focused import
+cases passed after the final external-prefix and missing-dependency cases. Both
+threaded-setup and consumer-path regressions fail with the old boundaries restored.
+The actual old-CLI proof was repeated at `/tmp/barca-explicit-real-old-pkt45llb`
+with identical preserved artifact hash and one consumer execution. Website build
+produced 51 pages. Pinned Ruff, Rust formatting, version sync and lock checks pass;
+`ty` reports no errors and six existing dependency/environment warnings.
+
+Compatibility note: this requires a minor release because layouts that depended
+on ambiguous bare stems or prior-worker-directory fallbacks must use explicit
+qualified imports. Ordinary installed/stdlib imports and unambiguous sibling
+helpers remain supported. An external module with an `_barca_` name retains normal
+pickle importing only after exhaustive proof finds no matching legacy project
+source; missing dependencies in a proven producer retain their original error.

@@ -108,6 +108,7 @@ fn load_blocking(
             .iter()
             .map(|(path, source)| (path.as_path(), source.clone())),
     );
+    cones.validate_imports(&nodes_by_file)?;
     // Nodes in command-line order (the last asset is `get file.py`'s final value).
     let mut all_nodes: Vec<crate::model::ExtractedNode> = Vec::new();
     for (index, nodes) in nodes_by_file.into_iter().enumerate() {
