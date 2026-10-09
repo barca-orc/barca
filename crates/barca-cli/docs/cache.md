@@ -688,11 +688,14 @@ Known limits:
 
 - With shared remote state (`barca docs remote`) all of this holds on the machine the run is on:
   the pull at the start of a command keeps what a run recorded locally, so progress and resume
-  work whatever other machines upload in the meantime. Other machines see a run when it ends,
-  and a killed run once a later run on its machine has ended.
+  work whatever other machines upload in the meantime. Newly committed progress is shared
+  every minute in healthy operation, without ending the run; the final outcome is shared
+  when it ends. Other machines can reuse confirmed results already checkpointed after a kill.
 - With a remote artifact store, a failed or unfinished upload is never recorded as reusable
   progress. Confirmed uploads are recorded locally while other steps are still running;
-  shared history is still published only when the run ends.
+  shared history publishes new committed progress every minute. Database and storage failures
+  can delay that cadence; a failed checkpoint retains local history for a later retry. Clean
+  ticks do not upload another snapshot.
 - **When a run is `interrupted`.** For runs started with 0.20.0 or later, only on an observation
   that can only be made when the run's process is gone; whenever barca cannot make one, the run stays `running`. A run
   records which kernel its process ran on (the boot id), its pid namespace, its start time,
