@@ -280,7 +280,7 @@ dependencies = [
 
 [[package]]
 name = "barca"
-version = "0.19.0"
+version = "0.20.0"
 dependencies = [
  "barca-core",
  "barca-server",
@@ -292,7 +292,7 @@ dependencies = [
 
 [[package]]
 name = "barca-core"
-version = "0.19.0"
+version = "0.20.0"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -319,7 +319,7 @@ dependencies = [
 
 [[package]]
 name = "barca-server"
-version = "0.19.0"
+version = "0.20.0"
 dependencies = [
  "axum",
  "barca-core",
