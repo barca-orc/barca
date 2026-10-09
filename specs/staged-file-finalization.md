@@ -61,3 +61,9 @@ SIGTERM at unlink entry proves this remaining interval. Apply the same private
 deferral to just the owned unlink/unregister critical section, replaying afterward;
 keep the raw owned remover available for SIG_DFL cleanup. This adds no caller or
 lifecycle policy and avoids deferring any user work or network operations.
+
+Review also found a deferred SIG_DFL arriving at handler-restoration entry could
+be lost if pending state was checked only beforehand. The real restoration-entry
+signal regression proves exit 0 instead of default termination. Recheck pending
+state after restoring, perform any still-needed owned cleanup, and re-send the
+signal; preserve restoration and termination even if cleanup fails.
