@@ -133,6 +133,21 @@ def test_transfer_errors_redact_uri_and_storage_secrets(monkeypatch):
     )
 
 
+def test_transfer_trace_redacts_uri_passwords_and_signed_queries(project):
+    root, env = project
+    (root / "barca.toml").write_text(
+        '[remote]\nuri = "s3://user:TRACE_PASSWORD@bucket/project?token=TRACE_SIGNATURE"\n'
+        'state = "off"\ntransfer_timeout = 1\n'
+    )
+    env["BARCA_TRACE_TIMING"] = "1"
+    out = run(root, env)
+    assert out.returncode == 0, out.stderr
+    assert "[trace]  transfer probe s3://<redacted>@bucket/project done" in out.stderr
+    assert "[trace]  transfer put s3://<redacted>@bucket/project" in out.stderr
+    assert "TRACE_PASSWORD" not in out.stderr
+    assert "TRACE_SIGNATURE" not in out.stderr
+
+
 def test_upload_progress_is_visible_while_the_drain_is_still_running(project):
     root, env = project
     (root / "barca.toml").write_text(

@@ -573,9 +573,9 @@ async fn io_task(
             req = req_rx.recv() => {
                 let Some((req, tx)) = req else { break };
                 let entry = match &req {
-                    TransferRequest::Put { id, remote, .. } => Some((*id, format!("put {remote}"))),
-                    TransferRequest::Get { id, remote, .. } => Some((*id, format!("get {remote}"))),
-                    TransferRequest::Probe { id, root } => Some((*id, format!("probe {root}"))),
+                    TransferRequest::Put { id, remote, .. } => Some((*id, format!("put {}", diagnostic_uri(remote)))),
+                    TransferRequest::Get { id, remote, .. } => Some((*id, format!("get {}", diagnostic_uri(remote)))),
+                    TransferRequest::Probe { id, root } => Some((*id, format!("probe {}", diagnostic_uri(root)))),
                     TransferRequest::Shutdown => None,
                 };
                 if write_frame(&mut stream, &req).await.is_err() {
