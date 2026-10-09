@@ -20,6 +20,7 @@ Points:
               file exists already
 - ``copied``  a copy into a directory store has written its temp file and not yet renamed it
 - ``push``    the state helper is about to push the metadata DB (``python -m barca._state push``)
+- ``repush``  a corrective state upload after an earlier upload reached ``pushed``
 - ``pull``    the state helper is about to pull it (``python -m barca._state pull``)
 - ``pushed``  the state helper has put the metadata DB in a directory store and has not said so
               yet (after the rename, before it prints the new token)
@@ -122,6 +123,11 @@ def _install(point: str, directory: Path) -> None:
                 _hold(point, directory)
 
         _storage.staged_beside = staged_then_hold
+    elif point == "repush":
+        wrap(
+            "local_path_of",
+            lambda *a: sys.argv[1:2] == ["push"] and (directory / "pushed.started").exists(),
+        )
     elif point in ("push", "pull"):
         # `_state.push` and `_state.pull` resolve their target through `_storage` first,
         # whatever the backend. Both points can be installed at once: each wraps the other.

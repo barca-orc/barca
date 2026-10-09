@@ -30,8 +30,9 @@
 //!   (see [`SETTLED`]; found through the index on `runs.status`) can be further along
 //!   locally. Its steps are compared when its `(status, steps_executed)` differs between the
 //!   two (a run's `steps_executed` moves with every step it records). Runs settled in the
-//!   pulled database are not looked at again: a run writes nothing after the push that
-//!   carries its outcome.
+//!   pulled database are normally not looked at again. The exception is local cancellation:
+//!   an upload may publish a completed outcome before the interrupted coordinator hears its
+//!   acknowledgement. A matching local cancelled outcome must survive the next pull.
 //!
 //! Copying is idempotent: carrying the same local database onto the same pulled one twice
 //! adds nothing the second time. That is what makes an interrupted pull safe to repeat.
@@ -47,7 +48,8 @@ use std::collections::{HashMap, HashSet};
 use turso::{Connection, Value};
 
 /// The outcomes a run records for itself when it ends. A run the pulled database holds with one
-/// of these was pushed after its last write, so the pulled database has all of it. `running`
+/// of these normally has all its writes. Cancellation during upload acknowledgement can
+/// still correct a completed outcome; see `carry_unpushed`. `running`
 /// (pushed mid-run by another process on the same machine) and `interrupted` (marked later, by
 /// whoever noticed the process was gone) can be behind what this machine recorded.
 const SETTLED: [&str; 3] = ["success", "failed", "cancelled"];
@@ -125,7 +127,7 @@ pub struct Carried {
 impl Carried {
     /// True when the pulled database was changed.
     pub fn wrote(&self) -> bool {
-        self.runs + self.steps + self.log_lines > 0
+        self.runs + self.steps + self.log_lines > 0 || !self.kept_runs.is_empty()
     }
 
     /// Identifies what was kept, so that keeping the same rows again is not announced again.
@@ -357,6 +359,42 @@ pub(crate) async fn carry_unpushed(
             });
         }
     }
+    // An upload can land before its helper acknowledges it. A subsequent interrupt
+    // corrects the local outcome to cancelled, even when the bounded corrective push
+    // cannot finish. Compare only indexed cancellations, never all settled history.
+    // Require the recorded owner to match as well as the globally unique run ID.
+    // A stale success/failed outcome never replaces a remote cancellation.
+    let cancelled = rows_of(
+        local,
+        "SELECT run_id, COALESCE(host, ''), COALESCE(pid, 0), COALESCE(owner, '') \
+         FROM runs WHERE status = 'cancelled'",
+        vec![],
+        "reading local cancellations",
+    )
+    .await?;
+    for row in cancelled {
+        let Some(run_id) = text(&row[0]) else {
+            continue;
+        };
+        let remote = rows_of(
+            pulled,
+            "SELECT status, COALESCE(host, ''), COALESCE(pid, 0), COALESCE(owner, '') \
+             FROM runs WHERE run_id = ?1",
+            vec![Value::Text(run_id.into())],
+            "comparing a cancelled run's published outcome",
+        )
+        .await?;
+        if remote.first().is_some_and(|r| {
+            matches!(text(&r[0]), Some("success" | "failed")) && row[1..] == r[1..]
+        }) {
+            open.push(OpenRun {
+                run_id: run_id.into(),
+                status: "cancelled".into(),
+                ours: ours(text(&row[1]).unwrap_or("")),
+                in_pulled: true,
+            });
+        }
+    }
     if open.is_empty() {
         return Ok(carried);
     }
@@ -419,8 +457,9 @@ async fn copy_runs(
         let id = || vec![Value::Text(run_id.clone())];
         let before = (carried.runs, carried.steps, carried.log_lines);
 
-        // The run row. The pulled database may hold it as `running` or `interrupted` while
-        // this machine saw it end: then the outcome it recorded for itself stands.
+        // The run row. An unfinished published outcome, or a completed outcome whose
+        // cancellation acknowledgement was interrupted, yields to the local correction.
+        let mut corrected_outcome = false;
         match run.in_pulled {
             false => {
                 for row in rows_of(local, &run_select, id(), "reading a local run").await? {
@@ -441,6 +480,7 @@ async fn copy_runs(
                 )
                 .await?;
                 for mut row in outcome {
+                    corrected_outcome = true;
                     row.push(Value::Text(run_id.clone()));
                     pulled
                         .execute(
@@ -497,7 +537,7 @@ async fn copy_runs(
                 carried.log_lines += 1;
             }
         }
-        if before != (carried.runs, carried.steps, carried.log_lines) {
+        if corrected_outcome || before != (carried.runs, carried.steps, carried.log_lines) {
             carried.kept_runs.push(run_id.clone());
         }
     }
@@ -767,6 +807,74 @@ mod tests {
         add_run(&fresh, "noticed", "interrupted").await;
         // (`ended` is not in the fresh copy at all, so it is carried whole.)
         assert_eq!(carry(&pulled, &fresh).await.kept_runs, ["ended"]);
+    }
+
+    #[tokio::test]
+    async fn cancellation_corrects_a_settled_upload_without_new_steps_or_logs() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = fresh_db(&dir, "local.db").await;
+        let pulled = fresh_db(&dir, "pulled.db").await;
+        let file = artifact(&dir, "completed.json");
+        for status in ["success", "failed"] {
+            add_run(&local, status, "cancelled").await;
+            add_run(&pulled, status, status).await;
+            for db_path in [&local, &pulled] {
+                add_step(db_path, status, "f.py:a", &file).await;
+                db::insert_logs(db_path, status, &[("f.py:a".into(), "completed".into())])
+                    .await
+                    .unwrap();
+            }
+        }
+        add_run(&pulled, "unrelated", "success").await;
+        let carried = carry(&local, &pulled).await;
+        assert!(carried.wrote(), "outcome-only corrections must be tracked");
+        assert_eq!((carried.runs, carried.steps, carried.log_lines), (0, 0, 0));
+        assert_eq!(carried.kept_runs, ["success", "failed"]);
+        assert!(!carried.digest().is_empty());
+        assert_eq!(
+            runs(&pulled).await,
+            [
+                "failed\tcancelled",
+                "success\tcancelled",
+                "unrelated\tsuccess"
+            ]
+        );
+        assert_eq!(carry(&local, &pulled).await, Carried::default());
+        assert_eq!(
+            steps(&pulled).await,
+            ["failed\tf.py:a\tsuccess", "success\tf.py:a\tsuccess"]
+        );
+        for run in ["success", "failed"] {
+            assert_eq!(db::get_logs(&pulled, run).await.unwrap().len(), 1);
+        }
+        // A stale completed outcome from a machine that pulled before cancellation
+        // must never reverse the correction.
+        let stale = fresh_db(&dir, "stale.db").await;
+        add_run(&stale, "success", "success").await;
+        assert_eq!(carry(&stale, &pulled).await, Carried::default());
+        assert_eq!(runs(&pulled).await[1], "success\tcancelled");
+    }
+
+    #[tokio::test]
+    async fn cancellation_never_overwrites_a_different_recorded_owner() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = fresh_db(&dir, "local.db").await;
+        let pulled = fresh_db(&dir, "pulled.db").await;
+        for field in ["host", "pid", "owner"] {
+            add_run(&local, field, "cancelled").await;
+            add_run(&pulled, field, "success").await;
+            exec(
+                &pulled,
+                &format!("UPDATE runs SET {field} = ?1 WHERE run_id = ?2"),
+                vec![Value::Text("different".into()), Value::Text(field.into())],
+            )
+            .await;
+        }
+        assert_eq!(carry(&local, &pulled).await, Carried::default());
+        assert_eq!(
+            runs(&pulled).await,
+            ["host\tsuccess", "owner\tsuccess", "pid\tsuccess"]
+        );
     }
 
     #[tokio::test]

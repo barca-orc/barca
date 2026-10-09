@@ -538,7 +538,10 @@ Two narrow cases, stated exactly:
 - If the interrupt arrives in the instant in which the push completes in the store but barca
   has not yet heard so, the shared history has the run as `success` and this machine marks it
   `cancelled`. The wrap-up then pushes again, which puts `cancelled` in the shared history too.
-  Only if that wrap-up does not finish either do the two differ.
+  If that wrap-up does not finish either, the two can temporarily differ. The next pull on
+  this machine preserves its cancelled outcome, even if other machines have added runs to
+  the shared history. The next successful upload shares that correction. Until then, another
+  machine can still see the earlier outcome.
 
 The end-of-run line (`[barca] <n>/<total> steps | done in <secs>s`) is about the steps. A Ctrl-C
 that arrives after the last step finished, while artifacts upload or the history is pushed,
