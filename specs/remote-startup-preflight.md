@@ -54,12 +54,11 @@ conditions restricting the bucket-root listing do not satisfy this probe.
 
 ## Verification
 
-- Workspace Rust tests: 770 passed, then added URI-redaction unit passed separately.
+- Rebased onto main `851c576`: workspace Rust tests, 771 passed.
 - Workspace Clippy: passed with warnings denied.
-- CLI/manual/serve/preflight Python tests: 82 passed, 8 emulator-dependent skips.
+- CLI/manual/serve/preflight/config/transfer Python tests: 158 passed.
 - Remote staging/verification/inspection/lazy/config tests with local emulators: 60 passed.
 - Real S3/Azure/GCS transfer fault tests: 30 passed; 1 expected skip because GCS emulator does not authenticate.
-- Transfer helper tests: 68 passed.
 - First Rust run exhausted tmpfs quota; repeat with task-local TMPDIR passed.
 - Initial CLI contract run lacked pandas; repeat after installing dependency passed.
 
