@@ -59,6 +59,23 @@ def slow() -> None:
     let mut resolved = barca_core::config::resolve_in(None, dir).unwrap();
     resolved.db_path = dir.join("metadata.db").display().to_string();
     resolved.artifact_root = dir.join("artifacts").display().to_string();
+    resolved.local_artifact_dir = resolved.artifact_root.clone();
+    let python = barca_core::commands::find_python();
+    // Plain cargo test runs before CI installs a wheel. Follow api.rs's repository
+    // launcher convention, scoped to children instead of changing parallel tests' env.
+    #[cfg(unix)]
+    let python = {
+        use std::os::unix::fs::PermissionsExt;
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../python");
+        let launcher = dir.join("contract-python");
+        let source = serde_json::to_string(&source.display().to_string()).unwrap();
+        let interpreter = serde_json::to_string(&python.display().to_string()).unwrap();
+        std::fs::write(&launcher, format!(
+            "#!/usr/bin/env python3\nimport os, sys\nos.environ['PYTHONPATH'] = {source} + (os.pathsep + os.environ['PYTHONPATH'] if os.environ.get('PYTHONPATH') else '')\nos.execvp({interpreter}, [{interpreter}, *sys.argv[1:]])\n"
+        )).unwrap();
+        std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755)).unwrap();
+        launcher
+    };
     ServeConfig {
         files: vec![source.display().to_string()],
         host: "127.0.0.1".parse().unwrap(),
@@ -66,7 +83,7 @@ def slow() -> None:
         watch: false,
         schedule: false,
         timezone: "utc".into(),
-        python: barca_core::commands::find_python(),
+        python,
         resolved,
         read_only,
     }
