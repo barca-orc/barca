@@ -100,6 +100,12 @@ const DELIBERATE: &[(&str, &str, &str)] = &[
 /// called with an argument it does not define (#284): the tests and the documentation of that
 /// check. Every other pipeline in the repository must plan.
 const REJECTED_ARGUMENTS: &[(&str, &str, &str)] = &[
+    // An imported alias receives the original Barca decorator's argument check (#316).
+    (
+        "python/tests/test_decorator_names_not_barcas.py",
+        "a",
+        "when",
+    ),
     // The test that names in other scopes do not turn the check off.
     (
         "python/tests/test_decorator_names_not_barcas.py",

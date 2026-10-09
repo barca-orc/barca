@@ -6,9 +6,36 @@ description: Arguments and behavior of @asset, @sensor, @task, @sink and @unsafe
 Everything here is imported from `barca`. The decorators return the function unchanged: the
 `barca` binary reads their arguments from the source text and never imports your module to plan
 a run. Arguments must therefore be written literally (a dict literal for `inputs=`, a list of
-string literals for `env=`); a decorator built in a loop or called through a variable is not
-seen. The signatures below are those of `python/barca/__init__.py`; unless a version is named,
+string literals for `env=`); a decorator built in a loop or installed through a runtime assignment is not
+seen. Qualified names and imported aliases are supported as described below. The signatures below are those of `python/barca/__init__.py`; unless a version is named,
 the behavior was checked by running 0.18.0.
+
+## Qualified and aliased imports
+
+Barca recognizes top-level imports such as `import barca`, `import barca as b`
+and `from barca import asset as a`, for decorators and their helpers:
+
+```python
+import barca as b
+
+@b.asset(partitions={"key": b.partitions(["a", "b"])})
+def rows(key):
+    return {"key": key}
+```
+
+Planning reads these bindings statically and never imports your module. A name
+reassigned or imported from another library does not define a Barca node; local
+parameters or assignments also shadow task-body helpers such as `parallel`.
+Dynamic alias assignments and conditional imports are not resolved. Explicit writes to a Barca module export
+conservatively disable recognition of that export through every module alias and
+direct import, including earlier copies; unaffected exports remain available.
+
+If a foreign decorator previously became a node merely because it was named
+`asset`, `sensor` or `task`, import the actual Barca decorator instead. To keep a
+foreign wrapper on a node, stack it with a genuine Barca decorator (qualified or
+aliased imports work). Bare names with no competing binding retain legacy
+source-snippet recognition. Namespace reflection retains conservative discovery,
+but disables provenance-based validation and uses conservative hashing.
 
 ## Accepted arguments
 

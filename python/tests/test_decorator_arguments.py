@@ -201,7 +201,7 @@ def test_a_decorator_that_is_not_barcas_is_not_checked(tmp_path: Path) -> None:
     )
     proc = barca_cmd(tmp_path, "list", "pipeline.py", "--json")
     assert proc.returncode == 0, proc.stderr
-    assert [n["id"] for n in json.loads(proc.stdout)["nodes"]] == ["pipeline.py:mine"]
+    assert json.loads(proc.stdout)["nodes"] == []
 
 
 # ─── Arguments that work are not rejected ─────────────────────────────────────

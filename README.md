@@ -13,7 +13,9 @@
 
 Barca runs Python functions as a dependency graph and caches their results.
 
-You mark functions with `@asset`, `@sensor` or `@task` and declare their inputs. The
+You mark functions with `@asset`, `@sensor` or `@task` and declare their inputs.
+Qualified imports (`@barca.asset()`) and imported aliases (`@a()` after
+`from barca import asset as a`) work for decorators and helpers. The
 `barca` binary, written in Rust, reads the source without importing it, works out what
 needs to run, and runs it in Python worker processes. Results are stored as files under
 `.barca/`. An asset runs again only when its code or its inputs change; sensors and tasks

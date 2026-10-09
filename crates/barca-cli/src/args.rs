@@ -221,7 +221,7 @@ Examples:
   barca list                         # every node in the project (files that import barca)
   barca list pipelines/              # only files under pipelines/ (trailing / marks a directory)
   barca list .                       # the current directory and below
-  barca list pipeline.py             # table of nodes (in a terminal; JSON when piped)
+  barca list pipeline.py             # nodes, including qualified/aliased Barca decorators
   barca list pipeline.py --json      # {nodes: [{id, kind, freshness, schedule?, inputs, env, next_fire?}], total, truncated, root}
   barca list pipeline.py --pretty    # the table, even when piped
   barca list pipeline.py --fields id,inputs   # JSON with only these keys per node

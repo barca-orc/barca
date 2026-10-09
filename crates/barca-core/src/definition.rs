@@ -209,25 +209,21 @@ pub fn node_definition<'a>(
 
     for decorator in &func.decorator_list {
         let expr = &decorator.expression;
-        let name = match expr {
-            Expr::Name(name) => Some(name.id.as_str()),
-            Expr::Call(call) => match call.func.as_ref() {
-                Expr::Name(name) => Some(name.id.as_str()),
-                _ => None,
-            },
-            _ => None,
+        let callee = match expr {
+            Expr::Call(call) => call.func.as_ref(),
+            _ => expr,
         };
-        if !name.is_some_and(|name| barca.contains(name)) {
-            let node_like = match_node_decorator(expr).is_some();
+        if barca.resolve(callee).is_none() {
+            let node_like = match_node_decorator(expr, barca).is_some();
             is_node |= node_like;
             conservative_module = true;
             decorators.push(canonical_expr(expr, source));
             followed.push(expr);
-        } else if is_unsafe_decorator(expr) {
+        } else if is_unsafe_decorator(expr, barca) {
             if rule(UNSAFE) != Counts::No {
                 decorators.push("unsafe".to_string());
             }
-        } else if try_extract_sink(expr).is_some() {
+        } else if try_extract_sink(expr, barca).is_some() {
             if rule(SINK) != Counts::No {
                 decorators.push(canonical_expr(expr, source));
                 // The arguments, not the name `sink` itself (it is barca's).
@@ -236,10 +232,10 @@ pub fn node_definition<'a>(
                     followed.extend(call.arguments.keywords.iter().map(|kw| &kw.value));
                 }
             }
-        } else if let Some((kind, _)) = match_node_decorator(expr) {
+        } else if let Some((kind, _)) = match_node_decorator(expr, barca) {
             is_node = true;
             if let Expr::Call(call) = expr {
-                node_arguments(kind, call, source, &mut arguments, &mut followed);
+                node_arguments(kind, call, source, barca, &mut arguments, &mut followed);
             }
         } else if rule(OTHER_DECORATOR) != Counts::No {
             decorators.push(canonical_expr(expr, source));
@@ -279,6 +275,7 @@ fn node_arguments<'a>(
     kind: crate::NodeKind,
     call: &'a ast::ExprCall,
     source: &str,
+    barca: &crate::decorator_args::BarcaNames,
     arguments: &mut Vec<String>,
     followed: &mut Vec<&'a Expr>,
 ) {
@@ -303,11 +300,11 @@ fn node_arguments<'a>(
             Counts::PartitionShape => {
                 arguments.push(format!(
                     "{name}={}",
-                    partition_shape(value, source, followed)
+                    partition_shape(value, source, barca, followed)
                 ));
             }
             Counts::Yes if name == "inputs" => {
-                arguments.push(format!("{name}={}", inputs(value, source, followed)));
+                arguments.push(format!("{name}={}", inputs(value, source, barca, followed)));
             }
             Counts::Yes => {
                 arguments.push(format!("{name}={}", canonical_expr(value, source)));
@@ -319,7 +316,12 @@ fn node_arguments<'a>(
 
 /// `inputs={"param": upstream, ...}`: the mapping, sorted by parameter (its order means
 /// nothing). An upstream reference is hashed as written and not followed.
-fn inputs<'a>(value: &'a Expr, source: &str, followed: &mut Vec<&'a Expr>) -> String {
+fn inputs<'a>(
+    value: &'a Expr,
+    source: &str,
+    barca: &crate::decorator_args::BarcaNames,
+    followed: &mut Vec<&'a Expr>,
+) -> String {
     let Expr::Dict(dict) = value else {
         // Not a literal mapping: barca reads no inputs from it. Hashed and followed whole.
         followed.push(value);
@@ -336,7 +338,7 @@ fn inputs<'a>(value: &'a Expr, source: &str, followed: &mut Vec<&'a Expr>) -> St
             }
             None => "**".to_string(),
         };
-        follow_unless_node_reference(&item.value, followed);
+        follow_unless_node_reference(&item.value, barca, followed);
         items.push(format!("{key}: {}", canonical_expr(&item.value, source)));
     }
     items.sort();
@@ -346,7 +348,12 @@ fn inputs<'a>(value: &'a Expr, source: &str, followed: &mut Vec<&'a Expr>) -> St
 /// `partitions={"dim": partitions(...) | partitions_from(upstream)}`: for each dimension, its
 /// name and either `keys` (whatever the keys are and however they are written) or the
 /// `partitions_from` source. Sorted by dimension.
-fn partition_shape<'a>(value: &'a Expr, source: &str, followed: &mut Vec<&'a Expr>) -> String {
+fn partition_shape<'a>(
+    value: &'a Expr,
+    source: &str,
+    barca: &crate::decorator_args::BarcaNames,
+    followed: &mut Vec<&'a Expr>,
+) -> String {
     let Expr::Dict(dict) = value else {
         // Not a literal mapping: barca reads no partitions from it. Hashed and followed whole.
         followed.push(value);
@@ -363,10 +370,10 @@ fn partition_shape<'a>(value: &'a Expr, source: &str, followed: &mut Vec<&'a Exp
             }
             None => "**".to_string(),
         };
-        let shape = match barca_call(&item.value) {
+        let shape = match barca_call(&item.value, barca) {
             Some(("partitions", _)) => "keys".to_string(),
             Some(("partitions_from", call)) => {
-                follow_unless_node_reference(&item.value, followed);
+                follow_unless_node_reference(&item.value, barca, followed);
                 format!("from {}", canonical_arguments(&call.arguments, source))
             }
             _ => {
@@ -381,26 +388,28 @@ fn partition_shape<'a>(value: &'a Expr, source: &str, followed: &mut Vec<&'a Exp
     format!("{{{}}}", items.join(", "))
 }
 
-/// `name(...)` where `name` is a plain name: the name and the call.
-fn barca_call(expr: &Expr) -> Option<(&str, &ast::ExprCall)> {
-    let Expr::Call(call) = expr else {
-        return None;
-    };
-    let Expr::Name(name) = call.func.as_ref() else {
-        return None;
-    };
-    Some((name.id.as_str(), call))
+/// A recognized Barca helper call, with qualified/aliased spelling resolved.
+fn barca_call<'a>(
+    expr: &'a Expr,
+    barca: &crate::decorator_args::BarcaNames,
+) -> Option<(&'static str, &'a ast::ExprCall)> {
+    let Expr::Call(call) = expr else { return None };
+    Some((barca.recognized(&call.func)?, call))
 }
 
 /// Add `expr` to `followed`, leaving out what [`crate::parse`] reads as a reference to another
 /// node: a name, `module.name`, and the callee and first argument of `collect(up)`,
 /// `partitions_from(up)` and `up()`. `asset_ref("file.py:name")` names a node by a string.
-fn follow_unless_node_reference<'a>(expr: &'a Expr, followed: &mut Vec<&'a Expr>) {
+fn follow_unless_node_reference<'a>(
+    expr: &'a Expr,
+    barca: &crate::decorator_args::BarcaNames,
+    followed: &mut Vec<&'a Expr>,
+) {
     let is_reference = |e: &Expr| matches!(e, Expr::Name(_) | Expr::Attribute(_));
     if is_reference(expr) {
         return;
     }
-    let Some((_, call)) = barca_call(expr) else {
+    let Some((_, call)) = barca_call(expr, barca) else {
         followed.push(expr);
         return;
     };
@@ -1150,5 +1159,80 @@ def f(a, b, c):
             })
             .collect();
         assert_eq!(rows, expected);
+    }
+    #[test]
+    fn mutated_partition_helpers_keep_their_arguments_in_definition_hash() {
+        let definition = |keys: &str| {
+            let source = format!(
+                "import barca as b\nimport barca as c\nb.partitions = foreign\n@c.asset(partitions={{\"key\": c.partitions({keys})}})\ndef f(): return 1\n"
+            );
+            let parsed = parse_module(&source).unwrap();
+            let func = parsed
+                .syntax()
+                .body
+                .iter()
+                .find_map(|s| match s {
+                    Stmt::FunctionDef(f) => Some(f),
+                    _ => None,
+                })
+                .unwrap();
+            node_definition(
+                func,
+                &source,
+                &crate::decorator_args::BarcaNames::of(&parsed.syntax().body),
+            )
+            .unwrap()
+            .text
+        };
+        assert_ne!(definition("[1]"), definition("[2]"));
+    }
+
+    #[test]
+    fn aliased_nodes_share_metadata_and_partition_hash_rules() {
+        let definition = |imports: &str, decorator: &str| {
+            let source = format!("{imports}\n{decorator}\ndef f(key): return key\n");
+            let parsed = parse_module(&source).unwrap();
+            let func = parsed
+                .syntax()
+                .body
+                .iter()
+                .find_map(|s| match s {
+                    Stmt::FunctionDef(f) => Some(f),
+                    _ => None,
+                })
+                .unwrap();
+            node_definition(
+                func,
+                &source,
+                &crate::decorator_args::BarcaNames::of(&parsed.syntax().body),
+            )
+            .unwrap()
+            .text
+        };
+        let bare = definition(
+            "from barca import asset, partitions",
+            "@asset(partitions={\"key\": partitions([\"a\"])}, retries=1)",
+        );
+        assert_eq!(
+            bare,
+            definition(
+                "import barca as b",
+                "@b.asset(partitions={\"key\": b.partitions([\"b\"])}, retries=8)"
+            )
+        );
+        assert_eq!(
+            bare,
+            definition(
+                "from barca import asset as a, partitions as p",
+                "@a(partitions={\"key\": p([\"c\"])}, retries=3)"
+            )
+        );
+        let foreign = |keys: &str| {
+            definition(
+                "from barca import asset\nfrom other import partitions",
+                &format!("@asset(partitions={{\"key\": partitions({keys})}})"),
+            )
+        };
+        assert_ne!(foreign("[1]"), foreign("[2]"));
     }
 }

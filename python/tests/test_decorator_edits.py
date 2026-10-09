@@ -327,8 +327,10 @@ def test_an_unknown_argument_edit_is_rejected_before_using_the_cache(project):
     assert get(project, "end")["steps_executed"] == 0
     write(project, chain('@asset(inputs={"x": a}, mode="fast")'))
     proc = subprocess.run(
-        [_find_binary(), "get", "end", "pipeline.py"], cwd=project,
-        capture_output=True, text=True,
+        [_find_binary(), "get", "end", "pipeline.py"],
+        cwd=project,
+        capture_output=True,
+        text=True,
     )
     assert proc.returncode == 2
     assert proc.stdout == ""
@@ -426,6 +428,7 @@ def test_renaming_a_node_runs_it_once_and_nothing_downstream(project):
 
 def test_wrapper_keyword_order_is_part_of_the_result(project):
     """A custom decorator may observe Python's insertion order of keyword arguments."""
+
     def source(arguments: str) -> str:
         return (
             "from barca import asset\n\n"
@@ -438,6 +441,7 @@ def test_wrapper_keyword_order_is_part_of_the_result(project):
             f"@asset()\n@ordered({arguments})\n"
             "def result():\n    return []\n"
         )
+
     write(project, source("first=1, second=2"))
     assert get(project, "result")["final_output"] == ["first", "second"]
     assert get(project, "result")["steps_executed"] == 0
@@ -448,17 +452,20 @@ def test_wrapper_keyword_order_is_part_of_the_result(project):
 
 
 def test_local_asset_decorator_metadata_is_part_of_its_result(project):
-    template = '''def asset(**kwargs):
+    template = """from barca import asset as actual_asset
+
+def asset(**kwargs):
     def decorate(fn):
         def wrapped():
             return kwargs["description"]
         return wrapped
     return decorate
 
+@actual_asset()
 @asset(description={description!r})
 def value():
     return 0
-'''
+"""
     write(project, template.format(description="one"))
     first = get(project, "value")
     assert first["final_output"] == "one"
@@ -473,17 +480,20 @@ def value():
 
 def test_local_node_decorator_implementation_changes_its_result(project):
     decorator = "asset"
-    template = '''def {decorator}(**kwargs):
+    template = """from barca import asset as actual_asset
+
+def {decorator}(**kwargs):
     def decorate(fn):
         def wrapped():
             return {value!r}
         return wrapped
     return decorate
 
+@actual_asset()
 @{decorator}()
 def value():
     return 0
-'''
+"""
     write(project, template.format(decorator=decorator, value="one"))
     assert get(project, "value")["final_output"] == "one"
     assert get(project, "value")["steps_executed"] == 0
@@ -494,17 +504,20 @@ def value():
 
 
 def test_local_node_decorator_keyword_order_changes_its_result(project):
-    template = '''def asset(**kwargs):
+    template = """from barca import asset as actual_asset
+
+def asset(**kwargs):
     def decorate(fn):
         def wrapped():
             return list(kwargs)
         return wrapped
     return decorate
 
+@actual_asset()
 @asset({arguments})
 def value():
     return 0
-'''
+"""
     write(project, template.format(arguments='description="one", tags=["two"]'))
     assert get(project, "value")["final_output"] == ["description", "tags"]
     assert get(project, "value")["steps_executed"] == 0
@@ -514,14 +527,17 @@ def value():
     assert changed["steps_executed"] == 1
 
 
-@pytest.mark.parametrize("rebinding", [
-    "def install(x=(asset := custom)): pass",
-    "@((asset := custom)())\ndef install(): pass",
-    "class Install((asset := custom) and object): pass",
-    "@((asset := custom)())\nclass Install: pass",
-])
+@pytest.mark.parametrize(
+    "rebinding",
+    [
+        "def install(x=(asset := custom)): pass",
+        "@((asset := custom)())\ndef install(): pass",
+        "class Install((asset := custom) and object): pass",
+        "@((asset := custom)())\nclass Install: pass",
+    ],
+)
 def test_definition_time_walrus_does_not_hide_a_custom_decorator(project, rebinding):
-    template = '''from barca import asset
+    template = """from barca import asset, asset as actual_asset
 
 def custom(**kwargs):
     def decorate(fn):
@@ -532,10 +548,11 @@ def custom(**kwargs):
 
 {rebinding}
 
+@actual_asset()
 @asset(description={description!r})
 def value():
     return 0
-'''
+"""
     write(project, template.format(rebinding=rebinding, description="one"))
     assert get(project, "value")["final_output"] == "one"
     assert get(project, "value")["steps_executed"] == 0
@@ -546,16 +563,19 @@ def value():
     assert get(project, "value")["steps_executed"] == 0
 
 
-@pytest.mark.parametrize("rebinding", [
-    "def install(x=(asset := custom)): pass",
-    "@((asset := custom)())\ndef install(): pass",
-    "class Install((asset := custom) and object): pass",
-    "@((asset := custom)())\nclass Install: pass",
-    "if True:\n    asset = custom",
-    "def install():\n    global asset\n    asset = custom\ninstall()",
-])
+@pytest.mark.parametrize(
+    "rebinding",
+    [
+        "def install(x=(asset := custom)): pass",
+        "@((asset := custom)())\ndef install(): pass",
+        "class Install((asset := custom) and object): pass",
+        "@((asset := custom)())\nclass Install: pass",
+        "if True:\n    asset = custom",
+        "def install():\n    global asset\n    asset = custom\ninstall()",
+    ],
+)
 def test_rebound_decorator_body_is_not_hidden_by_its_original_import(project, rebinding):
-    template = '''from barca import asset
+    template = """from barca import asset, asset as actual_asset
 
 def custom(**kwargs):
     def decorate(fn):
@@ -566,10 +586,11 @@ def custom(**kwargs):
 
 {rebinding}
 
+@actual_asset()
 @asset(description="fixed")
 def value():
     return 0
-'''
+"""
     write(project, template.format(rebinding=rebinding, value="one"))
     assert get(project, "value")["final_output"] == "one"
     assert get(project, "value")["steps_executed"] == 0
@@ -582,7 +603,9 @@ def value():
 
 @pytest.mark.parametrize("imports", ["import helpers", "if True:\n    import helpers"])
 def test_unproven_decorator_fallback_follows_static_module_dependencies(project, imports):
-    write(project, '''from barca import asset
+    write(
+        project,
+        """from barca import asset, asset as actual_asset
 {imports}
 
 def custom(**kwargs):
@@ -590,10 +613,12 @@ def custom(**kwargs):
 
 def install(x=(asset := custom)): pass
 
+@actual_asset()
 @asset(description="fixed")
 def value():
     return 0
-'''.format(imports=imports))
+""".format(imports=imports),
+    )
     helper = project / "helpers.py"
     helper.write_text('def result():\n    return "one"\n')
     assert get(project, "value")["final_output"] == "one"
@@ -606,7 +631,7 @@ def value():
 
 @pytest.mark.parametrize("decorator", ["sink", "unsafe", "wrapper"])
 def test_rebound_stacked_decorator_implementation_is_part_of_the_result(project, decorator):
-    template = '''from barca import asset, sink, unsafe
+    template = """from barca import asset, sink, unsafe
 
 def custom(**kwargs):
     return lambda fn: lambda: {value!r}
@@ -617,7 +642,7 @@ def install(x=({decorator} := custom)): pass
 @{decorator}()
 def value():
     return 0
-'''
+"""
     write(project, template.format(decorator=decorator, value="one"))
     assert get(project, "value")["final_output"] == "one"
     assert get(project, "value")["steps_executed"] == 0
@@ -628,38 +653,47 @@ def value():
 
 
 def test_foreign_star_import_decorator_implementation_is_part_of_the_result(project):
-    write(project, '''from barca import asset
+    write(
+        project,
+        """from barca import asset, asset as actual_asset
 from helpers import *
+from barca import asset as actual_asset
 
+@actual_asset()
 @asset(description="fixed")
 def value():
     return 0
-''')
+""",
+    )
     helper = project / "helpers.py"
     for result in ["one", "two"]:
-        helper.write_text(f'def asset(**kwargs):\n    return lambda fn: lambda: {result!r}\n')
+        helper.write_text(f"def asset(**kwargs):\n    return lambda fn: lambda: {result!r}\n")
         changed = get(project, "value")
         assert changed["final_output"] == result
         assert changed["steps_executed"] == 1
         assert get(project, "value")["steps_executed"] == 0
 
 
-@pytest.mark.parametrize("rebinding", [
-    'globals()["asset"] = custom',
-    'namespace = globals\nnamespace()["asset"] = custom',
-    'import builtins as bi\nnamespace = bi.globals\nnamespace()["asset"] = custom',
-    'def install(default=globals().__setitem__("asset", custom)): pass',
-    'def install():\n    globals()["asset"] = custom\ninstall()',
-    'locals()["asset"] = custom',
-    'import sys\nvars(sys.modules[__name__])["asset"] = custom',
-    'exec("asset = custom")',
-    "eval('globals().__setitem__(\"asset\", custom)')",
-    'from builtins import globals as namespace\nnamespace()["asset"] = custom',
-    '__builtins__["globals"]()["asset"] = custom',
-
-])
-def test_explicit_namespace_reflection_defers_foreign_arguments_and_invalidates_cache(project, rebinding):
-    template = '''from barca import asset
+@pytest.mark.parametrize(
+    "rebinding",
+    [
+        'globals()["asset"] = custom',
+        'namespace = globals\nnamespace()["asset"] = custom',
+        'import builtins as bi\nnamespace = bi.globals\nnamespace()["asset"] = custom',
+        'def install(default=globals().__setitem__("asset", custom)): pass',
+        'def install():\n    globals()["asset"] = custom\ninstall()',
+        'locals()["asset"] = custom',
+        'import sys\nvars(sys.modules[__name__])["asset"] = custom',
+        'exec("asset = custom")',
+        "eval('globals().__setitem__(\"asset\", custom)')",
+        'from builtins import globals as namespace\nnamespace()["asset"] = custom',
+        '__builtins__["globals"]()["asset"] = custom',
+    ],
+)
+def test_explicit_namespace_reflection_defers_foreign_arguments_and_invalidates_cache(
+    project, rebinding
+):
+    template = """from barca import asset
 
 def custom(**kwargs):
     def decorate(fn):
@@ -673,16 +707,27 @@ def custom(**kwargs):
 @asset(description={description!r}, mode={mode!r})
 def value():
     return 0
-'''
+"""
     for description, mode, implementation in [
         ("one", "fast", "before"),
         ("two", "fast", "before"),
         ("two", "fast", "after"),
         ("two", "slow", "after"),
     ]:
-        write(project, template.format(rebinding=rebinding, description=description,
-                                       mode=mode, implementation=implementation))
+        write(
+            project,
+            template.format(
+                rebinding=rebinding,
+                description=description,
+                mode=mode,
+                implementation=implementation,
+            ),
+        )
         result = get(project, "value")
-        assert result["final_output"] == {"description": description, "mode": mode, "wrapper": implementation}
+        assert result["final_output"] == {
+            "description": description,
+            "mode": mode,
+            "wrapper": implementation,
+        }
         assert result["steps_executed"] == 1
         assert get(project, "value")["steps_executed"] == 0

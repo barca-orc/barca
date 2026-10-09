@@ -2255,7 +2255,7 @@ def shadowing(helpers, json):
         for name in ["asset", "task", "sensor", "unsafe", "sink"] {
             let pipeline = |result: &str| {
                 format!(
-                    "from barca import asset as actual_asset\ndef {name}(**kwargs):\n    return lambda fn: {result}\n\n@asset()\n@{name}()\ndef my_asset():\n    return 0\n"
+                    "from barca import asset as actual_asset\ndef {name}(**kwargs):\n    return lambda fn: {result}\n\n@actual_asset()\n@{name}()\ndef my_asset():\n    return 0\n"
                 )
             };
             let first = cone_hash(&pipeline("1"), "my_asset");

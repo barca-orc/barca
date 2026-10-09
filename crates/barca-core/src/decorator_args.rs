@@ -446,65 +446,240 @@ fn check_call(call: &ast::ExprCall, sig: &Signature) -> Option<Problem> {
     None
 }
 
-/// The names of one file that are positively barca's.
-///
-/// A name counts only when a `from barca import NAME` (or `from barca import *`) stands at the
-/// top level of the module and nothing else in the file binds the name at module scope:
-/// no assignment (plain, annotated, augmented, unpacking, `:=`), `def`, `class`, `import`,
-/// `from other import`, `for` target, `with ... as`, `except ... as`, `match` capture, `del`,
-/// no such statement inside `if` / `try` / `with` / loops, no `global NAME` in a function, and
-/// no `from other import *` after the barca import. A barca import that is itself nested
-/// (`try: from barca import task`) or renames (`from barca import task as asset`) does not
-/// count either. Explicit references to namespace-reflection builtins make all imports
-/// uncertain, including aliases or qualified/shadowed references. This is a bounded static
-/// check; arbitrary reflective indirection and runtime side effects are not resolved.
-/// When in doubt the name is not barca's, and its arguments are not checked.
-#[derive(Debug, Default)]
-pub struct BarcaNames(std::collections::HashSet<&'static str>);
+/// Conservative static provenance for top-level Barca imports, including aliases.
+/// Assignments, competing imports, globals, namespace reflection and writes to module
+/// attributes invalidate provenance. No Python module is imported or executed.
+/// Explicit competing bindings also prevent legacy bare-name discovery. Reflection alone
+/// retains discovery candidates, while hashing and argument validation stay conservative.
+#[derive(Debug, Default, Clone)]
+pub struct BarcaNames {
+    proven: std::collections::HashMap<String, &'static str>,
+    candidates: std::collections::HashMap<String, &'static str>,
+    bound: std::collections::HashSet<String>,
+    /// Explicit writes affect the shared module object, regardless of import spelling.
+    mutated_exports: std::collections::HashSet<&'static str>,
+}
+
+fn exported_names() -> impl Iterator<Item = &'static str> {
+    SIGNATURES.iter().map(|s| s.name).chain([
+        "unsafe",
+        "Always",
+        "Manual",
+        "parallel",
+        "parallel_map",
+    ])
+}
+fn exported(name: &str) -> Option<&'static str> {
+    exported_names().find(|n| *n == name)
+}
 
 impl BarcaNames {
     pub fn contains(&self, name: &str) -> bool {
-        self.0.contains(name)
+        self.proven.contains_key(name)
+    }
+
+    /// A positively imported Barca export, with qualified/aliased spelling resolved.
+    pub(crate) fn resolve(&self, expr: &Expr) -> Option<&'static str> {
+        match expr {
+            Expr::Name(n) => self
+                .proven
+                .get(n.id.as_str())
+                .copied()
+                .filter(|n| *n != "module"),
+            Expr::Attribute(a) => {
+                let Expr::Name(n) = a.value.as_ref() else {
+                    return None;
+                };
+                (self.proven.get(n.id.as_str()) == Some(&"module"))
+                    .then(|| exported(a.attr.as_str()))
+                    .flatten()
+                    .filter(|name| !self.mutated_exports.contains(name))
+            }
+            _ => None,
+        }
+    }
+
+    /// Compatibility for bare names in source snippets with no competing binding.
+    pub(crate) fn recognized(&self, expr: &Expr) -> Option<&'static str> {
+        self.resolve(expr)
+            .or_else(|| match expr {
+                Expr::Name(n) => self
+                    .candidates
+                    .get(n.id.as_str())
+                    .copied()
+                    .filter(|n| *n != "module"),
+                Expr::Attribute(a) => {
+                    let Expr::Name(n) = a.value.as_ref() else {
+                        return None;
+                    };
+                    (self.candidates.get(n.id.as_str()) == Some(&"module"))
+                        .then(|| exported(a.attr.as_str()))
+                        .flatten()
+                        .filter(|name| !self.mutated_exports.contains(name))
+                }
+                _ => None,
+            })
+            .or_else(|| {
+                let Expr::Name(n) = expr else { return None };
+                (!self.bound.contains(n.id.as_str()))
+                    .then(|| exported(n.id.as_str()))
+                    .flatten()
+            })
+    }
+
+    /// Function-local stores/parameters/imports cannot stand for module exports.
+    pub(crate) fn in_function(&self, func: &ast::StmtFunctionDef) -> Self {
+        struct Locals(std::collections::HashSet<String>);
+        impl<'a> Visitor<'a> for Locals {
+            fn visit_parameter(&mut self, p: &'a ast::Parameter) {
+                self.0.insert(p.name.to_string());
+            }
+            fn visit_expr(&mut self, e: &'a Expr) {
+                if let Expr::Name(n) = e
+                    && !n.ctx.is_load()
+                {
+                    self.0.insert(n.id.to_string());
+                }
+                visitor::walk_expr(self, e);
+            }
+            fn visit_stmt(&mut self, s: &'a ast::Stmt) {
+                match s {
+                    ast::Stmt::FunctionDef(f) => {
+                        self.0.insert(f.name.to_string());
+                        return;
+                    }
+                    ast::Stmt::ClassDef(c) => {
+                        self.0.insert(c.name.to_string());
+                        return;
+                    }
+                    ast::Stmt::Import(i) => {
+                        for a in &i.names {
+                            self.0.insert(
+                                a.asname
+                                    .as_ref()
+                                    .map_or_else(
+                                        || a.name.as_str().split('.').next().unwrap_or(""),
+                                        |n| n.as_str(),
+                                    )
+                                    .to_string(),
+                            );
+                        }
+                    }
+                    ast::Stmt::ImportFrom(i) => {
+                        for a in &i.names {
+                            self.0.insert(
+                                a.asname
+                                    .as_ref()
+                                    .map_or(a.name.as_str(), |n| n.as_str())
+                                    .to_string(),
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+                visitor::walk_stmt(self, s);
+            }
+            fn visit_except_handler(&mut self, handler: &'a ast::ExceptHandler) {
+                let ast::ExceptHandler::ExceptHandler(h) = handler;
+                if let Some(n) = &h.name {
+                    self.0.insert(n.to_string());
+                }
+                visitor::walk_except_handler(self, handler);
+            }
+            fn visit_pattern(&mut self, p: &'a ast::Pattern) {
+                match p {
+                    ast::Pattern::MatchAs(p) => {
+                        if let Some(n) = &p.name {
+                            self.0.insert(n.to_string());
+                        }
+                    }
+                    ast::Pattern::MatchStar(p) => {
+                        if let Some(n) = &p.name {
+                            self.0.insert(n.to_string());
+                        }
+                    }
+                    ast::Pattern::MatchMapping(p) => {
+                        if let Some(n) = &p.rest {
+                            self.0.insert(n.to_string());
+                        }
+                    }
+                    _ => {}
+                }
+                visitor::walk_pattern(self, p);
+            }
+        }
+        let mut locals = Locals(Default::default());
+        locals.visit_parameters(&func.parameters);
+        visitor::walk_body(&mut locals, &func.body);
+        let mut scoped = self.clone();
+        scoped.proven.retain(|n, _| !locals.0.contains(n));
+        scoped.candidates.retain(|n, _| !locals.0.contains(n));
+        scoped.bound.extend(locals.0);
+        scoped
     }
 
     pub fn of(body: &[ast::Stmt]) -> Self {
         use ast::Stmt;
         use std::collections::{HashMap, HashSet};
 
-        // Where each name is imported from barca at the top level, under its own name.
-        let mut imported: HashMap<&'static str, usize> = HashMap::new();
+        let mut imported: HashMap<String, (&'static str, usize)> = HashMap::new();
         let mut top_level_imports: HashSet<usize> = HashSet::new();
+        let mut module_aliases = HashSet::new();
+        let mut conflicting = HashSet::new();
+        let mut record = |local: String, canonical: &'static str, at: usize| {
+            if imported
+                .get(&local)
+                .is_some_and(|(old, _)| *old != canonical)
+            {
+                conflicting.insert(local.clone());
+            }
+            imported.insert(local, (canonical, at));
+        };
         for stmt in body {
-            let Stmt::ImportFrom(imp) = stmt else {
-                continue;
-            };
-            if imp.level != 0 || imp.module.as_ref().is_none_or(|m| m.as_str() != "barca") {
-                continue;
-            }
-            let at = imp.range().start().to_usize();
-            top_level_imports.insert(at);
-            for alias in &imp.names {
-                if alias.name.as_str() == "*" {
-                    for sig in SIGNATURES {
-                        imported.entry(sig.name).or_insert(at);
+            let at = stmt.range().start().to_usize();
+            match stmt {
+                Stmt::Import(imp) => {
+                    for alias in &imp.names {
+                        if alias.name.as_str() == "barca" {
+                            top_level_imports.insert(at);
+                            let local = alias
+                                .asname
+                                .as_ref()
+                                .map_or("barca", |n| n.as_str())
+                                .to_string();
+                            module_aliases.insert(local.clone());
+                            record(local, "module", at);
+                        }
                     }
-                    imported.entry("unsafe").or_insert(at);
-                } else if alias.asname.is_none() && alias.name.as_str() == "unsafe" {
-                    imported.entry("unsafe").or_insert(at);
-                } else if alias.asname.is_none()
-                    && let Some(sig) = Signature::named(alias.name.as_str())
-                {
-                    imported.entry(sig.name).or_insert(at);
                 }
+                Stmt::ImportFrom(imp)
+                    if imp.level == 0
+                        && imp.module.as_ref().is_some_and(|m| m.as_str() == "barca") =>
+                {
+                    top_level_imports.insert(at);
+                    for alias in &imp.names {
+                        if alias.name.as_str() == "*" {
+                            for name in exported_names() {
+                                record(name.to_string(), name, at);
+                            }
+                        } else if let Some(name) = exported(alias.name.as_str()) {
+                            let local = alias
+                                .asname
+                                .as_ref()
+                                .map_or(alias.name.as_str(), |n| n.as_str());
+                            record(local.to_string(), name, at);
+                        }
+                    }
+                }
+                _ => {}
             }
-        }
-        if imported.is_empty() {
-            return Self::default();
         }
 
         /// Everything else that binds a name at module scope.
         struct Bindings<'s> {
             top_level_imports: &'s HashSet<usize>,
+            module_aliases: HashSet<String>,
+            mutated_exports: HashSet<&'static str>,
             /// Inside a `def` or `class`: only `global` reaches the module scope from there.
             nested: usize,
             rebound: HashSet<String>,
@@ -524,7 +699,19 @@ impl BarcaNames {
                     Expr::Tuple(t) => t.elts.iter().for_each(|e| self.bind_target(e)),
                     Expr::List(l) => l.elts.iter().for_each(|e| self.bind_target(e)),
                     Expr::Starred(s) => self.bind_target(&s.value),
-                    _ => {} // an attribute or a subscript binds no name
+                    Expr::Attribute(a) => {
+                        // A known export is shared by every module alias and direct import.
+                        if let Expr::Name(n) = a.value.as_ref() {
+                            if self.module_aliases.contains(n.id.as_str())
+                                && let Some(export) = exported(a.attr.as_str())
+                            {
+                                self.mutated_exports.insert(export);
+                            } else {
+                                self.rebound.insert(n.id.to_string());
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -579,7 +766,13 @@ impl BarcaNames {
                                 Some(asname) => asname.as_str(),
                                 None => alias.name.as_str().split('.').next().unwrap_or(""),
                             };
-                            self.bind(bound);
+                            if !self
+                                .top_level_imports
+                                .contains(&imp.range().start().to_usize())
+                                || alias.name.as_str() != "barca"
+                            {
+                                self.bind(bound);
+                            }
                         }
                     }
                     Stmt::ImportFrom(imp) => {
@@ -590,10 +783,12 @@ impl BarcaNames {
                                 if !positive && self.nested == 0 {
                                     self.foreign_stars.push(at);
                                 }
-                            } else if let Some(asname) = &alias.asname {
+                            } else if (!positive || exported(alias.name.as_str()).is_none())
+                                && let Some(asname) = &alias.asname
+                            {
                                 // `from barca import task as asset` makes `asset` a task.
                                 self.bind(asname.as_str());
-                            } else if !positive {
+                            } else if !positive || exported(alias.name.as_str()).is_none() {
                                 self.bind(alias.name.as_str());
                             }
                         }
@@ -666,24 +861,42 @@ impl BarcaNames {
 
         let mut bindings = Bindings {
             top_level_imports: &top_level_imports,
+            module_aliases,
+            mutated_exports: HashSet::new(),
             nested: 0,
             rebound: HashSet::new(),
             foreign_stars: Vec::new(),
             reflective_namespace: false,
         };
         visitor::walk_body(&mut bindings, body);
+        bindings.rebound.extend(conflicting);
 
-        Self(
-            imported
-                .into_iter()
-                .filter(|(name, at)| {
-                    !bindings.reflective_namespace
-                        && !bindings.rebound.contains(*name)
-                        && !bindings.foreign_stars.iter().any(|star| star > at)
-                })
-                .map(|(name, _)| name)
-                .collect(),
-        )
+        let mut bound = bindings.rebound.clone();
+        bound.extend(imported.keys().cloned());
+        bound.extend(bindings.mutated_exports.iter().map(|name| name.to_string()));
+        if !bindings.foreign_stars.is_empty() {
+            bound.extend(exported_names().map(str::to_string));
+        }
+        let candidates: HashMap<String, &'static str> = imported
+            .iter()
+            .filter(|(name, (canonical, at))| {
+                !bindings.mutated_exports.contains(canonical)
+                    && !bindings.rebound.contains(*name)
+                    && !bindings.foreign_stars.iter().any(|star| star > at)
+            })
+            .map(|(name, (canonical, _))| (name.clone(), *canonical))
+            .collect();
+        let proven = if bindings.reflective_namespace {
+            HashMap::new()
+        } else {
+            candidates.clone()
+        };
+        Self {
+            proven,
+            candidates,
+            bound,
+            mutated_exports: bindings.mutated_exports,
+        }
     }
 }
 
@@ -705,10 +918,9 @@ pub fn check_decorators(decorators: &[ast::Decorator], barca: &BarcaNames) -> Op
                 return;
             }
             if let Expr::Call(call) = expr
-                && let Expr::Name(n) = call.func.as_ref()
-                && let Some(sig) = Signature::named(n.id.as_str())
+                && let Some(name) = self.barca.resolve(&call.func)
+                && let Some(sig) = Signature::named(name)
                 && !sig.decorator
-                && self.barca.contains(sig.name)
             {
                 self.found = check_call(call, sig);
                 if self.found.is_some() {
@@ -724,15 +936,13 @@ pub fn check_decorators(decorators: &[ast::Decorator], barca: &BarcaNames) -> Op
         let Expr::Call(call) = &decorator.expression else {
             continue;
         };
-        let Expr::Name(n) = call.func.as_ref() else {
+        let Some(sig) = barca
+            .resolve(&call.func)
+            .and_then(Signature::named)
+            .filter(|s| s.decorator)
+        else {
             continue;
         };
-        let Some(sig) = Signature::named(n.id.as_str()).filter(|s| s.decorator) else {
-            continue;
-        };
-        if !barca.contains(sig.name) {
-            continue;
-        }
         if let Some(problem) = check_call(call, sig) {
             return Some(problem);
         }
