@@ -2,8 +2,8 @@
 //!
 //! Every node with a result on disk becomes a view: assets and sensors at their cached artifact
 //! (or, when stale, their last successful one, with a note), tasks at their last result, and a
-//! partitioned asset as one view over its keys with a `partition` column. The view is named after
-//! the function, or after the full node id when two nodes share a function name. The query runs
+//! partitioned asset as one view over its keys with a `partition` column. The view uses the declared
+//! name, or the function name when no explicit name is set. Duplicate names use full node IDs. The query runs
 //! in `python -m barca._sql`, an in-memory DuckDB that opens artifact files only: user code is
 //! never imported and nothing is recorded. An artifact in remote storage is fetched, when the
 //! query names its view, into [`CACHE_DIR`] and queried from there.

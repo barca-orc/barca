@@ -549,7 +549,7 @@ pub(crate) enum Cli {
         #[arg(long)]
         env: Option<String>,
     },
-    /// Query cached results with SQL (DuckDB) — each asset is a view named after its function
+    /// Query cached results with SQL (DuckDB) — each asset is a named view
     ///
     /// Reads artifact files only: no step runs, user code is never imported, nothing is recorded.
     #[command(after_help = SQL_HELP)]

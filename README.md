@@ -134,7 +134,8 @@ summary   asset  stale   changed       success 2026-10-07 18:14:53 0.00s  dict (
 ```
 
 `barca sql` makes every node with a json or parquet result a view named after its
-function, so you can look at data without writing a step or a script:
+declared `name=`, or its function when unset, so you can inspect data without writing a step
+or a script:
 
 ```
 $ barca sql "select count(*) as n, sum(x) as total from raw_data"
