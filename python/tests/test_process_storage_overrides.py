@@ -10,7 +10,6 @@ import time
 from pathlib import Path
 
 import pytest
-
 from barca.api import _find_binary
 from barca.client import Client
 
@@ -106,7 +105,10 @@ def test_remote_off_preserves_history_recomputes_locally_and_reuses_local_cache(
     assert len(rows) == 3 and first["run_id"] in {r["run_id"] for r in rows}
 
 
-def test_remote_off_uses_older_local_cache_behind_newer_remote_row_and_sql_is_local(project):
+@pytest.mark.parametrize("remote_format", ["json", "pickle"])
+def test_remote_off_uses_older_local_cache_behind_newer_remote_row_and_sql_is_local(
+    project, remote_format
+):
     pytest.importorskip("duckdb")
     root, store = project
     off = environment(store, BARCA_REMOTE="off")
@@ -117,7 +119,14 @@ def test_remote_off_uses_older_local_cache_behind_newer_remote_row_and_sql_is_lo
         columns = [
             r[1] for r in conn.execute("PRAGMA table_info(materializations)") if r[1] != "id"
         ]
-        selection = [f"'{store}/external.json'" if c == "artifact_path" else c for c in columns]
+        selection = [
+            f"'{store}/external.{remote_format}'"
+            if c == "artifact_path"
+            else f"'{remote_format}'"
+            if c == "artifact_format"
+            else c
+            for c in columns
+        ]
         conn.execute(
             f"INSERT INTO materializations ({','.join(columns)}) SELECT {','.join(selection)} FROM materializations"
         )
@@ -125,7 +134,11 @@ def test_remote_off_uses_older_local_cache_behind_newer_remote_row_and_sql_is_lo
     env, observer = observed_environment(root, store, BARCA_REMOTE="off")
     assert succeeded(cli(root, env, "get", "total", "--json"))["steps_executed"] == 0
     inspected = succeeded(cli(root, env, "status", "total", "--json"))
-    assert all(n.get("shape") is not None for n in inspected["nodes"])
+    assert all(n.get("shape") is not None and "note" not in n["shape"] for n in inspected["nodes"])
+    first = next(n for n in inspected["nodes"] if n["name"] == "first")
+    assert first["shape"] == {"type": "list", "rows": 2}
+    assert first["last_materialization"]["format"] == remote_format
+    assert first["last_materialization"]["artifact"].endswith(f"external.{remote_format}")
     query = succeeded(cli(root, env, "sql", "select * from part order by value", "--json"))
     assert [r["value"] for r in query["rows"]] == ["a", "b"]
     assert not list(observer.glob("*.pids"))
