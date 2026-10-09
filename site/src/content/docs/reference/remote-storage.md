@@ -484,10 +484,9 @@ in place (only byte ranges are fetched), and results recorded before barca store
 Ctrl-C cancels a `barca get` or `barca run` at any point: while steps run, and while barca is
 uploading, downloading, or pulling or pushing the shared history. The command exits 130 with the
 `cancelled` error. It makes no difference whether the terminal sent the signal to every process
-of the job or something sent SIGINT to barca alone. Barca and its helper processes print no
-traceback. One exception, with or without a store: a Ctrl-C that reaches a worker while it is
-still starting up (the first moments of a run) can print that worker's `KeyboardInterrupt`
-traceback, and the command then takes about 10 seconds to exit, still with 130.
+of the job or something sent SIGINT to barca alone. Barca, its workers and its helper processes
+print no traceback, with or without a store and from the first moment of a run: a Ctrl-C while
+the workers are still starting exits as promptly as any other.
 
 1. **The first Ctrl-C cancels the run.** Steps and transfers in flight are stopped, what
    finished is recorded in this machine's history, the run as `cancelled`, and the run wraps
@@ -540,6 +539,19 @@ Two narrow cases, stated exactly:
 The end-of-run line (`[barca] <n>/<total> steps | done in <secs>s`) is about the steps. A Ctrl-C
 that arrives after the last step finished, while artifacts upload or the history is pushed,
 therefore follows a `done` line; the exit code and the error still say `cancelled`.
+
+Workers are part of the terminal's job, so a Ctrl-C reaches them too. A worker acts on it only
+while it runs a step: the step's code gets a `KeyboardInterrupt`, and the step is left out of
+the cancelled run (it is neither recorded nor reported as failed). Barca stops the worker
+right after, so do not rely on a step's `except KeyboardInterrupt` or `finally` code having
+run. While a worker imports a step's module or waits for its next step, a Ctrl-C does nothing
+in it, and barca stops it. While a worker is still starting it is not in the terminal's job at
+all (it joins once it is ready), so a Ctrl-C does not reach it.
+
+If barca itself was started with SIGINT ignored (`nohup barca ...`, a background job of a
+script, cron, some process supervisors), its workers inherit that and keep it: a step does not
+get a `KeyboardInterrupt`, as in any Python program started that way. A SIGINT sent to barca
+still cancels the run, with exit 130, and barca stops the workers.
 
 Barca's helper processes (the one that moves artifacts and the one that moves the history) do
 not act on Ctrl-C themselves. They are started outside the terminal's job (in a process group

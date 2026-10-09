@@ -25,6 +25,7 @@ __all__ = [
     "parallel",
     "parallel_map",
     "ParallelError",
+    "BranchResultError",
     "duckdb_connection",
     "get",
     "run",
@@ -242,6 +243,18 @@ class ParallelError:
         return {"__parallel_error__": True, "error": self.error}
 
 
+class BranchResultError(RuntimeError):
+    """A `parallel()` branch returned, and its return value could not be passed to the caller.
+
+    Raised by `parallel()` in the calling step, which fails like any step that raises. A
+    branch that itself raised is different: it comes back as a `ParallelError` in the list.
+
+    The message names the branch, the type of the value and the reason: the value cannot be
+    written as json, pickle or parquet (an open file, a lambda, a generator), or what was
+    written cannot be read back in the calling worker.
+    """
+
+
 def parallel(*callables):
     """Run callables in parallel across worker processes.
 
@@ -250,8 +263,11 @@ def parallel(*callables):
     order.
 
     When running inside a barca worker (BARCA_SOCKET set), uses the Unix socket
-    protocol to request Rust to dispatch branches as separate workers. When
-    running standalone, executes sequentially.
+    protocol to request Rust to dispatch branches as separate workers. A branch's
+    return value comes back the way a step's output reaches the next step: written
+    as an artifact (json, pickle or parquet, by type) and read from it here. A value
+    that cannot be passed raises `BranchResultError`; it is never replaced by `None`.
+    When running standalone, executes sequentially.
     """
     if not callables:
         return []
@@ -278,11 +294,9 @@ def parallel(*callables):
 
     if _runtime.is_worker() and _runtime.connect() is not None:
         # Inside a barca worker — dispatch via Unix socket to executor
-        raw_results = _runtime.submit_and_wait(items)
-        return [
-            r.get("result") if r.get("status") == "ok" else ParallelError(r.get("error", "unknown"))
-            for r in raw_results
-        ]
+        from barca import _branches
+
+        return _branches.collect(_runtime.submit_and_wait(items), items)
 
     # Not inside a worker — execute sequentially (standalone/testing)
     results = []

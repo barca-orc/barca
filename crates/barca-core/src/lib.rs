@@ -17,7 +17,8 @@ pub mod envelope;
 pub mod events;
 pub(crate) mod execution;
 pub mod hash;
-mod helper_proc;
+#[doc(hidden)]
+pub mod helper_proc;
 pub mod interrupt;
 pub mod io_loop;
 pub mod load;

@@ -14,7 +14,10 @@
 //! a lifeline ([`give_lifeline`]).
 //!
 //! Every child process of barca, helpers and workers alike, is started through [`spawn`] or
-//! [`spawn_std`]: one at a time.
+//! [`spawn_std`]: one at a time. That includes the children its tests start: a test that
+//! started one on its own would bring back, inside the test process, the race the lock removes
+//! (#293). `tests::every_child_process_is_started_through_this_module` fails on a `.spawn()`,
+//! `.output()` or `.status()` anywhere else in `crates/`.
 
 use std::time::Duration;
 use tokio::process::{Child, Command};
@@ -57,7 +60,7 @@ static SPAWNING: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// run and which the run stops only at its own end: about one `barca get` in a thousand with
 /// an artifact store hung for ever in its first pull. Started one at a time, no child can
 /// inherit what was made for another.
-pub(crate) fn spawn(cmd: &mut Command) -> std::io::Result<Child> {
+pub fn spawn(cmd: &mut Command) -> std::io::Result<Child> {
     let _one_at_a_time = SPAWNING
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -65,11 +68,20 @@ pub(crate) fn spawn(cmd: &mut Command) -> std::io::Result<Child> {
 }
 
 /// [`spawn`] for a `std::process::Command`.
-pub(crate) fn spawn_std(cmd: &mut std::process::Command) -> std::io::Result<std::process::Child> {
+pub fn spawn_std(cmd: &mut std::process::Command) -> std::io::Result<std::process::Child> {
     let _one_at_a_time = SPAWNING
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     cmd.spawn()
+}
+
+/// Run `cmd` to completion and collect its output, started through [`spawn_std`]: what
+/// `Command::output` does, one at a time.
+pub fn output_std(cmd: &mut std::process::Command) -> std::io::Result<std::process::Output> {
+    cmd.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    spawn_std(cmd)?.wait_with_output()
 }
 
 /// How long a helper gets to clean up after SIGTERM before it is killed.
@@ -86,6 +98,28 @@ pub(crate) const STOP_GRACE: Duration = Duration::from_secs(2);
 /// set by `posix_spawn` itself, with no hook and no pipe.
 pub(crate) fn shield_from_ctrl_c(cmd: &mut Command) {
     cmd.process_group(0);
+}
+
+/// Start a worker where the terminal's Ctrl-C does not reach it while it starts.
+///
+/// A worker belongs in the terminal's job: while it runs a step, Ctrl-C is meant to reach the
+/// step's code. But a Ctrl-C that arrives while the interpreter is still starting ends the
+/// worker with a `KeyboardInterrupt` traceback before any of barca's Python code can prevent
+/// it. So a worker starts like a helper, in a process group of its own ([`shield_from_ctrl_c`]
+/// explains why a group and not an ignored signal: it keeps `posix_spawn`), and is told the
+/// coordinator's group in `BARCA_JOB_PGID`. Once its own handling of the signal is in place it
+/// moves itself into that group (`python/barca/_worker.py`, `_join_the_job`), and from then
+/// on gets Ctrl-C like any process of the job.
+///
+/// (This was a `pre_exec` hook that ignored SIGINT. It made every worker start through
+/// `fork`, about 1 ms slower each, and it left the signal ignored in a way the worker could
+/// not tell from a barca that was itself started with SIGINT ignored.)
+#[cfg(unix)]
+pub(crate) fn start_outside_the_job(cmd: &mut std::process::Command) {
+    use std::os::unix::process::CommandExt;
+    cmd.process_group(0);
+    // SAFETY: plain syscall.
+    cmd.env("BARCA_JOB_PGID", unsafe { libc::getpgrp() }.to_string());
 }
 
 /// Give `cmd` a lifeline: its stdin is a pipe whose other end only this process holds, and
@@ -322,6 +356,29 @@ mod tests {
         stop(&mut child).await;
     }
 
+    /// A worker starts in a process group of its own and is told the coordinator's. Nothing
+    /// here depends on how this test process was started (its SIGINT disposition, whether it
+    /// leads its group): the child reports both facts itself.
+    #[cfg(unix)]
+    #[test]
+    fn a_worker_starts_outside_the_job_and_knows_which_job_to_join() {
+        let mut cmd = std::process::Command::new("sh");
+        cmd.args(["-c", "echo $$ $(ps -o pgid= -p $$) $BARCA_JOB_PGID"]);
+        start_outside_the_job(&mut cmd);
+        let out = output_std(&mut cmd).unwrap();
+        let fields: Vec<i64> = String::from_utf8(out.stdout)
+            .unwrap()
+            .split_whitespace()
+            .map(|f| f.parse().unwrap())
+            .collect();
+        let [pid, group, job] = fields[..] else {
+            panic!("expected pid, group and job, got {fields:?}");
+        };
+        assert_eq!(group, pid, "a group of its own");
+        assert_eq!(job, own_group(), "told the coordinator's group");
+        assert_ne!(group, job);
+    }
+
     /// A child whose output is read to the end, started while long-lived children are being
     /// started on other threads, must not have to wait for them: none of them may inherit its
     /// pipe. (Without [`spawn`]'s lock this hangs now and then on macOS; it cannot fail
@@ -358,6 +415,130 @@ mod tests {
         for sibling in siblings {
             let _ = sibling.await.unwrap().kill().await;
         }
+    }
+
+    /// Calls that start a child process without [`spawn`]'s lock, in the Rust sources under
+    /// `dir`: `(file, line number, line)`.
+    ///
+    /// `.spawn()` with no argument is `Command::spawn` (a thread or a task is spawned with
+    /// one) and is found in any file. `.output()` and `.status()` are looked for only in a
+    /// file that builds a `Command` or names `process::Command`, since HTTP responses have a
+    /// `.status()` too.
+    ///
+    /// What this cannot see: `.output()` or `.status()` on a `Command` in a file that names
+    /// the type only through a re-export or an alias defined in another file (`use
+    /// crate::Cmd`). A text scan does not resolve types; such a file must not be written.
+    fn unlocked_spawns(dir: &std::path::Path, found: &mut Vec<(String, usize, String)>) {
+        let spawn = [".spawn", "()"].concat();
+        let waits = [[".output", "()"].concat(), [".status", "()"].concat()];
+        let builds_a_command = ["Command", "::new"].concat();
+        let names_the_type = ["process::", "Command"].concat();
+        let mut entries: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        entries.sort();
+        for path in entries {
+            if path.is_dir() {
+                unlocked_spawns(&path, found);
+                continue;
+            }
+            if path.extension().is_none_or(|e| e != "rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            let this_module = path.ends_with("barca-core/src/helper_proc.rs");
+            // `process::Command` as well as `Command::new`: a file that imports the type under
+            // another name, or is handed a `Command` built elsewhere, still names the type.
+            let has_command = text.contains(&builds_a_command) || text.contains(&names_the_type);
+            for (i, line) in text.lines().enumerate() {
+                let code = line.split("//").next().unwrap_or("");
+                let starts_one = code.contains(&spawn)
+                    || (has_command && waits.iter().any(|w| code.contains(w.as_str())));
+                // The two calls this module exists to make.
+                let the_locked_call = this_module && code.trim() == format!("cmd{spawn}");
+                if starts_one && !the_locked_call {
+                    found.push((path.display().to_string(), i + 1, line.trim().to_string()));
+                }
+            }
+        }
+    }
+
+    /// Every child process, in tests too, is started through [`spawn`], [`spawn_std`] or
+    /// [`output_std`]. One started any other way can inherit a pipe made for a child that is
+    /// being started on another thread at that instant and hold it open for as long as it
+    /// lives: the hang these functions prevent, and what made
+    /// `output_is_read_to_the_end_while_long_lived_siblings_start` time out once in a full
+    /// test run (#293).
+    #[test]
+    fn every_child_process_is_started_through_this_module() {
+        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let mut found = Vec::new();
+        for krate in std::fs::read_dir(&crates).unwrap() {
+            let krate = krate.unwrap().path();
+            for sub in ["src", "tests"] {
+                if krate.join(sub).is_dir() {
+                    unlocked_spawns(&krate.join(sub), &mut found);
+                }
+            }
+        }
+        let listed: Vec<String> = found
+            .iter()
+            .map(|(file, line, text)| format!("{file}:{line}: {text}"))
+            .collect();
+        assert!(
+            found.is_empty(),
+            "child processes started without helper_proc's lock (use helper_proc::spawn, \
+             spawn_std or output_std):\n{}",
+            listed.join("\n")
+        );
+    }
+
+    /// The scan finds what it is meant to find, and nothing in a file without a `Command`.
+    #[test]
+    fn the_scan_for_unlocked_spawns_finds_each_kind() {
+        let dir = tempfile::tempdir().unwrap();
+        let call = |name: &str| format!("    let _ = cmd{name}{};\n", "()");
+        std::fs::write(
+            dir.path().join("a.rs"),
+            format!(
+                "fn f() {{\n    let mut cmd = std::process::Command{}(\"true\");\n{}{}{}}}\n",
+                "::new",
+                call(".spawn"),
+                call(".output"),
+                call(".status"),
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("b.rs"),
+            format!(
+                "fn g(resp: Response) {{\n{}    tokio::spawn(async {{}});\n}}\n",
+                call(".status").replace("cmd", "resp")
+            ),
+        )
+        .unwrap();
+        // The type imported under another name, and a command built elsewhere and passed in.
+        std::fs::write(
+            dir.path().join("c.rs"),
+            format!(
+                "use std::process::{} as Cmd;\nfn h(cmd: &mut Cmd) {{\n{}}}\n",
+                "Command",
+                call(".status"),
+            ),
+        )
+        .unwrap();
+        let mut found = Vec::new();
+        unlocked_spawns(dir.path(), &mut found);
+        let hits: Vec<(&str, usize)> = found
+            .iter()
+            .map(|(file, line, _)| (&file[file.len() - 4..], *line))
+            .collect();
+        assert_eq!(
+            hits,
+            [("a.rs", 3), ("a.rs", 4), ("a.rs", 5), ("c.rs", 3)],
+            "{found:?}"
+        );
     }
 
     #[tokio::test]
