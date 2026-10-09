@@ -321,6 +321,15 @@ fn invalid_shared_state(
     db_path: &str,
     invalid: &crate::state_validate::Invalid,
 ) -> BarcaError {
+    if invalid.kind == crate::state_validate::InvalidKind::Compatibility {
+        return BarcaError::Other(format!(
+            "the shared history {uri} has an incompatible metadata schema: {}.\n\
+             The local history {db_path} and shared object were left in place; nothing was \
+             uploaded. Use a compatible Barca release to access this history. A schema \
+             mismatch is not a reason to reset durable history.",
+            invalid.why
+        ));
+    }
     let mut message = format!(
         "the shared history {uri} is not a database barca can use: {}.\n\
          The local history {db_path} was left as it was, and nothing was uploaded.\n\

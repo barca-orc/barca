@@ -224,11 +224,17 @@ replaced. The download must be all of these:
 2. readable page by page: it opens, and SQLite's `PRAGMA integrity_check` answers `ok`. This is
    what catches a transfer that stopped part-way and pages overwritten inside the file;
 3. a barca history: it has both the `runs` and the `materializations` table;
-4. usable by this version: once barca's own schema updates are applied to the download (never
-   to your local copy), every table has every column this version uses, and none that this
-   version could not fill. A history written by an older barca passes. One written by a newer
-   barca passes as long as this version can still read and write it; when it cannot, the
-   message says the history was written by a newer barca, and the fix is to upgrade.
+4. compatible with this version: the metadata schema marker must be supported before any
+   schema updates or replacement. Existing unversioned histories are migrated additively in
+   one transaction, preserving their rows. Every table must have the columns this version
+   uses, and no required columns it cannot fill. Compatible extra nullable/defaulted columns
+   are left alone. Unsupported schema versions are refused; upgrade to a
+   compatible Barca release. A version mismatch never resets run history, logs or schedules.
+
+The same version guard applies to local reads and writes, including inspection snapshots.
+Read-only inspection does not migrate the source database. Older already-published Barca
+binaries do not understand this new guard, so the first versioned schema remains additive
+and compatible with their existing tables.
 
 If any of these fails, the command stops before any step runs:
 

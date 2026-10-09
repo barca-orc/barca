@@ -29,8 +29,8 @@
 //!    A database written by an older barca passes, because the migrations bring it up to date.
 //!    One written by a newer barca passes exactly when this version can still read and write
 //!    it: tables and nullable columns this version does not know are left alone, which is how
-//!    machines on different versions share one history. There is no schema version number to
-//!    compare yet (#82); when there is, that comparison belongs here.
+//!    machines on compatible versions share one history. A schema-version marker is checked
+//!    before migrations; unsupported or malformed versions are refused without replacement.
 //!
 //! Anything else that goes wrong while checking (the disk is full, the file cannot be written)
 //! is an error of this machine, not a verdict on the object, and is reported as such.
@@ -117,15 +117,33 @@ pub(crate) type Valid = (Database, Connection);
 /// Why a download is not valid.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Invalid {
+    pub kind: InvalidKind,
     /// One line: which rule failed and how.
     pub why: String,
     /// Every problem the integrity check reported, one per entry, when that is what failed.
     pub details: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InvalidKind {
+    Damage,
+    Compatibility,
+}
+
+impl Invalid {
+    fn compatibility(why: String) -> Self {
+        Self {
+            kind: InvalidKind::Compatibility,
+            why,
+            details: Vec::new(),
+        }
+    }
+}
+
 impl From<String> for Invalid {
     fn from(why: String) -> Self {
         Invalid {
+            kind: InvalidKind::Damage,
             why,
             details: Vec::new(),
         }
@@ -182,6 +200,7 @@ pub(crate) async fn open(path: &str, pages: Pages) -> Result<Result<Valid, Inval
             n => format!("{n} problems, the first"),
         };
         return Ok(Err(Invalid {
+            kind: InvalidKind::Damage,
             why: format!("its integrity check found {count}: {}", problems[0]),
             details: problems,
         }));
@@ -195,15 +214,26 @@ pub(crate) async fn open(path: &str, pages: Pages) -> Result<Result<Valid, Inval
         )
         .into()));
     }
-    let migrated = crate::db::init_schema(&conn).await;
-    // Tables with barca's names and another program's columns can make a migration fail; then
-    // the schema is the reason, and it is the download's fault.
-    if let Err(why) = usable_schema(&conn).await? {
-        return Ok(Err(why.into()));
+    let version =
+        match crate::db_schema::compatible_version(crate::db_schema::read_version(&conn).await?) {
+            Ok(version) => version,
+            Err(why) => return Ok(Err(Invalid::compatibility(why))),
+        };
+    // Establish incompatibility independently of migration. If a compatible legacy
+    // migration subsequently fails (I/O, commit, etc.), it is an operational error,
+    // not a damaged object to restore or remove.
+    let compatible = if version == crate::db_schema::VERSION {
+        usable_schema(&conn).await?
+    } else {
+        legacy_schema(&conn).await?
+    };
+    if let Err(why) = compatible {
+        return Ok(Err(Invalid::compatibility(why)));
     }
-    migrated.map_err(|e| {
+    crate::db::init_schema(&conn).await.map_err(|e| {
         BarcaError::Db(format!(
-            "could not bring the downloaded shared state {path} up to this version's schema: {e}"
+            "could not migrate the downloaded shared state {path}; local/shared histories \
+             were not replaced: {e}"
         ))
     })?;
     Ok(Ok((db, conn)))
@@ -211,6 +241,14 @@ pub(crate) async fn open(path: &str, pages: Pages) -> Result<Result<Valid, Inval
 
 /// Rule 4, on a database the migrations have been applied to.
 pub(crate) async fn usable_schema(conn: &Connection) -> Result<Result<(), String>, BarcaError> {
+    schema_columns(conn, false).await
+}
+
+pub(crate) async fn legacy_schema(conn: &Connection) -> Result<Result<(), String>, BarcaError> {
+    schema_columns(conn, true).await
+}
+
+async fn schema_columns(conn: &Connection, legacy: bool) -> Result<Result<(), String>, BarcaError> {
     let failed = |e| BarcaError::Db(format!("failed to read the downloaded schema: {e}"));
     for (table, columns) in TABLES {
         // (name, must be given a value by every insert)
@@ -226,12 +264,28 @@ pub(crate) async fn usable_schema(conn: &Connection) -> Result<Result<(), String
             let primary_key = row.get::<i64>(5).unwrap_or(0) != 0;
             found.push((name, not_null && no_default && !primary_key));
         }
+        drop(rows);
+        // Older versions did not yet have logs/cost/schedule tables. Missing tables
+        // are created by the additive migration; existing malformed tables are not.
+        if legacy && found.is_empty() {
+            continue;
+        }
+        let additions = if legacy {
+            match *table {
+                "runs" => crate::db_schema::RUN_COLUMNS,
+                "materializations" => crate::db_schema::MATERIALIZATION_COLUMNS,
+                _ => &[],
+            }
+        } else {
+            &[]
+        };
         let row_id = WITH_ROW_ID.contains(table).then_some("id");
-        if let Some(missing) = row_id
-            .iter()
-            .chain(columns.iter())
-            .find(|c| !found.iter().any(|(name, _)| name == *c))
-        {
+        if let Some(missing) = row_id.iter().chain(columns.iter()).find(|c| {
+            !found.iter().any(|(name, _)| name == *c)
+                && !additions
+                    .iter()
+                    .any(|definition| definition.split_whitespace().next() == Some(**c))
+        }) {
             return Ok(Err(format!(
                 "its `{table}` table has no `{missing}` column, which this version of barca needs"
             )));
@@ -478,14 +532,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_newer_schema_is_valid_only_while_this_version_can_write_to_it() {
+    async fn compatible_extra_columns_are_valid_but_required_unknown_columns_are_refused() {
         // A table and nullable or defaulted columns this version does not know: usable.
         let (_dir, path) = tmp();
         history(&path, 1).await;
         new_db(
             &path,
             &[
-                "CREATE TABLE schema_version (version INTEGER NOT NULL)",
                 "ALTER TABLE runs ADD COLUMN origin TEXT",
                 "ALTER TABLE materializations ADD COLUMN tier INTEGER NOT NULL DEFAULT 0",
             ],

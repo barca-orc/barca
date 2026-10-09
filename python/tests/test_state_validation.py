@@ -103,7 +103,7 @@ def invalid_blobs(good: bytes, scratch: Path) -> dict[str, tuple[bytes, str]]:
                 " NOT NULL, command TEXT NOT NULL, files TEXT NOT NULL, target TEXT, status TEXT"
                 " NOT NULL DEFAULT 'running', steps_total INTEGER, steps_executed INTEGER"
                 " DEFAULT 0, steps_cached INTEGER DEFAULT 0, started_at TEXT, finished_at TEXT,"
-                " elapsed_seconds REAL, pid INTEGER, host TEXT, tenant TEXT NOT NULL)",
+                " elapsed_seconds REAL, pid INTEGER, host TEXT, owner TEXT, tenant TEXT NOT NULL)",
                 "DROP TABLE runs_old",
             ),
             "newer barca",
@@ -139,9 +139,16 @@ def refused(out: subprocess.CompletedProcess, state_uri: Path, why: str = "") ->
     wrong with it, that nothing changed, and where the repair is described."""
     assert out.returncode == 3, (out.returncode, out.stderr)
     assert str(state_uri) in out.stderr, out.stderr
-    assert NOT_USABLE in out.stderr and why in out.stderr, out.stderr
-    assert "was left as it was, and nothing was uploaded" in out.stderr, out.stderr
-    assert "If the shared history is damaged" in out.stderr, out.stderr
+    assert why in out.stderr, out.stderr
+    if "incompatible metadata schema" in out.stderr:
+        assert "compatible Barca release" in out.stderr, out.stderr
+        assert "left in place" in out.stderr, out.stderr
+        assert "remove the object" not in out.stderr, out.stderr
+        assert "put back an earlier copy" not in out.stderr, out.stderr
+    else:
+        assert NOT_USABLE in out.stderr, out.stderr
+        assert "was left as it was, and nothing was uploaded" in out.stderr, out.stderr
+        assert "If the shared history is damaged" in out.stderr, out.stderr
     # Not the advice for an unreachable store.
     assert "connection or credentials" not in out.stderr, out.stderr
 
@@ -784,3 +791,21 @@ def test_a_kept_database_that_cannot_be_named_prev_is_a_warning_not_a_failure(ma
     )
     assert str(Path(".barca") / "metadata.db.prev") in out.stderr, out.stderr
     assert a.local_runs() == {a_first, b_run}
+
+
+def test_future_shared_schema_requires_compatible_binary_without_reset_advice(
+    machines, state_uri, tmp_path
+):
+    machine = machines("a")
+    saved = machine.get("a_one")
+    good = state_uri.read_bytes()
+    future = edited(good, tmp_path / "future.db", "PRAGMA user_version=2")
+    state_uri.write_bytes(future)
+    before = local_files(machine)
+    for args in (("status", "a_one.py", "--json"), ("get", "a_one.py", "--json")):
+        result = machine.barca(*args)
+        refused(result, state_uri, "schema version 2")
+        assert "If the shared history is damaged" not in result.stderr
+        assert state_uri.read_bytes() == future
+        assert local_files(machine) == before
+    assert machine.local_runs() == {saved}

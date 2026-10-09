@@ -732,6 +732,18 @@ Known limits:
 `--env <name>` (or `BARCA_ENV`, or `default_env` in `barca.toml`, else `default`) fully
 separates cache, artifacts and shared state. Use it for dev/staging/prod isolation.
 
+## Metadata schema compatibility
+
+Run history, captured logs and schedules are durable data. Barca records the
+metadata schema version and refuses unsupported versions before
+reading history or writing results. Upgrade Barca to a compatible release if this
+happens; a mismatch never automatically deletes or rebuilds your metadata.
+
+Existing unversioned metadata is upgraded with additive changes in one
+transaction, preserving its rows. A failed or interrupted upgrade can be retried.
+Read-only inspection does not migrate your source database. The same checks apply
+to shared history before it replaces a local copy.
+
 ## Seeing what happened
 
 ```bash

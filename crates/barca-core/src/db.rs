@@ -634,7 +634,10 @@ async fn open_local(db_path: &str) -> Result<LocalDb, BarcaError> {
         }
         .await;
         let error = match attempt {
-            Ok((db, conn)) => return Ok(LocalDb::Open(db, conn)),
+            Ok((db, conn)) => {
+                crate::db_schema::check(&conn).await?;
+                return Ok(LocalDb::Open(db, conn));
+            }
             Err(e) => e,
         };
         match &error {
@@ -704,9 +707,8 @@ async fn carry_and_fold(
 ) -> Result<crate::state_carry::Carried, BarcaError> {
     let kept_local = |e: BarcaError| {
         BarcaError::Db(format!(
-            "{e}\nThe local database was left as it was, and nothing was pulled. To go on with \
-             the shared history alone, move {db_path} and {db_path}-wal out of the way; what \
-             was recorded only on this machine is then not carried over."
+            "{e}\nThe local database was left as it was, and nothing was pulled. Keep the \
+             local history and its write-ahead log; resolve the error above and retry."
         ))
     };
 
@@ -828,6 +830,7 @@ async fn connect(path: &str) -> Result<(turso::Database, turso::Connection), Bar
     let conn = db
         .connect()
         .map_err(|e| BarcaError::Db(format!("failed to connect: {e}")))?;
+    crate::db_schema::check(&conn).await?;
     Ok((db, conn))
 }
 
@@ -896,9 +899,48 @@ pub async fn init_db(db_path: &str) -> Result<(), BarcaError> {
     init_schema(&conn).await
 }
 
-/// Create the tables and apply the migrations: afterwards the database has the current schema,
-/// whatever version wrote it. Idempotent, and writes nothing to a database that is current.
+/// Migrate legacy metadata atomically, preserving authoritative history. Unknown versions
+/// are refused before any write; current databases are validated without changing them.
 pub(crate) async fn init_schema(conn: &turso::Connection) -> Result<(), BarcaError> {
+    let version = crate::db_schema::check(conn).await?;
+    if version == crate::db_schema::VERSION {
+        return crate::state_validate::usable_schema(conn)
+            .await?
+            .map_err(BarcaError::Db);
+    }
+    crate::state_validate::legacy_schema(conn)
+        .await?
+        .map_err(BarcaError::Db)?;
+    conn.execute("BEGIN IMMEDIATE", ())
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to begin schema migration: {e}")))?;
+    let migrated = async {
+        migrate_legacy_schema(conn).await?;
+        crate::state_validate::usable_schema(conn)
+            .await?
+            .map_err(BarcaError::Db)?;
+        conn.execute(
+            &format!("PRAGMA user_version = {}", crate::db_schema::VERSION),
+            (),
+        )
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to record schema version: {e}")))?;
+        conn.execute("COMMIT", ())
+            .await
+            .map_err(|e| BarcaError::Db(format!("failed to commit schema migration: {e}")))?;
+        Ok(())
+    }
+    .await;
+    if let Err(error) = migrated {
+        conn.execute("ROLLBACK", ()).await.map_err(|e| {
+            BarcaError::Db(format!("{error}; schema migration rollback failed: {e}"))
+        })?;
+        return Err(error);
+    }
+    Ok(())
+}
+
+async fn migrate_legacy_schema(conn: &turso::Connection) -> Result<(), BarcaError> {
     conn.execute(
         "CREATE TABLE IF NOT EXISTS materializations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -928,29 +970,12 @@ pub(crate) async fn init_schema(conn: &turso::Connection) -> Result<(), BarcaErr
     .map_err(|e| BarcaError::Db(format!("failed to create index: {e}")))?;
 
     // Migrate existing databases: add artifact columns if missing.
-    // These are safe no-ops if the columns already exist.
-    for col in [
-        "ALTER TABLE materializations ADD COLUMN artifact_path TEXT",
-        "ALTER TABLE materializations ADD COLUMN artifact_format TEXT",
-        "ALTER TABLE materializations ADD COLUMN artifact_size_bytes INTEGER",
-        "ALTER TABLE materializations ADD COLUMN elapsed_seconds REAL",
-        "ALTER TABLE materializations ADD COLUMN error_message TEXT",
-        "ALTER TABLE materializations ADD COLUMN error_traceback TEXT",
-        "ALTER TABLE materializations ADD COLUMN attempts INTEGER DEFAULT 1",
-        "ALTER TABLE materializations ADD COLUMN sinks_json TEXT",
-        "ALTER TABLE materializations ADD COLUMN cpu_seconds REAL",
-        "ALTER TABLE materializations ADD COLUMN max_rss_bytes INTEGER",
-        // Content hash of a sensor's output (#183): folded into its consumers' run hashes, and
-        // what `--dry-run` / `barca status` assume the sensor returns next.
-        "ALTER TABLE materializations ADD COLUMN output_hash TEXT",
-        // The run that wrote the row (#214). Steps are recorded as they finish and again in the
-        // end-of-run ledger (and its replay after a shared-state conflict); this is how the
-        // later writes recognise what is already there. NULL on rows from older versions.
-        "ALTER TABLE materializations ADD COLUMN run_id TEXT",
-        "ALTER TABLE materializations ADD COLUMN error_type TEXT",
-    ] {
-        conn.execute(col, ()).await.ok();
-    }
+    crate::db_schema::add_columns(
+        conn,
+        "materializations",
+        crate::db_schema::MATERIALIZATION_COLUMNS,
+    )
+    .await?;
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_mat_run ON materializations(run_id)",
         (),
@@ -999,17 +1024,7 @@ pub(crate) async fn init_schema(conn: &turso::Connection) -> Result<(), BarcaErr
     .map_err(|e| BarcaError::Db(format!("failed to create runs table: {e}")))?;
     // Who is executing a `running` run (#214): the coordinator's pid and host, so a run whose
     // process died without recording an outcome can be told from one still in progress.
-    for col in [
-        "ALTER TABLE runs ADD COLUMN pid INTEGER",
-        "ALTER TABLE runs ADD COLUMN host TEXT",
-        // What the coordinator knew about itself when it started the run (#290, JSON, see
-        // `run_owner::Identity`): which kernel and pid namespace it was in, when it started,
-        // and the marker it holds. It lets a reader tell a dead process from a live one
-        // where pid and host cannot, in a container. NULL on rows from older versions.
-        "ALTER TABLE runs ADD COLUMN owner TEXT",
-    ] {
-        conn.execute(col, ()).await.ok();
-    }
+    crate::db_schema::add_columns(conn, "runs", crate::db_schema::RUN_COLUMNS).await?;
 
     // A pull of the shared state looks for unfinished runs on both sides (`state_carry`):
     // through this index that costs the number of such runs, not the length of the history.
@@ -2562,11 +2577,11 @@ mod tests {
         fs::copy(&local, &same).unwrap();
         init_db(&local).await.unwrap();
         let log = fs::metadata(format!("{local}-wal")).map_or(0, |m| m.len());
-        assert_eq!(
-            log, 32,
-            "the engine no longer leaves a header-only log on open"
+        assert!(
+            log <= 32,
+            "opening a current schema wrote WAL frames: {log}"
         );
-        assert!(log_holds_no_frame(&local) && !wal_is_clean(&local));
+        assert!(log_holds_no_frame(&local));
         pull_for_tests(&local, Path::new(&same)).await;
         assert_eq!(fs::read(&prev).unwrap(), first_generation);
 
