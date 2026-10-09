@@ -247,6 +247,11 @@ the body: `duckdb.sql("select * from orders")`, `pl.sql("... from orders")` and
 there. The check is deliberately conservative, so a warning means the input really is unused;
 when barca cannot tell, it says nothing.
 
+When a local name shadows an imported module, calls through that name may resolve SQL or
+expression inputs dynamically. This includes names captured by `match` and names bound by
+nested `def`, `async def` or `class` definitions. Such calls are treated conservatively;
+a module import alone does not prove the receiver still refers to that module.
+
 The string match is on whole identifiers and is case-sensitive: `orders` is not found in
 `reorders`, `orders_v2` or `Orders`. Every string and bytes literal in the body counts,
 multi-line, concatenated and the text of f-strings included, except a string that is a statement
