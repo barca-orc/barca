@@ -87,6 +87,8 @@ install SQL support with `uv add 'barca[sql]'`.
 - Results are always written locally first. A remote store is an optional shared copy:
   set `BARCA_REMOTE_URI=s3://my-bucket/barca/my-project` (or `gs://`, `abfs://`) and other
   machines using the same location get cache hits for what this one computed.
+- Required history writes commit terminal status and step outcomes together. A write failure
+  reports an infrastructure error and preserves earlier history and recorded progress.
 - `--env <name>` (or `BARCA_ENV`) keeps a separate cache and history, so dev and prod do
   not share results.
 

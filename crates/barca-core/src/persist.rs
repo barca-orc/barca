@@ -449,64 +449,23 @@ pub(crate) async fn persist_run(db_path: &str, l: &RunLedger<'_>) -> Result<(), 
     let _g = db::db_guard().await;
     let (_db, conn) = db::open_conn(db_path).await?;
 
-    conn.execute(
-            "INSERT OR IGNORE INTO runs (run_id, command, files, target, status, steps_total, pid, host) VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6, ?7)",
-            [
-                l.run_id.to_string(),
-                l.command.to_string(),
-                l.files.clone(),
-                l.target.unwrap_or("").to_string(),
-                l.steps_total.to_string(),
-                std::process::id().to_string(),
-                db::local_host(),
-            ],
-        )
+    conn.execute("BEGIN", ())
         .await
-        .ok();
-    conn.execute(
-            "UPDATE runs SET status = ?1, steps_executed = ?2, steps_cached = ?3, elapsed_seconds = ?4, finished_at = datetime('now') WHERE run_id = ?5",
-            [
-                l.status.to_string(),
-                l.steps_executed.to_string(),
-                l.steps_cached.to_string(),
-                l.elapsed.to_string(),
-                l.run_id.to_string(),
-            ],
-        )
-        .await
-        .map_err(|e| BarcaError::Db(format!("failed to finish run: {e}")))?;
-    // The persisted outcome replaces the process-liveness witness.
-    crate::run_owner::release(db_path, l.run_id);
-
-    // What the [`StepRecorder`] wrote during the run, or, on a replay after a shared-state
-    // conflict, what the pulled database holds of this run.
-    let already = crate::state_carry::steps_of_run(&conn, l.run_id).await;
-
-    for (node_id, oref) in l.all_outputs {
-        if l.cached_node_ids.contains(node_id) || already.contains(node_id) {
-            continue;
-        }
-        let Some(run_h) = l.run_hashes.get(node_id) else {
-            continue;
-        };
-        let base = crate::StepId::parse(node_id).base_id().to_string();
-        let (cpu, rss) = l.all_timings.get(node_id).copied().unwrap_or((None, None));
-        let mut row = StepRow::from_artifact(node_id, run_h, &serde_json::Value::Null, 1);
-        row.path = l.store_paths.get(node_id).unwrap_or(&oref.path).clone();
-        row.format = oref.format.clone();
-        row.size_bytes = oref.size_bytes;
-        row.elapsed_seconds = oref.elapsed_seconds;
-        row.attempts = l.all_attempts.get(&base).copied().unwrap_or(1);
-        row.sinks_json = l.all_sinks.get(node_id).cloned();
-        row.cpu_seconds = cpu;
-        row.max_rss_bytes = rss;
-        row.output_hash = l
-            .output_hashes
-            .get(node_id)
-            .or(oref.content_hash.as_ref())
-            .cloned();
-        row.insert(&conn, l.run_id).await.ok();
+        .map_err(|e| BarcaError::Db(format!("failed to begin terminal ledger: {e}")))?;
+    let result = async {
+        write_terminal_ledger(&conn, l).await?;
+        conn.execute("COMMIT", ())
+            .await
+            .map_err(|e| BarcaError::Db(format!("failed to commit terminal ledger: {e}")))?;
+        Ok::<(), BarcaError>(())
     }
+    .await;
+    if let Err(error) = result {
+        conn.execute("ROLLBACK", ()).await.ok();
+        return Err(error);
+    }
+    // Only a committed outcome replaces the process-liveness witness.
+    crate::run_owner::release(db_path, l.run_id);
 
     // Persist the measured-cost EWMA so the next run starts pre-warmed and
     // skips the cold-start probe entirely. (Inline — this fn already holds
@@ -532,6 +491,60 @@ pub(crate) async fn persist_run(db_path: &str, l: &RunLedger<'_>) -> Result<(), 
         .ok();
     }
 
+    Ok(())
+}
+
+/// Required outcome rows and terminal status, inside the caller's transaction.
+async fn write_terminal_ledger(
+    conn: &turso::Connection,
+    l: &RunLedger<'_>,
+) -> Result<(), BarcaError> {
+    conn.execute(
+            "INSERT OR IGNORE INTO runs (run_id, command, files, target, status, steps_total, pid, host) VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6, ?7)",
+            [
+                l.run_id.to_string(),
+                l.command.to_string(),
+                l.files.clone(),
+                l.target.unwrap_or("").to_string(),
+                l.steps_total.to_string(),
+                std::process::id().to_string(),
+                db::local_host(),
+            ],
+        )
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to create terminal run: {e}")))?;
+    // What the [`StepRecorder`] wrote during the run, or, on a replay after a shared-state
+    // conflict, what the pulled database holds of this run.
+    let already = crate::state_carry::steps_of_run(conn, l.run_id).await?;
+
+    for (node_id, oref) in l.all_outputs {
+        if l.cached_node_ids.contains(node_id) || already.contains(node_id) {
+            continue;
+        }
+        let Some(run_h) = l.run_hashes.get(node_id) else {
+            continue;
+        };
+        let base = crate::StepId::parse(node_id).base_id().to_string();
+        let (cpu, rss) = l.all_timings.get(node_id).copied().unwrap_or((None, None));
+        let mut row = StepRow::from_artifact(node_id, run_h, &serde_json::Value::Null, 1);
+        row.path = l.store_paths.get(node_id).unwrap_or(&oref.path).clone();
+        row.format = oref.format.clone();
+        row.size_bytes = oref.size_bytes;
+        row.elapsed_seconds = oref.elapsed_seconds;
+        row.attempts = l.all_attempts.get(&base).copied().unwrap_or(1);
+        row.sinks_json = l.all_sinks.get(node_id).cloned();
+        row.cpu_seconds = cpu;
+        row.max_rss_bytes = rss;
+        row.output_hash = l
+            .output_hashes
+            .get(node_id)
+            .or(oref.content_hash.as_ref())
+            .cloned();
+        row.insert(conn, l.run_id)
+            .await
+            .map_err(|e| BarcaError::Db(format!("failed to record terminal step: {e}")))?;
+    }
+
     // Persist permanently-failed steps as `status='failed'` rows (artifact
     // columns NULL). Failed rows are never served as cache hits.
     for failure in l.all_failures {
@@ -555,7 +568,24 @@ pub(crate) async fn persist_run(db_path: &str, l: &RunLedger<'_>) -> Result<(), 
                 ],
             )
             .await
-            .ok();
+            .map_err(|e| BarcaError::Db(format!("failed to record failed step: {e}")))?;
+    }
+    let updated = conn.execute(
+            "UPDATE runs SET status = ?1, steps_executed = ?2, steps_cached = ?3, elapsed_seconds = ?4, finished_at = datetime('now') WHERE run_id = ?5",
+            [
+                l.status.to_string(),
+                l.steps_executed.to_string(),
+                l.steps_cached.to_string(),
+                l.elapsed.to_string(),
+                l.run_id.to_string(),
+            ],
+        )
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to finish run: {e}")))?;
+    if updated != 1 {
+        return Err(BarcaError::Db(
+            "terminal run row was not written".to_string(),
+        ));
     }
     Ok(())
 }
@@ -706,6 +736,175 @@ mod persist_tests {
             .into_iter()
             .find(|r| r.run_id == run_id)
             .expect("run row")
+    }
+
+    async fn owner_marker(db_path: &str, run_id: &str) -> Option<std::path::PathBuf> {
+        let _g = db::db_guard().await;
+        let (_db, conn) = db::open_conn(db_path).await.unwrap();
+        let mut rows = conn
+            .query("SELECT owner FROM runs WHERE run_id = ?1", [run_id])
+            .await
+            .unwrap();
+        let owner = rows
+            .next()
+            .await
+            .unwrap()
+            .unwrap()
+            .get::<String>(0)
+            .unwrap();
+        crate::run_owner::token_of(&owner).map(|token| {
+            std::path::Path::new(db_path)
+                .parent()
+                .unwrap()
+                .join("run-owners")
+                .join(format!("{token}.fifo"))
+        })
+    }
+
+    #[tokio::test]
+    async fn cancellation_status_write_errors_retain_the_owner_and_previous_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = fresh_db(&dir, "m.db").await;
+        db::create_run(&db_path, "earlier", "get", "[]", None, Some(1))
+            .await
+            .unwrap();
+        db::finish_run(&db_path, "earlier", "cancelled", 0, 0, 0.1)
+            .await
+            .unwrap();
+        db::create_run(&db_path, "r1", "get", "[]", None, Some(1))
+            .await
+            .unwrap();
+        let marker = owner_marker(&db_path, "r1").await;
+        {
+            let _g = db::db_guard().await;
+            let (_db, conn) = db::open_conn(&db_path).await.unwrap();
+            conn.execute("CREATE UNIQUE INDEX status_fault ON runs(status)", ())
+                .await
+                .unwrap();
+        }
+        assert!(
+            db::finish_run(&db_path, "r1", "cancelled", 0, 0, 0.1)
+                .await
+                .is_err()
+        );
+        assert_eq!(run_record(&db_path, "r1").await.status, "running");
+        if let Some(marker) = &marker {
+            assert!(marker.exists());
+        }
+        {
+            let _g = db::db_guard().await;
+            let (_db, conn) = db::open_conn(&db_path).await.unwrap();
+            conn.execute("DROP INDEX status_fault", ()).await.unwrap();
+        }
+        db::finish_run(&db_path, "r1", "cancelled", 0, 0, 0.1)
+            .await
+            .unwrap();
+        assert_eq!(run_record(&db_path, "r1").await.status, "cancelled");
+        if let Some(marker) = &marker {
+            assert!(!marker.exists());
+        }
+        assert!(
+            db::finish_run(&db_path, "missing", "cancelled", 0, 0, 0.1)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_success_row_cannot_finalize_a_partial_ledger() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = fresh_db(&dir, "m.db").await;
+        let fx = Fixture::new();
+        db::create_run(&db_path, "r1", "get", "[]", None, Some(5))
+            .await
+            .unwrap();
+        db::create_run(&db_path, "earlier", "get", "[]", None, Some(1))
+            .await
+            .unwrap();
+        record_steps(&db_path, "earlier", &[fx.row("f.py:a")])
+            .await
+            .unwrap();
+        db::finish_run(&db_path, "earlier", "success", 1, 0, 0.1)
+            .await
+            .unwrap();
+        let marker = owner_marker(&db_path, "r1").await;
+        {
+            let _g = db::db_guard().await;
+            let (_db, conn) = db::open_conn(&db_path).await.unwrap();
+            conn.execute(
+                "CREATE UNIQUE INDEX unique_node_fault ON materializations(node_id)",
+                (),
+            )
+            .await
+            .unwrap();
+        }
+        assert!(persist_run(&db_path, &fx.ledger("r1")).await.is_err());
+        if let Some(marker) = &marker {
+            assert!(marker.exists());
+        }
+        assert_eq!(
+            rows(&db_path).await,
+            [(
+                "earlier".to_string(),
+                "f.py:a".to_string(),
+                "success".to_string()
+            )]
+        );
+        let mid = run_record(&db_path, "r1").await;
+        assert_eq!(
+            (mid.status.as_str(), mid.steps_executed, mid.finished_at),
+            ("running", 0, None)
+        );
+        {
+            let _g = db::db_guard().await;
+            let (_db, conn) = db::open_conn(&db_path).await.unwrap();
+            conn.execute("DROP INDEX unique_node_fault", ())
+                .await
+                .unwrap();
+        }
+        persist_run(&db_path, &fx.ledger("r1")).await.unwrap();
+        assert_eq!(rows(&db_path).await.len(), complete("r1").len() + 1);
+        assert_eq!(run_record(&db_path, "r1").await.status, "failed");
+        if let Some(marker) = &marker {
+            assert!(!marker.exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_failure_row_rolls_back_new_success_rows_and_terminal_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = fresh_db(&dir, "m.db").await;
+        let fx = Fixture::new();
+        persist_run(&db_path, &fx.ledger("earlier")).await.unwrap();
+        db::create_run(&db_path, "r1", "get", "[]", None, Some(5))
+            .await
+            .unwrap();
+        // Already acknowledged progress survives terminal rollback.
+        record_steps(&db_path, "r1", &[fx.row("f.py:a")])
+            .await
+            .unwrap();
+        let before = rows(&db_path).await;
+        {
+            let _g = db::db_guard().await;
+            let (_db, conn) = db::open_conn(&db_path).await.unwrap();
+            conn.execute("CREATE UNIQUE INDEX unique_failure_fault ON materializations(status) WHERE status = 'failed'", ()).await.unwrap();
+        }
+        assert!(persist_run(&db_path, &fx.ledger("r1")).await.is_err());
+        assert_eq!(rows(&db_path).await, before);
+        let mid = run_record(&db_path, "r1").await;
+        assert_eq!(
+            (mid.status.as_str(), mid.steps_executed, mid.finished_at),
+            ("running", 1, None)
+        );
+        {
+            let _g = db::db_guard().await;
+            let (_db, conn) = db::open_conn(&db_path).await.unwrap();
+            conn.execute("DROP INDEX unique_failure_fault", ())
+                .await
+                .unwrap();
+        }
+        persist_run(&db_path, &fx.ledger("r1")).await.unwrap();
+        assert_eq!(rows(&db_path).await.len(), 2 * complete("r1").len());
     }
 
     #[tokio::test]
