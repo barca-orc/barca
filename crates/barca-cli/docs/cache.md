@@ -190,14 +190,14 @@ when Python imports it. The project root is the boundary (see "Where things live
 followed. As in Python, a package (`helpers/__init__.py`) wins over a module (`helpers.py`) in
 the same directory.
 
-A pipeline file can also be imported by its file name from a pipeline file in another directory
-(`a/p.py` does `from shared import f`, and `b/shared.py` is a pipeline file), because a worker
-keeps the directory of every pipeline file it has loaded on its import path. Barca follows it:
-`b/shared.py` is hashed when nothing on `a/p.py`'s own import path is a module called `shared`,
-and **as well as** that module when something is, since which of the two a worker runs depends
-on what it has loaded before. A pipeline file is never a package: `shared.sub` always means
-`sub.py` inside a `shared/` directory. Avoid the ambiguity by giving helper modules and pipeline
-files distinct names (`barca docs discovery`, "Node ids").
+Pipeline imports must preserve the producer's ordinary root-relative module identity:
+use `from b.shared import f` for `b/shared.py`, rather than relying on a previously
+loaded pipeline to make `from shared import f` available. Workers use each task's
+own import path; another pipeline's directory is not retained as an implicit fallback.
+Conflicting project bindings or pipeline identities require qualified imports before
+execution (`barca docs discovery`, "Node ids"). Unambiguous non-pipeline sibling
+helpers keep ordinary Python lookup. A pipeline file is never a package:
+`shared.sub` means `sub.py` inside a `shared/` directory.
 
 Only files a step imports are read, each once per command. Barca never walks the project to
 look for helpers, and it never reads or hashes the standard library or installed packages,
@@ -227,9 +227,12 @@ An edit in one of these does not change the hash; recompute with `--refresh-all`
   are hashed as part of the function but the names in them are not followed);
 - helpers more than six project modules away along an import chain.
 
-Two pipeline directories that each have a `helpers.py` are hashed correctly, each against its
-own, but share one `sys.path` in a worker (`barca docs discovery`, "Node ids"): give such
-helpers distinct names.
+Conflicting ordinary project imports are rejected before user code runs. If two pipeline
+directories each have `helpers.py`, qualify the imports (`from east.helpers import value`,
+`from west.helpers import value`) so both hashing and workers select the same files.
+Unambiguous sibling helpers still work; previous tasks do not add implicit import paths.
+Literal imports in inactive branches and unused functions may conservatively require
+qualification. Dynamic imports and user mutations of import paths are not statically proven.
 
 #### After upgrading to 0.19
 

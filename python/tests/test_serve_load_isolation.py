@@ -229,11 +229,29 @@ def test_imported_reference_preserves_sibling_priority(project, sibling_healthy)
     (sub / "p.py").write_text(
         "from barca import asset\nfrom shared import value\n@asset(inputs={'x': value})\ndef consumer(x): return x+1\n"
     )
-    server = Server(project, ".", "--no-schedule")
+    server = Server(project, ".", "--no-schedule", "--watch")
     try:
-        assert ("sub/p.py:consumer" in loaded(server)) == sibling_healthy
+        assert "sub/p.py:consumer" not in loaded(server)
         affected = {n for e in errors(server) for n in e["affected_nodes"]}
-        assert ("sub/p.py:consumer" in affected) != sibling_healthy
+        assert "sub/p.py:consumer" in affected
+        if sibling_healthy:
+            # The producer retains its ordinary sub.shared identity. Its bare
+            # alias cannot create a second pipeline identity, even when the
+            # lower-priority root candidate failed parsing.
+            assert "sub/shared.py:value" in loaded(server)
+            assert any("conflicting import identities" in e["error"] for e in errors(server))
+            file = sub / "p.py"
+            file.write_text(
+                file.read_text().replace("from shared import value", "from sub.shared import value")
+            )
+            wait_for(
+                lambda: "sub/p.py:consumer" in loaded(server), "qualified sibling pipeline repair"
+            )
+            assert not any("sub/p.py:consumer" in e["affected_nodes"] for e in errors(server))
+        else:
+            # The failed preferred sibling still prevents fallback to the
+            # healthy root candidate with the same name.
+            assert "shared.py:value" in loaded(server)
         assert "inspection imported user code" not in server.log.read_text()
     finally:
         server.stop()

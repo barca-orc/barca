@@ -75,15 +75,29 @@ barca run validate pipelines/    # target first, then the scope
 
 ## Node ids
 
-A node id is `<file>:<function>` with `<file>` relative to the root (`pipelines/sources.py:ibp_model`),
-however you named the file: `../sources.py` from a subdirectory or an absolute path give the
-same id, and so share the cache. A bare name (`ibp_model`) selects the node when exactly one
-file defines it; when two do, the error lists both full ids.
+An explicit `name=` is the node’s stable id. Otherwise, its id is `<file>:<function>` with
+`<file>` relative to the root (`pipelines/sources.py:ibp_model`), however you named the file:
+`../sources.py` from a subdirectory or an absolute path give the same id, and so share the
+cache. A bare function name (`ibp_model`) selects the node when exactly one file defines it;
+when two do, the error lists both full ids.
 
-Two files may share a name in different directories (`east/assets.py`, `west/assets.py`): they
-are separate modules, hashed and run separately. Helper modules they import with a bare
-`import helpers` must have distinct names, because every pipeline directory goes on one
-`sys.path` in a worker, as in any single Python process.
+Two files may share a name in different directories (`east/assets.py`, `west/assets.py`):
+use their qualified module names when importing them. Workers share imported modules for
+one process lifetime, so imports that bind the same ordinary name to different project
+files, or to a project file in one context and an external/unavailable module in another,
+are rejected with exit 2 before user imports and run metadata. For example, replace
+`from helpers import value` with `from east.helpers import value` or
+`from west.helpers import value`. An unrelated off-path file does not outlaw an installed
+or standard-library import. With `serve`, the same validation isolates affected
+project source definitions into `/health` load errors; unrelated valid definitions
+remain inspectable, runnable and scheduled. Qualified-import repair restores those
+definitions on reload. One-shot commands remain strict and exit 2.
+
+Unambiguous root and sibling helper imports still work. Each task uses its own import
+path; another pipeline's directory does not become implicitly available after that
+worker runs it. Explicit node inputs that rely on off-path stem imports must use a
+qualified import such as `from pipelines.sources import seed`. Otherwise unavailable
+helper-only imports fail like ordinary Python.
 
 ## Cross-file inputs
 
@@ -134,10 +148,14 @@ def validate(r: dict, m: dict) -> dict:
 barca run validate               # from the root or any directory below it
 ```
 
-Every import form works: `from pipelines.sources import ibp_model`, `from .sources import
-ibp_model` (relative), `from sources import ibp_model` (a sibling file), `... import ibp_model as
-model`, and `module.ibp_model` after `import pipelines.sources [as module]`; also inside
-`collect(...)` and `partitions_from(...)`.
+Use ordinary imports that preserve the producer pipeline's root-relative module identity:
+`from pipelines.sources import ibp_model`, `from .sources import ibp_model` inside its
+package, `... import ibp_model as model`, or `module.ibp_model` after
+`import pipelines.sources [as module]`; also inside `collect(...)` and
+`partitions_from(...)`. A root `sources.py` uses `from sources import ibp_model`.
+For a pipeline under a subdirectory, use its qualified or package-relative name
+instead of a second bare-stem identity. Unambiguous non-pipeline sibling helper
+imports retain ordinary lookup.
 
 How a name in `inputs=` is resolved, most specific first:
 
@@ -155,12 +173,28 @@ an `@asset`/`@task`/`@sensor` in its module says so (`'close' is imported from p
 `asset_ref("<file>:<function>")` names a node without importing it (for example, to avoid an
 import cycle). The path is relative to the root, or to the referencing file's directory.
 
-A step file inside a package (every directory from the root down has an `__init__.py`) runs as
-that package's module (`pipelines.reconcile`), so relative imports work in it and `from
-pipelines.reconcile import x` elsewhere gets the same module. Other files run as standalone
-modules, as before.
+Ordinary importable pipeline files use their normal root-relative identity (`p` for
+`p.py`, `pipelines.reconcile` for `pipelines/reconcile.py`, including namespace packages).
+Executing a pipeline and importing it by that identity share the same module, classes
+and import-time setup. A fully packaged file searches the root; other files keep
+sibling-first imports. Files without an ordinary importable identity retain path loading.
+Use one qualified identity when importing a pipeline under a subdirectory rather than
+mixing its bare stem with its qualified name.
+
+Old `_barca_*` pickle references are read through a bounded compatibility lookup. It
+examines all possible historical path encodings without walking the project and loads a
+source only after proving one match. Missing, ambiguous or excessively costly lookups
+preserve the artifact and history and report explicit refresh guidance. Normal pickle
+module references keep ordinary Python import behavior. Compatibility loading can run
+the producer module's import-time setup once; it does not execute the producer asset.
 
 ## Known limitations
+
+- Import validation examines literal imports, including inactive branches and unused
+  functions. Such imports may conservatively require qualification; dynamic `importlib`
+  calls and user mutations of `sys.path`/`sys.modules` are not statically proven.
+- This import-policy change requires a minor release: implicit cross-directory stem
+  imports and conflicting project import identities need ordinary qualified imports.
 
 - `barca serve --watch` re-reads the files it found at start; a file added later needs a restart.
 - Ids changed in 0.13: before, an id kept the spelling you typed (`./p.py:f`, an absolute path).

@@ -24,6 +24,8 @@ import importlib.util
 import marshal
 import os
 import sys
+import threading
+from pathlib import Path
 from types import CodeType, ModuleType
 
 # Points a cached code object's co_filename at the source's current path, as the default
@@ -34,6 +36,20 @@ _fix_co_filename = getattr(_imp, "_fix_co_filename", None)
 _CHECKED_HASH_FLAGS = (0b11).to_bytes(4, "little")
 _HEADER = 16  # magic (4) + flags (4) + source hash (8)
 
+# One source object for normal imports, legacy aliases and cached-only reads.
+# Map access never holds a global lock across user code. Separate source locks
+# preserve setup-once across compatibility aliases without blocking other imports.
+_source_lock = threading.RLock()
+_setup_locks: dict[str, threading.RLock] = {}
+_pipeline_lock = threading.RLock()
+_loaded_sources: dict[str, ModuleType] = {}
+_LEGACY_PROBE_LIMIT = 256
+
+
+def _setup_lock(path: str):
+    with _source_lock:
+        return _setup_locks.setdefault(path, threading.RLock())
+
 
 class SourceHashLoader(_machinery.SourceFileLoader):
     """A SourceFileLoader whose bytecode cache is keyed by the source bytes, not mtime.
@@ -43,6 +59,24 @@ class SourceHashLoader(_machinery.SourceFileLoader):
     ignored, the source is compiled, and a checked hash-based .pyc replaces it. Compiling
     a large helper module costs milliseconds per worker; hashing it costs microseconds.
     """
+
+    def exec_module(self, module):
+        path = os.path.realpath(self.path)
+        with _setup_lock(path):
+            loaded = _loaded_sources.get(path)
+            if loaded is not None and loaded is not module:
+                # importlib returns the registered module after exec_module.
+                sys.modules[self.name] = loaded
+                return
+            # Executing an existing object is an explicit importlib.reload;
+            # preserve that ordinary Python operation rather than suppress it.
+            _loaded_sources[path] = module
+            try:
+                super().exec_module(module)
+            except BaseException:
+                if _loaded_sources.get(path) is module:
+                    del _loaded_sources[path]
+                raise
 
     def get_code(self, fullname):
         source_path = self.get_filename(fullname)
@@ -136,16 +170,17 @@ def _claim(root: str) -> None:
             del sys.path_importer_cache[entry]
 
 
-_project_root_claimed = False
+_project_root: str | None = None
+_managed_paths: set[str] = set()
 
 
 def _claim_project_root() -> None:
     """Claim the cwd the process started its first step in: the project root. Once, so a
     step that changes directory does not get that directory claimed by the next load."""
-    global _project_root_claimed
-    if not _project_root_claimed:
-        _project_root_claimed = True
-        _claim(os.path.realpath(os.getcwd()))
+    global _project_root
+    if _project_root is None:
+        _project_root = os.path.realpath(os.getcwd())
+        _claim(_project_root)
 
 
 def load_source_module(source_file: str, mod_name: str) -> ModuleType:
@@ -158,20 +193,27 @@ def load_source_module(source_file: str, mod_name: str) -> ModuleType:
     this search order: the file's directory, then the root).
     """
     path = os.path.realpath(source_file)
-    module_dir = os.path.dirname(path)
-    if module_dir not in sys.path:
-        sys.path.insert(0, module_dir)
-    _claim(module_dir)
-    _claim_project_root()
-    loader = SourceHashLoader(mod_name, path)
-    spec = importlib.util.spec_from_file_location(mod_name, path, loader=loader)
-    if spec is None:
-        raise RuntimeError(f"Could not load module spec for {path}")
-    mod = importlib.util.module_from_spec(spec)
-    # Register before executing so pickle and dataclasses can find the module.
-    sys.modules[mod_name] = mod
-    loader.exec_module(mod)
-    return mod
+    with _pipeline_lock:
+        module_dir = os.path.dirname(path)
+        if module_dir not in sys.path:
+            sys.path.insert(0, module_dir)
+        _claim(module_dir)
+        _claim_project_root()
+    # Registration and setup share source ownership. No global lock spans user code.
+    with _setup_lock(path):
+        loaded = _loaded_sources.get(path)
+        if loaded is not None:
+            sys.modules[mod_name] = loaded
+            return loaded
+        loader = SourceHashLoader(mod_name, path)
+        spec = importlib.util.spec_from_file_location(mod_name, path, loader=loader)
+        if spec is None:
+            raise RuntimeError(f"Could not load module spec for {path}")
+        mod = importlib.util.module_from_spec(spec)
+        # Register before executing so pickle and dataclasses can find the module.
+        sys.modules[mod_name] = mod
+        loader.exec_module(mod)
+        return sys.modules[mod_name]
 
 
 def load_package_module(dotted: str) -> ModuleType:
@@ -183,3 +225,192 @@ def load_package_module(dotted: str) -> ModuleType:
         sys.path.insert(0, root)
     _claim(root)
     return importlib.import_module(dotted)
+
+
+def _pipeline_name(path: Path) -> str | None:
+    """An ordinary root/package/namespace identity, when its path has one."""
+    _claim_project_root()
+    assert _project_root is not None
+    try:
+        parts = list(path.relative_to(_project_root).with_suffix("").parts)
+    except ValueError:
+        return None
+    if parts and parts[-1] == "__init__":
+        parts.pop()
+    if not parts or not all(part.isidentifier() for part in parts):
+        return None
+    return ".".join(parts)
+
+
+def _legacy_name(path: Path) -> str:
+    _claim_project_root()
+    assert _project_root is not None
+    try:
+        parts = path.relative_to(_project_root).with_suffix("").parts
+    except ValueError:
+        parts = (path.stem,)
+    return "_barca_" + "__".join(parts)
+
+
+def activate_source_path(source_file: str) -> None:
+    """Restore this task's ordinary import path, including cached module tasks."""
+    _claim_project_root()
+    assert _project_root is not None
+    path = Path(source_file).resolve()
+    directory = str(path.parent)
+    relative = path.relative_to(_project_root) if path.is_relative_to(_project_root) else None
+    packaged = (
+        relative is not None
+        and len(relative.parts) > 1
+        and all(
+            Path(_project_root).joinpath(*relative.parts[:i], "__init__.py").is_file()
+            for i in range(1, len(relative.parts))
+        )
+    )
+    entries = (
+        [_project_root] if packaged or directory == _project_root else [directory, _project_root]
+    )
+    _managed_paths.add(directory)
+    _managed_paths.add(_project_root)
+    sys.path[:] = entries + [entry for entry in sys.path if entry not in _managed_paths]
+    _claim(directory)
+
+
+def _ordinary_source(name: str) -> str | None:
+    """Find a module without executing its parents or consulting sys.modules."""
+    paths = sys.path
+    spec = None
+    prefix = []
+    for part in name.split("."):
+        prefix.append(part)
+        spec = _machinery.PathFinder.find_spec(part, paths)
+        if spec is None:
+            return None
+        paths = (
+            list(spec.submodule_search_locations)
+            if spec.submodule_search_locations is not None
+            else None
+        )
+        if paths is None and len(prefix) != len(name.split(".")):
+            return None
+    return os.path.realpath(spec.origin) if spec and spec.origin else None
+
+
+def load_pipeline_module(source_file: str) -> ModuleType:
+    """Load once with an ordinary identity; keep old aliases for durable pickle."""
+    path = Path(source_file).resolve()
+    with _pipeline_lock:
+        activate_source_path(str(path))
+        name = _pipeline_name(path)
+        legacy = _legacy_name(path)
+    loaded = _loaded_sources.get(str(path))
+    if loaded is not None:
+        # A normal import may have registered this object before finishing setup.
+        # Wait for that source only; imports of other helpers remain independent.
+        with _setup_locks[str(path)]:
+            loaded = _loaded_sources.get(str(path))
+    if loaded is None:
+        if name is not None and _ordinary_source(name) == str(path):
+            occupied = sys.modules.get(name)
+            if occupied is not None and os.path.realpath(getattr(occupied, "__file__", "")) != str(
+                path
+            ):
+                raise ImportError(
+                    f"project module '{name}' from '{path}' conflicts with an already imported module; use an explicit qualified project import"
+                )
+            loaded = importlib.import_module(name)
+        else:
+            # Files that ordinary imports cannot name retain their path identity.
+            loaded = load_source_module(str(path), legacy)
+    if os.path.realpath(getattr(loaded, "__file__", "")) != str(path):
+        raise ImportError(f"project module source mismatch for '{path}'")
+    previous = sys.modules.get(legacy)
+    ordinary_legacy = _ordinary_source(legacy)
+    # Compatibility aliases cannot occupy a real ordinary module name or
+    # replace another source's alias. Normal qualified identities still work;
+    # ambiguous old pickles refuse in the exhaustive compatibility reader.
+    if (previous is None or previous is loaded) and (
+        ordinary_legacy is None or ordinary_legacy == str(path)
+    ):
+        sys.modules[legacy] = loaded
+    return loaded
+
+
+def legacy_pickle_module(name: str) -> ModuleType:
+    """Recover a source without retaining its import path in the caller's scope."""
+    with _pipeline_lock:
+        previous_paths = sys.path.copy()
+    try:
+        return _recover_legacy_pickle_module(name)
+    finally:
+        with _pipeline_lock:
+            sys.path[:] = previous_paths
+
+
+def _recover_legacy_pickle_module(name: str) -> ModuleType:
+    """Prove one legacy source by exhaustive bounded, path-pruned probes."""
+    _claim_project_root()
+    assert _project_root is not None
+    suffix = name.removeprefix("_barca_")
+    if not name.startswith("_barca_") or not suffix or "/" in suffix or "\\" in suffix:
+        raise ImportError(
+            f"legacy project identity '{name}' is unavailable; use explicit refresh after resolving the source layout"
+        )
+    registered = sys.modules.get(name)
+    registered_file = getattr(registered, "__file__", None)
+    if isinstance(registered, ModuleType) and registered_file is not None:
+        path = Path(registered_file).resolve()
+        if (
+            not path.is_relative_to(_project_root)
+            and _loaded_sources.get(str(path)) is registered
+            and _legacy_name(path) == name
+        ):
+            # A direct path worker already loaded this exact outside-root
+            # object. Keep ordinary pickle's existing registered-module
+            # behavior; cold recovery cannot infer an outside-root source.
+            return registered
+    candidates: set[Path] = set()
+    # A legitimate ordinary module may itself start with '_barca_'. Preserve
+    # ordinary imports, but never guess if the same name also encodes a legacy source.
+    ordinary = _ordinary_source(name)
+    if ordinary is not None and Path(ordinary).is_relative_to(_project_root):
+        candidates.add(Path(ordinary))
+    pending = [(Path(_project_root), suffix)]
+    probes = 0
+    while pending:
+        directory, remaining = pending.pop()
+        probes += 1
+        if probes > _LEGACY_PROBE_LIMIT:
+            raise ImportError(
+                f"legacy project identity '{name}' exceeded its recovery bound; use explicit refresh after resolving the source layout"
+            )
+        file = directory / (remaining + ".py")
+        if file.is_file():
+            file = file.resolve()
+            if file.is_relative_to(_project_root) and _legacy_name(file) == name:
+                candidates.add(file)
+        # Every possible delimiter split, including overlapping '__' in '___'.
+        for offset in range(len(remaining) - 1):
+            if remaining[offset : offset + 2] != "__":
+                continue
+            component, tail = remaining[:offset], remaining[offset + 2 :]
+            if not component or not tail or component in {".", ".."}:
+                continue
+            probes += 1
+            if probes > _LEGACY_PROBE_LIMIT:
+                raise ImportError(
+                    f"legacy project identity '{name}' exceeded its recovery bound; use explicit refresh after resolving the source layout"
+                )
+            child = directory / component
+            if child.is_dir() and child.resolve().is_relative_to(_project_root):
+                pending.append((child, tail))
+    if not candidates and ordinary is not None:
+        # A normal external module can legitimately use this prefix. Only use
+        # it after exhaustive proof that no project legacy source matches.
+        return importlib.import_module(name)
+    if len(candidates) != 1:
+        state = "ambiguous" if candidates else "unavailable"
+        raise ImportError(
+            f"legacy project identity '{name}' is {state}; use explicit refresh after resolving the source layout"
+        )
+    return load_pipeline_module(str(next(iter(candidates))))
