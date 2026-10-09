@@ -27,13 +27,18 @@ def project(tmp_path):
 import os, time
 from barca import _storage
 
+# Force the real helper watchdog to finish before the coordinator deadline.
+# This changes only the child helper environment, after CLI configuration.
+if os.environ.get("PREFLIGHT_MODE") == "helper_timeout":
+    os.environ["BARCA_TRANSFER_TIMEOUT"] = "0.1"
+
 def check(root):
     from pathlib import Path
     Path("helper.pid").write_text(str(os.getpid()))
     mode = os.environ.get("PREFLIGHT_MODE", "ok")
     if mode == "denied":
         raise PermissionError("bad credentials")
-    if mode == "stall":
+    if mode in ("stall", "helper_timeout"):
         time.sleep(60)
 
 def put(local, remote):
@@ -61,8 +66,18 @@ def run(root, env):
     )
 
 
-@pytest.mark.parametrize("mode,detail", [("denied", "bad credentials"), ("stall", "timed out")])
-def test_state_off_rejects_bad_store_before_importing_user_code(project, mode, detail):
+@pytest.mark.parametrize(
+    "mode,details",
+    [
+        ("denied", ("bad credentials",)),
+        ("helper_timeout", ("TimeoutError: transfer attempt made no progress within 0.1s",)),
+        (
+            "stall",
+            ("timed out after 1s", "TimeoutError: transfer attempt made no progress within 1s"),
+        ),
+    ],
+)
+def test_state_off_rejects_bad_store_before_importing_user_code(project, mode, details):
     root, env = project
     env["PREFLIGHT_MODE"] = mode
     started = time.monotonic()
@@ -70,7 +85,9 @@ def test_state_off_rejects_bad_store_before_importing_user_code(project, mode, d
     assert out.returncode == 3, out.stderr
     assert time.monotonic() - started < 8
     assert "[barca] checking artifact store s3://bucket/project" in out.stderr
-    assert detail in out.stderr
+    # The coordinator deadline and helper watchdog both bound this same probe.
+    # Either can resolve first under load; both retain an actionable timeout.
+    assert any(detail in out.stderr for detail in details), out.stderr
     assert not (root / "user.started").exists()
     assert not (root / "user.imported").exists()
     with pytest.raises(ProcessLookupError):
