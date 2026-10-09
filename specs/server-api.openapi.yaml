@@ -41,6 +41,9 @@ paths:
               description: Methods accepted by this route
       description: Liveness, not readiness or authentication. The API has no authentication.
         Read-only mode refuses mutating routes; it does not restrict inspection access.
+        load_errors reports unloaded sources and excluded dependent definitions from
+        the selected served graph. Healthy loads return an empty array; healthy
+        definitions remain inspectable beside those diagnostics.
     head:
       summary: Server liveness and operating modes (headers only)
       operationId: head_health
@@ -390,6 +393,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RunHandle'
+        '400':
+          description: No loaded assets or sensors, or source files changed during loading
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Source-loading infrastructure error before run admission
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '403':
           description: Read-only server refuses mutation
           content:
@@ -408,7 +423,9 @@ paths:
               schema: *id002
               description: Methods accepted by this route
       description: Bodyless trigger; tasks are skipped. Returns HTTP 200 immediately
-        with a volatile polling handle. There is no POST /runs command endpoint.
+        with a volatile polling handle for the healthy selected graph. An entirely
+        unloaded graph or a graph containing only tasks returns 400; inspect /health
+        load_errors for source diagnostics. There is no POST /runs command endpoint.
   /run/{target}:
     post:
       summary: Run one task and refresh its upstream assets
@@ -1145,6 +1162,7 @@ components:
       - version
       - read_only
       - scheduler
+      - load_errors
       properties:
         status:
           const: ok
@@ -1152,6 +1170,23 @@ components:
         read_only: &id026
           type: boolean
         scheduler: *id026
+        load_errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/LoadError'
+    LoadError:
+      type: object
+      additionalProperties: false
+      required:
+      - file
+      - error
+      - affected_nodes
+      properties:
+        file: *id002
+        error: *id002
+        affected_nodes:
+          type: array
+          items: *id002
     RunHandle:
       type: object
       additionalProperties: false

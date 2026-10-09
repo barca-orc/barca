@@ -212,9 +212,18 @@ fn spec_matches_router_paths_and_methods_and_all_schemas_compile() {
     assert!(!v.is_valid(&json!({"handle":"r","status":"pending"})));
     assert!(!v.is_valid(&json!({"handle":"r","status":"queued","result":null,"error":null,"started_at":1.0,"finished_at":null})));
     let health = validator(&json!({"$ref":"#/components/schemas/Health"}));
-    assert!(!health.is_valid(
-        &json!({"status":"ok","version":"1","read_only":false,"scheduler":false,"invented":true})
+    assert!(health.is_valid(
+        &json!({"status":"ok","version":"1","read_only":false,"scheduler":false,"load_errors":[]})
     ));
+    assert!(
+        !health.is_valid(&json!({"status":"ok","version":"1","read_only":false,"scheduler":false}))
+    );
+    assert!(!health.is_valid(
+        &json!({"status":"ok","version":"1","read_only":false,"scheduler":false,"load_errors":[],"invented":true})
+    ));
+    let load_error = validator(&json!({"$ref":"#/components/schemas/LoadError"}));
+    assert!(!load_error.is_valid(&json!({"file":"p.py","error":"broken"})));
+    assert!(!load_error.is_valid(&json!({"file":"p.py","error":"broken","affected_nodes":[1]})));
     for event in [
         barca_core::RunEvent::RunStarted { run_id: "r".into() },
         barca_core::RunEvent::Log {
@@ -477,4 +486,88 @@ async fn ambiguous_targets_and_snapshot_failure_keep_error_envelopes() {
     let broken_store = app(cfg);
     checked(&broken_store, "GET", "/runs", "/runs", 500).await;
     checked(&broken_store, "GET", "/health", "/health", 200).await;
+}
+
+#[tokio::test]
+async fn partial_and_empty_graph_health_and_run_admission_match_contract() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut cfg = config(dir.path(), false);
+    let source = dir.path().join("pipeline.py");
+    let broken = dir.path().join("broken.py");
+    std::fs::write(&source, "from barca import asset, asset_ref\n@asset(inputs={'value': asset_ref('broken.py:bad')})\ndef blocked(value): return value\n@asset()\ndef safe(): return 7\n").unwrap();
+    std::fs::write(
+        &broken,
+        "from barca import asset\n@asset()\ndef bad(: pass\n",
+    )
+    .unwrap();
+    cfg.files.push(broken.display().to_string());
+    let router = app(cfg.clone());
+    let assets = checked(&router, "GET", "/assets", "/assets", 200).await;
+    assert_eq!(assets.as_array().unwrap().len(), 1);
+    assert!(assets[0]["id"].as_str().unwrap().ends_with(":safe"));
+    let health = checked(&router, "GET", "/health", "/health", 200).await;
+    let errors = health["load_errors"].as_array().unwrap();
+    assert!(errors.iter().any(
+        |error| error["file"].as_str().unwrap().ends_with("broken.py")
+            && error["affected_nodes"].as_array().unwrap().is_empty()
+    ));
+    assert!(errors.iter().any(|error| {
+        error["affected_nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|id| id.as_str().unwrap().ends_with(":blocked"))
+    }));
+    let handle = checked(&router, "POST", "/run", "/run", 200).await;
+    assert_eq!(
+        wait(&router, handle["run_id"].as_str().unwrap()).await["status"],
+        "complete"
+    );
+    std::fs::write(&source, "def broken(: pass\n").unwrap();
+    let empty = app(cfg.clone());
+    assert_eq!(
+        checked(&empty, "GET", "/assets", "/assets", 200).await,
+        json!([])
+    );
+    assert_eq!(
+        checked(&empty, "GET", "/state", "/state", 200).await,
+        json!([])
+    );
+    let health = checked(&empty, "GET", "/health", "/health", 200).await;
+    assert_eq!(health["load_errors"].as_array().unwrap().len(), 2);
+    let refusal = checked(&empty, "POST", "/run", "/run", 400).await;
+    assert!(
+        refusal["error"]
+            .as_str()
+            .unwrap()
+            .contains("no loaded assets or sensors")
+    );
+    std::fs::write(
+        &source,
+        "from barca import task\n@task()\ndef healthy(): pass\n",
+    )
+    .unwrap();
+    cfg.files = vec![source.display().to_string()];
+    let tasks_only = app(cfg);
+    let assets = checked(&tasks_only, "GET", "/assets", "/assets", 200).await;
+    assert_eq!(assets.as_array().unwrap().len(), 1);
+    assert_eq!(assets[0]["kind"], "task");
+    let health = checked(&tasks_only, "GET", "/health", "/health", 200).await;
+    assert_eq!(health["load_errors"], json!([]));
+    checked(&tasks_only, "POST", "/run", "/run", 400).await;
+}
+
+#[tokio::test]
+async fn run_loader_infrastructure_failure_matches_contract() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut cfg = config(dir.path(), false);
+    std::fs::write(dir.path().join("pipeline.py"), "from barca import asset, partitions\n@asset(partitions={'x': partitions(list(range(2)))})\ndef value(x): return x\n").unwrap();
+    cfg.python = dir.path().join("unavailable-python");
+    let body = checked(&app(cfg), "POST", "/run", "/run", 500).await;
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("DAG analysis task failed")
+    );
 }

@@ -71,6 +71,21 @@ could not load libstdc++.so.6; direct import reproduced that environment failure
 The isolated Linuxbrew Python environment passed the tests without product edits.
 No health schema additions are published before PR361 merges.
 
+After PR361 merged at 1642da9, the unchanged old health schema failed two real
+router cases because load_errors was an unexpected property. The updated schema
+requires the shipped field and closed LoadError shape, and documents POST /run
+admission 400/500 responses. Router cases preserve healthy colocated execution
+beside an unloaded sibling/dependent, validate entirely unloaded and healthy
+tasks-only admission refusals, and produce a real 500 by selecting a valid dynamic
+partition expression with an unavailable configured interpreter. No production
+fault hook is added. Actual Client cases cover partial and empty graph health.
+
+All 81 server/router/conformance Rust tests and 94 actual HTTP/client/CLI/manual/
+serve-isolation checks passed without skips; the final tasks-only extension also
+passed its focused router test. Strict workspace/all-target Clippy, Rust
+formatting, pinned Ruff, dependency lock and whitespace checks passed. Route and
+method inventory remains unchanged, and no unmerged API fields are advertised.
+
 ## Compatibility and ownership
 
 Core result/error definitions remain the source of runtime behavior. This is an

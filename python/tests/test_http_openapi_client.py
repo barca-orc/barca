@@ -21,6 +21,9 @@ import yaml
 from barca.api import BarcaError, _find_binary
 from barca.client import Client
 
+from .test_serve_load_isolation import BROKEN, PIPELINE
+from .test_serve_robustness import Server
+
 SPEC = yaml.safe_load((Path(__file__).parents[2] / "specs/server-api.openapi.yaml").read_text())
 
 
@@ -160,3 +163,30 @@ def test_real_client_requests_and_terminal_parsing_match_openapi(server, monkeyp
         ("POST", "/run"),
         ("DELETE", "/run/{target}"),
     }
+
+
+@pytest.mark.parametrize("empty", [False, True])
+def test_real_client_partial_load_health_and_empty_admission_match_openapi(tmp_path, empty):
+    (tmp_path / "barca.toml").write_text("")
+    (tmp_path / "pipeline.py").write_text(BROKEN if empty else PIPELINE)
+    (tmp_path / "broken.py").write_text(BROKEN)
+    process = Server(tmp_path, ".", "--no-schedule")
+    client = Client(f"http://127.0.0.1:{process.port}")
+    try:
+        assets = client.assets()
+        health = client.health()
+        validate({"$ref": "#/components/schemas/Health"}, health)
+        assert health["status"] == "ok" and health["load_errors"]
+        if empty:
+            assert assets == []
+            assert len(health["load_errors"]) == 2
+            with pytest.raises(BarcaError, match=r"failed \(400\).+no loaded assets or sensors"):
+                client.get()
+        else:
+            assert {asset["id"] for asset in assets} == {"pipeline.py:safe", "pipeline.py:healthy"}
+            affected = {node for error in health["load_errors"] for node in error["affected_nodes"]}
+            assert affected == {"pipeline.py:blocked", "pipeline.py:dependent"}
+            result = client.get("safe").wait(timeout=20, poll=0.02)
+            assert result["status"] == "complete"
+    finally:
+        process.stop()
