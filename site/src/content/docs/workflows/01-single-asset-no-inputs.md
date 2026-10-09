@@ -115,7 +115,7 @@ json
 yellow banana
 ```
 
-`barca sql` needs `duckdb` installed in the same Python environment. A result that is not a
+Install SQL support with `uv add 'barca[sql]'`. A result that is not a
 table (a string here) is one row with one column named `json`. `barca history` lists the runs.
 
 ## When the function runs again

@@ -81,7 +81,7 @@ no longer in the bucket) exits 3 and carries the store's error.
 - It never runs a step, never imports your code, and records nothing: `barca history` is
   unchanged. With local results nothing is written under `.barca/`; with remote storage only the
   copies in `.barca/sql-cache/` are.
-- It needs `duckdb` in the Python environment barca uses (`pip install duckdb`).
+- Install SQL support in barca's Python environment: `uv add 'barca[sql]'`.
 - The query runs in a fresh in-memory DuckDB, not on `barca.duckdb_connection()`: extensions or
   macros your pipeline module sets up at import time are not loaded.
 

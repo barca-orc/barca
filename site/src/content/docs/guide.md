@@ -102,8 +102,7 @@ n  total
 ```
 
 It returns at most 100 rows unless you pass `--limit N` or `--all`, shows the last result even
-when the asset is stale (stderr says so), and needs `duckdb` installed in the same
-environment. See [barca sql](/reference/sql/).
+when the asset is stale (stderr says so). Install SQL support with `uv add 'barca[sql]'`. See [barca sql](/reference/sql/).
 
 `get`, `run`, `list`, `status`, `sql`, `history` and `stats` print a table or summary in a
 terminal and JSON when piped or captured; `--json` and `--pretty` override that. Progress and

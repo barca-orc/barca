@@ -12,11 +12,11 @@ You need Python 3.12 or later. With [uv](https://docs.astral.sh/uv/):
 ```bash
 uv init --app my-project
 cd my-project
-uv add barca duckdb
+uv add 'barca[sql]'
 ```
 
-uv is recommended, not required. `pip install barca duckdb` in a virtualenv works the same
-way; then type `barca` wherever this page says `uv run barca`. `duckdb` is only needed for
+uv is recommended, not required. `pip install 'barca[sql]'` in a virtualenv works the same
+way; then type `barca` wherever this page says `uv run barca`. The `sql` extra installs DuckDB for
 `barca sql`. Wheels exist for macOS on Apple Silicon and x86-64 Linux with glibc.
 
 ## Write two assets

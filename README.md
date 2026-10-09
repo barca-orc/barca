@@ -67,8 +67,8 @@ API; wheels are published for macOS on Apple Silicon and x86-64 Linux with glibc
 with the Python of the environment it is installed in, or `python3` on `PATH`.
 
 Optional extras: `barca[parquet]` (pyarrow, for pandas DataFrames), and `barca[s3]`,
-`barca[gcs]`, `barca[azure]` or `barca[remote]` for a remote store. `barca sql` needs
-`duckdb` installed in the same environment.
+`barca[gcs]`, `barca[azure]` or `barca[remote]` for a remote store. For `barca sql`,
+install SQL support with `uv add 'barca[sql]'`.
 
 ## Where results live
 

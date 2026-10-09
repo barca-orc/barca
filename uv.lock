@@ -283,6 +283,9 @@ s3 = [
     { name = "fsspec" },
     { name = "s3fs" },
 ]
+sql = [
+    { name = "duckdb" },
+]
 test = [
     { name = "adlfs" },
     { name = "duckdb" },
@@ -304,6 +307,7 @@ requires-dist = [
     { name = "adlfs", marker = "extra == 'remote'" },
     { name = "adlfs", marker = "extra == 'test'" },
     { name = "ddtrace", marker = "extra == 'datadog'", specifier = ">=3,<5" },
+    { name = "duckdb", marker = "extra == 'sql'" },
     { name = "duckdb", marker = "extra == 'test'" },
     { name = "fsspec", marker = "extra == 'azure'" },
     { name = "fsspec", marker = "extra == 'gcs'" },
@@ -331,7 +335,7 @@ requires-dist = [
     { name = "s3fs", marker = "extra == 's3'" },
     { name = "s3fs", marker = "extra == 'test'" },
 ]
-provides-extras = ["parquet", "fast", "datadog", "azure", "s3", "r2", "gcs", "remote", "test"]
+provides-extras = ["parquet", "sql", "fast", "datadog", "azure", "s3", "r2", "gcs", "remote", "test"]
 
 [[package]]
 name = "botocore"
