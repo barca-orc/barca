@@ -121,3 +121,25 @@ recorder stop. Link its cancellation to run cancellation and recorder shutdown;
 stop and await it before terminal persistence. Keep the ten-second checkpoint
 budget already specified above and measure successful/outage behavior before
 claiming cadence or bounds. There are no additional config/API/wire/schema fields.
+
+## Local implementation evidence (unmerged)
+
+The initial fixed-minute implementation passes the real125.28-second integration:
+one69,632-byte running-run snapshot publishes two confirmed rows during a held
+step; its inode/mtime/size remain unchanged across a second clean minute tick;
+SIGKILL followed by a fresh project root reuses both results and executes only
+the remaining step. No claim of real-cloud-provider acceptance is made.
+
+Independent review found unexpected recorder-task failure could bypass terminal
+persistence while losing its token. Keep an immutable startup-token fallback in
+the session: it remains conflict-safe after newer acknowledged uploads because
+its stale CAS cannot overwrite them. Normal recorder stop returns the evolving
+token. Unexpected stop still permits full local terminal persistence and surfaces
+a note afterward; terminal publication uses the retained token and existing
+conflict/carry replay. A real aborted-recorder regression verifies token retention
+and complete successful/failed terminal rows. All18 persistence checks and strict
+workspace Clippy pass after this fault-path correction.
+
+The publication slice remains unfinished pending conflict/continued-local-write,
+lost-ack, outage/cancellation/resource-bound tests and current-main integration.
+It is not included in release0.21.0 or claimed to close #214.

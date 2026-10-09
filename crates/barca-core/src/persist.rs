@@ -30,15 +30,23 @@ impl SharedPush<'_> {
         ledger: &RunLedger<'_>,
         until: state_sync::Until<'_>,
     ) -> Result<u32, BarcaError> {
+        self.sync(Some(ledger), until).await
+    }
+
+    async fn checkpoint(&mut self, until: state_sync::Until<'_>) -> Result<u32, BarcaError> {
+        self.sync(None, until).await
+    }
+
+    async fn sync(
+        &mut self,
+        ledger: Option<&RunLedger<'_>>,
+        until: state_sync::Until<'_>,
+    ) -> Result<u32, BarcaError> {
         let (python, cfg) = (self.python, self.cfg);
         let mut attempt = 0u32;
         let mut pushed_again = false;
         loop {
             let again = match state_sync::push_state(python, cfg, &self.token, until).await? {
-                state_sync::PushOutcome::Pushed {
-                    local_unchanged: true,
-                    ..
-                } => false,
                 // Uploaded, but another process wrote to the local database (or replaced
                 // it) while the upload was on its way. Treated like a conflict, once: pull
                 // what was just uploaded, which keeps those rows, and push again. Only once,
@@ -46,8 +54,15 @@ impl SharedPush<'_> {
                 // chasing it would cost a pull and an upload each time for rows that run
                 // pushes itself when it ends. The upload stands either way; rows written
                 // after it go with the next push from this machine.
-                state_sync::PushOutcome::Pushed { .. } => {
-                    !std::mem::replace(&mut pushed_again, true) && attempt < cfg.push_retries
+                state_sync::PushOutcome::Pushed {
+                    token,
+                    local_unchanged,
+                } => {
+                    // Keep the acknowledgement even if a subsequent pull/replay fails.
+                    self.token = state_sync::StateToken(Some(token));
+                    !local_unchanged
+                        && !std::mem::replace(&mut pushed_again, true)
+                        && attempt < cfg.push_retries
                 }
                 state_sync::PushOutcome::Conflict => {
                     if attempt >= cfg.push_retries {
@@ -68,8 +83,10 @@ impl SharedPush<'_> {
             // is whole however much of it made the trip.
             self.token = state_sync::pull_state(python, cfg, until).await?.token;
             db::init_db(self.db_path).await?;
-            persist_run(self.db_path, ledger).await?;
-            db::insert_logs(self.db_path, self.run_id, self.logs).await?;
+            if let Some(ledger) = ledger {
+                persist_run(self.db_path, ledger).await?;
+                db::insert_logs(self.db_path, self.run_id, self.logs).await?;
+            }
         }
     }
 }
@@ -214,49 +231,102 @@ const RECORD_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50
 /// id). Failed batches are retained and retried at the existing interval. Rows still pending
 /// at [`StepRecorder::finish`] are made good at the end. A pull of shared state by another
 /// process mid-run keeps the written rows (see `state_carry`).
+const CHECKPOINT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+const CHECKPOINT_BUDGET: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Startup's shared token belongs to this context until the recorder is stopped.
+pub(crate) struct ProgressPublication {
+    pub(crate) python: std::path::PathBuf,
+    pub(crate) cfg: crate::config::ResolvedConfig,
+    pub(crate) token: state_sync::StateToken,
+    pub(crate) cancel: CancellationToken,
+}
+
 pub(crate) struct StepRecorder {
     tx: tokio::sync::mpsc::UnboundedSender<StepRow>,
     stop: CancellationToken,
-    task: tokio::task::JoinHandle<()>,
+    task: Option<tokio::task::JoinHandle<Option<state_sync::StateToken>>>,
 }
 
 impl StepRecorder {
+    #[cfg(test)]
     pub(crate) fn start(db_path: String, run_id: String) -> Self {
+        Self::start_with_publication(db_path, run_id, None)
+    }
+
+    pub(crate) fn start_with_publication(
+        db_path: String,
+        run_id: String,
+        mut publication: Option<ProgressPublication>,
+    ) -> Self {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<StepRow>();
-        let stop = CancellationToken::new();
+        let stop = publication
+            .as_ref()
+            .map_or_else(CancellationToken::new, |p| p.cancel.child_token());
         let stopped = stop.clone();
         let task = tokio::spawn(async move {
             let mut next_write = tokio::time::Instant::now() + RECORD_INTERVAL;
             let mut pending = Vec::new();
+            let mut generation = 0u64;
+            let mut published = 0u64;
+            let mut checkpoint = tokio::time::interval_at(
+                tokio::time::Instant::now() + CHECKPOINT_INTERVAL,
+                CHECKPOINT_INTERVAL,
+            );
+            checkpoint.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
-                if pending.is_empty() {
-                    let first = tokio::select! {
-                        biased;
-                        _ = stopped.cancelled() => break,
-                        row = rx.recv() => match row {
-                            Some(row) => row,
-                            None => break,
-                        },
-                    };
-                    pending.push(first);
-                }
                 tokio::select! {
                     biased;
                     _ = stopped.cancelled() => break,
-                    _ = tokio::time::sleep_until(next_write) => {}
+                    _ = tokio::time::sleep_until(next_write), if !pending.is_empty() => {
+                        while let Ok(row) = rx.try_recv() { pending.push(row); }
+                        // A successful no-op replay never marks unchanged state dirty.
+                        if let Ok(inserted) = record_steps(&db_path, &run_id, &pending).await {
+                            generation += inserted;
+                            pending.clear();
+                        }
+                        next_write = tokio::time::Instant::now() + RECORD_INTERVAL;
+                    }
+                    _ = checkpoint.tick(), if publication.is_some() => {
+                        if generation != published {
+                            let snapshot_generation = generation;
+                            let p = publication.as_mut().expect("publication enabled");
+                            let mut push = SharedPush {
+                                python: &p.python, cfg: &p.cfg, db_path: &db_path,
+                                run_id: &run_id, logs: &[], token: p.token.clone(),
+                            };
+                            let outcome = push.checkpoint(state_sync::Until {
+                                cancel: Some(&stopped),
+                                deadline: Some(std::time::Instant::now() + CHECKPOINT_BUDGET),
+                            }).await;
+                            // Acknowledged uploads remain known even if a later retry fails.
+                            p.token = push.token;
+                            match outcome {
+                                Ok(_) => published = snapshot_generation,
+                                Err(error) if !stopped.is_cancelled() => {
+                                    let mut message = error.to_string();
+                                    if let Some(uri) = &p.cfg.state_uri {
+                                        message = message.replace(uri, &crate::transfer::diagnostic_uri(uri));
+                                    }
+                                    crate::errln!("[barca] progress checkpoint failed; recorded results remain local: {message}");
+                                }
+                                Err(_) => {}
+                            }
+                        }
+                    }
+                    row = rx.recv() => match row {
+                        Some(row) => pending.push(row),
+                        None => break,
+                    },
                 }
-                while let Ok(row) = rx.try_recv() {
-                    pending.push(row);
-                }
-                // A failed transaction remains pending, even if no later step arrives.
-                // Terminal persistence still supplies the complete fallback on shutdown.
-                if record_steps(&db_path, &run_id, &pending).await.is_ok() {
-                    pending.clear();
-                }
-                next_write = tokio::time::Instant::now() + RECORD_INTERVAL;
             }
+            publication.map(|p| p.token)
         });
-        Self { tx, stop, task }
+        Self {
+            tx,
+            stop,
+            task: Some(task),
+        }
     }
 
     /// Queue a finished step. Never blocks.
@@ -285,9 +355,35 @@ impl StepRecorder {
 
     /// Stop the background task and wait for it, so no connection is left open. Rows it had
     /// not written yet are left to [`persist_run`].
+    #[cfg(test)]
     pub(crate) async fn finish(self) {
+        self.finish_with_token(&mut None).await.unwrap();
+    }
+
+    pub(crate) async fn finish_with_token(
+        mut self,
+        token: &mut Option<state_sync::StateToken>,
+    ) -> Result<(), BarcaError> {
         self.stop.cancel();
-        self.task.await.ok();
+        let returned = self
+            .task
+            .take()
+            .expect("recorder task owned")
+            .await
+            .map_err(|e| {
+                BarcaError::Other(format!("progress recorder stopped unexpectedly: {e}"))
+            })?;
+        if let Some(returned) = returned {
+            *token = Some(returned);
+        }
+        Ok(())
+    }
+}
+
+impl Drop for StepRecorder {
+    fn drop(&mut self) {
+        // Cancellation lets an in-flight state helper clean its staged snapshot.
+        self.stop.cancel();
     }
 }
 
@@ -949,7 +1045,7 @@ mod persist_tests {
         let recorder = StepRecorder {
             tx,
             stop: CancellationToken::new(),
-            task: tokio::spawn(async {}),
+            task: Some(tokio::spawn(async { None })),
         };
         let fx = Fixture::new();
         let mut sensor = fx.row("f.py:a");
@@ -1132,6 +1228,24 @@ mod persist_tests {
         }
         recorder.finish().await;
         assert_eq!(rows(&db_path).await.len(), 2); // unrelated blocker remains intact
+    }
+
+    #[tokio::test]
+    async fn aborted_recorder_keeps_known_token_for_terminal_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = fresh_db(&dir, "m.db").await;
+        let recorder = StepRecorder::start(db_path.clone(), "r1".into());
+        recorder.task.as_ref().unwrap().abort();
+        let mut token = Some(state_sync::StateToken(Some(
+            "known-before-checkpoint".into(),
+        )));
+        assert!(recorder.finish_with_token(&mut token).await.is_err());
+        assert_eq!(token.unwrap().0.as_deref(), Some("known-before-checkpoint"));
+        // Mid-run failure must not remove the complete terminal writer's fallback.
+        let fx = Fixture::new();
+        persist_run(&db_path, &fx.ledger("r1")).await.unwrap();
+        assert_eq!(rows(&db_path).await, complete("r1"));
+        assert_eq!(run_record(&db_path, "r1").await.status, "failed");
     }
 
     #[tokio::test]
