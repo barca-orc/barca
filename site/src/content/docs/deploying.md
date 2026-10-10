@@ -101,12 +101,16 @@ the proxy starts after that.
 
 What each part is for:
 
-- **The image.** Barca publishes wheels for x86-64 Linux with glibc and for macOS on Apple
+- **The image.** Published v0.21.0 has wheels for x86-64 Linux with glibc and for macOS on Apple
   Silicon. Use a Debian-based image. There is no wheel for Alpine (musl)
   ([issue #107](https://github.com/barca-orc/barca/issues/107)) or for Linux arm64; without a
   wheel pip falls back to the sdist, which needs a Rust toolchain to build. That is why the
   service sets `platform: linux/amd64`; on an x86-64 host the line changes nothing. Add your
   pipeline's own dependencies to the same `pip install`.
+  Linux arm64 GNU builds are being verified in native packaging CI; keep this amd64
+  fallback until a tagged release publishes that wheel. Alpine/musl has a separate
+  build and runtime gate in #107. A successful source build or cross-compile does
+  not establish that a compatible wheel is available from PyPI.
 - **The project mount.** The project is mounted at the working directory. Barca reads the
   source again for every run, so an edit to a function takes effect at the next run. A new
   file, a new scheduled node or a changed cron expression needs a restart.

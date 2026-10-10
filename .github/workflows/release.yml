@@ -6,7 +6,7 @@ on:
   # Dry-run the build jobs (no release/publish: those are gated to tags below)
   # when this workflow changes, or on demand to pre-warm the build cache.
   pull_request:
-    paths: [".github/workflows/release.yml"]
+    paths: [".github/workflows/release.yml", "scripts/smoke-release-package.py"]
   workflow_dispatch:
 
 permissions:
@@ -51,6 +51,10 @@ jobs:
             target: x86_64-unknown-linux-gnu
             maturin-target: x86_64
             name: linux-x86_64
+          - os: depot-ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            maturin-target: aarch64
+            name: linux-arm64
           - os: depot-macos-15
             target: aarch64-apple-darwin
             maturin-target: aarch64
@@ -107,6 +111,24 @@ jobs:
           cp "$BIN" barca-${{ matrix.name }}
           chmod +x barca-${{ matrix.name }}
           tar czf barca-${{ matrix.name }}.tar.gz barca-${{ matrix.name }}
+
+      - name: Install and execute Linux artifacts without a compiler
+        if: startsWith(matrix.name, 'linux-')
+        timeout-minutes: 5
+        run: |
+          VERSION=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          docker run --rm --init -v "$PWD:/io:ro" \
+            -e BARCA_VERSION="$VERSION" -e BARCA_NATIVE="barca-${{ matrix.name }}" \
+            python:3.13-slim sh -eu -c '
+              python -m pip install --disable-pip-version-check uv
+              mkdir /tmp/native
+              cp "/io/$BARCA_NATIVE" /tmp/native/barca
+              uv init --bare /tmp/project
+              cd /tmp/project
+              uv add --no-index --find-links /io/dist --no-build "barca==$BARCA_VERSION"
+              uv run --no-sync python /io/scripts/smoke-release-package.py \
+                --version "$BARCA_VERSION" --native /tmp/native/barca
+            '
 
       - uses: actions/upload-artifact@v4
         with:
