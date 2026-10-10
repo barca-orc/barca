@@ -361,7 +361,7 @@ Runs started over HTTP are asynchronous: `POST` returns a `run_id`, and you poll
 `/status/<run_id>`.
 
 ```bash
-curl localhost:8274/health                  # {"read_only":false,"scheduler":true,"status":"ok","version":"0.21.0"}
+curl localhost:8274/health                  # {"read_only":false,"scheduler":true,"status":"ok","version":"0.22.0"}
 curl localhost:8274/schedule                # each schedule: last and next fire, last status
 curl -XPOST localhost:8274/run              # every asset and sensor (tasks are skipped) -> {"run_id":"..."}
 curl -XPOST localhost:8274/get/summary      # one asset and what it depends on
