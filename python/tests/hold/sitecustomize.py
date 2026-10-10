@@ -19,6 +19,9 @@ Points:
 - ``put``     the transfer helper is about to upload an artifact (``_storage.put_file``)
 - ``get``     the transfer helper is about to download one (``_storage.get_file``); its temp
               file exists already
+- ``uploaded`` the artifact SDK upload returned, before its receipt reaches the coordinator
+- ``partial-get`` the concrete artifact stage has a flushed prefix of actual SDK bytes,
+              before that first write completes; other files and downloads are untouched
 - ``copied``  a copy into a directory store has written its temp file and not yet renamed it
 - ``push``    the state helper is about to push the metadata DB (``python -m barca._state push``)
 - ``repush``  a corrective state upload after an earlier upload reached ``pushed``
@@ -102,6 +105,84 @@ def _install(point: str, directory: Path) -> None:
         wrap("put_file", transferring)
     elif point == "get":
         wrap("get_file", transferring)
+    elif point == "uploaded":
+        real_put = _storage.put_file
+
+        def put_then_hold(*args, **kwargs):
+            result = real_put(*args, **kwargs)
+            if transferring():
+                _hold(point, directory)
+            return result
+
+        _storage.put_file = put_then_hold
+    elif point == "partial-get":
+        import builtins
+        import threading
+
+        real_open, real_get = builtins.open, _storage.get_file
+        lock = threading.Lock()
+        selected = None
+        claimed = False
+
+        class PartialWrite:
+            def __init__(self, file):
+                self.file = file
+                self.held = False
+
+            def __getattr__(self, name):
+                return getattr(self.file, name)
+
+            def __enter__(self):
+                self.file.__enter__()
+                return self
+
+            def __exit__(self, *args):
+                return self.file.__exit__(*args)
+
+            def write(self, data):
+                if self.held or not data:
+                    return self.file.write(data)
+                self.held = True
+                split = min(len(data), 64 * 1024)
+                written = self.file.write(data[:split])
+                self.file.flush()
+                _hold(point, directory)
+                return written + self.file.write(data[split:])
+
+        def scoped_open(file, mode="r", *args, **kwargs):
+            opened = real_open(file, mode, *args, **kwargs)
+            # fsspec performs its write on another thread. Match the exact active
+            # stage, never a thread-wide/global write hook or merely a .tmp suffix.
+            with lock:
+                target = selected
+            if (
+                target is not None
+                and isinstance(file, (str, bytes, os.PathLike))
+                and os.path.abspath(os.fsdecode(file)) == target
+                and "w" in mode
+                and "b" in mode
+            ):
+                return PartialWrite(opened)
+            return opened
+
+        def get_with_partial_stage(remote, local):
+            nonlocal selected, claimed
+            with lock:
+                first = transferring() and not claimed
+                if first:
+                    claimed = True
+                    selected = os.path.abspath(os.fspath(local))
+            if not first:
+                return real_get(remote, local)
+            (directory / "partial-get.path").write_text(selected)
+            try:
+                return real_get(remote, local)
+            finally:
+                with lock:
+                    selected = None
+
+        builtins.open = scoped_open
+        _storage.get_file = get_with_partial_stage
     elif point == "copied":
         import types
 
