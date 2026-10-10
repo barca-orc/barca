@@ -30,6 +30,9 @@ The [ownership, durability and result-identity index](reliability-contracts.md)
 consolidates current invariants, existing evidence owners and explicitly proposed
 extensions (document version 1). Its saved-handle policy and future run/event APIs
 are not approved or implemented. The
+[failure-scenario catalog](reliability-scenarios.md) distinguishes demonstrated
+defects, existing regression coverage, known limits and hypothetical policy
+examples; no answers are selected by those examples. The
 [consolidation plan](reliability-contract-consolidation-plan.md) records the scope
 of this documentation-only review.
 

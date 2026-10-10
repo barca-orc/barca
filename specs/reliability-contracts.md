@@ -14,6 +14,10 @@ retain their original evidence; their preparation-stage wording is not the
 current delivery status. Roadmap [#344](https://github.com/barca-orc/barca/issues/344)
 owns delivery status.
 
+[Concrete failure scenarios](reliability-scenarios.md) record timelines, evidence
+status and unanswered questions for each boundary. They are discussion examples,
+not approvals of the proposed policies below.
+
 ## 1. Ownership
 
 Current invariants:

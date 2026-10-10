@@ -21,6 +21,11 @@ without changing runtime behavior or presenting proposed APIs as implemented.
 6. Review claims against current source and existing tests, check local links and
    whitespace, and open a draft documentation PR for review. No runtime tests,
    schema changes, new dependencies or package release are needed for this draft.
+7. At the user's request, add concrete failure timelines and a scenario inventory
+   across the three contracts. Distinguish reproduced open defects, existing
+   regression coverage, known limitations and hypothetical policy examples.
+   Record unanswered questions without choosing their answers. Link the catalog
+   from the contract index and boundary inventory; use it to scope later tests.
 
 No new public API, immutable artifact storage, durable event replay, atomic log
 persistence, garbage collection or cloud-provider guarantee is implemented here.
