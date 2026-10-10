@@ -498,7 +498,9 @@ With [shared history](/reference/remote-storage/), status first pulls it, as a r
 Status reads the metadata DB as it is at that moment: while a `barca get` is running, the
 steps it has finished already show as `cached` (a partitioned asset as `partial`).
 
-Status writes nothing: no `.barca` directory is created and no run is recorded. An unknown target
+Status executes no pipeline step and records no new run. Optimistic shared history may
+create or update local metadata; `partitions(<expression>)` may evaluate Python while
+resolving keys. An unknown target
 is a usage error (exit 2). See `barca docs status`.
 
 ## sql

@@ -405,8 +405,9 @@ The site, [barca.sh](https://barca.sh), has the same material plus a guide and p
 git clone https://github.com/barca-orc/barca.git
 cd barca
 uv venv
+source .venv/bin/activate
 uv pip install maturin
-maturin develop --release --extras test   # builds the binary and installs it into .venv
+maturin develop --uv --release --extras test   # builds the binary and installs it into .venv
 cargo test
 ```
 

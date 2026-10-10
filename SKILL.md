@@ -15,7 +15,7 @@ under `.barca/`. Ask the `barca` CLI what exists, what is cached and what ran. F
 ```bash
 barca list                              # discover: every node in the project, its kind, inputs, env
 barca status                            # cached/stale/never_run and why, last run, rows/columns
-barca get total --dry-run               # preview: what would run or come from cache; writes nothing
+barca get total --dry-run               # preview: what would run or come from cache; no steps execute
 barca get total                         # execute an asset and its upstream cone
 barca run report                        # execute a task (always re-runs; upstream assets cached)
 barca sql "select * from total"         # look at a cached result with DuckDB; runs nothing
@@ -23,6 +23,9 @@ barca sql "select * from total"         # look at a cached result with DuckDB; r
 
 - `get` is for assets, `run` for tasks; the wrong one exits 2 and names the right one.
 - A second identical `get` reports `steps_executed: 0` (all cached).
+- `--dry-run`, status and SQL may synchronize optimistic shared history. Source parsing
+  is static; `partitions(<expression>)` can evaluate Python and import its module while
+  resolving keys. SQL can write files when explicitly asked through `COPY ... TO`.
 - No file arguments needed: barca reads every `.py` file in the project that imports barca.
   Add files or directories (`barca get total pipelines/`) to narrow it (`barca docs discovery`).
 - Any directory inside the project works: barca runs from the nearest `barca.toml` above you

@@ -16,7 +16,7 @@ def clean(data: dict) -> dict:
     return {"x": data["x"] + 1}
 
 
-@asset(freshness=Manual)                   # only recomputed on explicit refresh
+@asset(freshness=Manual)                   # recorded freshness; CLI caching is unchanged
 def pinned() -> dict:
     return {"x": 0}
 
@@ -234,7 +234,9 @@ not warn about this; Python simply uses the later definition.
 
 ## Static analysis
 
-Planning never imports your code. The decorators, `inputs=` and `freshness=` must be written
+Static extraction reads source without importing user code. Literal partition key lists
+need no resolver import; a nonliteral `partitions(<expression>)` imports the pipeline
+module to evaluate its keys. The decorators, `inputs=` and `freshness=` must be written
 literally enough for barca to read them from the source. Dynamic decorator construction
 (building `inputs` in a loop, calling a decorator through a variable) is not visible to the
 planner. An argument barca does not define, and `**options` in a decorator call, are errors
@@ -366,7 +368,9 @@ turns the warning off.
 
 `@sensor` takes the arguments in the table under "Accepted arguments" (`@asset`'s without
 `inputs`). `@sensor` observes external state and returns `(update_detected: bool, value)`. Sensors have no
-inputs and must use `Manual` or `Schedule(...)` freshness, never `Always`.
+inputs. Their default freshness is `Manual`; `Always` is also accepted. Only
+`Schedule(...)` causes automatic ticks under `barca serve`. `Always` and `Manual` do not
+change execution or cache policy (`barca docs scheduling`).
 
 A sensor always runs, and its `value` is part of the run hash of every asset that reads it: when
 the value changes, those assets and everything downstream of them re-run; when it is the same,

@@ -266,7 +266,8 @@ invisible to barca (`barca docs assets`).
 ## Inspect before you run
 
 Preview any `get`/`run` with `--dry-run`: it says which steps would run, which come from cache,
-and why, and writes nothing (`barca docs cache`):
+and why, without executing steps or recording a run. Optimistic shared history may
+synchronize locally (`barca docs cache`):
 
 ```bash
 barca run report pipeline.py --dry-run --refresh src
@@ -274,7 +275,7 @@ barca run report pipeline.py --dry-run --refresh src
 
 One call answers "what is here and what state is it in": `barca status` gives, per node, its
 kind and inputs, its cache state with the reason (the same decision `--dry-run` makes), its last
-materialization, and the artifact's row count and columns, without importing your code
+materialization, and the artifact's row count and columns, without executing steps
 (`barca docs status`):
 
 ```bash
@@ -290,7 +291,8 @@ barca history --json                # {runs: [...], total, truncated}: the last 
 barca stats total pipeline.py --json  # timings and cache hit rate for one asset
 ```
 
-Planning is pure static analysis: it never imports your code and never runs a step.
+Source parsing is static and planning executes no pipeline step. `partitions(<expression>)`
+can evaluate Python and import its module while resolving keys.
 
 ## Bounded output: --limit, --all, --fields
 

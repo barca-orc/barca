@@ -5,7 +5,7 @@ description: SKILL.md, the short guide an AI coding agent loads once before it r
 
 Barca ships a short [Agent Skills](https://agentskills.io/) file for AI coding agents:
 [`SKILL.md`](https://github.com/barca-orc/barca/blob/main/SKILL.md) at the repository root. In
-0.18.0 it is about 1,200 words (8 KB) and covers what an agent needs before its first command:
+the repository it is a short guide and covers what an agent needs before its first command:
 
 - when to use barca, and the loop: `barca list` and `barca status` to see what exists and what is
   cached, `--dry-run` to preview, `barca get` (assets) and `barca run` (tasks) to execute, and
@@ -52,3 +52,7 @@ The skill is short on purpose. Three things an agent working with data should al
   `never_run` and `barca sql` says the node has no result yet.
 - `barca sql` runs the statement you give it in DuckDB. A statement that writes files, such as
   `COPY ... TO 'file.csv'`, writes them, relative to the project root. Use `select`.
+
+Inspection and previews can synchronize optimistic shared history. Evaluated partition
+expressions can import a pipeline while resolving keys; SQL `COPY ... TO` can explicitly
+write files. The skill distinguishes these effects from executing pipeline steps.

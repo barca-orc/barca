@@ -31,7 +31,8 @@ directories after the query to limit the views to those files
 (`barca sql "select * from orders" pipeline.py`).
 
 Only parquet and json results can be queried: DataFrames, Arrow tables and DuckDB relations are
-stored as parquet; a dict or a list of dicts as json. A pickled result (any other Python object)
+stored as parquet; a dict or a list of dicts as json. A JSON list of scalars is
+a view with one column named `json` (for example, `[1, 2]` becomes two rows). A pickled result (any other Python object)
 is not a view.
 
 Partition membership comes from the same full cache-aware prediction as a dry run,
@@ -47,6 +48,9 @@ An asset with zero current keys has no partition result view, because SQL cannot
 infer a schema from absent current results.
 
 ## Remote storage
+
+With optimistic shared state, SQL first synchronizes metadata into the selected
+environment's local `.barca/` history, just like status. It does not create a new run.
 
 With remote storage (`barca docs remote`) a result that exists only in the bucket is a view like
 any other. When a query names such a view, barca downloads its artifact (for a partitioned asset,
@@ -85,6 +89,8 @@ off, `truncated` is true, `total` counts every row, and `hint` says how to see m
 These exit 2, with the fix as the remediation:
 
 - a node with no result yet: names the command that produces it (`barca get never`);
+  when querying with `--env`, add the same `--env <name>` to that command (the hint
+  currently omits it);
 - a pickled result: says it cannot be queried;
 - an unknown view: lists the views there are;
 - a SQL error: DuckDB's message, and the views;
@@ -95,9 +101,12 @@ no longer in the bucket) exits 3 and carries the store's error.
 
 ## What it does not do
 
-- It never runs a step, never imports your code, and records nothing: `barca history` is
-  unchanged. With local results nothing is written under `.barca/`; with remote storage only the
-  copies in `.barca/sql-cache/` are.
+- It never executes a pipeline step or records a new run. Source parsing is static,
+  but `partitions(<expression>)` may evaluate Python and import the pipeline module
+  while loading its key list. With optimistic shared state, local history may change
+  when synchronized; remote artifact copies are written under `.barca/sql-cache/`.
+- SQL is not restricted to SELECT: an explicit `COPY ... TO 'file.csv'` writes that
+  file using DuckDB. Queries run with the process's filesystem permissions.
 - Install SQL support in barca's Python environment: `uv add 'barca[sql]'`.
 - The query runs in a fresh in-memory DuckDB, not on `barca.duckdb_connection()`: extensions or
   macros your pipeline module sets up at import time are not loaded.

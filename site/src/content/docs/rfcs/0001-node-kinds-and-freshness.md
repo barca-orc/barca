@@ -10,6 +10,20 @@ description: The asset/sensor/task vocabulary and the Always/Manual/Schedule fre
 
 ---
 
+> **Historical design record:** the accepted baseline below describes the version
+> named in its status, with any amendments called out separately. It is not the
+> current executable contract. Use the [CLI contract](/reference/cli-contract/),
+> [decorator reference](/reference/api/decorators/),
+> [server API](/reference/server-api/) and [configuration reference](/reference/config/)
+> for implemented behavior. Open proposals remain proposals until separately accepted
+> and implemented.
+
+> **Current freshness behavior:** `Always` and `Manual` are recorded and displayed;
+> they do not implement automatic reconciliation or Manual barriers. Sensors accept
+> `Always`. Only `Schedule(...)` triggers runs under serve, and a scheduled sensor
+> does not trigger its consumers. Automatic freshness policy remains proposed in
+> [RFC-0008 / PR #276](https://github.com/barca-orc/barca/pull/276).
+
 ## 1. Summary
 
 Every node barca knows about is exactly one of three kinds — **asset**, **sensor**, or

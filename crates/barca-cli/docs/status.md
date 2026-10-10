@@ -43,8 +43,10 @@ notify  task   always-runs  task          -                                  -  
 2 cached, 0 stale, 0 never run, 0 partial, 0 unknown, 1 always run
 ```
 
-Status never imports your code and never writes: no `.barca` directory is created, no run is
-recorded. Like every inspection command, the result goes to stdout (a table in a terminal, JSON
+Status executes no pipeline step and records no new run. Without shared state it does not
+create `.barca/`; optimistic shared-history synchronization may create or update local metadata.
+Source parsing is static, but `partitions(<expression>)` may evaluate Python and import its
+module while resolving keys. Like every inspection command, the result goes to stdout (a table in a terminal, JSON
 when piped; `--json` / `--pretty` override) and errors to stderr; an unknown target is a usage
 error (exit 2) that ends with ``Run `barca list <files>` to see available assets and tasks.``,
 the same remediation as `get` and `run`. A target is one name or several, comma-separated with no

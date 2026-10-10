@@ -20,10 +20,12 @@ git cliff --config cliff.toml --unreleased
 
 ## CHANGELOG.md
 
-[`CHANGELOG.md`](https://github.com/barca-orc/barca/blob/main/CHANGELOG.md) in the repository
-root is out of date. It has entries for 0.0.3, 0.1.0 and 0.1.1 and an "Unreleased" section
-that was last edited in pull request #144, before 0.9.0. Releases 0.2.0 to 0.18.0 have no
-entry there. Use the GitHub Releases page.
+[`CHANGELOG.md`](https://github.com/barca-orc/barca/blob/main/CHANGELOG.md) links the
+current tagged release notes through
+[v0.21.0](https://github.com/barca-orc/barca/releases/tag/v0.21.0) and preserves
+older notes as historical records. Its former "Unreleased" section is explicitly
+historical, not the pending-release queue. Use GitHub Releases for the complete
+release-by-release history and upgrade instructions.
 
 ## Behavior changes noted in the docs
 

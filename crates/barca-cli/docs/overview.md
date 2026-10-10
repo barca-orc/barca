@@ -2,8 +2,9 @@
 
 Barca is an embedded asset orchestrator. You write plain Python functions, decorate them,
 and run `barca` anywhere in the project: it finds every file that imports barca
-(`barca docs discovery`). A Rust binary parses the source statically (it never imports
-your code to plan), builds a DAG, runs only what is stale, and caches every output.
+(`barca docs discovery`). A Rust binary parses the source statically, builds a DAG,
+runs only what is stale, and caches every output. `partitions(<expression>)` evaluates
+Python to resolve its keys and can import the pipeline module during loading.
 
 ## Mental model
 
@@ -49,10 +50,10 @@ barca get total pipeline.py      # second time: everything is a cache hit
 | `barca plan [files...]` | Emit the tiered execution plan as JSON. |
 | `barca history` / `barca stats` | Past runs; timing and cache statistics (`--json`, `--fields`; history takes `--limit`/`--all`). |
 | `barca serve [files...]` | HTTP API, cron scheduler and the web UI (`/ui/`). |
+| `barca docs [topic]` | This manual. |
 
 `files...` are optional everywhere: without them barca reads every file in the project that
 imports barca; with them (files or directories) it reads only those (`barca docs discovery`).
-| `barca docs [topic]` | This manual. |
 
 In a terminal, `get`/`run`/`list`/`history`/`stats` print human-readable output; piped or run
 from a program they print JSON. `--json` and `--pretty` (or `BARCA_OUTPUT=json|pretty`) override

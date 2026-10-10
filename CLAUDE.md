@@ -65,7 +65,7 @@ pyproject.toml          ← Maturin build config (binary + Python stubs in one w
 ```bash
 # Build (development)
 cargo build --release
-maturin develop --release     # installs into .venv
+maturin develop --uv --release --extras test  # active .venv; builds CLI + test dependencies
 
 # Run
 .venv/bin/barca get <file.py>
@@ -82,12 +82,14 @@ benchmarks/chain_100/bench.sh 5   # (coming soon)
 ## Design principles
 
 1. **Invisible** — the orchestrator should add zero perceptible overhead
-2. **Static analysis** — never import user code in the planning phase
+2. **Static analysis** — extract source without imports. The existing resolver imports user
+   modules to evaluate nonliteral partition key expressions; literal key lists need no import.
+   Add no other planning imports.
 3. **Rust for planning, Python for execution** — each does what it's best at
 4. **Single install** — `uv add barca` gives users everything
 5. **Turso for persistence** — Rust owns the DB; Python has no DB access
 6. **Artifact-based data passing** — serialized files (json/pickle/parquet) between worker batches
-7. **Content-addressed artifacts** — `{artifacts}/{node}/{run_hash}{ext}`; shared remote state pulls/pushes the metadata DB as a blob (see site/src/content/docs/reference/config.mdx and site/src/content/docs/reference/remote-storage.md, published at https://barca.sh/reference/config/ and https://barca.sh/reference/remote-storage/)
+7. **Run-hash-addressed artifacts** — `{artifacts}/{node}/{run_hash}{ext}`; shared remote state pulls/pushes the metadata DB as a blob (see site/src/content/docs/reference/config.mdx and site/src/content/docs/reference/remote-storage.md, published at https://barca.sh/reference/config/ and https://barca.sh/reference/remote-storage/)
 
 ## CLI and manual are part of every feature
 
@@ -123,7 +125,7 @@ documented command; `python/tests/test_docs_examples.py` executes the manual's e
 and asserts what the text claims. `cargo test -p barca` (`crates/barca-cli/src/contract.rs`) and
 `python/tests/test_cli_contract.py` fail on any surface change that the snapshots and
 `contract.md` do not reflect. Document behavior you have run, and state known limitations
-plainly (e.g. partitioned steps are not cache-checked yet) rather than describing intended
+plainly (e.g. a partitioned target currently returns only its first key's value) rather than describing intended
 behavior.
 
 ## Output and decorator arguments
