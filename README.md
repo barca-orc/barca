@@ -65,7 +65,8 @@ uv add barca          # or: pip install barca
 ```
 
 Python 3.12 or later. The wheel contains the `barca` binary, the decorators and a Python
-API; wheels are published for macOS on Apple Silicon and x86-64 Linux with glibc. [uv](https://docs.astral.sh/uv/) is recommended, not required: barca runs your steps
+API; wheels are published for macOS on Apple Silicon and for Linux on x86-64 and arm64, glibc
+and musl. [uv](https://docs.astral.sh/uv/) is recommended, not required: barca runs your steps
 with the Python of the environment it is installed in, or `python3` on `PATH`.
 
 Optional extras: `barca[parquet]` (pyarrow, for pandas DataFrames), and `barca[s3]`,
