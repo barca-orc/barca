@@ -23,11 +23,14 @@ Evidence labels:
 
 ## Ownership: which operation owns which bytes and resources?
 
-User direction recorded 2026-10-10: publication must be idempotent; local and
-server execution may overwrite each other's current published result. Therefore
-different successful publications need not preserve the same current bytes.
-Each receipt must still match its own upload. No retry-ordering, operation-ID or
-historical retention mechanism is selected by this statement.
+Accepted user direction, 2026-10-10: publication must be idempotent. Local and
+server execution may update the current result in a shared environment; changed
+remote state since the writer's starting observation requires a conflict warning
+and explicit `--force`. Stale-cache reads automatically synchronize before use.
+Each receipt must match its own uploaded bytes; force is not an integrity bypass.
+Results are versioned so reversions are possible. Version storage, command details,
+conflict/race implementation and retention duration remain to be specified. These
+are recorded product requirements, not claims of shipped implementation.
 
 ### O1. Two refreshes race with one upload
 
@@ -101,6 +104,46 @@ breaks lazy output. User-created catalog collisions are not isolated or restored
 Evidence: [accepted lifetime](duckdb-step-isolation.md),
 [worker regressions](../python/tests/test_duckdb_connection.py). No new setup API
 or per-step isolation is assumed.
+
+### O6. A delayed writer or retry would replace a newer published result
+
+**Accepted policy; open implementation acceptance.** Local execution observes
+published `11`, computes `22`, and starts publication. Another execution publishes
+`33`. The local publication or delayed retry would replace `33` with `22`.
+
+This changed-baseline publication is a conflict: warn and require `--force`.
+An intentional forced publication may make `22` current, with version history
+supporting reversion; an ordinary retry must not silently do so. Test the lost-ACK
+case as well as two independent runs. Idempotent retry recognition, atomicity at
+the conflict-check/write boundary and backend support remain engineering work;
+a read-then-write check alone must not be advertised as eliminating every race.
+No operation-ID API or distributed locking mechanism is selected here.
+
+### O7. The server has an older cached copy of a valid published result
+
+**Accepted policy; open cross-machine acceptance.** The server caches `11`.
+Local execution publishes `22` with matching metadata/checksum. Before the server
+consumes that result again, it obtains the current published identity, detects
+its stale cache, fetches the selected bytes and verifies them. This normal read
+requires no `--force`. Checking local bytes against an old expected checksum is
+insufficient to establish freshness; acquiring current metadata is part of the
+contract. If selected metadata and downloaded bytes disagree, that is an integrity
+failure rather than an ordinary stale cache or permission to force consumption.
+
+### O8. A valid publication is later found to be semantically wrong
+
+**Accepted versioning direction; open implementation acceptance.** Published
+version V1 contains `11`. A later valid publication V2 contains `22`; its bytes
+and receipts agree, but a user discovers the result is wrong for their workload.
+They must be able to revert to the earlier published version. Versioning must
+retain the needed bytes and identity/metadata for a supported reversion window;
+merely keeping a history row pointing to an overwritten path is insufficient.
+
+Specify how reverting changes the current selection and interacts with downstream
+cache/lineage, concurrent publication and force. The revert command, retention
+window, whether reversion creates a new publication record, and saved-handle/set
+semantics remain open. Do not assume indefinite retention or copy every artifact
+when unchanged data can be referenced safely.
 
 ## Durability: what happened before the crash or lost acknowledgement?
 
@@ -464,12 +507,11 @@ publishers as if they were harmless reads.
 
 ## Questions to discuss, without selecting answers
 
-One concrete idempotence question remains: publication A writes `22`, publication
-B subsequently writes `33`, then A is retried because its acknowledgement was
-lost. Should the retry leave `33` current, or may it publish `22` again? Permission
-for distinct runs to overwrite each other does not alone answer whether a retry
-counts as a new overwrite. Discuss this before choosing deduplication or conflict
-mechanics. This timeline is hypothetical; no current-runtime reproduction is claimed.
+Publication overwrite policy is now settled at the product level: a changed
+baseline requires `--force`; normal stale reads synchronize automatically;
+published results must be versioned for reversion. O6–O8 record those requirements.
+Their implementation and retention details remain open; the timelines are not
+new current-runtime reproductions.
 
 | Question | Scenarios | Owner |
 | --- | --- | --- |
@@ -478,6 +520,7 @@ mechanics. This timeline is hypothetical; no current-runtime reproduction is cla
 | Which outcomes/diagnostics must survive acceptance, failures and restart together? | D9, D10, D12 | #319 |
 | What is the event replay window and how does a client recover outside it? | D13, D14 | #318 |
 | Does a saved result pin original bytes or follow latest; what does a saved set pin? | R1, R2, R3, R8 | joint #287/#57 |
+| What is a result version, how does reverting affect downstream results, and what is the supported retention window? | O6, O8, R1, R4, R5, R8 | result-version plan coordinated with #287/#57/#83/#243; exact publication owner to be assigned |
 | How long are those bytes kept, and what happens after deletion or during active reads? | O4, R4, R5 | #83/#243 coordinated with #287 |
 | What are subset ordering, missing-key and partial-result semantics? | R3, R6, R7 | joint #57/#287 |
 
@@ -491,5 +534,6 @@ those are part of the scenario. Preserve negative controls and old-code failure
 proofs where practical. Link a newly demonstrated defect to its canonical ticket.
 Update its evidence label only after the corresponding proof or fix lands.
 
-This catalog itself runs no new reproductions and approves no implementation,
-API signature, storage migration, retention policy or success-status change.
+This catalog runs no new reproductions or runtime implementation. Explicit user
+decisions above are recorded product requirements; remaining API signatures,
+storage migration, retention duration and success-status changes are unselected.

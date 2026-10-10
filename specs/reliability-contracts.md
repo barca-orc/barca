@@ -111,13 +111,31 @@ Remaining extensions:
 
 ## 3. Result identity
 
-**Accepted publication direction, 2026-10-10:** local execution may publish an
-updated result to shared storage, and server execution may overwrite that result
-in turn. Overwriting current artifacts is permitted; publication must be
-idempotent. Receipt/checksum correctness still requires describing the exact
-uploaded bytes. This does not select immutable historical saved handles or
-resolve retries of an earlier publication after a newer publication succeeds;
-that retry-ordering detail remains a discussion question.
+**Accepted product direction, 2026-10-10 (not implemented by this draft):**
+
+- Environments provide separation. Local execution may publish an updated result
+  to shared storage; server execution may publish another result in the same
+  environment. Publication must be idempotent.
+- A stale local cache automatically synchronizes to the selected published
+  result before consumption. Ordinary stale-cache reads do not require `--force`.
+- If the published result changed since an execution's starting observation,
+  replacing it is a publication conflict: warn and require explicit `--force`.
+  A delayed retry encountering a newer result must not silently overwrite it.
+- Force permits intentional conflicting publication. It does not make a false
+  upload receipt or a mismatch between selected metadata and stored bytes valid.
+  Each receipt/checksum must describe the exact uploaded bytes.
+- Published results are versioned so reverting to an earlier result is possible.
+  Changing the current selection must not be equated with irreversibly erasing
+  every earlier version. A computation hash alone is insufficient version identity
+  when unchanged code/inputs can produce different bytes on refresh.
+
+The concrete version representation, publication/conflict mechanics, baseline
+observation, retry recognition, force/revert command surface and retention duration
+still need an implementation plan. Existing runtime paths remain overwriteable
+and do not yet implement this versioned publication contract. This direction does
+not decide whether an ordinary saved handle pins a version or follows current,
+nor whether a partition set is a consistent pinned manifest. Reuse artifacts where
+safe rather than eagerly copying every partition to create versions.
 
 Keep these concepts distinct:
 
