@@ -26,6 +26,13 @@ wrong statuses and additional routes, rather than only repeating happy-path exam
 
 ## Implementation designs and decisions
 
+The [ownership, durability and result-identity index](reliability-contracts.md)
+consolidates current invariants, existing evidence owners and explicitly proposed
+extensions (document version 1). Its saved-handle policy and future run/event APIs
+are not approved or implemented. The
+[consolidation plan](reliability-contract-consolidation-plan.md) records the scope
+of this documentation-only review.
+
 These documents record bounded implementation decisions and regression evidence. They
 are not additional public boundaries and do not advertise held or proposed behavior:
 
