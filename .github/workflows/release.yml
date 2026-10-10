@@ -55,6 +55,20 @@ jobs:
             target: aarch64-unknown-linux-gnu
             maturin-target: aarch64
             name: linux-arm64
+          - os: depot-ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            maturin-target: x86_64-unknown-linux-musl
+            name: linux-musl-x86_64
+            container: quay.io/pypa/musllinux_1_2_x86_64:latest
+            compatibility: musllinux_1_2
+            runtime: python:3.13-alpine
+          - os: depot-ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            maturin-target: aarch64-unknown-linux-musl
+            name: linux-musl-arm64
+            container: quay.io/pypa/musllinux_1_2_aarch64:latest
+            compatibility: musllinux_1_2
+            runtime: python:3.13-alpine
           - os: depot-macos-15
             target: aarch64-apple-darwin
             maturin-target: aarch64
@@ -98,8 +112,9 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.maturin-target }}
-          args: --release --out dist --find-interpreter
-          manylinux: auto
+          args: --release --locked --out dist --find-interpreter
+          manylinux: ${{ matrix.compatibility || 'auto' }}
+          container: ${{ matrix.container || '' }}
 
       - name: Package standalone CLI binary
         run: |
@@ -119,7 +134,7 @@ jobs:
           VERSION=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
           docker run --rm --init -v "$PWD:/io:ro" \
             -e BARCA_VERSION="$VERSION" -e BARCA_NATIVE="barca-${{ matrix.name }}" \
-            python:3.13-slim sh -eu -c '
+            "${{ matrix.runtime || 'python:3.13-slim' }}" sh -eu -c '
               python -m pip install --disable-pip-version-check uv
               mkdir /tmp/native
               cp "/io/$BARCA_NATIVE" /tmp/native/barca
