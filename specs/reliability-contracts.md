@@ -14,9 +14,9 @@ retain their original evidence; their preparation-stage wording is not the
 current delivery status. Roadmap [#344](https://github.com/barca-orc/barca/issues/344)
 owns delivery status.
 
-[Concrete failure scenarios](reliability-scenarios.md) record timelines, evidence
-status and unanswered questions for each boundary. They are discussion examples,
-not approvals of the proposed policies below.
+[Concrete failure scenarios](reliability-scenarios.md) record timelines, evidence,
+explicit user decisions and unanswered questions for each boundary. Discussion
+examples do not provide additional approval of unselected proposals.
 
 ## 1. Ownership
 
@@ -116,6 +116,11 @@ Remaining extensions:
 - Environments provide separation. Local execution may publish an updated result
   to shared storage; server execution may publish another result in the same
   environment. Publication must be idempotent.
+- Asset nodes are assumed pure functions of their definition and tracked inputs.
+  The computation hash is the logical result version. External observations and
+  side effects belong upstream; changed external data must enter through sensors
+  or other tracked inputs to change dependent asset hashes. Purity is an assumption,
+  not a runtime guarantee that arbitrary Python code is deterministic.
 - A stale local cache automatically synchronizes to the selected published
   result before consumption. Ordinary stale-cache reads do not require `--force`.
 - If the published result changed since an execution's starting observation,
@@ -124,31 +129,38 @@ Remaining extensions:
 - Force permits intentional conflicting publication. It does not make a false
   upload receipt or a mismatch between selected metadata and stored bytes valid.
   Each receipt/checksum must describe the exact uploaded bytes.
-- Published results are versioned so reverting to an earlier result is possible.
-  Changing the current selection must not be equated with irreversibly erasing
-  every earlier version. A computation hash alone is insufficient version identity
-  when unchanged code/inputs can produce different bytes on refresh.
+- Existing hash-addressed artifacts provide computation versioning: a changed
+  hash writes a separate path and earlier paths remain. Cached gets reuse data;
+  same-hash refreshes overwrite the same path and are expected to reproduce the
+  same bytes. Different bytes under one hash indicate a purity violation or
+  integrity defect, not a requirement to archive every execution as a new version.
+  Reversion should build on retained computation versions; no new per-execution
+  byte-version storage scheme is selected.
 
-The concrete version representation, publication/conflict mechanics, baseline
-observation, retry recognition, force/revert command surface and retention duration
-still need an implementation plan. Existing runtime paths remain overwriteable
-and do not yet implement this versioned publication contract. This direction does
-not decide whether an ordinary saved handle pins a version or follows current,
-nor whether a partition set is a consistent pinned manifest. Reuse artifacts where
-safe rather than eagerly copying every partition to create versions.
+Publication/conflict mechanics, baseline observation, retry recognition,
+force/revert command surface and retention duration still need an implementation
+plan. Automatic cross-machine freshness, conflict forcing and reversion tools are
+requirements, not features implemented by this draft. New computation hashes are
+ordinary versions; merely retaining multiple hashes is not a checksum conflict.
+Saved-result selectors and partition-set membership/version semantics still need
+specification. Reuse existing artifacts rather than copying every partition or
+introducing per-execution archives to create a result-set manifest.
 
 Keep these concepts distinct:
 
 | Identity | Current meaning | Limit |
 | --- | --- | --- |
-| Computation key (`run_hash`) | Code/input identity used to choose the deterministic cache path | Recomputing the same key may produce different bytes |
+| Computation key (`run_hash`) | Logical asset version from its definition and tracked inputs; chooses the deterministic cache path | Same-key recomputation is expected to reproduce the same bytes; arbitrary user code can violate purity |
 | Artifact checksum | Validation of particular bytes associated with a receipt/result | A checksum is not an immutable locator or a retention policy; #381 covers the snapshot race |
 | Durable run identity | Database identity for historical execution records | Today it is distinct from a live server polling handle; #319 owns convergence/compatibility |
 | Current partition membership | Current DAG/planning membership for current selection and SQL | Historical rows can remain for removed keys; history does not make those keys current |
 
 [Artifact path construction](../python/barca/_artifacts.py) intentionally permits
 refresh to overwrite the same computation-addressed path. Existing history is
-therefore not a guarantee that every prior result's bytes remain readable.
+therefore not a per-execution archive of different bytes under the same hash.
+Different computation versions already have separate paths. See the existing
+[cache manual](../crates/barca-cli/docs/cache.md) for purity, sensor inputs and
+the current storage layout.
 [Current SQL membership](sql-current-partition-membership.md) and
 [its regressions](../python/tests/test_sql_current_partitions.py) distinguish
 current membership from retained history.
@@ -161,19 +173,20 @@ operations. [#287](https://github.com/barca-orc/barca/issues/287) owns results a
 access; [#57](https://github.com/barca-orc/barca/issues/57) owns selectors and their
 composition with execution/refresh/backfill.
 
-**Proposed, awaiting product decision:** a saved handle continues to identify its
-original bytes after refresh; a separate latest lookup follows current results.
-For partition A changing from 11 to 22, the old saved handle still reads 11.
-This is not implemented or approved. If handles instead follow latest, their
-mutable semantics must be explicit. Either choice needs defined behavior for
-missing/deleted/corrupt data; a reference is not a promise of indefinite retention.
+**Discussion correction:** the earlier proposal to retain each execution's
+original bytes is withdrawn. A saved result can identify an existing computation
+version; a same-hash refresh is expected to be equivalent. A forced purity-violating
+replacement is not promised to preserve the previous bytes of that logical version.
+Exact API selectors for a particular computation version versus current results,
+missing/deleted/corrupt behavior and partition-set composition remain to be specified.
+A result reference is not a promise of indefinite retention.
 
-After that decision, specify multidimensional keys, ordering, membership/version
+Specify multidimensional keys, ordering, membership/version
 identity, one/subset/all return shapes, CLI/Python compatibility, stale-handle
 behavior and reference protection under GC. Reuse existing artifacts when safe;
 avoid eagerly copying all partitions merely to create a result-set manifest.
-Specify how old bytes can be retained without changing current cache semantics
-silently. Listing is metadata-only; selected reads touch only selected artifacts
+Build reversion and saved access on retained hash-addressed versions while preserving
+the accepted purity/cache semantics. Listing is metadata-only; selected reads touch only selected artifacts
 and reuse validated local data or supported remote reads. Test actual bytes/read
 counts alongside values and restart behavior. Exact API signatures and storage/
 migration mechanics remain engineering proposals.
@@ -191,7 +204,7 @@ migration mechanics remain engineering proposals.
 4. #318's reporting extraction can be prepared independently while preserving
    CLI output. Its terminal events must follow the agreed commit contract;
    replay/resume implementation needs an explicit scope and resource bound.
-5. Jointly specify #287/#57 after the saved-handle policy decision. Approve exact
+5. Jointly specify #287/#57 using the accepted computation-version/purity model. Approve exact
    API shapes and retention/migration dependencies before splitting manifest,
    selector, saved-read and targeted-refresh implementations into sequential PRs.
 

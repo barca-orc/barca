@@ -11,13 +11,15 @@ without changing runtime behavior or presenting proposed APIs as implemented.
    implementation owners and regression tests.
 2. Add a single Markdown contract index with implemented/proposed status,
    independent document version, evidence links and explicit limitations.
-3. Separate computation keys, artifact-byte identities, durable run identities
-   and current partition membership. Record saved-handle policy as unresolved.
+3. Separate computation keys, artifact-byte checksums, durable run identities
+   and current partition membership. Record the accepted asset-purity and
+   computation-version model; exact saved-result selectors remain unresolved.
 4. Link the index from `specs/README.md`; preserve native HTTP, CLI, metadata and
    Python grammar specifications and historical implementation evidence.
 5. Define bounded PR sequencing and issue ownership. Existing correctness fixes
-   may proceed independently; saved-results implementation waits for its policy
-   and exact API/migration/retention specification.
+   may proceed independently; saved-results implementation requires its exact
+   API, version-selection and retention specification. Do not introduce an
+   archive of every execution's bytes under the accepted pure-asset model.
 6. Review claims against current source and existing tests, check local links and
    whitespace, and open a draft documentation PR for review. No runtime tests,
    schema changes, new dependencies or package release are needed for this draft.

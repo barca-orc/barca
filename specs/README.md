@@ -28,8 +28,9 @@ wrong statuses and additional routes, rather than only repeating happy-path exam
 
 The [ownership, durability and result-identity index](reliability-contracts.md)
 consolidates current invariants, existing evidence owners and explicitly proposed
-extensions (document version 1). Its saved-handle policy and future run/event APIs
-are not approved or implemented. The
+extensions (document version 1). Asset purity and computation-hash versioning are
+accepted; exact saved-result selectors and future run/event APIs remain proposals.
+The
 [failure-scenario catalog](reliability-scenarios.md) distinguishes demonstrated
 defects, existing regression coverage, known limits and hypothetical policy
 examples; no answers are selected by those examples. The

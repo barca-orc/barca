@@ -3,7 +3,8 @@
 Status: **discussion draft**, 2026-10-10. Document version: **1**.
 Scope: the [ownership, durability and result-identity contracts](reliability-contracts.md),
 audited against main `96022e0` / release 0.22.0. This documents scenarios and
-unanswered questions, not additional guarantees or selected product policies.
+unanswered questions, not additional runtime guarantees or newly selected policies.
+Explicit user decisions are identified below; other proposals remain undecided.
 
 The catalog covers the failure modes identified in this review. It cannot
 enumerate every provider failure or arbitrary user-code side effect. Extend it
@@ -28,9 +29,15 @@ server execution may update the current result in a shared environment; changed
 remote state since the writer's starting observation requires a conflict warning
 and explicit `--force`. Stale-cache reads automatically synchronize before use.
 Each receipt must match its own uploaded bytes; force is not an integrity bypass.
-Results are versioned so reversions are possible. Version storage, command details,
-conflict/race implementation and retention duration remain to be specified. These
-are recorded product requirements, not claims of shipped implementation.
+Assets are assumed pure: their definition and tracked inputs determine the logical
+version (`run_hash`) and expected result. Existing distinct hash-addressed files
+provide versioning; sensors/other tracked inputs bring changing external observations
+into dependent hashes. Reversion builds on these retained computation versions.
+Same-hash outputs that differ are purity violations or integrity defects, not
+ordinary additional byte versions. Conflict/revert command details, race handling,
+saved-version selectors and retention remain to be specified. This discussion
+does not require archiving every execution's bytes or promise recovery of bytes
+replaced by an intentional same-hash override.
 
 ### O1. Two refreshes race with one upload
 
@@ -39,6 +46,11 @@ to a computation-addressed path. A's actual upload copies `11` to the remote
 destination. Before A computes its receipt, run B atomically replaces the local
 path with JSON `22`. A reopens the path and reports the checksum of `22`.
 The remote object is `11`, while the successful receipt describes `22`.
+
+Under the accepted pure-asset model, different values at the same computation
+hash violate the assumption. That does not excuse a false receipt: the transfer
+must describe its exact uploaded bytes even when a user violates purity or
+intentionally forces a conflict.
 
 This can make later validation reject the bytes or make metadata misdescribe
 the result. The proof is a synchronized primitive reproduction using real
@@ -61,9 +73,11 @@ records `11`? A post-upload checksum fix would not necessarily address this.
 
 Reproduce using actual overlapping execution and controlled open boundaries;
 inspect whether current loading/LRU behavior prevents the hypothesized read.
-No full-runtime failure or chosen concurrency policy is claimed. Discuss whether
-each run must consume its own producer snapshot or whether refreshed shared cache
-values may be observed, before broadening the fix's semantics.
+No full-runtime failure is claimed. Under purity, both executions should produce
+equivalent values, so per-run byte archives are not required by this example.
+Investigate wrong checksum/consumer behavior under purity violations without
+silently adding general snapshot isolation. Define detection and warning/force
+behavior separately from the exact-byte receipt requirement.
 
 ### O3. Cancellation lands inside temporary-file creation or deletion
 
@@ -112,8 +126,11 @@ published `11`, computes `22`, and starts publication. Another execution publish
 `33`. The local publication or delayed retry would replace `33` with `22`.
 
 This changed-baseline publication is a conflict: warn and require `--force`.
-An intentional forced publication may make `22` current, with version history
-supporting reversion; an ordinary retry must not silently do so. Test the lost-ACK
+An intentional forced publication may make `22` current; an ordinary retry must
+not silently do so. If all these values use the same computation hash, they
+violate asset purity, and forcing replacement does not promise preservation of
+the previous same-hash bytes. Different hashes already name separate computation
+versions. Test the lost-ACK
 case as well as two independent runs. Idempotent retry recognition, atomicity at
 the conflict-check/write boundary and backend support remain engineering work;
 a read-then-write check alone must not be advertised as eliminating every race.
@@ -121,8 +138,9 @@ No operation-ID API or distributed locking mechanism is selected here.
 
 ### O7. The server has an older cached copy of a valid published result
 
-**Accepted policy; open cross-machine acceptance.** The server caches `11`.
-Local execution publishes `22` with matching metadata/checksum. Before the server
+**Accepted policy; open cross-machine acceptance.** The server caches `11` from
+an older computation version. Local execution publishes `22` under a changed
+hash with matching metadata/checksum. Before the server
 consumes that result again, it obtains the current published identity, detects
 its stale cache, fetches the selected bytes and verifies them. This normal read
 requires no `--force`. Checking local bytes against an old expected checksum is
@@ -133,11 +151,14 @@ failure rather than an ordinary stale cache or permission to force consumption.
 ### O8. A valid publication is later found to be semantically wrong
 
 **Accepted versioning direction; open implementation acceptance.** Published
-version V1 contains `11`. A later valid publication V2 contains `22`; its bytes
+computation version H1 contains `11`. A later version H2 contains `22`; its bytes
 and receipts agree, but a user discovers the result is wrong for their workload.
-They must be able to revert to the earlier published version. Versioning must
-retain the needed bytes and identity/metadata for a supported reversion window;
-merely keeping a history row pointing to an overwritten path is insufficient.
+They must be able to revert to the earlier computation version. H1 and H2 already
+have different artifact paths; reuse those retained files and their history.
+This is not a requirement to archive every refresh of H1. If someone forces
+different bytes into H1, recovery of its original bytes is not promised by the
+pure-asset model. Reversion needs retained bytes and identity/metadata, not merely
+a history row pointing to a deleted or manually replaced artifact.
 
 Specify how reverting changes the current selection and interacts with downstream
 cache/lineage, concurrent publication and force. The revert command, retention
@@ -380,24 +401,30 @@ Full outcome/provenance consistency remains the separate #319 extension.
 
 ## Result identity: what does a saved result mean over time?
 
-### R1. Refresh changes bytes without changing code or input hashes
+### R1. Untracked external data violates a pure asset's same-hash assumption
 
-**Current path behavior plus policy example; #287/#57.** On Monday, partition
-`region=us` fetches external data and produces `11`. On Tuesday the same source
-and inputs produce `22` after refresh. The computation key can remain identical,
-so today's artifact path is overwritten.
+**Accepted model and known assumption violation; #287/#57.** On Monday, an
+asset fetches untracked external data and produces `11`. On Tuesday the same
+definition and tracked inputs produce `22` after refresh. The hash stays the
+same and its file is overwritten. This violates asset purity; it is not a new
+logical version that Barca must automatically archive.
 
-If Monday's saved handle is read Wednesday, should it return `11`, `22`, or a
-clear unavailable/stale result? Original-byte handles require a way to retain
-the original artifact; latest-value references intentionally follow changes.
-Neither policy is approved. Evidence:
+The intended workflow introduces changing observations upstream through a sensor
+or another tracked input. When that tracked value changes, dependent hashes
+change and separate artifact versions are retained. A cache hit creates no new
+artifact; a pure same-hash refresh is expected to reproduce equivalent bytes.
+Unexpected differences require integrity/purity diagnostics and conflict policy.
+An intentional forced same-hash replacement need not retain the prior bytes.
+This replaces the earlier original-byte-per-execution proposal. Evidence:
 [artifact path semantics](../python/barca/_artifacts.py),
+[purity and sensor manual](../crates/barca-cli/docs/cache.md),
 [#287](https://github.com/barca-orc/barca/issues/287).
 
 ### R2. A result set combines partitions from different refreshes
 
 **Policy example; #287/#57.** A saved set initially has `us=11, eu=100`. Refresh
-updates US to `22`; EU is still old or its refresh fails. Reading all produces
+with changed tracked inputs produces a new US hash/value `22`; EU is still at its
+earlier computation version or its update fails. Reading all produces
 `us=22, eu=100`. Each partition can be valid independently while the aggregate
 mixes different executions or external-data moments.
 
@@ -426,8 +453,10 @@ without defining node/membership identity. Owners #287/#57; evidence:
 exist, but a lifecycle rule, manual deletion or refresh removes/replaces the
 referenced data. History existence alone cannot ensure the bytes remain readable.
 
-For an exact historical handle, silently returning latest bytes would change its
-meaning. Silently recomputing can also produce a different value or rerun effects.
+For an explicit historical computation-version selector, silently substituting a
+different hash would change its meaning. A pure recomputation at the same hash
+should reproduce the value, but availability and implicit execution still need
+defined behavior; purity violations or untracked inputs may make recovery fail.
 Define unavailable/corrupt/expired behavior, any explicit recovery operation and
 how much retention is promised. These questions remain open.
 
@@ -466,15 +495,17 @@ jointly in CLI/Python; no syntax or error policy is chosen here.
 
 ### R8. An upstream refresh changes a downstream result's lineage
 
-**Open acceptance/policy example; #57/#287/#319.** A downstream result refers
-to an upstream computation key. The upstream is refreshed with different bytes
-under that same key. Does the downstream keep its original input snapshot,
-invalidate and recompute, or silently read the replacement? A computation key
-alone cannot distinguish all external-data changes.
+**Accepted purity model plus open diagnostics/acceptance; #57/#287/#319.** A
+downstream result refers to an upstream computation key. Upstream code violates
+purity and a forced refresh replaces that key's bytes. The unchanged hash alone
+cannot tell downstream that an untracked observation changed; it is not a reason
+to invent an automatic per-execution versioning scheme.
 
-Record the lineage actually consumed and define compatibility with existing
-sensor/output hash semantics; do not turn this example into an automatic cache
-or namespace redesign. Verify behavior before asserting a present defect.
+Changing external observations must enter through tracked inputs/sensors so
+dependent hashes change. Existing explicit refresh/cascade behavior is relevant
+when users force recomputation. Record lineage and specify useful diagnostics
+without treating arbitrary upstream side effects as tracked inputs. Verify
+actual runtime behavior before asserting an additional cache defect.
 
 ## Adjacent evidence that exercises the same boundaries
 
@@ -509,18 +540,20 @@ publishers as if they were harmless reads.
 
 Publication overwrite policy is now settled at the product level: a changed
 baseline requires `--force`; normal stale reads synchronize automatically;
-published results must be versioned for reversion. O6–O8 record those requirements.
+retained computation-hash versions support reversion under the accepted pure-asset
+model. O6–O8 and R1/R8 record those requirements and limits. The earlier proposal
+to preserve every execution's original bytes is withdrawn.
 Their implementation and retention details remain open; the timelines are not
 new current-runtime reproductions.
 
 | Question | Scenarios | Owner |
 | --- | --- | --- |
-| Does each run consume its own producer snapshot during overlapping refresh? | O1, O2, R8 | #381; demonstrated additional consumer defects need their own explicit scope |
+| How are same-hash purity violations and upload/consumer races detected without adding per-run archives? | O1, O2, R8 | #381; demonstrated additional consumer defects need their own explicit scope |
 | What does success mean when local work is durable but remote recovery is incomplete? | D4, D11, D13 | #319/#243; public CLI/HTTP/UI changes require compatibility review |
 | Which outcomes/diagnostics must survive acceptance, failures and restart together? | D9, D10, D12 | #319 |
 | What is the event replay window and how does a client recover outside it? | D13, D14 | #318 |
-| Does a saved result pin original bytes or follow latest; what does a saved set pin? | R1, R2, R3, R8 | joint #287/#57 |
-| What is a result version, how does reverting affect downstream results, and what is the supported retention window? | O6, O8, R1, R4, R5, R8 | result-version plan coordinated with #287/#57/#83/#243; exact publication owner to be assigned |
+| How do callers select a retained computation version versus current results, and what membership/version set does “all” mean? | R2, R3, R6, R7 | joint #287/#57 |
+| How does reverting to a retained hash affect downstream results, and what is the supported retention window? | O8, R4, R5, R8 | #287/#57 coordinated with #83/#243 |
 | How long are those bytes kept, and what happens after deletion or during active reads? | O4, R4, R5 | #83/#243 coordinated with #287 |
 | What are subset ordering, missing-key and partial-result semantics? | R3, R6, R7 | joint #57/#287 |
 
