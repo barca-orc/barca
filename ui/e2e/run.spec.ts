@@ -35,7 +35,7 @@ test.describe('topbar Run', () => {
     await topbarRun(page).click()
     await started
 
-    await expect(page).toHaveURL(/#\/graph/) // stays on the graph; no navigation
+    await expect(page).toHaveURL(/#\/assets\?.*view=graph/) // stays on the graph; no navigation
     await expect(inspector(page)).toContainText('hello from e2e 6', { timeout: 30_000 })
   })
 
@@ -60,7 +60,7 @@ test.describe('node panel', () => {
     // Build a history with a spread of durations.
     await seedRuns(request, 'say_hello', 8)
 
-    await page.goto('/ui/#/assets')
+    await page.goto('/ui/#/tasks')
     await page.getByRole('row', { name: /say_hello/ }).click()
 
     const hist = page.locator('.barca-hist')

@@ -20,7 +20,6 @@ body {
   font-family: var(--font-body);
   font-size: var(--text-base);
   line-height: var(--leading-normal);
-  font-feature-settings: "ss01", "cv01";
   /* Digits all the same width: counts, durations and timestamps that update in place
      must not change the width of what they sit in. */
   font-variant-numeric: tabular-nums;
@@ -49,7 +48,7 @@ body {
 a { color: var(--text-link); text-decoration: none; }
 a:hover { text-decoration: underline; text-underline-offset: 2px; }
 
-code, kbd, samp { font-family: var(--font-mono); font-size: 0.92em; }
+code, kbd, samp { font-family: var(--font-code); font-size: 0.92em; }
 
 hr {
   border: none;

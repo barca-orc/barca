@@ -10,6 +10,8 @@ from __future__ import annotations
 __version__ = "0.22.0"
 
 __all__ = [
+    "group",
+    "Group",
     "asset",
     "sensor",
     "task",
@@ -340,3 +342,28 @@ def duckdb_connection():
 
 from barca.api import BarcaError, get, history, plan, run, stats  # noqa: E402
 from barca.client import Client, Run  # noqa: E402
+
+
+class Group:
+    """Organizational metadata. Never an executable or cacheable node."""
+
+    def __init__(self, name: str, members: list[object] | tuple[object, ...], output: object, description: str):
+        self.name = name
+        self.members = members
+        self.output = output
+        self.description = description
+
+
+def group(
+    name: str,
+    /,
+    *,
+    members: list[object] | tuple[object, ...],
+    output: object,
+    description: str = "",
+) -> Group:
+    """Declare a UI/CLI group using literal references; groups may contain groups.
+
+    This metadata does not change execution, dependencies or caching.
+    """
+    return Group(name, members, output, description)

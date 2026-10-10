@@ -15,6 +15,9 @@ Options:
       --pretty
           Emit human-readable output (the default when stdout is a terminal)
 
+      --groups
+          Show the organizational hierarchy (groups are never executable nodes)
+
   -l, --limit <LIMIT>
           Maximum number of nodes to show, in topological order
 
@@ -37,6 +40,7 @@ Examples:
   barca list .                       # the current directory and below
   barca list pipeline.py             # nodes, including qualified/aliased Barca decorators
   barca list pipeline.py --json      # {nodes: [{id, kind, freshness, schedule?, inputs, env, next_fire?}], total, truncated, root}
+  barca list pipeline.py --groups --json  # organizational groups, separate from executable nodes
   barca list pipeline.py --pretty    # the table, even when piped
   barca list pipeline.py --fields id,inputs   # JSON with only these keys per node
   barca list big.py --limit 20       # first 20 nodes (topological order)

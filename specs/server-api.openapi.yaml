@@ -102,6 +102,57 @@ paths:
           description: Registered path with unsupported method; Allow header identifies
             supported methods
           headers: *id003
+  /groups:
+    get:
+      summary: List organizational groups
+      description: Groups organize nodes without changing execution, dependencies or
+        caching. Groups reference member node or group IDs and an output node or group ID.
+        Invalid groups are omitted from the healthy served graph and reported in
+        health load_errors, while healthy executable nodes remain available.
+      operationId: get_groups
+      responses:
+        '200':
+          description: Response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/NodeGroup'
+        '400':
+          description: Invalid source/target or wrong node kind
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Execution/inspection infrastructure error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '405':
+          description: Registered path with unsupported method; Allow header identifies
+            supported methods
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          headers: *id001
+    head:
+      summary: List organizational groups (headers only)
+      operationId: head_groups
+      responses:
+        '200':
+          description: Response
+        '400':
+          description: Invalid source/target or wrong node kind
+        '500':
+          description: Execution/inspection infrastructure error
+        '405':
+          description: Registered path with unsupported method; Allow header identifies
+            supported methods
+          headers: *id001
   /assets:
     get:
       summary: List assets, tasks and sensors
@@ -1237,6 +1288,23 @@ components:
           type:
             const: Schedule
           value: *id002
+    NodeGroup:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - name
+      - description
+      - members
+      - output
+      properties:
+        id: *id002
+        name: *id002
+        description: *id002
+        members:
+          type: array
+          items: *id002
+        output: *id002
     Asset:
       type: object
       additionalProperties: false

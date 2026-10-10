@@ -52,6 +52,15 @@ pub struct Signature {
 /// `parallel()` / `parallel_map()` run inside a task body: their arguments are yours.
 pub const SIGNATURES: &[Signature] = &[
     Signature {
+        name: "group",
+        decorator: false,
+        positional: &["name"],
+        keywords: &["members", "output", "description"],
+        deferred: &[],
+        usage: "group(\"training\", members=[features, model], output=model)",
+        topic: "groups",
+    },
+    Signature {
         name: "asset",
         decorator: true,
         positional: &[],
@@ -300,7 +309,7 @@ pub struct Problem {
     pub fix: String,
 }
 
-fn check_call(call: &ast::ExprCall, sig: &Signature) -> Option<Problem> {
+pub(crate) fn check_call(call: &ast::ExprCall, sig: &Signature) -> Option<Problem> {
     let shown = sig.display();
     let see = format!("See `barca docs {}`.", sig.topic);
     let args = &call.arguments.args;

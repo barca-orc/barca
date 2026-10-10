@@ -59,6 +59,7 @@ GET routes also accept HEAD and return the corresponding headers without a body.
 |--------|------|-------------|
 | `GET`  | `/health` | Liveness, version, whether the server is read-only, and whether it runs the scheduler, and unloaded source/definition diagnostics. |
 | `GET`  | `/state` | Every node: its `barca status` entry plus typical durations and next run. |
+| `GET`  | `/groups` | Organizational groups as `[{id, name, description, members, output}]`; separate from execution edges. |
 | `GET`  | `/assets` | List every node with kind, freshness, upstream inputs and declared environment variables. |
 | `GET`  | `/assets/{name}` | One asset's summary joined with timing/cache stats. |
 | `GET`  | `/assets/{name}/schema` | Selected node and direct inputs as `NodeStatus[]`, with artifact shapes inspected on demand. |

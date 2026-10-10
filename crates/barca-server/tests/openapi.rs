@@ -249,6 +249,31 @@ fn spec_matches_router_paths_and_methods_and_all_schemas_compile() {
 }
 
 #[tokio::test]
+async fn nested_groups_match_contract() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config(dir.path(), true);
+    let source = config.files[0].clone();
+    let mut pipeline = std::fs::read_to_string(&source).unwrap();
+    pipeline.push_str(
+        r#"
+from barca import group
+preparation = group("Preparation", members=[first], output=first)
+modeling = group("Modeling", members=[preparation, second, publish], output=second)
+"#,
+    );
+    std::fs::write(&source, pipeline).unwrap();
+    let router = app(config);
+    let groups = checked(&router, "GET", "/groups", "/groups", 200).await;
+    let groups = groups.as_array().unwrap();
+    assert_eq!(groups.len(), 2);
+    let preparation = groups.iter().find(|g| g["name"] == "Preparation").unwrap();
+    let modeling = groups.iter().find(|g| g["name"] == "Modeling").unwrap();
+    assert_eq!(modeling["members"][0], preparation["id"]);
+    assert_eq!(preparation["output"], format!("{source}:first"));
+    assert_eq!(modeling["output"], format!("{source}:second"));
+}
+
+#[tokio::test]
 async fn inspection_methods_errors_read_only_and_ui_match_contract() {
     let dir = tempfile::tempdir().unwrap();
     let router = app(config(dir.path(), true));
@@ -256,6 +281,7 @@ async fn inspection_methods_errors_read_only_and_ui_match_contract() {
         ("/health", "/health"),
         ("/plan", "/plan"),
         ("/assets", "/assets"),
+        ("/groups", "/groups"),
         ("/assets/first", "/assets/{name}"),
         ("/assets/first/schema", "/assets/{name}/schema"),
         ("/state", "/state"),

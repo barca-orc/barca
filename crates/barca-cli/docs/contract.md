@@ -196,6 +196,7 @@ default, and any aliases.
 | `<FILES>...` | - | - | stable | Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`) |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
+| `--groups` | - | default `false` | experimental: Organizational group hierarchy and metadata shape are experimental | Show the organizational hierarchy (groups are never executable nodes) |
 | `-l, --limit` | `LIMIT` | default `100` | stable | Maximum number of nodes to show, in topological order |
 | `--all` | - | default `false` | stable | Show every node (no limit) |
 | `--fields` | comma-separated: `id`, `kind`, `freshness`, `schedule`, `inputs`, `env`, `next_fire` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `nodes`. Implies --json. An unknown key is a usage error listing the valid ones |
@@ -796,6 +797,22 @@ appears only when `truncated` is true. `--fields` keeps only the named keys on e
 | `truncated` | boolean | always |
 <!-- END GENERATED schema list -->
 
+### `list --groups`
+
+<!-- BEGIN GENERATED schema list_groups -->
+| Key | Type | Present |
+|---|---|---|
+| `groups` | array | always |
+| `groups[]` | object | always |
+| `groups[].description` | string | always |
+| `groups[].id` | string | always |
+| `groups[].members` | array | always |
+| `groups[].members[]` | string | always |
+| `groups[].name` | string | always |
+| `groups[].output` | string | always |
+<!-- END GENERATED schema list_groups -->
+
+
 Truncated (`--limit 1`):
 
 <!-- BEGIN GENERATED schema list_truncated -->
@@ -1185,3 +1202,5 @@ Qualified and imported aliases of Barca decorators/helpers receive the same node
 semantics and argument validation as direct imports. Explicit foreign or rebound
 names do not define Barca nodes. For a foreign wrapper intended to remain a node,
 stack it with a genuine Barca decorator; see `barca docs assets`.
+
+`list --groups` is experimental: JSON returns `{groups: [{id, name, description, members, output}]}`. IDs and member/output references are strings; members is an array of strings. The default `list` schema is unchanged. Groups are organizational metadata and cannot be execution targets.

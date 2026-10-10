@@ -517,25 +517,25 @@ fn collect_definitions(source: &str, package: Option<&str>) -> HashMap<String, M
     }
     impl<'a> Visitor<'a> for StaticImports<'_> {
         fn visit_stmt(&mut self, stmt: &'a Stmt) {
-            self.uses
-                .extend(
-                    import_bindings(stmt, self.package)
-                        .into_iter()
-                        .map(|(bound, binding)| {
-                            // A star import can install any decorator/helper from this module.
-                            let binding = match binding {
-                                ModuleDef::FromImport { module, name } if name == "*" => {
-                                    ModuleDef::ModuleImport { module }
-                                }
-                                other => other,
-                            };
-                            LocalUse {
-                                bound,
-                                binding,
-                                attrs: Vec::new(),
+            self.uses.extend(
+                import_bindings(stmt, self.package)
+                    .into_iter()
+                    .filter(|(_, binding)| !is_group_import(binding))
+                    .map(|(bound, binding)| {
+                        // A star import can install any decorator/helper from this module.
+                        let binding = match binding {
+                            ModuleDef::FromImport { module, name } if name == "*" => {
+                                ModuleDef::ModuleImport { module }
                             }
-                        }),
-                );
+                            other => other,
+                        };
+                        LocalUse {
+                            bound,
+                            binding,
+                            attrs: Vec::new(),
+                        }
+                    }),
+            );
             visitor::walk_stmt(self, stmt);
         }
     }
@@ -581,6 +581,13 @@ fn collect_definitions(source: &str, package: Option<&str>) -> HashMap<String, M
                 defs.insert(class.name.to_string(), ModuleDef::Class(code(class, uses)));
             }
             Stmt::Assign(assign) => {
+                // Organizational declarations must not become dependencies when a local
+                // variable happens to share their name (the cone is conservative about locals).
+                if let Expr::Call(call) = assign.value.as_ref()
+                    && barca.resolve(&call.func) == Some("group")
+                {
+                    continue;
+                }
                 for target in &assign.targets {
                     if let Expr::Name(n) = target {
                         let mut uses = UseCollector::new(package);
@@ -590,6 +597,11 @@ fn collect_definitions(source: &str, package: Option<&str>) -> HashMap<String, M
                 }
             }
             Stmt::AnnAssign(assign) => {
+                if let Some(Expr::Call(call)) = assign.value.as_deref()
+                    && barca.resolve(&call.func) == Some("group")
+                {
+                    continue;
+                }
                 if let Expr::Name(n) = assign.target.as_ref() {
                     let mut uses = UseCollector::new(package);
                     if let Some(value) = &assign.value {
@@ -607,7 +619,11 @@ fn collect_definitions(source: &str, package: Option<&str>) -> HashMap<String, M
                     defs.entry(bound).or_insert(def);
                 }
             }
-            Stmt::ImportFrom(_) => defs.extend(import_bindings(stmt, package)),
+            Stmt::ImportFrom(_) => defs.extend(
+                import_bindings(stmt, package)
+                    .into_iter()
+                    .filter(|(_, binding)| !is_group_import(binding)),
+            ),
             Stmt::If(_) | Stmt::Try(_) => {
                 // Do not select a conditional binding by executing Python or by guessing
                 // which branch runs. The module may retain an earlier binding, install a
@@ -669,6 +685,12 @@ fn collect_definitions(source: &str, package: Option<&str>) -> HashMap<String, M
         }
     }
     defs
+}
+
+/// The group factory is metadata too: an unrelated local variable named `group`
+/// must not begin following this import when a hierarchy is added to the file.
+fn is_group_import(binding: &ModuleDef) -> bool {
+    matches!(binding, ModuleDef::FromImport { module, name } if module == "barca" && name == "group")
 }
 
 /// Walks `levels_up` package levels above `package` (e.g. `levels_up=1` on

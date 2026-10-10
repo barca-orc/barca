@@ -81,6 +81,7 @@ These are all the arguments barca's decorators and helpers take:
 
 | Call | Positional arguments | Keyword arguments |
 |---|---|---|
+| `group()` | one | `members`, `output`, `description` |
 | `@asset` | none | `name`, `inputs`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env` |
 | `@sensor` | none | `name`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env` |
 | `@task` | none | `name`, `inputs`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env` |

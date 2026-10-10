@@ -31,6 +31,11 @@ macro_rules! topic {
 /// Every topic, in index order. Add new topics here (and a file under `docs/`).
 pub const TOPICS: &[Topic] = &[
     topic!(
+        "groups",
+        "Organizational groups, nesting and outputs",
+        "groups.md"
+    ),
+    topic!(
         "overview",
         "What barca is, the mental model, and the commands",
         "overview.md"

@@ -5,7 +5,7 @@
 
 use crate::BarcaError;
 use crate::dag::Dag;
-use crate::parse::extract_nodes;
+use crate::parse::extract_pipeline;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -72,17 +72,16 @@ fn load_blocking(
     let mut errors = Vec::new();
     // Parse every file once.
     let mut sources: Vec<(PathBuf, std::rc::Rc<str>)> = Vec::with_capacity(file_args.len());
+    let mut group_declarations = Vec::new();
     let mut nodes_by_file: Vec<Vec<crate::model::ExtractedNode>> = Vec::new();
     for arg in file_args {
         let path = PathBuf::from(arg);
         let parsed = fs::read_to_string(&path)
             .map_err(|e| BarcaError::Usage(format!("{}: {e}", path.display())))
             .and_then(|source| {
-                extract_nodes(&source, arg)
-                    .map(|nodes| (source, nodes))
-                    .map_err(|e| BarcaError::Parse(e.to_string()))
+                extract_pipeline(&source, arg).map(|(nodes, groups)| (source, nodes, groups))
             });
-        let (source, nodes) = match parsed {
+        let (source, nodes, groups) = match parsed {
             Ok(parsed) => parsed,
             Err(error) if partial => {
                 errors.push(LoadError {
@@ -94,6 +93,7 @@ fn load_blocking(
             }
             Err(error) => return Err(error),
         };
+        group_declarations.extend(groups);
         nodes_by_file.push(nodes);
         sources.push((path, source.into()));
     }
@@ -137,7 +137,10 @@ fn load_blocking(
     if !partial {
         crate::dag::validate_partition_dimensions(&all_nodes)?;
         resolve_dynamic_partitions(&mut all_nodes, python);
-        return Ok((Dag::build(&all_nodes)?, errors));
+        let groups = crate::groups::resolve(group_declarations, &all_nodes)?;
+        let mut dag = Dag::build(&all_nodes)?;
+        dag.groups = groups;
+        return Ok((dag, errors));
     }
     let failed_files = errors.iter().map(|e| e.file.clone()).collect::<Vec<_>>();
     let (dag, mut failures) = Dag::isolate(&all_nodes, &failed_files);
@@ -149,7 +152,7 @@ fn load_blocking(
         })
         .collect();
     resolve_dynamic_partitions(&mut healthy, python);
-    let (dag, additional) = Dag::isolate(&healthy, &failed_files);
+    let (mut dag, additional) = Dag::isolate(&healthy, &failed_files);
     failures.extend(additional);
     for (id, error) in failures {
         let file = all_nodes
@@ -162,6 +165,46 @@ fn load_blocking(
             error,
             affected_nodes: vec![id],
         });
+    }
+    let retained: Vec<_> = healthy
+        .into_iter()
+        .filter(|node| dag.get_node(&node.continuity_key()).is_some())
+        .collect();
+    // Groups decorate only the retained definitions. An invalid hierarchy must not
+    // suppress healthy execution or unrelated files' organizational metadata.
+    let mut declarations_by_file = std::collections::BTreeMap::<String, Vec<_>>::new();
+    for declaration in group_declarations {
+        declarations_by_file
+            .entry(declaration.file.clone())
+            .or_default()
+            .push(declaration);
+    }
+    let mut owners = std::collections::HashSet::new();
+    for (file, declarations) in declarations_by_file {
+        match crate::groups::resolve(declarations, &retained) {
+            Ok(groups) => {
+                if groups
+                    .iter()
+                    .flat_map(|g| &g.members)
+                    .any(|member| owners.contains(member))
+                {
+                    errors.push(LoadError {
+                        file,
+                        error: "group members already belong to a group in another source file"
+                            .into(),
+                        affected_nodes: Vec::new(),
+                    });
+                } else {
+                    owners.extend(groups.iter().flat_map(|g| g.members.iter().cloned()));
+                    dag.groups.extend(groups);
+                }
+            }
+            Err(error) => errors.push(LoadError {
+                file,
+                error: error.to_string(),
+                affected_nodes: Vec::new(),
+            }),
+        }
     }
     Ok((dag, errors))
 }

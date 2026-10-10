@@ -96,7 +96,7 @@ export function DagNode({
             style={{
               flex: 1,
               minWidth: 0,
-              fontFamily: 'var(--font-mono)',
+              fontFamily: 'var(--font-sans)',
               fontSize: 'var(--text-sm)',
               fontWeight: 500,
               color: 'var(--text-strong)',
@@ -125,7 +125,7 @@ export function DagNode({
         >
           <span
             style={{
-              fontFamily: 'var(--font-mono)',
+              fontFamily: 'var(--font-sans)',
               fontSize: 'var(--text-2xs)',
               letterSpacing: 'var(--tracking-wide)',
               textTransform: 'uppercase',
@@ -137,7 +137,7 @@ export function DagNode({
           {(statusLabel ?? metric) && (
             <span
               style={{
-                fontFamily: 'var(--font-mono)',
+                fontFamily: 'var(--font-sans)',
                 fontSize: 'var(--text-2xs)',
                 color: running ? 'var(--status-running)' : 'var(--text-muted)',
               }}

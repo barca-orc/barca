@@ -315,7 +315,7 @@ def test_assets_topic_accepted_arguments_example(binary, topics, tmp_path):
     # `cargo test -p barca-core decorator_args`).
     rows = re.findall(r"^\| `@?(\w+)(?:\(\))?` \| (\w+) \| (.*) \|$", body, re.M)
     assert [r[0] for r in rows] == [
-        "asset", "sensor", "task", "sink",
+        "group", "asset", "sensor", "task", "sink",
         "partitions", "partitions_from", "collect", "asset_ref", "Schedule",
     ]  # fmt: skip
     for name, positional, keywords in rows:

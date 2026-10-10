@@ -797,6 +797,14 @@ pub async fn wrong_method(method: axum::http::Method, uri: axum::http::Uri) -> R
         .into_response()
 }
 
+/// Organizational metadata; never part of the execution graph.
+pub async fn groups(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<barca_core::groups::NodeGroup>>, ApiError> {
+    let dag = state.loaded_dag().await?;
+    Ok(Json(dag.groups.clone()))
+}
+
 #[cfg(test)]
 mod duration_tests {
     use super::*;

@@ -18,6 +18,7 @@ pub mod envdeps;
 pub mod envelope;
 pub mod events;
 pub(crate) mod execution;
+pub mod groups;
 pub mod hash;
 #[doc(hidden)]
 pub mod helper_proc;
