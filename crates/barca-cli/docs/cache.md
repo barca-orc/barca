@@ -204,6 +204,15 @@ look for helpers, and it never reads or hashes the standard library or installed
 wherever the virtualenv is (`.venv/`, `venv/`, inside or outside the project): after upgrading
 a package, recompute with `--refresh-all` or `--refresh` (below).
 
+Names bound inside a module-level `if` or `try` are followed conservatively. Barca does not
+execute the condition to choose an import or fallback definition: a step reading such a name
+hashes the module's source and follows its statically visible imports and references. Editing
+an inactive branch's project helper can therefore re-run the step too. This provenance is
+retained through later assignments, functions, classes and imports: an earlier alias may have
+captured the conditional value before that replacement. Even an unconditional replacement can
+therefore retain conservative invalidation. Ordinary definitions
+that do not use these uncertain bindings keep their selective dependency cones.
+
 #### Not followed
 
 An edit in one of these does not change the hash; recompute with `--refresh-all` or `--refresh`:
@@ -213,8 +222,9 @@ An edit in one of these does not change the hash; recompute with `--refresh-all`
 - imports built at run time: `importlib.import_module(name)`, `__import__(name)`, and
   `getattr` on anything but a module barca can see imported. Static analysis cannot follow
   these, and barca does not run your code to plan;
-- `from helpers import *`, and names a module defines anywhere but at its top level (inside an
-  `if` or `try`, or assigned dynamically);
+- `from helpers import *`, and names a module defines dynamically or inside other module-level
+  control flow such as a `for`, `while`, `with` or `match` (module-level `if` and `try` bindings
+  are covered conservatively above);
 - module-level constants bound by tuple unpacking (`A, B = 1, 2`), and augmented assignments to
   a module-level name (`A += 1`): only a plain `A = ...` or `A: int = ...` is a definition;
 - a module reached through another module's `import` (`from helpers import other` where
