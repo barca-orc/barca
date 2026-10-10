@@ -37,13 +37,13 @@ network. An nginx upstream can then be `http://barca:8274/`, with no shared netw
 
 ## In a container
 
-This example was run with Docker 29 and barca 0.18.0. It has two services: barca, and an nginx
-that shares barca's network namespace so that it can reach `127.0.0.1:8274`.
+This example pins barca 0.22.0. It has two services: barca, and an nginx that shares
+barca's network namespace so that it can reach `127.0.0.1:8274`.
 
 ```dockerfile
 # Dockerfile
-FROM python:3.12-slim
-RUN pip install --no-cache-dir 'barca[parquet]==0.18.0'
+FROM python:3.13-slim
+RUN pip install --no-cache-dir --only-binary=:all: 'barca==0.22.0'
 WORKDIR /project
 CMD ["barca", "serve", "--timezone", "utc"]
 ```
@@ -53,11 +53,9 @@ CMD ["barca", "serve", "--timezone", "utc"]
 services:
   barca:
     build: .
-    platform: linux/amd64
     volumes:
       - ./project:/project
       - barca-state:/project/.barca
-    stop_signal: SIGINT        # only for barca 0.19.0 and earlier, see below
     restart: unless-stopped
     ports:
       - "127.0.0.1:8080:8080"
@@ -93,7 +91,7 @@ server {
 ```
 $ docker compose up -d
 $ curl -s http://127.0.0.1:8080/health
-{"read_only":false,"scheduler":true,"status":"ok","version":"0.18.0"}
+{"read_only":false,"scheduler":true,"status":"ok","version":"0.22.0","load_errors":[]}
 ```
 
 `docker compose ps` shows the `barca` service as `healthy` once the first check passes, and
@@ -101,16 +99,11 @@ the proxy starts after that.
 
 What each part is for:
 
-- **The image.** Published v0.21.0 has wheels for x86-64 Linux with glibc and for macOS on Apple
-  Silicon. Use a Debian-based image. There is no wheel for Alpine (musl)
-  ([issue #107](https://github.com/barca-orc/barca/issues/107)) or for Linux arm64; without a
-  wheel pip falls back to the sdist, which needs a Rust toolchain to build. That is why the
-  service sets `platform: linux/amd64`; on an x86-64 host the line changes nothing. Add your
-  pipeline's own dependencies to the same `pip install`.
-  Additional native packaging CI jobs test Linux arm64 GNU and x86-64/arm64 musl
-  artifacts. Keep this amd64 fallback until a tagged release publishes those wheels
-  and #107 records fresh PyPI installation evidence. A successful source build or cross-compile does
-  not establish that a compatible wheel is available from PyPI.
+- **The image.** v0.22.0 publishes core wheels and native archives for both x86-64 and
+  arm64 Linux with glibc or musl. Debian slim selects the native GNU wheel; Alpine selects
+  the native musl wheel. The example needs no `platform: linux/amd64` override or Rust
+  compiler. Add your pipeline's own dependencies separately; their wheels and Barca's
+  optional SQL/parquet/cloud extras have their own platform requirements.
 - **The project mount.** The project is mounted at the working directory. Barca reads the
   source again for every run, so an edit to a function takes effect at the next run. A new
   file, a new scheduled node or a changed cron expression needs a restart.
@@ -120,8 +113,8 @@ What each part is for:
 - **`--timezone`.** Cron is evaluated in the container's local time unless you say otherwise,
   and that is usually UTC whatever the host uses. State it. A value barca does not know is a
   usage error: the server exits 2 and names it.
-- **`stop_signal: SIGINT`.** Needed for barca 0.19.0 and earlier, the version this example
-  pins included. Those releases shut down cleanly on SIGINT (Ctrl-C) but have no SIGTERM
+- **Legacy `stop_signal: SIGINT`.** Needed for barca 0.19.0 and earlier. Those releases
+  shut down cleanly on SIGINT (Ctrl-C) but have no SIGTERM
   handler, and as process 1 in a container they ignore SIGTERM, so a default `docker stop`
   waits out its timeout and then kills the process. Later releases shut down the same way on
   SIGTERM as on SIGINT, as process 1 too: with them the line can be removed, and leaving it in
@@ -140,6 +133,49 @@ What each part is for:
 
 The published port above is bound to the host's loopback. Barca has no authentication, so
 before you bind it to anything wider, add [authentication](#authentication) at the proxy.
+
+### Native Debian and Alpine targets
+
+The v0.22.0 release verifies fresh official PyPI wheel installations and downloaded
+GitHub native archives on native x86-64 and arm64 runners. Each target runs a core
+pipeline, reuses its cache, serves `/health`, and serves the embedded UI without a
+compiler or a source checkout.
+
+| Linux runtime | CPU | Native archive |
+| --- | --- | --- |
+| GNU/glibc (Debian) | x86-64 | `barca-linux-x86_64.tar.gz` |
+| GNU/glibc (Debian) | arm64 | `barca-linux-arm64.tar.gz` |
+| musl (Alpine) | x86-64 | `barca-linux-musl-x86_64.tar.gz` |
+| musl (Alpine) | arm64 | `barca-linux-musl-arm64.tar.gz` |
+
+For an Alpine core deployment, use the same Compose configuration with this image:
+
+```dockerfile
+FROM python:3.13-alpine
+RUN pip install --no-cache-dir --only-binary=:all: 'barca==0.22.0'
+WORKDIR /project
+CMD ["barca", "serve", "--timezone", "utc"]
+```
+
+These checks cover Barca's stdlib-only core. A pipeline using compiled libraries or
+optional extras must also verify those dependencies for its selected CPU and libc;
+use Debian if its dependencies require GNU wheels. Native archives include the CLI
+and UI; Python workers still need a Python environment with the matching Barca package
+and the pipeline's dependencies.
+
+**Keeping v0.21.0:** that release publishes GNU x86-64 Linux and macOS Apple Silicon
+wheels, without Linux arm64 or musl wheels. Keep a Debian image and the following
+Compose override when deploying its Linux wheel, including on arm64 hosts:
+
+```yaml
+services:
+  barca:
+    platform: linux/amd64
+```
+
+Pin `barca==0.21.0` in that image. Without a compatible wheel, pip can fall back to a
+source build requiring Rust; `--only-binary=:all:` makes an unavailable wheel explicit.
+The legacy override is unnecessary for the verified v0.22.0 Linux targets above.
 
 ### What happens on restart
 
