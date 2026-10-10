@@ -1,7 +1,7 @@
 # S07 publication acceptance: four Linux runtime targets
 
 Status: scoped technical plan before implementation. Depends on #372/#375;
-refs #107 and specs/linux-target-packaging.md. Existing prepublication native
+refs #107 and specs/notes/linux-target-packaging.md. Existing prepublication native
 build/runtime gates stay intact. No public API/config/dependency/version change.
 
 ## Why a publication check is separate

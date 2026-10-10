@@ -1,7 +1,7 @@
 # S07 second slice: native Alpine/musl packages
 
 Status: technical plan recorded before workflow changes. Refs #107, #372,
-specs/linux-target-packaging.md. This branch builds on PR372's GNU arm64 matrix
+specs/notes/linux-target-packaging.md. This branch builds on PR372's GNU arm64 matrix
 and shared compiler-free installed-artifact smoke. It cannot merge until that
 prerequisite is merged and this slice is freshly integrated onto current main.
 
