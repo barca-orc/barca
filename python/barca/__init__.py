@@ -7,7 +7,7 @@ parses these statically from source without importing.
 
 from __future__ import annotations
 
-__version__ = "0.22.0"
+__version__ = "0.23.0"
 
 __all__ = [
     "group",
