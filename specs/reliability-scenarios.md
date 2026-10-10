@@ -23,6 +23,12 @@ Evidence labels:
 
 ## Ownership: which operation owns which bytes and resources?
 
+User direction recorded 2026-10-10: publication must be idempotent; local and
+server execution may overwrite each other's current published result. Therefore
+different successful publications need not preserve the same current bytes.
+Each receipt must still match its own upload. No retry-ordering, operation-ID or
+historical retention mechanism is selected by this statement.
+
 ### O1. Two refreshes race with one upload
 
 **Reproduced open defect, primitive scope; #381.** Run A serializes JSON `11`
@@ -457,6 +463,13 @@ verification; do not retry arbitrary dependency/authentication failures or rerun
 publishers as if they were harmless reads.
 
 ## Questions to discuss, without selecting answers
+
+One concrete idempotence question remains: publication A writes `22`, publication
+B subsequently writes `33`, then A is retried because its acknowledgement was
+lost. Should the retry leave `33` current, or may it publish `22` again? Permission
+for distinct runs to overwrite each other does not alone answer whether a retry
+counts as a new overwrite. Discuss this before choosing deduplication or conflict
+mechanics. This timeline is hypothetical; no current-runtime reproduction is claimed.
 
 | Question | Scenarios | Owner |
 | --- | --- | --- |

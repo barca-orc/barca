@@ -111,6 +111,14 @@ Remaining extensions:
 
 ## 3. Result identity
 
+**Accepted publication direction, 2026-10-10:** local execution may publish an
+updated result to shared storage, and server execution may overwrite that result
+in turn. Overwriting current artifacts is permitted; publication must be
+idempotent. Receipt/checksum correctness still requires describing the exact
+uploaded bytes. This does not select immutable historical saved handles or
+resolve retries of an earlier publication after a newer publication succeeds;
+that retry-ordering detail remains a discussion question.
+
 Keep these concepts distinct:
 
 | Identity | Current meaning | Limit |
