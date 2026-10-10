@@ -17,7 +17,8 @@ uv add 'barca[sql]'
 
 uv is recommended, not required. `pip install 'barca[sql]'` in a virtualenv works the same
 way; then type `barca` wherever this page says `uv run barca`. The `sql` extra installs DuckDB for
-`barca sql`. Wheels exist for macOS on Apple Silicon and x86-64 Linux with glibc.
+`barca sql`. Wheels exist for macOS on Apple Silicon and for Linux on x86-64 and arm64, glibc
+and musl.
 
 ## Write two assets
 
