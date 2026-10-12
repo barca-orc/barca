@@ -38,7 +38,7 @@ export function Tag({ tone = 'default', size = 'sm', dot = false, style, childre
         height: s.height,
         padding: s.padding,
         borderRadius: 'var(--radius-sm)',
-        fontFamily: 'var(--font-mono)',
+        fontFamily: 'var(--font-sans)',
         fontSize: s.fontSize,
         fontWeight: 500,
         whiteSpace: 'nowrap',

@@ -35,7 +35,9 @@ export function SchedulesPage() {
     const p = new URLSearchParams();
     if (pipeline) p.set("pipeline", pipeline);
     p.set("node", id);
-    navigate(`/assets?${p}`);
+    const kind = states?.find((node) => node.id === id)?.kind;
+    const path = kind === "task" ? "/tasks" : kind === "sensor" ? "/sensors" : "/assets";
+    navigate(`${path}?${p}`);
   };
 
   return (

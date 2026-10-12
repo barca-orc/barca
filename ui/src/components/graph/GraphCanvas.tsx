@@ -11,13 +11,13 @@ import {
   type NodeTypes,
 } from '@xyflow/react'
 import { AssetNode } from './AssetNode'
+import { GroupNode } from './GroupNode'
 import { UNKNOWN_GRAPH_STATE, type GraphState } from '@/lib/graphState'
-import { buildGraph, edgeClassName, type LayoutDir, type GraphNode } from '@/lib/graph'
+import { buildGraph, edgeClassName, type LayoutDir, type GraphNode, type GraphEntry } from '@/lib/graph'
 import { statusMeta } from '@/lib/status'
-import type { AssetSummary } from '@/lib/types'
 
 // Defined once, outside the component — a fresh object each render is a perf bug.
-const nodeTypes: NodeTypes = { asset: AssetNode }
+const nodeTypes: NodeTypes = { asset: AssetNode, nodeGroup: GroupNode }
 
 const FIT_OPTIONS = { padding: 0.18, maxZoom: 1.4, duration: 200 }
 
@@ -26,10 +26,11 @@ export interface GraphCanvasHandle {
 }
 
 interface GraphCanvasProps {
-  assets: AssetSummary[]
+  assets: GraphEntry[]
   dir: LayoutDir
   selected: string | null
   onSelect: (id: string | null) => void
+  onOpenGroup?: (id: string) => void
   /** Persistent state with active-run overlays. */
   states: Record<string, GraphState>
   handleRef?: Ref<GraphCanvasHandle>
@@ -61,6 +62,7 @@ export function GraphCanvas({
   dir,
   selected,
   onSelect,
+  onOpenGroup,
   states,
   handleRef,
 }: GraphCanvasProps) {
@@ -103,6 +105,15 @@ export function GraphCanvas({
         edges={edges}
         nodeTypes={nodeTypes}
         onNodeClick={onNodeClick}
+        onNodeDoubleClick={(_, node) => node.data.kind === 'group' && onOpenGroup?.(node.id)}
+        onKeyDown={(event) => {
+          const id = event.target instanceof Element ? event.target.closest('.react-flow__node')?.getAttribute('data-id') : null
+          if (event.key === 'Enter' && id && base.nodes.some(node => node.id === id && node.data.kind === 'group') && onOpenGroup) {
+            event.preventDefault()
+            onOpenGroup(id)
+          }
+        }}
+        zoomOnDoubleClick={!onOpenGroup}
         onPaneClick={() => onSelect(null)}
         minZoom={0.3}
         maxZoom={1.6}

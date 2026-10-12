@@ -1,14 +1,13 @@
-import { NavLink, useLocation, useNavigate, useSearchParams } from 'react-router'
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router'
 import { Layers } from 'lucide-react'
 import { StatusDot } from '@/components'
-import { NAV_ITEMS } from './nav'
 import { useAssetStates } from '@/hooks/useAssetStates'
 import { severityStatus } from '@/lib/assetTable'
 import { pipelineSummaries } from '@/lib/pipeline'
 import markUrl from '@/assets/brand/mark.svg'
 
 /** Pages that can show one pipeline; elsewhere a pipeline click opens Assets. */
-const FILTERABLE = ['/assets', '/graph']
+const FILTERABLE = ['/assets', '/graph', '/tasks', '/sensors', '/schedules']
 
 export function Sidebar() {
   const { data: nodes } = useAssetStates()
@@ -24,13 +23,15 @@ export function Sidebar() {
     const next = new URLSearchParams(params)
     if (file === null) next.delete('pipeline')
     else next.set('pipeline', file)
+    next.delete('node')
+    next.delete('focus')
+    next.delete('group')
+    next.delete('q')
+    next.delete('attention')
     const path = FILTERABLE.includes(location.pathname) ? location.pathname : '/assets'
     const search = next.toString()
     navigate({ pathname: path, search: search ? `?${search}` : '' })
   }
-
-  // Page links keep the pipeline selection (and nothing page-specific, like sort).
-  const keep = selected ? `?pipeline=${encodeURIComponent(selected)}` : ''
 
   return (
     <aside className="barca-sidebar">
@@ -38,18 +39,6 @@ export function Sidebar() {
         <img src={markUrl} width="22" height="22" alt="" />
         <span className="barca-wordmark">barca</span>
       </div>
-
-      <nav className="barca-navlist">
-        {NAV_ITEMS.map((item) => {
-          const Icon = item.icon
-          return (
-            <NavLink key={item.id} to={{ pathname: item.path, search: keep }} className="barca-nav">
-              <Icon size={15} />
-              <span>{item.label}</span>
-            </NavLink>
-          )
-        })}
-      </nav>
 
       <div className="barca-sect">
         <span>Pipelines</span>
@@ -85,6 +74,7 @@ export function Sidebar() {
           </button>
         ))}
       </div>
+      <div className="barca-side-foot"><Link className="barca-nav" to="/docs">Docs</Link></div>
     </aside>
   )
 }

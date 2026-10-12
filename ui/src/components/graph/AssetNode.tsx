@@ -29,7 +29,7 @@ export function AssetNode({ data, selected }: NodeProps<GraphNode>) {
         statusLabel={data.metric ?? undefined}
         stateHint={data.stateHint}
         selected={selected}
-        icon={kindIcon(data.kind)}
+        icon={data.kind === 'group' ? undefined : kindIcon(data.kind)}
       />
       <Handle type="source" position={data.direction === "TB" ? Position.Bottom : Position.Right} />
     </div>

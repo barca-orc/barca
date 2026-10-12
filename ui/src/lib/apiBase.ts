@@ -14,7 +14,9 @@
 /** The API base for a page at `pathname`: `''` at the server root, else the prefix. */
 export function apiBase(pathname: string): string {
   const path = pathname.replace(/\/index\.html$/, '/')
-  const m = /^(.*)\/ui\/?$/.exec(path)
+  // Also recognize paths below /ui/ when a dev-server fallback serves the app
+  // for a copied path such as /ui/assets instead of /ui/#/assets.
+  const m = /^(.*)\/ui(?:\/.*)?$/.exec(path)
   if (m) return m[1] ?? ''
   // Not under a `ui` segment (shouldn't happen when served by barca): treat the
   // page's directory as the base.

@@ -1,4 +1,4 @@
-import { GitBranch, Activity, Layers, Clock, Book, type LucideIcon } from 'lucide-react'
+import { Activity, Layers, Clock, Play, Radar, type LucideIcon } from 'lucide-react'
 
 export interface NavItem {
   id: string
@@ -9,8 +9,8 @@ export interface NavItem {
 
 export const NAV_ITEMS: NavItem[] = [
   { id: 'assets', label: 'Assets', path: '/assets', icon: Layers },
-  { id: 'graph', label: 'Graph', path: '/graph', icon: GitBranch },
   { id: 'runs', label: 'Runs', path: '/runs', icon: Activity },
   { id: 'schedules', label: 'Schedules', path: '/schedules', icon: Clock },
-  { id: 'docs', label: 'Docs', path: '/docs', icon: Book },
+  { id: 'tasks', label: 'Tasks', path: '/tasks', icon: Play },
+  { id: 'sensors', label: 'Sensors', path: '/sensors', icon: Radar },
 ]

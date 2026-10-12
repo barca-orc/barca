@@ -14,7 +14,7 @@ import { useRunStream } from '@/hooks/useRunStream'
 import { useTriggerNode } from '@/hooks/useTriggerNode'
 import type { AppShellContext } from '@/layouts/shellContext'
 import { shortName } from '@/lib/graph'
-import { inPipeline, sourceFile, pipelineName } from '@/lib/pipeline'
+import { inPipeline, pipelineName } from '@/lib/pipeline'
 import { overlayRunStatus, type LayoutDir } from '@/lib/graph'
 import type { StatusKind } from '@/lib/types'
 
@@ -31,8 +31,14 @@ export function GraphPage() {
   const { data: health, isError: healthError } = useHealth()
   const [dir, setDir] = useState<LayoutDir>('LR')
   // `?focus=<node id>` (from the Assets table) opens with that node selected.
-  const [searchParams] = useSearchParams()
-  const [selected, setSelected] = useState<string | null>(searchParams.get('focus'))
+  const [searchParams, setSearchParams] = useSearchParams()
+  const selected = searchParams.get('focus')
+  const setSelected = (id: string | null) => {
+    const next = new URLSearchParams(searchParams)
+    if (id) next.set('focus', id)
+    else next.delete('focus')
+    setSearchParams(next, { replace: true })
+  }
   // The pipeline picked in the sidebar (?pipeline=<file>): show only its nodes.
   const pipeline = searchParams.get('pipeline')
   const assets = useMemo(
@@ -45,11 +51,7 @@ export function GraphPage() {
   const stream = useRunStream(run?.handle ?? null)
   const { setTopbarRun } = useOutletContext<AppShellContext>()
 
-  const title = pipeline
-    ? pipelineName(pipeline)
-    : assets[0] && assets.every((a) => sourceFile(a.id) === sourceFile(assets[0]!.id))
-      ? pipelineName(sourceFile(assets[0].id))
-      : 'All pipelines'
+  const title = pipeline ? `Assets · ${pipelineName(pipeline)}` : 'Assets'
 
   const selectedAsset = useMemo(
     () => assets.find((a) => a.id === selected) ?? null,

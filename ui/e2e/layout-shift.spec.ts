@@ -15,6 +15,7 @@ async function expectStable(page: Page, what: string) {
 // A node with history is the case that matters: the panel has stats, a histogram and a run list.
 test.beforeAll(async ({ request }) => {
   await seedRuns(request, 'say_hello', 6)
+  await seedRuns(request, 'pipeline.py:history_asset', 2, 'get')
 })
 
 test.beforeEach(async ({ page }) => {
@@ -27,8 +28,8 @@ test('assets page: loading the table', async ({ page }) => {
   await expectStable(page, 'assets page load')
 })
 
-test('assets page: opening a node panel', async ({ page }) => {
-  await page.goto('/ui/#/assets')
+test('tasks page: opening a node panel', async ({ page }) => {
+  await page.goto('/ui/#/tasks')
   await expect(page.getByRole('row', { name: /say_hello/ })).toBeVisible()
   await takeShifts(page)
   await page.getByRole('row', { name: /say_hello/ }).click()
@@ -37,7 +38,7 @@ test('assets page: opening a node panel', async ({ page }) => {
 
 test('assets page: switching the node in the panel', async ({ page }) => {
   await page.goto('/ui/#/assets')
-  await page.getByRole('row', { name: /say_hello/ }).click()
+  await page.getByRole('row', { name: /history_asset.*pipeline.py/ }).click()
   await expect(page.getByRole('complementary', { name: /details$/ })).toContainText('median')
   await takeShifts(page)
   await page.getByRole('row', { name: /numbers/ }).click()

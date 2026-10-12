@@ -54,7 +54,7 @@ test.describe('run history', () => {
       && decodeURIComponent(response.url()).endsWith('/get/pipeline.py:history_asset'))
     await page.getByRole('banner').getByRole('button', { name: 'Run', exact: true }).click()
     expect((await started).ok()).toBeTruthy()
-    await expect(page).toHaveURL(/#\/graph/)
+    await expect(page).toHaveURL(/#\/assets\?.*view=graph/)
     await page.getByRole('link', { name: 'View run', exact: true }).click()
     await expect(page).toHaveURL(/#\/runs\?run=/)
     const details = page.getByRole('complementary', { name: 'Run details' })
