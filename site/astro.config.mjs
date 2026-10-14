@@ -144,6 +144,7 @@ export default defineConfig({
               slug: 'rfcs/0006-configuration-and-remote-state',
             },
             { label: 'RFC-0007: Server Mode', slug: 'rfcs/0007-server-mode' },
+            { label: 'RFC-0009: Store Backup & Restore', slug: 'rfcs/0009-store-backup-and-restore' },
           ],
         },
       ],
