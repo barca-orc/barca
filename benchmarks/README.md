@@ -200,6 +200,12 @@ worker count is read once, at server startup, from the environment.
 | `parallel_tasks` | N (param) | `parallel()` runtime dispatch — SIGSTOP/SIGCONT, temp workers |
 | `resilience_pileup` | 18 | Failure/retry behavior — one flaky chain shouldn't stall healthy work |
 
+### Artifact hash check
+
+Not a `hyperfine` run: `python benchmarks/transfer_hash/bench.py [MB] [--max-seconds-per-gb N]`
+times the SHA-256 a remote-backed run takes of each local artifact it reads (about 0.5 s/GB with a
+warm page cache), so a regression in `python/barca/_transfer.py` shows up as a number.
+
 ### Scheduler / daemon
 
 The odd one out: not a `hyperfine` cold-start measurement but a comparison of the

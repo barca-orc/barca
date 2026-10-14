@@ -14,6 +14,7 @@ The rule (`barca docs cache`, "A cached result whose artifact is missing"):
 `--dry-run` and `barca status` predict the same thing.
 """
 
+import fcntl
 import json
 import os
 import shutil
@@ -21,11 +22,12 @@ import signal
 import socket
 import sqlite3
 import subprocess
+import tempfile
+import threading
 import time
 from pathlib import Path
 
 import pytest
-
 from barca.api import _find_binary
 
 SCRUB = ("BARCA_", "FSSPEC_", "AWS_", "AZURE_", "GOOGLE_", "GCSFS_", "STORAGE_EMULATOR_HOST")
@@ -840,18 +842,32 @@ def _free_port() -> int:
 
 
 def _rows(root: Path) -> dict[tuple[str, str], int]:
-    """Materializations per (node, status); empty while the database is not there yet."""
+    """Read a private DB/WAL snapshot, respecting Barca's single-owner lock."""
+    source = root / ".barca" / "metadata.db"
+    if not source.exists():
+        return {}
     try:
-        db = sqlite3.connect(root / ".barca" / "metadata.db")
-        try:
-            return {
-                (node.rsplit(":", 1)[1], status): count
-                for node, status, count in db.execute(
-                    "select node_id, status, count(*) from materializations group by 1, 2"
-                )
-            }
-        finally:
-            db.close()
+        with tempfile.TemporaryDirectory(prefix="barca-history-reader-") as directory:
+            snapshot = Path(directory) / "metadata.db"
+            # sqlite3 must never open the live Turso DB while a server operation owns it.
+            # Match DbSnapshot::take: copy the main file and WAL under its advisory lock,
+            # then release the lock before querying the disposable copy.
+            with Path(f"{source}.lock").open("rb") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                shutil.copyfile(source, snapshot)
+                wal = Path(f"{source}-wal")
+                if wal.exists():
+                    shutil.copyfile(wal, Path(f"{snapshot}-wal"))
+            db = sqlite3.connect(snapshot)
+            try:
+                return {
+                    (node.rsplit(":", 1)[1], status): count
+                    for node, status, count in db.execute(
+                        "select node_id, status, count(*) from materializations group by 1, 2"
+                    )
+                }
+            finally:
+                db.close()
     except sqlite3.Error:
         return {}
 
@@ -867,9 +883,19 @@ def _wait_for(root: Path, done, what: str, timeout: float = 60) -> dict[tuple[st
         time.sleep(0.25)
 
 
-def test_a_scheduled_task_recovers_once_when_its_input_is_deleted(tmp_path):
+@pytest.mark.parametrize("concurrent_readers", [0, 4])
+def test_a_scheduled_task_recovers_once_when_its_input_is_deleted(tmp_path, concurrent_readers):
     """The reproduction in #252: before the fix every tick after the delete failed."""
     root = project(tmp_path, SCHEDULED)
+    stop_readers = threading.Event()
+
+    def read_history():
+        while not stop_readers.wait(0.01):
+            _rows(root)
+
+    readers = [threading.Thread(target=read_history) for _ in range(concurrent_readers)]
+    for reader in readers:
+        reader.start()
     serve = subprocess.Popen(
         [_find_binary(), "serve", "pipeline.py", "--port", str(_free_port())],
         cwd=root,
@@ -891,12 +917,16 @@ def test_a_scheduled_task_recovers_once_when_its_input_is_deleted(tmp_path):
             "ticks after the delete",
         )
     finally:
+        stop_readers.set()
         serve.send_signal(signal.SIGTERM)
         try:
             _, err = serve.communicate(timeout=30)
         except subprocess.TimeoutExpired:
             serve.kill()
             _, err = serve.communicate()
+        for reader in readers:
+            reader.join(timeout=60)
+            assert not reader.is_alive(), "history reader did not release the DB lock"
 
     rows = _rows(root)
     context = f"{rows}\n{err}"

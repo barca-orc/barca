@@ -36,6 +36,10 @@ const HELP_WIDTH: usize = 100;
 /// `docs <TOPIC>`); `barca` is the top level.
 pub const EXPERIMENTAL: &[(&str, &str)] = &[
     (
+        "list --groups",
+        "Organizational group hierarchy and metadata shape are experimental",
+    ),
+    (
         "plan",
         "prints the planner's internal phase/stream layout, which changes with scheduling work",
     ),

@@ -2,13 +2,14 @@
 //! materialization and artifact shape.
 //!
 //! Nothing here is new logic. Cache state comes from the same decision `--dry-run` makes
-//! ([`commands::explain_dag`]), history from the metadata DB, and artifact shape from
+//! ([`crate::execution::explain_dag`]), history from the metadata DB, and artifact shape from
 //! `python -m barca._inspect`, which opens artifact files only: user code is never imported.
 //! Nothing is written, and no `.barca` directory is created.
 
 use crate::BarcaError;
-use crate::commands::{self, CachePolicy, StepReport};
+use crate::cache::CachePolicy;
 use crate::db;
+use crate::results::StepReport;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -32,7 +33,7 @@ pub struct StatusResult {
 pub struct NodeStatus {
     /// Node id, e.g. `pipeline.py:clean`.
     pub id: String,
-    /// The function name (what `get`, `run` and `--refresh` accept).
+    /// The declared name, or function name when no explicit name is set.
     pub name: String,
     /// `asset`, `task` or `sensor`.
     #[cfg_attr(feature = "ts", ts(type = "\"asset\" | \"task\" | \"sensor\""))]
@@ -140,9 +141,53 @@ pub async fn status(
     sample: usize,
     shape: bool,
 ) -> Result<StatusResult, BarcaError> {
-    let dag = commands::build_dag(file_args, python).await?;
-    let explained = commands::explain_dag(
-        &dag,
+    Ok(
+        status_with_membership(cfg, target_names, file_args, python, sample, shape)
+            .await?
+            .0,
+    )
+}
+
+/// SQL reuses this prediction instead of loading the DAG or interpreting keys again.
+pub(crate) async fn status_with_membership(
+    cfg: &crate::config::ResolvedConfig,
+    target_names: &[String],
+    file_args: &[String],
+    python: &std::path::Path,
+    sample: usize,
+    shape: bool,
+) -> Result<(StatusResult, crate::cache::ExpandedMembership), BarcaError> {
+    let dag = crate::load::build_dag(file_args, python).await?;
+    status_from_dag_with_membership(cfg, target_names, &dag, python, sample, shape).await
+}
+
+/// Inspect a validated graph; shares cache decisions with strict status.
+pub async fn status_from_dag(
+    cfg: &crate::config::ResolvedConfig,
+    target_names: &[String],
+    dag: &crate::dag::Dag,
+    python: &std::path::Path,
+    sample: usize,
+    shape: bool,
+) -> Result<StatusResult, BarcaError> {
+    Ok(
+        status_from_dag_with_membership(cfg, target_names, dag, python, sample, shape)
+            .await?
+            .0,
+    )
+}
+
+/// Preserve the given graph and move the prediction's private membership to SQL.
+async fn status_from_dag_with_membership(
+    cfg: &crate::config::ResolvedConfig,
+    target_names: &[String],
+    dag: &crate::dag::Dag,
+    python: &std::path::Path,
+    sample: usize,
+    shape: bool,
+) -> Result<(StatusResult, crate::cache::ExpandedMembership), BarcaError> {
+    let (explained, membership) = crate::execution::explain_dag_with_membership(
+        dag,
         cfg,
         target_names,
         python,
@@ -210,7 +255,12 @@ pub async fn status(
         });
         nodes.push(NodeStatus {
             id: id.to_string(),
-            name: node.function_name().to_string(),
+            name: node
+                .extracted
+                .explicit_name
+                .as_deref()
+                .unwrap_or(node.function_name())
+                .to_string(),
             kind: serde_json::to_value(node.kind())
                 .ok()
                 .and_then(|v| v.as_str().map(String::from))
@@ -240,12 +290,15 @@ pub async fn status(
             _ => summary.unknown += 1,
         }
     }
-    Ok(StatusResult {
-        targets: explained.target_names(),
-        target: explained.target,
-        nodes,
-        summary,
-    })
+    Ok((
+        StatusResult {
+            targets: explained.target_names(),
+            target: explained.target,
+            nodes,
+            summary,
+        },
+        membership,
+    ))
 }
 
 fn cache(state: &str, reason: &str, detail: impl Into<String>) -> CacheStatus {
@@ -389,22 +442,82 @@ async fn read_shapes(
     nodes: &mut [NodeStatus],
     sample: usize,
 ) {
-    let wanted: Vec<(usize, String, String)> = nodes
-        .iter()
-        .enumerate()
-        .filter_map(|(i, n)| {
-            let m = n.last_materialization.as_ref()?;
-            if m.status != "success" {
-                return None;
+    read_shapes_inner(python, cfg, nodes, sample, false).await;
+}
+
+/// Inspect artifact schemas, including JSON object field and list element types.
+/// This richer on-demand view leaves the CLI's existing shape contract unchanged.
+pub async fn read_schemas(
+    python: &Path,
+    cfg: &crate::config::ResolvedConfig,
+    nodes: &mut [NodeStatus],
+) {
+    read_shapes_inner(python, cfg, nodes, 0, true).await;
+}
+
+async fn read_shapes_inner(
+    python: &Path,
+    cfg: &crate::config::ResolvedConfig,
+    nodes: &mut [NodeStatus],
+    sample: usize,
+    fields: bool,
+) {
+    // A remote-off cache hit can select an older local row than the historical latest
+    // materialization. Keep the selected artifact's metadata together rather than read
+    // its bytes with the latest row's (possibly different) format.
+    let cache = if cfg.remote_off
+        && nodes.iter().any(|n| {
+            n.cache.artifact.as_ref().is_some_and(|path| {
+                n.last_materialization
+                    .as_ref()
+                    .and_then(|m| m.artifact.as_ref())
+                    != Some(path)
+            })
+        }) {
+        db::CacheReader::for_config(cfg).await.ok()
+    } else {
+        None
+    };
+    let mut wanted: Vec<(usize, String, String)> = Vec::new();
+    for (i, n) in nodes.iter().enumerate() {
+        let Some(m) = n.last_materialization.as_ref() else {
+            continue;
+        };
+        if m.status != "success" {
+            continue;
+        }
+        let path = if cfg.remote_off {
+            n.cache.artifact.as_ref().or(m.artifact.as_ref())
+        } else {
+            m.artifact.as_ref()
+        };
+        let Some(path) = path.filter(|path| cfg.allows_artifact(path)) else {
+            continue;
+        };
+        if cfg.remote_off && m.artifact.as_ref() != Some(path) {
+            let (Some(cache), Some(hash)) = (&cache, &n.cache.run_hash) else {
+                continue;
+            };
+            let Some(selected) = crate::cache::lookup_cached(cache, &n.id, hash).await else {
+                continue;
+            };
+            // A concurrent write may have changed which result would now be selected.
+            // Do not attach unrelated metadata to the previously reported artifact.
+            if selected.path == *path {
+                wanted.push((i, selected.path, selected.format));
             }
-            Some((i, m.artifact.clone()?, m.format.clone().unwrap_or_default()))
-        })
-        .collect();
+        } else {
+            wanted.push((i, path.clone(), m.format.clone().unwrap_or_default()));
+        }
+    }
+    // The inspector only reads artifact files; release the database before launching it.
+    drop(cache);
     if wanted.is_empty() {
         return;
     }
     let request = serde_json::json!({
         "sample": sample,
+        "fields": fields,
         "artifacts": wanted
             .iter()
             .map(|(_, path, format)| serde_json::json!({"path": path, "format": format}))
@@ -430,18 +543,16 @@ async fn run_inspector(
     request: &serde_json::Value,
 ) -> Result<Vec<serde_json::Value>, String> {
     use tokio::io::AsyncWriteExt;
-    let mut cmd = tokio::process::Command::new(python);
-    cmd.args(["-m", "barca._inspect"]);
-    // The same options workers get (`[remote.storage_options.*]` merged with the environment).
-    if let Some(ref opts) = cfg.storage_options_json {
-        cmd.env("BARCA_STORAGE_OPTIONS", opts);
-    }
-    let mut child = cmd
-        .stdin(std::process::Stdio::piped())
+    let mut cmd = crate::helper_proc::python_module(
+        python,
+        "barca._inspect",
+        cfg.storage_options_json.as_deref(),
+    );
+    cmd.stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("{}: {e}", python.display()))?;
+        .stderr(std::process::Stdio::piped());
+    let mut child =
+        crate::helper_proc::spawn(&mut cmd).map_err(|e| format!("{}: {e}", python.display()))?;
     let mut stdin = child.stdin.take().ok_or("no stdin")?;
     stdin
         .write_all(request.to_string().as_bytes())

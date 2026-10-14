@@ -27,7 +27,7 @@ pub fn warn_once(message: &str) -> bool {
         .map(|mut seen| seen.insert(message.to_string()))
         .unwrap_or(true);
     if first {
-        eprintln!("[barca] warning: {message}");
+        crate::errln!("[barca] warning: {message}");
     }
     first
 }
@@ -52,7 +52,7 @@ pub struct PlanWarning {
     pub message: String,
 }
 
-/// The warnings for the steps of `plan`, in plan order: one per (step, unused input).
+/// The warnings for the steps of `plan`, sorted by node, parameter and kind: one per (step, unused input).
 ///
 /// Only planned steps are looked at, so a command warns about the cone it was asked for and
 /// not about the rest of the file. A partitioned step is one step here, whatever its key
@@ -75,6 +75,7 @@ pub fn for_plan(dag: &Dag, plan: &ExecutionPlan) -> Vec<PlanWarning> {
             out.extend(unused_input_warnings(dag, node));
         }
     }
+    out.sort_by(|a, b| (&a.node, &a.param, &a.kind).cmp(&(&b.node, &b.param, &b.kind)));
     out
 }
 
@@ -131,9 +132,9 @@ pub fn print(warnings: &[PlanWarning]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::plan_for_targets;
     use crate::parse::extract_nodes;
     use crate::planner::{ResourceConfig, plan_from_dag};
+    use crate::targets::plan_for_targets;
 
     const SRC: &str = r#"
 import duckdb

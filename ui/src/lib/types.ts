@@ -6,6 +6,8 @@
    Do not hand-edit anything under ./generated.
    ============================================================ */
 
+export type { NodeGroup } from './generated/NodeGroup'
+
 // ── Generated from Rust (single source of truth) ──────────────────────────────
 export type { NodeKind } from './generated/NodeKind'
 export type { Freshness } from './generated/Freshness'
@@ -19,6 +21,9 @@ export type { OutputRef } from './generated/OutputRef'
 export type { RunEvent } from './generated/RunEvent'
 export type { RunState } from './generated/RunState'
 export type { RunStatus } from './generated/RunStatus'
+export type { RunSummary } from './generated/RunSummary'
+export type { RunList } from './generated/RunList'
+export type { RunDetail } from './generated/RunDetail'
 export type { AssetStats } from './generated/AssetStats'
 export type { AssetRunEntry } from './generated/AssetRunEntry'
 export type { LogEntry } from './generated/LogEntry'
@@ -28,6 +33,8 @@ export type { CacheStatus } from './generated/CacheStatus'
 export type { PartitionState } from './generated/PartitionState'
 export type { LastMaterialization } from './generated/LastMaterialization'
 export type { Durations } from './generated/Durations'
+
+import type { LoadError } from './generated/LoadError'
 
 import type { AssetSummary } from './generated/AssetSummary'
 import type { AssetStats } from './generated/AssetStats'
@@ -42,6 +49,8 @@ export interface Health {
   read_only: boolean
   /** Whether this server fires `Schedule(...)` nodes. */
   scheduler: boolean
+  /** Unloaded sources and graph-invalid definitions; healthy node routes remain available. */
+  load_errors: LoadError[]
 }
 
 /** POST /run, /run/{target}, /get/{target} — ad-hoc `{ run_id }`. */

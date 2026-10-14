@@ -1,6 +1,6 @@
 List all discovered definitions (assets, tasks, sensors) with their deps
 
-Scheduled definitions also show their next fire time in local time.
+Scheduled definitions also show their next fire time, computed in this machine's local time (a server started with --timezone fires in that zone).
 
 Usage: barca list [OPTIONS] [FILES]...
 
@@ -14,6 +14,9 @@ Options:
 
       --pretty
           Emit human-readable output (the default when stdout is a terminal)
+
+      --groups
+          Show the organizational hierarchy (groups are never executable nodes)
 
   -l, --limit <LIMIT>
           Maximum number of nodes to show, in topological order
@@ -35,8 +38,9 @@ Examples:
   barca list                         # every node in the project (files that import barca)
   barca list pipelines/              # only files under pipelines/ (trailing / marks a directory)
   barca list .                       # the current directory and below
-  barca list pipeline.py             # table of nodes (in a terminal; JSON when piped)
+  barca list pipeline.py             # nodes, including qualified/aliased Barca decorators
   barca list pipeline.py --json      # {nodes: [{id, kind, freshness, schedule?, inputs, env, next_fire?}], total, truncated, root}
+  barca list pipeline.py --groups --json  # organizational groups, separate from executable nodes
   barca list pipeline.py --pretty    # the table, even when piped
   barca list pipeline.py --fields id,inputs   # JSON with only these keys per node
   barca list big.py --limit 20       # first 20 nodes (topological order)
@@ -46,6 +50,10 @@ Examples:
 An ENV column (and `env` in JSON) lists the environment variables each node declares with
 @asset(env=[...]); their values are part of the run hash. `freshness` is `always`, `manual` or
 `schedule`; a scheduled node also has `schedule` (the cron expression) and `next_fire`.
+`next_fire` (NEXT FIRE (LOCAL TIME) in the table) is the next match of the cron expression in
+this machine's local time, which is when `barca serve` fires it unless the server was started
+with --timezone. `list` does not know a server's zone: GET /schedule on the running server
+reports the times it will fire at (barca docs scheduling).
 `list` reads no state, so it takes no --env.
 
 Node ids are relative to the project root (`root` in JSON; barca docs discovery).

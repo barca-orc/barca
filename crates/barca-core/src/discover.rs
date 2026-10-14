@@ -4,7 +4,7 @@
 //! `config::find_root`). A scope is a list of files and directories: files are taken as given,
 //! directories are walked. A walked file is a candidate only if it mentions barca (`from barca`
 //! or `import barca`), so helper modules, notebooks and scratch scripts are never parsed as
-//! pipelines; they are still read for cache hashing (`commands::build_dag_blocking`).
+//! pipelines; they are still read for cache hashing (`load::build_dag_blocking`).
 //!
 //! What a walk skips is controlled by `[discovery]` in barca.toml: `exclude` adds glob patterns
 //! to the built-in excludes; `include` replaces the walk with the files its patterns match

@@ -140,6 +140,36 @@ async fn plan_returns_phases() {
     assert!(json["phases"].is_array());
 }
 
+/// Invalid source is isolated from inspection, with its actual diagnostic on health.
+#[tokio::test]
+async fn an_unknown_decorator_argument_is_reported_without_fake_nodes() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = fixture_config(dir.path());
+    std::fs::write(
+        &config.files[0],
+        "from barca import asset\n\n@asset(after=None)\ndef first(): return {}\n",
+    )
+    .unwrap();
+    let app = app(config);
+    let (status, assets) = send(&app, "GET", "/assets").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(assets, serde_json::json!([]));
+    let (status, plan) = send(&app, "GET", "/plan").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(plan["total_steps"], 0);
+    let (_, health) = send(&app, "GET", "/health").await;
+    assert!(
+        health["load_errors"][0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("first (line 3): `after` is not an argument of @asset")
+    );
+    assert_eq!(
+        health["load_errors"][0]["affected_nodes"],
+        serde_json::json!([])
+    );
+}
+
 #[tokio::test]
 async fn unknown_asset_returns_404() {
     let dir = tempfile::tempdir().unwrap();
@@ -354,6 +384,215 @@ async fn delete_cancels_in_flight_run() {
     }
 }
 
+/// A fixture with an asset, a task and (in a second file) a second asset named like the first.
+fn trigger_config(dir: &std::path::Path) -> ServeConfig {
+    let mut config = isolated_config(dir, false);
+    std::fs::write(
+        &config.files[0],
+        "from barca import asset, task\n\n\
+         @asset()\ndef first() -> int:\n    return 1\n\n\
+         @task()\ndef publish() -> None:\n    pass\n",
+    )
+    .unwrap();
+    let other = dir.join("other.py");
+    std::fs::write(
+        &other,
+        "from barca import asset\n\n@asset()\ndef first() -> int:\n    return 2\n",
+    )
+    .unwrap();
+    config.files.push(other.display().to_string());
+    config
+}
+
+#[tokio::test]
+async fn a_trigger_with_a_target_that_cannot_run_is_refused_before_a_run_starts() {
+    // These used to answer 200 with a run id; the failure only showed in /status (#289).
+    let dir = tempfile::tempdir().unwrap();
+    let app = app(trigger_config(dir.path()));
+    for (uri, want, says) in [
+        (
+            "/get/nope",
+            StatusCode::NOT_FOUND,
+            "Asset 'nope' not found. Available: ",
+        ),
+        (
+            "/run/nope",
+            StatusCode::NOT_FOUND,
+            "Asset 'nope' not found. Available: ",
+        ),
+        (
+            "/get/first",
+            StatusCode::CONFLICT,
+            "'first' matches more than one node: ",
+        ),
+        (
+            "/get/publish",
+            StatusCode::BAD_REQUEST,
+            "'publish' is a task: use POST /run/publish",
+        ),
+        (
+            "/run/other.py:first",
+            StatusCode::BAD_REQUEST,
+            "'other.py:first' is an asset: use POST /get/other.py:first",
+        ),
+    ] {
+        let (status, body) = send(&app, "POST", uri).await;
+        assert_eq!(status, want, "{uri}: {body}");
+        let error = body["error"].as_str().expect("an error message");
+        assert!(error.starts_with(says), "{uri}: {error}");
+        assert!(body.get("run_id").is_none(), "{uri} started a run: {body}");
+    }
+    // Nothing ran: a run would have created the metadata DB.
+    assert!(!dir.path().join("metadata.db").exists());
+}
+
+#[tokio::test]
+async fn a_trigger_is_checked_against_the_source_as_it_is_now() {
+    // The nodes are kept between requests, but only while the source files are unchanged:
+    // a run reads the source again, and the check must name what that run would find.
+    let dir = tempfile::tempdir().unwrap();
+    let config = trigger_config(dir.path());
+    let pipeline = config.files[0].clone();
+    let app = app(config);
+    let (status, _) = send(&app, "POST", "/get/later").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = send(&app, "POST", "/get/later").await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "the same answer from the kept nodes"
+    );
+
+    // A node is added: known at once (and refused for its kind, so nothing runs).
+    let mut source = std::fs::read_to_string(&pipeline).unwrap();
+    source.push_str("\n@task()\ndef later() -> None:\n    pass\n");
+    std::fs::write(&pipeline, &source).unwrap();
+    let (status, body) = send(&app, "POST", "/get/later").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+
+    // A node is removed: unknown at once.
+    let (status, _) = send(&app, "POST", "/get/publish").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    std::fs::write(
+        &pipeline,
+        source.replace("def publish", "def no_longer_publish"),
+    )
+    .unwrap();
+    let (status, body) = send(&app, "POST", "/get/publish").await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert!(!dir.path().join("metadata.db").exists());
+}
+
+#[tokio::test]
+async fn a_target_may_contain_a_slash_and_a_missing_one_is_a_json_404() {
+    // A full node id of a file in a directory. Unencoded, its `/` used to match no route:
+    // 404 with an empty body. So did a trigger with no target at all.
+    let dir = tempfile::tempdir().unwrap();
+    let app = app(trigger_config(dir.path()));
+    for uri in ["/get/sub/other.py:publish", "/get/sub%2Fother.py:publish"] {
+        let (status, body) = send(&app, "POST", uri).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{uri}");
+        let error = body["error"].as_str().expect("an error message");
+        assert!(
+            error.starts_with("Asset 'sub/other.py:publish' not found. Available: "),
+            "{uri}: {error}"
+        );
+    }
+    // A path-suffixed id resolves the same either way (a task on /get: refused, nothing runs).
+    let long = format!("{}:publish", dir.path().join("pipeline.py").display());
+    let tail: String = long.split('/').skip(2).collect::<Vec<_>>().join("/");
+    for target in [tail.clone(), tail.replace('/', "%2F")] {
+        let (status, body) = send(&app, "POST", &format!("/get/{target}")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{target}: {body}");
+    }
+    for (method, uri, says) in [
+        ("POST", "/get/", "POST /get/{target} needs a target"),
+        ("POST", "/run/", "POST /run/{target} needs a target"),
+        ("GET", "/nowhere", "no such endpoint: GET /nowhere"),
+        ("DELETE", "/run/", "no such endpoint: DELETE /run/"),
+    ] {
+        let (status, body) = send(&app, method, uri).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{method} {uri}");
+        let error = body["error"].as_str().expect("an error message");
+        assert!(error.starts_with(says), "{method} {uri}: {error}");
+    }
+}
+
+#[tokio::test]
+async fn the_wrong_method_on_an_endpoint_is_a_json_405_naming_the_right_ones() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app(trigger_config(dir.path()));
+    for (method, uri, allowed, says) in [
+        (
+            "GET",
+            "/get/first",
+            "POST",
+            "GET is not allowed on /get/first: use POST",
+        ),
+        (
+            "GET",
+            "/run",
+            "POST",
+            "GET is not allowed on /run: use POST",
+        ),
+        (
+            "PUT",
+            "/run/x",
+            "POST, DELETE",
+            "PUT is not allowed on /run/x: use POST or DELETE",
+        ),
+        (
+            "POST",
+            "/health",
+            "GET",
+            "POST is not allowed on /health: use GET",
+        ),
+        (
+            "DELETE",
+            "/assets/first",
+            "GET",
+            "DELETE is not allowed on /assets/first: use GET",
+        ),
+    ] {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::METHOD_NOT_ALLOWED,
+            "{method} {uri}"
+        );
+        assert_eq!(resp.headers()["allow"], allowed, "{method} {uri}");
+        assert_eq!(body_json(resp).await["error"], says);
+    }
+}
+
+#[tokio::test]
+async fn an_unloaded_target_is_refused_before_run_admission() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = isolated_config(dir.path(), false);
+    std::fs::write(&config.files[0], "def broken(:\n").unwrap();
+    let app = app(config);
+    let (status, body) = send(&app, "POST", "/get/first").await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(
+        send(&app, "GET", "/health").await.1["load_errors"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(body["error"].is_string());
+}
+
 #[tokio::test]
 async fn cancel_for_unknown_run_returns_404() {
     let dir = tempfile::tempdir().unwrap();
@@ -421,6 +660,29 @@ async fn logs_for_unknown_run_returns_empty() {
     assert_eq!(resp.status(), StatusCode::OK);
     let json = body_json(resp).await;
     assert_eq!(json["logs"], serde_json::json!([]));
+}
+
+#[tokio::test]
+async fn state_reports_the_next_run_in_the_servers_timezone() {
+    // `0 5 * * *` in UTC is always 05:00 UTC; in Asia/Kolkata (UTC+5:30, no summer time) it
+    // is always 23:30 UTC. The next run used to be computed in the machine's local time
+    // whatever the server's `--timezone` (#289).
+    for (zone, seconds_into_the_utc_day) in [("utc", 5 * 3600), ("Asia/Kolkata", 23 * 3600 + 1800)]
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = isolated_config(dir.path(), false);
+        std::fs::write(
+            &config.files[0],
+            "from barca import asset, Schedule\n\n\
+             @asset(freshness=Schedule(\"0 5 * * *\"))\ndef daily() -> int:\n    return 1\n",
+        )
+        .unwrap();
+        config.timezone = zone.to_string();
+        let (status, json) = send(&app(config), "GET", "/state").await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        let next_run = json[0]["next_run"].as_i64().expect("a scheduled node");
+        assert_eq!(next_run % 86_400, seconds_into_the_utc_day, "{zone}");
+    }
 }
 
 #[tokio::test]
@@ -551,11 +813,16 @@ async fn ui_page_is_served_or_explains_it_was_not_built() {
 
 #[tokio::test]
 async fn run_events_are_not_buffered_by_proxies() {
-    // Start a run (it fails fast: the target doesn't exist) so a live event
-    // channel exists, then check the SSE response's headers.
+    // A valid definition that fails in execution still owns a live event channel.
     let dir = tempfile::tempdir().unwrap();
-    let app = app(isolated_config(dir.path(), false));
-    let (status, body) = send(&app, "POST", "/get/does_not_exist").await;
+    let config = isolated_config(dir.path(), false);
+    std::fs::write(
+        &config.files[0],
+        "from barca import asset\n@asset()\ndef broken(): raise RuntimeError('execution failed')\n",
+    )
+    .unwrap();
+    let app = app(config);
+    let (status, body) = send(&app, "POST", "/run").await;
     assert_eq!(status, StatusCode::OK);
     let handle = body["run_id"].as_str().unwrap().to_string();
     let resp = app
@@ -570,4 +837,297 @@ async fn run_events_are_not_buffered_by_proxies() {
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(resp.headers()["x-accel-buffering"], "no");
     assert_eq!(resp.headers()["content-type"], "text/event-stream");
+}
+
+#[tokio::test]
+async fn schema_reports_the_target_and_direct_inputs_without_creating_a_db() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app(isolated_config(dir.path(), true));
+    let (status, json) = send(&app, "GET", "/assets/second/schema").await;
+    assert_eq!(status, StatusCode::OK);
+    let nodes = json.as_array().unwrap();
+    assert_eq!(nodes.len(), 2);
+    assert_eq!(nodes[0]["name"], "first");
+    assert_eq!(nodes[1]["name"], "second");
+    assert!(nodes.iter().all(|n| n["shape"].is_null()));
+    assert!(!dir.path().join("metadata.db").exists());
+    let (status, _) = send(&app, "GET", "/assets/missing/schema").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn schema_excludes_indirect_ancestors() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = isolated_config(dir.path(), true);
+    let mut fixture = FIXTURE.to_string();
+    fixture
+        .push_str("\n@asset(inputs={\"second\": second})\ndef third(second):\n    return second\n");
+    std::fs::write(&config.files[0], fixture).unwrap();
+    let app = app(config);
+    let (status, json) = send(&app, "GET", "/assets/third/schema").await;
+    assert_eq!(status, StatusCode::OK);
+    let names: Vec<_> = json
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["second", "third"]);
+}
+
+#[tokio::test]
+async fn schema_reads_materialized_columns_and_reports_missing_artifacts() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = isolated_config(dir.path(), true);
+    // Run the repository's inspector with system Python, without requiring an
+    // installed wheel or mutating the process-wide environment in parallel tests.
+    let launcher = dir.path().join("inspect-python");
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../python");
+    std::fs::write(&launcher, format!(
+        "#!/usr/bin/env python3\nimport sys, runpy\nsys.path.insert(0, {})\nrunpy.run_module(sys.argv[2], run_name='__main__')\n",
+        serde_json::to_string(&source.display().to_string()).unwrap()
+    )).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755)).unwrap();
+    config.python = launcher;
+
+    let summaries = barca_core::queries::list_assets(&config.files, &config.python)
+        .await
+        .unwrap();
+    let first = summaries.iter().find(|n| n.id.ends_with(":first")).unwrap();
+    let artifact = dir.path().join("rows.json");
+    std::fs::write(
+        &artifact,
+        r#"[{"order_id":1,"region":"East"},{"order_id":2,"region":null}]"#,
+    )
+    .unwrap();
+    barca_core::db::init_db(&config.resolved.db_path)
+        .await
+        .unwrap();
+    let outputs = std::collections::HashMap::from([(
+        first.id.clone(),
+        barca_core::dispatch::OutputRef {
+            path: artifact.display().to_string(),
+            format: "json".into(),
+            size_bytes: 64,
+            elapsed_seconds: None,
+            content_hash: None,
+        },
+    )]);
+    barca_core::db::persist_outputs(&config.resolved.db_path, &outputs, &Default::default())
+        .await
+        .unwrap();
+    let object_path = dir.path().join("object.json");
+    std::fs::write(&object_path, r#"{"count":4,"enabled":true,"nothing":null}"#).unwrap();
+    let second = summaries
+        .iter()
+        .find(|n| n.id.ends_with(":second"))
+        .unwrap();
+    let output = barca_core::dispatch::OutputRef {
+        path: object_path.display().to_string(),
+        format: "json".into(),
+        size_bytes: 41,
+        elapsed_seconds: None,
+        content_hash: None,
+    };
+    barca_core::db::persist_outputs(
+        &config.resolved.db_path,
+        &std::collections::HashMap::from([(second.id.clone(), output)]),
+        &Default::default(),
+    )
+    .await
+    .unwrap();
+    let app = app(config);
+    let (status, json) = send(&app, "GET", "/assets/second/schema").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        json[1]["shape"]["columns"],
+        serde_json::json!([
+            {"name":"count","type":"int"}, {"name":"enabled","type":"bool"}, {"name":"nothing","type":"null"}
+        ])
+    );
+    assert_eq!(json[0]["shape"]["rows"], 2);
+    assert_eq!(
+        json[0]["shape"]["columns"][0],
+        serde_json::json!({"name":"order_id","type":"int"})
+    );
+    assert_eq!(json[0]["shape"]["columns"][1]["type"], "str | null");
+    std::fs::remove_file(artifact).unwrap();
+    let (_, json) = send(&app, "GET", "/assets/second/schema").await;
+    assert_eq!(json[0]["shape"]["note"], "artifact file not found");
+}
+
+#[tokio::test]
+async fn runs_inspection_survives_server_restart_and_never_mutates_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = isolated_config(dir.path(), true);
+    let path = &config.resolved.db_path;
+    barca_core::db::init_db(path).await.unwrap();
+    for (id, command, target, status) in [
+        ("cli", "get", "first", "success"),
+        ("scheduled", "run", "second", "failed"),
+    ] {
+        barca_core::db::create_run(path, id, command, "[\"old.py\"]", Some(target), Some(2))
+            .await
+            .unwrap();
+        barca_core::db::insert_logs(path, id, &[("old.py:first".into(), format!("from {id}"))])
+            .await
+            .unwrap();
+        barca_core::db::finish_run(path, id, status, 1, 1, 0.25)
+            .await
+            .unwrap();
+    }
+    let original = std::fs::read(path).unwrap();
+    let modified = std::fs::metadata(path).unwrap().modified().unwrap();
+    for _ in 0..2 {
+        let router = app(config.clone()); // fresh server state has no polling handles
+        let (status, list) = send(&router, "GET", "/runs?limit=1").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(list["total"], 2);
+        assert_eq!(list["truncated"], true);
+        assert_eq!(list["runs"][0]["id"], "scheduled");
+        assert_eq!(list["runs"][0]["handle"], serde_json::Value::Null);
+        assert_eq!(list["runs"][0]["status"], "failed");
+        let (status, detail) = send(&router, "GET", "/runs/cli").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(detail["run"]["files"], serde_json::json!(["old.py"]));
+        assert_eq!(detail["run"]["steps_cached"], 1);
+        assert_eq!(detail["logs"][0]["line"], "from cli");
+        assert!(detail["run"]["started_at"].as_str().unwrap().ends_with('Z'));
+        assert_eq!(
+            send(&router, "GET", "/runs/missing").await.0,
+            StatusCode::NOT_FOUND
+        );
+    }
+    assert_eq!(std::fs::read(path).unwrap(), original);
+    assert_eq!(
+        std::fs::metadata(path).unwrap().modified().unwrap(),
+        modified
+    );
+}
+
+#[tokio::test]
+async fn runs_inspection_without_a_database_does_not_create_one() {
+    let dir = tempfile::tempdir().unwrap();
+    for read_only in [false, true] {
+        let config = isolated_config(dir.path(), read_only);
+        let path = config.resolved.db_path.clone();
+        let router = app(config);
+        let (status, list) = send(&router, "GET", "/runs").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(list["runs"], serde_json::json!([]));
+        assert_eq!(
+            send(&router, "GET", "/runs/missing").await.0,
+            StatusCode::NOT_FOUND
+        );
+        assert!(!std::path::Path::new(&path).exists());
+    }
+}
+
+#[tokio::test]
+async fn groups_are_source_metadata_and_never_execution_nodes() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = isolated_config(dir.path(), true);
+    let path = &config.files[0];
+    std::fs::write(path, format!("{FIXTURE}\nfrom barca import group\npreparation = group('Preparation', members=[first], output=first)\ntraining = group('Training', members=[preparation, second], output=second)\n")).unwrap();
+    let router = app(config.clone());
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/groups")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let groups = body_json(resp).await;
+    assert_eq!(groups.as_array().unwrap().len(), 2);
+    assert_eq!(groups[1]["members"][0], format!("group:{path}:preparation"));
+    assert_eq!(groups[1]["output"], format!("{path}:second"));
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/assets")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let assets = body_json(resp).await;
+    assert_eq!(assets.as_array().unwrap().len(), 2);
+    assert!(!std::path::Path::new(&config.resolved.db_path).exists());
+    // Fresh metadata on the next request, including invalid declarations.
+    std::fs::write(
+        path,
+        format!(
+            "{FIXTURE}\nfrom barca import group\ng = group('g', members=[first], output=second)\n"
+        ),
+    )
+    .unwrap();
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/groups")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(body_json(resp).await, serde_json::json!([]));
+    let (status, health) = send(&router, "GET", "/health").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!health["load_errors"].as_array().unwrap().is_empty());
+    let (_, assets) = send(&router, "GET", "/assets").await;
+    assert_eq!(assets.as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn groups_use_the_healthy_subset_beside_invalid_sources_and_definitions() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = isolated_config(dir.path(), true);
+    let path = config.files[0].clone();
+    std::fs::write(&path, format!("{FIXTURE}\nfrom barca import group\ng = group('Preparation', members=[first, second], output=second)\n")).unwrap();
+    let broken = dir.path().join("broken.py");
+    std::fs::write(&broken, "from barca import asset\n@asset\ndef broken(:\n").unwrap();
+    config.files.push(broken.display().to_string());
+    let router = app(config);
+    let (status, groups) = send(&router, "GET", "/groups").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(groups.as_array().unwrap().len(), 1);
+    assert_eq!(
+        send(&router, "GET", "/assets")
+            .await
+            .1
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    // A valid file can contain an excluded definition too. Its unusable group
+    // must disappear, without suppressing the same file's healthy nodes.
+    std::fs::write(&path, format!("{FIXTURE}\nfrom barca import group\n@asset(inputs={{'x': missing}})\ndef excluded(x): return x\ng = group('Preparation', members=[first, excluded], output=first)\n")).unwrap();
+    let (status, groups) = send(&router, "GET", "/groups").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(groups, serde_json::json!([]));
+    assert_eq!(
+        send(&router, "GET", "/assets")
+            .await
+            .1
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert!(
+        send(&router, "GET", "/health").await.1["load_errors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|error| error["error"].as_str().unwrap().contains("invalid group"))
+    );
 }

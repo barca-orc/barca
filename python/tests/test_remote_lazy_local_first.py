@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from . import emulators
 from .test_remote_inspect import S3_ENDPOINT, S3_KEY, S3_SECRET, _reachable, cli, ok
 
 PIPELINE = """
@@ -41,8 +42,7 @@ def machine(tmp_path):
     pytest.importorskip("pandas")
     pytest.importorskip("duckdb")
     pytest.importorskip("s3fs")
-    if not _reachable(S3_ENDPOINT):
-        pytest.skip(f"s3 emulator not reachable at {S3_ENDPOINT}")
+    emulators.require("s3", _reachable(S3_ENDPOINT), S3_ENDPOINT)
     import fsspec
 
     bucket = f"barca-lazy-{uuid.uuid4().hex[:8]}"

@@ -43,7 +43,7 @@ export function StatusBadge({
         background: subtle ? 'transparent' : meta.bg,
         border: `1px solid ${subtle ? 'transparent' : meta.line}`,
         color: meta.color,
-        fontFamily: 'var(--font-mono)',
+        fontFamily: 'var(--font-sans)',
         fontSize: s.fontSize,
         fontWeight: 500,
         letterSpacing: '0.01em',

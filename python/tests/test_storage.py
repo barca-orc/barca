@@ -367,3 +367,11 @@ class TestCheckStore:
         with pytest.raises(FileNotFoundError):
             _storage.check_store(str(tmp_path / "unmounted" / "artifacts"))
         assert not (tmp_path / "unmounted").exists()
+
+
+def test_first_line_keeps_only_the_first_line_of_a_message():
+    from barca import _storage
+
+    assert _storage.first_line(OSError("denied\nRequestId: abc\nHeaders: ...")) == "denied"
+    assert _storage.first_line(KeyError()) == ""
+    assert _storage.first_line(ValueError("  padded  \n")) == "padded"

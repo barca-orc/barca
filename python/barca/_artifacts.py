@@ -332,6 +332,17 @@ def _scan_remote_parquet(uri: str, frame_type: str) -> Any:
     return pl.scan_pyarrow_dataset(dataset)
 
 
+class _ProjectUnpickler(pickle.Unpickler):
+    def find_class(self, module, name):
+        if module.startswith("_barca_"):
+            from barca._source_import import legacy_pickle_module
+
+            loaded = legacy_pickle_module(module)
+            # Let pickle resolve protocol-specific names (including Outer.Record).
+            return super().find_class(loaded.__name__, name)
+        return super().find_class(module, name)
+
+
 def _deserialize_local(path: Path, fmt: str, *, frame_type: str | None = None) -> Any:
     if fmt == "json":
         with open(path) as f:
@@ -339,7 +350,7 @@ def _deserialize_local(path: Path, fmt: str, *, frame_type: str | None = None) -
 
     if fmt == "pickle":
         with open(path, "rb") as f:
-            return pickle.load(f)
+            return _ProjectUnpickler(f).load()
 
     if fmt == "parquet":
         return _deserialize_parquet(path, frame_type=frame_type or "pandas")
@@ -400,10 +411,11 @@ def artifact_path(
 ) -> "Path | str":
     """Compute the deterministic artifact path for a node + format.
 
-    With a run_hash the artifact is content-addressed —
-    ``{dir}/{safe_node_id}/{run_hash}{ext}`` — so objects are immutable and
-    cache hits transfer across machines. Without one (older coordinators,
-    parallel() children, batch mode) the legacy node-id-keyed layout is used.
+    With a run_hash the path is ``{dir}/{safe_node_id}/{run_hash}{ext}``: it names the
+    computation (code and inputs), so it is the same on every machine and cache hits
+    transfer across machines. It does not name the bytes: computing the result again
+    (a refresh, a missing artifact) overwrites the file. Without a run_hash (older
+    coordinators, parallel() children, batch mode) the legacy node-id-keyed layout is used.
 
     Returns a Path for a local artifact_dir, or a URI string when
     artifact_dir is a remote prefix (e.g. BARCA_ARTIFACT_URI).

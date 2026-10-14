@@ -280,11 +280,10 @@ def test_package_pipeline_imports_its_sibling(tmp_path, imports):
     p.check("pkg/helpers.py", "beside", ignored=("helpers.py",))
 
 
-def test_a_pipeline_file_wins_over_a_root_directory_without_init(tmp_path):
-    # `a/p.py` imports `shared`, which is the pipeline file `b/shared.py`; the root also has a
-    # directory `shared/` with no `__init__.py`. A worker that has loaded `b/shared.py` has `b/`
-    # on its import path, and a regular module beats a namespace package wherever it is on the
-    # path: the step runs `b/shared.py` (it returns its value), so that file must be hashed.
+def test_off_path_pipeline_requires_qualified_import_over_namespace_directory(tmp_path):
+    # A namespace directory cannot make an off-path pipeline a bare import.
+    # Refuse before user code, then prove the explicit qualified replacement
+    # executes and hashes b/shared.py despite the unrelated namespace directory.
     shared = """
         from barca import asset
 
@@ -311,6 +310,21 @@ def test_a_pipeline_file_wins_over_a_root_directory_without_init(tmp_path):
         "shared/notes.txt": "a directory that is not a package\n",
     }
     write(tmp_path, {"barca.toml": "", **files})
+
+    refused = subprocess.run(
+        [_find_binary(), "get", "val"], cwd=tmp_path, capture_output=True, text=True
+    )
+    assert refused.returncode == 2, refused.stderr
+    assert "off-path" in refused.stderr and "from b.shared import upstream" in refused.stderr
+    assert not (tmp_path / ".barca/default/metadata.db").exists()
+    write(
+        tmp_path,
+        {
+            "a/p.py": files["a/p.py"].replace(
+                "from shared import compute, upstream", "from b.shared import compute, upstream"
+            )
+        },
+    )
 
     first = barca(tmp_path, "get", "val")
     assert first["steps_executed"] == 2 and first["final_output"] == "from b"
@@ -364,11 +378,10 @@ def test_a_pipeline_file_does_not_hide_a_directory_without_init(tmp_path, target
     p.assert_reruns("new", "compute() in shared/compute.py changed")
 
 
-def test_a_helper_named_like_another_pipeline_file_hashes_both(tmp_path):
-    # `a/p.py` imports `shared`: `shared.py` in the root, or the pipeline file `b/shared.py`
-    # if this worker has loaded it (its directory is then on the import path, before the
-    # root). Here `val` reads `b/shared.py`'s asset, so the worker has, and `b/shared.py` is
-    # what runs. Which one runs is not known when planning, so both are hashed.
+def test_root_helper_identity_is_independent_of_prior_pipeline_directory(tmp_path):
+    # Loading b/shared.py as an upstream must not redirect the later consumer's
+    # ordinary shared import away from root/shared.py. Only the source actually
+    # called by the consumer belongs in its helper dependency cone.
     files = {
         "a/p.py": """
             from barca import asset, asset_ref
@@ -389,16 +402,16 @@ def test_a_helper_named_like_another_pipeline_file_hashes_both(tmp_path):
         return {step["id"]: step["action"] for step in plan["steps"]}["a/p.py:val"]
 
     first = barca(tmp_path, "get", "val")
-    assert first["steps_executed"] == 2 and first["final_output"] == "from b"
+    assert first["steps_executed"] == 2 and first["final_output"] == "root"
     assert val_action() == "cached"
     write(tmp_path, {"b/shared.py": OTHER_PIPELINE.format(value="edited")})
-    assert val_action() == "run", "compute() in b/shared.py, the file that ran, changed"
-    write(tmp_path, {"b/shared.py": OTHER_PIPELINE.format(value="from b")})
-    assert val_action() == "cached"
+    assert val_action() == "cached", "uncalled b/shared.py compute does not run"
+    assert barca(tmp_path, "get", "val")["final_output"] == "root"
     write(tmp_path, {"shared.py": helper("edited")})
-    assert val_action() == "run", (
-        "compute() in shared.py, which runs when b/ is not loaded, changed"
-    )
+    assert val_action() == "run", "root/shared.py is the actual consumer helper"
+    result = barca(tmp_path, "get", "val")
+    assert result["steps_executed"] == 1 and result["final_output"] == "edited"
+    assert val_action() == "cached"
 
 
 # ─── What is never followed ──────────────────────────────────────────────────

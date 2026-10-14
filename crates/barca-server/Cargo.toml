@@ -1,6 +1,6 @@
 [package]
 name = "barca-server"
-version = "0.18.0"
+version = "0.23.0"
 edition = "2024"
 
 [dependencies]
@@ -26,5 +26,8 @@ ts-rs = { version = "12", optional = true }
 ts = ["dep:ts-rs", "barca-core/ts"]
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 tower = { workspace = true }
 tempfile = "3"
+jsonschema = { version = "0.33", default-features = false }
+serde_yaml_ng = "0.10.0"

@@ -7,9 +7,11 @@ parses these statically from source without importing.
 
 from __future__ import annotations
 
-__version__ = "0.18.0"
+__version__ = "0.23.0"
 
 __all__ = [
+    "group",
+    "Group",
     "asset",
     "sensor",
     "task",
@@ -25,6 +27,7 @@ __all__ = [
     "parallel",
     "parallel_map",
     "ParallelError",
+    "BranchResultError",
     "duckdb_connection",
     "get",
     "run",
@@ -50,7 +53,7 @@ class Manual:
 class Schedule:
     """Runs on a cron schedule."""
 
-    def __init__(self, cron: str) -> None:
+    def __init__(self, cron: str, /) -> None:
         self.cron = cron
 
 
@@ -59,6 +62,7 @@ class Schedule:
 
 def asset(
     fn=None,
+    /,
     *,
     name=None,
     inputs=None,
@@ -71,9 +75,12 @@ def asset(
     description=None,
     tags=None,
     env: list[str] | None = None,
-    **kwargs,
 ):
     """Declare a cached asset node.
+
+    The arguments below are the only ones: the `barca` binary rejects any other when it
+    plans (exit 2, naming the argument), and this signature rejects it when the module
+    is imported.
 
     `freshness` controls when the asset is kept up to date — `Always` (default),
     `Manual`, or `Schedule("<cron>")`. The Rust binary reads it statically; a
@@ -104,8 +111,11 @@ def asset(
 
 def sensor(
     fn=None,
+    /,
     *,
     name=None,
+    partitions: dict | None = None,
+    serializer: str | None = None,
     freshness=Manual,
     timeout_seconds=300,
     retries=1,
@@ -113,13 +123,16 @@ def sensor(
     description=None,
     tags=None,
     env: list[str] | None = None,
-    **kwargs,
 ):
     """Declare a sensor node (observes external state).
 
     Sensors must use `Manual` or `Schedule(...)` freshness — `Always` is not
     valid for a sensor (its polling cadence must be declared explicitly). See
     `asset` for `env`, `retries` and `retry_backoff` semantics.
+
+    `partitions` runs the sensor once per key, with the key passed as the parameter
+    named in the dict, as on `asset`. `serializer` forces the format its value is
+    stored in ("json", "pickle" or "parquet").
     """
     if fn is not None:
         return fn
@@ -132,9 +145,12 @@ def sensor(
 
 def task(
     fn=None,
+    /,
     *,
     name=None,
     inputs=None,
+    partitions: dict | None = None,
+    serializer: str | None = None,
     freshness=Always,
     timeout_seconds=300,
     retries=1,
@@ -142,7 +158,6 @@ def task(
     description=None,
     tags=None,
     env: list[str] | None = None,
-    **kwargs,
 ):
     """Declare a task node (always re-runs; never cached).
 
@@ -155,6 +170,10 @@ def task(
     on a timer: leave `barca serve` running and it fires on each cron tick (see
     the Scheduling guide). See `asset` for `env`, `retries` and `retry_backoff`
     semantics; a task always runs, so `env` only records the values it used.
+
+    `partitions` runs the task once per key, with the key passed as the parameter
+    named in the dict, as on `asset`. `serializer` forces the format its return
+    value is stored in ("json", "pickle" or "parquet").
     """
     if fn is not None:
         return fn
@@ -165,7 +184,7 @@ def task(
     return decorator
 
 
-def sink(path: str, serializer: str | None = None, **kwargs):
+def sink(path: str, /, *, serializer: str | None = None):
     """Declare a sink output (stacked on @asset).
 
     path may be local or a remote URI (abfss://, s3://, gs://). serializer
@@ -187,22 +206,22 @@ def unsafe(fn):
 # ─── Marker functions ─────────────────────────────────────────────────────────
 
 
-def partitions(values):
+def partitions(values, /):
     """Declare static partition values."""
     return values
 
 
-def partitions_from(source):
+def partitions_from(source, /):
     """Derive partitions from an upstream asset."""
     return source
 
 
-def collect(asset_fn):
+def collect(asset_fn, /):
     """Aggregate all partitions of an upstream asset."""
     return asset_fn
 
 
-def asset_ref(ref_string: str) -> str:
+def asset_ref(ref_string: str, /) -> str:
     """Canonical asset reference."""
     return ref_string
 
@@ -226,6 +245,18 @@ class ParallelError:
         return {"__parallel_error__": True, "error": self.error}
 
 
+class BranchResultError(RuntimeError):
+    """A `parallel()` branch returned, and its return value could not be passed to the caller.
+
+    Raised by `parallel()` in the calling step, which fails like any step that raises. A
+    branch that itself raised is different: it comes back as a `ParallelError` in the list.
+
+    The message names the branch, the type of the value and the reason: the value cannot be
+    written as json, pickle or parquet (an open file, a lambda, a generator), or what was
+    written cannot be read back in the calling worker.
+    """
+
+
 def parallel(*callables):
     """Run callables in parallel across worker processes.
 
@@ -234,8 +265,11 @@ def parallel(*callables):
     order.
 
     When running inside a barca worker (BARCA_SOCKET set), uses the Unix socket
-    protocol to request Rust to dispatch branches as separate workers. When
-    running standalone, executes sequentially.
+    protocol to request Rust to dispatch branches as separate workers. A branch's
+    return value comes back the way a step's output reaches the next step: written
+    as an artifact (json, pickle or parquet, by type) and read from it here. A value
+    that cannot be passed raises `BranchResultError`; it is never replaced by `None`.
+    When running standalone, executes sequentially.
     """
     if not callables:
         return []
@@ -262,11 +296,9 @@ def parallel(*callables):
 
     if _runtime.is_worker() and _runtime.connect() is not None:
         # Inside a barca worker — dispatch via Unix socket to executor
-        raw_results = _runtime.submit_and_wait(items)
-        return [
-            r.get("result") if r.get("status") == "ok" else ParallelError(r.get("error", "unknown"))
-            for r in raw_results
-        ]
+        from barca import _branches
+
+        return _branches.collect(_runtime.submit_and_wait(items), items)
 
     # Not inside a worker — execute sequentially (standalone/testing)
     results = []
@@ -296,8 +328,10 @@ def duckdb_connection():
 
     Configure it once at import time of your asset module (``INSTALL``/``LOAD`` extensions,
     credentials, ``SET`` options, macros); every duckdb input, and ``duckdb.sql(...)`` inside
-    your steps, runs on this same connection, so relations always combine. See
-    ``barca docs types``.
+    your steps, runs on this same connection, so relations always combine. User-created
+    objects and session settings persist across sequential steps; Barca cleans up only
+    its temporary input views. Avoid catalog names that collide with input parameters.
+    See ``barca docs types``.
     """
     from barca import _duckdb
 
@@ -308,3 +342,28 @@ def duckdb_connection():
 
 from barca.api import BarcaError, get, history, plan, run, stats  # noqa: E402
 from barca.client import Client, Run  # noqa: E402
+
+
+class Group:
+    """Organizational metadata. Never an executable or cacheable node."""
+
+    def __init__(self, name: str, members: list[object] | tuple[object, ...], output: object, description: str):
+        self.name = name
+        self.members = members
+        self.output = output
+        self.description = description
+
+
+def group(
+    name: str,
+    /,
+    *,
+    members: list[object] | tuple[object, ...],
+    output: object,
+    description: str = "",
+) -> Group:
+    """Declare a UI/CLI group using literal references; groups may contain groups.
+
+    This metadata does not change execution, dependencies or caching.
+    """
+    return Group(name, members, output, description)

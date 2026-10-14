@@ -1,6 +1,7 @@
 """`barca sql`: query cached artifacts with DuckDB, without writing a probe step (#202).
 
-Every asset (and task) with a cached result is a view named after its function. The query runs
+Every asset (and task) with a cached result is a view named after its declared name
+(or function name when no explicit name is set). The query runs
 in an in-memory DuckDB over the artifact files: user code is never imported, nothing is
 recorded, and nothing is written under .barca/.
 """

@@ -8,13 +8,17 @@
 import { API_BASE, apiUrl } from './apiBase'
 
 import type {
+  NodeGroup,
   AssetSummary,
   AssetDetail,
   NodeState,
+  NodeStatus,
   PlanResult,
   RunState,
   RunHandle,
   Health,
+  RunList,
+  RunDetail,
 } from './types'
 
 
@@ -48,10 +52,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   health: () => request<Health>('/health'),
+  groups: () => request<NodeGroup[]>('/groups'),
   assets: () => request<AssetSummary[]>('/assets'),
   asset: (name: string) => request<AssetDetail>(`/assets/${encodeURIComponent(name)}`),
+  assetSchema: (name: string) => request<NodeStatus[]>(`/assets/${encodeURIComponent(name)}/schema`),
   plan: () => request<PlanResult>('/plan'),
   state: () => request<NodeState[]>('/state'),
+  runs: (limit = 100) => request<RunList>(`/runs?limit=${limit}`),
+  runDetail: (id: string) => request<RunDetail>(`/runs/${encodeURIComponent(id)}`),
   status: (runId: string) => request<RunState>(`/status/${encodeURIComponent(runId)}`),
   run: () => request<RunHandle>('/run', { method: 'POST' }),
   runTarget: (target: string) =>

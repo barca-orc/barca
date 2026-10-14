@@ -42,8 +42,9 @@ pyproject.toml          ← Maturin build config (binary + Python stubs in one w
    - Imports user modules via `importlib.util.spec_from_file_location`
    - Executes the task, serializes results to artifact files (json/pickle/parquet)
    - Reports results back to Rust via the Unix domain socket protocol
-   - For `parallel()`: coordinator freezes the caller (SIGSTOP), spawns a temp replacement,
-     adds children to the ready queue; on completion kills the temp, resumes the caller (SIGCONT)
+   - For `parallel()`: coordinator freezes the caller (SIGSTOP), spawns a replacement,
+     adds children to the ready queue; on completion resumes the caller (SIGCONT) and stops
+     the next worker that has nothing leased
    - No DB access — Rust owns all persistence
    - Artifacts are always local; with a remote store, `python -m barca._transfer` (one per run,
      driven by `transfer.rs` over its own UDS) uploads them in the background and fetches
@@ -64,7 +65,7 @@ pyproject.toml          ← Maturin build config (binary + Python stubs in one w
 ```bash
 # Build (development)
 cargo build --release
-maturin develop --release     # installs into .venv
+maturin develop --uv --release --extras test  # active .venv; builds CLI + test dependencies
 
 # Run
 .venv/bin/barca get <file.py>
@@ -81,19 +82,21 @@ benchmarks/chain_100/bench.sh 5   # (coming soon)
 ## Design principles
 
 1. **Invisible** — the orchestrator should add zero perceptible overhead
-2. **Static analysis** — never import user code in the planning phase
+2. **Static analysis** — extract source without imports. The existing resolver imports user
+   modules to evaluate nonliteral partition key expressions; literal key lists need no import.
+   Add no other planning imports.
 3. **Rust for planning, Python for execution** — each does what it's best at
 4. **Single install** — `uv add barca` gives users everything
 5. **Turso for persistence** — Rust owns the DB; Python has no DB access
 6. **Artifact-based data passing** — serialized files (json/pickle/parquet) between worker batches
-7. **Content-addressed artifacts** — `{artifacts}/{node}/{run_hash}{ext}`; shared remote state pulls/pushes the metadata DB as a blob (see site/src/content/docs/reference/config.mdx and site/src/content/docs/reference/remote-storage.md, published at https://barca.sh/reference/config/ and https://barca.sh/reference/remote-storage/)
+7. **Run-hash-addressed artifacts** — `{artifacts}/{node}/{run_hash}{ext}`; shared remote state pulls/pushes the metadata DB as a blob (see site/src/content/docs/reference/config.mdx and site/src/content/docs/reference/remote-storage.md, published at https://barca.sh/reference/config/ and https://barca.sh/reference/remote-storage/)
 
 ## CLI and manual are part of every feature
 
 The CLI must be usable by humans **and** AI agents without leaving the terminal. Any change to a
 command, flag, decorator, output format, or caching behavior ships with all of:
 
-1. **`--help` examples** — the subcommand's `after_help` in `crates/barca-cli/src/main.rs`
+1. **`--help` examples** — the subcommand's `after_help` in `crates/barca-cli/src/args.rs`
    (runnable `barca ...` example lines; a new flag gets an example).
 2. **The manual** — the matching topic in `crates/barca-cli/docs/*.md`, embedded by
    `crates/barca-cli/src/docs.rs`. New topics go in `TOPICS` and must be linked from
@@ -122,15 +125,25 @@ documented command; `python/tests/test_docs_examples.py` executes the manual's e
 and asserts what the text claims. `cargo test -p barca` (`crates/barca-cli/src/contract.rs`) and
 `python/tests/test_cli_contract.py` fail on any surface change that the snapshots and
 `contract.md` do not reflect. Document behavior you have run, and state known limitations
-plainly (e.g. partitioned steps are not cache-checked yet) rather than describing intended
+plainly (e.g. a partitioned target currently returns only its first key's value) rather than describing intended
 behavior.
+
+## Output and decorator arguments
+
+`barca-core/src/decorator_args.rs` is the shared list of accepted decorator/helper arguments.
+Its tests keep Python stubs and documentation tables in sync. Use `outln!` / `errln!` for
+lines, or `term::stdout_str` / `stderr_str` for rendered chunks; direct print macros are denied
+by Clippy. Use `term::child_output()` for uncaptured child streams and `term::exit` to drain
+child output before exiting.
 
 ## Git workflow
 
 Trunk-based: `main` is the integration branch — always green, but not necessarily
 released. Merging to main never publishes anything; only pushing a `v*` tag does.
 
-- **Always use worktrees** for local development work
+- **Always use worktrees** for local development work — see [AGENTS.md](AGENTS.md):
+  create only under `.worktrees/<slug>`, share `CARGO_TARGET_DIR` with the trunk `target/`,
+  reap processes, and remove the tree when the task is done (orphan trees eat disk)
 - **Topic branches**: one per issue, branched off main, PRed straight into main
 - **Release**: when ready to ship, cut a short-lived release branch
   `release/v<major>.<minor>.<patch>` off main containing only the version bump; PR it
@@ -138,6 +151,14 @@ released. Merging to main never publishes anything; only pushing a `v*` tag does
   `v<major>.<minor>.<patch>` — the tag triggers the release workflow (wheels, GitHub
   Release, PyPI). The `release/` prefix keeps branch and tag names from colliding, so
   `git push origin v<x.y.z>` and `git log v<x.y.z>..` are unambiguous
+
+## Boundary contracts
+
+[specs/README.md](specs/README.md) inventories native boundary specifications and
+conformance checks. A public boundary change must update its specification, executable
+conformance and explanatory documentation in the same PR. Proposals remain labeled as
+proposed until implemented; do not describe RFC routes or schemas as shipped. Existing
+CLI contract/snapshot ownership remains in place.
 
 ## Commit messages
 

@@ -8,6 +8,8 @@ export interface DagNodeProps {
   kind: string
   status: StatusKind
   metric?: string | null
+  statusLabel?: string
+  stateHint?: string
   selected?: boolean
   icon?: ReactNode
   style?: CSSProperties
@@ -27,6 +29,8 @@ export function DagNode({
   kind,
   status,
   metric,
+  statusLabel,
+  stateHint,
   selected = false,
   icon,
   style,
@@ -36,15 +40,15 @@ export function DagNode({
   const running = status === 'running'
 
   const borderColor = selected
-    ? 'var(--signal)'
+    ? 'var(--text-strong)'
     : running
       ? 'var(--status-running-line)'
       : 'var(--border-strong)'
 
   const ring = selected
-    ? '0 0 0 1px var(--signal), 0 0 18px -4px var(--c-green-glow)'
+    ? '0 0 0 1px var(--text-strong)'
     : running
-      ? '0 0 14px -5px rgba(54,203,211,0.6)'
+      ? 'var(--glow-running)'
       : 'var(--shadow-sm)'
 
   // Tasks always re-run (never cached) — a dashed border marks that ephemeral
@@ -54,6 +58,7 @@ export function DagNode({
   return (
     <div
       onClick={onClick}
+      title={stateHint ?? statusLabel}
       data-status={status}
       data-kind={kind}
       style={{
@@ -91,7 +96,7 @@ export function DagNode({
             style={{
               flex: 1,
               minWidth: 0,
-              fontFamily: 'var(--font-mono)',
+              fontFamily: 'var(--font-sans)',
               fontSize: 'var(--text-sm)',
               fontWeight: 500,
               color: 'var(--text-strong)',
@@ -120,7 +125,7 @@ export function DagNode({
         >
           <span
             style={{
-              fontFamily: 'var(--font-mono)',
+              fontFamily: 'var(--font-sans)',
               fontSize: 'var(--text-2xs)',
               letterSpacing: 'var(--tracking-wide)',
               textTransform: 'uppercase',
@@ -129,15 +134,15 @@ export function DagNode({
           >
             {kind}
           </span>
-          {metric && (
+          {(statusLabel ?? metric) && (
             <span
               style={{
-                fontFamily: 'var(--font-mono)',
+                fontFamily: 'var(--font-sans)',
                 fontSize: 'var(--text-2xs)',
                 color: running ? 'var(--status-running)' : 'var(--text-muted)',
               }}
             >
-              {metric}
+              {statusLabel ?? metric}
             </span>
           )}
         </div>

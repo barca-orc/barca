@@ -1,80 +1,94 @@
 ---
 title: "Pattern: Ordering-Only Dependencies"
-description: Use the underscore-prefix convention to signal a dependency exists only for ordering, not data.
+description: Start an input's name with an underscore when a step must run after another but does not need its value.
 ---
 
-When you need one step to run after another but do not need the upstream step's data. Use the `_` prefix convention to signal ordering-only intent.
+Use this when one step must run after another but does not need its result: seed a database
+after migrating it, read an external table after the step that wrote it. Start the input's
+name with `_`, both the key in `inputs=` and the parameter.
 
-## The right way
+## Example
 
 ```python
 from barca import task
 
-@task
+
+@task()
 def migrate_db():
     run_migrations()
+
 
 @task(inputs={"_migrate": migrate_db})
 def seed_data(_migrate):
     insert_seed_records()
+    return {"seeded": 2, "received": repr(_migrate)}
 ```
 
-The `_migrate` parameter name starts with `_`, which tells barca to establish the DAG edge (ensuring `migrate_db` finishes before `seed_data` starts) and pass `None` to the function instead of the upstream value. The function must still accept the parameter (barca passes `_migrate=None`; without it the call fails with a `TypeError`), but its body never references `_migrate`.
+`run_migrations()` and `insert_seed_records()` stand for your own code. In the run below they
+print `migrating` and `seeding`.
 
-## Why this works
-
-- **Intent is explicit.** Anyone reading the code immediately sees that the dependency is for ordering, not data flow. The parameter exists in the signature to satisfy static analysis, but the `_` prefix signals "I don't use this value."
-- **Value is not passed.** The function receives `None` for `_`-prefixed parameters, making it clear the dependency is structural. The upstream artifact is still materialized and cached as normal -- the `_` prefix only affects what the downstream function sees.
-- **DAG is still correct.** The edge is still present in the execution plan. Barca will still schedule `seed_data` in a later tier than `migrate_db`.
-
-## The `_` prefix is how you declare an input unused on purpose
-
-An input without the `_` prefix is loaded and passed whether or not the function uses it. At plan
-time barca reads each function body and, when a step never mentions an input (or only `del`s it),
-`barca plan`, `barca get`, `barca run` and `--dry-run` print one line on stderr and add an entry
-to the `warnings` array of their JSON output:
-
-```
-[barca] warning: pipeline.py:seed_data never uses its input `migrate`. It is still loaded in full each time the step runs, and it counts toward the step's cache key. Use it, remove it from inputs=, or rename the parameter `_migrate` if it is there for ordering only (a `_` input is not loaded and never flagged)
+```bash
+barca run seed_data pipeline.py
 ```
 
-A `_`-prefixed input is never flagged: the prefix is the documented way to say the input is there
-for ordering only. The step still runs after the upstream and still re-runs when the upstream
-changes; only removing the input removes that dependency. There is no flag or config key to turn
-the warning off. A name that appears inside a string in the body counts as used (SQL such as
-`duckdb.sql("select * from orders")`, a pandas `query("x > @limit")`). The exact rule, and what is
-never reported (stubs, `**kwargs`, `locals()`, queries built outside the body, duckdb relation
-inputs, sensor inputs), is in `barca docs assets`, "Unused inputs".
+## What barca does
 
-## Common mistakes
+`migrate_db` runs first, then `seed_data`. The `_migrate` parameter receives `None`: the
+upstream result is not read from disk.
 
-### Using a normal parameter name and ignoring it
+```
+migrating
+seeding
+[barca] 2/2 steps | done in 0.1s
+Run 5360fb511240 | ran 'seed_data' in 0.878s (2 steps, 1 phase)
+
+Value:
+{
+  "received": "None",
+  "seeded": 2
+}
+```
+
+The same works between assets (`@asset(inputs={"_events": events})`). The edge is a real
+dependency: the downstream asset runs after the upstream and runs again when the upstream
+changes. Only removing the input removes the dependency.
+
+## An unused input without the prefix is loaded, and reported
+
+An input whose name does not start with `_` is loaded and passed whether or not the function
+uses it. At plan time barca reads each function body, and when a step never mentions an input
+(or only `del`s it), `barca plan`, `barca get`, `barca run` and `--dry-run` print one line on
+stderr and add an entry to the `warnings` array of their JSON output:
 
 ```python
-# Works but unclear intent
 @task(inputs={"migrate": migrate_db})
-def seed_data(migrate):  # never used, but barca still passes the value
+def seed_data(migrate):      # never used
     insert_seed_records()
 ```
 
-This runs, but the upstream value is loaded for nothing, the parameter looks like it carries data, and barca prints the unused-input warning above on every `plan`, `get` and `run` that includes the step. Use the `_` prefix to signal that the dependency is for ordering only and the value is not needed.
-
-### Trying to use `after=`
-
-```python
-# Wrong -- after= was removed
-@task(after=[migrate_db])
-def seed_data():
-    insert_seed_records()
+```
+[barca] warning: unused.py:seed_data never uses its input `migrate`. It is still loaded in full each time the step runs, and it counts toward the step's cache key. Use it, remove it from inputs=, or rename the parameter `_migrate` if it is there for ordering only (a `_` input is not loaded and never flagged)
 ```
 
-Early prototypes of barca had an `after=` keyword for ordering-only edges. This was removed in favor of the `_` prefix convention on `inputs=`, which keeps a single mechanism for all dependency types. If you see `after=` in old examples, replace it with `inputs={"_name": upstream}`.
+A `_`-prefixed input is never reported. There is no flag or configuration key that turns the
+warning off. A name that appears inside a string in the body counts as used (SQL such as
+`duckdb.sql("select * from orders")`, a pandas `query("x > @limit")`). The exact rule, and what
+is never reported (stubs, `**kwargs`, `locals()`, queries built outside the body, DuckDB
+relation inputs, sensor inputs), is in `barca docs assets`, "Unused inputs".
 
-## Naming convention
+## Limits
 
-The `_` prefix was chosen deliberately to signal "ordering-only" to barca.
-This intentionally overlaps with Python's convention for unused parameters —
-if barca won't pass a value, you shouldn't use the parameter anyway.
+- **The function must still accept the parameter.** Barca passes `_migrate=None`. Without the
+  parameter the step fails:
 
-If you have a linter warning about unused `_` parameters, add a
-`# noqa: ARG001` comment or configure your linter to allow `_`-prefixed params.
+  ```
+  Worker failed: TypeError: seed_data() got an unexpected keyword argument '_migrate'
+  ```
+
+- **There is no `after=` keyword.** Early prototypes had one. On 0.18.0 `@task(after=[migrate_db])`
+  is not an error: the keyword is ignored, `migrate_db` does not run, and the command exits 0.
+  Use `inputs={"_name": upstream}`.
+- **A task cannot be an ordering-only input to an asset**, for the same reason it cannot be a
+  data input: [Asset-to-Task](/patterns/02-asset-to-task/).
+- A linter that reports unused parameters may flag `_migrate`. Most linters can be configured
+  to allow parameters that start with `_`.

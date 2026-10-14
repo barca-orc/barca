@@ -1,11 +1,14 @@
-"""Run hashes recorded with barca 0.17.0, for a project that uses none of the patterns #194
-started tracking (classes, imports inside a function body, aliased `from` imports of project
-modules, a module used as a value, a root module imported from a subdirectory, a pipeline file
-inside a package).
+"""Run hashes of a project that uses none of the patterns #194 started tracking (classes,
+imports inside a function body, aliased `from` imports of project modules, a module used as a
+value, a root module imported from a subdirectory, a pipeline file inside a package).
 
-A cold `--dry-run` run hash depends only on the definitions (source, dependency cone, decorator
-arguments) of a step and its upstreams. If one of these moves, every cache entry of projects
-like this one is recomputed after upgrading: change them only on purpose, with a release note.
+A cold `--dry-run` run hash depends only on the definitions (the function from `def` on, the
+decorator arguments that count, the dependency cone) of a step and its upstreams. If one of
+these moves, every cache entry of projects like this one is recomputed after upgrading: change
+them only on purpose, with a release note.
+
+They were pinned to the values barca 0.17.0 computed until 0.19.0, which changed all of them on
+purpose (#283, "After upgrading to 0.19" in `barca docs cache`). See `RUN_HASHES_0_19_0`.
 """
 
 import json
@@ -165,7 +168,33 @@ FILES = {
     """,
 }
 
-# `barca get <target> --dry-run --json` with barca 0.17.0, step id -> run hash.
+# `barca get <target> --dry-run --json`, step id -> run hash, from barca 0.19.0 on.
+#
+# Every value differs from the one 0.17.0 and 0.18 computed (kept below), and for the same
+# single reason: up to 0.18 the definition hash covered the decorator as text (`@asset()`,
+# `@asset(inputs={"rows": from_import})`) plus the freshness; from 0.19 it covers the decorator
+# arguments that count, in canonical form, and the function from `def` on. `downstream` also
+# moves because the run hash of its upstream `from_import` did.
+#
+# Nothing else moved. The dependency cones of these steps are pinned separately and still have
+# their 0.17.0 values (`cone_hashes_from_0_17_0_are_unchanged` in `crates/barca-core/src/cone.rs`),
+# and `run_hash_unchanged_for_pipelines_without_module_attribute_helpers` in
+# `crates/barca-core/src/cache.rs` recomputes the old values from the old decorator text.
+RUN_HASHES_0_19_0 = {
+    "jobs/nightly.py:nightly": "a11455419b8b32ec9afb231a1d7d15eb23a8d157cbf7c01efbe7fa123586306b",
+    "pipeline.py:dotted": "31677379d8ef231b6758257598610cd5b1c5a01fa5082c690c26bf11af94f0a0",
+    "pipeline.py:downstream": "735807a933f890d5eae32273196833c92743ee7c41bcffbe941048cfb4b14408",
+    "pipeline.py:from_import": "0947b450745fb8e992083a13d0c0b8d582d2fbe11a3f6a9262510ee693818cab",
+    "pipeline.py:local_only": "14bdbde38e8938ff2866124302145d74cd803ef9eb04c318bc21766fbdcdeb6b",
+    "pipeline.py:module_attr": "da14b051b0ea3bca9e92d44454fecee7a9aa9c44601a58b55d578f8d2eb7c157",
+    "pipeline.py:no_deps": "04c886dc1198d92e34d35f143bc747db3f0eef2da1b1e1f229444d69062967e0",
+    "pipeline.py:package_reexport": "c91872c06b81d7952718b8237030fd922f8dc92fae105a8f19f287e339dc309f",
+    "pipeline.py:recursive_helper": "3d5207870fbf37dd45df4654685d25679006f249c9ccecb02834dec319a4e871",
+    "pipeline.py:third_party": "1699490d20cb63b17dff5657bab53248137f3f6f89f1957a35d38b24938963c5",
+}
+
+# What barca 0.17.0 to 0.18.1 computed for the same files. Not what barca computes any more:
+# kept so the change is on record next to its reason (above).
 RUN_HASHES_0_17_0 = {
     "jobs/nightly.py:nightly": "855ea9c29be7031d3829cf4d8878420b4994a777cd14c8192b752be030467e98",
     "pipeline.py:dotted": "88f897c0fe7cd2fc5a456b2084d4cad1e3afa5d2cef39747fd9334a69300263a",
@@ -180,8 +209,8 @@ RUN_HASHES_0_17_0 = {
 }
 
 
-def cold_run_hashes(root: Path) -> dict:
-    for rel, code in FILES.items():
+def cold_run_hashes(root: Path, files: dict | None = None) -> dict:
+    for rel, code in (files or FILES).items():
         path = root / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(textwrap.dedent(code).lstrip("\n"))
@@ -203,5 +232,39 @@ def cold_run_hashes(root: Path) -> dict:
     return hashes
 
 
-def test_run_hashes_from_0_17_0_are_unchanged(tmp_path):
-    assert cold_run_hashes(tmp_path) == RUN_HASHES_0_17_0
+def test_run_hashes_from_0_19_0_are_unchanged(tmp_path):
+    hashes = cold_run_hashes(tmp_path)
+    assert hashes == RUN_HASHES_0_19_0
+    # Every step moved in 0.19.0, none by accident kept its old value.
+    assert not set(hashes.values()) & set(RUN_HASHES_0_17_0.values())
+
+
+def test_run_hashes_do_not_depend_on_how_the_decorators_are_written(tmp_path):
+    """The same project with every decorator reformatted, re-quoted, commented, its keywords
+    reordered, and `description`, `tags`, `retries`, `retry_backoff`, `timeout_seconds` and
+    `freshness` added: the pinned run hashes, unchanged."""
+    bare = """@asset(  # reformatted
+            description='A step',
+            tags={"team": 'data',},
+            retries=3, retry_backoff=1.5,
+            timeout_seconds=60,
+            freshness=Always,
+        )"""
+    with_inputs = """@asset(
+            freshness = Manual,  # only on request
+            description = "Downstream",
+            inputs = {
+                'rows' : from_import ,
+            },
+            retries=2,
+        )"""
+    files = dict(FILES)
+    for rel in ("pipeline.py", "jobs/nightly.py"):
+        code = files[rel]
+        assert "@asset()" in code
+        code = code.replace("@asset()", bare)
+        code = code.replace('@asset(inputs={"rows": from_import})', with_inputs)
+        code = code.replace("from barca import asset", "from barca import Always, Manual, asset")
+        files[rel] = code
+    assert "'rows' : from_import" in files["pipeline.py"]
+    assert cold_run_hashes(tmp_path, files) == RUN_HASHES_0_19_0

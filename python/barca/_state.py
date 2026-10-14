@@ -31,7 +31,6 @@ import hashlib
 import json
 import os
 import sys
-import tempfile
 from pathlib import Path
 
 from barca import _storage
@@ -64,15 +63,9 @@ def _sha256(path: "Path | str") -> str:
 def _staged_download(fetch, local_path: "Path | str") -> None:
     """Download via `fetch(tmp_path)` then atomically replace local_path."""
     local_path = Path(local_path)
-    local_path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=local_path.parent, prefix=".state.", suffix=".tmp")
-    os.close(fd)
-    try:
+    with _storage.staged_beside(local_path) as tmp:
         fetch(tmp)
         os.replace(tmp, local_path)
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
 
 
 def _remote_token(uri: str) -> "str | None":
@@ -159,17 +152,11 @@ def _file_push(target: Path, local_path: "Path | str", token: "str | None") -> s
         current = _sha256(target) if target.exists() else None
         if current != token:
             raise ConflictError(f"state at {target} changed (expected {token}, found {current})")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=".push.", suffix=".tmp")
-        os.close(fd)
-        try:
+        with _storage.staged_beside(target) as tmp:
             import shutil
 
             shutil.copyfile(local_path, tmp)
             os.replace(tmp, target)
-        except BaseException:
-            Path(tmp).unlink(missing_ok=True)
-            raise
         return _sha256(target)
 
 
@@ -362,7 +349,7 @@ def main(argv: "list[str] | None" = None) -> int:
         try:
             new_token = push(uri, local, token)
         except ConflictError as exc:
-            print(f"conflict: {exc}", file=sys.stderr)
+            print(f"conflict: {_storage.safe_error(str(exc))}", file=sys.stderr)
             return _EXIT_CONFLICT
         print(json.dumps({"token": new_token}))
         return 0
@@ -374,12 +361,26 @@ def main(argv: "list[str] | None" = None) -> int:
     return 1
 
 
+def _stop(signum, frame) -> None:
+    """Asked to stop mid-transfer: unwind, so the temp file being written is removed."""
+    raise SystemExit(128 + signum)
+
+
 if __name__ == "__main__":
+    import signal
+
+    from barca import _lifeline
+
+    # The coordinator starts this helper out of reach of the terminal's Ctrl-C, which is its
+    # own to act on, and stops it with SIGTERM (crates/barca-core/src/helper_proc.rs). Should
+    # the coordinator be killed, the lifeline ends this process.
+    signal.signal(signal.SIGTERM, _stop)
+    _lifeline.watch()
     try:
         sys.exit(main())
     except ConflictError as exc:  # pull never raises this; belt and braces
-        print(f"conflict: {exc}", file=sys.stderr)
+        print(f"conflict: {_storage.safe_error(str(exc))}", file=sys.stderr)
         sys.exit(_EXIT_CONFLICT)
     except Exception as exc:
-        print(f"error: {type(exc).__name__}: {exc}", file=sys.stderr)
+        print(f"error: {_storage.safe_error(f'{type(exc).__name__}: {exc}')}", file=sys.stderr)
         sys.exit(1)

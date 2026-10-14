@@ -11,8 +11,9 @@ use crate::hash;
 use crate::model::{DagNode, EdgeKind, ExtractedNode, NodeKind};
 
 /// The constructed DAG — validated, acyclic, ready for plan generation.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Dag {
+    pub groups: Vec<crate::groups::NodeGroup>,
     pub graph: DiGraph<DagNode, EdgeKind>,
     index: HashMap<String, NodeIndex>,
 }
@@ -115,6 +116,42 @@ impl DagError {
     }
 }
 
+/// Reject mixed static/evaluated and runtime-derived dimensions before Python evaluation.
+pub(crate) fn validate_partition_dimensions(nodes: &[ExtractedNode]) -> Result<(), DagError> {
+    use crate::model::PartitionSpec;
+    for node in nodes {
+        let derived = node
+            .partitions
+            .iter()
+            .filter_map(|(dim, spec)| match spec {
+                PartitionSpec::DerivedFrom { source_ref } => Some((dim, source_ref)),
+                _ => None,
+            })
+            .min_by_key(|(dim, _)| *dim);
+        if let Some((_, source_ref)) = derived
+            && node
+                .partitions
+                .values()
+                .any(|spec| !matches!(spec, PartitionSpec::DerivedFrom { .. }))
+        {
+            return Err(DagError::PartitionsFrom {
+                node: node.continuity_key(),
+                upstream: source_ref.resolution_name().to_string(),
+                problem: "must be the asset's only partition dimension when combined with \
+                          partitions(): mixing partitions() and partitions_from() dimensions \
+                          is not supported"
+                    .to_string(),
+                fix: format!(
+                    "Use only partitions_from() dimensions on '{}', or declare every \
+                     dimension explicitly with partitions([...]).",
+                    node.function_name
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Resolve `partitions_from(upstream)` where `upstream` is itself partitioned (#189).
 ///
 /// The consumer takes the upstream's partition spec (so the same keys, static or resolved at
@@ -155,6 +192,8 @@ fn resolve_partitions_from(nodes: &[ExtractedNode]) -> Result<Vec<ExtractedNode>
                 _ => None,
             })
             .collect();
+        let mut derived = derived;
+        derived.sort_by(|a, b| a.0.cmp(&b.0));
         for (dim, source_ref) in derived {
             let source = source_ref.resolution_name().to_string();
             let j = match refs.resolve_input(&nodes[i], &source, &source_ref) {
@@ -261,7 +300,7 @@ fn resolve_partitions_from(nodes: &[ExtractedNode]) -> Result<Vec<ExtractedNode>
 ///
 /// Several candidates and nothing more specific is an error, never a guess (#202): before,
 /// the last file read silently won.
-struct Resolver {
+pub(crate) struct Resolver {
     ids: Vec<String>,
     by_id: HashMap<String, usize>,
     by_file: HashMap<(String, String), usize>,
@@ -288,7 +327,7 @@ fn file_dir(file: &str) -> std::path::PathBuf {
 }
 
 impl Resolver {
-    fn new(nodes: &[ExtractedNode]) -> Self {
+    pub(crate) fn new(nodes: &[ExtractedNode]) -> Self {
         let mut r = Resolver {
             ids: Vec::with_capacity(nodes.len()),
             by_id: HashMap::new(),
@@ -312,6 +351,16 @@ impl Resolver {
                 .push(i);
         }
         r
+    }
+
+    pub(crate) fn resolve_id(
+        &self,
+        file: &str,
+        reference: &crate::model::NodeRef,
+    ) -> Option<String> {
+        self.resolve(file, reference)
+            .ok()
+            .map(|i| self.ids[i].clone())
     }
 
     fn in_file(&self, file: &std::path::Path, name: &str) -> Option<usize> {
@@ -429,8 +478,154 @@ impl Resolver {
 }
 
 impl Dag {
+    /// Isolate graph-invalid definitions while retaining their unrelated neighbours.
+    /// Dependency edges are resolved before removing anything, so removal cannot redirect
+    /// an input to a different same-named definition.
+    pub(crate) fn isolate(
+        nodes: &[ExtractedNode],
+        failed_files: &[String],
+    ) -> (Self, Vec<(String, String)>) {
+        use std::collections::HashSet;
+        let refs = Resolver::new(nodes);
+        let mut edges = Vec::new();
+        let mut failures = Vec::new();
+        for node in nodes {
+            let id = node.continuity_key();
+            let inputs = node
+                .inputs
+                .iter()
+                .map(|i| (&i.param_name, &i.upstream, true))
+                .chain(node.partitions.iter().filter_map(|(dim, p)| match p {
+                    crate::model::PartitionSpec::DerivedFrom { source_ref } => {
+                        Some((dim, source_ref, false))
+                    }
+                    _ => None,
+                }));
+            for (param, upstream, required) in inputs {
+                // Follow the resolver's priority: a failed lower-priority source
+                // cannot hide an earlier healthy binding, and an earlier failed
+                // source cannot redirect to a later healthy same-named node.
+                let candidates = match upstream {
+                    crate::model::NodeRef::Canonical(value) if !refs.by_id.contains_key(value) => {
+                        value.rsplit_once(':').map(|(file, name)| {
+                            (
+                                vec![
+                                    std::path::PathBuf::from(file),
+                                    file_dir(&node.source_file).join(file),
+                                ],
+                                name,
+                            )
+                        })
+                    }
+                    crate::model::NodeRef::Imported { module, name } => Some((
+                        Resolver::module_files(&node.source_file, module),
+                        name.as_str(),
+                    )),
+                    _ => None,
+                };
+                let mut failed = None;
+                if let Some((candidates, name)) = candidates {
+                    for candidate in candidates {
+                        failed = failed_files.iter().find(|file| {
+                            norm_path(&candidate) == norm_path(std::path::Path::new(file))
+                        });
+                        if failed.is_some() || refs.in_file(&candidate, name).is_some() {
+                            break;
+                        }
+                    }
+                }
+                if let Some(file) = failed {
+                    failures.push((
+                        id.clone(),
+                        format!("input '{param}' references unloaded source '{file}'"),
+                    ));
+                    continue;
+                }
+                match refs.resolve_input(node, param, upstream) {
+                    Ok(i) => edges.push((refs.ids[i].clone(), id.clone())),
+                    Err(DagError::UnresolvedInput { .. }) if !required => {}
+                    Err(e) => failures.push((id.clone(), e.to_string())),
+                }
+            }
+        }
+        let mut excluded: HashSet<String> = failures.iter().map(|(id, _)| id.clone()).collect();
+        loop {
+            // Close over the original bindings, never over newly selected names.
+            loop {
+                let before = excluded.len();
+                for (upstream, dependent) in &edges {
+                    if excluded.contains(upstream) && excluded.insert(dependent.clone()) {
+                        failures.push((
+                            dependent.clone(),
+                            format!("upstream '{upstream}' is not loaded"),
+                        ));
+                    }
+                }
+                if before == excluded.len() {
+                    break;
+                }
+            }
+            let selected: Vec<_> = nodes
+                .iter()
+                .filter(|n| !excluded.contains(&n.continuity_key()))
+                .cloned()
+                .collect();
+            match Self::build(&selected) {
+                Ok(dag) => return (dag, failures),
+                Err(error) => {
+                    let offenders: Vec<String> = match &error {
+                        DagError::UnresolvedInput { node, .. }
+                        | DagError::AmbiguousInput { node, .. }
+                        | DagError::UnresolvedImport { node, .. }
+                        | DagError::PartitionedInputToUnpartitioned { node, .. }
+                        | DagError::PartitionsFrom { node, .. } => vec![node.clone()],
+                        DagError::SensorWithInputs { sensor } => vec![sensor.clone()],
+                        DagError::TaskAsInput { downstream, .. } => vec![downstream.clone()],
+                        DagError::DuplicateKey { key, .. } => vec![key.clone()],
+                        DagError::CycleDetected => {
+                            let mut graph = DiGraph::<String, ()>::new();
+                            let indices: HashMap<_, _> = selected
+                                .iter()
+                                .map(|n| {
+                                    let id = n.continuity_key();
+                                    let idx = graph.add_node(id.clone());
+                                    (id, idx)
+                                })
+                                .collect();
+                            for (upstream, dependent) in &edges {
+                                if let (Some(&u), Some(&d)) =
+                                    (indices.get(upstream), indices.get(dependent))
+                                {
+                                    graph.add_edge(u, d, ());
+                                }
+                            }
+                            petgraph::algo::tarjan_scc(&graph)
+                                .into_iter()
+                                .filter(|component| {
+                                    component.len() > 1
+                                        || graph.contains_edge(component[0], component[0])
+                                })
+                                .flatten()
+                                .map(|i| graph[i].clone())
+                                .collect()
+                        }
+                    };
+                    assert!(
+                        !offenders.is_empty(),
+                        "DAG validation must identify its invalid definitions"
+                    );
+                    for id in offenders {
+                        assert!(excluded.insert(id.clone()), "isolation must make progress");
+                        failures.push((id, error.to_string()));
+                    }
+                }
+            }
+        }
+    }
+
     /// Build a DAG from extracted nodes. Validates all constraints.
     pub fn build(nodes: &[ExtractedNode]) -> Result<Self, DagError> {
+        validate_partition_dimensions(nodes)?;
         let resolved = resolve_partitions_from(nodes)?;
         let nodes = resolved.as_slice();
         let mut graph = DiGraph::new();
@@ -455,18 +650,11 @@ impl Dag {
                 return Err(DagError::SensorWithInputs { sensor: id.clone() });
             }
 
-            // Compute definition_hash from source text + dependency cone + metadata.
-            // Sinks and serializer are included so that changing a @sink or
-            // @asset(serializer=) re-materializes the node — cached steps never
-            // reach a worker, so their sinks would otherwise silently not run.
-            let metadata = serde_json::json!({
-                "kind": node.kind,
-                "freshness": node.freshness,
-                "inputs": node.inputs.iter().map(|i| &i.param_name).collect::<Vec<_>>(),
-                "sinks": node.sinks,
-                "serializer": node.artifact_serializer,
-            })
-            .to_string();
+            // The definition hash: what determines the node's result. `source_text` is the
+            // function from `def` on plus the decorator parts that count, in canonical form
+            // (`crate::definition::RULES` is the list: inputs, serializer, sinks, ...), and
+            // `cone_hash` is the helper code both reach. The kind is the one thing added here.
+            let metadata = serde_json::json!({ "kind": node.kind }).to_string();
             let def_hash = hash::definition_hash(&node.source_text, &node.cone_hash, &metadata);
 
             let dag_node = DagNode {
@@ -553,7 +741,11 @@ impl Dag {
             }
         }
 
-        let dag = Dag { graph, index };
+        let dag = Dag {
+            graph,
+            index,
+            groups: Vec::new(),
+        };
 
         // Verify acyclicity.
         if toposort(&dag.graph, None).is_err() {
@@ -696,7 +888,6 @@ impl Dag {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{SerializerKind, SinkDecl};
 
     fn node(name: &str) -> ExtractedNode {
         ExtractedNode {
@@ -1040,55 +1231,118 @@ def margin(region: str, tier: str, sales: dict) -> dict:\n    return sales\n"
         assert!(dag.subgraph_many(&["t.py:nope"]).is_empty());
     }
 
+    /// The definition hash of `a` in a one-file pipeline, through the parser.
+    fn definition_hash_of(source: &str) -> String {
+        let source = &format!(
+            "from barca import asset, sensor, task, sink, partitions, partitions_from\n{source}"
+        );
+        let nodes = crate::parse::extract_nodes(source, "test.py").unwrap();
+        let dag = Dag::build(&nodes).unwrap();
+        dag.get_node("test.py:a").unwrap().definition_hash.clone()
+    }
+
+    const A: &str = "def a():\n    return 1\n";
+
+    // Cached steps never reach a worker, so a new or edited sink has to change the hash, or it
+    // would silently not be written.
     #[test]
     fn definition_hash_changes_when_sink_added() {
-        let plain = node("a");
-        let mut sinked = node("a");
-        sinked.sinks.push(SinkDecl {
-            path: "exports/a.parquet".to_string(),
-            serializer: None,
-        });
-
-        let dag_plain = Dag::build(std::slice::from_ref(&plain)).unwrap();
-        let dag_sinked = Dag::build(std::slice::from_ref(&sinked)).unwrap();
         assert_ne!(
-            dag_plain.get_node("test.py:a").unwrap().definition_hash,
-            dag_sinked.get_node("test.py:a").unwrap().definition_hash,
+            definition_hash_of(&format!("@asset()\n{A}")),
+            definition_hash_of(&format!("@asset()\n@sink(\"exports/a.parquet\")\n{A}")),
         );
     }
 
     #[test]
     fn definition_hash_changes_when_sink_edited() {
-        let mut s1 = node("a");
-        s1.sinks.push(SinkDecl {
-            path: "exports/a.parquet".to_string(),
-            serializer: None,
-        });
-        let mut s2 = node("a");
-        s2.sinks.push(SinkDecl {
-            path: "exports/a.parquet".to_string(),
-            serializer: Some(SerializerKind::Pickle),
-        });
-
-        let d1 = Dag::build(std::slice::from_ref(&s1)).unwrap();
-        let d2 = Dag::build(std::slice::from_ref(&s2)).unwrap();
+        let hash = |sink: &str| definition_hash_of(&format!("@asset()\n@sink({sink})\n{A}"));
         assert_ne!(
-            d1.get_node("test.py:a").unwrap().definition_hash,
-            d2.get_node("test.py:a").unwrap().definition_hash,
+            hash("\"exports/a.parquet\""),
+            hash("\"exports/a.parquet\", serializer=\"pickle\""),
         );
+        assert_ne!(hash("\"exports/a.parquet\""), hash("\"exports/b.parquet\""));
     }
 
     #[test]
     fn definition_hash_changes_when_serializer_changed() {
-        let plain = node("a");
-        let mut with_ser = node("a");
-        with_ser.artifact_serializer = Some(SerializerKind::Parquet);
-
-        let d1 = Dag::build(std::slice::from_ref(&plain)).unwrap();
-        let d2 = Dag::build(std::slice::from_ref(&with_ser)).unwrap();
         assert_ne!(
+            definition_hash_of(&format!("@asset()\n{A}")),
+            definition_hash_of(&format!("@asset(serializer=\"parquet\")\n{A}")),
+        );
+    }
+
+    /// The definition hash is over `source_text` (the canonical definition, see
+    /// `crate::definition`), the cone and the kind. The fields the parser reads from arguments
+    /// that do not count (`freshness`, `retries`, `description`, ...) are not part of it.
+    #[test]
+    fn definition_hash_ignores_what_does_not_count() {
+        let plain = node("a");
+        let mut other = node("a");
+        other.freshness = crate::model::Freshness::Manual;
+        other.retries = 5;
+        other.retry_backoff_seconds = 2.0;
+        other.timeout_seconds = 10;
+        other.description = Some("d".to_string());
+        other.tags.insert("team".to_string(), "a".to_string());
+        other.env.push("HOME".to_string());
+        let d1 = Dag::build(std::slice::from_ref(&plain)).unwrap();
+        let d2 = Dag::build(std::slice::from_ref(&other)).unwrap();
+        assert_eq!(
             d1.get_node("test.py:a").unwrap().definition_hash,
             d2.get_node("test.py:a").unwrap().definition_hash,
+        );
+
+        let mut sensor = node("a");
+        sensor.kind = NodeKind::Sensor;
+        let d3 = Dag::build(std::slice::from_ref(&sensor)).unwrap();
+        assert_ne!(
+            d1.get_node("test.py:a").unwrap().definition_hash,
+            d3.get_node("test.py:a").unwrap().definition_hash,
+            "the kind counts"
+        );
+    }
+
+    /// Issue #283, end to end through the parser: decorator edits that do not change the
+    /// result leave the definition hash alone; edits that can change it do not.
+    #[test]
+    fn definition_hash_covers_the_result_and_nothing_else() {
+        let base = definition_hash_of(&format!(
+            "@asset(partitions={{\"region\": partitions([\"us\", \"eu\"])}})\n{A}"
+        ));
+        for same in [
+            "@asset(partitions={\"region\": partitions([\"us\", \"eu\", \"apac\"])})\n",
+            "@asset(partitions={\"region\": partitions([\"eu\"])})\n",
+            "@asset(partitions={\"region\": partitions([\"eu\", \"us\"])})\n",
+            "@asset(partitions={\"region\": partitions(REGIONS)})\n",
+            "@asset(partitions={\"region\": partitions(regions())})\n",
+            "@asset(partitions={\"region\": partitions([r for r in REGIONS])})\n",
+            "@asset(\n    partitions = {'region': partitions(['us', 'eu',]),},  # keys\n)\n",
+            "@asset(description=\"d\", partitions={\"region\": partitions([\"us\", \"eu\"])})\n",
+            "@asset(partitions={\"region\": partitions([\"us\", \"eu\"])}, tags={\"a\": \"b\"}, retries=3)\n",
+            "@asset(partitions={\"region\": partitions([\"us\", \"eu\"])}, freshness=Manual)\n",
+            "@asset(partitions={\"region\": partitions([\"us\", \"eu\"])}, timeout_seconds=5, retry_backoff=1.5)\n",
+        ] {
+            assert_eq!(base, definition_hash_of(&format!("{same}{A}")), "{same}");
+        }
+        for different in [
+            "@asset(partitions={\"area\": partitions([\"us\", \"eu\"])})\n",
+            "@asset(partitions={\"region\": partitions([\"us\", \"eu\"])}, serializer=\"pickle\")\n",
+            "@asset(partitions={\"region\": partitions([\"us\", \"eu\"])})\n@sink(\"a.json\")\n",
+            "@asset(partitions={\"region\": partitions([\"us\", \"eu\"])})\n@functools.cache\n",
+            "@asset()\n",
+        ] {
+            assert_ne!(
+                base,
+                definition_hash_of(&format!("{different}{A}")),
+                "{different}"
+            );
+        }
+        assert_ne!(
+            base,
+            definition_hash_of(
+                "@asset(partitions={\"region\": partitions([\"us\", \"eu\"])})\ndef a():\n    return 2\n"
+            ),
+            "the body counts"
         );
     }
 }

@@ -10,9 +10,9 @@ export default defineConfig({
   integrations: [
     starlight({
       title: 'Barca',
-      tagline: 'The invisible asset orchestrator.',
+      tagline: 'Runs Python functions as a dependency graph and caches their results.',
       description:
-        'Rust plans it. Python runs it. You just write functions. Docs for the barca asset orchestrator.',
+        'Documentation for barca, which runs Python functions as a dependency graph and caches their results.',
       social: [
         { icon: 'github', label: 'GitHub', href: 'https://github.com/barca-orc/barca' },
       ],

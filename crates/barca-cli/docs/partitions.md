@@ -27,6 +27,17 @@ def summary(all_sales: list[dict]) -> dict:
 - `partitions([...])` declares keys. A literal list is read statically; any other expression
   (a list comprehension, a function call) is evaluated by the Python runtime at plan time.
 - The partition key is passed to the function as the parameter named in `partitions={...}`.
+- Changing the keys: adding a key runs that key and no other; removing a key or reordering the
+  list runs no key. Downstream, a `partitions_from` consumer runs for the new key only, and a
+  `collect` fan-in runs again whenever a key is added or removed. This is the same however the
+  keys are written: a literal list, a module-level constant, any other expression, or
+  `partitions_from`. The keys are not part of the function's definition (`barca docs cache`,
+  "Which decorator arguments count"); renaming the dimension is, and re-runs every key. (Up to
+  0.18, editing a list written inside the decorator re-ran every key.)
+- `partitions()`, `partitions_from()` and `collect()` take exactly one argument, by position. A
+  keyword (`partitions(values=[...])`, `collect(asset_fn=sales)`), no argument or two are
+  errors when the file is read, exit 2 (`barca docs assets`, "Accepted arguments").
+- `partitions=` works on `@task` and `@sensor` as on `@asset`: one run per key.
 - `partitions_from(upstream)` on a partitioned `upstream` gives the asset the same keys, and
   each key is called with the key and that key's output of `upstream`, passed as the parameter
   named after it: above, `margin(region="emea", sales=<the emea output of sales>)`. To receive
@@ -38,6 +49,9 @@ def summary(all_sales: list[dict]) -> dict:
 - The dimension must keep the upstream's name (`"region"` above), `upstream` must have a single
   dimension, and `partitions_from(upstream)` must be the asset's only dimension. Anything else is
   a usage error (exit 2) when the DAG is built.
+- Mixing `partitions()` and `partitions_from()` dimensions on one asset is unsupported
+  and fails before execution with exit 2. Use only derived dimensions or declare every
+  dimension explicitly with `partitions([...])`.
 - `partitions_from(keys)` on an *unpartitioned* asset that returns a list uses the list's values
   as keys. They are only known once `keys` has run (a dry run reports the asset as `unknown`
   until then), and the list itself is not passed to the function.
@@ -54,6 +68,18 @@ def summary(all_sales: list[dict]) -> dict:
 - Artifacts are stored per key, for example
   `.barca/artifacts/pipeline.py--sales_region_emea/<run_hash>.json`. `barca plan` lists one step
   per key, all under the same node id (`pipeline.py:sales`).
-- A fan-in (`collect`) runs in its own phase after every partition has finished.
+- A fan-in (`collect`) runs in its own phase after every partition has finished, also when the
+  asset has one key or barca has one worker.
+- Which keys run, and each key's run hash, do not depend on the number of workers
+  (`BARCA_POOL_SIZE`, by default the machine's core count). Up to 0.18.1 they could: with a
+  chain of `partitions_from` assets and fewer workers than keys, some keys of the second asset
+  were recorded under a run hash that depended on how the keys were split across workers, and
+  ran again when the split changed. Such a key, and a fan-in over it, runs once more after
+  upgrading; with at least as many workers as the two assets have keys together, nothing
+  changes.
 
 See also: `barca docs sinks` (one file per partition), `barca docs examples/partitions`.
+
+`barca plan` uses the same worker-pool size as execution: available cores, overridden
+by a positive `BARCA_POOL_SIZE`. Warnings sort by node, parameter and kind. Key previews
+list the first twenty keys in lexical order, independently of worker chunking.

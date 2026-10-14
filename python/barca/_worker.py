@@ -21,10 +21,10 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from barca import _duckdb, _storage
-from barca._source_import import load_package_module, load_source_module
 from barca._artifacts import (
     LAZY_FRAME_TYPES,
     _frame_kind,
+    _FORMAT_EXTENSIONS,
     artifact_path,
     clean_staging,
     deserialize,
@@ -34,6 +34,7 @@ from barca._artifacts import (
     serialize,
     serialize_hashed,
 )
+from barca._source_import import activate_source_path, load_pipeline_module
 
 _EXT_FORMATS = {
     ".json": "json",
@@ -217,7 +218,7 @@ def _isolated_copy(value):
 class _ArtifactLRU:
     """Tier-1 read-through cache: deserialized artifacts hot in this process.
 
-    Keyed by (path, frame_type) — paths are content-addressed
+    Keyed by (path, frame_type) — paths are named by run hash
     ({node}/{run_hash}{ext}), so a path uniquely identifies content and
     invalidation is automatic (changed input → changed hash → new path → miss).
     Frame type is part of the key so a polars consumer never hits a cached pandas
@@ -385,50 +386,13 @@ def _emit_error(node_id, exc, elapsed=0.0):
 
 
 def load_module(source_file):
-    # Compiled from the source on disk, never a cached .pyc (#176); the file's directory
-    # goes on sys.path so cross-file imports work, and those compile from source too.
-    path = Path(source_file).resolve()
-    dotted = package_module_name(path)
-    if dotted is not None:
-        return load_package_module(dotted)
-    return load_source_module(str(path), module_name_for(path))
-
-
-def package_module_name(path: Path) -> str | None:
-    """The importable name of a step's file when it sits in a package under the project root
-    (every directory from the root down has an `__init__.py`): `pipelines/reconcile.py` is
-    `pipelines.reconcile`. Loading it under that name gives it a parent package, so relative
-    imports (`from .sources import x`) work, and `from pipelines.reconcile import y` elsewhere
-    gets the same module. `None` for a file in the root or outside a package."""
-    root = Path.cwd().resolve()
-    try:
-        parts = list(path.relative_to(root).with_suffix("").parts)
-    except ValueError:
-        return None
-    if parts and parts[-1] == "__init__":
-        parts.pop()
-    if len(parts) < 2:
-        return None
-    for i in range(1, len(parts)):
-        if not root.joinpath(*parts[:i], "__init__.py").is_file():
-            return None
-    return ".".join(parts)
-
-
-def module_name_for(path: Path) -> str:
-    """`sys.modules` name for a step's file: `_barca_` plus its path relative to the project
-    root (the cwd), so `east/assets.py` and `west/assets.py` stay distinct modules. A file in the
-    root keeps the plain `_barca_<stem>` name, which pickled artifacts refer to."""
-    try:
-        rel = path.relative_to(Path.cwd().resolve()).with_suffix("")
-    except ValueError:
-        return f"_barca_{path.stem}"
-    return "_barca_" + "__".join(rel.parts)
+    return load_pipeline_module(source_file)
 
 
 def _run_with_timeout(fn, kwargs, timeout_seconds):
     """Run a function with a timeout. Raises TimeoutError if exceeded."""
     import threading
+    from contextvars import copy_context
 
     result = None
     exception = None
@@ -443,7 +407,8 @@ def _run_with_timeout(fn, kwargs, timeout_seconds):
             # silently and the step "succeeded" with a None result (issue #149).
             exception = e
 
-    thread = threading.Thread(target=target)
+    # Timeout execution uses a new thread; carry the active job trace into it.
+    thread = threading.Thread(target=copy_context().run, args=(target,))
     thread.daemon = True
     thread.start()
     thread.join(timeout=timeout_seconds)
@@ -574,6 +539,21 @@ def _sink_dest(path: str, node_id: str) -> str:
     return path + part
 
 
+def _through_symlink(dest: str) -> str:
+    """Where a sink is really written when its path is a symlink.
+
+    A sink path is the user's: barca writes the file there and changes nothing else.
+    `serialize` installs a file by renaming a temp file over its path, which would replace a
+    symlink by a regular file. So the link is followed first: the file it points to is
+    written (as `open(path, "w")` would do) and the link stays. A link to a directory then
+    fails the sink like a directory does.
+    """
+    local = _storage.local_path_of(dest)
+    if local is not None and os.path.islink(local):
+        return os.path.realpath(local)
+    return dest
+
+
 def _write_sinks(result, step, node_id, primary_fmt):
     """Write each @sink declared on the step. Error-isolated: a sink failure
     never fails the parent asset — it is logged and reported in the outcome."""
@@ -595,7 +575,7 @@ def _write_sinks(result, step, node_id, primary_fmt):
                     "Arrow table or DuckDB relation, or sink it as json or pickle"
                 )
             dest = _sink_dest(dest, node_id)
-            size = serialize(result, dest, fmt)
+            size = serialize(result, _through_symlink(dest), fmt)
             outcomes.append({"path": str(dest), "status": "ok", "size_bytes": size})
         except Exception as exc:
             print(
@@ -613,7 +593,16 @@ def _write_sinks(result, step, node_id, primary_fmt):
     return outcomes
 
 
-def _materialize(result, node_id, art_dir, step, elapsed, elapsed_in_artifact=False, timing=None):
+def _materialize(
+    result,
+    node_id,
+    art_dir,
+    step,
+    elapsed,
+    elapsed_in_artifact=False,
+    timing=None,
+    before_emit=None,
+):
     """Serialize a result to its artifact and emit a `result` protocol message.
 
     `timing` (cpu_seconds, max_rss_bytes) rides on the artifact dict — the
@@ -627,21 +616,43 @@ def _materialize(result, node_id, art_dir, step, elapsed, elapsed_in_artifact=Fa
     """
     explicit_fmt = step.get("serializer")
     fmt = resolve_format(result, detect_format(result, explicit=explicit_fmt))
-    # Content-addressed layout when the coordinator supplies a run hash.
+    # Run-hash layout when the coordinator supplies a run hash.
     # Batch mode's legacy partitioned loop reuses the step-level hash only for
     # unpartitioned steps (a per-step hash is wrong per-partition; the daemon
     # path gets a per-item hash from Rust and batch mode is test-only).
     run_hash = step.get("run_hash") if node_id == step.get("node_id") else None
-    path = artifact_path(art_dir, node_id, fmt, run_hash)
+    branch_path = step.get("branch_path")
+    if branch_path:
+        # A parallel() branch: the coordinator names a file that belongs to this run and this
+        # group alone, so the caller can only read what its own branches wrote (#332).
+        path = Path(f"{branch_path}{_FORMAT_EXTENSIONS[fmt]}")
+    else:
+        path = artifact_path(art_dir, node_id, fmt, run_hash)
     _ser_wall0 = time.perf_counter()
     _ser_cpu0 = time.process_time()
     # A sensor's output is hashed: the coordinator folds the hash into the run hash of every
     # asset that reads the sensor, so a changed output re-runs them.
     content_hash = None
-    if step.get("kind") == "sensor":
-        size, content_hash = serialize_hashed(result, path, fmt)
+    # A branch's small JSON result is not written at all: its text goes back in the report
+    # and on to the caller (barca/_branches.py). The text is what the file would have held.
+    inline_json = None
+    if branch_path and fmt == "json":
+        from barca import _branches
+
+        inline_json = _branches.small_json(result)
+    if inline_json is not None:
+        path, size = "", len(inline_json)
     else:
-        size = serialize(result, path, fmt)
+        # A directory where the artifact file belongs is not an artifact: it is moved out of
+        # the way (never deleted) so the step's result can be written. Sinks are the user's
+        # paths and never get this treatment.
+        local = _storage.local_path_of(path)
+        if local is not None:
+            _storage.make_way(local)
+        if step.get("kind") == "sensor":
+            size, content_hash = serialize_hashed(result, path, fmt)
+        else:
+            size = serialize(result, path, fmt)
     elapsed += time.perf_counter() - _ser_wall0
     if timing and timing.get("cpu_seconds") is not None:
         timing = {
@@ -649,8 +660,15 @@ def _materialize(result, node_id, art_dir, step, elapsed, elapsed_in_artifact=Fa
             "cpu_seconds": timing["cpu_seconds"] + (time.process_time() - _ser_cpu0),
         }
     artifact: dict = {"path": str(path), "format": fmt, "size_bytes": size}
+    if inline_json is not None:
+        artifact["json"] = inline_json
     if content_hash is not None:
         artifact["content_hash"] = content_hash
+    if step.get("branch") and fmt == "parquet":
+        # The caller of parallel() gets back the frame type the branch returned.
+        from barca import _branches
+
+        artifact["frame_type"] = _branches.frame_type(result, fmt)
     if elapsed_in_artifact:
         artifact["elapsed_seconds"] = elapsed
     if timing:
@@ -661,6 +679,8 @@ def _materialize(result, node_id, art_dir, step, elapsed, elapsed_in_artifact=Fa
     sink_outcomes = _write_sinks(result, step, node_id, fmt)
     if sink_outcomes:
         artifact["sinks"] = sink_outcomes
+    if before_emit is not None:
+        before_emit()
     _emit("result", node_id=node_id, artifact=artifact, elapsed=elapsed)
     return artifact
 
@@ -713,6 +733,7 @@ def run_batch(batch):
 
                 try:
                     source = str(Path(step["source_file"]).resolve())
+                    activate_source_path(source)
                     if source not in modules:
                         modules[source] = load_module(source)
                     fn = getattr(modules[source], step["function_name"])
@@ -774,6 +795,7 @@ def run_batch(batch):
 
             try:
                 source = str(Path(step["source_file"]).resolve())
+                activate_source_path(source)
                 if source not in modules:
                     modules[source] = load_module(source)
                 fn = getattr(modules[source], step["function_name"])
@@ -818,6 +840,89 @@ def run_batch(batch):
             _materialize(result, node_id, art_dir, step, elapsed)
 
 
+# What a worker does with Ctrl-C (SIGINT). The terminal sends it to every process of the job,
+# and the coordinator, which gets it too, decides what it means for the run and stops the
+# workers. A worker acts on it only while a step's function runs:
+#
+# - While the interpreter starts and barca is imported: it does not get the signal at all.
+#   The coordinator starts a worker in a process group of its own
+#   (`helper_proc::start_outside_the_job`), since nothing written here can keep an interrupt
+#   that arrives that early from ending the process with a traceback. `_join_the_job` moves
+#   the worker into the coordinator's group once the handler below is installed.
+# - While a step's module is imported, between steps, and while a result or an error is
+#   reported: nothing happens (`_ctrl_c_does_nothing`). An interrupt there used to end the
+#   worker with a `KeyboardInterrupt` traceback of barca's own frames or of the module's
+#   import, which tells the user nothing.
+# - While a step runs, from loading its inputs to writing its result: `KeyboardInterrupt` is
+#   raised in the step (`_ctrl_c_interrupts_the_step`), as before. The worker reports the step
+#   as interrupted and the coordinator leaves it out of the cancelled run. The coordinator's
+#   SIGTERM follows the interrupt and ends the worker at once (`_on_sigterm`), so a step
+#   cannot count on its `except` or `finally` code running.
+#
+# One exception to all of it: a barca that was itself started with SIGINT ignored (`nohup`, a
+# background job of a non-interactive shell, cron, some supervisors). Its workers inherit that,
+# and keep it: SIGINT stays ignored at every stage, a step included, which is what Python does
+# for any program started that way and what a step saw before these stages existed. The
+# coordinator still acts on a SIGINT sent to it and stops the workers.
+
+# Whether this process was started with SIGINT ignored. Read before anything changes it.
+_ctrl_c_inherited_ignored: bool | None = None
+
+
+def _started_with_ctrl_c_ignored() -> bool:
+    global _ctrl_c_inherited_ignored
+    if _ctrl_c_inherited_ignored is None:
+        import signal
+
+        _ctrl_c_inherited_ignored = signal.getsignal(signal.SIGINT) is signal.SIG_IGN
+    return _ctrl_c_inherited_ignored
+
+
+def _no_interrupt(_signum, _frame) -> None:
+    pass
+
+
+def _ctrl_c_does_nothing() -> None:
+    """Ctrl-C has no effect on this process until a step runs.
+
+    A handler that does nothing, not `SIG_IGN`: an ignored signal is inherited as ignored by
+    every process the user's code starts, a handled one is not.
+    """
+    import signal
+
+    if _started_with_ctrl_c_ignored():
+        return
+    try:
+        signal.signal(signal.SIGINT, _no_interrupt)
+    except ValueError:
+        pass  # not the main thread: nothing to change
+
+
+def _ctrl_c_interrupts_the_step() -> None:
+    """Ctrl-C raises `KeyboardInterrupt` in the main thread, as in any Python program."""
+    import signal
+
+    if _started_with_ctrl_c_ignored():
+        return
+    try:
+        signal.signal(signal.SIGINT, signal.default_int_handler)
+    except ValueError:
+        pass  # not the main thread: nothing to change
+
+
+def _join_the_job() -> None:
+    """Move this worker into the coordinator's process group, where the terminal's Ctrl-C is
+    delivered. Called once `_ctrl_c_does_nothing` is in place; until then the worker is in a
+    group of its own, out of the terminal's reach."""
+    job = os.environ.get("BARCA_JOB_PGID")
+    if not job:
+        return  # started by hand, or by a coordinator that leaves workers in its group
+    try:
+        os.setpgid(0, int(job))
+    except (OSError, ValueError):
+        pass  # the coordinator's group is gone; so is the coordinator, and the socket says so
+
+
 def _run_daemon_step(step, modules, art_dir, lru):
     """Execute one step in daemon mode and emit its result or error.
 
@@ -827,7 +932,9 @@ def _run_daemon_step(step, modules, art_dir, lru):
     work), wall time, and peak RSS ride back on the completion message.
     """
     from barca import _runtime
+    from barca._telemetry import Execution
 
+    tracing = Execution(step)
     node_id = step.get("node_id", "unknown")
     t0 = time.perf_counter()
     c0 = time.process_time()
@@ -835,12 +942,18 @@ def _run_daemon_step(step, modules, art_dir, lru):
     # Views bound for duckdb-typed inputs. They must outlive materialization: a returned
     # relation is lazy and may still reference them when it is written to parquet.
     bound_views: list[str] = []
+    # Set when this step is a parallel() branch whose return value could not be written.
+    unwritable = False
 
     try:
         source = str(Path(step["source_file"]).resolve())
+        activate_source_path(source)
         if source not in modules:
             modules[source] = load_module(source)
         fn = getattr(modules[source], step["function_name"])
+
+        # From here until the result is written, Ctrl-C interrupts the step.
+        _ctrl_c_interrupts_the_step()
 
         # Direct args/kwargs from parallel() dispatch.
         d_args = step.get("direct_args", [])
@@ -877,6 +990,8 @@ def _run_daemon_step(step, modules, art_dir, lru):
                 ) from None
 
         bound_views = _duckdb.bind_inputs(kwargs, param_types)
+        # Legacy pickle recovery may have activated a different producer directory.
+        activate_source_path(source)
 
         timeout = step.get("timeout_seconds", 0)
         # Capture user stdout and stream it live, line by line.
@@ -917,19 +1032,32 @@ def _run_daemon_step(step, modules, art_dir, lru):
         result = _make_serializable(result)
 
         # Serialize result to artifact (and write any declared sinks).
-        artifact = _materialize(
-            result,
-            node_id,
-            art_dir,
-            step,
-            wall,
-            elapsed_in_artifact=True,
-            timing={"cpu_seconds": cpu, "max_rss_bytes": _peak_rss_bytes()},
-        )
+        try:
+            artifact = _materialize(
+                result,
+                node_id,
+                art_dir,
+                step,
+                wall,
+                elapsed_in_artifact=True,
+                timing={"cpu_seconds": cpu, "max_rss_bytes": _peak_rss_bytes()},
+                before_emit=tracing.finish,
+            )
+        except Exception as exc:
+            if not step.get("branch"):
+                raise
+            # A parallel() branch whose return value cannot be written: say so in terms of
+            # the branch, for the step that called it (barca/_branches.py).
+            from barca import _branches
+
+            unwritable = True
+            raise _branches.unwritable(step, result, exc) from exc
         # A downstream step in this worker may consume what we just produced, keyed by the
         # reader it is equivalent to so a consumer never gets a different frame type.
+        # (Not a branch's result: no step of this worker reads it, and its file is removed
+        # when the calling step ends.)
         result_type = _result_frame_type(result)
-        if result_type is not False:
+        if result_type is not False and not step.get("branch"):
             lru.admit(artifact["path"], result, result_type, artifact.get("size_bytes"))
         return True
 
@@ -939,6 +1067,11 @@ def _run_daemon_step(step, modules, art_dir, lru):
         # errors are OSError subclasses, so a socket-error catch here would
         # swallow them; genuine socket death surfaces when the emit below
         # fails, and that propagates to the caller.)
+        # The step is over. A Ctrl-C from here on (people press it twice) must not interrupt
+        # the report of how it ended: it would leave this function as an uncaught
+        # KeyboardInterrupt and print a traceback. The coordinator has the same signal and
+        # stops this worker.
+        _ctrl_c_does_nothing()
         wall = time.perf_counter() - t0
         message = str(exc)
         if isinstance(exc, SystemExit):
@@ -949,9 +1082,15 @@ def _run_daemon_step(step, modules, art_dir, lru):
         note = _duckdb.explain_error(exc, bound_views)
         if note:
             message = f"{message}\n\n{note}"
+        tracing.finish(exc)
+        from barca import _branches
+
         _runtime.emit_step_error(
             node_id=node_id,
-            error_type=type(exc).__name__,
+            # Only this branch's own return value that could not be written is reported as
+            # such. A branch that raises, a BranchResultError from a parallel() of its own
+            # included, is a branch that raised.
+            error_type=_branches.UNRETURNABLE if unwritable else type(exc).__name__,
             message=message,
             traceback=_user_traceback(exc),
             elapsed=wall,
@@ -959,12 +1098,17 @@ def _run_daemon_step(step, modules, art_dir, lru):
         return False
 
     finally:
+        _ctrl_c_does_nothing()
+        tracing.finish()
         _duckdb.unbind_inputs(bound_views)
 
 
 def run_daemon():
     """Daemon mode: read execute commands from socket, run each step, send results."""
     global _use_socket
+
+    _ctrl_c_does_nothing()
+    _join_the_job()
 
     from barca import _runtime
 
@@ -1032,6 +1176,11 @@ def run_daemon():
                     break
         except (BrokenPipeError, ConnectionResetError, OSError):
             # Socket was closed (e.g. replacement worker killed) — exit cleanly.
+            break
+        except KeyboardInterrupt:
+            # A Ctrl-C that landed in the instant between a step's last statement and
+            # `_ctrl_c_does_nothing`. Leave without a traceback; the coordinator, which has
+            # the same signal, is stopping the run.
             break
 
     _runtime.disconnect()

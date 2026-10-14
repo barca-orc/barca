@@ -7,14 +7,24 @@ pinned by crates/barca-core/src/protocol.rs (TransferRequest/TransferReply).
 
 import hashlib
 import json
+import os
+import shutil
+import signal
 import socket
 import struct
+import subprocess
+import sys
+import tempfile
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
 from barca import _runtime, _storage, _transfer
+
+# Test-only shim that pauses a helper process at a named point (see its docstring).
+HOLD_SHIM = str(Path(__file__).resolve().parent / "hold")
 
 
 @pytest.fixture(autouse=True)
@@ -206,6 +216,747 @@ class TestChecksums:
         reply = self._get(helper, self._store(b'{"x": 2}'), local, sha256=None)
         assert (reply["type"], reply["fetched"]) == ("done", True)
         assert reply["sha256"] == hashlib.sha256(b'{"x": 2}').hexdigest()
+
+
+class TestDirectoryAtTheArtifactPath:
+    """An artifact is one file. A directory where it belongs is moved aside, never deleted
+    (`_storage.make_way`, `barca docs cache`)."""
+
+    BODY = TestChecksums.BODY
+    SHA = TestChecksums.SHA
+
+    def _get(self, helper, local, sha256=SHA) -> dict:
+        store = local.parent / "store"
+        store.mkdir(exist_ok=True)
+        (store / "h.json").write_bytes(self.BODY)
+        msg = {"type": "get", "id": 1, "remote": str(store / "h.json"), "local": str(local)}
+        if sha256 is not None:
+            msg["sha256"] = sha256
+        helper.request(msg)
+        return helper.reply()
+
+    def _names(self, directory) -> list[str]:
+        return sorted(p.name for p in directory.iterdir() if p.name != "store")
+
+    def test_an_empty_directory_is_removed(self, helper, tmp_path, capfd):
+        local = tmp_path / "h.json"
+        local.mkdir()
+        reply = self._get(helper, local)
+        assert (reply["type"], reply["fetched"], reply["mismatch"]) == ("done", True, False)
+        assert local.is_file() and local.read_bytes() == self.BODY
+        assert self._names(tmp_path) == ["h.json"]
+        assert "warning" not in capfd.readouterr().err  # nothing was there to lose
+
+    def test_a_directory_with_contents_is_moved_aside_intact(self, helper, tmp_path, capfd):
+        local = tmp_path / "h.json"
+        (local / "inner").mkdir(parents=True)
+        (local / "inner" / "x").write_text("mine")
+        (local / "top").write_text("also mine")
+        reply = self._get(helper, local)
+        assert (reply["type"], reply["fetched"], reply["mismatch"]) == ("done", True, False)
+        assert local.is_file() and local.read_bytes() == self.BODY
+        aside = tmp_path / "h.json.moved-aside"
+        assert self._names(tmp_path) == ["h.json", "h.json.moved-aside"]
+        assert (aside / "inner" / "x").read_text() == "mine"
+        assert (aside / "top").read_text() == "also mine"
+        err = capfd.readouterr().err
+        assert f"[barca] warning: {local} is a directory, not an artifact" in err, err
+        assert str(aside) in err, err
+
+    def test_an_earlier_moved_aside_directory_is_never_overwritten(self, helper, tmp_path):
+        local = tmp_path / "h.json"
+        earlier = tmp_path / "h.json.moved-aside"
+        earlier.mkdir()
+        (earlier / "old").write_text("first")
+        local.mkdir()
+        (local / "new").write_text("second")
+        assert self._get(helper, local)["type"] == "done"
+        assert (earlier / "old").read_text() == "first"
+        assert (tmp_path / "h.json.moved-aside-2" / "new").read_text() == "second"
+        assert local.read_bytes() == self.BODY
+
+    def test_a_directory_is_moved_aside_without_a_recorded_hash_too(self, helper, tmp_path):
+        local = tmp_path / "h.json"
+        local.mkdir()
+        (local / "x").write_text("mine")
+        assert self._get(helper, local, sha256=None)["type"] == "done"
+        assert local.read_bytes() == self.BODY
+        assert (tmp_path / "h.json.moved-aside" / "x").read_text() == "mine"
+
+    def test_a_symlink_to_a_directory_is_replaced_and_its_target_is_untouched(
+        self, helper, tmp_path
+    ):
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        (elsewhere / "precious").write_text("keep")
+        local = tmp_path / "h.json"
+        local.symlink_to(elsewhere, target_is_directory=True)
+        assert self._get(helper, local)["type"] == "done"
+        assert local.is_file() and not local.is_symlink()
+        assert local.read_bytes() == self.BODY
+        assert self._names(elsewhere) == ["precious"]
+        assert (elsewhere / "precious").read_text() == "keep"
+        assert self._names(tmp_path) == ["elsewhere", "h.json"]
+
+    def test_a_symlink_to_a_file_is_replaced_and_its_target_is_untouched(self, helper, tmp_path):
+        target = tmp_path / "target.json"
+        target.write_text("other bytes")
+        local = tmp_path / "h.json"
+        local.symlink_to(target)
+        assert self._get(helper, local)["type"] == "done"
+        assert not local.is_symlink() and local.read_bytes() == self.BODY
+        assert target.read_text() == "other bytes"
+
+    def test_a_directory_in_the_store_is_an_error_and_is_left_alone(self, helper, tmp_path):
+        # The store is shared: barca moves nothing there.
+        src = tmp_path / "a.json"
+        src.write_bytes(self.BODY)
+        dest = tmp_path / "store" / "n" / "h.json"
+        (dest / "theirs").mkdir(parents=True)
+        helper.request({"type": "put", "id": 1, "local": str(src), "remote": str(dest)})
+        reply = helper.reply()
+        assert reply["type"] == "error" and "IsADirectoryError" in reply["message"], reply
+        assert (dest / "theirs").is_dir()
+        assert sorted(p.name for p in dest.parent.iterdir()) == ["h.json"]
+
+
+class TestMakeWay:
+    def test_a_file_or_nothing_at_the_path_is_left_alone(self, tmp_path):
+        assert _storage.make_way(tmp_path / "absent.json") is None
+        (tmp_path / "f.json").write_text("x")
+        assert _storage.make_way(tmp_path / "f.json") is None
+        assert (tmp_path / "f.json").read_text() == "x"
+
+    def test_it_returns_where_the_directory_went(self, tmp_path):
+        d = tmp_path / "h.parquet"
+        (d / "part-0").mkdir(parents=True)
+        assert _storage.make_way(d) == tmp_path / "h.parquet.moved-aside"
+        assert not d.exists()
+        assert (tmp_path / "h.parquet.moved-aside" / "part-0").is_dir()
+
+    def test_a_file_is_never_moved_even_if_it_looked_like_a_directory(self, tmp_path, monkeypatch):
+        # Another process installed the artifact after this one looked: the check said
+        # "directory", the thing there now is the artifact.
+        dest = tmp_path / "h.json"
+        dest.write_text("the artifact")
+        monkeypatch.setattr(type(dest), "is_dir", lambda self: True)
+        assert _storage.make_way(dest) is None
+        assert dest.read_text() == "the artifact"
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["h.json"]
+
+    def test_an_artifact_installed_between_the_look_and_the_rename_is_left_alone(
+        self, tmp_path, monkeypatch, capfd
+    ):
+        dest = tmp_path / "h.json"
+        (dest / "inner").mkdir(parents=True)
+        real = os.path.lexists
+
+        def another_process_gets_there_first(path):
+            # Runs just before the rename: the directory is moved away and the artifact
+            # installed, as a concurrent `make_way` and install would do.
+            if dest.is_dir():
+                dest.rename(tmp_path / "moved-by-the-other")
+                dest.write_text("the artifact")
+            return real(path)
+
+        monkeypatch.setattr(os.path, "lexists", another_process_gets_there_first)
+        assert _storage.make_way(dest) is None
+        assert dest.read_text() == "the artifact"
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["h.json", "moved-by-the-other"]
+        assert "is a directory" not in capfd.readouterr().err
+
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root may rename in any directory")
+    def test_a_directory_that_cannot_be_moved_is_an_error_that_says_what_to_do(self, tmp_path):
+        parent = tmp_path / "node"
+        dest = parent / "h.json"
+        (dest / "inner").mkdir(parents=True)
+        parent.chmod(0o555)
+        try:
+            with pytest.raises(_storage.ArtifactPathError) as raised:
+                _storage.make_way(dest)
+        finally:
+            parent.chmod(0o755)
+        message = str(raised.value)
+        assert str(dest) in message and "PermissionError" in message
+        assert f"write permission on {parent}" in message and "Nothing was deleted" in message
+        assert (dest / "inner").is_dir()
+
+    def test_processes_racing_to_install_one_artifact_never_move_a_file(self, tmp_path):
+        """Six processes, each making way and installing the artifact 50 times while a
+        seventh keeps putting a directory back. Whatever the interleaving: nothing that was
+        moved aside is a file, and no directory's contents are lost."""
+        dest = tmp_path / "node" / "h.json"
+        dest.parent.mkdir()
+        code = (
+            "import os, sys\n"
+            "from pathlib import Path\n"
+            "from barca import _storage\n"
+            "dest = Path(sys.argv[1])\n"
+            "for i in range(50):\n"
+            "    _storage.make_way(dest)\n"
+            "    with _storage.staged_beside(dest) as tmp:\n"
+            "        tmp.write_text('artifact')\n"
+            "        try:\n"
+            "            os.replace(tmp, dest)\n"
+            "        except (IsADirectoryError, PermissionError):\n"
+            "            pass  # a directory came back in between: the next round moves it\n"
+        )
+        spoil = (
+            "import sys\n"
+            "from pathlib import Path\n"
+            "dest = Path(sys.argv[1])\n"
+            "for i in range(40):\n"
+            "    try:\n"
+            "        dest.unlink()\n"
+            "        (dest / f'made-{i}').mkdir(parents=True)\n"
+            "    except OSError:\n"
+            "        pass\n"
+        )
+        procs = [
+            subprocess.Popen([sys.executable, "-c", code, str(dest)], stderr=subprocess.PIPE)
+            for _ in range(6)
+        ]
+        procs.append(subprocess.Popen([sys.executable, "-c", spoil, str(dest)]))
+        errors = [p.communicate(timeout=120)[1] for p in procs]
+        assert [p.returncode for p in procs] == [0] * 7, errors
+        aside = [p for p in dest.parent.iterdir() if ".moved-aside" in p.name]
+        assert all(p.is_dir() for p in aside), [p.name for p in aside if not p.is_dir()]
+        # Every warning names a directory that was really moved.
+        warned = b"".join(e for e in errors if e).count(b"is a directory, not an artifact")
+        assert warned == len(aside)
+
+
+class ProcessHelper:
+    """`python -m barca._transfer` as its own process, as the coordinator runs it.
+
+    `hold` pauses it at a point of python/tests/hold/sitecustomize.py until `release()`.
+    """
+
+    def __init__(self, tmp_path, hold: str | None = None, lifeline: bool = False):
+        # A Unix socket path is limited to about 100 bytes; pytest's tmp_path is longer.
+        self._sockdir = tempfile.mkdtemp(prefix="bx", dir="/tmp")
+        self.hold_dir = tmp_path / f"hold-{os.path.basename(self._sockdir)}"
+        self.hold_dir.mkdir()
+        path = os.path.join(self._sockdir, "s")
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        server.bind(path)
+        server.listen(1)
+        server.settimeout(30)
+        env = {**os.environ, "BARCA_SOCKET": path}
+        if hold:
+            env["PYTHONPATH"] = HOLD_SHIM + os.pathsep + env.get("PYTHONPATH", "")
+            env["BARCA_TEST_HOLD"] = f"{hold}:{self.hold_dir}"
+        self.hold = hold
+        if lifeline:
+            # As the coordinator starts it: stdin is a pipe only the coordinator holds.
+            env["BARCA_LIFELINE"] = "stdin"
+        self.proc = subprocess.Popen(
+            [sys.executable, "-m", "barca._transfer"],
+            env=env,
+            stdin=subprocess.PIPE if lifeline else None,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            self.peer, _ = server.accept()
+        finally:
+            server.close()
+        self.peer.settimeout(30)
+
+    def request(self, msg: dict) -> None:
+        _send(self.peer, msg)
+
+    def reply(self) -> dict:
+        return _recv(self.peer)
+
+    def wait_until_held(self) -> None:
+        marker = self.hold_dir / f"{self.hold}.started"
+        deadline = time.monotonic() + 30
+        while not marker.exists():
+            assert self.proc.poll() is None, "the helper exited before reaching the hold"
+            assert time.monotonic() < deadline, f"the helper never reached {self.hold}"
+            time.sleep(0.02)
+
+    def release(self) -> None:
+        (self.hold_dir / "release").write_text("")
+
+    def finish(self) -> tuple[int, str]:
+        """Wait for the helper to exit; (exit code, stderr)."""
+        # Python 3.12.0 communicate() flushes a referenced stdin even after
+        # the lifeline was explicitly closed. EOF already reached the helper.
+        if self.proc.stdin is not None and self.proc.stdin.closed:
+            self.proc.stdin = None
+        try:
+            _, err = self.proc.communicate(timeout=30)
+        finally:
+            self.proc.kill()
+            self.proc.wait(timeout=30)
+            for stream in (self.proc.stdin, self.proc.stderr):
+                if stream is not None:
+                    stream.close()
+            self.peer.close()
+            shutil.rmtree(self._sockdir, ignore_errors=True)
+        return self.proc.returncode, err
+
+
+@pytest.fixture
+def process_helper(tmp_path):
+    helpers = []
+
+    def start(hold: str | None = None, lifeline: bool = False) -> ProcessHelper:
+        helpers.append(ProcessHelper(tmp_path, hold, lifeline))
+        return helpers[-1]
+
+    yield start
+    for h in helpers:
+        if h.proc.poll() is None:
+            h.proc.kill()
+            h.finish()
+
+
+def _store_file(tmp_path, body: bytes):
+    store = tmp_path / "store"
+    store.mkdir(exist_ok=True)
+    (store / "h.json").write_bytes(body)
+    return store / "h.json"
+
+
+class TestSignals:
+    """Ctrl-C is the coordinator's to act on; it stops the helper with SIGTERM
+    (crates/barca-core/src/helper_proc.rs)."""
+
+    def test_sigint_is_ignored_and_the_helper_keeps_serving(self, process_helper, tmp_path):
+        h = process_helper()
+        remote = _store_file(tmp_path, b'{"x": 1}')
+        # A reply proves the helper is in its serving loop before the signal is sent.
+        h.request({"type": "probe", "id": 1, "root": str(remote.parent)})
+        assert h.reply()["type"] == "done"
+
+        h.proc.send_signal(signal.SIGINT)
+        local = tmp_path / "local" / "h.json"
+        h.request({"type": "get", "id": 2, "remote": str(remote), "local": str(local)})
+        assert h.reply()["type"] == "done"  # still serving after the interrupt
+        assert local.read_bytes() == b'{"x": 1}'
+
+        h.request({"type": "shutdown"})
+        code, err = h.finish()
+        assert code == 0, err
+        assert "Traceback" not in err and "KeyboardInterrupt" not in err, err
+
+    def test_sigterm_mid_download_removes_the_temp_file_and_exits(self, process_helper, tmp_path):
+        h = process_helper(hold="get")
+        remote = _store_file(tmp_path, b'{"x": 1}')
+        local = tmp_path / "local" / "h.json"
+        h.request({"type": "get", "id": 1, "remote": str(remote), "local": str(local)})
+        h.wait_until_held()
+        # The download is under way: its temp file is there, the artifact is not.
+        assert [p.name.endswith(".tmp") for p in local.parent.iterdir()] == [True]
+
+        h.proc.send_signal(signal.SIGTERM)
+        code, err = h.finish()
+        assert code == 128 + signal.SIGTERM, err
+        assert list(local.parent.iterdir()) == []
+        assert "Traceback" not in err, err
+
+    def test_sigterm_mid_upload_to_a_directory_store_leaves_no_partial_object(
+        self, process_helper, tmp_path
+    ):
+        h = process_helper(hold="copied")
+        src = tmp_path / "a.json"
+        src.write_bytes(b'{"x": 1}')
+        dest = tmp_path / "store" / "n" / "h.json"
+        h.request({"type": "put", "id": 1, "local": str(src), "remote": str(dest)})
+        h.wait_until_held()
+        # Held between writing the temp file and renaming it: the object is not there yet.
+        assert [p.name.endswith(".tmp") for p in dest.parent.iterdir()] == [True]
+
+        h.proc.send_signal(signal.SIGTERM)
+        code, err = h.finish()
+        assert code == 128 + signal.SIGTERM, err
+        assert list(dest.parent.iterdir()) == []
+
+
+class TestStaging:
+    """Temp files beside their destination (`_storage.staged_beside`), and a process that
+    leaves in the middle (`_storage.discard_staged`)."""
+
+    @pytest.fixture(autouse=True)
+    def _fresh(self, monkeypatch):
+        monkeypatch.setattr(_storage, "_leaving", False)
+        monkeypatch.setattr(_storage, "_staged", set())
+
+    def test_a_staged_file_is_removed_when_its_block_ends_without_installing_it(self, tmp_path):
+        with pytest.raises(RuntimeError), _storage.staged_beside(tmp_path / "h.json") as tmp:
+            tmp.write_text("half")
+            raise RuntimeError("the transfer failed")
+        assert list(tmp_path.iterdir()) == []
+
+    @pytest.mark.parametrize("handler", ["transfer", "state", "default", "ignored"])
+    def test_sigterm_during_finalizer_removes_partial_stage_only(self, tmp_path, handler):
+        destination = tmp_path / "artifact.json"
+        sentinel = tmp_path / ".unrelated.tmp"
+        destination.write_bytes(b"previous artifact")
+        sentinel.write_bytes(b"another owner")
+        child = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                """import os, signal, sys
+from pathlib import Path
+from barca import _storage, _transfer, _state
+signal.signal(signal.SIGTERM, {'transfer': _transfer._stop, 'state': _state._stop,
+                             'default': signal.SIG_DFL, 'ignored': signal.SIG_IGN}[sys.argv[2]])
+real_unlink = Path.unlink
+stage = None
+def interrupt_unlink(path, *args, **kwargs):
+    if path == stage:
+        assert path.read_bytes() == b'partial artifact'
+        os.kill(os.getpid(), signal.SIGTERM)
+    return real_unlink(path, *args, **kwargs)
+Path.unlink = interrupt_unlink
+with _storage.staged_beside(Path(sys.argv[1])) as temporary:
+    stage = temporary
+    temporary.write_bytes(b'partial artifact')
+""",
+                str(destination),
+                handler,
+            ],
+            capture_output=True,
+            timeout=30,
+        )
+        expected = {"transfer": 143, "state": 143, "default": -15, "ignored": 0}
+        assert child.returncode == expected[handler], child.stderr.decode()
+        assert destination.read_bytes() == b"previous artifact"
+        assert sentinel.read_bytes() == b"another owner"
+        assert sorted(p.name for p in tmp_path.iterdir()) == [sentinel.name, destination.name]
+
+    def test_failed_finalizer_keeps_stage_registered_for_shutdown(self, tmp_path, monkeypatch):
+        real_unlink = Path.unlink
+
+        def denied(path, *args, **kwargs):
+            raise PermissionError("temporary removal refused")
+
+        monkeypatch.setattr(Path, "unlink", denied)
+        with pytest.raises(PermissionError), _storage.staged_beside(tmp_path / "a.json") as tmp:
+            tmp.write_bytes(b"partial")
+        assert str(tmp) in _storage._staged
+        assert tmp.exists()
+        monkeypatch.setattr(Path, "unlink", real_unlink)
+        _storage.discard_staged()
+        assert not tmp.exists()
+
+    @pytest.mark.parametrize("handler", ["transfer", "state", "default", "ignored"])
+    def test_sigterm_after_creation_keeps_owned_cleanup(self, tmp_path, handler):
+        destination = tmp_path / "artifact.json"
+        sentinel = tmp_path / ".unrelated.tmp"
+        destination.write_bytes(b"previous artifact")
+        sentinel.write_bytes(b"another owner")
+        child = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                """import os, signal, sys
+from pathlib import Path
+from barca import _storage, _transfer, _state
+handlers = {'transfer': _transfer._stop, 'state': _state._stop,
+            'default': signal.SIG_DFL, 'ignored': signal.SIG_IGN}
+original_handler = handlers[sys.argv[2]]
+signal.signal(signal.SIGTERM, original_handler)
+real_mkstemp = _storage.tempfile.mkstemp
+def interrupt_creation(**kwargs):
+    fd, temporary = real_mkstemp(**kwargs)
+    os.write(fd, b'partial artifact')
+    os.kill(os.getpid(), signal.SIGTERM)
+    return fd, temporary
+_storage.tempfile.mkstemp = interrupt_creation
+with _storage.staged_beside(Path(sys.argv[1])) as temporary:
+    assert sys.argv[2] == 'ignored'
+    assert temporary.read_bytes() == b'partial artifact'
+assert signal.getsignal(signal.SIGTERM) == original_handler
+""",
+                str(destination),
+                handler,
+            ],
+            capture_output=True,
+            timeout=30,
+        )
+        expected = {"transfer": 143, "state": 143, "default": -15, "ignored": 0}
+        assert child.returncode == expected[handler], child.stderr.decode()
+        assert destination.read_bytes() == b"previous artifact"
+        assert sentinel.read_bytes() == b"another owner"
+        assert sorted(p.name for p in tmp_path.iterdir()) == [sentinel.name, destination.name]
+
+    @pytest.mark.parametrize("fails", [False, True])
+    def test_creation_restores_handler_and_replays_after_registration(
+        self, tmp_path, monkeypatch, fails
+    ):
+        real_mkstemp = _storage.tempfile.mkstemp
+        previous_handler = signal.getsignal(signal.SIGTERM)
+        calls, opened = [], []
+
+        def handler(signum, frame):
+            calls.append((signum, set(_storage._staged)))
+            if opened:
+                with pytest.raises(OSError):
+                    os.fstat(opened[0])
+
+        def creation(**kwargs):
+            if fails:
+                os.kill(os.getpid(), signal.SIGTERM)
+                raise OSError("creation refused")
+            fd, temporary = real_mkstemp(**kwargs)
+            opened.append(fd)
+            os.kill(os.getpid(), signal.SIGTERM)
+            return fd, temporary
+
+        signal.signal(signal.SIGTERM, handler)
+        monkeypatch.setattr(_storage.tempfile, "mkstemp", creation)
+        try:
+            if fails:
+                with pytest.raises(OSError, match="creation refused"):
+                    with _storage.staged_beside(tmp_path / "artifact.json"):
+                        pytest.fail("creation should fail")
+                assert calls == [(signal.SIGTERM, set())]
+            else:
+                with _storage.staged_beside(tmp_path / "artifact.json") as temporary:
+                    assert calls == [(signal.SIGTERM, {str(temporary)})]
+            assert signal.getsignal(signal.SIGTERM) is handler
+            assert list(tmp_path.iterdir()) == []
+        finally:
+            signal.signal(signal.SIGTERM, previous_handler)
+
+    @pytest.mark.parametrize("handler", ["transfer", "state", "default"])
+    def test_sigterm_at_handler_restoration_is_replayed(self, tmp_path, handler):
+        destination = tmp_path / "artifact.json"
+        destination.write_bytes(b"previous artifact")
+        child = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                """import os, signal, sys
+from pathlib import Path
+from barca import _storage, _transfer, _state
+original = {'transfer': _transfer._stop, 'state': _state._stop,
+            'default': signal.SIG_DFL}[sys.argv[2]]
+signal.signal(signal.SIGTERM, original)
+real_signal = signal.signal
+interrupted = False
+def at_restoration(signum, handler):
+    global interrupted
+    if signum == signal.SIGTERM and handler == original and not interrupted:
+        interrupted = True
+        os.kill(os.getpid(), signal.SIGTERM)
+    return real_signal(signum, handler)
+signal.signal = at_restoration
+with _storage.staged_beside(Path(sys.argv[1])):
+    pass
+""",
+                str(destination),
+                handler,
+            ],
+            capture_output=True,
+            timeout=30,
+        )
+        assert child.returncode == (-15 if handler == "default" else 143), child.stderr.decode()
+        assert destination.read_bytes() == b"previous artifact"
+        assert list(tmp_path.iterdir()) == [destination]
+
+    def test_leaving_removes_what_is_staged_and_stages_nothing_more(self, tmp_path):
+        with _storage.staged_beside(tmp_path / "h.json") as tmp:
+            assert tmp.exists()
+            _storage.discard_staged()
+            assert not tmp.exists()
+        # A transfer that starts after the process began to leave gets no temp file: nothing
+        # can be created that nobody is left to remove.
+        with pytest.raises(InterruptedError), _storage.staged_beside(tmp_path / "late.json"):
+            pass
+        assert list(tmp_path.iterdir()) == []
+
+    def test_a_file_cannot_be_created_between_the_look_and_the_exit(self, tmp_path, monkeypatch):
+        """The window the soak hit: one thread leaves while another is creating its temp file.
+        The file is created while the staging lock is held, so leaving waits for it."""
+        import tempfile as real_tempfile
+
+        entered, proceed, left = threading.Event(), threading.Event(), threading.Event()
+        real = real_tempfile.mkstemp
+
+        def slow_mkstemp(**kwargs):
+            entered.set()
+            assert proceed.wait(30)
+            return real(**kwargs)
+
+        monkeypatch.setattr(_storage.tempfile, "mkstemp", slow_mkstemp)
+        outcome = []
+
+        def stage():
+            try:
+                with _storage.staged_beside(tmp_path / "h.json") as tmp:
+                    assert left.wait(30)  # the other thread has discarded by now
+                    outcome.append(tmp.exists())
+            except InterruptedError:
+                outcome.append("refused")
+
+        def leave():
+            _storage.discard_staged()
+            left.set()
+
+        stager = threading.Thread(target=stage)
+        stager.start()
+        assert entered.wait(30)  # inside mkstemp, lock held
+        leaver = threading.Thread(target=leave)
+        leaver.start()
+        assert not left.wait(0.2), "leaving did not wait for the file being created"
+        proceed.set()
+        stager.join(30)
+        leaver.join(30)
+        assert outcome == [False]  # created, registered, then removed by the leaver
+        assert list(tmp_path.iterdir()) == []
+
+
+class TestCoordinatorGone:
+    """The helper is deaf to Ctrl-C, so it has to notice by itself that the coordinator is
+    gone, and then leave without a word and without a half-written file (#249)."""
+
+    def _run(self, tmp_path, **env) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, "-m", "barca._transfer"],
+            env={**os.environ, "BARCA_SOCKET": str(tmp_path / "no-such.sock"), **env},
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+    def test_no_socket_and_no_coordinator_is_a_silent_exit(self, tmp_path):
+        # What a helper finds when the command that started it has already ended: the socket
+        # is gone and so is the other end of its lifeline (here: stdin at end-of-file).
+        proc = self._run(tmp_path, BARCA_LIFELINE="stdin")
+        assert (proc.returncode, proc.stdout, proc.stderr) == (0, "", "")
+
+    def test_no_socket_with_the_coordinator_alive_is_one_line_not_a_traceback(self, tmp_path):
+        proc = self._run(tmp_path)
+        assert proc.returncode == 1
+        (line,) = proc.stderr.strip().splitlines()
+        assert line.startswith("[barca] transfer helper: cannot reach the coordinator at ")
+        assert "Error: " in line and "Traceback" not in proc.stderr
+
+    def test_the_helper_leaves_when_its_lifeline_closes_mid_download(
+        self, process_helper, tmp_path
+    ):
+        h = process_helper(hold="get", lifeline=True)
+        remote = _store_file(tmp_path, b'{"x": 1}')
+        local = tmp_path / "local" / "h.json"
+        h.request({"type": "get", "id": 1, "remote": str(remote), "local": str(local)})
+        h.wait_until_held()
+        assert [p.name.endswith(".tmp") for p in local.parent.iterdir()] == [True]
+
+        h.proc.stdin.close()  # the coordinator was killed
+        code, err = h.finish()
+        assert (code, err) == (0, "")
+        assert h.proc.poll() == 0
+        with pytest.raises(ChildProcessError):
+            os.waitpid(h.proc.pid, os.WNOHANG)  # already reaped, not a zombie
+        assert list(local.parent.iterdir()) == []
+
+    def test_failed_communication_still_reaps_helper_and_closes_owned_resources(
+        self, process_helper, monkeypatch
+    ):
+        h = process_helper(lifeline=True)
+
+        def timed_out(**_kwargs):
+            raise subprocess.TimeoutExpired(h.proc.args, 0)
+
+        monkeypatch.setattr(h.proc, "communicate", timed_out)
+        with pytest.raises(subprocess.TimeoutExpired):
+            h.finish()
+        assert h.proc.returncode is not None
+        with pytest.raises(ChildProcessError):
+            os.waitpid(h.proc.pid, os.WNOHANG)
+        assert h.proc.stdin.closed and h.proc.stderr.closed
+        assert h.peer.fileno() == -1 and not Path(h._sockdir).exists()
+
+    def test_the_helper_leaves_when_the_socket_closes_mid_download(self, process_helper, tmp_path):
+        h = process_helper(hold="get")
+        remote = _store_file(tmp_path, b'{"x": 1}')
+        local = tmp_path / "local" / "h.json"
+        h.request({"type": "get", "id": 1, "remote": str(remote), "local": str(local)})
+        h.wait_until_held()
+
+        h.peer.close()
+        code, err = h.finish()
+        assert (code, err) == (0, "")
+        assert list(local.parent.iterdir()) == []
+
+    def test_the_state_helper_leaves_when_its_lifeline_closes(self, tmp_path):
+        hold_dir = tmp_path / "hold"
+        hold_dir.mkdir()
+        db = tmp_path / "metadata.db"
+        db.write_bytes(b"not looked at")
+        env = {
+            **os.environ,
+            "BARCA_LIFELINE": "stdin",
+            "PYTHONPATH": HOLD_SHIM + os.pathsep + os.environ.get("PYTHONPATH", ""),
+            "BARCA_TEST_HOLD": f"push:{hold_dir}",
+        }
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "barca._state", "push", str(tmp_path / "s" / "m.db"), str(db)],
+            env=env,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            deadline = time.monotonic() + 30
+            while not (hold_dir / "push.started").exists():
+                assert proc.poll() is None and time.monotonic() < deadline
+                time.sleep(0.02)
+            proc.stdin.close()
+            out, err = proc.stdout.read(), proc.stderr.read()
+            assert proc.wait(timeout=30) == 0
+        finally:
+            proc.kill()
+        assert (out, err) == ("", "")
+        assert not (tmp_path / "s" / "m.db").exists()
+
+
+class TestCrossProcess:
+    def test_two_processes_fetching_the_same_local_path_both_succeed(
+        self, process_helper, tmp_path
+    ):
+        """Each downloads to its own temp file and renames it into place, so neither sees a
+        partial file and neither removes the other's.
+
+        Both helpers are held with their download staged, so the two fetches are certainly
+        in flight at once; whichever rename lands second replaces a whole file with a whole
+        file.
+        """
+        body = b"x" * 200_000
+        sha = hashlib.sha256(body).hexdigest()
+        remote = _store_file(tmp_path, body)
+        local = tmp_path / "local" / "h.json"
+        helpers = [process_helper(hold="get"), process_helper(hold="get")]
+        for h in helpers:
+            h.request(
+                {"type": "get", "id": 1, "remote": str(remote), "local": str(local), "sha256": sha}
+            )
+        for h in helpers:
+            h.wait_until_held()
+        assert len([p for p in local.parent.iterdir() if p.name.endswith(".tmp")]) == 2
+        assert not local.exists()
+
+        for h in helpers:
+            h.release()
+        replies = [h.reply() for h in helpers]
+        assert [(r["type"], r["sha256"], r["mismatch"]) for r in replies] == [
+            ("done", sha, False)
+        ] * 2
+        for h in helpers:
+            h.request({"type": "shutdown"})
+            code, err = h.finish()
+            assert code == 0, err
+        assert local.read_bytes() == body
+        assert sorted(p.name for p in local.parent.iterdir()) == ["h.json"]
 
 
 class TestConcurrency:

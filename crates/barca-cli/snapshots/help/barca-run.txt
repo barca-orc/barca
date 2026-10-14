@@ -19,7 +19,7 @@ Options:
           Force re-materialize EVERY asset in the task's cone (nothing comes from cache)
 
       --dry-run
-          Show what this command would do (each step cached or will-run, and why) without running or writing anything
+          Show what this command would do (each step cached or will-run, and why) without executing steps or recording a run (shared history may synchronize)
 
   -o, --output <OUTPUT>
           Output format (kept for compatibility; --json / --pretty are the canonical spelling)
@@ -41,7 +41,7 @@ Options:
       --fields <FIELDS>
           Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones
 
-          [possible values: id, kind, action, status, reason, detail, run_hash, artifact, warning, partitions, env]
+          [possible values: id, kind, action, status, reason, detail, run_hash, artifact, warning, artifact_mismatch, partitions, env]
 
       --env <ENV>
           Environment name (separates cache/state per environment)
@@ -50,6 +50,7 @@ Options:
           Print help (see a summary with '-h')
 
 Examples:
+  BARCA_REMOTE=off barca run deploy pipeline.py   # local artifacts and history for this process
   barca run deploy                                     # find the task anywhere in the project and run it
   barca run deploy pipelines/                          # only read files under pipelines/
   barca run deploy pipeline.py                         # task runs; upstream assets come from cache

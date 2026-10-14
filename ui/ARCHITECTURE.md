@@ -88,6 +88,57 @@ The two pure steps are covered by `runStream.test.ts` and `runFeedback.test.ts`,
 including the worker-failure path (`"No module named 'sklearn'"` → node `failed` + error
 surfaced). No browser, no server, no mocks.
 
+## Design core
+
+The look of the UI is defined in three places, in this order:
+
+1. **Tokens** (`styles/tokens/`): colors, type scale, spacing, radius, elevation, motion, and
+   the light theme. The only place a color or a size is written as a value.
+2. **Primitives** (`components/`): `Button`, `IconButton`, `Tag`, `Chip`/`ChipGroup`, `Select`,
+   `SearchInput`, `StatusDot`/`StatusBadge`, `Skeleton`, `ConnectionBadge`, and `SidePanel` with
+   `Section` and `KeyValue`. Their CSS is inline (tokens as `var(--…)`) or, where it needs
+   pseudo-classes, in `styles/components.css`.
+3. **Pages** (`pages/`, `layouts/`): compose primitives; `styles/shell.css` holds page layout
+   only.
+
+Rules:
+
+- A page does not write a `<button>`, `<select>` or `<input>` for something a primitive covers,
+  and does not restyle a primitive. If it needs a variant, the primitive gets it.
+- A second use of a pattern is the cue to make the primitive; the first use stays in its page.
+- A new or changed primitive is added to the kit page (`pages/KitPage.tsx`, at `/ui/#/kit`
+  under `pnpm dev`) in every state it has. The kit page is not in the built UI.
+- `styles/tokens.test.ts` fails on a raw color or an off-scale font size outside
+  `styles/tokens/`. Add a token instead of an exception.
+
+Not primitives yet, by that second-use rule: the sortable table, the run list, the log viewer's
+frame. They are the next candidates when a second view needs them.
+
+## Layout stability
+
+A page must not move when its data arrives. The rules:
+
+- **Reserve the space.** Content that loads later gets a `Skeleton` sized like what will
+  replace it, or a fixed-size slot that is always rendered (the node panel's duration
+  histogram shows "needs two or more successful runs" in the same box). Never render
+  `{data && <Thing/>}` where `Thing` changes the height of what follows it.
+- **Late things go last.** A control that appears after data loads (a filter chip) sits after
+  the controls that are always there, so it pushes nothing that was already placed.
+- **Three states, not two.** "Not loaded yet" is its own state (`lib/connection.ts`:
+  connecting / online / offline). Showing the failure state until the data arrives is wrong
+  and shifts when the truth lands.
+- **Fixed-width digits.** `font-variant-numeric: tabular-nums` is on `body`; numbers that
+  update in place keep their width.
+- **Scrollbars take their space always** (`scrollbar-gutter: stable` on the scroll areas).
+
+`e2e/layout-shift.spec.ts` enforces this: every flow runs with the API held back 800ms (so the
+loading state is visible and the data lands after the browser's 500ms input window) and
+fails over a small shift budget, naming the elements that moved. A new page or panel gets a
+flow there. Run it with `pnpm test:e2e`; `e2e/helpers/layoutShift.ts` has the helpers.
+
+Known gap: the self-hosted fonts load with `font-display: swap`, which reflows text once when
+they arrive. The tests do not exercise that (fonts are local and fast).
+
 ## Toolchain
 
 - **pnpm**, **strict TypeScript** (latest stable), **ts-pattern** across the board.
@@ -98,3 +149,10 @@ surfaced). No browser, no server, no mocks.
   `tsc`); the production `build` keeps stable `tsc -b` as the authoritative gate.
 - Styling via the barca design-system CSS tokens; components reference `var(--…)`, never
   invented colors.
+
+Graph state presentation lives in `src/lib/graphState.ts`. Resting node
+colors come from `/state`: cached green, stale/partial yellow, never-run/unknown/always-run
+neutral, and the latest failed attempt red even if an older artifact exists. Active
+run events overlay that state; completion refreshes it. Selection uses a separate outline.
+The graph displays every asset and dependency in the selected pipeline. No nodes
+are grouped or collapsed automatically.

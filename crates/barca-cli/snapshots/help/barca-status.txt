@@ -54,7 +54,8 @@ gone and a run would read it: reason `artifact_missing`), never_run, partial
 (some partition keys cached), unknown (dynamic partitions not yet known) or always_runs (tasks,
 sensors), with a reason. JSON spells the states in snake_case, the same as the `summary` keys
 (the table prints never-run, always-runs). It is the same decision `--dry-run` makes.
-Read-only: never imports your code, never writes. Shape (rows, columns, type) is read from the
+No steps execute. Optimistic shared history may synchronize locally; partitions(<expression>)
+may import the source to resolve keys. Shape (rows, columns, type) is read from the
 artifact file only. With remote storage it is read from the bucket: a parquet footer by ranged
 requests, json and pickle by a download of up to 16 MB (larger ones get a `note`). A store that
 cannot be reached is a `note` on each shape, not a failed command.

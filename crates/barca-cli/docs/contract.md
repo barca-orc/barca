@@ -76,7 +76,7 @@ outside the `GENERATED` blocks is written by hand.
 | `barca serve` | `[<FILES>...]` | experimental: the HTTP API and scheduler are young: no auth, no shared remote state, routes may change | Run a long-running HTTP server exposing the orchestrator as a JSON API |
 | `barca list` | `[<FILES>...]` | stable | List all discovered definitions (assets, tasks, sensors) with their deps |
 | `barca status` | `[<ARGS>...]` | stable | Show every node's cache state, last materialization and artifact shape (read-only) |
-| `barca sql` | `<QUERY> [<FILES>...]` | experimental: new in 0.13: the view naming and the JSON result shape may change after field use | Query cached results with SQL (DuckDB) — each asset is a view named after its function |
+| `barca sql` | `<QUERY> [<FILES>...]` | experimental: new in 0.13: the view naming and the JSON result shape may change after field use | Query cached results with SQL (DuckDB) — each asset is a named view |
 | `barca docs` | `[<TOPIC>]` | stable | Show the built-in manual: concepts, output formats, examples, agent conventions |
 | `barca version` | - | stable | Print version information |
 | `barca help` | - | stable | Print this message or the help of the given subcommand(s) |
@@ -93,9 +93,13 @@ Positional rules (stable), for `get`, `run` and `status`:
   (`a,,b`), is a usage error.
 - An unknown target is a usage error (exit 2) on every command, with one remediation:
   ``Run `barca list <files>` to see available assets and tasks.``
-- barca never offers fuzzy suggestions: no "did you mean" for targets or `barca docs` topics (an
-  unknown topic lists every valid topic), and argument errors carry no "a similar argument
-  exists" tip. A guess can read as confirmation.
+- barca never offers fuzzy suggestions on the command line: no "did you mean" for targets or
+  `barca docs` topics (an unknown topic lists every valid topic), and argument errors carry no
+  "a similar argument exists" tip. A guess can read as confirmation. The one place a guess is
+  made is a misspelt decorator argument in a pipeline file (`input=` for `inputs=`): the error
+  names the accepted argument when exactly one is within one edit of what was written (two for
+  a name longer than four characters), always next to the full list of accepted arguments
+  (`barca docs assets`, "Accepted arguments").
 - `--refresh` and `--fields` take one comma-separated list (`--refresh a,b`).
 
 ## Arguments
@@ -122,9 +126,9 @@ default, and any aliases.
 | `--no-cascade` | - | default `false` | stable | With --refresh: re-materialize only the named assets, not what is downstream of them. Cached downstream assets then do not reflect the refresh; barca warns |
 | `--refresh-all` | - | default `false` | stable | Force re-materialize EVERY asset in the target's cone (nothing comes from cache) |
 | `--no-cache` | - | default `false`; hidden from `--help` | experimental: deprecated: the old spelling of --refresh-all; warns on stderr and will be removed | Deprecated spelling of --refresh-all (prints a warning; removed in a future minor) |
-| `--dry-run` | - | default `false` | stable | Show what this command would do (each step cached or will-run, and why) without running or writing anything |
+| `--dry-run` | - | default `false` | stable | Show what this command would do (each step cached or will-run, and why) without executing steps or recording a run (shared history may synchronize) |
 | `--agent` | - | default `false` | stable | Agent-friendly output: plain structured progress lines instead of visual progress bar |
-| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `run_hash`, `artifact`, `warning`, `partitions`, `env` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones |
+| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `partitions`, `env` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
 
 #### barca run
@@ -136,12 +140,12 @@ default, and any aliases.
 | `--no-cascade` | - | default `false` | stable | With --refresh: re-materialize only the named assets, not what is downstream of them. Cached downstream assets then do not reflect the refresh; barca warns |
 | `--refresh-all` | - | default `false` | stable | Force re-materialize EVERY asset in the task's cone (nothing comes from cache) |
 | `--no-cache` | - | default `false`; hidden from `--help` | experimental: deprecated: the old spelling of --refresh-all; warns on stderr and will be removed | Deprecated spelling of --refresh-all (prints a warning; removed in a future minor) |
-| `--dry-run` | - | default `false` | stable | Show what this command would do (each step cached or will-run, and why) without running or writing anything |
+| `--dry-run` | - | default `false` | stable | Show what this command would do (each step cached or will-run, and why) without executing steps or recording a run (shared history may synchronize) |
 | `-o, --output` | `json\|value\|pretty` | - | experimental: kept for compatibility; --json / --pretty are the canonical spelling | Output format (kept for compatibility; --json / --pretty are the canonical spelling) |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `--agent` | - | default `false` | stable | Agent-friendly output: plain structured progress lines instead of visual progress bar |
-| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `run_hash`, `artifact`, `warning`, `partitions`, `env` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones |
+| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `partitions`, `env` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
 
 #### barca plan
@@ -178,9 +182,10 @@ default, and any aliases.
 |---|---|---|---|---|
 | `<FILES>...` | - | - | experimental (with the command) | Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`). With --watch, files added later are not picked up until restart |
 | `-p, --port` | `PORT` | default `8274` | experimental (with the command) | Port to bind on |
+| `--host` | `HOST` | default `127.0.0.1` | experimental (with the command) | IP address to bind on; 0.0.0.0 (or ::) listens on every interface. The API has no authentication |
 | `--watch` | - | default `false` | experimental (with the command) | Dev mode: re-parse the DAG when source files change |
 | `--no-schedule` | - | default `false` | experimental (with the command) | Disable the cron scheduler (Schedule(...) assets will not auto-fire) |
-| `--timezone` | `TIMEZONE` | default `local` | experimental (with the command) | Timezone for cron evaluation: local (default), utc, or an IANA name |
+| `--timezone` | `TIMEZONE` | default `local` | experimental (with the command) | Timezone for cron evaluation: local (this machine's zone) or utc, in any letter case, or an IANA name such as America/New_York, which is case-sensitive. Any other value is a usage error |
 | `--read-only` | - | default `false` | experimental (with the command) | Inspect only: refuse runs, never schedule, read the metadata DB from snapshots |
 | `--env` | `ENV` | - | experimental (with the command) | Environment name (separates cache/state per environment) |
 
@@ -191,6 +196,7 @@ default, and any aliases.
 | `<FILES>...` | - | - | stable | Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`) |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
+| `--groups` | - | default `false` | experimental: Organizational group hierarchy and metadata shape are experimental | Show the organizational hierarchy (groups are never executable nodes) |
 | `-l, --limit` | `LIMIT` | default `100` | stable | Maximum number of nodes to show, in topological order |
 | `--all` | - | default `false` | stable | Show every node (no limit) |
 | `--fields` | comma-separated: `id`, `kind`, `freshness`, `schedule`, `inputs`, `env`, `next_fire` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `nodes`. Implies --json. An unknown key is a usage error listing the valid ones |
@@ -261,10 +267,13 @@ follow the same rule: in JSON mode they are the envelope on stderr (see Errors).
 |---|---|---|
 | `BARCA_OUTPUT` | `json` or `pretty`: output format when no flag is given; any other value is a usage error (exit 2) | stable |
 | `BARCA_ENV` | environment name when `--env` is not given (beats `default_env` in `barca.toml`) | stable |
+| `BARCA_REMOTE` | `off` disables remote artifacts/history for this process; unset/empty retains normal config; other values are usage errors | stable |
 | `BARCA_REMOTE_URI` | remote root for artifacts and shared state (`[remote].uri`) | stable |
 | `BARCA_STATE_URI` | shared metadata DB location (`[remote].state_uri`) | stable |
 | `BARCA_STATE` | `optimistic` or `off` (`[remote].state`); any other value is a usage error | stable |
 | `BARCA_PUSH_RETRIES` | integer: retries when pushing shared state (`[remote].push_retries`, default 5) | stable |
+| `BARCA_TRANSFER_CONCURRENCY` | positive integer: concurrent artifact transfers (`[remote].transfer_concurrency`, default 4); invalid values exit 3 | stable |
+| `BARCA_TRANSFER_TIMEOUT` | positive integer seconds per transfer attempt (`[remote].transfer_timeout`, default 600); invalid values exit 3 | stable |
 | `BARCA_STORAGE_OPTIONS` | JSON object keyed by protocol, merged over `[remote.storage_options.*]` | stable |
 | `BARCA_ARTIFACT_URI` | literal artifact root, bypassing the environment prefix (warns with a non-default env) | experimental |
 | `BARCA_PROGRESS_SECS` | seconds between `still running` lines (default 15, `0` turns them off) | experimental |
@@ -292,11 +301,85 @@ Each error `kind` has exactly one exit code (stable):
 <!-- END GENERATED exit-codes -->
 
 `step_failed`: one of your steps raised (fix the code). `usage`: bad arguments, unknown target,
-task/asset misuse, a `.py` file that does not parse, a DAG that cannot be built (an input that
+task/asset misuse, a `.py` file that does not parse, a decorator called with an argument it does
+not define (`@asset(after=x)`, `input=` for `inputs=`, `@asset(**options)`; `barca docs assets`,
+"Accepted arguments"), a DAG that cannot be built (an input that
 names no definition, a cycle, a partitioned asset in an unpartitioned asset's `inputs=` without
 `collect()`, a `partitions_from()` the asset cannot mirror), invalid `--env` or `barca.toml`. `infra`:
 barca or its environment failed (metadata DB, workers, remote state, I/O); retrying may help.
-`cancelled`: interrupted with Ctrl-C.
+`cancelled`: stopped by Ctrl-C (SIGINT) or by SIGTERM (what a supervisor, a CI timeout or
+`docker stop` sends), at any point of a `get` or `run`: while steps run, and
+with an artifact store also while artifacts upload or download or the shared history is pulled
+or pushed. The exit code is 130 whatever the store does: a cancelled run spends at most 10
+seconds sharing its record, a second Ctrl-C or SIGTERM ends that at once, and a push that fails
+then is a line on stderr, not exit 3 (`barca docs remote`, "Ctrl-C").
+
+The exit code is 130 for SIGTERM as well as for SIGINT. Barca handles both signals the same way
+(it stops the workers, records the run as `cancelled` and exits), and the exit code follows the
+error `kind`, which has one code. 143, which a shell reports for a process that SIGTERM killed,
+is never barca's own exit code. SIGKILL cannot be handled: the shell reports 137 and the run is
+later reported as `interrupted` (`barca docs cache`).
+
+`barca serve` is not a run: stopped by SIGINT or SIGTERM it cancels the runs in flight, records
+them as `cancelled` and exits 0 (`barca docs scheduling`, "Stopping the server").
+
+An error in a pipeline file (a syntax error, a decorator argument barca does not define, an
+invalid `env=` or cron) fails every command that reads that file, whatever the target: `list`,
+`plan`, `status`, `get`, `run`, `stats` and `sql` exit 2 and run nothing. With no file arguments
+that is every pipeline file of the project. The envelope's `error` starts with `Parse error:
+<file>:<function> (line <n>):` for a decorator argument, and its `remediation` says what to
+change; the wording is not contract.
+
+### A closed stdout or stderr (stable)
+
+When the reader of barca's output goes away (`barca list | head -1`, a pager that quits, a
+caller that stops reading), barca prints nothing about it and does not stop what it is doing:
+
+- Output for the closed stream is dropped. There is no panic, no traceback and no message on
+  the other stream.
+- The command finishes. A `get` or `run` executes every step and records the run as it would
+  with a reader, whether stdout, stderr or both are closed. A closed pipe is not a
+  cancellation: to stop a run, interrupt it (Ctrl-C, exit 130).
+- A step is not affected, whatever it does. Its `print` output, the output of a process it
+  starts, a write to file descriptor 1 or 2 and the output of a C library are dropped like
+  barca's own; none of them raises `BrokenPipeError` in the step or ends a child process with
+  SIGPIPE. When barca's stderr is a pipe or a socket, the workers write to a pipe barca itself
+  reads and copies to its stderr, so they never hold a pipe that can lose its reader. With a
+  reader attached the output is the same as before, in the same order, on the same stream
+  (stderr); when stderr is a terminal or a file the workers hold it directly, as before.
+  SIGPIPE keeps its default for the processes a step starts, so `yes | head -1` inside a step
+  ends as usual.
+- The exit code does not change. It is the one the command would have had with a reader: 0
+  when it succeeded, and 1, 2, 3 or 130 when it has an error of its own (the envelope is still
+  written to stderr if stderr is open). A reader that stops early is not an error, so
+  `barca list | head -1` and `barca list | grep -q name` exit 0, also under `set -o pipefail`.
+  barca does not exit 141 and is not ended by SIGPIPE.
+
+This holds for every command, `--help`, `--version` and `barca docs` included. Up to 0.18.1,
+`docs` and `--help` behaved this way, every other command ended in a Rust panic (exit 101), and
+a closed stderr abandoned a run in the middle (it stayed `interrupted` in `barca history`).
+
+Limits: barca learns that a stream is closed only when it writes to it, so a run whose reader
+has left goes on to its end; interrupt it to stop it.
+
+**New in this release: a process a step leaves running.** If a step starts a process that
+outlives the run (a server, a watcher) and lets it inherit the step's stdout and stderr, then,
+when barca's stderr is a pipe or a socket, that process holds barca's pipe on both, not the
+caller's. Once barca has exited nobody reads that pipe: the process's next write to its stdout
+or its stderr ends it (SIGPIPE), or fails with `BrokenPipeError` if it ignores the signal. Up to
+0.18.1 it held the caller's pipe instead, went on writing to it, and the caller's pipeline
+(`barca run start_server 2>&1 | tee log`) did not finish until that process did. Nothing
+changes when barca's stderr is a terminal or a file: the process holds that, as before. The
+remedy is to give such a process its own output when starting it, for example
+`subprocess.Popen(cmd, stdout=log, stderr=log)` or `stdout=subprocess.DEVNULL,
+stderr=subprocess.DEVNULL`.
+
+A caller's pipe in non-blocking mode is supported: while its reader is behind, barca waits for
+it (no output is dropped, and the wait reaches the step that is printing), on stdout and on
+stderr. A caller cannot tell from the exit code
+that part of the result was not read: it is the caller that stopped reading. A write to stdout
+that fails for any other reason (a full disk behind `> result.json`) is exit 3, with one line
+on stderr.
 
 ## JSON output schemas
 
@@ -328,7 +411,7 @@ Each item is an object with exactly these keys, all strings and always present:
 | `message` | the warning in words, with what to do about it. The wording is not contract |
 
 The list covers the steps the command planned (the targets' cones; the whole project for `plan`
-or `get` with no target), one item per step and parameter, in plan order. It is a function of the
+or `get` with no target), one item per step and parameter, sorted by node, parameter and kind. It is a function of the
 source files and the targets only: cache state, `--refresh*`, `--env` and the output mode do not
 change it, so a dry run reports exactly what the real run will. Each item is also printed once on
 stderr as `[barca] warning: <message>` before any step runs, in every output mode. Warnings never
@@ -380,7 +463,8 @@ the set of `kind` values grows additively.
 - `get` and `run` share one refresh vocabulary: `--refresh a,b` (cascading downstream),
   `--no-cascade`, `--refresh-all`. `artifact` appears on cached steps, `run_hash`
   on unpartitioned steps, `warning` on a cached step whose upstream was refreshed without
-  cascading, `env` on nodes that declare `env=[...]` (`null` for an unset variable,
+  cascading and on a step with `artifact_mismatch` (see "A store copy that differs from its
+  recorded hash" below), `env` on nodes that declare `env=[...]` (`null` for an unset variable,
   `"<redacted>"` for secret-looking names).
 
 For a parquet or pickle artifact, `final_output` is a pointer instead of the value:
@@ -410,7 +494,7 @@ For a parquet or pickle artifact, `final_output` is a pointer instead of the val
 | `warnings` | array | always |
 <!-- END GENERATED schema get_artifact_pointer -->
 
-A partitioned step carries `partitions` (counted in keys; `will_run_keys` is capped at 20):
+A partitioned step carries `partitions` (counted in keys; `will_run_keys` lists the first 20 keys in lexical order):
 
 <!-- BEGIN GENERATED schema get_partitioned -->
 | Key | Type | Present |
@@ -497,6 +581,59 @@ envelope goes to stderr:
 | `warnings` | array | always |
 <!-- END GENERATED schema run_failed -->
 
+### get and run: a store copy that differs from its recorded hash
+
+With an artifact store, an artifact fetched from the store is checked against the SHA-256
+recorded when it was written (`barca docs remote`, "Checking a local copy against the store"). A copy with
+other bytes is still used, the exit code does not change, and the result says so on the step
+entries:
+
+<!-- BEGIN GENERATED schema get_artifact_mismatch -->
+| Key | Type | Present |
+|---|---|---|
+| `elapsed_seconds` | number | always |
+| `final_output` | `<user value>` | always |
+| `phases` | integer | always |
+| `run_id` | string | always |
+| `status` | string | always |
+| `steps` | array | always |
+| `steps[]` | object | always |
+| `steps[].artifact` | string | sometimes |
+| `steps[].artifact_mismatch` | boolean | sometimes |
+| `steps[].detail` | string | sometimes |
+| `steps[].id` | string | always |
+| `steps[].kind` | string | always |
+| `steps[].reason` | string | sometimes |
+| `steps[].run_hash` | string | always |
+| `steps[].status` | string | always |
+| `steps[].warning` | string | sometimes |
+| `steps_executed` | integer | always |
+| `warnings` | array | always |
+<!-- END GENERATED schema get_artifact_mismatch -->
+
+- `steps[].artifact_mismatch` is the boolean `true`, or the key is absent. It is never `false`
+  and never `null`: test for the key. It is on the step the artifact belongs to, whatever that
+  step's `status`, and on every step that read the artifact as an input in this run (`status`
+  `ran`, `partial` or `failed`). A step that only depends on such a reader does not have it.
+- `steps[].warning` on the same entries is the finding in words: the store location, and the
+  `--refresh` that recomputes the step. The wording is not contract; `artifact_mismatch` is.
+- The key appears on `get` and `run`, with one target or several, in a failed run's result
+  line, with `--agent`, and in `result.steps` of `barca serve`'s `GET /status/{run_id}`.
+  `--fields` accepts it (`--fields id,status,artifact_mismatch`). It never appears with
+  `--dry-run`, which does not contact the store, nor in `status`, `history` or `stats`, which
+  describe recorded results and do not fetch.
+- It is not an item of the top-level `warnings` array. That array is the plan warnings (see
+  "Plan warnings"): a function of the source files and the targets, the same in a dry run and
+  whatever is cached. A mismatch is found only when a run fetches an artifact, so it is
+  reported where the other facts about what happened to a step are.
+- stderr has the same finding in every output mode, `--agent` included, as
+  `[barca] warning: <id>: the copy at <location> is not the one this result was recorded
+  with ...`. Like every `[barca] warning:` line its wording is experimental: read the key.
+
+In the fixture run above, the store's copy of one asset was overwritten after it was recorded;
+that asset and the step recomputed from it carry the key, and the two other steps do not.
+Stability: stable.
+
 ### get and run: several targets
 
 With `a,b`, `final_output` is replaced by `targets`, keyed by target name in the order given.
@@ -568,7 +705,9 @@ failed, and the exit code is then 1. Steps skipped because an upstream failed ha
 
 ### Dry run
 
-`--dry-run` on `get` or `run` changes nothing and prints what would happen. `steps[].action` is
+`--dry-run` on `get` or `run` executes no steps and records no new run; it prints what
+would happen. Optimistic shared-history synchronization may update local metadata, and
+`partitions(<expression>)` may evaluate Python while resolving keys. `steps[].action` is
 `cached`, `run`, `partial` or `unknown` (in place of `status`). An `unknown` step has `reason`
 `partitions_unknown` (dynamic partitions whose source has not run) or `sensor_output_unknown` (it,
 or a step upstream of it, reads a sensor with no recorded output). A step that reads a sensor is
@@ -658,6 +797,22 @@ appears only when `truncated` is true. `--fields` keeps only the named keys on e
 | `truncated` | boolean | always |
 <!-- END GENERATED schema list -->
 
+### `list --groups`
+
+<!-- BEGIN GENERATED schema list_groups -->
+| Key | Type | Present |
+|---|---|---|
+| `groups` | array | always |
+| `groups[]` | object | always |
+| `groups[].description` | string | always |
+| `groups[].id` | string | always |
+| `groups[].members` | array | always |
+| `groups[].members[]` | string | always |
+| `groups[].name` | string | always |
+| `groups[].output` | string | always |
+<!-- END GENERATED schema list_groups -->
+
+
 Truncated (`--limit 1`):
 
 <!-- BEGIN GENERATED schema list_truncated -->
@@ -678,7 +833,10 @@ Truncated (`--limit 1`):
 
 `nodes[].kind` is `asset`, `task` or `sensor`; `nodes[].freshness` is `always`, `manual` or
 `schedule`, lowercase like `kind`. A scheduled node also has `schedule` (the cron expression) and
-`next_fire` (string, local time). `list` reads no state, so it takes no `--env`.
+`next_fire` (string, `YYYY-MM-DD HH:MM:SS`): the next match of the cron expression in the local
+time of the machine `list` runs on. `list` talks to no server, so the value does not follow a
+server's `--timezone`; `GET /schedule` on the running server does (`barca docs scheduling`).
+`list` reads no state, so it takes no `--env`.
 
 ### sql (experimental)
 
@@ -691,6 +849,12 @@ With remote storage, the artifacts of the views a query names are downloaded int
 `.barca/sql-cache/`; a download is reported on stderr (`barca: fetched 1 remote artifact ...`) and
 the JSON is the same. A remote artifact that cannot be downloaded exits 3 (`infra`); a missing
 storage driver exits 2 (`usage`).
+
+Partitioned views include only current identities from full cache-aware prediction,
+including cached keys across worker chunks. Removed-key history is preserved. A
+current key may show its stale last successful result; an unknown derived key set
+requires its source to materialize first, and zero current keys have no result
+view. Excluded historical remote artifacts are not fetched for that view.
 
 <!-- BEGIN GENERATED schema sql -->
 | Key | Type | Present |
@@ -806,9 +970,16 @@ counts every node even when `nodes` is truncated.
 Newest first. `files` is an array of the `.py` files the run was given. `target`,
 `steps_total`, `finished_at` and `elapsed_seconds` can be `null` (no target; a run still in
 progress or interrupted). `status` is `running`, `success`, `failed`, `cancelled` or
-`interrupted`: a `running` run counts the steps it has recorded so far in `steps_executed`, and
+`interrupted`: local history records completed steps during execution, after confirmed upload
+for remote results. New committed shared progress is published every minute in healthy
+operation, followed by the final outcome at run end. A `running` run counts the steps
+it has recorded so far in `steps_executed`, and
 `interrupted` is a run whose process died without recording an outcome (`barca docs cache`,
 "While a run is going, and after one is killed").
+
+Terminal status/counts and successful/failed step rows commit in one transaction. A required
+write failure reports the existing infrastructure error (exit 3) and preserves previous
+history/progress and run state; captured output is written separately afterward.
 
 ### stats
 
@@ -839,6 +1010,9 @@ are `null` when the asset never ran; `recent_runs[].error_message` is a string f
 `phases[].reason` is `{"type": "initial"}` for the first phase or `{"type": "fan_in", "node_id":
 "<id>"}` for a phase that waits on a node gathering several upstream results. `plan` reads no
 state and takes no `--env`.
+
+The phase/stream layout uses the same pool as execution: available cores, or a positive
+`BARCA_POOL_SIZE`.
 
 `warnings` is the plan-warnings array described under "Plan warnings" above.
 
@@ -962,6 +1136,7 @@ placeholders:
 ```
 [barca] <n>/<total> steps | done in <secs>s
 [barca] <n>/<total> steps | failed in <secs>s
+[barca] checking artifact store <store>/default/artifacts (timeout <secs>s)
 [barca] run failed: step 'pipeline.py:broken' failed (exit 1)
 [barca] step:pipeline.py:broken failed: ValueError: contract fixture failure
 [barca] step:pipeline.py:keys completed <secs>s (<n>/<total>)
@@ -970,6 +1145,7 @@ placeholders:
 [barca] step:pipeline.py:per_key[k=b] completed <secs>s (<n>/<total>)
 [barca] step:pipeline.py:report completed <secs>s (<n>/<total>)
 [barca] step:pipeline.py:total cached env CONTRACT_API_TOKEN=<unset> CONTRACT_REGION=eu
+[barca] uploading <n> artifacts to <store>/default/artifacts (timeout <secs>s per attempt); waiting for confirmation
 [barca] warning: pipeline.py:report never uses its input `rows`. It is still loaded in full each time the step runs, and it counts toward the step's cache key. Use it, remove it from inputs=, or rename the parameter `_rows` if it is there for ordering only (a `_` input is not loaded and never flagged)
 ```
 <!-- END GENERATED agent-lines -->
@@ -980,7 +1156,11 @@ placeholders:
 | `[barca] step:<id> cached[ env NAME=VALUE ...]` | a step was served from cache. Printed when the step is decided, or, when its artifact is not on disk, at the end of the run once it is settled that nothing needed it (if something did, the step prints `completed` or `failed` instead, never both). Exception: a result in a remote artifact store whose object proves to be deleted when it is fetched has already printed `cached`; a `[barca] warning: <id>: the artifact of its cached result is missing ...` line and then `completed` or `failed` for the same step follow | stable |
 | `[barca] step:<id> failed: <first line of the error>` | a step raised | stable |
 | `[barca] run failed: step '<id>' failed (exit <code>)` | just before the error envelope of a failed step (every mode) | stable |
-| `[barca] <n>/<total> steps \| done in <secs>s` | end of a run that executed steps, with or without `--agent`; `failed in` when a step failed, `cancelled after` on Ctrl-C (never `done` then) | stable |
+| `[barca] <n>/<total> steps \| done in <secs>s` | end of a run that executed steps, with or without `--agent`; `failed in` when a step failed, `cancelled after` on a Ctrl-C that arrives while steps are running (never `done` then). The line is about the steps: with an artifact store, a Ctrl-C after the last step finished (while artifacts upload or the shared history is pushed) follows a `done` line, and the exit code (130) and the error envelope still say `cancelled` (`barca docs remote`, "Ctrl-C") | stable |
+| `[barca] checking artifact store <store> (timeout <secs>s)` | before workers start whenever a separate artifact store is configured, including state-off runs; requires bucket/container-root listing and backend existence access, verifies reachability rather than write permission | experimental |
+| `[barca] uploading <n> artifacts to <store> (timeout <secs>s per attempt); waiting for confirmation` | before awaiting queued artifact uploads (every mode) | experimental |
+| `[barca] still waiting for artifact uploads to <store> (<secs>s)` | every 10 seconds while the upload drain waits (every mode); destinations omit URI passwords and signed query parameters | experimental |
+| `[barca] progress checkpoint failed; recorded results remain local: <cause>` | a mid-run shared-state publication failed; committed local results are retained and retried at the next minute tick, without changing successful user work into a failed step | experimental |
 | `[barca] still running (<n>s): <id>` | a step in flight for `BARCA_PROGRESS_SECS` (every mode) | experimental |
 | `[barca] <n> more: <first line of a warning>` | before the end-of-run line (every mode): a `logging` WARNING printed because logging is unconfigured, or a `warnings` warning, from a step's process was printed once and suppressed `<n>` more times in this run; beyond ten texts, one `[barca] <n> more: <k> other repeated warnings` (`barca docs agents`) | experimental |
 | `[barca] skipped N task(s) ...`, `[barca] nothing to get ...` | `get` with no target skipped tasks | experimental |
@@ -1015,3 +1195,12 @@ error envelope or an `--agent` line updates, in the same PR:
    warning.
 
 See also: `barca docs agents` (how to drive barca from scripts and agents), `barca docs skill`.
+
+### Static decorator bindings
+
+Qualified and imported aliases of Barca decorators/helpers receive the same node
+semantics and argument validation as direct imports. Explicit foreign or rebound
+names do not define Barca nodes. For a foreign wrapper intended to remain a node,
+stack it with a genuine Barca decorator; see `barca docs assets`.
+
+`list --groups` is experimental: JSON returns `{groups: [{id, name, description, members, output}]}`. IDs and member/output references are strings; members is an array of strings. The default `list` schema is unchanged. Groups are organizational metadata and cannot be execution targets.

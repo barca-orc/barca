@@ -15,8 +15,8 @@ import pytest
 
 duckdb = pytest.importorskip("duckdb")
 
-from barca import _duckdb  # noqa: E402
-from barca.api import _find_binary  # noqa: E402
+from barca import _duckdb
+from barca.api import _find_binary
 
 # ─── Unit: the connection and view binding ────────────────────────────────────
 
@@ -193,6 +193,7 @@ def run_get(binary: str, cwd: Path, target: str, *flags: str) -> dict:
         [binary, "get", target, "pipeline.py", *flags],
         cwd=cwd,
         env=env,
+        check=False,
         capture_output=True,
         text=True,
     )
@@ -255,6 +256,7 @@ def run_failing(binary: str, cwd: Path, target: str) -> subprocess.CompletedProc
         [binary, "get", target, "pipeline.py", "--refresh-all"],
         cwd=cwd,
         env={**os.environ, "BARCA_POOL_SIZE": "1"},
+        check=False,
         capture_output=True,
         text=True,
     )
@@ -276,3 +278,89 @@ def test_querying_a_bound_input_from_another_connection_fails_loudly(binary, tmp
     (tmp_path / "pipeline.py").write_text(MIXING_PIPELINE)
     err = run_failing(binary, tmp_path, "queried_via_helper").stderr
     assert "barca: this step queried `orders` on a different connection" in err
+
+
+@pytest.mark.parametrize("outcome", ["success", "user_failure", "materialization_failure"])
+def test_worker_shared_setup_survives_but_input_views_are_cleaned(tmp_path, monkeypatch, outcome):
+    """The accepted lifetime is one connection/process; only Barca's bindings are temporary."""
+    from barca import _artifacts, _runtime, _worker
+
+    previous = duckdb.default_connection()
+    con = duckdb.connect()
+    duckdb.set_default_connection(con)
+    try:
+        parquet = tmp_path / "orders.parquet"
+        con.sql("select 7::bigint amount").write_parquet(str(parquet))
+        source = tmp_path / "shared_setup.py"
+        source.write_text("""
+import duckdb
+import barca
+
+barca.duckdb_connection().execute("create macro twice(x) as x * 2")
+barca.duckdb_connection().execute("create view project_marker as select 99 x")
+setup_connection = barca.duckdb_connection()
+
+
+def query_input():
+    return duckdb.sql("select twice(amount) as amount from orders")
+
+
+def read(orders):
+    assert barca.duckdb_connection() is setup_connection
+    return query_input()
+
+
+def fail(orders):
+    query_input().fetchall()
+    raise ValueError("user failure after reading input")
+""")
+        reports = []
+        errors = []
+        monkeypatch.setattr(_worker, "_emit", lambda kind, **kw: reports.append((kind, kw)))
+        monkeypatch.setattr(_runtime, "emit_step_error", lambda **kw: errors.append(kw))
+        monkeypatch.setattr(_worker, "_ctrl_c_does_nothing", lambda: None)
+        monkeypatch.setattr(_worker, "_ctrl_c_interrupts_the_step", lambda: None)
+        modules = {}
+        lru = _worker._ArtifactLRU()
+        step = {
+            "node_id": "shared_setup.py:read",
+            "function_name": "fail" if outcome == "user_failure" else "read",
+            "source_file": str(source),
+            "kind": "task",
+            "inputs": {"orders": str(parquet)},
+            "param_types": {"orders": "duckdb"},
+            "run_hash": "first",
+        }
+        with monkeypatch.context() as scoped:
+            if outcome == "materialization_failure":
+
+                def reject_write(*args, **kwargs):
+                    raise OSError("injected artifact write failure")
+
+                scoped.setattr(_worker, "serialize", reject_write)
+            ok = _worker._run_daemon_step(step, modules, str(tmp_path / "arts"), lru)
+        assert ok == (outcome == "success")
+        if ok:
+            artifact = reports[-1][1]["artifact"]
+            assert _artifacts.deserialize(artifact["path"], "parquet")["amount"].tolist() == [14]
+        else:
+            assert len(errors) == 1
+            assert errors[0]["error_type"] == (
+                "ValueError" if outcome == "user_failure" else "OSError"
+            )
+        assert con.sql("select twice(x) from project_marker").fetchone() == (198,)
+        with pytest.raises(duckdb.CatalogException):
+            con.sql("select * from orders")
+
+        # Reuse the exact same module, connection and worker history after any outcome.
+        # Re-importing setup would fail CREATE MACRO/VIEW; closing its connection would fail too.
+        step.update(function_name="read", run_hash="second")
+        assert _worker._run_daemon_step(step, modules, str(tmp_path / "arts"), lru)
+        artifact = reports[-1][1]["artifact"]
+        assert _artifacts.deserialize(artifact["path"], "parquet")["amount"].tolist() == [14]
+        assert con.sql("select twice(x) from project_marker").fetchone() == (198,)
+        with pytest.raises(duckdb.CatalogException):
+            con.sql("select * from orders")
+    finally:
+        duckdb.set_default_connection(previous)
+        con.close()

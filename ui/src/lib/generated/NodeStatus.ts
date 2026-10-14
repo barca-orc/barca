@@ -9,7 +9,7 @@ export type NodeStatus = {
  */
 id: string,
 /**
- * The function name (what `get`, `run` and `--refresh` accept).
+ * The declared name, or function name when no explicit name is set.
  */
 name: string,
 /**

@@ -12,8 +12,8 @@ use tokio::net::UnixListener;
 /// Minimal "worker" that connects to a socket, sends one message, disconnects.
 /// Written as a Python one-liner to avoid any barca import overhead.
 fn spawn_connector(socket_path: &str, worker_id: usize) -> std::process::Child {
-    Command::new("python3")
-        .args([
+    let mut cmd = Command::new("python3");
+    cmd.args([
             "-c",
             &format!(
                 r#"
@@ -27,9 +27,8 @@ s.close()
             ),
         ])
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .unwrap()
+        .stderr(std::process::Stdio::piped());
+    barca_core::helper_proc::spawn_std(&mut cmd).unwrap()
 }
 
 #[tokio::test]
@@ -160,13 +159,13 @@ async fn accept_16_workers_with_barca_worker() {
     for i in 0..16 {
         let batch_path = format!("/tmp/barca-test-batch-{i}.json");
         std::fs::write(&batch_path, &batch_json).unwrap();
-        let child = Command::new(&python)
-            .args(["-m", "barca._worker", &batch_path])
+        let mut cmd = Command::new(&python);
+        cmd.args(["-m", "barca._worker", &batch_path])
             .env("BARCA_SOCKET", &path)
             .env("BARCA_WORKER", "1")
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
-            .spawn();
+            .stderr(std::process::Stdio::piped());
+        let child = barca_core::helper_proc::spawn_std(&mut cmd);
         match child {
             Ok(c) => children.push((c, batch_path)),
             Err(e) => {

@@ -31,6 +31,9 @@ examples/*/uv.lock
 # Vendored dependencies
 vendor/
 
+# Git worktrees (agents create only under .worktrees/<slug>; see AGENTS.md)
+.worktrees/
+
 # Editors / OS / AI
 .vscode/
 .idea/

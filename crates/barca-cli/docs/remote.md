@@ -59,6 +59,17 @@ convention, so other fsspec tools on the machine read the same settings.
 2. On a second machine, or a fresh clone with no `.barca/`, run the same `barca get`: it reports
    `steps_executed: 0`, served from the bucket.
 
+Every execution checks the artifact store before starting workers, including with
+`state = "off"` and runs triggered through `barca serve`. The read-only startup
+probe is limited to 10 seconds, or `transfer_timeout` when shorter. Cloud stores
+must allow listing the bucket/container root and its backend's existence check;
+object read/write access or prefix-only listing is insufficient. This check
+verifies reachability, not upload permission. A new directory store checks its
+existing ancestor; the probe creates nothing.
+Before the end-of-run upload wait, barca reports the artifact count, destination
+and per-attempt timeout; longer waits report progress every 10 seconds. Failed
+uploads report their attempt count and remain unrecorded.
+
 A failure to reach the bucket stops the run before any step: exit 3, naming the location, with
 the cloud's own error (expired login, access denied). A missing extra says which one to install.
 
@@ -85,6 +96,38 @@ Keep secrets out of it: credentials still come from the environment. Precedence,
 `[remote.storage_options.*]` over `FSSPEC_*` variables. Every key is in the configuration
 reference: https://barca.sh/reference/config/
 
+## Storage for one process
+
+Set `BARCA_REMOTE=off` to use local artifacts and local history without editing
+`barca.toml`. It overrides configured artifact/state URIs and remote options,
+including environment overrides. `--env` still selects the local environment.
+Unset or empty values keep the configured storage; other values are usage errors.
+
+```bash
+BARCA_REMOTE=off barca get total pipeline.py
+BARCA_REMOTE=off barca run deploy pipeline.py
+BARCA_REMOTE=off barca serve pipeline.py
+```
+
+Existing history is kept. Remote/shared-store results recorded in that history
+are not fetched or inspected while off. Barca uses a previously recorded local
+result when available, otherwise computes one locally; subsequent runs reuse it.
+`barca status --json` reports local cache paths. Historical materialization paths
+still describe where those earlier results were stored. User code can still
+perform its own network I/O.
+
+`BARCA_STATE=off` is the narrower existing override: keep metadata local while
+continuing to share artifacts. Use it with `serve` when project configuration
+normally enables optimistic shared state:
+
+```bash
+BARCA_STATE=off barca serve pipeline.py
+```
+
+`serve` continues to refuse optimistic shared metadata unless explicitly disabled.
+It does not silently discard that configuration. Empty URI overrides remain
+unset; `BARCA_REMOTE_URI=` does not turn off a TOML remote root.
+
 ## What barca keeps in the bucket
 
 ```
@@ -99,8 +142,9 @@ recomputes a result whose artifact is missing (see "Failures"). In practice that
 history object needs delete permission there), and Storage Blob Data Contributor on Azure.
 
 Two machines finishing runs at the same time do not lose history: the second detects the
-conflict, re-reads and merges. Set `BARCA_STATE=off` to keep history on each machine and share
-only results.
+conflict, re-reads and merges. Set `BARCA_STATE=off` to keep history on each machine while uploading artifact
+files to the configured store. Another machine does not discover cache hits from those
+files alone: cache discovery needs materialization rows in shared history.
 
 The shared history is one object, replaced by every run, and barca keeps no earlier copies of
 it in the bucket. Turn on object versioning for the bucket (S3, GCS and Azure all have it): it
@@ -110,7 +154,8 @@ put a good one back, is under "If the shared history is damaged" below.
 ### The local copy of the history
 
 Each machine works on a local copy, `.barca/metadata.db`. `barca get` and `barca run` bring it up
-to the shared history when they start (a pull) and upload it when they end; `--dry-run` and
+to the shared history when they start (a pull), publish newly recorded progress every minute,
+and upload their final outcome when they end; `--dry-run` and
 `barca status` pull before they look, and upload nothing. `barca history` and `barca stats` read
 the local copy as it is.
 
@@ -129,9 +174,10 @@ After a pull the local copy is the shared history plus what was recorded only on
   `[barca] kept 1 run and 2 finished steps recorded only on this machine (not yet in the shared history)`.
   So after a kill the next `barca get` serves the steps the killed run finished from cache
   (`barca docs cache`, "While a run is going, and after one is killed").
-- **They are shared by the next upload.** When the next `barca get` or `barca run` on this
-  machine ends, those runs and steps are in the shared history; a killed run shows there as
-  `interrupted`. `--dry-run` and `barca status` keep them locally and upload nothing, and the
+- **They are shared by the next upload.** A running `barca get` or `barca run` publishes
+  newly recorded progress on its next healthy minute checkpoint, including history kept by
+  a pull. Its final upload also shares that history. A killed run can still appear `running`
+  on a machine that cannot establish that its original process has gone. `--dry-run` and `barca status` keep them locally and upload nothing, and the
   `kept` line is printed once, not by every command until then.
 - **Nothing is there twice.** A run is identified by its run id and a step by its run id and
   node, so a row both copies hold appears once, however many pulls happen before an upload.
@@ -318,12 +364,16 @@ versions kept running on it (with errors such as `short read on page 33` now and
 
 (the second lists `row 29 missing from index idx_mat_run` among its problems).
 
-One machine may not get the message: the one that uploaded last holds the same bytes as the
-shared history, so its pull changes nothing and is let through. Its copy is damaged all the
-same, and step 1 finds it. In what we reproduced with 0.17.1 the local copies were damaged in
-the same way as the shared history, so rebuilding the shared history from a local copy as
-described above uploads the damage again. Either salvage the copies or start the history again.
-Both keep every result file. Do this with no barca command running on any machine.
+A machine whose local main file is byte-for-byte identical to the download and whose
+write-ahead log has no frames skips the full page-integrity scan on that pull. The
+download still passes the header, schema and compatibility checks, so this is not a
+guarantee that a damaged identical copy is accepted. A successful pull can update local
+metadata and its retained copy; inspection is not a promise to leave those files untouched.
+In the 0.17.1 reproduction, local and shared copies had the same damage. Uploading that
+local copy again cannot repair the shared history. Verify a candidate backup before
+restoring it, or salvage readable history. Unsupported schema versions require a
+compatible release, rather than resetting history. Stop Barca commands on every machine
+before the manual repair procedure below.
 
 *Salvage what can be read.* This needs the `sqlite3` command, version 3.29 or later, built
 with `.recover` (the one shipped with macOS and with current Linux distributions is).
@@ -341,20 +391,20 @@ with `.recover` (the one shipped with macOS and with current Linux distributions
 
    ```
    sqlite3 .barca/metadata.db ".recover" | sqlite3 .barca/metadata.recovered.db
-   sqlite3 .barca/metadata.recovered.db <<'SQL'
-   DROP TABLE IF EXISTS lost_and_found;
+   sqlite3 .barca/metadata.recovered.db 'DROP TABLE IF EXISTS lost_and_found;
    INSERT OR IGNORE INTO "__turso_internal_seq___turso_internal_autoincrement_runs" VALUES (1,0,1,1,1,9223372036854775807,0);
    INSERT OR IGNORE INTO "__turso_internal_seq___turso_internal_autoincrement_materializations" VALUES (1,0,1,1,1,9223372036854775807,0);
    INSERT OR IGNORE INTO "__turso_internal_seq___turso_internal_autoincrement_logs" VALUES (1,0,1,1,1,9223372036854775807,0);
-   PRAGMA integrity_check;
-   SQL
+   PRAGMA integrity_check;'
    mv .barca/metadata.db .barca/metadata.db.damaged
    rm -f .barca/metadata.db-wal .barca/metadata.db-shm .barca/metadata.db.base
    mv .barca/metadata.recovered.db .barca/metadata.db
    BARCA_STATE=off barca history --all
    ```
 
-   The second command must end with `ok`, and the last must list the machine's runs. (The three
+   These lines work as they are in bash, zsh and fish (the second command is one command:
+   its quoted argument spans five lines). The second command must end with `ok`, and the last
+   must list the machine's runs. (The three
    `INSERT` lines put back a bookkeeping row the database engine needs, in case it was on a
    page that could not be read; they do nothing when it is there.) If either fails, this copy
    cannot be salvaged: remove it with the command under "Start the history again" and go on;
@@ -439,16 +489,130 @@ history. A machine uses that hash to decide whether its own copy is current:
   match (edited by hand, or left from before another machine refreshed the result), it is
   replaced by the store's copy and reported as a fetch.
 - A downloaded artifact is hashed too. If the store's copy does not match the recorded hash,
-  the run still uses it and prints a warning naming the step. This is not an error: an
+  the run still uses it and prints a warning naming the step:
+  `[barca] warning: pipeline.py:total: the copy at <location> is not the one this result was
+  recorded with (another run overwrote it, or it was changed). Using it. Recompute with
+  --refresh pipeline.py:total.` This is not an error and the exit code does not change: an
   artifact's path is `<node>/<run_hash>`, which identifies the computation and not the bytes,
   so a `--refresh`, or two machines computing the same step at once, overwrites the object.
-  The warning names the step; `--refresh <file.py:name>` recomputes it, which clears the
-  warning for every machine that shares this history. Until then, machines can hold
-  different copies of that one result: a machine whose copy matches the recorded hash keeps
-  it, and the others use the store's.
+  `--refresh <file.py:name>` recomputes the step, uploads the new bytes over the object and
+  records their hash, which clears the warning for every machine that shares this history.
+  Until then, machines can hold different copies of that one result: a machine whose copy
+  matches the recorded hash keeps it, and the others use the store's.
+
+The JSON result carries the same finding, so a script or agent does not have to read stderr:
+
+```bash
+barca get total --json --fields id,status,artifact_mismatch
+```
+
+```json
+{"steps": [{"id": "pipeline.py:numbers", "status": "cached", "artifact_mismatch": true},
+           {"id": "pipeline.py:total", "status": "ran", "artifact_mismatch": true}], "...": "..."}
+```
+
+`steps[].artifact_mismatch` is `true` on the step the artifact belongs to and on every step that
+read it as an input in this run; on every other step the key is absent. `steps[].warning` has
+the text. It is reported per step and not in the top-level `warnings` array, which holds plan
+warnings only (`barca docs contract`).
+
+A mismatch and a missing object are different findings and never stand in for each other: a
+copy with other bytes is used and flagged, as above; an object that is not in the store at all
+is computed again with `reason: "artifact_missing"` (see "Failures").
 
 Only artifacts a run reads are hashed, once per run. Not checked: a parquet input that is read
-in place (only byte ranges are fetched), and results recorded before barca stored a hash.
+in place (only byte ranges are fetched), and results recorded before barca stored a hash. A
+`--dry-run` does not contact the store, so it never reports a mismatch.
+
+## Ctrl-C
+
+Ctrl-C cancels a `barca get` or `barca run` at any point: while steps run, and while barca is
+uploading, downloading, or pulling or pushing the shared history. The command exits 130 with the
+`cancelled` error. It makes no difference whether the terminal sent the signal to every process
+of the job or something sent SIGINT to barca alone. Barca, its workers and its helper processes
+print no traceback, with or without a store and from the first moment of a run: a Ctrl-C while
+the workers are still starting exits as promptly as any other.
+
+SIGTERM, which a supervisor, a CI timeout or `docker stop` sends, does what Ctrl-C does:
+everything below holds for it, a second SIGTERM counts as a second Ctrl-C, and the exit code
+is 130, not 143.
+
+1. **The first Ctrl-C cancels the run.** Steps and transfers in flight are stopped, what
+   finished is recorded in this machine's history, the run as `cancelled`, and the run wraps
+   up: it pushes that record to the shared history, so that other machines do not compute the
+   finished steps again.
+2. **The wrap-up takes at most 10 seconds.** With a store that answers it takes a fraction of
+   a second. If the push has not finished by then (a slow, stalled or unreachable store) it is
+   stopped, and stderr says so:
+   `[barca] the shared history was not updated (the upload did not finish within 10s). This run
+   is recorded on this machine; the next barca get or barca run here uploads it.`
+3. **A second Ctrl-C abandons the wrap-up at once** (the same line, with `stopped by a second
+   interrupt`, whichever signal it was). A third changes nothing.
+
+Stopping a helper process can take up to 2 seconds, so the command ends within a few seconds of
+the last of these. The exit code is 130 in every case, never 3: a push that fails during the
+wrap-up is reported in that stderr line, not as an error.
+
+What is left behind is always consistent:
+
+- A step is recorded only once its artifact is confirmed in the store. A step whose upload
+  was still in flight is not recorded, and runs again next time.
+- No partial file is left. A download, and an upload into a store that is a directory, is
+  written to a temp file beside its destination and renamed when whole; the temp file is
+  removed when the transfer is stopped. An object store shows an object only once its upload
+  has completed, so an interrupted upload leaves the previous object, or none. The shared
+  history is replaced in one step, so it is the old one or the new one.
+- Nothing is lost when the wrap-up does not finish. The record is in this machine's history, a
+  pull keeps what was recorded only here (see "The local copy of the history"), and the next
+  `barca get` or `barca run` on this machine serves the finished steps from cache and uploads
+  them with its own.
+- Interrupted while the shared history is still being pulled, before anything ran, the command
+  exits 130, no run is recorded and the local copy is as it was.
+
+**What the run's record says.** `cancelled`, whenever the interrupt arrived before the record
+was shared. That includes a Ctrl-C during the final push, when every step had finished: the
+steps are recorded as finished, the run as `cancelled`, and that is what the wrap-up shares, so
+every machine sees the same. A Ctrl-C that arrives once the push has completed is too late
+to cancel anything: the run is `success` and the command exits 0.
+
+Two narrow cases, stated exactly:
+
+- A run with a failed step is recorded and shared as `failed`, and may then still download an
+  earlier output to return. Interrupted during that download, the command exits 130 and the
+  record stays `failed`, the same on every machine.
+- If the interrupt arrives in the instant in which the push completes in the store but barca
+  has not yet heard so, the shared history has the run as `success` and this machine marks it
+  `cancelled`. The wrap-up then pushes again, which puts `cancelled` in the shared history too.
+  If that wrap-up does not finish either, the two can temporarily differ. The next pull on
+  this machine preserves its cancelled outcome, even if other machines have added runs to
+  the shared history. The next successful upload shares that correction. Until then, another
+  machine can still see the earlier outcome.
+
+The end-of-run line (`[barca] <n>/<total> steps | done in <secs>s`) is about the steps. A Ctrl-C
+that arrives after the last step finished, while artifacts upload or the history is pushed,
+therefore follows a `done` line; the exit code and the error still say `cancelled`.
+
+Workers are part of the terminal's job, so a Ctrl-C reaches them too. A worker acts on it only
+while it runs a step: the step's code gets a `KeyboardInterrupt`, and the step is left out of
+the cancelled run (it is neither recorded nor reported as failed). Barca stops the worker
+right after, so do not rely on a step's `except KeyboardInterrupt` or `finally` code having
+run. While a worker imports a step's module or waits for its next step, a Ctrl-C does nothing
+in it, and barca stops it. While a worker is still starting it is not in the terminal's job at
+all (it joins once it is ready), so a Ctrl-C does not reach it.
+
+If barca itself was started with SIGINT ignored (`nohup barca ...`, a background job of a
+script, cron, some process supervisors), its workers inherit that and keep it: a step does not
+get a `KeyboardInterrupt`, as in any Python program started that way. A SIGINT sent to barca
+still cancels the run, with exit 130, and barca stops the workers.
+
+Barca's helper processes (the one that moves artifacts and the one that moves the history) do
+not act on Ctrl-C themselves. They are started outside the terminal's job (in a process group
+of their own), so the terminal's Ctrl-C reaches barca only, which decides what it means and
+stops them. If barca itself is killed (`kill -9`, out of memory), nobody is left to stop them,
+so they watch for that: each exits on its own, at once and without output, and removes the temp
+file it was writing. A download of the history that was cut this way can leave
+`.barca/metadata.db.pull-*`, and an upload `.barca/metadata.db.push-*`; the next pull removes
+both.
 
 ## Settings
 
@@ -499,9 +663,22 @@ exceeds `transfer_timeout` fails as stalled and is not retried.
 - **Stalled store**: lower `transfer_timeout` to fail faster; raise it if single artifacts
   legitimately take longer than 10 minutes to move.
 
+- **A directory where a local copy belongs**: not a store problem and not an error. The store's
+  copy is fetched and the directory is moved aside, never deleted (`barca docs cache`, "A
+  directory at an artifact's path"). If barca may not rename it (no write permission on the
+  directory that holds it), the run exits 3 and says so, naming the path.
+- **A directory at an object's path in the store** (a store that is a shared directory): barca
+  changes nothing in a store but its own objects, so the fetch or the upload fails with exit
+  3 (`IsADirectoryError`, naming the path) and the error says what works: remove or rename the
+  directory there. Recomputing with `--refresh-all` does not help; the upload meets the same
+  directory. The same goes for a directory at `state/metadata.db`: the pull fails with
+  `<uri> is a directory, not the shared history file`.
+
 `.barca/artifacts/` doubles as a local cache of the store and is never pruned automatically;
 deleting it is safe (anything needed later is downloaded again, or computed again if it is no
-longer in the store).
+longer in the store). Directories barca moved out of an artifact's way
+(`*.moved-aside*`, see `barca docs cache`) are in there too and go with it; barca never deletes
+them itself.
 
 Using a GCS emulator (e.g. fake-gcs-server) with gcsfs 2026.10 or later: set
 `GCSFS_EXPERIMENTAL_ZB_HNS_SUPPORT=false`. gcsfs's experimental mode calls a gRPC API the
@@ -521,16 +698,28 @@ up to 16 MB; a store it cannot read is a `note` on each shape, not a failed comm
 (`barca docs status`). `barca sql` downloads the artifacts of the views a query names and reuses
 the copies while the objects are unchanged (`barca docs sql`).
 
+## State object paths
+
+`BARCA_REMOTE_URI` names an artifact/state root or prefix. `BARCA_STATE_URI` instead
+names the shared history file or object itself: for example,
+`/shared/history/metadata.db` or `s3://bucket/history/metadata.db`. If it points to a
+directory, startup exits 3 before importing user code and explains the object-path
+setting. Barca leaves that directory and its contents unchanged; choose a file/object
+path or set `BARCA_STATE=off` to use local history.
+
 ## Limitations
 
 - `barca serve` does not share history yet; set `BARCA_STATE=off` for it.
-- The shared history is updated once, when a run ends. A run records each finished step in the
-  local copy as it goes (`barca docs cache`, "While a run is going, and after one is killed"), but
-  other machines see none of it until the run ends. A run that was killed is seen by other
-  machines only after another `barca get` or `barca run` on the same machine has ended; if that
-  machine never runs again, they never see it. With a remote artifact store a run records
-  nothing early: a step is recorded once its upload is confirmed, when the run ends, so a
-  killed run leaves its run row and no steps.
+- During `barca get` and `barca run`, newly recorded progress is published every minute
+  in healthy operation, and the final outcome is published when the run ends. A shared
+  checkpoint keeps the run `running`, with its recorded step count and no finish timestamp.
+  With a remote artifact store, only confirmed uploads become reusable progress; failed or
+  unfinished uploads do not. A fresh project root can reuse the shared confirmed results
+  after the original process is killed. Unchanged progress does not upload another snapshot.
+- A failed checkpoint leaves committed local history intact and retries on the next minute
+  tick. Failed uploads or database/storage failures can delay publication beyond a minute;
+  this cadence is not a guaranteed recovery point during an outage. Checkpoints replace the
+  current shared object; they do not create retained snapshots or delete history.
 - Carried across a pull: runs, steps and captured output. Not carried: step rows written by
   barca before 0.17 that were never uploaded (they do not say which run wrote them), and the
   timing estimates used to size batches, which are rebuilt by running.

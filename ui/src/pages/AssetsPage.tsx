@@ -1,14 +1,24 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
-import { ArrowDown, ArrowUp, Search, X } from 'lucide-react'
-import { StatusBadge, StatusDot, Tag } from '@/components'
+import { ArrowDown, ArrowUp, X } from 'lucide-react'
+import {
+  Chip,
+  ChipGroup,
+  ConnectionBadge,
+  SearchInput,
+  Select,
+  Skeleton,
+  StatusBadge,
+  StatusDot,
+  Tag,
+} from '@/components'
 import { useAssetStates } from '@/hooks/useAssetStates'
 import { NodePanel } from '@/components/assets/NodePanel'
 import { useHealth } from '@/hooks/useHealth'
+import { connection } from '@/lib/connection'
 import { inPipeline, pipelineName } from '@/lib/pipeline'
 import {
   EMPTY_FILTERS,
-  KINDS,
   LAST_RUNS,
   applyFilters,
   facetCounts,
@@ -16,7 +26,6 @@ import {
   parseFilters,
   writeFilters,
   type Filters,
-  type Kind,
   type LastRun,
 } from '@/lib/assetFilters'
 import {
@@ -32,6 +41,7 @@ import {
   type Sort,
   type SortKey,
 } from '@/lib/assetTable'
+import type { NodeKind } from '@/lib/types'
 
 const SEVERITY_LABEL: Record<Severity, string> = {
   failed: 'failed',
@@ -43,7 +53,7 @@ const SEVERITY_LABEL: Record<Severity, string> = {
   cached: 'cached',
 }
 
-const KIND_LABEL: Record<Kind, string> = { asset: 'assets', task: 'tasks', sensor: 'sensors' }
+const PAGE_LABEL: Record<NodeKind, string> = { asset: 'Assets', task: 'Tasks', sensor: 'Sensors' }
 
 const LAST_RUN_LABEL: Record<LastRun, string> = {
   any: 'any time',
@@ -96,9 +106,9 @@ function SortHeader({
   )
 }
 
-export function AssetsPage() {
+export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
   const { data, isError, error, dataUpdatedAt } = useAssetStates()
-  const { data: health } = useHealth()
+  const { data: health, isError: healthError } = useHealth()
   const navigate = useNavigate()
   // The sort lives in the URL (#/assets?sort=typical&dir=desc), so it survives
   // a reload and can be shared.
@@ -123,16 +133,17 @@ export function AssetsPage() {
   // "x ago" is relative to when the data was fetched, so it stays pure and
   // refreshes with every poll.
   const rows = useMemo(
-    () => buildRows((data ?? []).filter((n) => inPipeline(n.id, pipeline)), dataUpdatedAt),
-    [data, dataUpdatedAt, pipeline],
+    () => buildRows((data ?? []).filter((n) => n.kind === kind && inPipeline(n.id, pipeline)), dataUpdatedAt),
+    [data, dataUpdatedAt, pipeline, kind],
   )
   // Filters live in the URL with the sort and pipeline, so a filtered view can
   // be reloaded and shared.
-  const filters = parseFilters(params)
+  const filters = { ...parseFilters(params), kinds: [] }
   const setFilters = (f: Filters) => setParams(writeFilters(params, f), { replace: true })
   const now = dataUpdatedAt
   const counts = facetCounts(rows, filters, now)
   const visible = sortRows(applyFilters(rows, filters, now), sort)
+  const tableBody = useRef<HTMLTableSectionElement>(null)
 
   // The node shown in the side panel (?node=<id>).
   const selectedId = params.get('node')
@@ -144,91 +155,96 @@ export function AssetsPage() {
     setParams(p, { replace: true })
   }
   const open = (row: AssetRow) => setSelected(row.id === selectedId ? null : row.id)
-  const openGraph = (id: string) => navigate(`/graph?focus=${encodeURIComponent(id)}`)
+  const openGraph = (id: string) => {
+    const p = new URLSearchParams()
+    p.set('view', 'graph')
+    p.set('focus', id)
+    if (pipeline) p.set('pipeline', pipeline)
+    navigate(`/assets?${p}`)
+  }
+
+  useEffect(() => {
+    if (!selectedId) return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
+      if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+      // Keep text editing and native controls' arrow-key behavior intact.
+      if (event.target instanceof Element && event.target.closest(
+        'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="combobox"], [role="slider"], [role="spinbutton"]',
+      )) return
+      const index = visible.findIndex((row) => row.id === selectedId)
+      if (index < 0) return
+      event.preventDefault()
+      const nextIndex = index + (event.key === 'ArrowDown' ? 1 : -1)
+      const next = visible[nextIndex]
+      if (!next) return
+      const p = new URLSearchParams(params)
+      p.set('node', next.id)
+      setParams(p, { replace: true })
+      const row = tableBody.current?.rows[nextIndex]
+      row?.focus({ preventScroll: true })
+      row?.scrollIntoView({ block: 'nearest' })
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [selectedId, visible, params, setParams])
 
   return (
     <div className="barca-view">
       <div className="barca-view-head">
         <div className="barca-view-bar">
           <div className="barca-view-title">
-            <h1>{pipeline ? pipelineName(pipeline) : 'Assets'}</h1>
-            {data && (
+            <h1>{PAGE_LABEL[kind]}{pipeline ? ` · ${pipelineName(pipeline)}` : ''}</h1>
+            {data ? (
               <span className="barca-count" title={pipeline ?? undefined}>
-                {pipeline ? `${rows.length} of ${data.length} nodes · ${pipeline}` : `${rows.length} nodes`}
+                {rows.length} {kind === 'asset' ? 'assets' : kind === 'task' ? 'tasks' : 'sensors'}
               </span>
+            ) : (
+              <Skeleton width={64} height={14} />
             )}
           </div>
           <div className="barca-view-actions">
             {health?.read_only && <Tag tone="bare">read-only</Tag>}
-            <span className="barca-conn">
-              <StatusDot status={health && !isError ? 'success' : 'queued'} size={6} />
-              {health ? `barca serve · v${health.version}` : 'offline'}
-            </span>
+            <ConnectionBadge connection={connection(health, healthError)} />
           </div>
         </div>
         <div className="barca-table-tools">
-          <label className="barca-table-search">
-            <Search size={13} />
-            <input
-              placeholder="Search by name or file"
-              value={filters.query}
-              onChange={(e) => setFilters({ ...filters, query: e.target.value })}
-              autoFocus
-            />
-          </label>
+          <SearchInput
+            placeholder="Search by name or file"
+            value={filters.query}
+            onChange={(query) => setFilters({ ...filters, query })}
+            autoFocus
+          />
 
-          <div className="barca-chips" role="group" aria-label="Kind">
-            {KINDS.filter((k) => counts.kinds[k] > 0 || filters.kinds.includes(k)).map((k) => (
-              <button
-                key={k}
-                type="button"
-                className={filters.kinds.includes(k) ? 'is-on' : undefined}
-                aria-pressed={filters.kinds.includes(k)}
-                onClick={() => setFilters({ ...filters, kinds: toggle(filters.kinds, k) })}
-              >
-                {counts.kinds[k]} {KIND_LABEL[k]}
-              </button>
-            ))}
-          </div>
-
-          <label className="barca-select">
-            <span>Last run</span>
-            <select
-              value={filters.lastRun}
-              onChange={(e) => setFilters({ ...filters, lastRun: e.target.value as LastRun })}
-            >
-              {LAST_RUNS.map((l) => (
-                <option key={l} value={l}>
-                  {LAST_RUN_LABEL[l]}
-                  {l === 'any' ? '' : ` (${counts.lastRun[l]})`}
-                </option>
-              ))}
-            </select>
-          </label>
+          <Select
+            label="Last run"
+            value={filters.lastRun}
+            options={LAST_RUNS.map((l) => ({
+              value: l,
+              label: LAST_RUN_LABEL[l] + (l === 'any' ? '' : ` (${counts.lastRun[l]})`),
+            }))}
+            onChange={(lastRun) => setFilters({ ...filters, lastRun })}
+          />
 
           {(counts.scheduled > 0 || filters.scheduled) && (
-            <div className="barca-chips">
-              <button
-                type="button"
-                className={filters.scheduled ? 'is-on' : undefined}
-                aria-pressed={filters.scheduled}
+            <ChipGroup label="Scheduled">
+              <Chip
+                pressed={filters.scheduled}
                 onClick={() => setFilters({ ...filters, scheduled: !filters.scheduled })}
               >
                 {counts.scheduled} scheduled
-              </button>
-            </div>
+              </Chip>
+            </ChipGroup>
           )}
           {(counts.partitioned > 0 || filters.partitioned) && (
-            <div className="barca-chips">
-              <button
-                type="button"
-                className={filters.partitioned ? 'is-on' : undefined}
-                aria-pressed={filters.partitioned}
+            <ChipGroup label="Partitioned">
+              <Chip
+                pressed={filters.partitioned}
                 onClick={() => setFilters({ ...filters, partitioned: !filters.partitioned })}
               >
                 {counts.partitioned} partitioned
-              </button>
-            </div>
+              </Chip>
+            </ChipGroup>
           )}
 
           {isFiltered(filters) && (
@@ -239,20 +255,18 @@ export function AssetsPage() {
         </div>
 
         <div className="barca-table-tools">
-          <div className="barca-chips" role="group" aria-label="State">
-            {SEVERITIES.filter((s) => counts.states[s] > 0 || filters.states.includes(s)).map((s) => (
-              <button
-                key={s}
-                type="button"
-                className={filters.states.includes(s) ? 'is-on' : undefined}
-                aria-pressed={filters.states.includes(s)}
-                onClick={() => setFilters({ ...filters, states: toggle(filters.states, s) })}
+          <ChipGroup label="State">
+            {SEVERITIES.filter((sev) => counts.states[sev] > 0 || filters.states.includes(sev)).map((sev) => (
+              <Chip
+                key={sev}
+                pressed={filters.states.includes(sev)}
+                onClick={() => setFilters({ ...filters, states: toggle(filters.states, sev) })}
               >
-                <StatusDot status={severityStatus(s)} size={6} />
-                {counts.states[s]} {SEVERITY_LABEL[s]}
-              </button>
+                <StatusDot status={severityStatus(sev)} size={6} />
+                {counts.states[sev]} {SEVERITY_LABEL[sev]}
+              </Chip>
             ))}
-          </div>
+          </ChipGroup>
           <span className="barca-count barca-shown">
             {visible.length === rows.length ? `${rows.length} shown` : `${visible.length} of ${rows.length} shown`}
           </span>
@@ -266,7 +280,11 @@ export function AssetsPage() {
             Can't load state: {error instanceof Error ? error.message : 'barca serve is not reachable'}
           </p>
         ) : !data ? (
-          <p className="barca-table-empty">Loading…</p>
+          <div className="barca-table-skeleton" aria-label="Loading">
+            {[0, 1, 2, 3, 4, 5].map((i) => (
+              <Skeleton key={i} height={52} />
+            ))}
+          </div>
         ) : visible.length === 0 ? (
           <p className="barca-table-empty">Nothing matches.</p>
         ) : (
@@ -280,13 +298,16 @@ export function AssetsPage() {
                 <SortHeader label="Next run" column="next" sort={sort} onSort={onSort} />
               </tr>
             </thead>
-            <tbody>
+            <tbody ref={tableBody}>
               {visible.map((r) => (
                 <tr
                   key={r.id}
                   tabIndex={0}
                   aria-selected={r.id === selectedId}
-                  onClick={() => open(r)}
+                  onClick={(event) => {
+                    event.currentTarget.focus({ preventScroll: true })
+                    open(r)
+                  }}
                   onKeyDown={(e) => e.key === 'Enter' && open(r)}
                 >
                   <td>

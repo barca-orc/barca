@@ -16,7 +16,7 @@ use turso::Builder;
 /// Process-wide serialization of `metadata.db` operations. The server can run
 /// multiple pipelines in parallel (they execute Python concurrently), but their
 /// brief reads/writes to the shared SQLite file must not overlap. Every DB
-/// helper — and the inline cache-check/persist ops in `commands::execute` — holds
+/// helper — and the inline cache-check/persist ops in `execution::execute` — holds
 /// this guard for the duration of its (short) database work, so runs never race
 /// on the file without depending on WAL support. A one-shot CLI run leaves it
 /// uncontended.
@@ -198,7 +198,7 @@ async fn acquire_file_lock(db_path: &str, wait: Duration) -> Result<fs::File, Ba
     }
 }
 
-/// Where [`replace_db`] can be cut short. Each is a point at which the process may die; the
+/// Where [`replace_db_holding`] can be cut short. Each is a point at which the process may die; the
 /// tests stop there and check that the next pull still ends with nothing lost.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ReplaceStage {
@@ -223,7 +223,7 @@ pub(crate) struct Incoming<'a> {
     pub version: Option<&'a str>,
 }
 
-/// What [`replace_db`] did.
+/// What [`replace_db_holding`] did.
 #[derive(Debug)]
 pub(crate) enum Replaced {
     /// The download is now the local database, with what was carried over from the old one.
@@ -272,6 +272,7 @@ pub(crate) enum Replaced {
 /// [`Carried::unreadable`](crate::state_carry::Carried) says why. A local database that cannot
 /// be opened for any other reason (held open by another program, permissions, I/O) is an
 /// error and stays as it was; so does everything when the download is not valid.
+#[cfg(test)]
 pub(crate) async fn replace_db(
     db_path: &str,
     incoming: Incoming<'_>,
@@ -279,7 +280,7 @@ pub(crate) async fn replace_db(
     replace_db_until(db_path, incoming, None).await
 }
 
-/// [`replace_db`] for a caller that took the database's lock before it began the download,
+/// [`replace_db_holding`] for a caller that took the database's lock before it began the download,
 /// so that nothing can overtake it.
 pub(crate) async fn replace_db_holding(
     _lock: &DbLock,
@@ -289,6 +290,7 @@ pub(crate) async fn replace_db_holding(
     replace_locked(db_path, incoming, None).await
 }
 
+#[cfg(test)]
 async fn replace_db_until(
     db_path: &str,
     incoming: Incoming<'_>,
@@ -306,15 +308,27 @@ pub(crate) struct DbLock {
 }
 
 pub(crate) async fn lock_db(db_path: &str) -> Result<DbLock, BarcaError> {
-    let guard = db_guard().await;
-    let lock = acquire_file_lock(db_path, DB_FILE_LOCK_WAIT).await?;
+    lock_db_with_until(db_path, crate::state_sync::Until::done()).await
+}
+
+/// Cancellation applies only to lock admission. The caller must finish any admitted
+/// atomic database mutation before releasing this lock.
+pub(crate) async fn lock_db_with_until(
+    db_path: &str,
+    until: crate::state_sync::Until<'_>,
+) -> Result<DbLock, BarcaError> {
+    let guard = until.admit(db_guard()).await?;
+    let lock = until
+        .admit(acquire_file_lock(db_path, DB_FILE_LOCK_WAIT))
+        .await??;
+    until.check()?;
     Ok(DbLock {
         _lock: lock,
         _guard: guard,
     })
 }
 
-/// The body of [`replace_db`]; the caller holds [`lock_db`].
+/// The body of [`replace_db_holding`]; the caller holds [`lock_db`].
 async fn replace_locked(
     db_path: &str,
     incoming: Incoming<'_>,
@@ -469,7 +483,7 @@ async fn replace_locked(
         && let Err(e) = prev.publish()
     {
         // The swap is done and stands whatever happens to the name of the old file.
-        eprintln!(
+        crate::errln!(
             "[barca] warning: the local history was replaced, but the one it replaced could \
              not be kept as {}: {e}",
             state_prev::path(db_path)
@@ -493,24 +507,69 @@ pub(crate) struct PushCopy {
     base_raw: Option<Vec<u8>>,
 }
 
+impl Drop for PushCopy {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
 /// Fold the local database's write-ahead log into its main file and copy the result next to
 /// it, under the lock: the copy is one consistent database (turso keeps most data in the log;
 /// the main file alone, without a checkpoint, would be an old or empty database), and it
 /// stays that whatever other barca processes do to the database during the upload, which
 /// therefore needs no lock.
+#[cfg(test)]
 pub(crate) async fn copy_for_push(db_path: &str, copy: PathBuf) -> Result<PushCopy, BarcaError> {
-    let _lock = lock_db(db_path).await?;
+    copy_for_push_with_until(db_path, copy, crate::state_sync::Until::done()).await
+}
+
+pub(crate) async fn copy_for_push_with_until(
+    db_path: &str,
+    copy: PathBuf,
+    until: crate::state_sync::Until<'_>,
+) -> Result<PushCopy, BarcaError> {
+    let _lock = lock_db_with_until(db_path, until).await?;
+    // Finish the admitted WAL checkpoint safely, then observe cancellation again.
     fold_log(db_path).await?;
-    fs::copy(db_path, &copy).map_err(|e| {
-        BarcaError::Db(format!(
-            "failed to copy {db_path} to {} for upload: {e}",
-            copy.display()
-        ))
-    })?;
-    Ok(PushCopy {
+    until.check()?;
+    let copy = PushCopy {
         path: copy,
         base_raw: crate::state_base::read_raw(db_path),
-    })
+    };
+    copy_snapshot_bytes(db_path, &copy.path, until).await?;
+    Ok(copy)
+}
+
+async fn copy_snapshot_bytes(
+    db_path: &str,
+    target_path: &Path,
+    until: crate::state_sync::Until<'_>,
+) -> Result<(), BarcaError> {
+    use std::io::{Read, Write};
+    let failed = |e| {
+        BarcaError::Db(format!(
+            "failed to copy {db_path} to {} for upload: {e}",
+            target_path.display(),
+        ))
+    };
+    let mut source = fs::File::open(db_path).map_err(failed)?;
+    let mut target = fs::File::create(target_path).map_err(failed)?;
+    target
+        .set_permissions(source.metadata().map_err(failed)?.permissions())
+        .map_err(failed)?;
+    let mut bytes = [0u8; 64 * 1024];
+    loop {
+        until.check()?;
+        let count = source.read(&mut bytes).map_err(failed)?;
+        if count == 0 {
+            break;
+        }
+        target.write_all(&bytes[..count]).map_err(failed)?;
+        // No background filesystem worker may outlive the lock or partial-copy cleanup.
+        tokio::task::yield_now().await;
+    }
+    until.check()?;
+    Ok(())
 }
 
 /// After the upload of `copy` succeeded: advance the base record, so that a download begun
@@ -518,9 +577,18 @@ pub(crate) async fn copy_for_push(db_path: &str, copy: PathBuf) -> Result<PushCo
 /// is still what was uploaded: false when something was written to it during the upload (every
 /// write goes to the write-ahead log, which was empty when the copy was taken) or a pull
 /// replaced it. Those rows are local only; the caller pushes again.
+#[cfg(test)]
 pub(crate) async fn record_pushed(db_path: &str, copy: &PushCopy) -> bool {
+    record_pushed_with_until(db_path, copy, crate::state_sync::Until::done()).await
+}
+
+pub(crate) async fn record_pushed_with_until(
+    db_path: &str,
+    copy: &PushCopy,
+    until: crate::state_sync::Until<'_>,
+) -> bool {
     use crate::state_base;
-    let Ok(_lock) = lock_db(db_path).await else {
+    let Ok(_lock) = lock_db_with_until(db_path, until).await else {
         return false;
     };
     let base_raw = state_base::read_raw(db_path);
@@ -634,7 +702,10 @@ async fn open_local(db_path: &str) -> Result<LocalDb, BarcaError> {
         }
         .await;
         let error = match attempt {
-            Ok((db, conn)) => return Ok(LocalDb::Open(db, conn)),
+            Ok((db, conn)) => {
+                crate::db_schema::check(&conn).await?;
+                return Ok(LocalDb::Open(db, conn));
+            }
             Err(e) => e,
         };
         match &error {
@@ -694,7 +765,7 @@ async fn fold_pulled(
     remove_sidecars(staged_path)
 }
 
-/// Steps 2 and 3 of [`replace_db`], on the validated download `pulled` (the file at
+/// Steps 2 and 3 of [`replace_db_holding`], on the validated download `pulled` (the file at
 /// `staged_path`, with the current schema). Afterwards `staged_path` and (when it is a
 /// database) `db_path` are each one self-contained file with an empty or absent log.
 async fn carry_and_fold(
@@ -704,9 +775,8 @@ async fn carry_and_fold(
 ) -> Result<crate::state_carry::Carried, BarcaError> {
     let kept_local = |e: BarcaError| {
         BarcaError::Db(format!(
-            "{e}\nThe local database was left as it was, and nothing was pulled. To go on with \
-             the shared history alone, move {db_path} and {db_path}-wal out of the way; what \
-             was recorded only on this machine is then not carried over."
+            "{e}\nThe local database was left as it was, and nothing was pulled. Keep the \
+             local history and its write-ahead log; resolve the error above and retry."
         ))
     };
 
@@ -796,6 +866,7 @@ fn db_open_error(detail: impl std::fmt::Display) -> BarcaError {
 /// this run executes Python. (Fields drop in order: connection, database + file lock,
 /// then the in-process guard.)
 pub struct CacheReader {
+    local_artifact_dir: Option<String>,
     conn: turso::Connection,
     _handle: DbHandle,
     _guard: MutexGuard<'static, ()>,
@@ -807,10 +878,25 @@ impl CacheReader {
         let guard = db_guard().await;
         let (handle, conn) = open_conn(db_path).await?;
         Ok(Self {
+            local_artifact_dir: None,
             conn,
             _handle: handle,
             _guard: guard,
         })
+    }
+
+    pub(crate) async fn for_config(
+        cfg: &crate::config::ResolvedConfig,
+    ) -> Result<Self, BarcaError> {
+        let mut cache = Self::open(&cfg.db_path).await?;
+        cache.local_artifact_dir = cfg.remote_off.then(|| cfg.local_artifact_dir.clone());
+        Ok(cache)
+    }
+
+    pub(crate) fn allows_artifact(&self, path: &str) -> bool {
+        self.local_artifact_dir
+            .as_deref()
+            .is_none_or(|root| crate::config::local_artifact(path, root))
     }
 
     pub fn conn(&self) -> &turso::Connection {
@@ -828,6 +914,7 @@ async fn connect(path: &str) -> Result<(turso::Database, turso::Connection), Bar
     let conn = db
         .connect()
         .map_err(|e| BarcaError::Db(format!("failed to connect: {e}")))?;
+    crate::db_schema::check(&conn).await?;
     Ok((db, conn))
 }
 
@@ -835,7 +922,17 @@ async fn connect(path: &str) -> Result<(turso::Database, turso::Connection), Bar
 /// for the duration of their work on the returned connection; the returned
 /// handle holds the cross-process lock until it is dropped.
 pub(crate) async fn open_conn(db_path: &str) -> Result<(DbHandle, turso::Connection), BarcaError> {
-    let lock = acquire_file_lock(db_path, DB_FILE_LOCK_WAIT).await?;
+    open_conn_with_until(db_path, crate::state_sync::Until::done()).await
+}
+
+pub(crate) async fn open_conn_with_until(
+    db_path: &str,
+    until: crate::state_sync::Until<'_>,
+) -> Result<(DbHandle, turso::Connection), BarcaError> {
+    let lock = until
+        .admit(acquire_file_lock(db_path, DB_FILE_LOCK_WAIT))
+        .await??;
+    until.check()?;
     let (db, conn) = connect(db_path).await?;
     Ok((
         DbHandle {
@@ -896,9 +993,48 @@ pub async fn init_db(db_path: &str) -> Result<(), BarcaError> {
     init_schema(&conn).await
 }
 
-/// Create the tables and apply the migrations: afterwards the database has the current schema,
-/// whatever version wrote it. Idempotent, and writes nothing to a database that is current.
+/// Migrate legacy metadata atomically, preserving authoritative history. Unknown versions
+/// are refused before any write; current databases are validated without changing them.
 pub(crate) async fn init_schema(conn: &turso::Connection) -> Result<(), BarcaError> {
+    let version = crate::db_schema::check(conn).await?;
+    if version == crate::db_schema::VERSION {
+        return crate::state_validate::usable_schema(conn)
+            .await?
+            .map_err(BarcaError::Db);
+    }
+    crate::state_validate::legacy_schema(conn)
+        .await?
+        .map_err(BarcaError::Db)?;
+    conn.execute("BEGIN IMMEDIATE", ())
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to begin schema migration: {e}")))?;
+    let migrated = async {
+        migrate_legacy_schema(conn).await?;
+        crate::state_validate::usable_schema(conn)
+            .await?
+            .map_err(BarcaError::Db)?;
+        conn.execute(
+            &format!("PRAGMA user_version = {}", crate::db_schema::VERSION),
+            (),
+        )
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to record schema version: {e}")))?;
+        conn.execute("COMMIT", ())
+            .await
+            .map_err(|e| BarcaError::Db(format!("failed to commit schema migration: {e}")))?;
+        Ok(())
+    }
+    .await;
+    if let Err(error) = migrated {
+        conn.execute("ROLLBACK", ()).await.map_err(|e| {
+            BarcaError::Db(format!("{error}; schema migration rollback failed: {e}"))
+        })?;
+        return Err(error);
+    }
+    Ok(())
+}
+
+async fn migrate_legacy_schema(conn: &turso::Connection) -> Result<(), BarcaError> {
     conn.execute(
         "CREATE TABLE IF NOT EXISTS materializations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -928,29 +1064,12 @@ pub(crate) async fn init_schema(conn: &turso::Connection) -> Result<(), BarcaErr
     .map_err(|e| BarcaError::Db(format!("failed to create index: {e}")))?;
 
     // Migrate existing databases: add artifact columns if missing.
-    // These are safe no-ops if the columns already exist.
-    for col in [
-        "ALTER TABLE materializations ADD COLUMN artifact_path TEXT",
-        "ALTER TABLE materializations ADD COLUMN artifact_format TEXT",
-        "ALTER TABLE materializations ADD COLUMN artifact_size_bytes INTEGER",
-        "ALTER TABLE materializations ADD COLUMN elapsed_seconds REAL",
-        "ALTER TABLE materializations ADD COLUMN error_message TEXT",
-        "ALTER TABLE materializations ADD COLUMN error_traceback TEXT",
-        "ALTER TABLE materializations ADD COLUMN attempts INTEGER DEFAULT 1",
-        "ALTER TABLE materializations ADD COLUMN sinks_json TEXT",
-        "ALTER TABLE materializations ADD COLUMN cpu_seconds REAL",
-        "ALTER TABLE materializations ADD COLUMN max_rss_bytes INTEGER",
-        // Content hash of a sensor's output (#183): folded into its consumers' run hashes, and
-        // what `--dry-run` / `barca status` assume the sensor returns next.
-        "ALTER TABLE materializations ADD COLUMN output_hash TEXT",
-        // The run that wrote the row (#214). Steps are recorded as they finish and again in the
-        // end-of-run ledger (and its replay after a shared-state conflict); this is how the
-        // later writes recognise what is already there. NULL on rows from older versions.
-        "ALTER TABLE materializations ADD COLUMN run_id TEXT",
-        "ALTER TABLE materializations ADD COLUMN error_type TEXT",
-    ] {
-        conn.execute(col, ()).await.ok();
-    }
+    crate::db_schema::add_columns(
+        conn,
+        "materializations",
+        crate::db_schema::MATERIALIZATION_COLUMNS,
+    )
+    .await?;
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_mat_run ON materializations(run_id)",
         (),
@@ -999,12 +1118,7 @@ pub(crate) async fn init_schema(conn: &turso::Connection) -> Result<(), BarcaErr
     .map_err(|e| BarcaError::Db(format!("failed to create runs table: {e}")))?;
     // Who is executing a `running` run (#214): the coordinator's pid and host, so a run whose
     // process died without recording an outcome can be told from one still in progress.
-    for col in [
-        "ALTER TABLE runs ADD COLUMN pid INTEGER",
-        "ALTER TABLE runs ADD COLUMN host TEXT",
-    ] {
-        conn.execute(col, ()).await.ok();
-    }
+    crate::db_schema::add_columns(conn, "runs", crate::db_schema::RUN_COLUMNS).await?;
 
     // A pull of the shared state looks for unfinished runs on both sides (`state_carry`):
     // through this index that costs the number of such runs, not the length of the history.
@@ -1420,8 +1534,11 @@ pub async fn create_run(
 ) -> Result<(), BarcaError> {
     let _g = db_guard().await;
     let (_db, conn) = open_conn(db_path).await?;
+    // The marker exists from before the row does until the run has recorded its outcome
+    // ([`finish_run`], or the end of this process).
+    let owner = crate::run_owner::claim(db_path, run_id);
     conn.execute(
-        "INSERT INTO runs (run_id, command, files, target, status, steps_total, pid, host) VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6, ?7)",
+        "INSERT INTO runs (run_id, command, files, target, status, steps_total, pid, host, owner) VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6, ?7, NULLIF(?8, ''))",
         [
             run_id.to_string(),
             command.to_string(),
@@ -1430,11 +1547,12 @@ pub async fn create_run(
             steps_total.map(|n| n.to_string()).unwrap_or_default(),
             std::process::id().to_string(),
             local_host(),
+            owner,
         ],
     )
     .await
     .ok();
-    mark_interrupted_runs(&conn).await;
+    mark_interrupted_runs(&conn, db_path).await;
     Ok(())
 }
 
@@ -1466,41 +1584,91 @@ pub(crate) fn pid_alive(pid: i64) -> bool {
     rc == 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
 }
 
-/// The `running` runs started on this host whose process no longer exists (killed, out of
-/// memory, power loss): they will never record an outcome themselves. Runs from other hosts,
-/// and from versions that did not record a pid, are never listed. Best effort: empty when the
-/// host name or the columns cannot be read.
-async fn interrupted_runs(conn: &turso::Connection) -> Vec<String> {
-    let mut dead: Vec<String> = Vec::new();
-    let host = local_host();
-    if host.is_empty() {
-        return dead;
-    }
-    let Ok(mut rows) = conn
-        .query(
-            "SELECT run_id, pid FROM runs WHERE status = 'running' AND host = ?1 AND pid IS NOT NULL",
-            [host],
-        )
-        .await
-    else {
-        return dead;
+/// The `running` runs whose process is known to be gone (killed, out of memory, power loss):
+/// they will never record an outcome themselves.
+///
+/// A run that recorded who started it is judged by [`crate::run_owner::judge`], which says
+/// "gone" only when this process can establish it, also in a container, where the pid is 1
+/// on every start and the host name changes. When it cannot (a run on another machine, in
+/// another container whose marker cannot be consulted, on the host of this container) the
+/// run is not listed: it may be going.
+///
+/// A run that recorded nothing of the kind (an older barca) is judged as before: gone when
+/// it was started on this host and its pid does not exist. Best effort: empty when nothing
+/// can be read.
+async fn interrupted_runs(conn: &turso::Connection, db_path: &str) -> Vec<String> {
+    let on = crate::run_owner::System::for_db(db_path);
+    interrupted_among(&running_runs(conn).await, &on, pid_alive)
+}
+
+/// A `running` row, as much of it as says who is running it.
+#[derive(Debug, Clone)]
+struct RunningRun {
+    run_id: String,
+    pid: Option<i64>,
+    host: String,
+    /// The `owner` column: empty on rows from older versions.
+    owner: String,
+}
+
+async fn running_runs(conn: &turso::Connection) -> Vec<RunningRun> {
+    // A database this version has not migrated (history read from one an older barca wrote)
+    // has no `owner` column yet.
+    let with_owner = "SELECT run_id, pid, COALESCE(host, ''), COALESCE(owner, '') FROM runs WHERE status = 'running'";
+    let without = "SELECT run_id, pid, COALESCE(host, ''), '' FROM runs WHERE status = 'running'";
+    let mut rows = match conn.query(with_owner, ()).await {
+        Ok(rows) => rows,
+        Err(_) => match conn.query(without, ()).await {
+            Ok(rows) => rows,
+            Err(_) => return Vec::new(),
+        },
     };
+    let mut running = Vec::new();
     while let Ok(Some(row)) = rows.next().await {
-        if let (Ok(run_id), Ok(pid)) = (row.get::<String>(0), row.get::<i64>(1))
-            && !pid_alive(pid)
-        {
-            dead.push(run_id);
+        if let Ok(run_id) = row.get::<String>(0) {
+            running.push(RunningRun {
+                run_id,
+                pid: row.get::<i64>(1).ok(),
+                host: row.get::<String>(2).unwrap_or_default(),
+                owner: row.get::<String>(3).unwrap_or_default(),
+            });
         }
     }
-    dead
+    running
+}
+
+/// [`interrupted_runs`] with what it asks of the machine passed in.
+fn interrupted_among(
+    running: &[RunningRun],
+    on: &dyn crate::run_owner::Observer,
+    pid_alive: impl Fn(i64) -> bool,
+) -> Vec<String> {
+    use crate::run_owner::{Owner, judge_json};
+    let this_host = on.here().host;
+    running
+        .iter()
+        .filter(|run| {
+            if run.owner.is_empty() {
+                let on_this_host = !this_host.is_empty() && run.host == this_host;
+                on_this_host && run.pid.is_some_and(|pid| !pid_alive(pid))
+            } else {
+                judge_json(run.pid, &run.owner, on) == Owner::Gone
+            }
+        })
+        .map(|run| run.run_id.clone())
+        .collect()
 }
 
 /// Record [`interrupted_runs`] as `interrupted`. Their `finished_at` and `elapsed_seconds`
 /// stay NULL, since nobody saw them end. Only a run does this (it writes anyway, and with
 /// shared state pushes what it wrote); reading history reports the same status without
-/// writing it (see [`get_recent_runs`]).
-async fn mark_interrupted_runs(conn: &turso::Connection) {
-    for run_id in interrupted_runs(conn).await {
+/// writing it (see [`get_recent_runs`]). Both go by the same rule: a run is recorded as
+/// interrupted only by a process that has established that its owner is gone.
+///
+/// Afterwards the markers that no `running` row names any more are removed
+/// ([`crate::run_owner::sweep`]).
+async fn mark_interrupted_runs(conn: &turso::Connection, db_path: &str) {
+    for run_id in interrupted_runs(conn, db_path).await {
         conn.execute(
             "UPDATE runs SET status = 'interrupted' WHERE run_id = ?1 AND status = 'running'",
             [run_id],
@@ -1508,6 +1676,12 @@ async fn mark_interrupted_runs(conn: &turso::Connection) {
         .await
         .ok();
     }
+    let named = running_runs(conn)
+        .await
+        .iter()
+        .filter_map(|run| crate::run_owner::token_of(&run.owner))
+        .collect();
+    crate::run_owner::sweep(db_path, &named, SystemTime::now());
 }
 
 /// Finalize a run record with status and stats.
@@ -1521,7 +1695,7 @@ pub async fn finish_run(
 ) -> Result<(), BarcaError> {
     let _g = db_guard().await;
     let (_db, conn) = open_conn(db_path).await?;
-    conn.execute(
+    let updated = conn.execute(
         "UPDATE runs SET status = ?1, steps_executed = ?2, steps_cached = ?3, elapsed_seconds = ?4, finished_at = datetime('now') WHERE run_id = ?5",
         [
             status.to_string(),
@@ -1532,21 +1706,41 @@ pub async fn finish_run(
         ],
     )
     .await
-    .ok();
+    .map_err(|e| BarcaError::Db(format!("failed to finish run: {e}")))?;
+    if updated != 1 {
+        return Err(BarcaError::Db("cannot finish a missing run".to_string()));
+    }
+    crate::run_owner::release(db_path, run_id);
     Ok(())
 }
 
 /// Retrieve recent run records, newest first.
 pub async fn get_recent_runs(db_path: &str, limit: usize) -> Result<Vec<RunRecord>, BarcaError> {
+    read_runs(db_path, None, limit).await
+}
+
+/// Read a durable run by id, including the same interrupted-owner diagnosis as history.
+pub async fn get_run(db_path: &str, run_id: &str) -> Result<Option<RunRecord>, BarcaError> {
+    Ok(read_runs(db_path, Some(run_id), 1)
+        .await?
+        .into_iter()
+        .next())
+}
+
+async fn read_runs(
+    db_path: &str,
+    run_id: Option<&str>,
+    limit: usize,
+) -> Result<Vec<RunRecord>, BarcaError> {
     let _g = db_guard().await;
     let (_db, conn) = open_conn(db_path).await?;
     // A run whose process died is reported as `interrupted`, not as still `running`. Reported,
     // not written: reading history must not change the database (the next run records it).
-    let interrupted = interrupted_runs(&conn).await;
+    let interrupted = interrupted_runs(&conn, db_path).await;
     let mut rows = conn
         .query(
-            "SELECT run_id, command, files, target, status, steps_total, steps_executed, steps_cached, started_at, finished_at, elapsed_seconds FROM runs ORDER BY id DESC LIMIT ?1",
-            [limit.to_string()],
+            "SELECT run_id, command, files, target, status, steps_total, steps_executed, steps_cached, started_at, finished_at, elapsed_seconds FROM runs WHERE (?1 = '' OR run_id = ?1) ORDER BY id DESC LIMIT ?2",
+            [run_id.unwrap_or_default().to_string(), limit.to_string()],
         )
         .await
         .map_err(|e| BarcaError::Db(format!("failed to query runs: {e}")))?;
@@ -1583,6 +1777,39 @@ pub async fn get_recent_runs(db_path: &str, limit: usize) -> Result<Vec<RunRecor
         });
     }
     Ok(records)
+}
+
+/// A step recorded by this run. Cached inputs have no new materialization row.
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct RunStep {
+    pub node_id: String,
+    pub status: String,
+    pub elapsed_seconds: Option<f64>,
+    pub error: Option<String>,
+}
+
+pub async fn get_run_steps(db_path: &str, run_id: &str) -> Result<Vec<RunStep>, BarcaError> {
+    let _g = db_guard().await;
+    let (_db, conn) = open_conn(db_path).await?;
+    let mut rows = conn.query(
+        "SELECT node_id, status, elapsed_seconds, error_message FROM materializations WHERE run_id = ?1 ORDER BY id",
+        [run_id],
+    ).await.map_err(|e| BarcaError::Db(format!("failed to query run steps: {e}")))?;
+    let mut steps = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to read run step: {e}")))?
+    {
+        steps.push(RunStep {
+            node_id: row.get::<String>(0).unwrap_or_default(),
+            status: row.get::<String>(1).unwrap_or_default(),
+            elapsed_seconds: row.get::<f64>(2).ok(),
+            error: row.get::<String>(3).ok(),
+        });
+    }
+    Ok(steps)
 }
 
 /// Total number of recorded runs (for `barca history` truncation reporting).
@@ -1804,6 +2031,26 @@ pub async fn latest_partition_artifacts(
     db_path: &str,
     base_id: &str,
 ) -> Result<Vec<(String, String, String)>, BarcaError> {
+    latest_partition_artifacts_scoped(db_path, base_id, None).await
+}
+
+pub(crate) async fn partition_artifacts_for_config(
+    cfg: &crate::config::ResolvedConfig,
+    base_id: &str,
+) -> Result<Vec<(String, String, String)>, BarcaError> {
+    latest_partition_artifacts_scoped(
+        &cfg.db_path,
+        base_id,
+        cfg.remote_off.then_some(cfg.local_artifact_dir.as_str()),
+    )
+    .await
+}
+
+async fn latest_partition_artifacts_scoped(
+    db_path: &str,
+    base_id: &str,
+    local_dir: Option<&str>,
+) -> Result<Vec<(String, String, String)>, BarcaError> {
     let _g = db_guard().await;
     let (_db, conn) = open_conn(db_path).await?;
     let prefix = format!("{base_id}[");
@@ -1822,6 +2069,11 @@ pub async fn latest_partition_artifacts(
         .await
         .map_err(|e| BarcaError::Db(format!("failed to read row: {e}")))?
     {
+        if local_dir.is_some_and(|root| {
+            !crate::config::local_artifact(&row.get::<String>(1).unwrap_or_default(), root)
+        }) {
+            continue;
+        }
         let node_id = row.get::<String>(0).unwrap_or_default();
         seen.entry(node_id).or_insert_with(|| {
             (
@@ -1920,6 +2172,76 @@ pub async fn get_avg_elapsed_for_partitioned(
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn cancelled_snapshot_copy_stops_between_chunks_and_cleans_partial_stage() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.db");
+        std::fs::File::create(&source)
+            .unwrap()
+            .set_len(4 * 1024 * 1024)
+            .unwrap();
+        let stage = super::PushCopy {
+            path: dir.path().join("stage.db"),
+            base_raw: None,
+        };
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let source_path = source.to_string_lossy();
+        let target_path = stage.path.clone();
+        let work = super::copy_snapshot_bytes(
+            &source_path,
+            &target_path,
+            crate::state_sync::Until::cancelled(&cancel),
+        );
+        tokio::pin!(work);
+        tokio::select! {
+            biased;
+            _ = &mut work => panic!("copy finished without yielding between chunks"),
+            _ = async {
+                loop {
+                    if std::fs::metadata(&stage.path).is_ok_and(|m| m.len() > 0) {break;}
+                    tokio::task::yield_now().await;
+                }
+            } => {},
+        }
+        let copied = std::fs::metadata(&stage.path).unwrap().len();
+        assert!(copied > 0 && copied < std::fs::metadata(&source).unwrap().len());
+        cancel.cancel();
+        assert!(matches!(work.await, Err(crate::BarcaError::Cancelled)));
+        let path = stage.path.clone();
+        drop(stage);
+        assert!(!path.exists());
+        assert_eq!(std::fs::metadata(&source).unwrap().len(), 4 * 1024 * 1024);
+    }
+    #[tokio::test]
+    async fn run_inspection_selects_its_recorded_steps_and_failure_details() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metadata.db").display().to_string();
+        super::init_db(&path).await.unwrap();
+        {
+            let _guard = super::db_guard().await;
+            let (_db, conn) = super::open_conn(&path).await.unwrap();
+            for (id, node, status, error) in [
+                ("first", "p.py:ok", "success", ""),
+                ("first", "p.py:bad", "failed", "bad input"),
+                ("other", "p.py:other", "success", ""),
+            ] {
+                conn.execute("INSERT INTO materializations (run_id,node_id,status,error_message,elapsed_seconds) VALUES (?1,?2,?3,NULLIF(?4,''),1.25)", [id,node,status,error]).await.unwrap();
+            }
+        }
+        let steps = super::get_run_steps(&path, "first").await.unwrap();
+        assert_eq!(steps.len(), 2);
+        assert_eq!(steps[0].node_id, "p.py:ok");
+        assert_eq!(steps[1].status, "failed");
+        assert_eq!(steps[1].error.as_deref(), Some("bad input"));
+        assert_eq!(steps[1].elapsed_seconds, Some(1.25));
+        assert!(
+            super::get_run_steps(&path, "unknown")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
     use super::*;
 
     #[tokio::test]
@@ -2417,11 +2739,11 @@ mod tests {
         fs::copy(&local, &same).unwrap();
         init_db(&local).await.unwrap();
         let log = fs::metadata(format!("{local}-wal")).map_or(0, |m| m.len());
-        assert_eq!(
-            log, 32,
-            "the engine no longer leaves a header-only log on open"
+        assert!(
+            log <= 32,
+            "opening a current schema wrote WAL frames: {log}"
         );
-        assert!(log_holds_no_frame(&local) && !wal_is_clean(&local));
+        assert!(log_holds_no_frame(&local));
         pull_for_tests(&local, Path::new(&same)).await;
         assert_eq!(fs::read(&prev).unwrap(), first_generation);
 
@@ -3049,7 +3371,8 @@ mod tests {
         init_db(&db_path).await.unwrap();
 
         // A pid that existed and is certainly gone: a child that has been reaped.
-        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let mut child =
+            crate::helper_proc::spawn_std(&mut std::process::Command::new("true")).unwrap();
         let dead_pid = child.id();
         child.wait().unwrap();
 
@@ -3122,6 +3445,464 @@ mod tests {
         assert_eq!(stored("dead").await, "interrupted");
         assert_eq!(stored("elsewhere").await, "running");
         assert_eq!(stored("alive").await, "running");
+    }
+
+    // ─── who is running a `running` run (#290) ───────────────────────────────
+
+    use crate::run_owner::{self, Here, Identity, Marker, Observer, Owner, Process};
+
+    /// Insert a `running` run as some process recorded it.
+    async fn add_running(db_path: &str, run_id: &str, pid: u32, host: &str, owner: &str) {
+        let _g = db_guard().await;
+        let (_db, conn) = open_conn(db_path).await.unwrap();
+        conn.execute(
+            "INSERT INTO runs (run_id, command, files, status, pid, host, owner) VALUES (?1, 'get', 'f.py', 'running', ?2, ?3, NULLIF(?4, ''))",
+            [
+                run_id.to_string(),
+                pid.to_string(),
+                host.to_string(),
+                owner.to_string(),
+            ],
+        )
+        .await
+        .unwrap();
+    }
+
+    async fn stored_status(db_path: &str, run_id: &str) -> String {
+        let _g = db_guard().await;
+        let (_db, conn) = open_conn(db_path).await.unwrap();
+        let mut rows = conn
+            .query("SELECT status FROM runs WHERE run_id = ?1", [run_id])
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        row.get::<String>(0).unwrap()
+    }
+
+    async fn reported(db_path: &str) -> HashMap<String, String> {
+        get_recent_runs(db_path, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.run_id, r.status))
+            .collect()
+    }
+
+    /// A pid that existed and is certainly gone: a child that has been reaped.
+    fn a_dead_pid() -> u32 {
+        let mut child =
+            crate::helper_proc::spawn_std(&mut std::process::Command::new("true")).unwrap();
+        let pid = child.id();
+        child.wait().unwrap();
+        pid
+    }
+
+    async fn metadata_db(dir: &tempfile::TempDir) -> String {
+        let db_path = dir.path().join("metadata.db").to_string_lossy().to_string();
+        init_db(&db_path).await.unwrap();
+        db_path
+    }
+
+    fn marker_files(dir: &tempfile::TempDir) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(dir.path().join("run-owners"))
+            .map(|entries| {
+                entries
+                    .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        names.sort();
+        names
+    }
+
+    /// What the real machine says of itself, as an identity a run here would record.
+    fn this_process(fifo: Option<run_owner::FifoId>) -> Identity {
+        let scratch = tempfile::tempdir().unwrap();
+        let db = scratch.path().join("metadata.db").display().to_string();
+        let owner = run_owner::claim(&db, "probe");
+        run_owner::release(&db, "probe");
+        let mut id: Identity = serde_json::from_str(&owner).expect("this kernel has a boot id");
+        id.fifo = fifo;
+        id
+    }
+
+    fn json(id: &Identity) -> String {
+        serde_json::to_string(id).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_run_killed_in_a_container_is_interrupted_after_the_restart() {
+        // #290. The coordinator was pid 1 of a container; the container that replaces it has
+        // another host name and a pid 1 of its own. By pid and host the killed run looked
+        // alive and foreign, and stayed `running` for ever. Here: the same kernel, the pid
+        // namespace number handed out again, and a pid 1 that started later.
+        let run = Identity {
+            boot: "the-kernel".into(),
+            pidns: "pid:[4026532980]".into(),
+            timens: "time:[4026531834]".into(),
+            start: Some(1_000),
+            ..Identity::default()
+        };
+        let rows = [RunningRun {
+            run_id: "killed".into(),
+            pid: Some(1),
+            host: "container-1".into(),
+            owner: json(&run),
+        }];
+        let restarted = run_owner::tests::Fake {
+            here: Here {
+                boot: "the-kernel".into(),
+                machine: String::new(),
+                host: "container-2".into(),
+                pidns: "pid:[4026532980]".into(),
+                timens: "time:[4026531834]".into(),
+                handles: true,
+            },
+            process: Process::Present(Some(9_000)),
+            marker: Marker::Missing,
+        };
+        // `pid_alive` is what the old rule asked; it says the pid exists.
+        assert_eq!(interrupted_among(&rows, &restarted, |_| true), ["killed"]);
+
+        // The same container still going, seen from inside (`docker exec`): the same pid 1.
+        let mut inside = restarted.clone();
+        inside.process = Process::Present(Some(1_000));
+        assert!(interrupted_among(&rows, &inside, |_| false).is_empty());
+
+        // A new container that got another namespace number cannot look the pid up. It
+        // takes the marker, where the filesystem lets it be verified...
+        let mut with_marker = run.clone();
+        with_marker.fifo = Some(run_owner::FifoId {
+            token: run_owner::tests::T.into(),
+            dev: 5,
+            ino: 6,
+            handle: Some("1:00ff".into()),
+            fs: "volume".into(),
+            local: true,
+        });
+        let rows = [RunningRun {
+            owner: json(&with_marker),
+            ..rows[0].clone()
+        }];
+        let mut elsewhere = restarted.clone();
+        elsewhere.here.pidns = "pid:[4026533111]".into();
+        let seen = |handle: Option<&str>, reader| Marker::Present {
+            dev: 5,
+            ino: 6,
+            handle: handle.map(String::from),
+            reader: Some(reader),
+            fs: "volume".into(),
+            local: true,
+        };
+        elsewhere.marker = seen(Some("1:00ff"), false);
+        assert_eq!(interrupted_among(&rows, &elsewhere, |_| true), ["killed"]);
+        // ...not while the first container is still running next to it...
+        elsewhere.marker = seen(Some("1:00ff"), true);
+        assert!(interrupted_among(&rows, &elsewhere, |_| false).is_empty());
+        // ...and not where the file cannot be shown to be the one the owner held.
+        elsewhere.marker = seen(None, false);
+        assert!(interrupted_among(&rows, &elsewhere, |_| false).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_live_run_that_cannot_be_observed_stays_running_and_keeps_its_marker() {
+        // The review's failure, with the real files. A run is going on the host; its marker
+        // is in the project directory, which a container mounts. The container is another
+        // kernel: to it the marker FIFO has no reader and the pid does not exist. It must
+        // report the run as `running`, record nothing, and leave the marker alone, also
+        // when it starts a run of its own, and also long after.
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = metadata_db(&dir).await;
+        // The host's process: alive for the whole test.
+        let (fifo, _host_process) = run_owner::tests::other_process(&db_path);
+        let marker = format!("{}.fifo", fifo.token);
+        let mut host_run = this_process(Some(fifo));
+        // This test process stands for the container: the run is from another kernel. As
+        // in the review's attack, the reader has the owner's machine id and host name
+        // (`this_process` recorded this machine's), and the pid is dead here.
+        host_run.boot = "the-host-kernel".into();
+        add_running(
+            &db_path,
+            "host-run",
+            a_dead_pid(),
+            &local_host(),
+            &json(&host_run),
+        )
+        .await;
+
+        assert_eq!(reported(&db_path).await["host-run"], "running");
+        create_run(&db_path, "container-run", "get", "f.py", None, Some(1))
+            .await
+            .unwrap();
+        assert_eq!(stored_status(&db_path, "host-run").await, "running");
+        assert!(marker_files(&dir).contains(&marker));
+
+        // The same with every answer the container's kernel could give about a process and
+        // a file it sees through a mount that is not a local disk: no such pid, nobody at
+        // the other end of the marker, whatever inode numbers and filesystem id it shows.
+        let rows = {
+            let _g = db_guard().await;
+            let (_db, conn) = open_conn(&db_path).await.unwrap();
+            running_runs(&conn).await
+        };
+        let host_row: Vec<RunningRun> = rows
+            .into_iter()
+            .filter(|r| r.run_id == "host-run")
+            .collect();
+        let real = run_owner::System::for_db(&db_path);
+        let Marker::Present {
+            dev,
+            ino,
+            handle,
+            fs,
+            ..
+        } = real.marker(&host_run.fifo.as_ref().unwrap().token)
+        else {
+            panic!("the marker is there");
+        };
+        for process in [
+            Process::Absent,
+            Process::Present(None),
+            Process::Present(Some(1)),
+        ] {
+            for reader in [Some(false), None] {
+                for (handle, fs) in [(handle.clone(), fs.clone()), (None, String::new())] {
+                    let blind = run_owner::tests::Fake {
+                        here: real.here(),
+                        process,
+                        marker: Marker::Present {
+                            dev,
+                            ino,
+                            handle,
+                            reader,
+                            fs,
+                            local: false,
+                        },
+                    };
+                    assert!(interrupted_among(&host_row, &blind, |_| false).is_empty());
+                }
+            }
+        }
+
+        // Hours later the container starts another run: the marker is still named by a
+        // `running` row, so the sweep leaves it.
+        {
+            let _g = db_guard().await;
+            let (_db, conn) = open_conn(&db_path).await.unwrap();
+            let named = running_runs(&conn)
+                .await
+                .iter()
+                .filter_map(|run| run_owner::token_of(&run.owner))
+                .collect();
+            let later = SystemTime::now() + Duration::from_secs(48 * 3600);
+            run_owner::sweep(&db_path, &named, later);
+        }
+        assert!(marker_files(&dir).contains(&marker));
+        finish_run(&db_path, "container-run", "success", 1, 0, 0.1)
+            .await
+            .unwrap();
+        assert_eq!(
+            marker_files(&dir),
+            [marker],
+            "the container removed its own, only"
+        );
+        assert_eq!(reported(&db_path).await["host-run"], "running");
+    }
+
+    #[tokio::test]
+    async fn a_run_whose_owner_died_next_door_is_interrupted_once_its_marker_has_no_reader() {
+        // Another pid namespace on this kernel (a second container on the same volume): the
+        // pid cannot be looked up, the marker can. Real files, real kernel.
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = metadata_db(&dir).await;
+        let (fifo, process) = run_owner::tests::other_process(&db_path);
+        // Where this filesystem gives no file handle (Linux), the marker proves nothing
+        // and the run must simply stay `running`.
+        let provable = if cfg!(target_os = "macos") {
+            fifo.local
+        } else {
+            fifo.handle.is_some()
+        };
+        let marker = format!("{}.fifo", fifo.token);
+        let mut next_door = this_process(Some(fifo));
+        next_door.pidns = "pid:[another-container]".into();
+        add_running(
+            &db_path,
+            "theirs",
+            std::process::id(),
+            "container-1",
+            &json(&next_door),
+        )
+        .await;
+
+        assert_eq!(reported(&db_path).await["theirs"], "running");
+        create_run(&db_path, "ours", "get", "f.py", None, Some(1))
+            .await
+            .unwrap();
+        assert_eq!(stored_status(&db_path, "theirs").await, "running");
+
+        // It is killed.
+        drop(process);
+        if !provable {
+            assert_eq!(reported(&db_path).await["theirs"], "running");
+            return;
+        }
+        let system = run_owner::System::for_db(&db_path);
+        run_owner::tests::eventually("the owner is seen to be gone", || {
+            run_owner::judge(None, &next_door, &system) == Owner::Gone
+        });
+        assert_eq!(reported(&db_path).await["theirs"], "interrupted");
+        // Reading reported it and wrote nothing; the next run to start records it.
+        assert_eq!(stored_status(&db_path, "theirs").await, "running");
+        create_run(&db_path, "next", "get", "f.py", None, Some(1))
+            .await
+            .unwrap();
+        assert_eq!(stored_status(&db_path, "theirs").await, "interrupted");
+        assert_eq!(stored_status(&db_path, "ours").await, "running");
+        // Its marker is not named by a `running` row any more: it goes once it is old.
+        assert!(marker_files(&dir).contains(&marker));
+        {
+            let _g = db_guard().await;
+            let (_db, conn) = open_conn(&db_path).await.unwrap();
+            let named = running_runs(&conn)
+                .await
+                .iter()
+                .filter_map(|run| run_owner::token_of(&run.owner))
+                .collect();
+            run_owner::sweep(
+                &db_path,
+                &named,
+                SystemTime::now() + Duration::from_secs(7200),
+            );
+        }
+        assert_eq!(marker_files(&dir).len(), 1, "this process's own marker");
+        assert!(!marker_files(&dir).contains(&marker));
+    }
+
+    #[tokio::test]
+    async fn a_run_from_before_a_restart_of_this_machine_is_interrupted() {
+        // What main reports by host name and pid, established by observation instead: the
+        // marker is on this machine's local disk, the same filesystem and inode the owner
+        // recorded under another boot id, and nobody on this kernel holds it.
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = metadata_db(&dir).await;
+        let (fifo, process) = run_owner::tests::other_process(&db_path);
+        // A temp dir that is not on a local disk (a container's overlay) proves nothing.
+        let provable = fifo.local && !fifo.fs.is_empty();
+        let mut before = this_process(Some(fifo));
+        before.boot = "the-boot-before".into();
+        add_running(
+            &db_path,
+            "then",
+            std::process::id(),
+            "any-host",
+            &json(&before),
+        )
+        .await;
+
+        // While somebody holds the marker, the kernel it was created on is still running
+        // (this one, in the test): no restart can have happened.
+        assert_eq!(reported(&db_path).await["then"], "running");
+        drop(process);
+        let system = run_owner::System::for_db(&db_path);
+        if provable {
+            run_owner::tests::eventually("the marker has no reader", || {
+                run_owner::judge(None, &before, &system) == Owner::Gone
+            });
+            assert_eq!(reported(&db_path).await["then"], "interrupted");
+        } else {
+            assert_eq!(reported(&db_path).await["then"], "running");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_run_from_another_machine_is_never_marked_interrupted() {
+        // The shared history brings other machines' `running` rows into this database, and
+        // such a run may be going right now. Even with this machine's host name and a pid
+        // that is dead here (which by pid and host alone read as interrupted).
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = metadata_db(&dir).await;
+        let mut theirs = this_process(None);
+        theirs.boot = "a-kernel-somewhere".into();
+        for (run_id, machine) in [("twin", theirs.machine.clone()), ("other", "m-2".into())] {
+            theirs.machine = machine;
+            add_running(
+                &db_path,
+                run_id,
+                a_dead_pid(),
+                &local_host(),
+                &json(&theirs),
+            )
+            .await;
+        }
+        create_run(&db_path, "ours", "get", "f.py", None, Some(1))
+            .await
+            .unwrap();
+        for run_id in ["twin", "other"] {
+            assert_eq!(reported(&db_path).await[run_id], "running");
+            assert_eq!(stored_status(&db_path, run_id).await, "running");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_run_records_who_started_it_and_gives_up_its_marker_when_it_ends() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = metadata_db(&dir).await;
+        create_run(&db_path, "r1", "get", "f.py", None, Some(1))
+            .await
+            .unwrap();
+        let rows = {
+            let _g = db_guard().await;
+            let (_db, conn) = open_conn(&db_path).await.unwrap();
+            running_runs(&conn).await
+        };
+        assert_eq!(rows.len(), 1);
+        let id: Identity = serde_json::from_str(&rows[0].owner).unwrap();
+        assert!(!id.boot.is_empty());
+        let token = id.fifo.as_ref().expect("a marker").token.clone();
+        assert_eq!(marker_files(&dir), [format!("{token}.fifo")]);
+        let system = run_owner::System::for_db(&db_path);
+        assert_eq!(run_owner::judge(rows[0].pid, &id, &system), Owner::Alive);
+        assert_eq!(reported(&db_path).await["r1"], "running");
+
+        finish_run(&db_path, "r1", "success", 1, 0, 0.1)
+            .await
+            .unwrap();
+        assert!(marker_files(&dir).is_empty());
+    }
+
+    #[tokio::test]
+    async fn history_of_a_database_an_older_barca_wrote_is_read_without_the_owner_column() {
+        // `barca history` does not migrate what it reads. A 0.18 database has pid and host
+        // and no owner: its killed run is still reported, by pid and host.
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("metadata.db").to_string_lossy().to_string();
+        {
+            let _g = db_guard().await;
+            let (_db, conn) = open_conn(&db_path).await.unwrap();
+            conn.execute(
+                "CREATE TABLE runs (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT UNIQUE NOT NULL, \
+                 command TEXT NOT NULL, files TEXT NOT NULL, target TEXT, \
+                 status TEXT NOT NULL DEFAULT 'running', steps_total INTEGER, \
+                 steps_executed INTEGER DEFAULT 0, steps_cached INTEGER DEFAULT 0, \
+                 started_at TEXT DEFAULT (datetime('now')), finished_at TEXT, elapsed_seconds REAL, \
+                 pid INTEGER, host TEXT)",
+                (),
+            )
+            .await
+            .unwrap();
+            for (run_id, pid) in [("killed", a_dead_pid()), ("going", std::process::id())] {
+                conn.execute(
+                    "INSERT INTO runs (run_id, command, files, pid, host) VALUES (?1, 'get', 'f.py', ?2, ?3)",
+                    [run_id.to_string(), pid.to_string(), local_host()],
+                )
+                .await
+                .unwrap();
+            }
+        }
+        let status = reported(&db_path).await;
+        assert_eq!(status["killed"], "interrupted");
+        assert_eq!(status["going"], "running");
     }
 
     #[tokio::test(flavor = "multi_thread")]

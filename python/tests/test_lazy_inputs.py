@@ -168,15 +168,19 @@ def test_a_cached_result_reaches_an_unannotated_consumer_as_pandas(project, monk
     not be served to a consumer that asked for the default (pandas) reader."""
     art_dir = str(project / "arts")
     lru = _worker._ArtifactLRU()
-    producer = _run_step(
-        project,
-        monkeypatch,
-        f"""
+    body = f"""
         import polars as pl
 
         def make():
             return {returns}
-        """,
+
+        def use(data):
+            return type(data).__module__.split(".")[0]
+        """
+    producer = _run_step(
+        project,
+        monkeypatch,
+        body,
         "make",
         {},
         {},
@@ -184,13 +188,14 @@ def test_a_cached_result_reaches_an_unannotated_consumer_as_pandas(project, monk
         lru,
     )
     produced = _artifacts.artifact_path(art_dir, producer["node_id"], "parquet", "h2")
+    if returns.startswith("pl.DataFrame"):
+        assert isinstance(lru.get(str(produced), "polars"), pl.DataFrame)
+    else:
+        assert lru.get(str(produced), "polars") is None
     consumer = _run_step(
         project,
         monkeypatch,
-        """
-        def use(data):
-            return type(data).__module__.split(".")[0]
-        """,
+        body,
         "use",
         {"data": str(produced)},
         {},

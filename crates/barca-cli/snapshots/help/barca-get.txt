@@ -35,7 +35,7 @@ Options:
           Force re-materialize EVERY asset in the target's cone (nothing comes from cache)
 
       --dry-run
-          Show what this command would do (each step cached or will-run, and why) without running or writing anything
+          Show what this command would do (each step cached or will-run, and why) without executing steps or recording a run (shared history may synchronize)
 
       --agent
           Agent-friendly output: plain structured progress lines instead of visual progress bar
@@ -43,7 +43,7 @@ Options:
       --fields <FIELDS>
           Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones
 
-          [possible values: id, kind, action, status, reason, detail, run_hash, artifact, warning, partitions, env]
+          [possible values: id, kind, action, status, reason, detail, run_hash, artifact, warning, artifact_mismatch, partitions, env]
 
       --env <ENV>
           Environment name (separates cache/state per environment)
@@ -52,6 +52,7 @@ Options:
           Print help (see a summary with '-h')
 
 Examples:
+  BARCA_REMOTE=off barca get total pipeline.py   # local artifacts and history for this process
   barca get total                          # find `total` anywhere in the project and get it
   barca get total pipelines/               # only read files under pipelines/
   barca get                                # every asset and sensor in the project, never tasks
@@ -62,7 +63,7 @@ Examples:
   barca get total pipeline.py --refresh-all        # recompute everything in that cone
   barca get total pipeline.py --refresh clean      # recompute clean and everything downstream of it
   barca get total pipeline.py --refresh clean --no-cascade   # recompute only clean
-  barca get total pipeline.py --dry-run    # what would run vs come from cache; changes nothing
+  barca get total pipeline.py --dry-run    # what would run vs come from cache; no steps execute
   barca get total pipeline.py --json       # JSON even in a terminal (the default when piped)
   barca get total pipeline.py --pretty     # summary and value for humans (the default in a terminal)
   barca get total pipeline.py -o value     # just the value, pretty-printed
@@ -93,6 +94,9 @@ the cone (the target itself may be named) and also re-runs everything downstream
 A cached step whose artifact file is gone is computed again when something needs to read it (a
 step that runs takes it as an input, or it is a target), with reason `artifact_missing` and a
 warning on stderr. A missing artifact that nothing reads is left alone (barca docs cache).
+Completed steps are recorded during the run; remote results require confirmed upload.
+Use `barca status pipeline.py` in another terminal to inspect recorded progress. Shared history
+is published when the run ends (barca docs remote).
 Targets must be assets; use `barca run` for tasks. With no target, get materializes every asset and
 sensor and skips tasks (previously it ran tasks too); stderr names the skipped tasks and the
 `barca run` command. A file with only tasks gets nothing: exit 0, empty `steps`.
@@ -102,4 +106,5 @@ Errors: in JSON mode the last stderr line is one JSON object {error, code, kind,
 plus node, traceback and artifact_dir when a step failed. Exit 1 step failed, 2 usage error,
 3 barca/infra failure, 130 cancelled. A failed step still prints a stdout result line with
 status "failed" and failed_node.
+A required history-write failure exits 3 and preserves previously committed history.
 More: barca docs cache, barca docs types, barca docs agents

@@ -37,6 +37,17 @@ pub enum ParseError {
         function: String,
         reason: String,
     },
+
+    /// A barca decorator or helper is called with an argument it does not define (#284).
+    /// The first line says what is wrong, the second what to do.
+    #[error("{file}:{function} (line {line}): {message}\n{fix}")]
+    InvalidArguments {
+        file: String,
+        function: String,
+        line: usize,
+        message: String,
+        fix: String,
+    },
 }
 
 /// Parse a Python source file and extract all barca-decorated nodes.
@@ -65,21 +76,54 @@ pub fn extract_nodes(source: &str, file_path: &str) -> Result<Vec<ExtractedNode>
     Ok(nodes)
 }
 
+/// Parse organizational metadata and nodes together, without importing the module.
+pub(crate) fn extract_pipeline(
+    source: &str,
+    file: &str,
+) -> Result<(Vec<ExtractedNode>, Vec<crate::groups::Declaration>), crate::BarcaError> {
+    let parsed = parse_module(source).map_err(|e| {
+        crate::BarcaError::Parse(
+            ParseError::SyntaxError {
+                file: file.to_string(),
+                message: e.to_string(),
+            }
+            .to_string(),
+        )
+    })?;
+    let body = &parsed.syntax().body;
+    let names = FileNames::collect(body);
+    let mut nodes = Vec::new();
+    for stmt in body {
+        if let Stmt::FunctionDef(func) = stmt
+            && let Some(node) = try_extract_function(func, file, source, &names)
+                .map_err(|e| crate::BarcaError::Parse(e.to_string()))?
+        {
+            nodes.push(node);
+        }
+    }
+    Ok((nodes, crate::groups::extract_body(body, file)?))
+}
+
 /// What the top-level names of a file are bound to, for resolving `inputs=` references:
 /// functions defined in the file, names imported with `from M import x [as y]`, and modules
 /// imported with `import M [as m]`. Module names keep their leading dots (`.sources`).
 #[derive(Default)]
-struct FileNames {
+pub(crate) struct FileNames {
     local: std::collections::HashSet<String>,
     /// local name -> (module, name in that module)
     from_imports: HashMap<String, (String, String)>,
     /// local dotted name -> module (`s` -> `pipelines.sources`, `a.b` -> `a.b`)
     modules: HashMap<String, String>,
+    /// The decorator and helper names that are positively barca's, for the argument check.
+    pub(crate) barca: crate::decorator_args::BarcaNames,
 }
 
 impl FileNames {
-    fn collect(body: &[Stmt]) -> Self {
-        let mut names = FileNames::default();
+    pub(crate) fn collect(body: &[Stmt]) -> Self {
+        let mut names = FileNames {
+            barca: crate::decorator_args::BarcaNames::of(body),
+            ..FileNames::default()
+        };
         for stmt in body {
             match stmt {
                 Stmt::FunctionDef(f) => {
@@ -120,7 +164,7 @@ impl FileNames {
 
     /// The node an `inputs=` value (or `collect(...)` / `partitions_from(...)` argument) refers
     /// to: a function in this file, a name imported from a module, or `module.name`.
-    fn node_ref(&self, expr: &Expr) -> Option<NodeRef> {
+    pub(crate) fn node_ref(&self, expr: &Expr) -> Option<NodeRef> {
         match expr {
             Expr::Name(n) => {
                 let id = n.id.to_string();
@@ -170,19 +214,19 @@ fn try_extract_function(
 
     for decorator in &func.decorator_list {
         // Check for @unsafe
-        if is_unsafe_decorator(&decorator.expression) {
+        if is_unsafe_decorator(&decorator.expression, &names.barca) {
             is_unsafe = true;
             continue;
         }
 
         // Check for @sink(...)
-        if let Some(sink) = try_extract_sink(&decorator.expression) {
+        if let Some(sink) = try_extract_sink(&decorator.expression, &names.barca) {
             sinks.push(sink);
             continue;
         }
 
         // Check for @asset/@sensor/@task
-        if let Some((k, kws)) = match_node_decorator(&decorator.expression) {
+        if let Some((k, kws)) = match_node_decorator(&decorator.expression, &names.barca) {
             kind = Some(k);
             keywords = kws;
         }
@@ -192,7 +236,21 @@ fn try_extract_function(
         return Ok(None);
     };
 
-    let freshness = extract_freshness(&keywords, file_path, func.name.as_str())?
+    // Before anything is read from the arguments: an argument barca does not define is an
+    // error, not something to ignore (`decorator_args`).
+    if let Some(problem) =
+        crate::decorator_args::check_decorators(&func.decorator_list, &names.barca)
+    {
+        return Err(ParseError::InvalidArguments {
+            file: file_path.to_string(),
+            function: func.name.to_string(),
+            line: source[..problem.offset].matches('\n').count() + 1,
+            message: problem.message,
+            fix: problem.fix,
+        });
+    }
+
+    let freshness = extract_freshness(&keywords, file_path, func.name.as_str(), &names.barca)?
         .unwrap_or(Freshness::default_for(kind));
     let inputs = extract_inputs(&keywords, names);
     let partitions = extract_partitions(&keywords, source, names);
@@ -210,7 +268,7 @@ fn try_extract_function(
         .and_then(|kw| extract_serializer_kind(&kw.value));
 
     let parallel_calls = if kind == NodeKind::Task {
-        extract_parallel_calls(&func.body)
+        extract_parallel_calls(&func.body, &names.barca.in_function(func))
     } else {
         Vec::new()
     };
@@ -225,8 +283,11 @@ fn try_extract_function(
         });
 
     let start = func.range().start().to_usize();
-    let end = func.range().end().to_usize();
-    let source_text = source[start..end].to_string();
+    // What the definition hash covers: the function from `def` on and the decorator parts that
+    // count, in canonical form. Never the decorators as written (`crate::definition`).
+    let source_text = crate::definition::node_definition(func, source, &names.barca)
+        .map(|definition| definition.text)
+        .unwrap_or_default();
 
     Ok(Some(ExtractedNode {
         kind,
@@ -330,14 +391,16 @@ fn classify_type(module: &str, name: &str) -> Option<ValueType> {
     }
 }
 
-fn is_unsafe_decorator(expr: &Expr) -> bool {
-    matches!(expr, Expr::Name(n) if n.id.as_str() == "unsafe")
+pub(crate) fn is_unsafe_decorator(expr: &Expr, barca: &crate::decorator_args::BarcaNames) -> bool {
+    barca.recognized(expr) == Some("unsafe")
 }
 
-fn try_extract_sink(expr: &Expr) -> Option<SinkDecl> {
+pub(crate) fn try_extract_sink(
+    expr: &Expr,
+    barca: &crate::decorator_args::BarcaNames,
+) -> Option<SinkDecl> {
     if let Expr::Call(call) = expr
-        && let Expr::Name(n) = call.func.as_ref()
-        && n.id.as_str() == "sink"
+        && barca.recognized(&call.func) == Some("sink")
     {
         let path = call
             .arguments
@@ -371,76 +434,59 @@ fn extract_serializer_kind(expr: &Expr) -> Option<SerializerKind> {
     }
 }
 
-fn match_node_decorator(expr: &Expr) -> Option<(NodeKind, Vec<&Keyword>)> {
-    match expr {
-        Expr::Name(name) => {
-            let kind = match name.id.as_str() {
-                "asset" => NodeKind::Asset,
-                "sensor" => NodeKind::Sensor,
-                "task" => NodeKind::Task,
-                _ => return None,
-            };
-            Some((kind, vec![]))
-        }
-        Expr::Call(call) => {
-            let name = match call.func.as_ref() {
-                Expr::Name(n) => n.id.as_str(),
-                _ => return None,
-            };
-            let kind = match name {
-                "asset" => NodeKind::Asset,
-                "sensor" => NodeKind::Sensor,
-                "task" => NodeKind::Task,
-                _ => return None,
-            };
-            let kwargs: Vec<&Keyword> = call.arguments.keywords.iter().collect();
-            Some((kind, kwargs))
-        }
-        _ => None,
-    }
+pub(crate) fn match_node_decorator<'a>(
+    expr: &'a Expr,
+    barca: &crate::decorator_args::BarcaNames,
+) -> Option<(NodeKind, Vec<&'a Keyword>)> {
+    let (callee, keywords) = match expr {
+        Expr::Call(call) => (call.func.as_ref(), call.arguments.keywords.iter().collect()),
+        _ => (expr, Vec::new()),
+    };
+    let kind = match barca.recognized(callee)? {
+        "asset" => NodeKind::Asset,
+        "sensor" => NodeKind::Sensor,
+        "task" => NodeKind::Task,
+        _ => return None,
+    };
+    Some((kind, keywords))
 }
 
 fn extract_freshness(
     keywords: &[&Keyword],
     file_path: &str,
     function_name: &str,
+    barca: &crate::decorator_args::BarcaNames,
 ) -> Result<Option<Freshness>, ParseError> {
     for kw in keywords {
         let Some(ref ident) = kw.arg else { continue };
         if ident.as_str() != "freshness" {
             continue;
         }
-        let freshness = match &kw.value {
-            Expr::Call(call) => match call.func.as_ref() {
-                Expr::Name(n) => match n.id.as_str() {
-                    "Always" => Freshness::Always,
-                    "Manual" => Freshness::Manual,
-                    "Schedule" => {
-                        let cron = call
-                            .arguments
-                            .args
-                            .first()
-                            .and_then(extract_string_literal)
-                            .unwrap_or_default();
-                        if let Err(reason) = CronExpr::validate(&cron) {
-                            return Err(ParseError::InvalidCron {
-                                file: file_path.to_string(),
-                                function: function_name.to_string(),
-                                cron,
-                                reason,
-                            });
-                        }
-                        Freshness::Schedule(CronExpr(cron))
-                    }
-                    _ => return Ok(None),
-                },
-                _ => return Ok(None),
-            },
-            Expr::Name(n) => match n.id.as_str() {
-                "Always" => Freshness::Always,
-                "Manual" => Freshness::Manual,
-                _ => return Ok(None),
-            },
+        let (callee, call) = match &kw.value {
+            Expr::Call(call) => (call.func.as_ref(), Some(call)),
+            expr => (expr, None),
+        };
+        let freshness = match barca.recognized(callee) {
+            Some("Always") => Freshness::Always,
+            Some("Manual") => Freshness::Manual,
+            Some("Schedule") => {
+                let Some(call) = call else { return Ok(None) };
+                let cron = call
+                    .arguments
+                    .args
+                    .first()
+                    .and_then(extract_string_literal)
+                    .unwrap_or_default();
+                if let Err(reason) = CronExpr::validate(&cron) {
+                    return Err(ParseError::InvalidCron {
+                        file: file_path.to_string(),
+                        function: function_name.to_string(),
+                        cron,
+                        reason,
+                    });
+                }
+                Freshness::Schedule(CronExpr(cron))
+            }
             _ => return Ok(None),
         };
         return Ok(Some(freshness));
@@ -482,28 +528,24 @@ fn extract_inputs_from_dict(
                 None => continue,
             },
             Expr::Call(call) => {
-                let is_collect =
-                    matches!(call.func.as_ref(), Expr::Name(n) if n.id.as_str() == "collect");
+                let is_collect = names.barca.recognized(&call.func) == Some("collect");
                 if is_collect {
                     match call.arguments.args.first().and_then(|a| names.node_ref(a)) {
                         Some(r) => (r, true),
                         None => continue,
                     }
-                } else if let Expr::Name(n) = call.func.as_ref() {
-                    // asset_ref("...") or other call
-                    if n.id.as_str() == "asset_ref" {
-                        if let Some(arg) = call.arguments.args.first() {
-                            if let Some(s) = extract_string_literal(arg) {
-                                (NodeRef::Canonical(s), false)
-                            } else {
-                                continue;
-                            }
+                } else if names.barca.recognized(&call.func) == Some("asset_ref") {
+                    if let Some(arg) = call.arguments.args.first() {
+                        if let Some(s) = extract_string_literal(arg) {
+                            (NodeRef::Canonical(s), false)
                         } else {
                             continue;
                         }
                     } else {
-                        (NodeRef::FunctionName(n.id.to_string()), false)
+                        continue;
                     }
+                } else if let Expr::Name(n) = call.func.as_ref() {
+                    (NodeRef::FunctionName(n.id.to_string()), false)
                 } else {
                     continue;
                 }
@@ -545,8 +587,8 @@ fn extract_partitions(
 
                 let spec = match &item.value {
                     Expr::Call(call) => {
-                        if let Expr::Name(n) = call.func.as_ref() {
-                            match n.id.as_str() {
+                        if let Some(name) = names.barca.recognized(&call.func) {
+                            match name {
                                 "partitions" => extract_partition_spec(call, source),
                                 "partitions_from" => {
                                     let source_ref =
@@ -729,65 +771,72 @@ fn extract_string_literal(expr: &Expr) -> Option<String> {
 
 /// Scan a task function body for `parallel(...)` and `parallel_map(...)` calls.
 /// Returns a list of ParallelCall structs describing each call.
-fn extract_parallel_calls(body: &[Stmt]) -> Vec<ParallelCall> {
+fn extract_parallel_calls(
+    body: &[Stmt],
+    barca: &crate::decorator_args::BarcaNames,
+) -> Vec<ParallelCall> {
     let mut results = Vec::new();
-    collect_parallel_calls_from_stmts(body, &mut results);
+    collect_parallel_calls_from_stmts(body, &mut results, barca);
     results
 }
 
 /// Recursively walk statements looking for parallel()/parallel_map() calls.
-fn collect_parallel_calls_from_stmts(stmts: &[Stmt], results: &mut Vec<ParallelCall>) {
+fn collect_parallel_calls_from_stmts(
+    stmts: &[Stmt],
+    results: &mut Vec<ParallelCall>,
+    barca: &crate::decorator_args::BarcaNames,
+) {
     for stmt in stmts {
         match stmt {
             Stmt::Expr(expr_stmt) => {
-                collect_parallel_calls_from_expr(&expr_stmt.value, results);
+                collect_parallel_calls_from_expr(&expr_stmt.value, results, barca);
             }
             Stmt::Assign(assign) => {
-                collect_parallel_calls_from_expr(&assign.value, results);
+                collect_parallel_calls_from_expr(&assign.value, results, barca);
             }
             Stmt::AnnAssign(assign) => {
                 if let Some(ref value) = assign.value {
-                    collect_parallel_calls_from_expr(value, results);
+                    collect_parallel_calls_from_expr(value, results, barca);
                 }
             }
             Stmt::Return(ret) => {
                 if let Some(ref value) = ret.value {
-                    collect_parallel_calls_from_expr(value, results);
+                    collect_parallel_calls_from_expr(value, results, barca);
                 }
             }
             Stmt::If(if_stmt) => {
-                collect_parallel_calls_from_stmts(&if_stmt.body, results);
+                collect_parallel_calls_from_stmts(&if_stmt.body, results, barca);
                 for clause in &if_stmt.elif_else_clauses {
-                    collect_parallel_calls_from_stmts(&clause.body, results);
+                    collect_parallel_calls_from_stmts(&clause.body, results, barca);
                 }
             }
             Stmt::For(for_stmt) => {
-                collect_parallel_calls_from_stmts(&for_stmt.body, results);
-                collect_parallel_calls_from_stmts(&for_stmt.orelse, results);
+                collect_parallel_calls_from_stmts(&for_stmt.body, results, barca);
+                collect_parallel_calls_from_stmts(&for_stmt.orelse, results, barca);
             }
             Stmt::While(while_stmt) => {
-                collect_parallel_calls_from_stmts(&while_stmt.body, results);
-                collect_parallel_calls_from_stmts(&while_stmt.orelse, results);
+                collect_parallel_calls_from_stmts(&while_stmt.body, results, barca);
+                collect_parallel_calls_from_stmts(&while_stmt.orelse, results, barca);
             }
             Stmt::With(with_stmt) => {
-                collect_parallel_calls_from_stmts(&with_stmt.body, results);
+                collect_parallel_calls_from_stmts(&with_stmt.body, results, barca);
             }
             Stmt::Try(try_stmt) => {
-                collect_parallel_calls_from_stmts(&try_stmt.body, results);
+                collect_parallel_calls_from_stmts(&try_stmt.body, results, barca);
                 for handler in &try_stmt.handlers {
                     let ast::ExceptHandler::ExceptHandler(h) = handler;
-                    collect_parallel_calls_from_stmts(&h.body, results);
+                    collect_parallel_calls_from_stmts(&h.body, results, barca);
                 }
-                collect_parallel_calls_from_stmts(&try_stmt.orelse, results);
-                collect_parallel_calls_from_stmts(&try_stmt.finalbody, results);
+                collect_parallel_calls_from_stmts(&try_stmt.orelse, results, barca);
+                collect_parallel_calls_from_stmts(&try_stmt.finalbody, results, barca);
             }
             Stmt::Match(m) => {
                 for case in &m.cases {
-                    collect_parallel_calls_from_stmts(&case.body, results);
+                    collect_parallel_calls_from_stmts(&case.body, results, barca);
                 }
             }
             Stmt::AugAssign(a) => {
-                collect_parallel_calls_from_expr(&a.value, results);
+                collect_parallel_calls_from_expr(&a.value, results, barca);
             }
             _ => {}
         }
@@ -797,10 +846,14 @@ fn collect_parallel_calls_from_stmts(stmts: &[Stmt], results: &mut Vec<ParallelC
 /// Check if an expression is a call to `parallel()` or `parallel_map()` and extract it.
 /// Recursively descends into sub-expressions (call args, ternaries, lists, tuples,
 /// list comprehensions) to find nested parallel() calls.
-fn collect_parallel_calls_from_expr(expr: &Expr, results: &mut Vec<ParallelCall>) {
+fn collect_parallel_calls_from_expr(
+    expr: &Expr,
+    results: &mut Vec<ParallelCall>,
+    barca: &crate::decorator_args::BarcaNames,
+) {
     if let Expr::Call(call) = expr {
-        if let Expr::Name(n) = call.func.as_ref() {
-            match n.id.as_str() {
+        if let Some(name) = barca.recognized(&call.func) {
+            match name {
                 "parallel" => {
                     results.push(extract_parallel_call(call));
                     return;
@@ -814,7 +867,7 @@ fn collect_parallel_calls_from_expr(expr: &Expr, results: &mut Vec<ParallelCall>
         }
         // Not a parallel/parallel_map call — descend into call arguments
         for arg in &call.arguments.args {
-            collect_parallel_calls_from_expr(arg, results);
+            collect_parallel_calls_from_expr(arg, results, barca);
         }
         return;
     }
@@ -822,22 +875,22 @@ fn collect_parallel_calls_from_expr(expr: &Expr, results: &mut Vec<ParallelCall>
     // Descend into other expression forms
     match expr {
         Expr::If(e) => {
-            collect_parallel_calls_from_expr(&e.body, results);
-            collect_parallel_calls_from_expr(&e.test, results);
-            collect_parallel_calls_from_expr(&e.orelse, results);
+            collect_parallel_calls_from_expr(&e.body, results, barca);
+            collect_parallel_calls_from_expr(&e.test, results, barca);
+            collect_parallel_calls_from_expr(&e.orelse, results, barca);
         }
         Expr::List(l) => {
             for elt in &l.elts {
-                collect_parallel_calls_from_expr(elt, results);
+                collect_parallel_calls_from_expr(elt, results, barca);
             }
         }
         Expr::Tuple(t) => {
             for elt in &t.elts {
-                collect_parallel_calls_from_expr(elt, results);
+                collect_parallel_calls_from_expr(elt, results, barca);
             }
         }
         Expr::ListComp(lc) => {
-            collect_parallel_calls_from_expr(&lc.elt, results);
+            collect_parallel_calls_from_expr(&lc.elt, results, barca);
         }
         _ => {}
     }
@@ -1239,5 +1292,111 @@ def conditional():
 "#;
         let nodes = extract_nodes(src, "test.py").unwrap();
         assert_eq!(nodes[0].parallel_calls.len(), 1);
+    }
+    #[test]
+    fn qualified_and_aliased_nodes_helpers_are_extracted_consistently() {
+        for (imports, prefix) in [
+            ("import barca", "barca."),
+            ("import barca as b", "b."),
+            (
+                "from barca import asset as a, sensor as s, task as t, sink as sk, unsafe as u, Schedule as S, partitions as p, partitions_from as pf, collect as c, asset_ref as ar",
+                "",
+            ),
+        ] {
+            let name = |canonical: &str, alias: &str| {
+                if prefix.is_empty() {
+                    alias.to_string()
+                } else {
+                    format!("{prefix}{canonical}")
+                }
+            };
+            let source = format!(
+                "{imports}\n@{}()\ndef up(): return 1\n@{}(\"out.json\")\n@{}\n@{}(inputs={{\"x\": {}(up), \"y\": {}(\"other.py:ref\")}}, partitions={{\"key\": {}([\"a\"]), \"derived\": {}(up)}}, freshness={}(\"0 5 * * *\"))\ndef rows(x, y, key, derived): return x\n@{}()\ndef finish(): pass\n",
+                name("sensor", "s"),
+                name("sink", "sk"),
+                name("unsafe", "u"),
+                name("asset", "a"),
+                name("collect", "c"),
+                name("asset_ref", "ar"),
+                name("partitions", "p"),
+                name("partitions_from", "pf"),
+                name("Schedule", "S"),
+                name("task", "t")
+            );
+            let nodes = extract_nodes(&source, "pipeline.py").unwrap();
+            assert_eq!(nodes.len(), 3, "{imports}");
+            let rows = &nodes[1];
+            assert_eq!(rows.kind, NodeKind::Asset);
+            assert!(rows.is_unsafe);
+            assert_eq!(rows.sinks.len(), 1);
+            assert!(rows.inputs[0].collected);
+            assert_eq!(
+                rows.inputs[1].upstream,
+                NodeRef::Canonical("other.py:ref".into())
+            );
+            assert_eq!(rows.partitions.len(), 2);
+            assert!(matches!(rows.freshness, Freshness::Schedule(_)));
+        }
+    }
+
+    #[test]
+    fn explicit_foreign_and_shadowed_decorators_are_not_nodes() {
+        for source in [
+            "from foreign import asset\n@asset()\ndef f(): pass\n",
+            "from barca import duckdb_connection as asset\n@asset()\ndef f(): pass\n",
+            "from barca import task as a\nfrom barca import asset as a\n@a()\ndef f(): pass\n",
+            "import foreign as b\n@b.asset()\ndef f(): pass\n",
+            "from barca import asset as a\na = foreign\n@a()\ndef f(): pass\n",
+            "import barca as b\nb = foreign\n@b.asset()\ndef f(): pass\n",
+            "import barca as b\nb.asset = foreign\n@b.asset()\ndef f(): pass\n",
+            "from barca import asset\nfrom foreign import *\n@asset()\ndef f(): pass\n",
+        ] {
+            assert!(
+                extract_nodes(source, "pipeline.py").unwrap().is_empty(),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn shared_module_export_writes_block_affected_helpers_and_aliases() {
+        let source = "import barca as b\nimport barca as c\nfrom barca import partitions as old_p\nb.partitions = foreign\nfrom barca import partitions as new_p\n@b.asset(partitions={\"a\": c.partitions([1], custom=True), \"b\": new_p([2], custom=True), \"c\": old_p([3], custom=True)})\ndef f(): return 1\n";
+        let nodes = extract_nodes(source, "pipeline.py").unwrap();
+        assert_eq!(nodes.len(), 1);
+        assert!(nodes[0].partitions.is_empty());
+    }
+
+    #[test]
+    fn aliased_decorator_and_helper_arguments_receive_validation() {
+        for source in [
+            "import barca as b\n@b.asset(input={})\ndef f(): pass\n",
+            "from barca import asset as a\n@a(after=other)\ndef f(): pass\n",
+            "import barca\n@barca.asset(partitions={\"p\": barca.partitions(values=[1])})\ndef f(p): pass\n",
+        ] {
+            assert!(
+                matches!(
+                    extract_nodes(source, "pipeline.py"),
+                    Err(ParseError::InvalidArguments { .. })
+                ),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn task_helpers_resolve_aliases_without_local_shadowing() {
+        let source = "import barca as b\nfrom barca import parallel as p\n@b.task()\ndef f():\n    b.parallel_map(work, items)\n    p(work)\n";
+        let nodes = extract_nodes(source, "pipeline.py").unwrap();
+        assert_eq!(nodes[0].parallel_calls.len(), 2);
+        for body in [
+            "def f(b):\n    b.parallel_map(work, items)",
+            "def f(p):\n    p(work)",
+            "def f():\n    p(work)\n    p = foreign",
+        ] {
+            let source =
+                format!("import barca as b\nfrom barca import parallel as p\n@b.task()\n{body}\n");
+            let nodes = extract_nodes(&source, "pipeline.py").unwrap();
+            assert!(nodes[0].parallel_calls.is_empty(), "{body}");
+        }
     }
 }

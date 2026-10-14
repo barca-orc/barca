@@ -6,19 +6,17 @@ on:
 
 # One run per PR at a time; a newer push cancels the older run.
 concurrency:
-  group: ci-${{ github.event.pull_request.number }}
+  group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   test:
     runs-on: depot-ubuntu-latest
     env:
-      # Only pip downloads live on the Depot cache disk. Cargo builds on the
-      # runner's local disk: on the shared network volume, cargo hit zero-length
-      # reads of just-written .rlib/.rmeta files ("memory map must have a
-      # non-zero length", "found invalid metadata files", SIGBUS in the linker),
-      # even with a target dir per PR. The cost is a cold Rust build every run.
-      CARGO_TARGET_DIR: /tmp/barca-target
+      # Cargo must build on local disk: builds on the shared cache volume
+      # produced corrupt .rlib/.rmeta files, even with a target dir per PR.
+      # rust-cache restores an archive here before the build and saves afterward.
+      CARGO_TARGET_DIR: target
       PIP_CACHE_DIR: /mnt/cache/test/pip
     steps:
       - uses: actions/checkout@v4
@@ -32,27 +30,20 @@ jobs:
       - name: Prepare cache dirs
         run: |
           mkdir -p "$CARGO_TARGET_DIR" "$PIP_CACHE_DIR" 2>/dev/null \
-            || { sudo mkdir -p "$CARGO_TARGET_DIR" "$PIP_CACHE_DIR" && sudo chown -R "$(id -u):$(id -g)" /mnt/cache/test; }
-          # Left behind by a reverted experiment that moved CARGO_HOME onto this disk.
-          rm -rf /mnt/cache/test/cargo-home
-          # Cargo no longer builds on this disk; drop what earlier runs left here.
-          rm -rf /mnt/cache/test/target /mnt/cache/test/target-pr* 2>/dev/null || true
-          # The cache disk persists and nothing garbage-collects target/. A full disk
-          # truncates object files mid-build ("failed to map object file: memory map
-          # must have a non-zero length"), so report usage and, when space runs low,
-          # start this job's target dir over.
-          df -h /mnt/cache
-          du -sh /mnt/cache/* 2>/dev/null || true
-          avail_kb=$(df -Pk /mnt/cache | awk 'NR==2 {print $4}')
-          if [ "$avail_kb" -lt $((5 * 1024 * 1024)) ]; then
-            echo "::warning::cache disk has less than 5 GiB free; clearing $CARGO_TARGET_DIR"
-            rm -rf "$CARGO_TARGET_DIR" && mkdir -p "$CARGO_TARGET_DIR"
-          fi
+            || { sudo mkdir -p "$CARGO_TARGET_DIR" "$PIP_CACHE_DIR" && sudo chown "$(id -u):$(id -g)" "$PIP_CACHE_DIR"; }
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+
+      - name: Restore Rust build cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          # Separate archives for clippy/test builds and wheel-only builds.
+          key: ci-local-v1-test
+          workspaces: ". -> target"
+          cache-on-failure: true
 
       - name: Clippy (warnings are errors)
         run: cargo clippy --workspace --all-targets -- -D warnings
@@ -105,7 +96,7 @@ jobs:
     # covers GCS generation-match, Azurite covers Azure ETag If-Match.
     runs-on: depot-ubuntu-latest
     env:
-      CARGO_TARGET_DIR: /tmp/barca-target
+      CARGO_TARGET_DIR: target
       PIP_CACHE_DIR: /mnt/cache/backends/pip
     steps:
       - uses: actions/checkout@v4
@@ -136,22 +127,7 @@ jobs:
       - name: Prepare cache dirs
         run: |
           mkdir -p "$CARGO_TARGET_DIR" "$PIP_CACHE_DIR" 2>/dev/null \
-            || { sudo mkdir -p "$CARGO_TARGET_DIR" "$PIP_CACHE_DIR" && sudo chown -R "$(id -u):$(id -g)" /mnt/cache/backends; }
-          # Left behind by a reverted experiment that moved CARGO_HOME onto this disk.
-          rm -rf /mnt/cache/backends/cargo-home
-          # Cargo no longer builds on this disk; drop what earlier runs left here.
-          rm -rf /mnt/cache/backends/target /mnt/cache/backends/target-pr* 2>/dev/null || true
-          # The cache disk persists and nothing garbage-collects target/. A full disk
-          # truncates object files mid-build ("failed to map object file: memory map
-          # must have a non-zero length"), so report usage and, when space runs low,
-          # start this job's target dir over.
-          df -h /mnt/cache
-          du -sh /mnt/cache/* 2>/dev/null || true
-          avail_kb=$(df -Pk /mnt/cache | awk 'NR==2 {print $4}')
-          if [ "$avail_kb" -lt $((5 * 1024 * 1024)) ]; then
-            echo "::warning::cache disk has less than 5 GiB free; clearing $CARGO_TARGET_DIR"
-            rm -rf "$CARGO_TARGET_DIR" && mkdir -p "$CARGO_TARGET_DIR"
-          fi
+            || { sudo mkdir -p "$CARGO_TARGET_DIR" "$PIP_CACHE_DIR" && sudo chown "$(id -u):$(id -g)" "$PIP_CACHE_DIR"; }
 
       - name: Install Python
         uses: actions/setup-python@v5
@@ -161,9 +137,15 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # The web UI, checked and built so this job's barca binary embeds it
-      # (crates/barca-server/src/ui.rs) and the reverse-proxy test below can
-      # load it through nginx.
+      - name: Restore Rust build cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          # Separate archives for clippy/test builds and wheel-only builds.
+          key: ci-local-v1-backends
+          workspaces: ". -> target"
+          cache-on-failure: true
+
+      # Build the UI before Cargo so the binary embeds it for the proxy test.
       - uses: pnpm/action-setup@v4
         with:
           package_json_file: ui/package.json
@@ -200,7 +182,8 @@ jobs:
           BARCA_TEST_S3_ENDPOINT: http://localhost:9100
           BARCA_TEST_GCS_ENDPOINT: http://localhost:9200
           BARCA_TEST_AZURITE_HOST: 127.0.0.1:9210
-        run: pytest python/tests -q
+        # Bound concurrency: these tests launch workers and local store clients.
+        run: pytest python/tests -q -n 4 --dist loadscope --durations=30
 
       - name: barca serve behind nginx (prefix, embedded UI, live events)
         run: bash tests/integration/test_reverse_proxy.sh

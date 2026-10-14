@@ -53,7 +53,17 @@ BARCA_OUTPUT=json barca get total pipeline.py
 | 1    | `step_failed` | a step of yours raised (traceback included); the run is recorded as failed      | fix the code, re-run          |
 | 2    | `usage`       | bad flags or arguments, unknown target, task/asset misuse, unreadable or invalid `.py` file, invalid `--env` or barca.toml | fix the command |
 | 3    | `infra`       | barca or its environment failed: metadata DB, worker pool, remote state, I/O    | not your code; retrying may help |
-| 130  | `cancelled`   | interrupted (Ctrl-C)                                                            | re-run                        |
+| 130  | `cancelled`   | stopped by Ctrl-C (SIGINT) or SIGTERM                                           | re-run                        |
+
+A reader that stops early is not an error. `barca list | head -1` and
+`barca list | grep -q name` exit 0 (also under `set -o pipefail`), and a `get` or `run` whose
+output nobody reads still finishes and is recorded, so
+`barca run deploy pipeline.py 2>&1 | head -20` runs the whole deploy (`barca docs contract`,
+"A closed stdout or stderr").
+
+A decorator argument barca does not define (`@asset(after=other)`, `input=` for `inputs=`) is a
+`usage` error on every command that reads the file; the envelope names the node, the line, the
+argument and the accepted ones (`barca docs assets`, "Accepted arguments").
 
 ```bash
 barca get total pipeline.py --agent > result.json 2> progress.log
@@ -103,7 +113,9 @@ read the outcome without parsing stderr: `{"status": "failed", "failed_node": ..
 `get`/`run` JSON fields: `status` (`success`, or `failed` as above), `run_id`, `elapsed_seconds`,
 `steps_executed` (0 means everything was a cache hit), `phases`, `steps` (what happened to each
 step: `status` ran/cached/partial and why, plus `env`, the declared environment variable values
-used, for nodes with `env=[...]`),
+used, for nodes with `env=[...]`, and `artifact_mismatch: true` when the artifact store's copy
+of the step's result, or of an input it read, is not the one that was recorded: `barca docs
+remote`),
 `final_output`. `final_output` is the value for json artifacts and
 `{"_barca_artifact": {"path", "format", "size_bytes"}}` for parquet and pickle
 (`barca docs types`).
@@ -220,6 +232,10 @@ configuration key that turns it off. A name that appears inside a string in the 
 pandas `query` expression) counts as used. The list is the same on every run of the same command, cached or not, and never
 changes the exit code (`barca docs assets`, "Unused inputs"; `barca docs contract`).
 
+The array holds plan warnings only. What a run finds out while it runs is on the step it
+concerns: `steps[].warning`, and for a store copy that differs from its recorded hash the marker
+`steps[].artifact_mismatch` (`barca docs remote`, "Checking a local copy against the store").
+
 ## Environment variables
 
 A node that declares `env=["SOURCE_CSV"]` has those values in its cache key, and each `--agent`
@@ -250,7 +266,8 @@ invisible to barca (`barca docs assets`).
 ## Inspect before you run
 
 Preview any `get`/`run` with `--dry-run`: it says which steps would run, which come from cache,
-and why, and writes nothing (`barca docs cache`):
+and why, without executing steps or recording a run. Optimistic shared history may
+synchronize locally (`barca docs cache`):
 
 ```bash
 barca run report pipeline.py --dry-run --refresh src
@@ -258,7 +275,7 @@ barca run report pipeline.py --dry-run --refresh src
 
 One call answers "what is here and what state is it in": `barca status` gives, per node, its
 kind and inputs, its cache state with the reason (the same decision `--dry-run` makes), its last
-materialization, and the artifact's row count and columns, without importing your code
+materialization, and the artifact's row count and columns, without executing steps
 (`barca docs status`):
 
 ```bash
@@ -274,7 +291,8 @@ barca history --json                # {runs: [...], total, truncated}: the last 
 barca stats total pipeline.py --json  # timings and cache hit rate for one asset
 ```
 
-Planning is pure static analysis: it never imports your code and never runs a step.
+Source parsing is static and planning executes no pipeline step. `partitions(<expression>)`
+can evaluate Python and import its module while resolving keys.
 
 ## Bounded output: --limit, --all, --fields
 

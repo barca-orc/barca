@@ -1,25 +1,32 @@
 ---
 title: "Barca vs Prefect"
-description: New-user experience comparison — install footprint, steps to first output, error handling.
+description: Install size, steps to a first result, run output, error output and caching for the same pipeline, measured on 2026-06-10 with barca 0.2.0 and Prefect 3.7.4.
 ---
 
-Tested 2026-06-10. Barca 0.2.0, Prefect 3.7.4 (latest at time of test).
-Both installed from PyPI via `uv` on macOS (Apple Silicon), Python 3.14.
+Last measured: 2026-06-10, with barca 0.2.0 and Prefect 3.7.4, on macOS (Apple Silicon), Python 3.14, both installed from PyPI with `uv`. Not re-run since. Re-run tracked in [#277](https://github.com/barca-orc/barca/issues/277).
+
+Everything on this page describes those two versions on that date unless a note says otherwise.
+Prefect has had releases since, and so has barca: where barca's behavior has changed, a note
+dated 2026-10-07 says how.
 
 ## Install footprint
 
-| Metric | barca | prefect | Ratio |
-|--------|-------|---------|-------|
-| Packages installed | 1 | 104 | 104x |
-| Venv size | 16 MB | 163 MB | 10x |
-| Import time | 22ms | 400ms | 18x |
+| Metric | barca 0.2.0 | Prefect 3.7.4 |
+|--------|-------|---------|
+| Packages installed | 1 | 104 |
+| Venv size | 16 MB | 163 MB |
+| Import time | 22ms | 400ms |
 
-Prefect pulls in fastapi, sqlalchemy, pydantic, cryptography, docker, redis,
-opentelemetry, graphviz, and ~90 transitive dependencies.
+The barca wheel declared no dependencies. Installing Prefect installed 104 packages, among them
+fastapi, sqlalchemy, pydantic, cryptography, docker, redis, opentelemetry and graphviz.
+
+Note, 2026-10-07: the barca wheel now also embeds the web UI that `barca serve` shows. barca
+0.18.0 is still one package with no dependencies; a fresh Python 3.12 virtualenv with only barca
+installed is 21 MB (`du -sh`). The Prefect column and the import times were not re-measured.
 
 ## Steps to first output
 
-### Barca (3 steps)
+### Barca
 
 ```bash
 uv add barca
@@ -27,7 +34,7 @@ uv add barca
 barca get pipeline.py
 ```
 
-### Prefect (2 steps — but 6 seconds)
+### Prefect
 
 ```python
 # pipeline.py
@@ -45,20 +52,25 @@ if __name__ == "__main__":
 python pipeline.py
 ```
 
-Prefect's onboarding is technically fewer steps — no separate CLI command, just
-`python file.py`. But every run starts a temporary HTTP server, adding 2–3 seconds
-of overhead before any code executes.
+Prefect needs no separate command: the flow runs with `python pipeline.py`. In the test each run
+started a temporary HTTP server first, and the run took about 6 seconds in total, of which 2 to 3
+seconds passed before any user code executed.
 
 ## Running the same pipeline
 
-### Barca: 240ms, 2 output lines
+The pipeline is two steps: one returns three rows, the other counts and sums them.
+
+### Barca 0.2.0: 240ms, 2 output lines
 
 ```
 [barca] 2/2 steps done in 0.0s
 {"elapsed_seconds":0.241,"final_output":{"count":3,"total":6},...}
 ```
 
-### Prefect: 5.5 seconds, 7 output lines
+Note, 2026-10-07: barca 0.18.0 prints more keys in this JSON object (`status`, a `steps` array,
+`warnings`). The current shape is in the [CLI contract](/reference/cli-contract/).
+
+### Prefect 3.7.4: 5.5 seconds, 7 log lines and the result
 
 ```
 21:00:00 | INFO | prefect - Starting temporary server on http://127.0.0.1:8966
@@ -71,150 +83,76 @@ See https://docs.prefect.io/... for more information on running a dedicated Pref
 21:00:04 | INFO | prefect - Stopping temporary server on http://127.0.0.1:8966
 ```
 
-The 3-second gap between "Starting temporary server" and the first task is pure
-framework overhead — server boot, database init, event system warmup.
+The log shows 3 seconds between "Starting temporary server" and the first task. Each time on
+this page is one run, not an average.
 
-## Error handling comparison
+## Error output
 
-### Barca: 2 lines
+The same step raising `ValueError("something went wrong")`.
+
+### Barca 0.2.0: 2 lines
 
 ```
 [barca] 0/1 steps done in 0.0s
 Worker failed: something went wrong
 ```
 
-### Prefect: 75 lines
+Note, 2026-10-07: barca 0.18.0 prints more than this: a JSON result with `"status": "failed"`
+on stdout, and on stderr a `[barca] run failed: ...` line and one JSON line with the error, a
+remediation and the traceback frames from the user's file. See the
+[CLI contract](/reference/cli-contract/).
 
-The same `ValueError("something went wrong")` produces:
-1. Task-level ERROR with full traceback (task_engine.py, run_context, call_task_fn, ...)
-2. Flow-level ERROR with full traceback (flow_engine.py, run_context, call_flow_fn, ...)
-3. Unhandled exception with full traceback (flows.py, run_flow, ...)
+### Prefect 3.7.4: about 75 lines
 
-Each includes 10+ internal prefect frames. The user's error (`broken.py:6`) is
-buried 6 frames deep in each copy. Total: ~75 lines for a one-line ValueError.
+The error was printed three times:
+
+1. a task-level ERROR with a traceback (`task_engine.py`, `run_context`, `call_task_fn`, ...);
+2. a flow-level ERROR with a traceback (`flow_engine.py`, `run_context`, `call_flow_fn`, ...);
+3. the unhandled exception with a traceback (`flows.py`, `run_flow`, ...).
+
+Each traceback had more than ten Prefect frames, with the frame from the user's file
+(`broken.py:6`) six frames down.
 
 ## Caching
 
-Barca: built-in, automatic, content-addressed. Second run of the same pipeline
-completes in 2ms with `steps_executed: 0`.
+Barca caches every asset by its run hash, a hash of the function's code and its inputs, with no
+option to set. A second run of the same pipeline on barca 0.2.0 finished in 2ms and reported
+`steps_executed: 0`. `barca docs cache` says what the hash covers.
 
-Prefect: `cache_policy=INPUTS` is available but doesn't work between runs with
-the ephemeral server. Requires a persistent `prefect server start` instance.
-Without it, every run re-executes everything.
+Prefect has `cache_policy=INPUTS`. In the test it did not carry a result from one
+`python pipeline.py` run to the next under the temporary server: every run executed every task.
+A persistent `prefect server start` instance was not tested.
 
-## What prefect does well
+## Other things observed in the same session
 
-### `python file.py` execution model
+These are notes from using Prefect 3.7.4 on 2026-06-10. They have not been checked against a
+later Prefect release.
 
-No CLI to learn. Decorate, run, done. This is the fastest possible onboarding —
-2 steps vs barca's 3. The problem is the 6-second runtime, but the conceptual
-simplicity is real.
+- `process_customer.map(customer_ids)` fans one task out over a list in one call. barca's
+  equivalents are `parallel_map` inside a task and `partitions` on an asset
+  ([Parallel tasks](/patterns/04-parallel-tasks/)).
+- Flow runs get generated names such as "tricky-kiwi". barca run ids are hexadecimal strings.
+- `prefect flow-run ls` listed past runs with their status across separate invocations.
+  barca's equivalent is `barca history`.
+- `main.serve(name="my-deployment", cron="0 8 * * *")` turned a flow into a scheduled
+  long-running process. barca's equivalent is `Schedule("0 8 * * *")` on the function and
+  `barca serve` ([Scheduling](/scheduling/)).
+- Every `python file.py` run and every `prefect` CLI command started a temporary HTTP server,
+  which took 2 to 3 seconds. A flow computing `1 + 2` took 3.5 seconds.
+- `prefect --help` listed 31 subcommands. The names recorded were: api, artifact, automation,
+  block, cloud, concurrency-limit, config, dashboard, deploy, deployment, dev, events,
+  experimental, flow, flow-run, global-concurrency-limit, init, plugins, profile, sdk, server,
+  shell, task, task-run, transfer, variable, version, work-pool, work-queue, worker.
+- `prefect init --help` answered "Unknown option: --help. Did you mean --field?".
+- Every run printed the server start and stop lines, the flow run line and one line per task.
+  No option to suppress them was found during the test.
+- `@flow` and `@task` wrap the function, and the original is reached through `.fn`. barca's
+  decorators return the function unchanged, so a decorated function can be called as plain
+  Python; barca then does no caching and records nothing.
 
-### `.map()` for parallel fan-out
+## Why barca has no `python file.py` mode
 
-```python
-results = process_customer.map(customer_ids)
-```
-
-One-liner fan-out across N inputs. Very Pythonic. Clean API.
-
-### Human-readable run names
-
-"tricky-kiwi", "sage-markhor" — more memorable than hash-based IDs when debugging
-across multiple runs. Silly but useful.
-
-### Flow run history persists
-
-`prefect flow-run ls` shows a table of all past runs with status, even across
-separate invocations. This works via a persistent SQLite database.
-
-### `.serve()` for deployments
-
-```python
-main.serve(name="my-deployment", cron="0 8 * * *")
-```
-
-Convert any flow to a long-running scheduled service in one line.
-
-## What prefect gets wrong
-
-### Ephemeral server startup on every operation
-
-Every `python file.py` and every `prefect` CLI command starts a temporary HTTP
-server, adding 2–3 seconds. `1 + 2` takes 3.5 seconds. This is the #1 reason
-prefect feels slow.
-
-### 31 CLI subcommands
-
-`prefect --help` shows: api, artifact, automation, block, cloud, concurrency-limit,
-config, dashboard, deploy, deployment, dev, events, experimental, flow, flow-run,
-global-concurrency-limit, init, plugins, profile, sdk, server, shell, task,
-task-run, transfer, variable, version, work-pool, work-queue, worker.
-
-Overwhelming for a new user who just wants to run a function.
-
-### Error output printed 3 times
-
-Task-level traceback, flow-level traceback, unhandled exception traceback — each
-with 10+ internal frames. 75 lines for a single ValueError.
-
-### `--help` broken on some subcommands
-
-`prefect init --help` → "Unknown option: --help. Did you mean --field?"
-
-### Framework-coupled decorators
-
-Prefect's `@flow`/`@task` wrap the function. Code can't run without prefect
-installed — need `.fn` accessor to get the original function. Barca's
-identity-function decorators are a real advantage here.
-
-### No quiet mode
-
-Every run prints server start/stop messages, flow run creation, task state changes.
-No `--quiet` flag to suppress framework noise.
-
-## Key insights for barca
-
-### Why `python file.py` is NOT worth chasing
-
-Prefect's `python file.py` model looks appealing at first glance — fewer steps to
-first output. But it only works because prefect is fundamentally a **task runner**:
-you call functions, they execute, done. The server is just an observability
-side-effect recorder, which is why every run boots a throwaway HTTP server (and
-why every run takes 3–6 seconds).
-
-Barca's model is different because **the Rust coordinator is load-bearing**. It
-does parsing, DAG construction, execution planning, caching, and persistence. To
-make `python pipeline.py` work, you'd have to either:
-
-1. Shell out to the barca binary from Python — which is what `barca.get()` already
-   does, and it works fine as the programmatic entry point.
-2. Reimplement the coordinator in Python — defeats the purpose.
-3. Skip the coordinator entirely — loses caching, persistence, planning,
-   parallelism. Everything that makes barca barca.
-
-The identity-function decorators are the right design. Your code runs standalone
-as plain Python when you want that. When you want orchestration, you use
-`barca get`. The two modes are cleanly separated instead of awkwardly interleaved
-like prefect's "every function call boots an HTTP server" approach.
-
-A big part of the asset model is that you don't want people running independent
-Python scripts — they can, but they won't get persistence, caching, or any of
-the orchestration guarantees. The CLI is the entry point because the coordinator
-is the point.
-
-### What IS worth taking
-
-1. **Never add hidden server startup to the hot path.** Prefect's biggest UX sin
-   is booting an HTTP server for every operation. Barca's architecture (Rust
-   binary, no daemon) avoids this naturally — protect this property as features
-   are added.
-
-2. **`.map()` is an API worth studying.** Fan-out with a single method call is
-   cleaner than most alternatives. Barca's `parallel()` is the equivalent — make
-   sure it's equally clean and Pythonic.
-
-3. **Keep the CLI surface small.** 31 subcommands is hostile. Grow slowly.
-
-4. **Never duplicate error output.** Once, with the user's frames. Internal
-   frames behind `--verbose`.
+In barca the Rust binary does the parsing, planning, caching and persistence, so a pipeline is
+run through it: `barca get` on the command line, or `barca.get(...)` from Python, which starts
+the same binary. Running `python pipeline.py` executes the functions as ordinary Python with
+none of that.

@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any
 
@@ -28,6 +29,11 @@ DEFAULT_URL = "http://127.0.0.1:8274"
 
 # Terminal run states reported by ``GET /status``.
 _TERMINAL = {"complete", "failed", "cancelled"}
+
+
+def _quote(target: str) -> str:
+    """A target as one URL path segment: a full node id may contain ``/``."""
+    return urllib.parse.quote(target, safe=":")
 
 
 class Run:
@@ -140,13 +146,21 @@ class Client:
 
         Mirrors ``barca get [TARGET]`` (``POST /get/{target}``, or ``POST /run``
         with no target). Tasks never run without a target; use ``run``.
+
+        The server checks the target before it starts anything: an unknown name
+        (HTTP 404), a name that matches several nodes (409) or a task (400)
+        raises :class:`BarcaError` with the server's message, and no run exists.
         """
-        path = f"/get/{target}" if target is not None else "/run"
+        path = f"/get/{_quote(target)}" if target is not None else "/run"
         payload = self._request("POST", path)
         return Run(self, payload["run_id"])
 
     def run(self, target: str) -> Run:
         """Run a task (``POST /run/{target}``). Unlike ``barca run TARGET``, the server
-        recomputes every upstream asset of the task."""
-        payload = self._request("POST", f"/run/{target}")
+        recomputes every upstream asset of the task.
+
+        An unknown name (HTTP 404), a name that matches several nodes (409) or an
+        asset (400) raises :class:`BarcaError` with the server's message, and no
+        run exists."""
+        payload = self._request("POST", f"/run/{_quote(target)}")
         return Run(self, payload["run_id"])

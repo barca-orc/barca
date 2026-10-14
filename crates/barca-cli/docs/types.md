@@ -103,6 +103,13 @@ import barca
 barca.duckdb_connection().execute("SET threads = 4")   # runs once per worker process
 ```
 
+- **Shared state is intentional.** Steps in a worker run sequentially on that connection.
+  User-created views, tables, macros and session settings persist, including after a step
+  fails; Barca cleans up only its bound input views after materialization. Use relation
+  operations, CTEs or unique object names with deliberate cleanup. Avoid catalog objects
+  named after input parameters: an existing table is skipped during binding, while an
+  existing view may be replaced and then dropped. There is no per-step namespace isolation.
+
 - Stay on that connection. If a step opens its own `duckdb.connect()`, its relations cannot be
   combined with inputs (`Cannot combine LEFT and RIGHT relations of different connections!`),
   and `con.register("x", input)` fails the same way. Barca recognizes these DuckDB errors

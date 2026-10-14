@@ -411,7 +411,8 @@ pub struct ExtractedNode {
     pub source_file: String,
     /// Byte offset of the function definition in source.
     pub byte_offset: usize,
-    /// The raw source text of the function (for hashing).
+    /// The text the definition hash covers: the decorator parts that count, in canonical form,
+    /// then the function from `def` on as written (`crate::definition`).
     pub source_text: String,
     /// Hash of the dependency cone: source text of all helpers, constants,
     /// and imports that this function references (transitively).

@@ -9,12 +9,27 @@ materialization, the artifact is reused and the function does not run. Change th
 code, any upstream, a sensor's output or a declared environment variable and the hash changes, so
 only the affected subgraph re-runs.
 
+Before deciding a consumer, barca checks that every upstream step in the expanded
+plan has a run hash, including all upstream partition keys across worker chunks.
+An incomplete coordinator hash map fails as an infrastructure error before any
+consumer hash or cache lookup; it cannot reuse a result hashed from a partial set.
+The expected keys come from the selected expanded plan, and worker pool size does
+not change valid hashes or cache decisions.
+
 ### What the definition covers
 
-The definition part of the hash is the function's source, its decorator arguments, and its
-**dependency cone**: every module-level function, class, constant and import the function uses,
-followed transitively. That includes **helper modules in your project**. Both import styles are
-followed, at the same precision:
+The definition part of the hash covers what determines the step's result:
+
+- the function, from `def` to its last line, as written (comments and formatting included);
+- the decorator arguments that affect the result or what is stored, listed under "Which
+  decorator arguments count" below. Arguments that do not, such as `description=`, `tags=`,
+  `retries=` and the keys of a `partitions([...])` list, are not part of it: editing them
+  re-runs nothing;
+- its **dependency cone**: every module-level function, class, constant and import the function
+  uses, followed transitively.
+
+The cone includes **helper modules in your project**. Both import styles are followed, at the
+same precision:
 
 ```python
 # helpers.py
@@ -69,6 +84,92 @@ For functions, classes, constants and `module.attr`, barca does not work out loc
 parameter called `rate` counts as a use of a module-level `rate`. That can only cause an extra
 re-run, never a stale result.
 
+#### Which decorator arguments count
+
+| Part of the decorators | Counts | Why |
+|---|---|---|
+| `inputs=` | yes | decides which upstream feeds which parameter |
+| `serializer=` | yes | changes the bytes that are stored |
+| `partitions=` | the shape, not the keys | the dimension names and a `partitions_from` source decide how the function is called; the keys do not count, because each key is part of its own run hash |
+| `@sink(...)` | yes | a cached step does not write its sinks, so a new or edited sink has to run the asset to be written |
+| any other decorator | yes | it wraps the function and can change what it returns |
+| any other argument | yes | conservative fallback for unvalidated calls; recognized barca calls reject it |
+| `env=` | no | the declared names and their values are already part of the run hash |
+| `name=` | no | it is the node's id, under which results are looked up, not part of the result |
+| `freshness=` | no | decides when the step runs, not what it returns |
+| `retries=` | no | decides how often a failing step is tried, not what it returns |
+| `retry_backoff=` | no | decides how long to wait between attempts, not what the step returns |
+| `timeout_seconds=` | no | decides how long the step may take, not what it returns |
+| `description=` | no | documentation |
+| `tags=` | no | labels for people and tools |
+| `@unsafe` | no | a marker barca reads and does not act on |
+
+The same list applies to `@asset`, `@sensor` and `@task`. "Any other decorator" is one that is
+not barca's: `@functools.cache`, a wrapper of your own. "Any other argument" is a keyword barca
+does not define, a positional argument, or `**options`, only in a call that barca cannot
+positively identify from its imports. Positively identified barca node calls reject all of
+these at plan time (`barca docs assets`, "Accepted arguments"); the fallback is conservative
+hashing for unvalidated syntax, not an accepted argument. The hash rules are keyed to the
+same accepted signatures and a test checks every `(decorator, argument)` pair. A decorator
+whose name is not positively bound to a barca import counts in full, even if it is named
+`asset`, `sensor`, `task`, `sink` or `unsafe`: its arguments, their order and the wrapper
+implementation can change the result. Binding proof is conservative: a walrus assignment
+to a decorator name anywhere in the module makes it uncertain, even inside a local scope;
+this can cause an extra recompute rather than risk a stale result. Any unproven decorator on a node (including a wrapper stacked with a known barca decorator)
+counts the whole module source and all dependencies available to the existing static cone,
+so even unrelated edits in that module can recompute it. This does not add tracking for
+dynamically imported modules. Explicit references to `globals`, `locals`, `vars`, `exec`,
+`eval` or `__builtins__` also make every imported barca name uncertain, including aliases and qualified
+or shadowed references. These checks cover the explicit syntax, not arbitrary reflective
+indirection or runtime side effects. Ordinary static imports and dependencies
+remain the tracking boundary; this is not a guarantee about arbitrary dynamic Python.
+
+What this means in practice:
+
+```python
+@asset(partitions={"region": partitions(["emea", "amer"])}, description="Sales by region")
+def sales(region: str) -> dict:
+    return {"region": region}
+```
+
+- Add `"apac"` to the list: only `sales[region=apac]` runs. Remove a key or reorder the list:
+  nothing runs. This holds however the keys are written: a literal list, a module-level
+  constant, a comprehension, a function call, or `partitions_from`
+  (`barca docs partitions`).
+- Edit the description, add `tags=` or `retries=`, change `freshness=`: nothing runs.
+- Change `serializer=`, add or edit a `@sink`, change which upstream an `inputs=` entry names,
+  rename the partition dimension, or put another decorator on the function: the step runs
+  again, and its downstream steps with it.
+- Renaming a node with `name=` gives it a new id, and a result is looked up under its id, so the
+  renamed step runs once. Its run hash is the same as before, so nothing downstream re-runs.
+
+A counted argument is compared by what it says, not how it is typed. Whitespace, line breaks,
+comments, single or double quotes, a trailing comma, the order of barca's own decorator keyword
+arguments and the order of entries in `inputs={...}` do not change the hash. Other Python calls preserve keyword argument order: a wrapper
+decorator can observe it through `**kwargs`, so changing that order must invalidate the cache.
+Two things are compared as written: the function itself, from `def` on, and an f-string or `lambda` inside a counted
+argument.
+
+Names in a counted argument are followed into the cone exactly like names in the function body:
+with `@asset(serializer=FMT)` or `@retry(times=ATTEMPTS)`, editing `FMT` or `ATTEMPTS` re-runs
+the step, and so does editing `retry` itself if it is defined in your project. Names in an
+argument that does not count are not followed: with `partitions(REGIONS)` or
+`description=SUMMARY`, editing `REGIONS` or `SUMMARY` re-runs nothing (a new key in `REGIONS`
+runs that key). An upstream named in `inputs=`, `collect(...)` or `partitions_from(...)` is not
+followed either, and does not need to be: the upstream's run hash, which covers its code, is
+already part of the step's run hash.
+
+Known limits:
+
+- The keys of `partitions(<expression>)` are whatever the expression returns when the plan is
+  made. Barca does not hash the expression or the helpers it calls, so if a helper starts
+  returning the same keys with a different meaning, nothing re-runs.
+- A step whose function reads a constant that the decorator also uses for its keys
+  (`partitions(REGIONS)` and `REGIONS` in the body) re-runs every key when the constant is
+  edited: the body's use puts the constant in the cone.
+- A sink is written only when its asset runs. Removing a `@sink` also re-runs the asset once,
+  although nothing new has to be written.
+
 #### Which file a module name means
 
 A module name is looked up exactly where the worker's `import` looks: for a pipeline file inside
@@ -89,19 +190,28 @@ when Python imports it. The project root is the boundary (see "Where things live
 followed. As in Python, a package (`helpers/__init__.py`) wins over a module (`helpers.py`) in
 the same directory.
 
-A pipeline file can also be imported by its file name from a pipeline file in another directory
-(`a/p.py` does `from shared import f`, and `b/shared.py` is a pipeline file), because a worker
-keeps the directory of every pipeline file it has loaded on its import path. Barca follows it:
-`b/shared.py` is hashed when nothing on `a/p.py`'s own import path is a module called `shared`,
-and **as well as** that module when something is, since which of the two a worker runs depends
-on what it has loaded before. A pipeline file is never a package: `shared.sub` always means
-`sub.py` inside a `shared/` directory. Avoid the ambiguity by giving helper modules and pipeline
-files distinct names (`barca docs discovery`, "Node ids").
+Pipeline imports must preserve the producer's ordinary root-relative module identity:
+use `from b.shared import f` for `b/shared.py`, rather than relying on a previously
+loaded pipeline to make `from shared import f` available. Workers use each task's
+own import path; another pipeline's directory is not retained as an implicit fallback.
+Conflicting project bindings or pipeline identities require qualified imports before
+execution (`barca docs discovery`, "Node ids"). Unambiguous non-pipeline sibling
+helpers keep ordinary Python lookup. A pipeline file is never a package:
+`shared.sub` means `sub.py` inside a `shared/` directory.
 
 Only files a step imports are read, each once per command. Barca never walks the project to
 look for helpers, and it never reads or hashes the standard library or installed packages,
 wherever the virtualenv is (`.venv/`, `venv/`, inside or outside the project): after upgrading
 a package, recompute with `--refresh-all` or `--refresh` (below).
+
+Names bound inside a module-level `if` or `try` are followed conservatively. Barca does not
+execute the condition to choose an import or fallback definition: a step reading such a name
+hashes the module's source and follows its statically visible imports and references. Editing
+an inactive branch's project helper can therefore re-run the step too. This provenance is
+retained through later assignments, functions, classes and imports: an earlier alias may have
+captured the conditional value before that replacement. Even an unconditional replacement can
+therefore retain conservative invalidation. Ordinary definitions
+that do not use these uncertain bindings keep their selective dependency cones.
 
 #### Not followed
 
@@ -112,8 +222,9 @@ An edit in one of these does not change the hash; recompute with `--refresh-all`
 - imports built at run time: `importlib.import_module(name)`, `__import__(name)`, and
   `getattr` on anything but a module barca can see imported. Static analysis cannot follow
   these, and barca does not run your code to plan;
-- `from helpers import *`, and names a module defines anywhere but at its top level (inside an
-  `if` or `try`, or assigned dynamically);
+- `from helpers import *`, and names a module defines dynamically or inside other module-level
+  control flow such as a `for`, `while`, `with` or `match` (module-level `if` and `try` bindings
+  are covered conservatively above);
 - module-level constants bound by tuple unpacking (`A, B = 1, 2`), and augmented assignments to
   a module-level name (`A += 1`): only a plain `A = ...` or `A: int = ...` is a definition;
 - a module reached through another module's `import` (`from helpers import other` where
@@ -121,12 +232,38 @@ An edit in one of these does not change the hash; recompute with `--refresh-all`
 - what a helper refers to only in a decorator, a default argument value, an `except` clause's
   exception type, a `match` pattern, a set literal (`{f()}`), an assignment target
   (`table[key()] = ...`) or a loop's `else:` block. The helper's own text is hashed, but those
-  references are not followed;
+  references are not followed. (This is about helper functions. The decorators of a step
+  itself are covered by "Which decorator arguments count" above; its default argument values
+  are hashed as part of the function but the names in them are not followed);
 - helpers more than six project modules away along an import chain.
 
-Two pipeline directories that each have a `helpers.py` are hashed correctly, each against its
-own, but share one `sys.path` in a worker (`barca docs discovery`, "Node ids"): give such
-helpers distinct names.
+Conflicting ordinary project imports are rejected before user code runs. If two pipeline
+directories each have `helpers.py`, qualify the imports (`from east.helpers import value`,
+`from west.helpers import value`) so both hashing and workers select the same files.
+Unambiguous sibling helpers still work; previous tasks do not add implicit import paths.
+Literal imports in inactive branches and unused functions may conservatively require
+qualification. Dynamic imports and user mutations of import paths are not statically proven.
+
+#### After upgrading to 0.19
+
+Barca 0.19 changed what the definition covers of a step's decorators. Up to 0.18 it was the
+decorators' text as written, so any edit there (a new partition key, a description, a comment,
+a reformat) re-ran the step for every key, and everything downstream. From 0.19 it is the list
+under "Which decorator arguments count".
+
+The hash of every step is computed differently, so **every step recomputes once** on the first
+run after upgrading, in every project and every environment (`--env`). The run after that is
+served from cache as usual. Nothing has to be done by hand; plan for the time and cost of one
+full run.
+
+- Results written by 0.18 stay in `.barca/metadata.db` and their artifacts stay on disk, under
+  their old run hashes. Barca 0.19 does not read them and does not delete them.
+- With a shared history and artifact store (`barca docs remote`), the first machine that runs
+  0.19 computes every step once and the other machines on 0.19 reuse those results. A machine
+  still on 0.18 keeps finding its 0.18 results in the same store. The two versions do not
+  reuse each other's results, so upgrade the machines that share a store together.
+- Run hashes appear in the JSON of `barca get`, `barca run` (also with `--dry-run`) and
+  `barca status`; their values change with this upgrade. No command, flag or JSON key changed.
 
 #### After upgrading to 0.18
 
@@ -213,8 +350,14 @@ How it works:
   SHA-256 of those bytes is folded into the run hash of every asset that reads the sensor
   directly. Everything downstream of those assets changes with them, through their run hashes.
   Assets that do not depend on the sensor are not affected.
-- The same output gives the same run hash, so the consumer is served from cache. Going back to
-  an earlier output (an etag that was current before) serves the materialization made then.
+- The sensor's own code counts too. A sensor's run hash covers its function and the helpers it
+  reaches, and is part of its consumers' run hashes next to the hash of its output. Editing
+  the sensor's function re-runs the assets that read it, even when it returns the same value.
+  Editing its `freshness=`, `description=` or another decorator argument that does not count
+  ("Which decorator arguments count" above) re-runs nothing.
+- The same code and the same output give the same run hash, so the consumer is served from
+  cache. Going back to an earlier output (an etag that was current before) serves the
+  materialization made then.
 - Sensors run in a phase of their own, before their consumers, so a consumer's cache decision
   always uses the value the sensor returned in this run.
 - The `bool` in the sensor's `(update_detected, value)` return is not used for caching; only
@@ -256,12 +399,22 @@ output, so the next `--dry-run` or `barca status` shows its consumers as stale.
 .barca/metadata.db                          run history and materialization records (local DB)
 .barca/metadata.db.base                     with shared history: a counter of pulls and uploads (`barca docs remote`)
 .barca/metadata.db.prev                     with shared history: the local DB as it was before the last pull that changed it
-.barca/artifacts/<node>/<run_hash>.<ext>    one immutable file per materialization
+.barca/metadata.db.pull-*, .push-*          with shared history: a download or upload in progress; what a killed command left is removed by the next pull
+.barca/run-owners/<token>.fifo              a marker a barca process holds open while it has a run in flight ("While a run is going, and after one is killed")
+.barca/artifacts/<node>/<run_hash>.<ext>    one file per result
 ```
 
-`<ext>` is `.json`, `.pkl` or `.parquet` (see `barca docs types`). Artifacts are
-content-addressed, so they can be shared between machines: set `BARCA_REMOTE_URI` and your
-cloud's credentials (`barca docs remote`).
+`<ext>` is `.json`, `.pkl` or `.parquet` (see `barca docs types`). An artifact's path names the
+computation, not the bytes: the run hash covers the step's code and inputs, so the same step
+with the same inputs always writes the same path. A step is meant to be a pure function of its
+code and inputs (what changes outside comes in through a sensor, whose output is part of the
+run hash), so computing it again is expected to write the same bytes.
+Barca does not enforce that. Computing the result again (`--refresh`, `--refresh-all`, or a
+missing artifact that something needs) overwrites the file, and a function that is not
+deterministic then leaves different bytes at the same path; with an artifact store, a machine
+whose history still has the earlier hash is warned (`barca docs remote`, "Checking a local copy
+against the store"). Because the path is the same on every machine, artifacts can be shared:
+set `BARCA_REMOTE_URI` and your cloud's credentials (`barca docs remote`).
 
 `.barca/` lives in the **project root**: the nearest directory at or above the one you run barca
 from that holds a `barca.toml`. Without a `barca.toml` above you, the current directory is the
@@ -298,7 +451,8 @@ barca run publish pipeline.py                    # model is cached again
 - **Needed** means one of: a step that is going to run takes the artifact as an input; a
   `partitions_from` step is expanded from it; or it is the output the command returns: the
   targets you named, or with no target the one asset whose value is `final_output` (the last
-  asset). A partitioned asset is returned as a whole, so every one of its partitions is
+  asset). A partitioned target materializes every key, but `final_output` currently returns
+  only the first key's value in lexical key order. Every requested partition is still
   checked (one file lookup per key, a few milliseconds at 5,000 keys). Every other asset at the
   end of a pipeline is treated like an intermediate and is not looked at.
 - **Missing** means not on this machine's disk and, with an artifact store, not in the store
@@ -320,11 +474,63 @@ barca run publish pipeline.py                    # model is cached again
 - Under `barca serve` a scheduled task whose input was deleted recomputes the input once, on its
   next tick, and keeps succeeding.
 
+### A directory at an artifact's path
+
+An artifact is one file. If a **directory** sits at an artifact's path (made by hand, by a tool
+that unpacked something there, or by a mistaken `mkdir -p`), it is not an artifact, and barca
+treats the result exactly as if the file were missing: it is fetched from the artifact store, or
+computed again with `reason: "artifact_missing"`, when something needs to read it, and it is not
+looked at otherwise. The same holds for a symlink there that leads to a directory or to nothing.
+
+Barca then has to put a file where the directory is. It never deletes what it finds:
+
+- an **empty** directory is removed;
+- a directory **with anything in it** is renamed, contents and all, to
+  `<run_hash>.<ext>.moved-aside` beside it (`.moved-aside-2`, `-3`, ... if that name is taken),
+  and stderr says so:
+  `[barca] warning: <path> is a directory, not an artifact. Moved it, with its contents, to
+  <path>.moved-aside; barca does not use it, delete it if you do not need it.`
+- a **symlink** is replaced by the artifact file. Only the link goes; what it pointed to is not
+  touched.
+
+The run goes on and exits 0. Only a directory is ever moved: an artifact file that another
+barca process wrote in the same instant is never renamed.
+
+**Where they are, and getting rid of them.** A moved-aside directory stays beside the artifact,
+in `.barca/artifacts/<node>/` (under `.barca/envs/<env>/artifacts/` for a named environment).
+Barca never reads one again, never lists them in `barca status` or any other command, and never
+deletes one: they are yours, and they take disk space until you remove them. To see them all:
+
+```
+find .barca -name '*.moved-aside*'
+```
+
+Delete the ones you do not need. Deleting the whole of `.barca/artifacts/` to reclaim disk
+removes them with everything else (results are computed again, or downloaded again from an
+artifact store, when something needs them).
+
+**If barca may not move it.** Renaming needs write permission on the directory that holds the
+artifact. Without it the run exits 3 (an infrastructure error, not a failed step) and names the
+path and the permission; nothing is deleted. Grant the permission, or move or remove the
+directory yourself, and run the command again.
+
+This applies only inside barca's own artifact directory (`.barca/artifacts/`). Barca moves,
+renames and replaces nothing anywhere else:
+
+- a `@sink` path is yours. Barca writes the file there and changes nothing else: a directory at
+  the path fails that sink (`[barca] SINK FAILED: ... IsADirectoryError`) and is left as it is,
+  and a symlink is written through (the file it points to is written, the link stays). The
+  asset itself succeeds either way (`barca docs sinks`);
+- a directory at an object's path in an artifact store that is a shared directory fails the
+  fetch or the upload with exit 3, naming the path, and is left as it is. The error says to
+  remove or rename it there; `--refresh-all` does not help (`barca docs remote`).
+
 Known limits:
 
-- Only existence is checked. A file that is there but truncated or edited is read as it is (with
-  an artifact store, a copy that does not match its recorded hash is replaced: `barca docs
-  remote`). A directory at the artifact's path counts as present.
+- Only whether the artifact is a file is checked. A file that is there but truncated or edited
+  is read as it is (with an artifact store, a copy that does not match its recorded hash is
+  replaced: `barca docs remote`). A symlink to a file counts as that file and is read; writing
+  the artifact again replaces the link.
 - `--agent` announces each step once, with its outcome. A cached step whose artifact is not on
   disk waits: it prints `step:<id> completed` if it is computed again, or `step:<id> cached` at
   the end of the run if nothing needed it. The one exception is a result in a remote store
@@ -435,7 +641,10 @@ A real `barca get` / `barca run` returns the same per-step information in a `ste
 cached step also prints `[barca] step:<id> cached` on stderr, so a log shows what was served from
 cache as well as what ran. A step whose node declares `env=[...]` also carries `env`, the values
 it was hashed with (`null` when unset, `<redacted>` for secret-looking names), in both the JSON
-`steps` entry and the `--agent` line (`... env SOURCE_CSV=b.csv`). `barca history --json` and `barca stats` show the same over time.
+`steps` entry and the `--agent` line (`... env SOURCE_CSV=b.csv`). With an artifact store, a step
+whose stored result (or an input it read) is not the copy that was recorded carries
+`artifact_mismatch: true` and a `warning` (`barca docs remote`). `barca history --json` and
+`barca stats` show runs and timings over time.
 
 ## Concurrent runs
 
@@ -447,16 +656,29 @@ process waits more than 60 seconds for the lock you get an error that names the 
 an `... File is locked by another process` error means something outside barca (a DB browser, a
 backup tool, an older barca) has `.barca/metadata.db` open.
 
+The final run status and its successful/failed step rows commit together. If a required
+database write fails, the command reports an infrastructure error (exit 3), preserves
+earlier committed progress, history and the previous run state (normally unfinished).
+It does not record a new terminal outcome for a partially written ledger. Captured output is still
+written separately after the outcome transaction.
+
 ## While a run is going, and after one is killed
 
-A run records each step in `.barca/metadata.db` as the step finishes, not only when the run
-ends. Finished steps are written in batches, at most twice a second, so a step is recorded
-within about half a second of finishing.
+A run records completed steps in `.barca/metadata.db` during execution. Local results are
+queued after their artifact is written; with a remote artifact store, they are queued only
+after the upload is confirmed. The local writer batches these rows at most twice a second,
+so progress normally appears within about half a second of that confirmation.
 
 ```bash
 barca status pipeline.py        # from another terminal: steps the running get has finished are `cached`
 barca history --json            # the run is `running`; `steps_executed` is the steps recorded so far
 ```
+
+If a mid-run database write fails, barca retains the batch and retries at the same
+half-second interval, even if no further step finishes. A batch records its rows and
+progress count together; replay does not duplicate rows or count a step twice. Progress
+remains unrecorded while the database cannot commit. The final run write still includes
+completed results that the mid-run recorder has not saved.
 
 - **Progress.** `barca status` in a second terminal shows what a running `barca get` or
   `barca run` has finished: an asset is `cached`, a partitioned asset is `partial` with its
@@ -468,27 +690,96 @@ barca history --json            # the run is `running`; `steps_executed` is the 
   runs again.
 - **History says so.** `barca history` reports a run whose process no longer exists as
   `interrupted`, with `finished_at` and `elapsed_seconds` `null` (nobody saw it end) and
-  `steps_executed` at what it had recorded. Ctrl-C is different: the run stops its workers,
-  records itself and is `cancelled`.
+  `steps_executed` at what it had recorded. It does so as soon as the process is gone, and
+  also for a run killed with its container, once a container starts again on the same
+  `.barca` (see the limits below). Ctrl-C and SIGTERM (a supervisor, `docker stop`) are
+  different: the run stops its workers, records itself and is `cancelled` (exit 130).
+  With an artifact store that also holds while
+  artifacts upload, download or the shared history is pushed, and the cancelled run then shares
+  its record for at most 10 seconds; a second Ctrl-C ends that (`barca docs remote`, "Ctrl-C").
 
 Known limits:
 
 - With shared remote state (`barca docs remote`) all of this holds on the machine the run is on:
   the pull at the start of a command keeps what a run recorded locally, so progress and resume
-  work whatever other machines upload in the meantime. Other machines see a run when it ends,
-  and a killed run once a later run on its machine has ended.
-- With a remote artifact store, steps are not recorded as they finish: a row is written only
-  once the artifact's upload is confirmed, which happens when the run ends. Such a run shows no
-  progress in `barca status`, and a killed one records nothing.
-- `interrupted` is decided by looking for the run's process on this machine. A run started by an
-  older barca, or on another machine, stays `running`; so does a run whose process id has since
-  been reused by another program.
+  work whatever other machines upload in the meantime. Newly committed progress is shared
+  every minute in healthy operation, without ending the run; the final outcome is shared
+  when it ends. Other machines can reuse confirmed results already checkpointed after a kill.
+- With a remote artifact store, a failed or unfinished upload is never recorded as reusable
+  progress. Confirmed uploads are recorded locally while other steps are still running;
+  shared history publishes new committed progress every minute. Database and storage failures
+  can delay that cadence; a failed checkpoint retains local history for a later retry. Clean
+  ticks do not upload another snapshot.
+- **When a run is `interrupted`.** For runs started with 0.20.0 or later, only on an observation
+  that can only be made when the run's process is gone; whenever barca cannot make one, the run stays `running`. A run
+  records which kernel its process ran on (the boot id), its pid namespace, its start time,
+  and a marker: a FIFO in `.barca/run-owners/` that the process holds open for as long as it
+  has a run in flight. Three observations count:
+  - On the same kernel and in the same pid namespace, the process table: no process with
+    that id, or one with another start time in the same known time namespace.
+  - On the same kernel in another pid namespace (another container), the marker: the
+    system refuses to open a FIFO for writing when no process has it open for reading, and
+    it closes the owner's end when the owner ends, however it ended. This counts only where
+    barca can show that the file is the one the owner held: same device and inode, and on
+    Linux the same file handle.
+  - On another kernel, that the owner's kernel has shut down: the marker is on a local
+    disk (not a network or VM-shared mount) for both the owner and the reader, it is the
+    same filesystem and inode, and nobody has it open. A local disk is mounted by one
+    kernel at a time, so this is a machine, or a container's machine, that was restarted.
+
+  Machine ids and host names decide nothing. No clock is involved either: a killed run
+  reads `interrupted` at once, and a suspended laptop or a stopped process (Ctrl-Z) does
+  not make a live run look dead.
+- A run that is going is therefore shown as `running` from everywhere that sees the project
+  directory. The one situation in which a history says `interrupted` for a run that is
+  going somewhere is a copy of the whole disk (a cloned or restored virtual machine) taken
+  during the run and started as another machine: the copy's history is a copy too, and in
+  it the run will never end. And two virtual machines resumed from the same memory
+  snapshot are one machine as far as anything observable goes (same boot id, same
+  processes): if they share a project directory, a run killed on one is shown as
+  `interrupted` there while its twin on the other is still going.
+- What stays `running` although its process is gone:
+  - a run another machine started (it came with the shared history), until that machine
+    records it;
+  - with Docker Desktop, a run killed on the host as seen from a container, and a run
+    killed in a container as seen from the host: they are different kernels and the
+    directory between them is not a local disk. The side the run was on shows
+    `interrupted`, and once it has recorded that, so does the other;
+  - a run killed with its container when `.barca` is on a Docker Desktop bind mount (which
+    gives no file handle) and another container was started before the replacement, so
+    that the replacement got another pid namespace number. Restarting one container gives
+    the same number in practice. A named volume for `.barca` does not depend on it;
+  - a run killed in a container by a restart of the machine or of Docker's virtual machine
+    when `.barca` is on a bind mount from a Docker Desktop host or on a network
+    filesystem;
+  - a run killed by a restart of the machine when the project is on a network filesystem
+    (0.18.1 reported this one, from the host name and process id);
+  - a run started by barca 0.19.0 or earlier, which is judged by its process id and host
+    name: in a container, on another machine, or once its process id has been reused.
+- `interrupted` is written to the history by the next `get` or `run`, under the same rule.
+- A marker is removed by its process when its runs have ended. One left by a killed
+  process stays while its run reads `running`, and is removed by a later `get` or `run`
+  once no `running` run names it and it is an hour old. A process killed in the instant
+  between creating its marker and recording its run leaves a marker no run names; it goes
+  the same way after an hour. Markers are empty files.
 - Failed steps are recorded when the run ends, so a killed run records its successes only.
 
 ## Environments
 
 `--env <name>` (or `BARCA_ENV`, or `default_env` in `barca.toml`, else `default`) fully
 separates cache, artifacts and shared state. Use it for dev/staging/prod isolation.
+
+## Metadata schema compatibility
+
+Run history, captured logs and schedules are durable data. Barca records the
+metadata schema version and refuses unsupported versions before
+reading history or writing results. Upgrade Barca to a compatible release if this
+happens; a mismatch never automatically deletes or rebuilds your metadata.
+
+Existing unversioned metadata is upgraded with additive changes in one
+transaction, preserving its rows. A failed or interrupted upgrade can be retried.
+Read-only inspection does not migrate your source database. The same checks apply
+to shared history before it replaces a local copy.
 
 ## Seeing what happened
 

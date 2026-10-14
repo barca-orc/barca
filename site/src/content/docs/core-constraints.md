@@ -1,194 +1,163 @@
 ---
 title: Core Constraints
-description: Deliberate MVP constraints that define the shape of the Barca product.
+description: The rules barca was designed around, which of them 0.18.0 implements, and what happens where it does not.
 ---
 
-These are deliberate MVP constraints for Barca.
+These are the rules barca was designed around. Some were written before the code existed. Each
+section gives the rule, whether 0.18.0 implements it, and what happens where it does not.
 
-They are not incidental implementation details. They define the shape of the product.
+| Constraint | In 0.18.0 |
+|---|---|
+| [Graphs are acyclic](#directed-acyclic-graphs-only) | Implemented |
+| [Python interpreter resolution](#python-interpreter-resolution) | Implemented (no `uv` requirement) |
+| [Preflight consistency](#preflight-consistency) | Not needed between commands; not checked during a run |
+| [History is append-only](#history-is-append-only) | Rows are kept; no status flags, no pruning command |
+| [Freshness declarations](#freshness-declarations) | Only `Schedule` has an effect |
+| [Caching follows provenance, not recency](#caching-follows-provenance-not-recency) | Implemented |
+| [Asset identity](#asset-identity) | Implemented; no rename detection |
+| [User code is what runs](#user-code-is-what-runs) | Implemented; no source snapshots |
 
 ## Directed acyclic graphs only
 
-Barca only supports DAGs.
+**Rule.** The graph has no cycles: no node depends on itself, directly or through other nodes.
+Iteration belongs inside one function.
 
-Cycles are explicitly disallowed.
+**Status.** Implemented. Every command that reads the project checks the graph before
+anything runs:
 
-That means:
+```
+$ barca list cyc.py
+{"code":2,"error":"DAG error: cycle detected in dependency graph","kind":"usage","remediation":"Fix the inputs between definitions, then run `barca list cyc.py` to check each node's inputs."}
+```
 
-- no self-dependencies
-- no mutual recursion across assets
-- no longer dependency loops anywhere in the asset graph
-
-If a cycle is detected during indexing or job planning, Barca should fail immediately with a clear graph error.
-
-### Why this is the right constraint
-
-- it keeps scheduling and cache reuse understandable
-- it keeps staleness propagation simple
-- it avoids inventing vague semantics for cyclic materialization
-- it matches the dominant orchestrator model for asset graphs
-
-For the MVP, Barca should not attempt fixed-point computation, iterative cycles, or special loop semantics.
-
-If users need iteration, they should write it inside a single asset function.
+The exit code is 2. The same check rejects an input that names an unknown node, a sensor with
+inputs, and a task used as an input to an asset or a sensor.
 
 ## Python interpreter resolution
 
-This section originally proposed requiring `uv` for Python execution and environment
-management. That was never implemented: Barca does not depend on `uv`, check for it, or
-manage a virtualenv on the user's behalf. At runtime the Rust CLI resolves a `python`/`python3`
-binary sitting next to the `barca` executable (i.e. the same virtualenv `barca` was installed
-into, `uv`-managed or not) and falls back to whatever `python3` is on `PATH` — see
-`find_python()` in `crates/barca-core/src/commands.rs`. Any environment manager that puts a
-working `python3` on `PATH` or alongside the binary works today.
+**Rule.** Steps run in the Python environment barca is installed in.
 
-## Preflight consistency is required
+**Status.** Implemented. Barca uses the `python` (or `python3`) that sits beside the `barca`
+executable, which is the virtualenv barca was installed into. If there is none, it uses
+`python3` from `PATH`. An early version of this page proposed requiring `uv`. That was never
+built: barca does not need `uv`, does not check for it and does not manage an environment.
+Python 3.12 or later is required.
 
-Before executing a planned asset step, Barca should verify that the currently importable asset definition still matches the indexed definition.
+## Preflight consistency
 
-At minimum, that means checking:
+**Rule (original).** Before running a planned step, check that the function on disk still has
+the definition hash the plan was made with, and fail if it does not.
 
-- module path resolves
-- function name resolves
-- current `definition_hash` matches the planned `definition_hash`
+**Status.** The original rule assumed a stored plan that a later command executes. Barca has
+none: `barca get`, `barca run` and every run started by `barca serve` parse the source and
+plan again, so a plan cannot be stale between commands.
 
-If not, execution should fail fast and require re-indexing.
-
-This prevents the orchestrator from running stale plans against changed source.
+Within a run there is no check. The source is hashed when the run is planned, and the worker
+imports the file when the step executes. If you edit a function while a run that uses it is
+going, the step may run the new code and be recorded under the hash of the old code. Do not
+edit pipeline files during a run; if you did, run the affected assets again with
+`--refresh <asset>`.
 
 ## History is append-only
 
-Barca should not delete old asset definitions or old materializations as part of normal operation.
+**Rule.** Barca does not delete results or history as part of normal operation.
 
-Instead, Barca should:
+**Status.** Partly implemented.
 
-- keep prior definitions
-- keep prior materializations
-- mark old states as stale, superseded, inactive, or historical as appropriate
-- render history in the UI/TUI rather than hiding it
-
-This is a core part of the product.
-
-The point of Barca is not only to run assets, but to preserve approximate lineage over time.
-
-### What this means in practice
-
-- if code changes, create a new asset definition record
-- if a partition disappears, keep its historical materializations
-- if a run becomes stale, mark it stale rather than deleting it
-- if an asset is removed from the current codebase, keep its prior history and mark it inactive
-
-The storage model should therefore be append-only for definitions and materializations, with status flags rather than destructive updates.
+- Every step result adds a row to the `materializations` table and every run adds a row to
+  `runs`. No barca command deletes rows.
+- Artifact files are kept. When a function's code or inputs change, the new result is written
+  to a new file (`.barca/artifacts/{node}/{run_hash}{ext}`) and the old file stays.
+- A result can be overwritten in place: `--refresh` runs a step again under the same run
+  hash, and a function that is not deterministic then writes different bytes to the same
+  path.
+- The original design also called for a record of each definition and for status flags
+  (stale, superseded, inactive). Those do not exist. A node that is removed from the source is
+  no longer listed; its rows and files stay on disk.
 
 ### Pruning
 
-History accumulates over time. The intent is a `barca prune` command that permanently removes
-history unreachable from the current active DAG (removed assets, removed partition values, old
-definition hash versions no longer referenced by any current asset) as an explicit, destructive
-opt-in. **This command does not exist yet** — there is currently no way to reclaim disk space
-from old artifacts/materializations short of manually clearing `.barca/`.
+There is no `prune` or `gc` command in 0.18.0, and `.barca/artifacts/` has no size cap. To
+reclaim space, delete files under `.barca/artifacts/` yourself. Barca handles a missing file:
+when a step needs to read a cached result whose file is gone, the step that produced it runs
+again (the JSON output gives the reason `artifact_missing`). A missing file that nothing needs
+to read costs nothing. Deleting all of `.barca/` removes the cache and the history.
 
 ## Freshness declarations
 
-Every asset, sensor, and task declares how eagerly Barca keeps its output up to date. The `freshness` parameter is the core primitive — not `schedule`.
+**Rule.** Every asset, sensor and task declares how it is kept up to date with `freshness=`:
+`Always` (the default for assets and tasks), `Manual` (the default for sensors) or
+`Schedule("<cron>")`.
 
-Three freshness kinds exist:
+**Status.** Only `Schedule` has an effect at run time.
 
-- `Always` (default for `@asset` and `@task`)
-- `Manual`: intended to mean Barca never auto-updates this node, even when stale
-- `Schedule("cron_expr")`: brings this node up to date on each cron tick (recomputed only if its inputs changed; a task always runs)
+- `Schedule("<cron>")` makes `barca serve` run the node on each cron tick. See
+  [Scheduling](/scheduling/).
+- `Always` and `Manual` are parsed, recorded and shown by `barca list` and in the plan JSON.
+  Nothing acts on them. A `Manual` asset is computed by `barca get` like any other asset, a
+  `Manual` upstream does not hold back anything downstream, and `barca serve` does not run an
+  `Always` node on its own. Barca accepts `Always` on a sensor.
 
-Today, `freshness` is parsed, stored, and echoed back in the plan JSON, but only the `Schedule`
-kind has runtime teeth: `barca serve`'s cron scheduler (`crates/barca-server/src/scheduler.rs`)
-polls `Schedule`-freshness nodes and fires them on their cron tick. Nothing in the executor
-currently branches on `Always` vs. `Manual` — regular `barca get`/`barca run` caching is driven
-entirely by content-hash matching (see "Freshness is provenance-based, not recency-based"
-below), not by this field. In particular, **`Manual` does not currently block downstream
-auto-materialization**, and Barca does not reject an explicit `Always` on a `@sensor` — both are
-still just design intent.
+What `Always` and `Manual` should do in `barca serve` is proposed in RFC-0008
+([PR #276](https://github.com/barca-orc/barca/pull/276)). Until then, whether a function runs
+is decided by the cache alone (next section), and by `--refresh`.
 
-Sensors default to `Manual` freshness (they have no meaningful "always" refresh cadence).
+## Caching follows provenance, not recency
 
-## Freshness is provenance-based, not recency-based
+**Rule.** A result is valid if it was computed from the current code and the current inputs,
+however long ago. The most recent result is not special.
 
-Barca should decide freshness from provenance identity, not from whether something was run most recently.
+**Status.** Implemented. A result is stored under its run hash, which covers the function's
+code, the helper code it reaches, and its inputs. If the code changes from version A to
+version B and back to A, the results computed for A are cache hits again:
 
-That means:
+```
+$ barca get b prov.py --json        # a returns 1
+... "final_output":2 ... "steps_executed":2
+$ # edit a to return 5
+$ barca get b prov.py --json
+... "final_output":6 ... "steps_executed":2
+$ # edit a back to return 1
+$ barca get b prov.py --json
+... "final_output":2 ... "id":"prov.py:a" ... "status":"cached" ... "id":"prov.py:b" ... "status":"cached" ... "steps_executed":0
+```
 
-- if the current `definition_hash` matches an older definition snapshot, that older snapshot becomes current again
-- if the full `run_hash` matches an older successful materialization, that materialization is fresh again immediately
-- Barca should reuse that prior materialization without recomputing it
+This is why old artifact files are kept. What the hash does not see is listed in
+`barca docs cache`.
 
-This is an important invariant.
+## Asset identity
 
-If code changes from version A to version B and later returns to version A, Barca should be able to reuse the original A outputs as long as the full provenance matches.
+**Rule.** A node's identity is its explicit `name=` if it has one, otherwise the file path
+relative to the project root plus the function name (`pipeline.py:orders`). Two nodes may not
+share an identity.
 
-### Example
+**Status.** Implemented.
 
-- `a` at definition hash `H1`
-- `b` computed from `a@H1`
-- later `a` changes to definition hash `H2`
-- later `a` changes back to definition hash `H1`
+```
+$ barca list dup.py
+{"code":2,"error":"DAG error: duplicate continuity key: 'same' defined in both 'dup.py' and 'dup.py'", ...}
+```
 
-If Barca already has a successful `b` materialization whose `run_hash` corresponds to `a@H1`, that `b` materialization should be considered fresh again without recomputation.
+- A node with `name=` keeps its cache and history when its file is moved or its function is
+  renamed.
+- A node without `name=` that is moved or renamed gets a new id. It is computed again, and the
+  results and history under the old id stay on disk under the old id.
+- The original design mentioned suggesting a probable rename from source similarity. That
+  does not exist.
 
-This is why append-only history matters: old valid provenance states remain reusable.
+## User code is what runs
 
-## Asset continuity is approximate but explicit
+**Rule.** The worker imports your module from your project and calls your function, so
+imports, tracebacks and helper modules behave as they do outside barca.
 
-Barca needs a notion of "this is probably the same asset as before" so that code history remains legible across changes.
+**Status.** Implemented. The worker loads the pipeline file from source with whichever Python
+was resolved above. An early version of this page said barca also stores a snapshot of each
+function's source for provenance. It does not: the metadata database holds hashes, not source.
 
-For the MVP, use this continuity policy:
+## What follows from these
 
-- primary continuity key: explicit asset `name` if provided
-- otherwise: repo-relative file path + function name
-- if two live assets resolve to the same continuity key during indexing, fail with a duplicate-asset error
-
-That is the safe default.
-
-### Why not use `filepath/function name OR function definition` as identity
-
-That rule is too loose for automatic identity because:
-
-- two distinct assets can share nearly identical function definitions
-- a copied function in another file may be new work, not the same asset
-- a renamed or moved asset should usually keep history, but naive source matching can merge unrelated code
-
-So for the MVP:
-
-- use the continuity key above for canonical live identity
-- use source similarity only as a non-authoritative history hint
-
-Barca can later surface probable rename/move suggestions such as:
-
-- "this definition looks similar to a previously indexed asset"
-
-But it should not silently merge those histories automatically.
-
-## User code is the execution source of truth
-
-Barca stores inspected source snapshots for provenance, debugging, and reproducibility metadata.
-
-Barca does not execute those stored snapshots directly.
-
-Instead, the runner imports the real module from the user's codebase and executes the real function in the `uv` environment.
-
-That keeps:
-
-- imports honest
-- tracebacks accurate
-- helper/module semantics intact
-- environment problems correctly attributed to user code
-
-## Practical implications
-
-These constraints imply:
-
-- asset discovery requires importable, source-backed Python modules
-- notebook-defined assets are not first-class indexed assets in v1
-- graph validation is a mandatory indexing step
-- the execution engine must verify the planned `definition_hash`
-- dependency cone hashing is part of cache invalidation and provenance
-- definitions and materializations are append-only records
-- duplicate live continuity keys should fail indexing
-- old matching provenance can become current again without rerunning
+- Only `.py` files that import barca are read. Notebooks are not.
+- The graph is validated on every command.
+- Helper code a function reaches is part of its hash, so changing a helper invalidates the
+  functions that use it.
+- Old results stay usable, and stay on disk, until you delete them.

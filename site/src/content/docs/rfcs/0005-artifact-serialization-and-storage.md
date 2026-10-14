@@ -10,6 +10,40 @@ description: 'json/pickle/parquet artifact formats, local and remote storage, st
 
 ---
 
+> **Amended (after 0.18.0, issue #246, decided):** artifact objects stay at
+> `{node}/{run_hash}{ext}`. Addressing them by a hash of their bytes was proposed (#246)
+> and will not be done.
+>
+> Immutability follows from purity. An asset is a pure function of its code and its inputs,
+> so its run hash identifies its bytes, and the object at `{node}/{run_hash}{ext}` is
+> immutable in practice. State from outside enters through sensors: a sensor always runs,
+> and the hash of what it returned is folded into the run hash of every asset that reads it
+> (`cache::compute_run_hash`), so a changed observation lands at a new path instead of
+> changing an old one.
+>
+> The one case where bytes change under the same run hash is a recompute of an asset that
+> is not deterministic (`--refresh`, or two machines computing the same step at once). The
+> object is then overwritten in place: same path, other bytes. Checked on 0.18.0 plus #263
+> with an asset that returns a random id: after `--refresh` on one machine the store holds
+> one object for the node, with new bytes. A machine that shares the history pulls the new
+> recorded hash, replaces its stale local copy and says nothing. A machine whose history
+> still has the old hash (one that keeps its history local, or a refresh that was killed
+> before it recorded) uses the store's bytes and is told: a `[barca] warning:` line on
+> stderr, and `steps[].artifact_mismatch: true` in the JSON result
+> ([CLI contract](/reference/cli-contract/)).
+>
+> The body below is left as written. Read its words this way: "content-addressed" (the
+> title, §1, §4.1, §5) means "addressed by run hash", as §8 says, and "immutable" means
+> "not rewritten except by `--refresh` of a non-deterministic asset".
+
+> **Historical design record:** the accepted baseline below describes the version
+> named in its status, with any amendments called out separately. It is not the
+> current executable contract. Use the [CLI contract](/reference/cli-contract/),
+> [decorator reference](/reference/api/decorators/),
+> [server API](/reference/server-api/) and [configuration reference](/reference/config/)
+> for implemented behavior. Open proposals remain proposals until separately accepted
+> and implemented.
+
 ## 1. Summary
 
 Data never passes between worker processes in-memory — every asset/task output is
@@ -101,6 +135,29 @@ local disk — fails explicitly under a remote store) and `parallel()` return va
 remote store the parent gets `null` results with a warning). See
 [Remote Storage](/reference/remote-storage/) §"v1 limitations."
 
+> **Amended (0.20.0, issue #285):** `parallel()` return values are no longer an
+> exception. The second one above was worse than stated: the coordinator read a child's
+> artifact only when it was JSON, so a branch that returned anything else (a set, a date, a
+> DataFrame: written as pickle or parquet) resumed the parent with `null` for that branch,
+> with no warning, with or without a remote store. Checked on 0.18.1: the result was the
+> same in both cases, and no warning was printed in either.
+>
+> Now the coordinator tells the parent where each child's result is (`path`, `format`,
+> and for a frame the type the child returned), and the parent's worker reads it with the
+> reader steps use for their inputs. A child's result is written in the artifact formats
+> but is not an artifact of the store layout in §4.1: it is a file of the run, at
+> `.barca/branches/<run>-<pid>/<group>/<branch>.<ext>`, removed when the calling step ends
+> and never uploaded (issue #332: under the old name, shared by every run, two runs at the
+> same time read each other's results). A branch may return whatever a step may return. A value
+> that cannot be written or read back fails the calling step with an error naming the
+> branch, the type and the reason. Child results are local files whatever the store, so
+> nothing differs under a remote store.
+>
+> A JSON result whose text is at most 4 KB is not written at all: the child's worker sends
+> the text `json.dump` would have written in its report, the coordinator passes it on
+> unparsed, and the parent parses it. A fan-out of thousands of small branches then creates
+> no files. The coordinator reads no child result in any case.
+
 ### 4.4 Node-Kind Semantics
 
 Sensors' `(update_detected, output)` tuple is serialized like any other output; tasks'
@@ -186,7 +243,8 @@ with a more pluggable (and more configuration-heavy) interface; see
 ## 10. Unresolved Questions
 
 Should dynamic-partition source reads and `parallel()` return values (§4.3) grow remote
-support, closing the two documented v1 local-disk-only exceptions?
+support, closing the two documented v1 local-disk-only exceptions? (`parallel()` return
+values: closed, see the amendment in §4.3. Dynamic-partition source reads remain.)
 
 ## 11. Future Possibilities
 
@@ -194,3 +252,8 @@ A content-hash (rather than node-id-keyed) path for local-mode artifacts would r
 the local/remote asymmetry noted in §4.1, at the cost of local disk usage no longer
 mapping 1:1 to "current" outputs (ties into the `barca prune` command described as
 future work in [RFC-0002](/rfcs/0002-cli-surface/) §11).
+
+The same idea was considered for remote objects (a path that includes a hash of the bytes,
+#246) and declined: for pure assets the run hash already identifies the bytes, and the one
+exception, a recompute of an asset that is not deterministic, is reported as a hash mismatch
+rather than prevented (see the amendment at the top).

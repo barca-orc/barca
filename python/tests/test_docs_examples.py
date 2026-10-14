@@ -171,27 +171,63 @@ def test_example_duckdb_dag(binary, topics, tmp_path):
     assert ptr["final_output"]["_barca_artifact"]["format"] == "parquet"
 
 
-def test_example_partitions(binary, topics, tmp_path):
+@pytest.mark.parametrize("pool", [1, 2, 3])
+def test_example_partitions(binary, topics, tmp_path, monkeypatch, pool):
+    monkeypatch.setenv("BARCA_POOL_SIZE", str(pool))
     write_example(topics, "examples/partitions", tmp_path)
     plan = result(barca(binary, tmp_path, "plan", "pipeline.py"))
     steps = [s for p in plan["phases"] for st in p["streams"] for s in st["steps"]]
-    assert steps.count("pipeline.py:sales") == 3
+    # A physical plan step holds a chunk of keys; execution still covers all three.
+    assert steps.count("pipeline.py:sales") == pool
     first = result(barca(binary, tmp_path, "get", "summary", "pipeline.py"))
     assert first["steps_executed"] == 4
-    assert first["final_output"] == {"regions": 3, "total": 400}
+    assert first["final_output"] == {"regions": 3, "total": 1200}
     second = result(barca(binary, tmp_path, "get", "summary", "pipeline.py"))
     assert second["steps_executed"] == 0  # every partition and the fan-in come from cache
     assert (tmp_path / ".barca" / "artifacts" / "pipeline.py--sales_region_emea").is_dir()
 
+    # "Add "latam" to the list in the decorator ...: 2 steps run, `sales` for `latam` and
+    # `summary`" (#283: up to 0.18 this ran all five).
+    example = tmp_path / "pipeline.py"
+    listed = 'partitions(["emea", "amer", "apac"])'
+    assert listed in example.read_text(), "the example lists its keys inside the decorator"
+    example.write_text(
+        example.read_text().replace(listed, listed.replace('"apac"', '"apac", "latam"'))
+    )
+    grown = result(barca(binary, tmp_path, "get", "summary", "pipeline.py"))
+    assert grown["steps_executed"] == 2
+    assert partition_keys_run(grown) == {"pipeline.py:sales": ["region=latam"]}
+    assert {s["id"]: s["status"] for s in grown["steps"]}["pipeline.py:summary"] == "ran"
+    assert grown["final_output"] == {"regions": 4, "total": 1700}
 
-def test_partitions_topic_example(binary, topics, tmp_path):
+    # "Remove a region and only `summary` runs."
+    example.write_text(example.read_text().replace('"amer", ', ""))
+    shrunk = result(barca(binary, tmp_path, "get", "summary", "pipeline.py"))
+    assert shrunk["steps_executed"] == 1
+    assert partition_keys_run(shrunk) == {}
+    assert shrunk["final_output"] == {"regions": 3, "total": 1300}
+
+
+def partition_keys_run(run: dict) -> dict:
+    """Partitioned step id -> the keys that executed in this run (steps with none left out)."""
+    return {
+        s["id"]: s["partitions"]["will_run_keys"]
+        for s in run["steps"]
+        if s.get("partitions", {}).get("will_run_keys")
+    }
+
+
+@pytest.mark.parametrize("pool", [1, 2, 3])
+def test_partitions_topic_example(binary, topics, tmp_path, monkeypatch, pool):
     """The partitions topic's main example, as written (#189): `partitions_from(sales)` gives
     `margin` the keys of `sales`, and each key receives the key and that key's `sales` output."""
+    monkeypatch.setenv("BARCA_POOL_SIZE", str(pool))
     write_example(topics, "partitions", tmp_path)
     plan = result(barca(binary, tmp_path, "plan", "pipeline.py"))
     steps = [s for p in plan["phases"] for st in p["streams"] for s in st["steps"]]
-    assert steps.count("pipeline.py:sales") == 3
-    assert steps.count("pipeline.py:margin") == 3
+    # Chains are divided into worker-sized chunks, independently of key coverage.
+    assert steps.count("pipeline.py:sales") == pool
+    assert steps.count("pipeline.py:margin") == pool
     assert steps.count("pipeline.py:summary") == 1
 
     margin = result(barca(binary, tmp_path, "get", "margin", "pipeline.py"))
@@ -205,6 +241,30 @@ def test_partitions_topic_example(binary, topics, tmp_path):
     assert summary["steps_executed"] == 1  # every partition of sales comes from cache
     assert summary["final_output"] == {"total": 1200}
     assert result(barca(binary, tmp_path, "get", "pipeline.py"))["steps_executed"] == 0
+
+    # "Changing the keys: adding a key runs that key and no other ... a `partitions_from`
+    # consumer runs for the new key only, and a `collect` fan-in runs again" (#283).
+    example = tmp_path / "pipeline.py"
+    listed = 'partitions(["emea", "amer", "apac"])'
+    assert listed in example.read_text(), "the example lists its keys inside the decorator"
+    example.write_text(
+        example.read_text().replace(listed, listed.replace('"apac"', '"apac", "latam"'))
+    )
+    grown = result(barca(binary, tmp_path, "get", "pipeline.py"))
+    assert partition_keys_run(grown) == {
+        "pipeline.py:sales": ["region=latam"],
+        "pipeline.py:margin": ["region=latam"],
+    }
+    assert {s["id"]: s["status"] for s in grown["steps"]}["pipeline.py:summary"] == "ran"
+    assert grown["steps_executed"] == 3
+
+    # "removing a key or reordering the list runs no key."
+    example.write_text(example.read_text().replace('["emea", "amer", ', '["amer", "emea", '))
+    assert result(barca(binary, tmp_path, "get", "pipeline.py"))["steps_executed"] == 0
+    example.write_text(example.read_text().replace('"amer", ', ""))
+    shrunk = result(barca(binary, tmp_path, "get", "pipeline.py"))
+    assert partition_keys_run(shrunk) == {}
+    assert shrunk["steps_executed"] == 1  # the fan-in
 
 
 def test_overview_topic_example(binary, topics, tmp_path):
@@ -227,6 +287,43 @@ def test_assets_topic_example(binary, topics, tmp_path):
     assert result(barca(binary, tmp_path, "get", "daily", "pipeline.py"))["final_output"] == {
         "x": 2
     }
+
+
+def test_assets_topic_accepted_arguments_example(binary, topics, tmp_path):
+    """The "Accepted arguments" section: the example is rejected with exactly the two lines
+    the manual prints, exit 2, and the table lists what the Python stubs take."""
+    import inspect
+
+    import barca as stubs
+
+    body = topics["assets"]
+    snippet = next(b for b in blocks(body, "python") if "`input` for `inputs`" in b)
+    header = 'from barca import asset\n\n\n@asset()\ndef raw() -> dict:\n    return {"n": 1}\n\n\n'
+    (tmp_path / "pipeline.py").write_text(header + snippet)
+    documented = next(
+        b for b in blocks(body, "") if b.startswith("$ barca list pipeline.py --pretty")
+    )
+    proc = barca(binary, tmp_path, "list", "pipeline.py", "--pretty")
+    assert proc.returncode == 2
+    assert proc.stderr == documented.split("\n", 1)[1]
+    # Corrected as the message says, it plans.
+    (tmp_path / "pipeline.py").write_text(header + snippet.replace("input=", "inputs="))
+    nodes = result(barca(binary, tmp_path, "list", "pipeline.py", "--json"))["nodes"]
+    assert {n["id"]: n["inputs"] for n in nodes}["pipeline.py:report"] == ["pipeline.py:raw"]
+
+    # The table against the stubs a type checker reads (the Rust list is held to both by
+    # `cargo test -p barca-core decorator_args`).
+    rows = re.findall(r"^\| `@?(\w+)(?:\(\))?` \| (\w+) \| (.*) \|$", body, re.M)
+    assert [r[0] for r in rows] == [
+        "group", "asset", "sensor", "task", "sink",
+        "partitions", "partitions_from", "collect", "asset_ref", "Schedule",
+    ]  # fmt: skip
+    for name, positional, keywords in rows:
+        params = inspect.signature(getattr(stubs, name)).parameters.values()
+        by_keyword = [p.name for p in params if p.kind in (p.KEYWORD_ONLY, p.POSITIONAL_OR_KEYWORD)]
+        by_position = [p.name for p in params if p.kind == p.POSITIONAL_ONLY and p.name != "fn"]
+        assert by_keyword == ([] if keywords == "none" else re.findall(r"`(\w+)`", keywords)), name
+        assert len(by_position) == {"none": 0, "one": 1}[positional], name
 
 
 def test_assets_topic_unused_input_example(binary, topics, tmp_path):
@@ -451,6 +548,117 @@ def test_tasks_topic_example(binary, topics, tmp_path):
     bare = barca(binary, tmp_path, "get", "pipeline.py")
     assert set(steps(result(bare))) == {"report"}
     assert "barca run" in bare.stderr
+
+
+def test_tasks_topic_fan_out_example(binary, topics, tmp_path):
+    """Fan-out: a branch returns a dict holding a date and a set, one branch raises."""
+    code = blocks(topics["tasks"], "python")[2]
+    assert "def check_all" in code
+    (tmp_path / "pipeline.py").write_text(code)
+    doc = result(barca(binary, tmp_path, "run", "check_all", "pipeline.py"))
+    assert doc["final_output"] == {
+        "checked": ["2026-01-02", "2026-01-02"],
+        "failed": ["ap"],
+        "zones": ["a", "b"],
+    }
+    # The value the topic prints is this one.
+    printed = re.search(r"^# final_output: (.*)$", topics["tasks"], re.M)
+    assert printed and json.loads(printed.group(1)) == doc["final_output"]
+
+
+def test_tasks_topic_what_a_branch_may_return(binary, topics, tmp_path):
+    """Every sentence of "What a branch may return", "When a branch fails" and "Limits"."""
+    (tmp_path / "pipeline.py").write_text(
+        """
+import datetime
+from functools import partial
+
+from barca import ParallelError, asset, parallel, task
+
+
+@task()
+def value(kind: str):
+    return {"tuple": (1, 2), "keys": {1: "a"}, "none": None, "set": {1, 2}}[kind]
+
+
+@task()
+def raises(i: int):
+    raise ValueError("boom")
+
+
+@task()
+def handle(i: int):
+    return open(__file__)
+
+
+@task()
+def kind_of(x) -> str:
+    return type(x).__name__
+
+
+@task()
+def values() -> list:
+    out = parallel(*(partial(value, k) for k in ["tuple", "keys", "none", "set"]))
+    failed = parallel(partial(raises, 0))[0]
+    return [repr(v) for v in out] + [isinstance(failed, ParallelError), failed.error.splitlines()[0]]
+
+
+@task()
+def unpassable() -> list:
+    return parallel(partial(value, "set"), partial(handle, 1))
+
+
+@task()
+def set_argument() -> list:
+    return parallel(partial(kind_of, {1, 2}))
+
+
+@task()
+def tuple_argument() -> list:
+    return parallel(partial(kind_of, (1, 2)))
+
+
+@asset()
+def from_an_asset() -> list:
+    return [sorted(v) for v in parallel(partial(value, "set"))]
+"""
+    )
+    doc = result(barca(binary, tmp_path, "run", "values", "pipeline.py"))
+    assert doc["final_output"] == [
+        "[1, 2]",  # a tuple comes back as a list
+        "{'1': 'a'}",  # non-string keys as strings
+        "None",
+        "{1, 2}",
+        True,
+        "ValueError: boom",
+    ]
+
+    proc = barca(binary, tmp_path, "run", "unpassable", "pipeline.py")
+    assert proc.returncode == 1
+    error = json.loads(proc.stdout)["error"]
+    quoted = " ".join(blocks(topics["tasks"], "")[0].split())
+    assert error.startswith(quoted), (error, quoted)
+
+    proc = barca(binary, tmp_path, "run", "set_argument", "pipeline.py")
+    assert proc.returncode == 1 and "TypeError" in json.loads(proc.stdout)["error"]
+    doc = result(barca(binary, tmp_path, "run", "tuple_argument", "pipeline.py"))
+    assert doc["final_output"] == ["list"]
+
+    # From an asset the branches run; served from cache, the asset does not call them again.
+    first = result(barca(binary, tmp_path, "get", "from_an_asset", "pipeline.py"))
+    assert first["final_output"] == [[1, 2]] and first["steps_executed"] == 1
+    again = result(barca(binary, tmp_path, "get", "from_an_asset", "pipeline.py"))
+    assert again["final_output"] == [[1, 2]] and again["steps_executed"] == 0
+
+    # What the branches returned is gone with the runs; the artifact directory holds the
+    # results of the steps that finished and nothing per branch.
+    barca_dir = tmp_path / ".barca"
+    assert [p for p in (barca_dir / "branches").rglob("*") if p.is_file()] == []
+    assert sorted(p.name for p in (barca_dir / "artifacts").iterdir()) == [
+        "pipeline.py--from_an_asset",
+        "pipeline.py--tuple_argument",
+        "pipeline.py--values",
+    ]
 
 
 def test_sinks_topic_example(binary, topics, tmp_path):

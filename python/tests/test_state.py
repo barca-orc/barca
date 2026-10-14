@@ -7,6 +7,7 @@ the manual smoke checklist in the PR.
 """
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -235,3 +236,42 @@ class TestConflictClassification:
         blob — a concurrent first-push race, which must classify as a conflict
         so the coordinator re-pulls and replays instead of hard-failing."""
         assert _is_conflict(FileExistsError("barca-state/metadata.db"))
+
+
+@pytest.mark.parametrize("conflict", [False, True])
+def test_actual_state_helper_sanitizes_sdk_diagnostics(tmp_path, conflict):
+    """Run the real module entry point with a child-only failing SDK boundary."""
+    injected = tmp_path / "injected"
+    injected.mkdir()
+    message = (
+        "SDK refused https://user:basic-password@example.test/blob?sig=signed-secret "
+        "with configured option-secret"
+    )
+    failure = "PreconditionFailed" if conflict else "RuntimeError"
+    (injected / "sitecustomize.py").write_text(
+        "from barca import _storage\n"
+        "class PreconditionFailed(Exception): pass\n"
+        "class FailingSdk:\n"
+        "    def pipe_file(self, *args, **kwargs):\n"
+        f"        raise {failure}({message!r})\n"
+        "_storage.get_fs = lambda uri: FailingSdk()\n"
+    )
+    local = tmp_path / "local"
+    local.write_bytes(b"actual source bytes")
+    env = os.environ.copy()
+    python_root = str(Path(__file__).parents[1])
+    env["PYTHONPATH"] = os.pathsep.join([str(injected), python_root])
+    env["BARCA_STORAGE_OPTIONS"] = json.dumps({"s3": {"secret": "option-secret"}})
+    result = subprocess.run(
+        [sys.executable, "-m", "barca._state", "push", "s3://configured/object", str(local)],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == (3 if conflict else 1), result.stderr
+    assert "SDK refused" in result.stderr
+    assert "example.test/blob" in result.stderr
+    for secret in ("basic-password", "signed-secret", "option-secret"):
+        assert secret not in result.stderr
+    assert "<redacted>" in result.stderr

@@ -9,8 +9,11 @@
 //!   an `__init__.py`) is imported by its dotted name with only the **root** on the import
 //!   path: `import helpers` is `<root>/helpers.py`, a sibling is `from .helpers import f` or
 //!   `from pkg.helpers import f`.
-//! - **Any other** pipeline file is loaded by path with **its own directory, then the root**,
-//!   on the import path, so a module beside the file shadows a same-named one at the root.
+//! - Other pipeline files use ordinary root/namespace module identities when possible,
+//!   with **their own directory, then the root** on the import path. A sibling shadows a
+//!   root module. Previous tasks' directories never remain implicit import paths.
+//! - Actual conflicting project imports are refused before execution. Qualified names
+//!   identify their source; ordinary installed/stdlib imports stay external.
 //!
 //! Within one path entry Python's own order applies: a package (`name/__init__.py`) before a
 //! module (`name.py`), and a directory without `__init__.py` is a namespace package only when
@@ -98,14 +101,14 @@ impl PipelineLayout {
     }
 
     /// As [`PipelineLayout::of`], given what [`package_of`] says about the file's directory.
-    /// Mirrors `_worker.py::package_module_name`: a file is imported by dotted name when that
-    /// name has at least two segments and every directory above the file is a package.
+    /// Fully packaged files search the root; namespace/loose files keep sibling-first
+    /// imports while sharing their ordinary root-relative module identity.
     fn in_dir(file: &Path, root: &Path, dir_package: Option<&str>) -> Self {
         let stem = file.file_stem().unwrap_or_default().to_string_lossy();
         let is_init = stem == "__init__";
         let module = match dir_package {
             Some(package) if !is_init => Some(format!("{package}.{stem}")),
-            Some(package) if package.contains('.') => Some(package.to_string()),
+            Some(package) => Some(package.to_string()),
             _ => None,
         };
         if let Some(module) = module {
@@ -117,8 +120,12 @@ impl PipelineLayout {
         }
         let dir = file.parent().unwrap_or(root).to_path_buf();
         PipelineLayout {
-            module: stem.replace('.', "_"),
-            is_package: false,
+            module: if file.strip_prefix(root).is_ok() {
+                qualified_path(file, root)
+            } else {
+                stem.replace('.', "_")
+            },
+            is_package: is_init,
             path: if dir == root {
                 vec![dir]
             } else {
@@ -145,8 +152,8 @@ fn package_of(dir: &Path, root: &Path) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join("."))
 }
 
-/// A pipeline file of the plan, importable by its stem from pipeline files in other directories
-/// when nothing on their import path has that name.
+/// A pipeline file of the plan. Stems are used only to diagnose explicit node inputs
+/// that would otherwise rely on an off-path fallback.
 struct PipelineFile {
     /// Canonical, like everything this module compares paths with.
     path: PathBuf,
@@ -159,7 +166,7 @@ struct PipelineFile {
 #[derive(Clone)]
 enum Found {
     /// A module, and for a package the directory its submodules are searched in.
-    Module(Rc<Module>, Option<PathBuf>),
+    Module(Rc<Module>, Option<PathBuf>, PathBuf),
     /// A namespace package: directories without `__init__.py`, one per path entry.
     Namespace(Vec<PathBuf>),
     Missing,
@@ -189,7 +196,7 @@ impl ImportPath {
         let found = match name.rsplit_once('.') {
             None => self.search(name, name, &self.path),
             Some((parent, leaf)) => match self.find(parent) {
-                Found::Module(_, Some(dir)) => self.search(name, leaf, &[dir]),
+                Found::Module(_, Some(dir), _) => self.search(name, leaf, &[dir]),
                 Found::Namespace(dirs) => self.search(name, leaf, &dirs),
                 _ => Found::Missing,
             },
@@ -212,13 +219,17 @@ impl ImportPath {
                 .files
                 .module(package_dir.join("__init__.py"), name, true)
             {
-                return Found::Module(module, Some(package_dir));
+                return Found::Module(
+                    module,
+                    Some(package_dir.clone()),
+                    package_dir.join("__init__.py"),
+                );
             }
             if let Some(module) = self
                 .files
                 .module(dir.join(format!("{leaf}.py")), name, false)
             {
-                return Found::Module(module, None);
+                return Found::Module(module, None, dir.join(format!("{leaf}.py")));
             }
             if package_dir.is_dir() {
                 portions.push(package_dir);
@@ -236,70 +247,16 @@ impl ImportPath {
         let named = self.by_stem.get(name).map_or(&[][..], Vec::as_slice);
         named.iter().filter(|p| p.dir != self.dir)
     }
-
-    /// `file` as the module `name`.
-    fn pipeline_module(&self, file: &PipelineFile, name: &str) -> Option<Rc<Module>> {
-        self.files.module(file.path.clone(), name, false)
-    }
-
-    /// Whether the import path itself (not another pipeline's directory) reaches `file`.
-    fn on_path(&self, file: &PipelineFile) -> bool {
-        self.path.contains(&file.dir)
-    }
 }
 
-/// The module whose *contents* an import of `name` reads, for the cone.
-///
-/// A worker's `sys.path` is the import path of the file it is loading (see the top of this
-/// file) plus, between the file's directory and the root, the directory of every other
-/// pipeline file that worker has loaded by path. Whether it has loaded one is not known when
-/// planning, so a top-level name `N` that is also another pipeline file's stem (`b/N.py`) can
-/// mean two things. What the worker does, established by running it for a pipeline in the
-/// root, in a subdirectory and in a package (they agree), `b/` loaded or not:
-///
-/// | `N` on the import path | form                              | `b/` not loaded | `b/` loaded     |
-/// |------------------------|-----------------------------------|-----------------|-----------------|
-/// | regular module/package | `import N`, `from N import attr`  | the path's `N`  | `b/N.py`        |
-/// | regular package        | `N.sub` forms                     | `N/sub.py`      | import fails    |
-/// | directory, no init     | `import N`, `from N import attr`  | attr not found  | `b/N.py`        |
-/// | directory, no init     | `N.sub` forms                     | `N/sub.py`      | import fails    |
-/// | nothing                | `import N`, `from N import attr`  | import fails    | `b/N.py`        |
-/// | nothing                | `N.sub` forms                     | import fails    | import fails    |
-///
-/// (`N.sub` forms: `import N.sub`, `from N import sub`, `from N.sub import name`. Without a
-/// `b/N.py`, only the first column exists.)
-///
-/// So, to hash whatever can run:
-/// - `N.sub` always resolves on the import path ([`ImportPath::find`]): a pipeline file is
-///   never a package, and never hides the submodules of a directory.
-/// - The contents of `N` itself are the path's regular module when there is one, otherwise
-///   `b/N.py` ([`ModuleSource::module`]).
-/// - When both exist, either may run, so `b/N.py` is hashed as well
-///   ([`ModuleSource::alternatives`]).
+/// Resolve only the ordinary Python import path. Another pipeline's directory
+/// never becomes an implicit source merely because that worker ran it earlier.
 impl ModuleSource for ImportPath {
     fn module(&self, name: &str) -> Option<Rc<Module>> {
         match self.find(name) {
-            Found::Module(module, _) => Some(module),
-            Found::Namespace(_) | Found::Missing => self
-                .pipelines_named(name)
-                .next()
-                .and_then(|file| self.pipeline_module(file, name)),
+            Found::Module(module, _, _) => Some(module),
+            Found::Namespace(_) | Found::Missing => None,
         }
-    }
-
-    fn alternatives(&self, name: &str) -> Vec<Rc<Module>> {
-        if !matches!(self.find(name), Found::Module(..)) {
-            return Vec::new();
-        }
-        // A file on the import path is the path's own `N`, or legitimately shadowed by it.
-        self.pipelines_named(name)
-            .filter(|file| !self.on_path(file))
-            .filter_map(|file| {
-                let dir = file.dir.strip_prefix(&self.root).unwrap_or(&file.dir);
-                let label = format!("{name}@{}", dir.to_string_lossy().replace('\\', "/"));
-                self.pipeline_module(file, &label)
-            })
-            .collect()
     }
 }
 
@@ -389,11 +346,165 @@ impl ProjectCones {
         }
     }
 
+    /// Refuse source selections that a shared Python process cannot make
+    /// consistently. External modules remain external: off-path stems alone
+    /// provide no evidence that an ordinary installed/stdlib import is invalid.
+    pub(crate) fn validate_imports(
+        &mut self,
+        nodes: &[Vec<crate::model::ExtractedNode>],
+    ) -> std::collections::BTreeMap<PathBuf, String> {
+        let mut errors = std::collections::BTreeMap::new();
+        type ImportSites =
+            std::collections::BTreeMap<Option<PathBuf>, std::collections::BTreeSet<PathBuf>>;
+        let mut bindings: std::collections::BTreeMap<String, ImportSites> =
+            std::collections::BTreeMap::new();
+        type IdentitySites =
+            std::collections::BTreeMap<String, std::collections::BTreeSet<PathBuf>>;
+        let mut identities: std::collections::HashMap<PathBuf, IdentitySites> = self
+            .pipelines
+            .iter()
+            .map(|file| {
+                (
+                    file.path.clone(),
+                    std::collections::BTreeMap::from([(
+                        qualified_path(&file.path, &self.root),
+                        std::collections::BTreeSet::new(),
+                    )]),
+                )
+            })
+            .collect();
+        for (index, source_nodes) in nodes.iter().enumerate() {
+            let source = self.pipelines[index].path.clone();
+            let pipeline = self.pipeline(index);
+            let mut pending = vec![Rc::new(pipeline.module)];
+            let mut visited = std::collections::HashSet::new();
+            while let Some(module) = pending.pop() {
+                if !visited.insert(module.name.clone()) {
+                    continue;
+                }
+                for name in module.import_modules() {
+                    let (selected, imported) = match pipeline.modules.find(&name) {
+                        Found::Module(module, _, file) => {
+                            let file = file.canonicalize().unwrap_or(file);
+                            for (prior, prior_sources) in
+                                identities.get(&file).into_iter().flatten()
+                            {
+                                if *prior != name {
+                                    let error = format!(
+                                        "project source '{}' has conflicting import identities '{prior}' and '{name}' from '{}'; use the explicit qualified import `from {} import <name>` so setup and pickle identity do not depend on worker history",
+                                        file.display(),
+                                        source.display(),
+                                        qualified_path(&file, &pipeline.modules.root),
+                                    );
+                                    errors
+                                        .entry(source.clone())
+                                        .or_insert_with(|| error.clone());
+                                    for prior_source in prior_sources {
+                                        errors
+                                            .entry(prior_source.clone())
+                                            .or_insert_with(|| error.clone());
+                                    }
+                                }
+                            }
+                            identities
+                                .entry(file.clone())
+                                .or_default()
+                                .entry(name.clone())
+                                .or_default()
+                                .insert(source.clone());
+                            (Some(file), Some(module))
+                        }
+                        _ => (None, None),
+                    };
+                    for (prior, prior_sources) in bindings.get(&name).into_iter().flatten() {
+                        if *prior != selected {
+                            let describe = |file: &Option<PathBuf>| {
+                                file.as_ref()
+                                    .map(|p| p.display().to_string())
+                                    .unwrap_or_else(|| "external or unavailable module".into())
+                            };
+                            let project = selected
+                                .as_ref()
+                                .or(prior.as_ref())
+                                .expect("different bindings include a project source");
+                            let error = format!(
+                                "project import '{name}' resolves to '{}' from '{}' and '{}' from '{}'; use explicit qualified imports for the project source (for example `from {} import <name>`) instead of sharing a history-dependent module name",
+                                describe(prior),
+                                prior_sources
+                                    .first()
+                                    .expect("an import binding has a source")
+                                    .display(),
+                                describe(&selected),
+                                source.display(),
+                                qualified_path(project, &pipeline.modules.root),
+                            );
+                            if prior.is_some() {
+                                for prior_source in prior_sources {
+                                    errors
+                                        .entry(prior_source.clone())
+                                        .or_insert_with(|| error.clone());
+                                }
+                            }
+                            if selected.is_some() {
+                                errors.entry(source.clone()).or_insert(error);
+                            }
+                        }
+                    }
+                    bindings
+                        .entry(name)
+                        .or_default()
+                        .entry(selected)
+                        .or_default()
+                        .insert(source.clone());
+                    if let Some(imported) = imported {
+                        pending.push(imported);
+                    }
+                }
+            }
+            for node in source_nodes {
+                for reference in node.inputs.iter().map(|input| &input.upstream).chain(
+                    node.partitions.values().filter_map(|p| match p {
+                        crate::model::PartitionSpec::DerivedFrom { source_ref } => Some(source_ref),
+                        _ => None,
+                    }),
+                ) {
+                    if let crate::model::NodeRef::Imported { module, name } = reference
+                        && matches!(
+                            pipeline.modules.find(module),
+                            Found::Missing | Found::Namespace(_)
+                        )
+                        && let Some(file) = pipeline.modules.pipelines_named(module).next()
+                    {
+                        errors.entry(source.clone()).or_insert_with(|| format!(
+                            "input '{name}' in '{}' imports off-path project source '{}' as '{module}'; use an explicit qualified import: `from {} import {name}`",
+                            source.display(),
+                            file.path.display(),
+                            qualified_path(&file.path, &pipeline.modules.root),
+                        ));
+                    }
+                }
+            }
+        }
+        errors
+    }
+
     /// The files read from disk so far (pipeline files are given, not read).
     #[cfg(test)]
     fn files_read(&self) -> Vec<PathBuf> {
         self.files.read.borrow().clone()
     }
+}
+
+fn qualified_path(file: &Path, root: &Path) -> String {
+    let relative = file.strip_prefix(root).unwrap_or(file).with_extension("");
+    let mut parts = relative
+        .iter()
+        .map(|part| part.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    if parts.last().is_some_and(|part| part == "__init__") {
+        parts.pop();
+    }
+    parts.join(".")
 }
 
 /// `path` with symlinks resolved, as the worker resolves it before importing.
@@ -540,7 +651,7 @@ mod tests {
         let p = Project::new(&[("pipelines/p.py", "")]);
         let layout = PipelineLayout::of(&p.root.join("pipelines/p.py"), &p.root);
         assert_eq!(layout.path, vec![p.root.join("pipelines"), p.root.clone()]);
-        assert!(!layout.module.contains('.'));
+        assert_eq!(layout.module, "pipelines.p");
     }
 
     #[test]
@@ -562,14 +673,11 @@ mod tests {
                 path: vec![p.root.clone()],
             }
         );
-        // A package's `__init__.py` is the package; directly under the root it is loaded by
-        // path, like any file whose dotted name would have one segment.
+        // Package initializers share the ordinary package identity, including
+        // the package directly under the root.
         assert_eq!(of("pkg/sub/__init__.py").module, "pkg.sub");
         assert!(of("pkg/sub/__init__.py").is_package);
-        assert_eq!(
-            of("pkg/__init__.py").path,
-            vec![p.root.join("pkg"), p.root.clone()]
-        );
+        assert_eq!(of("pkg/__init__.py").path, vec![p.root.clone()]);
         // Every directory from the root down must be a package.
         assert_eq!(
             of("pkg/loose/p.py").path,
@@ -741,10 +849,9 @@ mod tests {
     }
 
     #[test]
-    fn a_pipeline_file_wins_over_a_root_directory_without_init() {
-        // `<root>/shared/` has no `__init__.py`. When a worker can import `shared` at all it is
-        // `b/shared.py` (a regular module beats a namespace package wherever it is on
-        // `sys.path`), so that is the file to track. 0.17.0 did; the first cut of #194 did not.
+    fn off_path_pipeline_files_do_not_hide_namespace_packages() {
+        // An off-path pipeline stem cannot replace the normal namespace package.
+        // Editing that off-path file must not change this unrelated cone.
         let p = Project::new(&[
             (
                 "a/p.py",
@@ -758,7 +865,7 @@ mod tests {
         p.edit_compute("shared/notes.py");
         assert_eq!(before, p.plan(&plan).0[0]);
         p.edit_compute("b/shared.py");
-        assert_ne!(before, p.plan(&plan).0[0]);
+        assert_eq!(before, p.plan(&plan).0[0]);
     }
 
     #[test]
@@ -819,12 +926,12 @@ mod tests {
     }
 
     #[test]
-    fn a_pipeline_file_in_another_directory_is_importable_by_its_stem() {
-        // Both files are in the plan: `b/` is on a worker's `sys.path` once it loaded from it.
+    fn off_path_pipeline_stems_do_not_change_the_cone() {
+        // Merely including another pipeline never makes its directory importable.
         let p = Project::new(&[("a/p.py", USES_HELPERS), ("b/helpers.py", HELPER)]);
         let before = p.plan(&["a/p.py", "b/helpers.py"]).0[0].clone();
         p.edit_compute("b/helpers.py");
-        assert_ne!(before, p.plan(&["a/p.py", "b/helpers.py"]).0[0]);
+        assert_eq!(before, p.plan(&["a/p.py", "b/helpers.py"]).0[0]);
         // Not in the plan: nothing makes `b/` importable.
         assert_eq!(
             p.hash("a/p.py"),
@@ -834,10 +941,8 @@ mod tests {
 
     // ─── A top-level name that is also another pipeline file's stem ──────────────
 
-    /// Every cell of the table on `impl ModuleSource for ImportPath`, for a pipeline in the
-    /// root, in a subdirectory and in a package: the files a worker can load for the import
-    /// (with `b/` loaded or not) are exactly the files whose edit changes the hash. A cell
-    /// whose import always fails tracks nothing, and no cell reads an unrelated file.
+    /// Ordinary import resolution is independent of unrelated pipeline stems:
+    /// edits track only sources on this context's own Python import path.
     #[test]
     fn a_name_shared_with_another_pipeline_file_follows_what_the_worker_can_load() {
         const MODULE: &str = "def name():\n    return 1\n";
@@ -897,12 +1002,8 @@ mod tests {
 
                         let expected: Vec<&str> = match (kind, sub_form) {
                             ("regular package", true) => vec!["shared/sub.py"],
-                            ("regular package", false) if with_stem => {
-                                vec!["shared/__init__.py", "b/shared.py"]
-                            }
                             ("regular package", false) => vec!["shared/__init__.py"],
                             ("directory without init", true) => vec!["shared/sub.py"],
-                            (_, false) if with_stem => vec!["b/shared.py"],
                             _ => vec![],
                         };
 
@@ -974,9 +1075,9 @@ mod tests {
 
         // A directory without init beside the pipeline, and `b/shared.py`.
         for (pipeline, source, expected) in [
-            ("a/p.py", attr, &["b/shared.py"][..]),
+            ("a/p.py", attr, &[][..]),
             ("a/p.py", sub, &["a/shared/sub.py"][..]),
-            ("pkg/p.py", attr, &["b/shared.py"][..]),
+            ("pkg/p.py", attr, &[][..]),
             ("pkg/p.py", sub, &[][..]),
         ] {
             let own_sub = pipeline.replace("p.py", "shared/sub.py");
@@ -995,7 +1096,7 @@ mod tests {
     }
 
     #[test]
-    fn alternatives_are_labelled_relative_to_the_root() {
+    fn ordinary_import_hashes_are_relative_to_the_root() {
         // The hash must not depend on where the project is checked out.
         let files = [
             (

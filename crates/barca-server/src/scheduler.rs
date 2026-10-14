@@ -16,95 +16,24 @@
 
 use crate::handlers;
 use crate::state::{AppState, JobStatus, RunStatus};
-use barca_core::commands::{self, AssetSummary};
-use barca_core::{CronExpr, Freshness, NodeKind, db};
-use chrono::{DateTime, FixedOffset, Local, TimeZone, Timelike, Utc};
+#[cfg(test)]
+use barca_core::results::AssetSummary;
+use barca_core::schedule::ScheduledJob;
+pub(crate) use barca_core::schedule::Zone;
+#[cfg(test)]
+use barca_core::schedule::next_fire;
+#[cfg(test)]
+use barca_core::schedule::{describe_schedule, jobs_from_summaries};
+use barca_core::{NodeKind, db};
+use chrono::{DateTime, FixedOffset, TimeZone, Timelike};
+#[cfg(test)]
 use croner::Cron;
-use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-/// Static description of one scheduled job, for `barca schedule` (no server).
-#[derive(Debug, Clone, Serialize)]
-pub struct ScheduleInfo {
-    pub id: String,
-    pub cron: String,
-    pub kind: NodeKind,
-    /// Next fire time as unix epoch seconds (for programmatic use).
-    pub next_fire: Option<i64>,
-    /// Next fire time formatted in local time (for display).
-    pub next_fire_local: Option<String>,
-}
-
-/// Enumerate scheduled jobs from source and compute each one's next fire time.
-/// Pure static analysis — used by the `barca schedule` CLI, no running server.
-pub async fn describe_schedule(files: &[String], python: &std::path::Path) -> Vec<ScheduleInfo> {
-    let now = Local::now();
-    collect_jobs(files, python)
-        .await
-        .iter()
-        .map(|j| {
-            let next = j.cron.find_next_occurrence(&now, false).ok();
-            ScheduleInfo {
-                id: j.id.clone(),
-                cron: j.cron_str.clone(),
-                kind: j.kind,
-                next_fire: next.map(|t| t.timestamp()),
-                next_fire_local: next.map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string()),
-            }
-        })
-        .collect()
-}
-
-/// A parsed cron job discovered from the DAG at startup.
-struct ScheduledJob {
-    /// Full node id (e.g. `pipeline.py:daily_report`), used verbatim as the run target.
-    id: String,
-    /// Node kind decides the trigger path: asset/sensor → `get`, task → `run`.
-    kind: NodeKind,
-    /// The original cron string, kept for logging.
-    cron_str: String,
-    /// Parsed cron (5-field minute-granular, or 6-field seconds-granular),
-    /// evaluated in the scheduler's configured timezone.
-    cron: Cron,
-}
-
-/// Enumerate every node whose freshness is `Schedule(cron)` and parse each cron.
-/// A DAG-analysis failure disables the scheduler (returns empty); individual
-/// invalid/empty cron strings are logged and skipped rather than aborting.
-async fn collect_jobs(files: &[String], python: &std::path::Path) -> Vec<ScheduledJob> {
-    match commands::list_assets(files, python).await {
-        Ok(summaries) => jobs_from_summaries(summaries),
-        Err(e) => {
-            eprintln!("[barca] scheduler disabled: failed to analyze DAG: {e}");
-            Vec::new()
-        }
-    }
-}
-
-/// Pure summary → job mapping (split out from [`collect_jobs`] so it is testable
-/// without a Python interpreter). Drops entries whose cron fails to parse.
-fn jobs_from_summaries(summaries: Vec<AssetSummary>) -> Vec<ScheduledJob> {
-    let mut jobs = Vec::new();
-    for s in summaries {
-        let Freshness::Schedule(expr) = &s.freshness else {
-            continue;
-        };
-        match CronExpr::parse(&expr.0) {
-            Ok(cron) => jobs.push(ScheduledJob {
-                id: s.id,
-                kind: s.kind,
-                cron_str: expr.0.clone(),
-                cron,
-            }),
-            Err(e) => eprintln!(
-                "[barca] skipping '{}': invalid cron {:?}: {e}",
-                s.id, expr.0
-            ),
-        }
-    }
-    jobs
+pub(crate) fn zone_of(config: &crate::state::ServeConfig) -> Zone {
+    Zone::parse(&config.timezone).unwrap_or(Zone::Local)
 }
 
 /// Pure eligibility check: which jobs fire at `now`? Split out so it can be
@@ -136,56 +65,6 @@ fn millis_to_next_second<Tz: TimeZone>(now: &DateTime<Tz>) -> u64 {
 /// Sleep until just after the next second boundary in the scheduler's timezone.
 async fn sleep_to_next_second(zone: &Zone) {
     tokio::time::sleep(Duration::from_millis(millis_to_next_second(&zone.now()))).await;
-}
-
-/// Resolved timezone that cron expressions are evaluated in.
-enum Zone {
-    Local,
-    Utc,
-    Named(chrono_tz::Tz),
-}
-
-impl Zone {
-    /// Parse a `--timezone` value: `local` (default), `utc`, or an IANA name
-    /// like `America/New_York`. Unknown names fall back to local with a warning.
-    fn parse(s: &str) -> Self {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "" | "local" => Zone::Local,
-            "utc" => Zone::Utc,
-            _ => match s.trim().parse::<chrono_tz::Tz>() {
-                Ok(tz) => Zone::Named(tz),
-                Err(_) => {
-                    eprintln!("[barca] unknown timezone {s:?}, using local time");
-                    Zone::Local
-                }
-            },
-        }
-    }
-
-    /// The current instant in this zone as a fixed-offset datetime.
-    fn now(&self) -> DateTime<FixedOffset> {
-        match self {
-            Zone::Local => Local::now().fixed_offset(),
-            Zone::Utc => Utc::now().fixed_offset(),
-            Zone::Named(tz) => Utc::now().with_timezone(tz).fixed_offset(),
-        }
-    }
-
-    /// An epoch-seconds timestamp interpreted in this zone.
-    fn timestamp(&self, secs: i64) -> DateTime<FixedOffset> {
-        let dt = match self {
-            Zone::Local => Local
-                .timestamp_opt(secs, 0)
-                .single()
-                .map(|t| t.fixed_offset()),
-            Zone::Utc => Utc
-                .timestamp_opt(secs, 0)
-                .single()
-                .map(|t| t.fixed_offset()),
-            Zone::Named(tz) => tz.timestamp_opt(secs, 0).single().map(|t| t.fixed_offset()),
-        };
-        dt.unwrap_or_else(|| self.now())
-    }
 }
 
 /// What the scheduler decided to do with a due job on a given tick.
@@ -248,6 +127,7 @@ fn trigger(state: &AppState, job: &ScheduledJob) -> String {
 /// next cron occurrence strictly after `last_fired` is already in the past. This
 /// drives the single catch-up run after the daemon was down. Pure and generic
 /// over timezone so it is testable and reusable once a `--timezone` is honored.
+#[cfg(test)]
 fn needs_catchup<Tz: TimeZone>(cron: &Cron, last_fired: &DateTime<Tz>, now: &DateTime<Tz>) -> bool {
     match cron.find_next_occurrence(last_fired, false) {
         Ok(next) => next <= *now,
@@ -255,10 +135,53 @@ fn needs_catchup<Tz: TimeZone>(cron: &Cron, last_fired: &DateTime<Tz>, now: &Dat
     }
 }
 
+/// Catch-up at startup, as of `now`: fire once each job whose scheduled tick elapsed while
+/// the server was down, however many ticks that was, and move its last-fired record to `now`.
+/// A job with no record is anchored to `now` and does not run (no stampede on first launch).
+/// Returns (handle of the run triggered per job, last-fired epoch per job).
+///
+/// `now` is a parameter so a restart across a tick can be tested with fixed times.
+async fn catch_up(
+    state: &AppState,
+    jobs: &[ScheduledJob],
+    zone: &Zone,
+    now: &DateTime<FixedOffset>,
+    db_path: &str,
+) -> Result<(HashMap<String, String>, HashMap<String, i64>), barca_core::BarcaError> {
+    let saved = db::get_schedule_state(db_path).await?;
+    let mut last_handle: HashMap<String, String> = HashMap::new();
+    let mut last_fired = saved.clone();
+    for job in jobs {
+        match saved.get(&job.id) {
+            Some(&last_epoch) => {
+                let last = zone.timestamp(last_epoch);
+                if barca_core::schedule::next_fire(
+                    &job.cron,
+                    zone,
+                    last.with_timezone(&chrono::Utc),
+                )
+                .is_some_and(|next| next <= *now)
+                {
+                    let handle = trigger(state, job);
+                    barca_core::errln!("[barca] catch-up run {} → {handle}", job.id);
+                    last_handle.insert(job.id.clone(), handle);
+                    last_fired.insert(job.id.clone(), now.timestamp());
+                    persist_fired(db_path, &job.id, now.timestamp()).await;
+                }
+            }
+            None => {
+                last_fired.insert(job.id.clone(), now.timestamp());
+                persist_fired(db_path, &job.id, now.timestamp()).await;
+            }
+        }
+    }
+    Ok((last_handle, last_fired))
+}
+
 /// Record that `node_id` fired at `epoch` seconds. Best-effort durability.
 async fn persist_fired(db_path: &str, node_id: &str, epoch: i64) {
     if let Err(e) = db::upsert_schedule_state(db_path, node_id, epoch).await {
-        eprintln!("[barca] schedule_state write failed for {node_id}: {e}");
+        barca_core::errln!("[barca] schedule_state write failed for {node_id}: {e}");
     }
 }
 
@@ -286,42 +209,76 @@ fn publish_registry(
 }
 
 /// Re-run static analysis to enumerate scheduled jobs. The parse itself runs
-/// on the blocking pool inside `commands::list_assets`.
+/// on the blocking pool inside `barca_core::queries::list_assets`.
 async fn reload_jobs(state: &AppState) -> Vec<ScheduledJob> {
-    collect_jobs(&state.config.files, &state.config.python).await
+    match state.loaded_dag().await {
+        Ok(dag) => barca_core::schedule::jobs_from_summaries(
+            barca_core::queries::list_assets_from_dag(&dag),
+        ),
+        Err(error) => {
+            barca_core::errln!("[barca] scheduler load failed: {error}");
+            Vec::new()
+        }
+    }
+}
+
+/// How many nodes of each kind are scheduled, in words: `1 task`, `2 assets and 1 task`,
+/// `1 asset, 2 sensors and 1 task`. Kinds are listed in the order asset, sensor, task.
+fn count_by_kind(jobs: &[ScheduledJob]) -> String {
+    let parts: Vec<String> = [
+        (NodeKind::Asset, "asset"),
+        (NodeKind::Sensor, "sensor"),
+        (NodeKind::Task, "task"),
+    ]
+    .into_iter()
+    .filter_map(|(kind, word)| {
+        let n = jobs.iter().filter(|j| j.kind == kind).count();
+        (n > 0).then(|| format!("{n} {word}{}", if n == 1 { "" } else { "s" }))
+    })
+    .collect();
+    match parts.as_slice() {
+        [] => "0 nodes".to_string(),
+        [one] => one.clone(),
+        [head @ .., last] => format!("{} and {last}", head.join(", ")),
+    }
 }
 
 /// Log the current schedule and each job's next fire time.
 fn log_schedule(jobs: &[ScheduledJob], zone: &Zone) {
     if jobs.is_empty() {
-        eprintln!("[barca] no scheduled assets yet (watching for changes)");
+        barca_core::errln!("[barca] no scheduled nodes yet (watching for changes)");
         return;
     }
-    eprintln!(
-        "[barca] scheduling {} asset{}:",
-        jobs.len(),
-        if jobs.len() == 1 { "" } else { "s" }
-    );
-    let now = zone.now();
+    barca_core::errln!("[barca] scheduling {}:", count_by_kind(jobs));
+    let now = chrono::Utc::now();
     for job in jobs {
-        let next = job
-            .cron
-            .find_next_occurrence(&now, false)
+        let next = barca_core::schedule::next_fire(&job.cron, zone, now)
             .map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string())
-            .unwrap_or_else(|_| "?".to_string());
-        eprintln!("  {} — {} (next {})", job.id, job.cron_str, next);
+            .unwrap_or_else(|| "?".to_string());
+        barca_core::errln!("  {} — {} (next {})", job.id, job.cron_str, next);
     }
 }
 
 /// The scheduler background task. Spawned from `serve_async` when scheduling is
 /// enabled; runs for the lifetime of the server.
 pub async fn run_scheduler(state: AppState) {
-    let zone = Zone::parse(&state.config.timezone);
+    // `serve` checks the timezone before it starts anything, so this only fails for a caller
+    // that spawned the scheduler on its own.
+    let zone = match Zone::parse(&state.config.timezone) {
+        Ok(zone) => zone,
+        Err(e) => {
+            barca_core::errln!("[barca] scheduler disabled: {e}");
+            return;
+        }
+    };
 
+    // Associate the initial jobs with the generation before loading them. Edits during
+    // loading, DB initialization or catch-up must remain pending for the first tick.
+    let mut seen_gen = state.dag_generation.load(Ordering::Relaxed);
     let mut jobs = reload_jobs(&state).await;
 
     if jobs.is_empty() && !state.config.watch {
-        eprintln!("[barca] no scheduled assets — scheduler idle");
+        barca_core::errln!("[barca] no scheduled nodes — scheduler idle");
         return;
     }
     log_schedule(&jobs, &zone);
@@ -331,11 +288,16 @@ pub async fn run_scheduler(state: AppState) {
     let db_path = match db::ensure_env_dirs(&state.config.resolved.env) {
         Ok(_) => {
             let path = state.config.resolved.db_path.clone();
-            let _ = db::init_db(&path).await;
+            if let Err(error) = db::init_db(&path).await {
+                barca_core::errln!(
+                    "[barca] scheduler disabled: metadata initialization failed: {error}"
+                );
+                return;
+            }
             Some(path)
         }
         Err(_) => {
-            eprintln!("[barca] scheduler: durability disabled (no metadata db)");
+            barca_core::errln!("[barca] scheduler: durability disabled (no metadata db)");
             None
         }
     };
@@ -343,38 +305,20 @@ pub async fn run_scheduler(state: AppState) {
     // Handle issued and last-fired epoch per job. `last_handle` powers the
     // overlap skip ("passes do not overlap"); `last_fired` powers durability and
     // the `/schedule` view. Entries for jobs removed on reload are harmless.
-    let mut last_handle: HashMap<String, String> = HashMap::new();
-    let mut last_fired: HashMap<String, i64> = HashMap::new();
-
-    // Catch-up: fire once per job whose scheduled tick elapsed while the daemon
-    // was down. Jobs with no prior record are anchored to now (no first-launch
-    // stampede). Requires durability; skipped entirely if the DB is unavailable.
-    if let Some(dbp) = &db_path {
-        let saved = db::get_schedule_state(dbp).await.unwrap_or_default();
-        last_fired = saved.clone();
-        let now = zone.now();
-        for job in &jobs {
-            match saved.get(&job.id) {
-                Some(&last_epoch) => {
-                    let last = zone.timestamp(last_epoch);
-                    if needs_catchup(&job.cron, &last, &now) {
-                        let handle = trigger(&state, job);
-                        eprintln!("[barca] catch-up run {} → {handle}", job.id);
-                        last_handle.insert(job.id.clone(), handle);
-                        last_fired.insert(job.id.clone(), now.timestamp());
-                        persist_fired(dbp, &job.id, now.timestamp()).await;
-                    }
-                }
-                None => {
-                    last_fired.insert(job.id.clone(), now.timestamp());
-                    persist_fired(dbp, &job.id, now.timestamp()).await;
-                }
+    // Catch-up requires durability; it is skipped entirely if the DB is unavailable.
+    let (mut last_handle, mut last_fired) = match &db_path {
+        Some(dbp) => match catch_up(&state, &jobs, &zone, &zone.now(), dbp).await {
+            Ok(caught_up) => caught_up,
+            Err(error) => {
+                barca_core::errln!(
+                    "[barca] scheduler disabled: cannot read schedule history: {error}"
+                );
+                return;
             }
-        }
-    }
+        },
+        None => (HashMap::new(), HashMap::new()),
+    };
     publish_registry(&state, &jobs, &last_handle, &last_fired);
-
-    let mut seen_gen = state.dag_generation.load(Ordering::Relaxed);
 
     loop {
         sleep_to_next_second(&zone).await;
@@ -384,7 +328,7 @@ pub async fn run_scheduler(state: AppState) {
         if current_gen != seen_gen {
             seen_gen = current_gen;
             let fresh = reload_jobs(&state).await;
-            eprintln!("[barca] schedule reloaded: {} job(s)", fresh.len());
+            barca_core::errln!("[barca] schedule reloaded: {} job(s)", fresh.len());
             jobs = fresh;
             log_schedule(&jobs, &zone);
             publish_registry(&state, &jobs, &last_handle, &last_fired);
@@ -397,13 +341,13 @@ pub async fn run_scheduler(state: AppState) {
         // that substring ("scheduled run", plus the job id) if this wording changes.
         for action in plan_tick(&now, &jobs, &last_handle, |h| is_in_flight(&state, h)) {
             match action {
-                TickAction::Skip { job, handle } => eprintln!(
+                TickAction::Skip { job, handle } => barca_core::errln!(
                     "[barca] scheduled run {} skipped — previous run {handle} still in flight",
                     job.id
                 ),
                 TickAction::Fire(job) => {
                     let handle = trigger(&state, job);
-                    eprintln!("[barca] scheduled run {} → {handle}", job.id);
+                    barca_core::errln!("[barca] scheduled run {} → {handle}", job.id);
                     last_handle.insert(job.id.clone(), handle);
                     last_fired.insert(job.id.clone(), now.timestamp());
                     if let Some(dbp) = &db_path {
@@ -424,6 +368,7 @@ mod tests {
     use super::*;
     use crate::state::{RunState, ServeConfig};
     use barca_core::{CronExpr, Freshness, NodeKind};
+    use chrono::{Local, Utc};
     use std::net::{IpAddr, Ipv4Addr};
 
     fn summary(id: &str, kind: NodeKind, cron: &str) -> AssetSummary {
@@ -479,6 +424,9 @@ mod tests {
             handle.to_string(),
             RunState {
                 handle: handle.to_string(),
+                db_run_id: None,
+                command: "get".into(),
+                target: None,
                 status,
                 result: None,
                 error: None,
@@ -487,6 +435,59 @@ mod tests {
                 cancel: barca_core::CancellationToken::new(),
             },
         );
+    }
+
+    #[tokio::test]
+    async fn startup_db_admission_cannot_acknowledge_a_source_generation_it_did_not_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("pipeline.py");
+        let initial = "from barca import task, Schedule\n@task(freshness=Schedule('0 5 1 1 *'))\ndef healthy(): pass\n";
+        std::fs::write(&source, initial).unwrap();
+        let mut config = app_state().config.as_ref().clone();
+        config.files = vec![source.to_string_lossy().into()];
+        config.watch = true;
+        config.resolved.db_path = dir.path().join("metadata.db").to_string_lossy().into();
+        let state = AppState::new(config);
+        let held = db::db_guard().await;
+        let task = tokio::spawn(run_scheduler(state.clone()));
+        // The initial selected graph is published before scheduler DB admission.
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while state.loaded.lock().await.is_none() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("initial graph not loaded");
+        std::fs::write(
+            &source,
+            format!("{initial}\n@task(freshness=Schedule('0 5 1 1 *'))\ndef repaired(): pass\n"),
+        )
+        .unwrap();
+        // This is the existing watch event signal, while startup still waits for the DB.
+        state.dag_generation.fetch_add(1, Ordering::Relaxed);
+        assert_eq!(
+            barca_core::queries::list_assets_from_dag(&state.loaded_dag().await.unwrap()).len(),
+            2
+        );
+        drop(held);
+        let repaired = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if state
+                    .schedule
+                    .read()
+                    .unwrap()
+                    .iter()
+                    .any(|job| job.id.ends_with(":repaired"))
+                {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        task.abort();
+        let _ = task.await;
+        repaired.expect("startup swallowed the repaired source generation");
     }
 
     #[test]
@@ -576,6 +577,23 @@ mod tests {
         );
     }
 
+    // ─── startup log wording ───────────────────────────────────────────────
+
+    #[test]
+    fn the_schedule_line_names_each_kind_with_its_count() {
+        let asset = || job("f.py:a", NodeKind::Asset, "0 5 * * *");
+        let sensor = || job("f.py:s", NodeKind::Sensor, "0 5 * * *");
+        let task = || job("f.py:t", NodeKind::Task, "0 5 * * *");
+        assert_eq!(count_by_kind(&[task()]), "1 task");
+        assert_eq!(count_by_kind(&[asset()]), "1 asset");
+        assert_eq!(count_by_kind(&[asset(), asset()]), "2 assets");
+        assert_eq!(count_by_kind(&[task(), asset()]), "1 asset and 1 task");
+        assert_eq!(
+            count_by_kind(&[task(), sensor(), asset(), sensor(), task()]),
+            "1 asset, 2 sensors and 2 tasks"
+        );
+    }
+
     // ─── catch-up detection ────────────────────────────────────────────────
 
     #[test]
@@ -609,13 +627,81 @@ mod tests {
     // ─── timezone handling ─────────────────────────────────────────────────
 
     #[test]
-    fn zone_parse_handles_local_utc_named_and_unknown() {
-        assert!(matches!(Zone::parse("local"), Zone::Local));
-        assert!(matches!(Zone::parse(""), Zone::Local));
-        assert!(matches!(Zone::parse("UTC"), Zone::Utc));
-        assert!(matches!(Zone::parse("America/New_York"), Zone::Named(_)));
-        // Unknown names fall back to local rather than erroring.
-        assert!(matches!(Zone::parse("Not/AZone"), Zone::Local));
+    fn zone_parse_accepts_local_utc_and_iana_names() {
+        assert!(matches!(Zone::parse("local"), Ok(Zone::Local)));
+        assert!(matches!(Zone::parse("Local"), Ok(Zone::Local)));
+        assert!(matches!(Zone::parse("utc"), Ok(Zone::Utc)));
+        assert!(matches!(Zone::parse("UTC"), Ok(Zone::Utc)));
+        assert!(matches!(Zone::parse(" utc "), Ok(Zone::Utc)));
+        assert!(matches!(
+            Zone::parse("America/New_York"),
+            Ok(Zone::Named(chrono_tz::America::New_York))
+        ));
+        assert!(matches!(Zone::parse("Etc/UTC"), Ok(Zone::Named(_))));
+    }
+
+    #[test]
+    fn zone_parse_rejects_anything_else_and_names_it() {
+        // An unknown zone used to fall back to local time with one line on stderr (#289).
+        for bad in ["Not/AZone", "", "america/new_york", "EST5", "+02:00"] {
+            let err = Zone::parse(bad).unwrap_err();
+            assert!(
+                err.contains(&format!("unknown timezone '{bad}'")),
+                "{bad:?}: {err}"
+            );
+            assert!(err.contains("America/New_York"), "{err}");
+        }
+    }
+
+    /// 2026-10-08 14:33:00 UTC.
+    fn an_instant() -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 10, 8, 14, 33, 0)
+            .single()
+            .unwrap()
+    }
+
+    #[test]
+    fn the_next_fire_time_is_computed_in_the_given_zone() {
+        let j = job("f.py:daily", NodeKind::Asset, "0 5 * * *");
+        let epoch = |zone: &Zone| next_fire(&j.cron, zone, an_instant()).unwrap().timestamp();
+        let utc_5am = Utc.with_ymd_and_hms(2026, 10, 9, 5, 0, 0).single().unwrap();
+        assert_eq!(epoch(&Zone::Utc), utc_5am.timestamp());
+        // 05:00 in Kolkata (UTC+5:30) is 23:30 UTC the day before; in Honolulu (UTC-10), 15:00.
+        let kolkata = Zone::parse("Asia/Kolkata").unwrap();
+        assert_eq!(epoch(&kolkata), utc_5am.timestamp() - 5 * 3600 - 1800);
+        let honolulu = Zone::parse("Pacific/Honolulu").unwrap();
+        assert_eq!(
+            epoch(&honolulu),
+            Utc.with_ymd_and_hms(2026, 10, 8, 15, 0, 0)
+                .single()
+                .unwrap()
+                .timestamp()
+        );
+    }
+
+    #[test]
+    fn get_schedule_reports_next_fire_in_the_servers_zone() {
+        // It used to compute it in local time whatever `--timezone` said (#289). Two zones, so
+        // the test cannot pass by running on a machine whose local zone is one of them.
+        for (zone, want) in [
+            ("Asia/Kolkata", "2026-10-08T23:30:00Z"),
+            ("Pacific/Honolulu", "2026-10-08T15:00:00Z"),
+            ("utc", "2026-10-09T05:00:00Z"),
+        ] {
+            let mut config = (*app_state().config).clone();
+            config.timezone = zone.to_string();
+            let st = AppState::new(config);
+            publish_registry(
+                &st,
+                &[job("f.py:daily", NodeKind::Task, "0 5 * * *")],
+                &HashMap::new(),
+                &HashMap::new(),
+            );
+            let body = handlers::schedule_at(&st, an_instant());
+            let want = DateTime::parse_from_rfc3339(want).unwrap().timestamp();
+            assert_eq!(body[0]["next_fire"], want, "{zone}: {body}");
+            assert_eq!(body[0]["id"], "f.py:daily");
+        }
     }
 
     #[test]
@@ -755,6 +841,166 @@ mod tests {
         assert_eq!(fired_ids(&plan), vec!["f.py:b"]);
     }
 
+    // ─── catch-up across a restart (fixed times, a real schedule_state table) ──
+
+    /// A metadata DB in a temp dir, and the UTC instant `hour:minute` on 2026-07-02.
+    async fn schedule_db() -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metadata.db").display().to_string();
+        barca_core::db::init_db(&path).await.unwrap();
+        (dir, path)
+    }
+
+    fn utc(day: u32, hour: u32, minute: u32) -> DateTime<FixedOffset> {
+        Utc.with_ymd_and_hms(2026, 7, day, hour, minute, 0)
+            .single()
+            .unwrap()
+            .fixed_offset()
+    }
+
+    #[tokio::test]
+    async fn unreadable_schedule_history_never_becomes_an_empty_first_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = app_state();
+        let jobs = [job("f.py:daily", NodeKind::Asset, "0 6 * * *")];
+        // A directory cannot be opened as metadata. A failed read must not anchor
+        // or trigger jobs as if the durable schedule history were simply absent.
+        let error = catch_up(
+            &st,
+            &jobs,
+            &Zone::Utc,
+            &utc(2, 9, 0),
+            &dir.path().display().to_string(),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(error, barca_core::BarcaError::Db(_)));
+        assert!(st.runs.is_empty());
+        assert!(st.schedule.read().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_first_start_anchors_every_job_to_now_and_runs_nothing() {
+        let (_dir, db_path) = schedule_db().await;
+        let st = app_state();
+        let jobs = [job("f.py:daily", NodeKind::Asset, "0 6 * * *")];
+        let now = utc(2, 9, 0);
+
+        let (handles, fired) = catch_up(&st, &jobs, &Zone::Utc, &now, &db_path)
+            .await
+            .unwrap();
+
+        assert!(handles.is_empty());
+        assert!(st.runs.is_empty(), "nothing may run on a first start");
+        assert_eq!(
+            fired,
+            HashMap::from([("f.py:daily".to_string(), now.timestamp())])
+        );
+        assert_eq!(db::get_schedule_state(&db_path).await.unwrap(), fired);
+    }
+
+    #[tokio::test]
+    async fn catch_up_does_not_fire_early_across_the_autumn_offset_change() {
+        let (_dir, db_path) = schedule_db().await;
+        let zone = Zone::parse("America/New_York").unwrap();
+        let jobs = [job("f.py:daily", NodeKind::Asset, "0 5 * * *")];
+        let before = Utc.with_ymd_and_hms(2026, 10, 31, 12, 0, 0).unwrap();
+        db::upsert_schedule_state(&db_path, "f.py:daily", before.timestamp())
+            .await
+            .unwrap();
+        // 09:30 UTC is 04:30 after the offset changed; the old fixed-offset
+        // search incorrectly treated the next 05:00 as 09:00 UTC.
+        let early = zone.at(Utc.with_ymd_and_hms(2026, 11, 1, 9, 30, 0).unwrap());
+        let st = app_state();
+        let (handles, fired) = catch_up(&st, &jobs, &zone, &early, &db_path).await.unwrap();
+        assert!(handles.is_empty() && st.runs.is_empty());
+        assert_eq!(fired["f.py:daily"], before.timestamp());
+        let due = zone.at(Utc.with_ymd_and_hms(2026, 11, 1, 10, 0, 0).unwrap());
+        let (handles, _) = catch_up(&st, &jobs, &zone, &due, &db_path).await.unwrap();
+        assert_eq!(handles.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_tick_missed_while_the_server_was_down_runs_once_when_it_comes_back() {
+        let (_dir, db_path) = schedule_db().await;
+        let jobs = [
+            job("f.py:daily", NodeKind::Asset, "0 6 * * *"),
+            job("f.py:hourly", NodeKind::Task, "0 * * * *"),
+        ];
+        // Running at 05:10: both jobs are anchored. The server then stops.
+        let stopped = utc(2, 5, 10);
+        catch_up(&app_state(), &jobs, &Zone::Utc, &stopped, &db_path)
+            .await
+            .unwrap();
+
+        // Back at 05:50: no tick of either job has passed.
+        let st = app_state();
+        let early = utc(2, 5, 50);
+        let (handles, fired) = catch_up(&st, &jobs, &Zone::Utc, &early, &db_path)
+            .await
+            .unwrap();
+        assert!(handles.is_empty() && st.runs.is_empty());
+        assert_eq!(
+            fired["f.py:daily"],
+            stopped.timestamp(),
+            "the record is not moved"
+        );
+
+        // Back three days later: `daily` missed three ticks and `hourly` dozens. Each runs
+        // exactly once, and its record moves to the restart time.
+        let st = app_state();
+        let back = utc(5, 9, 30);
+        let (handles, fired) = catch_up(&st, &jobs, &Zone::Utc, &back, &db_path)
+            .await
+            .unwrap();
+        assert_eq!(handles.len(), 2);
+        assert_eq!(
+            st.runs.len(),
+            2,
+            "one run per job, however many ticks were missed"
+        );
+        for id in ["f.py:daily", "f.py:hourly"] {
+            assert!(st.runs.contains_key(&handles[id]), "{id}");
+            assert_eq!(fired[id], back.timestamp(), "{id}");
+        }
+        assert_eq!(db::get_schedule_state(&db_path).await.unwrap(), fired);
+
+        // A restart right after has nothing left to catch up: the catch-up does not repeat.
+        let st = app_state();
+        let again = utc(5, 9, 31);
+        let (handles, fired) = catch_up(&st, &jobs, &Zone::Utc, &again, &db_path)
+            .await
+            .unwrap();
+        assert!(handles.is_empty() && st.runs.is_empty());
+        assert_eq!(fired["f.py:hourly"], back.timestamp());
+    }
+
+    #[tokio::test]
+    async fn a_job_added_while_the_server_was_down_is_anchored_not_run() {
+        let (_dir, db_path) = schedule_db().await;
+        let old = job("f.py:daily", NodeKind::Asset, "0 6 * * *");
+        catch_up(
+            &app_state(),
+            std::slice::from_ref(&old),
+            &Zone::Utc,
+            &utc(2, 5, 0),
+            &db_path,
+        )
+        .await
+        .unwrap();
+
+        let st = app_state();
+        let jobs = [old, job("f.py:new", NodeKind::Asset, "0 6 * * *")];
+        let back = utc(4, 9, 0);
+        let (handles, fired) = catch_up(&st, &jobs, &Zone::Utc, &back, &db_path)
+            .await
+            .unwrap();
+
+        assert_eq!(handles.keys().collect::<Vec<_>>(), ["f.py:daily"]);
+        assert_eq!(st.runs.len(), 1);
+        assert_eq!(fired["f.py:new"], back.timestamp());
+    }
+
     // ─── kind-based dispatch ───────────────────────────────────────────────
 
     #[tokio::test]
@@ -791,7 +1037,7 @@ mod tests {
         )
         .unwrap();
 
-        let jobs = collect_jobs(
+        let jobs = barca_core::schedule::collect_jobs(
             &[path.display().to_string()],
             &barca_core::commands::find_python(),
         )

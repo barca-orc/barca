@@ -31,9 +31,16 @@ detail?: string | null, run_hash?: string | null,
  */
 artifact?: string | null,
 /**
- * Set when a cached step depends on an asset refreshed in the same run.
+ * Something to know about the step, in words: it was served from cache although an asset
+ * it depends on was refreshed in the same run, or `artifact_mismatch` is set.
  */
-warning?: string | null, partitions?: PartitionSummary | null,
+warning?: string | null,
+/**
+ * `true` when the artifact store's copy of this step's result, or of an input the step
+ * read in this run, does not have the hash recorded for it. The store's copy was used,
+ * and `warning` says which and how to recompute it. Absent otherwise (never `false`).
+ */
+artifact_mismatch?: boolean | null, partitions?: PartitionSummary | null,
 /**
  * Declared env values the step used (`@asset(env=[...])`): name -> value, `null` when unset,
  * `"<redacted>"` for secret-looking names. Absent when the node declares no env.

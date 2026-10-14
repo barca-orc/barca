@@ -9,6 +9,7 @@
 //! cannot drift between commands. Progress on stderr is separate: the progress bar draws
 //! only when stderr is a terminal and `--agent` is not set.
 
+use crate::error::CliErrorExt;
 use clap::Args;
 use std::io::IsTerminal;
 
