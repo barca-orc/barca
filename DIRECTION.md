@@ -21,8 +21,8 @@ An embedded orchestrator. You mark Python functions with `@asset`, `@sensor`, `@
 ## Now, in order
 
 1. **Correctness and recovery.** Wrong cache results and lost history come first: upload receipts (#381), hash holes that serve stale results (#295), a corrupt shared-history blob destroying every machine's copy (#243), a killed run that stays `running` (#290), a partitioned target that returns one key (#287).
-2. **Everyday use.** What the two real users asked for: per-step timings in the run output (#386), task output you can use (#387), `barca doctor` and one documented local profile (#388), a one-line failure summary (#389), a remote store that fails soft after the work is done (#390), sane `barca list` defaults (#391), a warning when a recompute produces different bytes (#392), paths by default in `barca get` output, and a metadata backup with a restore command in place of the shared-history blob (RFC-0009).
-3. **Server mode.** The server is the ledger (RFC-0007): one run contract over HTTP (#393), `--server` on the CLI with a parity suite (#394), and local runs that read the server's ledger and write back to it.
+2. **Everyday use.** What the two real users asked for: per-step timings in the run output (#386), task output you can use (#387), `barca doctor` and one documented local profile (#388), a one-line failure summary (#389), a remote store that fails soft after the work is done (#390), sane `barca list` defaults (#391), a warning when a recompute produces different bytes (#392), paths by default in `barca get` output (#404), and a metadata backup with a restore command in place of the shared-history blob (RFC-0009, #403).
+3. **Server mode.** The server is the ledger (RFC-0007): one run contract over HTTP (#393), `--server` on the CLI with a parity suite (#394), and local runs that read the server's ledger and write back to it (#402).
 4. **Freshness under serve.** `Always` and `Manual` get their run-time meaning (RFC-0008, #253): a tick reconciles the `Always` nodes below it, `Manual` pins itself, failures retry up to `max_failures`.
 
 ## Decided, October 2026
