@@ -71,10 +71,13 @@ you can "get." A task is something like `send_slack_notification` — clearly
 something you "do." The API aligns with how people naturally name their
 functions.
 
-## Tasks can't be inputs to assets (status: will soften to warning)
+## Tasks can't be inputs to assets (status: rejected today; softening is not planned)
 
 **Decision (current):** DAG validation rejects edges from tasks to assets or
 sensors.
+
+**Status (2026-10-10):** still a hard error, and there is no open issue to change
+it. The target behavior below records the intent in case one is filed.
 
 **Target behavior:** Allow it with a warning. The downstream asset becomes
 uncacheable — it re-runs every time because its task input always re-runs.
@@ -323,11 +326,15 @@ def deploy(model):
 - This is one of the decisions we're not entirely convinced of. We're noting it
   here so we can revisit when a cleaner pattern emerges.
 
-## Sensors: SensorResult in, SensorResult out (status: redesigning)
+## Sensors: SensorResult in, SensorResult out (status: parked, not implemented)
 
 **Current implementation:** Sensors return `(updated, data)` tuples. This works
 but is an unusual Python contract — ambiguous, hard to remember which element
 is which, and doesn't compose well.
+
+**Status (2026-10-10):** `SensorResult` does not exist. The tuple is the
+contract (`barca docs assets`); the cache keys on the returned value and the
+`bool` is not used. The redesign below is parked with no open issue.
 
 **Redesign direction:** Sensors receive the previous `SensorResult` as a
 parameter and return a new `SensorResult`. Same type in, same type out.
@@ -418,9 +425,12 @@ auto-updating. If `config` is Manual and `report` depends on it, `report`
 can't be fresher than `config`. This creates deliberate control points in the
 DAG where a human must explicitly approve re-execution.
 
-**Status:** Always and Manual work in v0.2.0. Schedule is declared but not
-enforced at runtime — scheduled assets behave like Always until cron
-enforcement ships in v0.3.0.
+**Status (2026-10-10):** the reverse of what an earlier version of this note
+said. Only `Schedule` has an effect, and only in `barca serve`
+([Core constraints](../site/src/content/docs/core-constraints.md)). `Always`
+and `Manual` are parsed and shown by `barca list`, and nothing acts on them:
+`barca get` and `barca run` are decided by the cache alone. What they should do
+under `serve` is RFC-0008 (PR #276, decision in #253).
 
 ## Design principle: when unsure, add less
 

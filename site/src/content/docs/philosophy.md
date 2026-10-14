@@ -39,8 +39,8 @@ Cost: nothing happens when no command is running. Cron schedules need `barca ser
 `pip install barca` installs the binary, the decorators and the worker. The worker needs only
 the standard library; parquet and remote storage are extras.
 
-Cost: a wheel must exist for your platform. 0.18.0 has wheels for macOS on Apple Silicon and
-x86-64 Linux with glibc, and requires Python 3.12 or later.
+Cost: a wheel must exist for your platform. Since 0.22.0 there are wheels for macOS on Apple
+Silicon and for Linux on x86-64 and arm64 with glibc or musl; Python 3.12 or later is required.
 
 ## Rust plans, Python executes
 
