@@ -287,7 +287,7 @@ barca status total,orders pipeline.py --json    # several targets: the union of 
 ```bash
 barca list pipeline.py --json       # {nodes: [{id, kind, freshness, inputs, env}], total, truncated}; freshness: always|manual|schedule
 barca plan pipeline.py              # phases and steps that would run, nothing executes
-barca history --json                # {runs: [...], total, truncated}: the last 10 runs
+barca history --json                # {runs: [...], total, truncated}: every recorded run unless --limit is given
 barca stats total pipeline.py --json  # timings and cache hit rate for one asset
 ```
 
@@ -296,9 +296,10 @@ can evaluate Python and import its module while resolving keys.
 
 ## Bounded output: --limit, --all, --fields
 
-List-shaped commands print a bounded number of items so a large project cannot flood your
-context: `barca list` shows at most 100 nodes (in topological order) and `barca history` the 10
-most recent runs. Their JSON is an envelope that says whether you saw everything:
+`list`, `status` and `history` return every item in JSON unless `--limit N` is explicit.
+This includes piped output, `--fields`, and `BARCA_OUTPUT=json`. Human tables show at most
+100 nodes for `list`/`status` and the 10 most recent runs for `history`; `--all` removes
+these bounds. JSON keeps the envelope that says whether you saw everything:
 
 ```json
 {"nodes": [...], "total": 312, "truncated": true,

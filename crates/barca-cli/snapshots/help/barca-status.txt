@@ -16,9 +16,7 @@ Options:
           Emit human-readable output (the default when stdout is a terminal)
 
   -l, --limit <LIMIT>
-          Maximum number of nodes to show, in topological order
-
-          [default: 100]
+          Maximum nodes, in topological order (default: every node in JSON, 100 in a human table)
 
       --all
           Show every node (no limit)
@@ -45,7 +43,7 @@ Examples:
   barca status pipeline.py --json          # {target, targets, nodes, summary, total, truncated, root}, even in a terminal
   barca status pipeline.py --pretty        # the table, even when piped
   barca status pipeline.py --fields id,cache   # JSON with only these keys per node
-  barca status big.py --limit 20           # first 20 nodes (default: at most 100); the summary counts all
+  barca status big.py --limit 20           # first 20 nodes; the summary counts all
   barca status total pipeline.py --json --sample 5   # add up to 5 sample rows per json/parquet artifact
   barca status pipeline.py --env dev       # state recorded in another environment
 
@@ -59,4 +57,5 @@ may import the source to resolve keys. Shape (rows, columns, type) is read from 
 artifact file only. With remote storage it is read from the bucket: a parquet footer by ranged
 requests, json and pickle by a download of up to 16 MB (larger ones get a `note`). A store that
 cannot be reached is a `note` on each shape, not a failed command.
+JSON returns every item unless --limit is given; human tables keep their default bound.
 More: barca docs status, barca docs agents

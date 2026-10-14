@@ -278,7 +278,7 @@ $ barca plan pipeline.py
 ## history
 
 Show recent runs from `.barca/metadata.db`: run id, command, status, step counts and timing.
-The default is the 10 most recent.
+The human table defaults to the 10 most recent; JSON returns every run unless `--limit` is explicit.
 
 ```
 $ barca history
@@ -294,11 +294,12 @@ Times are UTC. `--fields` takes `run_id`, `command`, `files`, `target`, `status`
 `elapsed_seconds`.
 
 ```bash
-barca history -l 25               # last 25 (default 10); --all for every recorded run
+barca history -l 25               # last 25; human default 10, JSON default every run
 barca history --json              # {"runs": [...], "total": N, "truncated": bool, "hint"?: "..."}
 barca history --fields run_id,status   # JSON with only these keys per run
 ```
 
+History JSON returns every run unless `--limit N` is explicit; the human table defaults to 10.
 When more runs exist than are shown, the JSON has `"truncated": true`, the `total`, and a `hint`;
 the table prints the same hint as one line on stderr. See [Bounded output](#bounded-output). Each
 run's `files` is an array of the `.py` files it was given.
@@ -411,7 +412,7 @@ barca list pipeline.py --fields id,inputs   # JSON with only these keys per node
 In JSON, `freshness` is `always`, `manual` or `schedule` (lowercase, like `kind`); a scheduled node
 also has `schedule`, its cron expression. `list` reads no state, so it takes no `--env`.
 
-`list` prints at most 100 nodes by default, in topological order; see
+`list` prints every node in JSON by default, in topological order; human tables show at most 100; see
 [Bounded output](#bounded-output).
 
 When any node declares environment variables (`@asset(env=["SOURCE_CSV"])`), the table gains an
@@ -419,8 +420,9 @@ ENV column listing them; `--json` always includes `env` (an empty list when none
 
 ## Bounded output
 
-List-shaped commands (`list`, `status`, `history`) are bounded by default so a large project cannot flood
-a terminal or an agent's context. Their JSON is an envelope:
+List-shaped commands (`list`, `status`, `history`) return every item in JSON unless `--limit N`
+is explicit, including piped output and `--fields`. Human tables show at most 100 nodes or
+10 history runs by default; `--all` removes the bound. Their JSON keeps its envelope:
 
 ```json
 {"nodes": [...], "total": 312, "truncated": true,
@@ -491,7 +493,8 @@ missing_keys}` (up to 20 keys). `last_materialization` is the most recently run 
 `partition` field), and `shape` describes that key's artifact.
 
 Each node also lists `env`, the environment variables it declares with `env=[...]`. Like `list`,
-status shows at most 100 nodes unless you pass `--limit N` or `--all`; the `summary` still counts
+status returns every node in JSON unless `--limit N` is explicit. Its human table shows at most
+100 nodes unless you pass `--limit N` or `--all`; the `summary` still counts
 every node, and the JSON reports `total` and `truncated` (see [Bounded output](#bounded-output)).
 
 With [shared history](/reference/remote-storage/), status first pulls it, as a run does.
