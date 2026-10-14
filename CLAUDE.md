@@ -141,7 +141,9 @@ child output before exiting.
 Trunk-based: `main` is the integration branch — always green, but not necessarily
 released. Merging to main never publishes anything; only pushing a `v*` tag does.
 
-- **Always use worktrees** for local development work
+- **Always use worktrees** for local development work — see [AGENTS.md](AGENTS.md):
+  create only under `.worktrees/<slug>`, share `CARGO_TARGET_DIR` with the trunk `target/`,
+  reap processes, and remove the tree when the task is done (orphan trees eat disk)
 - **Topic branches**: one per issue, branched off main, PRed straight into main
 - **Release**: when ready to ship, cut a short-lived release branch
   `release/v<major>.<minor>.<patch>` off main containing only the version bump; PR it
