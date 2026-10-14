@@ -7,7 +7,7 @@ description: 'A remote store with no server is this machine''s backup and read-t
 - **Date:** 2026-10-14
 - **Touches:** barca-core | barca-cli | python/barca
 - **Prerequisites:** minute checkpoints of the shared history ([#376](https://github.com/barca-orc/barca/pull/376)) and upload receipts ([#381](https://github.com/barca-orc/barca/issues/381)), the content digest per artifact ([#392](https://github.com/barca-orc/barca/issues/392)).
-- **Supersedes / Related:** supersedes the shared-history half of [RFC-0006](/rfcs/0006-configuration-and-remote-state/) (optimistic mode, pull-before-run, the conditional push). Sharing between machines is [RFC-0007](/rfcs/0007-server-mode/). Fail-soft uploads are [#390](https://github.com/barca-orc/barca/issues/390); the corrupt-blob problem is [#243](https://github.com/barca-orc/barca/issues/243). Decisions recorded in [DIRECTION.md](https://github.com/barca-orc/barca/blob/main/DIRECTION.md#decided-october-2026).
+- **Supersedes / Related:** supersedes the shared-history half of [RFC-0006](/rfcs/0006-configuration-and-remote-state/) (optimistic mode, pull-before-run, the conditional push). Sharing between machines is [RFC-0007](/rfcs/0007-server-mode/). Fail-soft uploads are [#390](https://github.com/barca-orc/barca/issues/390); the corrupt-blob problem is [#243](https://github.com/barca-orc/barca/issues/243). Implementation: [#403](https://github.com/barca-orc/barca/issues/403). Decisions recorded in [DIRECTION.md](https://github.com/barca-orc/barca/blob/main/DIRECTION.md#decided-october-2026).
 
 ---
 
