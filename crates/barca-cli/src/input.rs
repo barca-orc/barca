@@ -30,21 +30,14 @@ pub(crate) fn usage_line(sub: &str) -> &'static str {
 }
 
 /// The cache policy of `get` / `run`: one vocabulary on both (`--refresh a,b`, `--no-cascade`,
-/// `--refresh-all`). `--no-cache` is the deprecated spelling of `--refresh-all`.
+/// `--refresh-all`).
 pub(crate) fn cache_policy(
     refresh: Option<Vec<String>>,
     no_cascade: bool,
     refresh_all: bool,
-    no_cache: bool,
 ) -> barca_core::cache::CachePolicy {
     use barca_core::cache::CachePolicy;
-    if no_cache {
-        barca_core::errln!(
-            "[barca] warning: --no-cache is deprecated and will be removed in a future minor \
-             release; use --refresh-all"
-        );
-    }
-    match (refresh_all || no_cache, refresh) {
+    match (refresh_all, refresh) {
         (true, _) => CachePolicy::RefreshAll,
         (false, Some(names)) => CachePolicy::RefreshSelective {
             names,

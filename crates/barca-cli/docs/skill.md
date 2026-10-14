@@ -57,8 +57,8 @@ barca get total pipeline.py --refresh-all         # recompute an asset's whole c
 - `--refresh a b` is an error that tells you to write `--refresh a,b`.
 - `--refresh` cascades: downstream assets re-run too (reason `refresh_cascade`). With
   `--no-cascade` they stay cached, do not reflect the refresh, and barca warns.
-- `get` and `run` take the same `--refresh`, `--no-cascade` and `--refresh-all`. `--no-cache` is
-  a deprecated spelling of `--refresh-all` (it warns); do not use it.
+- `get` and `run` take the same `--refresh`, `--no-cascade` and `--refresh-all`.
+  In Python, force a full refresh with `refresh_all=True`.
 - Data that changes in place (a blob overwritten at the same path): an asset that reads a
   `@sensor` re-runs when the sensor's returned value changes, so have a sensor return the etag.
   `--dry-run` and `status` assume the sensor returns its last value; before it ever ran, its

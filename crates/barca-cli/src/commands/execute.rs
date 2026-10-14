@@ -15,7 +15,7 @@ pub(crate) async fn explain_cmd(
     fields: Option<&[String]>,
 ) -> Result<(), barca_core::BarcaError> {
     let result =
-        barca_core::queries::explain(cfg, targets, file_args, python, policy, false, label).await?;
+        barca_core::queries::explain(cfg, targets, file_args, python, policy, label).await?;
     super::emit(barca_core::report::render_explain(
         &result,
         label,

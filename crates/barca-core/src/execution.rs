@@ -149,7 +149,6 @@ pub(crate) struct ExecuteRequest<'a> {
     pub(crate) target_names: &'a [String],
     pub(crate) file_args: &'a [String],
     pub(crate) python: &'a std::path::Path,
-    pub(crate) no_cache: bool,
     pub(crate) agent_mode: bool,
     pub(crate) policy: CachePolicy,
     pub(crate) command_label: &'a str,
@@ -776,7 +775,6 @@ async fn expand_and_decide(
     let decided = decide_phase(DecidePhase {
         dag: &session.prepared.dag,
         policy: &session.request.policy,
-        no_cache: session.request.no_cache,
         cfg: session.request.cfg,
         phase_ref,
         decide_state: &mut session.state.decide_state,
@@ -1461,20 +1459,13 @@ pub(crate) async fn explain_dag(
     target_names: &[String],
     python: &std::path::Path,
     policy: CachePolicy,
-    no_cache: bool,
     command_label: &str,
 ) -> Result<ExplainResult, BarcaError> {
-    Ok(explain_dag_with_membership(
-        dag,
-        cfg,
-        target_names,
-        python,
-        policy,
-        no_cache,
-        command_label,
+    Ok(
+        explain_dag_with_membership(dag, cfg, target_names, python, policy, command_label)
+            .await?
+            .0,
     )
-    .await?
-    .0)
 }
 
 /// Full actual prediction membership, moved without changing public reports.
@@ -1484,7 +1475,6 @@ pub(crate) async fn explain_dag_with_membership(
     target_names: &[String],
     python: &std::path::Path,
     policy: CachePolicy,
-    no_cache: bool,
     command_label: &str,
 ) -> Result<(ExplainResult, crate::cache::ExpandedMembership), BarcaError> {
     let targets = resolve_targets(dag, target_names, command_label)?;
@@ -1551,7 +1541,6 @@ pub(crate) async fn explain_dag_with_membership(
     let mut prediction = Prediction {
         dag,
         policy: &policy,
-        no_cache,
         cache: cache.as_ref(),
         layout: layout.as_ref(),
         pool_size,
@@ -1620,7 +1609,6 @@ pub(crate) async fn explain_dag_with_membership(
 struct Prediction<'a> {
     dag: &'a Dag,
     policy: &'a CachePolicy,
-    no_cache: bool,
     cache: Option<&'a db::CacheReader>,
     layout: Option<&'a ArtifactLayout>,
     pool_size: usize,
@@ -1733,16 +1721,8 @@ async fn predict_steps(
             .find(|up| ctx.hash_unknown.contains(&up_base(up)))
             .cloned();
 
-        let (step, decision) = decide_step(
-            ctx.dag,
-            ctx.policy,
-            ctx.no_cache,
-            ctx.cache,
-            ctx.state,
-            step,
-        )
-        .await?;
-        // Forced to run whatever the cache holds (task, sensor, refresh, --no-cache).
+        let (step, decision) = decide_step(ctx.dag, ctx.policy, ctx.cache, ctx.state, step).await?;
+        // Forced to run whatever the cache holds (task, sensor, refresh).
         let forced = matches!(
             &decision,
             Decision::Run(reason) if *reason != RunReason::NotMaterialized
@@ -1856,7 +1836,6 @@ async fn predict_phase(ctx: &mut Prediction<'_>, phase: &Phase) -> Result<(), Ba
 struct DecidePhase<'a> {
     dag: &'a Dag,
     policy: &'a CachePolicy,
-    no_cache: bool,
     cfg: &'a crate::config::ResolvedConfig,
     phase_ref: &'a Phase,
     decide_state: &'a mut DecideState,
@@ -1874,7 +1853,6 @@ async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaError> {
     let DecidePhase {
         dag,
         policy,
-        no_cache,
         cfg,
         phase_ref,
         decide_state,
@@ -1900,8 +1878,7 @@ async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaError> {
         vec![Vec::new(); phase_ref.streams.len()];
     for (stream_idx, step) in in_dependency_order(dag, phase_ref) {
         let uncached_steps = &mut uncached[stream_idx];
-        let (step, decision) =
-            decide_step(dag, policy, no_cache, Some(&cache), decide_state, step).await?;
+        let (step, decision) = decide_step(dag, policy, Some(&cache), decide_state, step).await?;
         let decision = localize_decision(decision, &step, store);
         step_reports.push(report_for(dag, &step, &decision, false));
         let display_id = step.step_id.display();

@@ -192,7 +192,6 @@ pub async fn explain(
     file_args: &[String],
     python: &std::path::Path,
     policy: CachePolicy,
-    no_cache: bool,
     command_label: &str,
 ) -> Result<ExplainResult, BarcaError> {
     let dag = build_dag(file_args, python).await?;
@@ -202,16 +201,9 @@ pub async fn explain(
     {
         crate::errln!("{note}");
     }
-    let result = crate::execution::explain_dag(
-        &dag,
-        cfg,
-        target_names,
-        python,
-        policy,
-        no_cache,
-        command_label,
-    )
-    .await?;
+    let result =
+        crate::execution::explain_dag(&dag, cfg, target_names, python, policy, command_label)
+            .await?;
     crate::warnings::print(&result.warnings);
     Ok(result)
 }

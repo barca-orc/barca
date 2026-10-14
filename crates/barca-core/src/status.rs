@@ -192,7 +192,6 @@ async fn status_from_dag_with_membership(
         target_names,
         python,
         CachePolicy::CacheAware,
-        false,
         "status",
     )
     .await?;

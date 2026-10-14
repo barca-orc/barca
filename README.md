@@ -221,8 +221,8 @@ barca get order_count pipeline.py --refresh orders --no-cascade   # only orders;
 barca get order_count pipeline.py --refresh-all                   # every asset the target depends on
 ```
 
-`--refresh` takes one comma-separated list (`--refresh a,b`). `--no-cache` is a deprecated
-spelling of `--refresh-all`. Do not delete files under `.barca/` to force a recompute.
+`--refresh` takes one comma-separated list (`--refresh a,b`). Use `--refresh-all` to force
+all assets to recompute. Do not delete files under `.barca/` to force a recompute.
 
 More: `barca docs cache`, which also lists what the run hash does not see (star imports,
 installed packages, environment variables not declared with `env=`).
@@ -297,7 +297,8 @@ error (exit 2) that names the right one. `barca pipeline.py` is short for
 | `barca version` | Print the version (also `barca --version`). |
 
 `--fields a,b` keeps only those keys on each item of the JSON output. Every
-`barca <command> --help` ends with runnable examples.
+`barca <command> --help` ends with runnable examples. For a full refresh use `--refresh-all`
+(or `refresh_all=True` in Python); the deprecated alias is removed in 0.24.0.
 
 ## Partitions
 

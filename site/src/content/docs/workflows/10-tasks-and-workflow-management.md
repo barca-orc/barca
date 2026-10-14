@@ -145,8 +145,7 @@ With `--no-cascade`, `trained_model` stays cached and barca says so:
 [barca] warning: 'trained_model' was served from cache but depends on refreshed 'raw_data', so it does not reflect the refresh. Drop --no-cascade, add it to --refresh (for example --refresh raw_data,trained_model) or use --refresh-all.
 ```
 
-`--no-cache` still works as a deprecated spelling of `--refresh-all` and prints
-`[barca] warning: --no-cache is deprecated and will be removed in a future minor release; use --refresh-all`.
+`--no-cache` was removed in 0.24.0; use `--refresh-all` (or `refresh_all=True` in Python).
 
 ## Ordering without data
 

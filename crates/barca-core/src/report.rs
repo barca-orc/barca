@@ -504,7 +504,7 @@ pub(crate) fn report_for(
             if step.partition_keys.is_empty() {
                 word_run
             } else {
-                // A forced (task/refresh/no-cache) partitioned step runs every key.
+                // A forced (task/refresh) partitioned step runs every key.
                 r.partitions = Some(PartitionSummary {
                     total: step.partition_keys.len(),
                     cached: 0,

@@ -132,7 +132,6 @@ async fn run_cli(cli: Cli, ctx: &Context) -> Result<(), CliError> {
             refresh,
             no_cascade,
             refresh_all,
-            no_cache,
             dry_run,
             agent,
             fields,
@@ -155,7 +154,7 @@ async fn run_cli(cli: Cli, ctx: &Context) -> Result<(), CliError> {
             }
             let hint_files: Vec<PathBuf> = ctx.files.iter().map(PathBuf::from).collect();
             let targets = targets_arg(target.as_deref(), &hint_files)?;
-            let policy = cache_policy(refresh, no_cascade, refresh_all, no_cache);
+            let policy = cache_policy(refresh, no_cascade, refresh_all);
             get_cmd(
                 env.as_deref(),
                 targets,
@@ -175,7 +174,6 @@ async fn run_cli(cli: Cli, ctx: &Context) -> Result<(), CliError> {
             refresh,
             no_cascade,
             refresh_all,
-            no_cache,
             dry_run,
             output,
             format,
@@ -200,7 +198,7 @@ async fn run_cli(cli: Cli, ctx: &Context) -> Result<(), CliError> {
                 ));
             }
             let hint_files: Vec<PathBuf> = ctx.files.iter().map(PathBuf::from).collect();
-            let policy = cache_policy(refresh, no_cascade, refresh_all, no_cache);
+            let policy = cache_policy(refresh, no_cascade, refresh_all);
             let targets = targets_arg(Some(&target), &hint_files)?;
             run_cmd(
                 env.as_deref(),

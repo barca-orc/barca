@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # `barca run` / `barca get` cache semantics: upstream assets cache-aware by default,
-# --refresh <names> selective, --refresh-all for the whole cone (--no-cache is its deprecated
-# spelling and warns).
+# --refresh <names> selective, --refresh-all for the whole cone.
 #
 # Run: bash tests/integration/test_run_refresh.sh
 set -euo pipefail
@@ -48,12 +47,11 @@ check "warm run executes task only" 1 "$(steps "$("$BARCA" run validate pipe.py)
 check "--refresh clean re-runs clean + task" 2 "$(steps "$("$BARCA" run validate pipe.py --refresh clean)")"
 check "--refresh raw,clean re-runs both + task" 3 "$(steps "$("$BARCA" run validate pipe.py --refresh raw,clean)")"
 check "--refresh-all re-runs whole cone" 3 "$(steps "$("$BARCA" run validate pipe.py --refresh-all)")"
-check "--no-cache (deprecated) equals --refresh-all" 3 "$(steps "$("$BARCA" run validate pipe.py --no-cache 2>/dev/null)")"
-WARN=$("$BARCA" run validate pipe.py --no-cache 2>&1 >/dev/null)
-if [[ "$WARN" == *"[barca] warning: --no-cache is deprecated"* ]]; then
-  pass "--no-cache warns that it is deprecated"
+if "$BARCA" run validate pipe.py --no-cache > /dev/null 2>&1; then
+  fail "removed --no-cache was accepted"
 else
-  fail "--no-cache did not print a deprecation warning"
+  code=$?
+  if [ "$code" -eq 2 ]; then pass "removed --no-cache exits 2"; else fail "removed flag exited $code"; fi
 fi
 
 echo "=== barca get: the same refresh vocabulary ==="

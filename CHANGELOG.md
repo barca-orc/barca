@@ -12,6 +12,14 @@ reconciliation, and verified shared DuckDB worker lifetime. See
 upgrade and breaking-change notes. Releases between the historical entries below
 and these tags are available on the same releases page.
 
+## Pending 0.24.0
+
+### Removed
+
+- **Breaking:** removed `barca get|run --no-cache` and `barca.get(no_cache=...)`.
+  Use `--refresh-all` and `refresh_all=True`, respectively. The CLI alias is now an
+  unknown-flag usage error (exit 2); Python rejects the removed keyword.
+
 The older notes below are preserved as historical records. Their former
 "Unreleased" section describes work that has already shipped; it is not the
 current pending-release queue.

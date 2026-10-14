@@ -163,7 +163,7 @@ matching.
 | `--fields a,b` | Keep only these keys on each entry of `steps`: `id`, `kind`, `action`, `status`, `reason`, `detail`, `run_hash`, `artifact`, `warning`, `partitions`, `env`. |
 | `--env <name>` | Use a named environment's cache and history. |
 
-`--no-cache` is a deprecated spelling of `--refresh-all`: it works and warns on stderr.
+`--no-cache` was removed in 0.24.0; use `--refresh-all`.
 
 A dry run of the same target:
 
