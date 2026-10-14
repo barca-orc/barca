@@ -79,7 +79,7 @@ def ok(proc: subprocess.CompletedProcess) -> dict:
 
 
 def envelope(proc: subprocess.CompletedProcess) -> dict:
-    return json.loads(proc.stderr.strip().splitlines()[-1])
+    return json.loads(next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{")))
 
 
 @pytest.fixture

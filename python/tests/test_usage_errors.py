@@ -56,7 +56,7 @@ def usage_error(proc: subprocess.CompletedProcess) -> str:
     assert proc.returncode == 2, (proc.returncode, proc.stderr)
     assert proc.stdout == ""
     assert "steps done" not in proc.stderr  # rejected before anything ran
-    env = json.loads(proc.stderr.strip().splitlines()[-1])
+    env = json.loads(next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{")))
     assert env["kind"] == "usage" and env["code"] == 2, env
     return f"error: {env['error']}\n\n{env['remediation']}\n"
 
