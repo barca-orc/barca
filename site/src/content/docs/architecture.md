@@ -149,5 +149,6 @@ and the metadata database is shared as one object in the store (shared history).
   `clap`, `toml`; the server adds `axum`, `notify`, `chrono-tz` and `rust-embed`.
 - **Python**: 3.12 or later, standard library only. Extras: `parquet`, `fast` (orjson), and
   `s3`, `r2`, `gcs`, `azure`, `remote` (fsspec and the store's client).
-- **Build**: maturin packages the binary and the Python package into one wheel. 0.18.0
-  publishes wheels for macOS on Apple Silicon and x86-64 Linux with glibc.
+- **Build**: maturin packages the binary and the Python package into one wheel. Since 0.22.0
+  wheels are published for macOS on Apple Silicon and for Linux on x86-64 and arm64, glibc and
+  musl.

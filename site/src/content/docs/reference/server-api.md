@@ -222,7 +222,7 @@ GET /health
 ```
 
 ```json
-{ "status": "ok", "version": "0.22.0", "read_only": false, "scheduler": true, "load_errors": [] }
+{ "status": "ok", "version": "0.23.0", "read_only": false, "scheduler": true, "load_errors": [] }
 ```
 
 `scheduler` is `true` when this server fires `Schedule(...)` nodes: on by default, `false` with

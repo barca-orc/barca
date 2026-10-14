@@ -24,18 +24,11 @@ and site pages should link to that owner and defer on wire details. Tests should
 to the specification. Test changes should include controls that detect missing fields,
 wrong statuses and additional routes, rather than only repeating happy-path examples.
 
-## Implementation designs and decisions
+## Implementation notes
 
-These documents record bounded implementation decisions and regression evidence. They
-are not additional public boundaries and do not advertise held or proposed behavior:
+[notes/](notes/) holds the implementation notes individual PRs left behind (a plan, the
+invariant, the regression evidence). They are not boundaries, they are not indexed here, and
+nothing in them is a promise: the PR that made each one is the record. A new boundary goes in
+this directory and in the table above; anything else goes in `notes/` or stays in its PR.
 
-- [HTTP contract implementation plan](http-openapi-conformance-plan.md): this contract and its conformance scope.
-- [DuckDB lifetime](duckdb-step-isolation.md): accepted shared process connection; the original per-step isolation proposal was declined.
-- [Cancellation reconciliation](cancelled-shared-history.md): cancellation and shared-history preservation.
-- [Remote startup preflight](remote-startup-preflight.md): current bounded store probe and its limits.
-- [Process storage overrides](process-storage-overrides.md): process overrides design; consult its recorded delivery status before assuming it shipped.
-- [Lexical unused inputs](lexical-unused-inputs.md): static binding rules and warning regressions.
-
-Roadmap [#344](https://github.com/barca-orc/barca/issues/344) owns delivery order and pending
-slices. New files in this directory should be added to this inventory with their status;
-being checked into `specs/` alone does not make a proposal implemented.
+[DIRECTION.md](../DIRECTION.md) states what is being worked on and why.

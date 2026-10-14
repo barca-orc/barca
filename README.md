@@ -65,7 +65,8 @@ uv add barca          # or: pip install barca
 ```
 
 Python 3.12 or later. The wheel contains the `barca` binary, the decorators and a Python
-API; wheels are published for macOS on Apple Silicon and x86-64 Linux with glibc. [uv](https://docs.astral.sh/uv/) is recommended, not required: barca runs your steps
+API; wheels are published for macOS on Apple Silicon and for Linux on x86-64 and arm64, glibc
+and musl. [uv](https://docs.astral.sh/uv/) is recommended, not required: barca runs your steps
 with the Python of the environment it is installed in, or `python3` on `PATH`.
 
 Optional extras: `barca[parquet]` (pyarrow, for pandas DataFrames), and `barca[s3]`,
@@ -361,7 +362,7 @@ Runs started over HTTP are asynchronous: `POST` returns a `run_id`, and you poll
 `/status/<run_id>`.
 
 ```bash
-curl localhost:8274/health                  # {"read_only":false,"scheduler":true,"status":"ok","version":"0.22.0"}
+curl localhost:8274/health                  # {"read_only":false,"scheduler":true,"status":"ok","version":"0.23.0"}
 curl localhost:8274/schedule                # each schedule: last and next fire, last status
 curl -XPOST localhost:8274/run              # every asset and sensor (tasks are skipped) -> {"run_id":"..."}
 curl -XPOST localhost:8274/get/summary      # one asset and what it depends on

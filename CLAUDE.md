@@ -17,6 +17,10 @@ crates/
   barca-core/           ← Core library: models, parser, DAG, execution planning, hashing
   barca-cli/            ← CLI binary (the `barca` command)
     docs/               ← The manual: markdown topics embedded in the binary (`barca docs`)
+  barca-server/         ← `barca serve`: axum HTTP API, cron scheduler, file watcher, embedded UI
+ui/                     ← The web UI (TypeScript, Vite); its build output is compiled into barca-server
+specs/                  ← Boundary specifications (README.md is the index); notes/ holds implementation notes
+DIRECTION.md            ← What barca is, standing non-goals, what is being worked on now
 python/barca/
   __init__.py           ← No-op decorator stubs (identity functions)
   _worker.py            ← Batch worker (invoked by Rust via `python -m barca._worker`)
@@ -81,6 +85,10 @@ benchmarks/chain_100/bench.sh 5   # (coming soon)
 
 ## Design principles
 
+[DIRECTION.md](DIRECTION.md) states what barca is, the standing non-goals and the current
+priorities; the pinned Direction issue on GitHub mirrors it. Check a new feature against it before
+filing an issue.
+
 1. **Invisible** — the orchestrator should add zero perceptible overhead
 2. **Static analysis** — extract source without imports. The existing resolver imports user
    modules to evaluate nonliteral partition key expressions; literal key lists need no import.
@@ -141,7 +149,9 @@ child output before exiting.
 Trunk-based: `main` is the integration branch — always green, but not necessarily
 released. Merging to main never publishes anything; only pushing a `v*` tag does.
 
-- **Always use worktrees** for local development work
+- **Always use worktrees** for local development work — see [AGENTS.md](AGENTS.md):
+  create only under `.worktrees/<slug>`, share `CARGO_TARGET_DIR` with the trunk `target/`,
+  reap processes, and remove the tree when the task is done (orphan trees eat disk)
 - **Topic branches**: one per issue, branched off main, PRed straight into main
 - **Release**: when ready to ship, cut a short-lived release branch
   `release/v<major>.<minor>.<patch>` off main containing only the version bump; PR it
