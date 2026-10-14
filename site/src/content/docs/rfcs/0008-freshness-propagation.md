@@ -1,12 +1,12 @@
 ---
 title: 'RFC-0008: Freshness Propagation in barca serve'
-description: 'What Always and Manual do at run time: a scheduled tick brings the Always nodes below it up to date in one run, and Manual stops it.'
+description: 'What Always and Manual do at run time: a scheduled tick brings the Always nodes below it up to date in one run; Manual is refreshed by hand only and pins itself.'
 ---
 
-- **Status:** Draft
-- **Date:** 2026-10-07
+- **Status:** Accepted
+- **Date:** 2026-10-07 (accepted 2026-10-14)
 - **Touches:** HTTP server | barca-core
-- **Supersedes / Related:** [RFC-0001](/rfcs/0001-node-kinds-and-freshness/) (defines `Always`/`Manual`/`Schedule`; this RFC gives the first two their run-time meaning), [RFC-0004](/rfcs/0004-http-server-api/) (the scheduler and its per-job rules). Issues #253 and #80; closed attempt #261.
+- **Supersedes / Related:** [RFC-0001](/rfcs/0001-node-kinds-and-freshness/) (defines `Always`/`Manual`/`Schedule`; this RFC gives the first two their run-time meaning), [RFC-0004](/rfcs/0004-http-server-api/) (the scheduler and its per-job rules). Issues #253 and #80; closed attempt #261. Decisions recorded in [DIRECTION.md](https://github.com/barca-orc/barca/blob/main/DIRECTION.md#decided-october-2026).
 
 ---
 
@@ -20,10 +20,14 @@ and shown, and nothing acts on them. This RFC defines what they do in `barca ser
 - An `Always` asset is up to date when it has a result for its current code and inputs.
 - An `Always` task is up to date when its last successful run used the current versions of
   its direct inputs. So a task fires only when something immediately before it changed.
-- `Manual` stops propagation. A `Manual` node is never updated by a tick, and nothing is
-  reached through it.
+- `Manual` means refreshed by hand only. A `Manual` node is never updated by a tick, and
+  nothing below it is recomputed because of it; what is below reads its current result.
+- A failed node is retried at every tick that reaches it, up to a per-node cap,
+  `Schedule(..., max_failures=N)`.
 
-`barca get` and `barca run` are not changed by this RFC.
+`barca get` changes in one way: a stale `Manual` upstream is no longer recomputed on the way
+to a target. It is served as it is, with a note. Only naming it in `--refresh`, or `barca get`
+of the node itself with `--refresh`, recomputes it.
 
 ## 2. Motivation
 
@@ -88,7 +92,7 @@ Every five minutes `barca serve` polls `inbox`.
 - If it returns a new value, one run computes `orders` once, then `hourly_summary` and
   `send_report`. Both consumers see the same observation, and nothing is computed twice.
 
-`Manual` pins a node:
+`Manual` pins a node, and only that node:
 
 ```python
 @sensor(freshness=Schedule("*/5 * * * *"))
@@ -97,20 +101,43 @@ def prices() -> tuple[bool, str]: ...
 @asset(inputs={"etag": prices}, freshness=Manual)
 def baseline(etag) -> dict: ...                  # only an explicit request updates it
 
+@asset(inputs={"baseline": baseline, "etag": prices})
+def report(baseline, etag) -> dict: ...          # recomputed when prices changes, reading the pinned baseline
+
 @task(inputs={"baseline": baseline})
 def publish(baseline) -> None: ...               # does not fire when prices changes
 ```
 
-`prices` changes, `baseline` is not recomputed, so nothing immediately before `publish`
-changed and `publish` does not fire. After `barca get baseline pipeline.py --refresh baseline`
-(or the equivalent API call) gives `baseline` a new result, the next tick of `prices` finds
-`publish` out of date and fires it.
+`prices` changes. `baseline` is not recomputed: it is `Manual`. `report` is, because one of its
+inputs changed, and it reads `baseline` as it is. `publish` does not fire, because nothing
+immediately before it changed. After `barca get baseline pipeline.py --refresh baseline` (or the
+equivalent API call) gives `baseline` a new result, the next tick of `prices` finds `report` and
+`publish` out of date and runs them. This is the expensive-model case: the model is retrained by
+hand, and everything that consumes it keeps moving on the version it has.
+
+The same holds for `barca get`: `barca get report` serves the pinned `baseline` and prints
+`[barca] note: baseline is Manual and stale; barca get baseline --refresh baseline to recompute`.
+`barca get report` when `baseline` has never been computed is a usage error (exit 2) whose
+remediation is that same command.
+
+A failing node under a schedule is retried at every tick until it succeeds or hits its cap:
+
+```python
+@asset(inputs={"files": inbox}, freshness=Schedule("0 * * * *", max_failures=3))
+def orders(files) -> pd.DataFrame: ...
+```
+
+After three consecutive failed ticks `orders` is skipped, `barca status` shows it as `failing`
+with the count, and the next explicit `barca get orders` or a change in its inputs resets the
+count. The default is 5.
 
 ### 3.4 HTTP API
 
-No new endpoints. A tick's run now has more than one target (the scheduled node and the
-`Always` nodes below it). How that run is reported by `GET /status/{run_id}` and in history
-is an open question (section 10).
+No new endpoints. A tick's run has more than one target (the scheduled node and the `Always`
+nodes below it) and is one run: one run id, one row in history with `triggered_by: schedule`,
+and the existing multi-target result shape (`targets: [...]`, one entry per target with its
+status) in `GET /runs/{id}` and the event stream. `GET /schedule` keeps `last_run` and
+`last_status` per scheduled node, pointing at that shared run.
 
 ### 3.5 Dev server / `--watch` / UI
 
@@ -143,8 +170,11 @@ ticks.
 3. **An `Always` task is up to date** when its last successful run used the current version
    of every direct input. Otherwise it fires. A task whose input is another task fires when
    that task has run successfully since.
-4. **`Manual` stops propagation.** A `Manual` asset or task is never run by a tick, whether
-   the tick is its own ancestor's or any other. Nothing below it is reached through it.
+4. **`Manual` pins itself.** A `Manual` asset or task is never run by a tick, whether the
+   tick is its own ancestor's or any other. It is not a wall: an `Always` node below it is
+   still reached through it when some other input of that node changed, and reads the
+   `Manual` node's current result. A `Manual` node that has never been computed blocks what
+   reads it (section 4.5).
 5. **`Schedule` stops propagation too.** A node with its own schedule is updated on its own
    ticks, not by a tick above it. Freshness answers one question, "when is this node
    updated", with one answer per node: `Always` follows what is above it, `Schedule` follows
@@ -158,8 +188,17 @@ ticks.
 8. **Nodes with no scheduled node above them** are not touched by any tick. They are
    updated only by an explicit request, as today.
 
-**What does not change:** `barca get`, `barca run`, `barca plan`, `POST /run`,
-`POST /get/{target}` and `POST /run/{target}` compute what they are asked for, as today.
+9. **A failed node retries at every tick, up to `max_failures`.** `Schedule(cron,
+   max_failures=N)` caps consecutive failed ticks for that node; the default is 5. Past the
+   cap the node is skipped and reported `failing`; an explicit request or a change in its
+   inputs resets the count. The cap lives on the node and nowhere else.
+10. **A node seen for the first time** is out of date and fires at the first tick that reaches
+    it.
+
+**What changes in `barca get` and `barca run`:** a stale `Manual` node on the way to the target
+is served as it is, with a note, instead of being recomputed. `--refresh <node>` or
+`--refresh-all` recomputes it as today. Everything else (`barca plan`, `POST /run`,
+`POST /get/{target}`, `POST /run/{target}`) computes what it is asked for, as today.
 The per-job rules of RFC-0004 section 4.5 still hold: a tick is skipped while the previous
 run for the same scheduled node is still going, and one catch-up tick fires at startup.
 
@@ -172,6 +211,10 @@ run for the same scheduled node is still going, and one catch-up tick fires at s
 - Rule 3 needs the server to know which input versions a task's last successful run used.
   Whether the existing run and step records carry enough, or a small addition is needed, is
   to be settled in implementation; it must survive a restart.
+- Rule 9 needs a consecutive-failure count per scheduled node in `schedule_state`, reset on
+  success, on an explicit request and on an input change.
+- `max_failures` is a `Schedule` argument, so it is listed in `decorator_args.rs` and part of
+  the definition hash like the cron expression.
 - Rule 1 is level-triggered on purpose: each tick compares the present state with the
   desired state. A task that failed, a node edited under `--watch`, and a server that was
   down all converge at the next tick without separate machinery.
@@ -188,16 +231,18 @@ a task.
 ### 4.5 Edge Cases
 
 - **A step fails.** Its downstream nodes in that run are skipped, as in any run. At the next
-  tick the failed node is still out of date and is tried again (see section 10, question 3).
-- **A `Manual` asset that has never been computed.** A node that reads it cannot run. It is
-  reported as blocked on that input and is not an error of the tick.
+  tick the failed node is still out of date and is tried again, until `max_failures`.
+- **A `Manual` asset that has never been computed.** Under a tick, a node that reads it cannot
+  run; it is reported as blocked on that input and is not an error of the tick. Under
+  `barca get`, it is a usage error (exit 2) naming the node and the `--refresh` command that
+  computes it.
 - **A tick arrives while its previous run is still going.** It is skipped (RFC-0004). Nothing
   is lost: versions are compared by value, so the next tick sees the latest state.
 - **Two scheduled nodes above the same `Always` node.** Each one's tick reconciles it. If
   their ticks coincide, two runs may both compute a shared step. This is what remains of
   #253; see section 11.
 - **A task with no recorded run.** It is out of date, so it fires at the first tick that
-  reaches it (section 10, question 4).
+  reaches it (rule 10).
 
 ## 5. Determinism, Caching & Testing
 
@@ -210,9 +255,14 @@ Tests, all with an injected clock rather than real time:
   node under two scheduled nodes, and a node under none.
 - Server: the two examples in section 3 (unchanged sensor runs nothing; changed sensor
   computes the shared asset once and fires each task once; `Manual` in the chain stops the
-  task; an explicit refresh of the `Manual` node lets the next tick through); a failed task
-  is retried at the next tick and not before; a restart does not refire a task that is up
-  to date; `--watch` edit picked up at the next tick.
+  task; an explicit refresh of the `Manual` node lets the next tick through; a node below a
+  `Manual` node with another changed input is recomputed reading the pinned value); a failed
+  task is retried at the next tick and not before, skipped after `max_failures`, and retried
+  again after an explicit request; a restart does not refire a task that is up to date;
+  `--watch` edit picked up at the next tick.
+- CLI: `barca get` of a target behind a stale `Manual` node serves the pinned value and prints
+  the note; behind a never-computed one exits 2; `--refresh` of the `Manual` node recomputes
+  it. Contract snapshots and the `scheduling` and `cache` manual topics updated.
 
 ## 6. Performance
 
@@ -226,9 +276,10 @@ one-second cron before it ships.
 - **It changes what existing deployments do.** A pipeline that today has a scheduled sensor
   and unscheduled `Always` nodes below it will start running those nodes, tasks included,
   when the sensor changes. That is the documented meaning, but it is new behavior with side
-  effects, so it needs a minor version and a "Breaking" line (section 10, question 5).
-- **`Manual` in a scheduled node's upstream cone is no longer recomputed at its tick.**
-  Today it is.
+  effects, so it ships on by default in a minor version with a "Breaking" line.
+- **`Manual` in a scheduled node's upstream cone is no longer recomputed at its tick,** and
+  **`barca get` no longer recomputes a stale `Manual` upstream.** Today both are. This is the
+  second Breaking line.
 - Users who scheduled every consumer to work around the old behavior keep working, since
   `Schedule` nodes are left to their own ticks, but they keep the duplicate work until they
   move the schedule to the sensor.
@@ -255,26 +306,12 @@ three-value freshness field from RFC-0001 and gives the default a meaning instea
 
 ## 10. Unresolved Questions
 
-1. **A node with one changed input and one stale `Manual` input.** Proposed (rule 7): it is
-   updated, reading the `Manual` node's pinned result, because pinning a baseline while
-   other inputs move is what `Manual` is for. The stricter reading is that any stale
-   `Manual` ancestor blocks everything below it.
-2. **Does `Manual` also pin in `barca get` and `barca run`?** Today `barca get downstream`
-   recomputes a stale `Manual` upstream. Making it stay pinned unless named in `--refresh`
-   would match this RFC, and would be a breaking CLI change. Out of scope here; it needs
-   its own decision.
-3. **Retrying a failed task at every tick.** Proposed: yes, because the task is still out of
-   date. For a task with a short cron above it and a persistent failure this means a failed
-   run per tick. The alternative is to retry only when an input changes again.
-4. **A task seen for the first time.** Proposed: it fires at the first tick that reaches it.
-   The alternative is to record the current input versions without firing, so that adding a
-   notification task to a running deployment does not send one immediately.
-5. **Rollout.** Proposed: on by default in the release that ships it, with a "Breaking"
-   line. The alternative is a `barca serve` flag to opt in for one release.
-6. **Reporting.** How a tick's multi-target run appears in `GET /status/{run_id}`,
-   `GET /schedule`, the event stream, `barca history` (which `command` value, for a run that
-   mixes assets and tasks) and the web UI. The existing multi-target result shape should be
-   reused where one exists.
+None at acceptance. The six questions the draft carried were decided on 2026-10-14 and are in
+the rules above: a changed input beside a stale `Manual` input updates the node (rule 4);
+`Manual` pins in `barca get` too, as a Breaking change; a failed node retries every tick up to
+`max_failures` (rule 9); a new task fires at the first tick (rule 10); propagation is on by
+default with a Breaking line; a tick is one run with several targets in the existing
+multi-target shape (section 3.4).
 
 ## 11. Future Possibilities
 
