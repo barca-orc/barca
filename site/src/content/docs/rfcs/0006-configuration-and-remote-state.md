@@ -4,6 +4,7 @@ description: 'barca.toml, env var/CLI precedence, --env separation, and the opti
 ---
 
 - **Status:** Accepted (retroactive baseline — documents behavior as of v0.6.1)
+- **Superseded in part (2026-10-14):** the shared-state half of this RFC (optimistic mode, pull-before-run, the conditional push, `BARCA_STATE`) is superseded by [RFC-0009](/rfcs/0009-store-backup-and-restore/) (the store as backup) and [RFC-0007](/rfcs/0007-server-mode/) (sharing through a server). The configuration half (`barca.toml`, precedence, `--env`) stands.
 - **Date:** 2026-07-16
 - **Touches:** barca-core | barca-cli
 - **Supersedes / Related:** [RFC-0005](/rfcs/0005-artifact-serialization-and-storage/) (content-addressed artifacts this config points at), [RFC-0004](/rfcs/0004-http-server-api/) (`serve`'s shared-state restriction)
