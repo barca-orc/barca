@@ -682,3 +682,5 @@ Task return values remain usable through `barca run --json`, `-o value`, and `ba
 During get/run, non-JSON modes print stdout lines to stderr with `[node_id]` prefixes;
 `--agent` framework lines keep `[barca]` prefixes. JSON output suppresses captured prints;
 retrieve them with `barca logs` using the result's run id.
+
+See [Doctor and local debugging](/reference/doctor/) for prerequisite checks and a local-only debugging profile.
