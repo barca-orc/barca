@@ -224,8 +224,8 @@ barca get order_count pipeline.py --refresh-all                   # every asset 
 `--refresh` takes one comma-separated list (`--refresh a,b`). `--no-cache` is a deprecated
 spelling of `--refresh-all`. Do not delete files under `.barca/` to force a recompute.
 
-More: `barca docs cache`, which also lists what the run hash does not see (star imports,
-installed packages, environment variables not declared with `env=`).
+More: `barca docs cache`, which also lists what the run hash does not see (star imports in
+undecorated helpers, installed packages, environment variables not declared with `env=`).
 
 ## Large inputs
 
@@ -268,7 +268,8 @@ More: `barca docs big-inputs`, `barca docs types`.
 
 The target comes first, then files or directories. Both are optional: with no files,
 barca reads every `.py` file under the project root that imports barca
-(`barca docs discovery`).
+(`barca docs discovery`). A project star import with a literal `__all__` preserves Barca
+decorator and group bindings when its exports do not collide with their local names.
 
 ```bash
 barca get summary pipeline.py     # an asset and what it depends on

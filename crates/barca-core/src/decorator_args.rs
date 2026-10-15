@@ -482,6 +482,131 @@ fn exported(name: &str) -> Option<&'static str> {
     exported_names().find(|n| *n == name)
 }
 
+/// Only a single literal __all__ with no other reads/writes or namespace reflection
+/// proves a project's star-export set. Computed/mutated sets stay unknown.
+pub(crate) fn literal_star_exports(source: &str) -> Option<Vec<String>> {
+    let parsed = ruff_python_parser::parse_module(source).ok()?;
+    struct Safety {
+        references: usize,
+        uncertain: bool,
+    }
+    impl<'a> Visitor<'a> for Safety {
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            let name = match expr {
+                Expr::Name(n) => Some(n.id.as_str()),
+                Expr::Attribute(a) => Some(a.attr.as_str()),
+                _ => None,
+            };
+            if name == Some("__all__") {
+                self.references += 1;
+            }
+            if name.is_some_and(|n| {
+                matches!(
+                    n,
+                    "globals"
+                        | "locals"
+                        | "vars"
+                        | "exec"
+                        | "eval"
+                        | "__builtins__"
+                        | "setattr"
+                        | "delattr"
+                )
+            }) {
+                self.uncertain = true;
+            }
+            if matches!(expr, Expr::StringLiteral(s) if s.value.to_str() == "__all__") {
+                self.uncertain = true;
+            }
+            visitor::walk_expr(self, expr);
+        }
+        fn visit_except_handler(&mut self, handler: &'a ast::ExceptHandler) {
+            let ast::ExceptHandler::ExceptHandler(h) = handler;
+            if h.name.as_ref().is_some_and(|n| n.as_str() == "__all__") {
+                self.uncertain = true;
+            }
+            visitor::walk_except_handler(self, handler);
+        }
+        fn visit_pattern(&mut self, pattern: &'a ast::Pattern) {
+            let name = match pattern {
+                ast::Pattern::MatchAs(p) => p.name.as_ref(),
+                ast::Pattern::MatchStar(p) => p.name.as_ref(),
+                ast::Pattern::MatchMapping(p) => p.rest.as_ref(),
+                _ => None,
+            };
+            if name.is_some_and(|n| n.as_str() == "__all__") {
+                self.uncertain = true;
+            }
+            visitor::walk_pattern(self, pattern);
+        }
+        fn visit_stmt(&mut self, stmt: &'a ast::Stmt) {
+            match stmt {
+                ast::Stmt::ImportFrom(i) => {
+                    if i.names.iter().any(|a| {
+                        matches!(
+                            a.name.as_str(),
+                            "*" | "__all__"
+                                | "globals"
+                                | "locals"
+                                | "vars"
+                                | "exec"
+                                | "eval"
+                                | "setattr"
+                                | "delattr"
+                        ) || a.asname.as_ref().is_some_and(|n| n.as_str() == "__all__")
+                    }) {
+                        self.uncertain = true;
+                    }
+                }
+                ast::Stmt::FunctionDef(f) if f.name.as_str() == "__all__" => self.uncertain = true,
+                ast::Stmt::ClassDef(c) if c.name.as_str() == "__all__" => self.uncertain = true,
+                ast::Stmt::Import(i)
+                    if i.names.iter().any(|a| {
+                        a.name.as_str() == "__all__"
+                            || a.asname.as_ref().is_some_and(|n| n.as_str() == "__all__")
+                    }) =>
+                {
+                    self.uncertain = true
+                }
+                _ => {}
+            }
+            visitor::walk_stmt(self, stmt);
+        }
+    }
+    let body = &parsed.syntax().body;
+    let mut safety = Safety {
+        references: 0,
+        uncertain: false,
+    };
+    visitor::walk_body(&mut safety, body);
+    if safety.uncertain || safety.references != 1 {
+        return None;
+    }
+    let value = body.iter().find_map(|stmt| match stmt {
+        ast::Stmt::Assign(a)
+            if a.targets.len() == 1
+                && matches!(&a.targets[0], Expr::Name(n) if n.id.as_str() == "__all__") =>
+        {
+            Some(a.value.as_ref())
+        }
+        ast::Stmt::AnnAssign(a)
+            if matches!(a.target.as_ref(), Expr::Name(n) if n.id.as_str() == "__all__") => a.value.as_deref(),
+        _ => None,
+    })?;
+    let elements = match value {
+        Expr::List(l) => &l.elts,
+        Expr::Tuple(t) => &t.elts,
+        _ => return None,
+    };
+    elements
+        .iter()
+        .map(|e| match e {
+            Expr::StringLiteral(s) => Some(s.value.to_str().to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
 impl BarcaNames {
     pub fn contains(&self, name: &str) -> bool {
         self.proven.contains_key(name)
@@ -628,6 +753,14 @@ impl BarcaNames {
     }
 
     pub fn of(body: &[ast::Stmt]) -> Self {
+        Self::with_star_exports(body, |_| None)
+    }
+
+    /// A project resolver can prove a star import's finite export set without importing it.
+    pub(crate) fn with_star_exports(
+        body: &[ast::Stmt],
+        exports: impl Fn(&ast::StmtImportFrom) -> Option<Vec<String>>,
+    ) -> Self {
         use ast::Stmt;
         use std::collections::{HashMap, HashSet};
 
@@ -685,7 +818,8 @@ impl BarcaNames {
         }
 
         /// Everything else that binds a name at module scope.
-        struct Bindings<'s> {
+        struct Bindings<'s, F> {
+            exports: &'s F,
             top_level_imports: &'s HashSet<usize>,
             module_aliases: HashSet<String>,
             mutated_exports: HashSet<&'static str>,
@@ -693,10 +827,10 @@ impl BarcaNames {
             nested: usize,
             rebound: HashSet<String>,
             /// Offsets of `from <not barca> import *`.
-            foreign_stars: Vec<usize>,
+            foreign_stars: Vec<(usize, Option<HashSet<String>>)>,
             reflective_namespace: bool,
         }
-        impl Bindings<'_> {
+        impl<F> Bindings<'_, F> {
             fn bind(&mut self, name: &str) {
                 if self.nested == 0 {
                     self.rebound.insert(name.to_string());
@@ -724,7 +858,7 @@ impl BarcaNames {
                 }
             }
         }
-        impl<'a> Visitor<'a> for Bindings<'_> {
+        impl<'a, F: Fn(&ast::StmtImportFrom) -> Option<Vec<String>>> Visitor<'a> for Bindings<'_, F> {
             fn visit_stmt(&mut self, stmt: &'a Stmt) {
                 if let Stmt::ImportFrom(import) = stmt
                     && import.names.iter().any(|alias| {
@@ -790,7 +924,11 @@ impl BarcaNames {
                         for alias in &imp.names {
                             if alias.name.as_str() == "*" {
                                 if !positive && self.nested == 0 {
-                                    self.foreign_stars.push(at);
+                                    self.foreign_stars.push((
+                                        at,
+                                        (self.exports)(imp)
+                                            .map(|names| names.into_iter().collect()),
+                                    ));
                                 }
                             } else if (!positive || exported(alias.name.as_str()).is_none())
                                 && let Some(asname) = &alias.asname
@@ -869,6 +1007,7 @@ impl BarcaNames {
         }
 
         let mut bindings = Bindings {
+            exports: &exports,
             top_level_imports: &top_level_imports,
             module_aliases,
             mutated_exports: HashSet::new(),
@@ -883,15 +1022,20 @@ impl BarcaNames {
         let mut bound = bindings.rebound.clone();
         bound.extend(imported.keys().cloned());
         bound.extend(bindings.mutated_exports.iter().map(|name| name.to_string()));
-        if !bindings.foreign_stars.is_empty() {
-            bound.extend(exported_names().map(str::to_string));
+        for (_, exports) in &bindings.foreign_stars {
+            match exports {
+                Some(names) => bound.extend(names.iter().cloned()),
+                None => bound.extend(exported_names().map(str::to_string)),
+            }
         }
         let candidates: HashMap<String, &'static str> = imported
             .iter()
             .filter(|(name, (canonical, at))| {
                 !bindings.mutated_exports.contains(canonical)
                     && !bindings.rebound.contains(*name)
-                    && !bindings.foreign_stars.iter().any(|star| star > at)
+                    && !bindings.foreign_stars.iter().any(|(star, exports)| {
+                        star > at && exports.as_ref().is_none_or(|names| names.contains(*name))
+                    })
             })
             .map(|(name, (canonical, _))| (name.clone(), *canonical))
             .collect();
