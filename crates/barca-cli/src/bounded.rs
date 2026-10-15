@@ -66,6 +66,7 @@ pub const STEP_FIELDS: &[&str] = &[
     "artifact",
     "warning",
     "artifact_mismatch",
+    "bytes_changed",
     "partitions",
     "env",
 ];
@@ -90,6 +91,7 @@ pub const STATUS_FIELDS: &[&str] = &[
     "cache",
     "partitions",
     "last_materialization",
+    "last_bytes_change",
     "shape",
     "env",
 ];
@@ -191,6 +193,7 @@ mod tests {
             run_hash: s(),
             artifact: s(),
             artifact_mismatch: Some(true),
+            bytes_changed: Some(true),
             warning: s(),
             partitions: Some(Default::default()),
             env: Some(Default::default()),
@@ -233,6 +236,12 @@ mod tests {
                 missing_keys: vec![],
             }),
             last_materialization: None,
+            last_bytes_change: Some(barca_core::db::BytesChange {
+                node_id: String::new(),
+                run_hash: String::new(),
+                content_hash: String::new(),
+                created_at: String::new(),
+            }),
             shape: None,
             env: vec![],
         };

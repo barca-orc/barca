@@ -808,3 +808,25 @@ shutdown, with dead-process cleanup as the crash backstop.
 
 Paths still identify code and inputs, so a later refresh can replace local and remote bytes.
 This receipt guarantee does not isolate concurrent result reads from those replacements.
+
+## Recompute byte checks
+
+Every new successful materialization records a SHA-256 digest of the serialized bytes.
+A recompute of the same node and run hash compares with its preceding successful digest.
+If the bytes differ, barca warns that the function is not deterministic and sets
+`steps[].bytes_changed: true` in run JSON. A new code/input hash is an expected change
+and does not warn. Legacy rows without a digest establish a baseline on recompute.
+This checks serialized bytes, so a serializer that emits variable metadata can also warn.
+Artifact paths and exit codes are unchanged.
+
+`barca status` shows the last such event even after a later unchanged recompute. JSON
+includes `last_bytes_change` with the exact node id, run hash, digest and UTC timestamp,
+and `last_materialization.content_hash` when a digest was recorded. Partition events
+are compared per key; the run's partitioned step report is marked if any key changed.
+Checkpoint and terminal writes retain the same finding without creating a second row.
+See `specs/materialization-digests.md` for the native boundary.
+
+```bash
+barca get orders pipeline.py --refresh orders --json   # compare recomputed bytes with the last digest
+barca status orders pipeline.py --json                 # last byte-change event and current digest
+```

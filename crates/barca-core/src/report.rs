@@ -193,6 +193,16 @@ pub fn render_status_table(result: &crate::status::StatusResult) -> String {
     for r in &rows {
         line(r);
     }
+    for node in &result.nodes {
+        if let Some(event) = &node.last_bytes_change {
+            writeln!(
+                &mut rendered,
+                "{}: different bytes for the same code and inputs at {} ({})",
+                node.name, event.created_at, event.node_id
+            )
+            .unwrap();
+        }
+    }
     let s = &result.summary;
     writeln!(
         &mut rendered,

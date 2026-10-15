@@ -632,25 +632,20 @@ def _materialize(
         path = artifact_path(art_dir, node_id, fmt, run_hash)
     _ser_wall0 = time.perf_counter()
     _ser_cpu0 = time.process_time()
-    # A sensor's output is hashed: the coordinator folds the hash into the run hash of every
-    # asset that reads the sensor, so a changed output re-runs them.
+    # Hash producer-owned bytes for every materialization; sensor hashes also
+    # participate in downstream run hashes.
     content_hash = None
     upload_snapshot = None
-    # A directory where the artifact file belongs is not an artifact: it is moved out of
-    # the way (never deleted) so the step's result can be written. Sinks are the user's
-    # paths and never get this treatment.
     local = _storage.local_path_of(path)
     if local is not None:
         _storage.make_way(local)
     snapshot_prefix = os.environ.get("BARCA_UPLOAD_SNAPSHOT_PREFIX")
     if snapshot_prefix and not step.get("branch"):
         size, content_hash, upload_snapshot = serialize_for_upload(
-            result, path, fmt, snapshot_prefix, want_hash=step.get("kind") == "sensor"
+            result, path, fmt, snapshot_prefix, want_hash=True
         )
-    elif step.get("kind") == "sensor":
-        size, content_hash = serialize_hashed(result, path, fmt)
     else:
-        size = serialize(result, path, fmt)
+        size, content_hash = serialize_hashed(result, path, fmt)
     elapsed += time.perf_counter() - _ser_wall0
     if timing and timing.get("cpu_seconds") is not None:
         timing = {

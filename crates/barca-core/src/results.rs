@@ -140,6 +140,9 @@ pub struct StepReport {
     /// and `warning` says which and how to recompute it. Absent otherwise (never `false`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifact_mismatch: Option<bool>,
+    /// This recompute produced different bytes for the same node and run hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes_changed: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub partitions: Option<PartitionSummary>,
     /// Declared env values the step used (`@asset(env=[...])`): name -> value, `null` when unset,

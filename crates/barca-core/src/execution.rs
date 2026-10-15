@@ -1314,7 +1314,7 @@ async fn return_outputs(
     session: &mut RunSession<'_, '_>,
     elapsed: f64,
 ) -> Result<Executed, BarcaError> {
-    let (step_reports, outcomes, final_output) = finalize_outputs(
+    let (mut step_reports, outcomes, final_output) = finalize_outputs(
         &session.prepared.dag,
         &session.prepared.targets,
         &session.prepared.exec_plan,
@@ -1328,6 +1328,18 @@ async fn return_outputs(
         &session.started.cancel,
     )
     .await?;
+
+    let changed =
+        db::changed_bytes_in_run(&session.request.cfg.db_path, &session.started.run_id).await?;
+    for node in &changed {
+        crate::errln!(
+            "[barca] warning: {node} produced different bytes for the same code and inputs; the function is not deterministic"
+        );
+        let base = crate::StepId::parse(node).base_id().to_string();
+        if let Some(report) = step_reports.iter_mut().find(|report| report.id == base) {
+            report.bytes_changed = Some(true);
+        }
+    }
 
     Ok(Executed {
         result: GetResult {
