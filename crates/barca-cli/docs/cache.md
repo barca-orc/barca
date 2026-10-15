@@ -218,6 +218,11 @@ If a reached helper catches `helpers.Error`, changing that project definition in
 its consumers. A bare `except:` adds no exception-type dependency. Existing affected
 consumers may recompute once after this dependency-tracking correction.
 
+References in set literal elements are followed, just like list and tuple elements.
+For example, `{helpers.compute()}` includes the project helper's dependency cone; a set of
+constants adds no helper dependency. Existing affected consumers may recompute once after
+this dependency-tracking correction.
+
 Default argument expressions are followed for steps and reached helpers, including
 positional-only and keyword-only parameters, nested functions and lambdas. For example,
 `def value(x=helpers.compute()): ...` includes `helpers.compute` in the dependency cone.
@@ -244,6 +249,9 @@ An edit in one of these does not change the hash; recompute with `--refresh-all`
   `helpers.py` does `import other`): import it directly;
 - what a helper refers to only in a decorator, a `match` pattern, a set literal (`{f()}`),
   an assignment target
+
+- what a helper refers to only in a decorator, an `except` clause's exception type,
+  a `match` pattern, an assignment target
   (`table[key()] = ...`) or a loop's `else:` block. The helper's own text is hashed, but those
   references are not followed. (This is about helper functions. The decorators of a step
   itself are covered by "Which decorator arguments count" above; default argument references

@@ -1125,6 +1125,7 @@ impl<'p> UseCollector<'p> {
                 }
             }
             Expr::List(l) => self.exprs(&l.elts),
+            Expr::Set(s) => self.exprs(&s.elts),
             Expr::Tuple(t) => self.exprs(&t.elts),
             Expr::Lambda(l) => {
                 if let Some(parameters) = &l.parameters {
@@ -2115,6 +2116,28 @@ def my_asset():
         );
     }
 
+    #[test]
+    fn set_literal_elements_follow_project_helpers() {
+        let project =
+            |n: u32| sources(&[("helpers", &format!("def compute():\n    return {n}\n"))]);
+        for entry in [
+            "import helpers\ndef my_asset():\n    return {helpers.compute()}\n",
+            "from helpers import compute\ndef my_asset():\n    return {compute(), 7}\n",
+            "def my_asset():\n    import helpers as local\n    return {local.compute(), 7}\n",
+        ] {
+            assert_ne!(
+                hash_of(entry, &project(1), &[]),
+                hash_of(entry, &project(2), &[]),
+                "{entry}"
+            );
+        }
+        let literal = "import helpers\ndef my_asset():\n    return {1, 7}\n";
+        assert_eq!(
+            hash_of(literal, &project(1), &[]),
+            hash_of(literal, &project(2), &[])
+        );
+    }
+
     // ─── Known limitations, as `barca docs cache` lists them ─────────────────────
 
     /// Not followed today. Each of these is in the manual ("Not followed"); when one starts
@@ -2140,10 +2163,6 @@ def my_asset():
             (
                 "decorator",
                 "from helpers import compute\n\ndef wrap(v):\n    return lambda f: f\n\n@wrap(compute())\ndef inner():\n    return 1\n\ndef my_asset():\n    return inner()\n",
-            ),
-            (
-                "set literal",
-                "import helpers\n\ndef my_asset():\n    return {helpers.compute()}\n",
             ),
             (
                 "loop else",
