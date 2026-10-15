@@ -67,6 +67,10 @@ pub struct SubmitItem {
 /// Reference to a materialized artifact.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArtifactRef {
+    /// Run-owned bytes pinned before the reusable artifact path is published.
+    /// Internal transfer source; never an artifact identity or persisted path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upload_snapshot: Option<String>,
     pub path: String,
     pub format: String,
     pub size_bytes: u64,
@@ -341,6 +345,7 @@ mod tests {
         let msg = WorkerMessage::StepCompleted {
             node_id: "load_data".to_string(),
             artifact: ArtifactRef {
+                upload_snapshot: None,
                 path: "/tmp/artifacts/load_data.json".to_string(),
                 format: "json".to_string(),
                 size_bytes: 1024,
@@ -417,6 +422,7 @@ mod tests {
         let msg = WorkerMessage::StepCompleted {
             node_id: "n".to_string(),
             artifact: ArtifactRef {
+                upload_snapshot: None,
                 path: "abfss://cont@acct.dfs.core.windows.net/arts/n.parquet".to_string(),
                 format: "parquet".to_string(),
                 size_bytes: 42,
@@ -595,6 +601,7 @@ mod tests {
             WorkerMessage::StepCompleted {
                 node_id: "step_1".to_string(),
                 artifact: ArtifactRef {
+                    upload_snapshot: None,
                     path: "/tmp/step_1.json".to_string(),
                     format: "json".to_string(),
                     size_bytes: 512,

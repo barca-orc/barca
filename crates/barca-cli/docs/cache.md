@@ -796,3 +796,15 @@ cached second run reports 0 for assets.
 A decorated pipeline function in a file with a top-level project star import conservatively
 hashes the imported module and its static imports. Editing any part of that module can
 invalidate the node; this preserves cache safety when discovery proves its literal `__all__`.
+
+## Upload receipts during a concurrent refresh
+
+An upload pins the serializing run's bytes before publishing the reusable local artifact
+path. Its confirmed hash and byte count describe those uploaded bytes, even when another
+run replaces that path before the transfer starts. Sensor content hashes keep their existing
+meaning; ordinary asset rows use the confirmed upload hash. Failed or cancelled uploads do
+not record a successful remote materialization. Staging is removed at confirmation or run
+shutdown, with dead-process cleanup as the crash backstop.
+
+Paths still identify code and inputs, so a later refresh can replace local and remote bytes.
+This receipt guarantee does not isolate concurrent result reads from those replacements.
