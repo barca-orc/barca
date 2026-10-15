@@ -115,7 +115,7 @@ def test_invalid_transfer_settings_are_infrastructure_errors(tmp_path):
             timeout=10,
         )
         assert proc.returncode == 3
-        envelope = json.loads(proc.stderr.strip().splitlines()[-1])
+        envelope = json.loads(next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{")))
         assert envelope["kind"] == "infra" and variable in envelope["error"]
         assert not (tmp_path / ".barca").exists()
 

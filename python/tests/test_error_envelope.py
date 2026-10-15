@@ -67,9 +67,9 @@ def barca_cli(cwd: Path, *args: str) -> subprocess.CompletedProcess:
 
 
 def envelope(proc: subprocess.CompletedProcess) -> dict:
-    """The last stderr line, which must be the JSON envelope; checks the shared contract."""
+    """The last JSON error object on stderr; failed runs end with a separate summary."""
     assert proc.returncode != 0, proc.stderr
-    last = proc.stderr.strip().splitlines()[-1]
+    last = next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{"))
     env = json.loads(last)
     if env["kind"] == "step_failed" and proc.stdout:
         result = json.loads(proc.stdout)  # one line: the failed run's result, not the error
@@ -171,7 +171,7 @@ def test_human_mode_keeps_prose_and_appends_the_remediation(project):
     assert proc.stdout == ""
     assert "Worker failed: ZeroDivisionError: division by zero" in proc.stderr
     assert "return x / 0" in proc.stderr
-    assert proc.stderr.rstrip().endswith("will not re-run.")
+    assert "will not re-run.\n[barca] run failed:" in proc.stderr
     assert not proc.stderr.strip().splitlines()[-1].startswith("{")
 
 

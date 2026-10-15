@@ -57,7 +57,7 @@ def barca_cmd(cwd: Path, *args: str) -> subprocess.CompletedProcess:
 
 
 def envelope(proc: subprocess.CompletedProcess) -> dict:
-    return json.loads(proc.stderr.strip().splitlines()[-1])
+    return json.loads(next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{")))
 
 
 @pytest.mark.parametrize(

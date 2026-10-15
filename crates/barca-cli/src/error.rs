@@ -40,6 +40,9 @@ impl CliErrorExt for CliError {
     /// Write the error to stderr and exit with its code.
     fn emit(&self, json: bool) -> ! {
         barca_core::errln!("{}", self.render(json));
+        if let Some(line) = self.run_failure_line() {
+            barca_core::errln!("{line}");
+        }
         barca_core::term::exit(self.code())
     }
 }

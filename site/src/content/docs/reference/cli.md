@@ -573,7 +573,7 @@ target: a syntax error, or a decorator called with an argument it does not defin
 
 In JSON output mode (whenever results are JSON: piped or captured stdout, `--json`, `-o json` or
 `BARCA_OUTPUT=json`; `plan` always; `docs` with `--json`), an error is a single JSON line, the
-last line on stderr:
+last JSON error object on stderr (a failed run adds its summary afterwards):
 
 ```
 {"code":2,"error":"Asset 'nope' not found. Available: pipeline.py:orders, pipeline.py:total, pipeline.py:notify","kind":"usage","remediation":"Run `barca list pipeline.py` to see available assets and tasks."}
@@ -596,8 +596,8 @@ same fields as attributes (`kind`, `code`, `remediation`, `node`, `traceback`, `
 When a step fails in JSON mode, `get`/`run` still print one result line on stdout, so you can
 read the outcome without parsing stderr: `{"status": "failed", "failed_node": ..., "error": ...,
 "run_id", "steps", ...}`, where the failed step's `status` is `failed`. A successful result has
-`"status": "success"`. Just before the error, stderr gets one greppable line:
-`[barca] run failed: step 'pipeline.py:clean' failed (exit 1)`.
+`"status": "success"`. After the error, stderr ends with one greppable line:
+`[barca] run failed: step 'pipeline.py:clean' failed: ZeroDivisionError: division by zero; 0 downstream steps skipped (exit 1)`.
 
 ## version
 

@@ -105,15 +105,6 @@ fn main() {
             .emit(json)
         });
     if let Err(e) = rt.block_on(run_cli(cli, &ctx)) {
-        // A failed run gets one greppable line naming the step, right before the error.
-        if e.kind == ErrorKind::StepFailed
-            && let Some(node) = &e.node
-        {
-            barca_core::errln!(
-                "[barca] run failed: step '{node}' failed (exit {})",
-                e.code()
-            );
-        }
         e.emit(json);
     }
     drop(rt);

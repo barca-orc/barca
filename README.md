@@ -296,6 +296,9 @@ error (exit 2) that names the right one. `barca pipeline.py` is short for
 | `barca docs [topic]` | The manual, compiled into the binary. `--all`, `--json`, `--fields` |
 | `barca version` | Print the version (also `barca --version`). |
 
+Failed runs end stderr with the failed step, its first error line and the count of skipped
+downstream nodes. JSON retains the detailed step and target outcomes.
+
 `--fields a,b` keeps only those keys on each item of the JSON output. Every
 `barca <command> --help` ends with runnable examples.
 
