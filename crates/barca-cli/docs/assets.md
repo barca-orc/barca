@@ -69,7 +69,7 @@ Star-import dependency hashing remains conservative.
 | `inputs={"param": upstream}` | Wire upstream nodes to parameters. The param name must match a function parameter. |
 | `name="..."` | Explicit node name (the default is the function name). |
 | `freshness=` | `Always` (default), `Manual`, or `Schedule("<cron>")`. |
-| `serializer=` | Force `"json"`, `"pickle"` or `"parquet"`. See `barca docs types`. |
+| `serializer=` | Force `"json"`, `"pickle"`, `"parquet"` or `"csv"`. See `barca docs types`. |
 | `partitions=` | Fan one asset out over keys. See `barca docs partitions`. |
 | `timeout_seconds=` | Per-attempt time limit (default 300). |
 | `retries=` | Total attempts on failure; 1 means no retry. |

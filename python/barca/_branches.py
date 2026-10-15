@@ -71,7 +71,7 @@ def unwritable(step: dict, value, exc: BaseException) -> Exception:
 
 def frame_type(value, fmt: str) -> str | None:
     """The reader that gives back the type `value` has, when it was written as parquet."""
-    if fmt != "parquet":
+    if fmt not in ("parquet", "csv"):
         return None
     from barca._artifacts import _frame_kind
 

@@ -438,6 +438,7 @@ fn extract_serializer_kind(expr: &Expr) -> Option<SerializerKind> {
     match name.to_lowercase().as_str() {
         "json" => Some(SerializerKind::Json),
         "parquet" => Some(SerializerKind::Parquet),
+        "csv" => Some(SerializerKind::Csv),
         "pickle" => Some(SerializerKind::Pickle),
         "text" => Some(SerializerKind::Text),
         "yaml" => Some(SerializerKind::Yaml),

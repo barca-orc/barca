@@ -452,7 +452,7 @@ with the reason, its last run, and the shape of its result. It runs nothing.
 barca status total pipeline.py                   # only `total` and its upstream cone
 barca status total,notify pipeline.py            # several targets: the union of their cones
 barca status pipeline.py --json                  # {target, targets, nodes, summary, total, truncated, root}
-barca status pipeline.py --json --sample 5       # plus up to 5 sample rows per json/parquet artifact
+barca status pipeline.py --json --sample 5       # plus up to 5 sample rows per json/parquet/CSV artifact
 ```
 
 ```
@@ -515,7 +515,7 @@ is a usage error (exit 2). See `barca docs status`.
 Query cached results with DuckDB. Every asset, sensor and task with a result on disk is a view
 named after its declared `name=`, or its function when unset; a partitioned asset is one
 view with a `partition` column. No step
-runs, your code is not imported, and no run is recorded. Only parquet and json results are
+runs, your code is not imported, and no run is recorded. Only parquet, CSV and json results are
 views; a pickled result cannot be queried. Install SQL support with `uv add 'barca[sql]'`. With a remote store it first pulls the shared history into `.barca/`, and the
 artifacts of the views a query names are downloaded into `.barca/sql-cache/` and reused.
 Experimental.

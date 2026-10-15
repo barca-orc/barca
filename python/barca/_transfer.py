@@ -19,7 +19,7 @@ reply carries the request id.
        listing; anything else is an "error". Nothing is ever created by a probe.
   → {"type": "shutdown"}                        finish in-flight work, exit
   ← {"type": "done", "id", "size_bytes", "sha256", "fetched", "mismatch"}
-       "sha256" is the local file's; "fetched" is false when a get left the local file as it
+       "sha256" identifies the exact uploaded snapshot for a put and the local copy for a get; "fetched" is false when a get left the local file as it
        was; "mismatch" is true when the store's copy does not have the recorded hash. That
        is not an error: an artifact path is `{node}/{run_hash}`, so a refresh or a second
        machine computing the same step overwrites it, and the store's copy is still used.
@@ -46,6 +46,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from barca import _lifeline, _runtime, _storage
+from barca._artifacts import _pin_file
 
 _DEFAULT_CONCURRENCY = 4
 _DEFAULT_RETRIES = 3
@@ -135,8 +136,17 @@ def _transfer(msg: dict) -> dict:
         return {"size_bytes": 0, "fetched": False, "mismatch": False}
     local = msg["local"]
     if msg["type"] == "put":
-        _storage.put_file(local, msg["remote"])
-        result = {"sha256": _sha256(local), "fetched": True, "mismatch": False}
+        # SDKs reopen filenames. Give both the SDK and receipt calculation the
+        # same immutable inode, rather than reopening a producer's replacement.
+        with _storage.staged_beside(Path(local)) as snapshot:
+            _pin_file(local, snapshot)
+            _storage.put_file(str(snapshot), msg["remote"])
+            return {
+                "size_bytes": snapshot.stat().st_size,
+                "sha256": _sha256(snapshot),
+                "fetched": True,
+                "mismatch": False,
+            }
     else:
         expected = msg.get("sha256")
         if expected is not None and _local_sha256(local) == expected:
@@ -327,9 +337,30 @@ def _env_float(name: str, default: float) -> float:
     return float(raw) if raw else default
 
 
+def _cleanup_upload_snapshots() -> None:
+    prefix = os.environ.get("BARCA_UPLOAD_SNAPSHOT_PREFIX")
+    if not prefix:
+        return
+    owned = Path(prefix)
+    try:
+        for entry in owned.parent.iterdir():
+            if entry.name.lstrip(".").startswith(owned.name):
+                entry.unlink(missing_ok=True)
+    except OSError:
+        # Dead-PID cleanup on the next worker startup remains the crash backstop.
+        pass
+
+
+def _leave() -> None:
+    _storage.discard_staged()
+    _cleanup_upload_snapshots()
+    os._exit(0)
+
+
 def _stop(signum, frame) -> None:
     """Asked to stop mid-transfer: leave no half-written temp file behind, then exit."""
     _storage.discard_staged()
+    _cleanup_upload_snapshots()
     os._exit(128 + signum)
 
 
@@ -349,7 +380,7 @@ def main() -> int:
     signal.signal(signal.SIGTTOU, signal.SIG_IGN)
     signal.signal(signal.SIGTERM, _stop)
     # Deaf to Ctrl-C, so this process must notice by itself when the coordinator is gone.
-    _lifeline.watch()
+    _lifeline.watch(on_gone=_leave)
     try:
         sock = _runtime.connect(role="transfer")
     except OSError as exc:
@@ -374,6 +405,7 @@ def main() -> int:
     # Whatever was still in flight is abandoned (the coordinator disconnected, or an attempt
     # timed out): leave no temp file of it.
     _storage.discard_staged()
+    _cleanup_upload_snapshots()
     # Exit without joining pool threads: a timed-out attempt may be stuck in
     # a network call that would otherwise keep the process alive.
     sys.stdout.flush()

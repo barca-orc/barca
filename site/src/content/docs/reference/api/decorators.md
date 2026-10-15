@@ -123,7 +123,7 @@ only when its run hash changes, that is, when its code, an input, a sensor value
 partition key or a declared environment variable changes.
 
 `inputs` maps a parameter name to an upstream node. `name` replaces the function name in the
-node id. `serializer` forces `"json"`, `"pickle"` or `"parquet"`. `timeout_seconds` is the
+node id. `serializer` forces `"json"`, `"pickle"`, `"parquet"` or `"csv"`. `timeout_seconds` is the
 limit for one attempt. `description` and `tags` are metadata.
 
 `retries` is the total number of attempts on failure (1 = no retry). `retry_backoff` is the base
@@ -361,8 +361,8 @@ def banana() -> dict:
     return {'a': 1}
 ```
 
-- The format comes from `serializer=` (`json`, `pickle`, `parquet`), else the path's extension
-  (`.json`, `.pkl`, `.pickle`, `.parquet`), else the asset's own artifact format.
+- The format comes from `serializer=` (`json`, `pickle`, `parquet`, `csv`), else the path's extension
+  (`.json`, `.pkl`, `.pickle`, `.parquet`, `.csv`), else the asset's own artifact format.
 - A parquet sink needs a DataFrame, Arrow table or DuckDB relation. Anything else is a sink
   failure.
 - Writes go to a temporary file first and are then renamed or uploaded, so a crash does not
@@ -400,7 +400,7 @@ cone includes it. See `@asset` above for `env`, `retries` and `retry_backoff`.
 
 `partitions` runs the sensor once per key, with the key passed as the parameter named in the
 dict; each key's value is stored on its own. `serializer` forces the format the value is stored
-in (`"json"`, `"pickle"` or `"parquet"`).
+in (`"json"`, `"pickle"`, `"parquet"` or `"csv"`).
 
 ```python
 from pathlib import Path
@@ -596,3 +596,15 @@ references. Argument validation then follows Python at runtime, and nodes with a
 decorator conservatively hash their entire module and statically tracked dependencies.
 These checks cover explicit syntax; they do not resolve arbitrary reflective indirection,
 runtime side effects or dynamically imported dependencies.
+
+### CSV outputs
+
+`@asset(serializer="csv")`, `@sensor(serializer="csv")` and `@task(serializer="csv")`
+write frames as CSV. `@sink("exports/orders.csv")` infers CSV from the extension.
+Pandas, Polars (including LazyFrame), Arrow tables and DuckDB relations are supported.
+Writers include column headers and omit the pandas index. Parameter annotations select
+pandas (the default), Polars, Arrow or DuckDB readers. Readers infer types; CSV does not
+preserve exact dtypes, indexes, null/empty-string distinctions or nested columns.
+Unsupported values fail rather than falling back to pickle. Remote lazy CSV inputs are
+materialized before exposing their lazy interface. Frames still default to Parquet.
+CSV artifacts are also available to `barca sql` and `barca status --sample`.

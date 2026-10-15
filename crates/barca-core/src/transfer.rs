@@ -44,6 +44,14 @@ pub(crate) fn diagnostic_uri(uri: &str) -> String {
     plain.to_string()
 }
 
+/// Shared run-owned upload staging identity, handed to workers and the helper.
+pub(crate) fn upload_snapshot_prefix(run_id: &str) -> std::io::Result<PathBuf> {
+    Ok(std::env::current_dir()?
+        .join(".barca/staging")
+        .join(std::process::id().to_string())
+        .join(format!("upload-{run_id}-")))
+}
+
 // ─── Path mapping ────────────────────────────────────────────────────────────
 
 /// Maps artifact paths between the local artifact dir and the store root.
@@ -331,6 +339,10 @@ impl TransferClient {
             cfg.storage_options_json.as_deref(),
         );
         cmd.env(
+            "BARCA_UPLOAD_SNAPSHOT_PREFIX",
+            upload_snapshot_prefix(run_id)?,
+        );
+        cmd.env(
             "BARCA_TRANSFER_CONCURRENCY",
             cfg.transfer_concurrency.to_string(),
         )
@@ -388,29 +400,31 @@ impl TransferClient {
     /// Queue an upload of a worker-reported local artifact. Returns its store
     /// location, or None when `local` is not under the local artifact dir.
     pub fn upload(&mut self, key: &str, local: &str) -> Option<String> {
-        self.queue_upload(key, local, None)
+        self.queue_upload(key, local, local, None)
     }
 
     pub(crate) fn upload_confirmed(
         &mut self,
         key: &str,
         local: &str,
+        source: &str,
         uploaded: UploadNotice,
     ) -> Option<String> {
-        self.queue_upload(key, local, Some(uploaded))
+        self.queue_upload(key, local, source, Some(uploaded))
     }
 
     fn queue_upload(
         &mut self,
         key: &str,
         local: &str,
+        source: &str,
         uploaded: Option<UploadNotice>,
     ) -> Option<String> {
         let store = self.layout.store_for(local)?;
         let rx = self.send_observed(
             |id| TransferRequest::Put {
                 id,
-                local: local.to_string(),
+                local: source.to_string(),
                 remote: store.clone(),
             },
             uploaded,
@@ -1015,6 +1029,7 @@ for t in threads: t.join()
         c.upload_confirmed(
             "done",
             &done,
+            &done,
             Box::new(move |receipt| {
                 tx.send((receipt.bytes, receipt.sha256.clone())).unwrap();
             }),
@@ -1050,15 +1065,16 @@ for t in threads: t.join()
             }) as UploadNotice
         };
         let denied = fx.write_local("fail/h.json", b"1");
-        c.upload_confirmed("denied", &denied, notify()).unwrap();
+        c.upload_confirmed("denied", &denied, &denied, notify())
+            .unwrap();
         assert_eq!(within(c.drain()).await.failures.len(), 1);
         assert_eq!(calls.load(Ordering::Relaxed), 0);
         assert!(
-            c.upload_confirmed("outside", "/outside/h.json", notify())
+            c.upload_confirmed("outside", "/outside/h.json", "/outside/h.json", notify())
                 .is_none()
         );
         let held = fx.write_local("hold/h.json", b"1");
-        c.upload_confirmed("held", &held, notify()).unwrap();
+        c.upload_confirmed("held", &held, &held, notify()).unwrap();
         let (unconfirmed, _) = within(c.abort()).await;
         assert_eq!(unconfirmed, ["held"]);
         assert_eq!(calls.load(Ordering::Relaxed), 0);
@@ -1074,6 +1090,7 @@ for t in threads: t.join()
         let (release_tx, release_rx) = std::sync::mpsc::channel();
         c.upload_confirmed(
             "done",
+            &done,
             &done,
             Box::new(move |_| {
                 started_tx.send(()).unwrap();

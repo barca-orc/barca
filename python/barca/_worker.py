@@ -22,9 +22,9 @@ from pathlib import Path
 
 from barca import _duckdb, _storage
 from barca._artifacts import (
+    _FORMAT_EXTENSIONS,
     LAZY_FRAME_TYPES,
     _frame_kind,
-    _FORMAT_EXTENSIONS,
     artifact_path,
     clean_staging,
     deserialize,
@@ -32,6 +32,7 @@ from barca._artifacts import (
     resolve_format,
     safe_node_id,
     serialize,
+    serialize_for_upload,
     serialize_hashed,
 )
 from barca._source_import import activate_source_path, load_pipeline_module
@@ -41,6 +42,7 @@ _EXT_FORMATS = {
     ".pkl": "pickle",
     ".pickle": "pickle",
     ".parquet": "parquet",
+    ".csv": "csv",
 }
 
 
@@ -562,10 +564,10 @@ def _write_sinks(result, step, node_id, primary_fmt):
         dest = sink.get("path", "")
         try:
             fmt = sink.get("serializer") or _EXT_FORMATS.get(_storage.suffix(dest)) or primary_fmt
-            if fmt not in ("json", "pickle", "parquet"):
+            if fmt not in ("json", "pickle", "parquet", "csv"):
                 raise ValueError(
                     f"sink serializer '{fmt}' is not supported yet "
-                    "(supported: json, pickle, parquet)"
+                    "(supported: json, pickle, parquet, csv)"
                 )
             if fmt == "parquet" and resolve_format(result, fmt, warn=False) != "parquet":
                 # An artifact may fall back to pickle (barca picks its file name), but a sink's
@@ -633,6 +635,7 @@ def _materialize(
     # A sensor's output is hashed: the coordinator folds the hash into the run hash of every
     # asset that reads the sensor, so a changed output re-runs them.
     content_hash = None
+    upload_snapshot = None
     # A branch's small JSON result is not written at all: its text goes back in the report
     # and on to the caller (barca/_branches.py). The text is what the file would have held.
     inline_json = None
@@ -649,7 +652,12 @@ def _materialize(
         local = _storage.local_path_of(path)
         if local is not None:
             _storage.make_way(local)
-        if step.get("kind") == "sensor":
+        snapshot_prefix = os.environ.get("BARCA_UPLOAD_SNAPSHOT_PREFIX")
+        if snapshot_prefix and not step.get("branch"):
+            size, content_hash, upload_snapshot = serialize_for_upload(
+                result, path, fmt, snapshot_prefix, want_hash=step.get("kind") == "sensor"
+            )
+        elif step.get("kind") == "sensor":
             size, content_hash = serialize_hashed(result, path, fmt)
         else:
             size = serialize(result, path, fmt)
@@ -660,11 +668,13 @@ def _materialize(
             "cpu_seconds": timing["cpu_seconds"] + (time.process_time() - _ser_cpu0),
         }
     artifact: dict = {"path": str(path), "format": fmt, "size_bytes": size}
+    if upload_snapshot is not None:
+        artifact["upload_snapshot"] = upload_snapshot
     if inline_json is not None:
         artifact["json"] = inline_json
     if content_hash is not None:
         artifact["content_hash"] = content_hash
-    if step.get("branch") and fmt == "parquet":
+    if step.get("branch") and fmt in ("parquet", "csv"):
         # The caller of parallel() gets back the frame type the branch returned.
         from barca import _branches
 

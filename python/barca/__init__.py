@@ -132,7 +132,7 @@ def sensor(
 
     `partitions` runs the sensor once per key, with the key passed as the parameter
     named in the dict, as on `asset`. `serializer` forces the format its value is
-    stored in ("json", "pickle" or "parquet").
+    stored in ("json", "pickle", "parquet" or "csv").
     """
     if fn is not None:
         return fn
@@ -173,7 +173,7 @@ def task(
 
     `partitions` runs the task once per key, with the key passed as the parameter
     named in the dict, as on `asset`. `serializer` forces the format its return
-    value is stored in ("json", "pickle" or "parquet").
+    value is stored in ("json", "pickle", "parquet" or "csv").
     """
     if fn is not None:
         return fn
@@ -188,7 +188,7 @@ def sink(path: str, /, *, serializer: str | None = None):
     """Declare a sink output (stacked on @asset).
 
     path may be local or a remote URI (abfss://, s3://, gs://). serializer
-    overrides the format ("json", "pickle", "parquet"); it defaults to the
+    overrides the format ("json", "pickle", "parquet", "csv"); it defaults to the
     path extension, then the parent asset's artifact format.
     """
 
