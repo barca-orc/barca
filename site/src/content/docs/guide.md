@@ -190,6 +190,10 @@ and imports retain that provenance because earlier aliases may have captured the
 value; an unconditional replacement can therefore still invalidate conservatively. Steps that do not use these uncertain
 bindings retain their selective cones.
 
+Project helper references in exception handler types are tracked too, including exception
+tuples and `except*`. Changing a referenced exception type invalidates its consumers;
+existing affected consumers may recompute once after this dependency-tracking correction.
+
 ## 5. Tasks, and `get` versus `run`
 
 A task is a step that does something: deploy, notify, upload. It is never cached.

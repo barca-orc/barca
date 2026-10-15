@@ -12,6 +12,14 @@ reconciliation, and verified shared DuckDB worker lifetime. See
 upgrade and breaking-change notes. Releases between the historical entries below
 and these tags are available on the same releases page.
 
+## Pending 0.24.0
+
+### Bug Fixes
+
+- Follow project helper references in exception handler types, including exception tuples
+  and `except*`. Editing those helpers invalidates their consumers. Existing affected
+  consumers may recompute once after upgrading.
+
 The older notes below are preserved as historical records. Their former
 "Unreleased" section describes work that has already shipped; it is not the
 current pending-release queue.

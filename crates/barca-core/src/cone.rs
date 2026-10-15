@@ -1003,9 +1003,9 @@ impl<'p> UseCollector<'p> {
         }
     }
 
-    // The statements and expressions visited below are exactly the ones every earlier release
-    // visited: visiting more (a decorator, a default value, an `except` type, ...) would add
-    // names, and so change the hash of code that has not changed.
+    // Extend this traversal one construct family at a time: following previously omitted
+    // references invalidates existing cached code. Keep the manual and regression controls
+    // aligned with each deliberate extension.
     fn stmt(&mut self, stmt: &Stmt) {
         match stmt {
             Stmt::Expr(s) => self.expr(&s.value),
@@ -1042,6 +1042,7 @@ impl<'p> UseCollector<'p> {
                 self.stmts(&s.body);
                 for handler in &s.handlers {
                     let ExceptHandler::ExceptHandler(handler) = handler;
+                    self.exprs(handler.type_.as_deref());
                     self.stmts(&handler.body);
                 }
                 self.stmts(&s.orelse);
@@ -2054,6 +2055,28 @@ def my_asset():
         );
     }
 
+    #[test]
+    fn exception_handler_types_follow_project_helpers() {
+        let project = |name: &str| sources(&[("helpers", &format!("Error = {name}\n"))]);
+        for entry in [
+            "import helpers\ndef my_asset():\n    try:\n        pass\n    except helpers.Error:\n        pass\n",
+            "from helpers import Error\ndef my_asset():\n    try:\n        pass\n    except (KeyError, Error):\n        pass\n",
+            "def my_asset():\n    from helpers import Error\n    try:\n        pass\n    except* Error:\n        pass\n",
+        ] {
+            assert_ne!(
+                hash_of(entry, &project("ValueError"), &[]),
+                hash_of(entry, &project("TypeError"), &[]),
+                "{entry}"
+            );
+        }
+        let bare =
+            "import helpers\ndef my_asset():\n    try:\n        pass\n    except:\n        pass\n";
+        assert_eq!(
+            hash_of(bare, &project("ValueError"), &[]),
+            hash_of(bare, &project("TypeError"), &[])
+        );
+    }
+
     // ─── Known limitations, as `barca docs cache` lists them ─────────────────────
 
     /// Not followed today. Each of these is in the manual ("Not followed"); when one starts
@@ -2095,10 +2118,6 @@ def my_asset():
             (
                 "assignment target",
                 "import helpers\n\ndef my_asset():\n    t = {}\n    t[helpers.compute()] = 1\n    return t\n",
-            ),
-            (
-                "except type",
-                "import helpers\n\ndef my_asset():\n    try:\n        return 1\n    except helpers.compute:\n        return 2\n",
             ),
             (
                 "match pattern",
