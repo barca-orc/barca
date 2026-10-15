@@ -24,6 +24,37 @@ Three facts shape every deployment:
 - **One instance per project.** Runs in progress and their live events are held in the
   server's memory. Do not run two servers on one project or load-balance across several.
 
+## What ships in v0.24.0
+
+The working deployment is one `barca serve` with its pipeline code, Python dependencies
+and persistent `.barca/` directory on the server. Users trigger runs through the web UI,
+HTTP API or `barca.Client`; the work executes on that server's machine.
+
+```bash
+# On the server, from the project directory; install the pipeline's dependencies too.
+uv add 'barca==0.24.0'
+uv run barca serve pipeline.py --timezone utc
+```
+
+Open `http://127.0.0.1:8274/ui/`. From the same machine, start an asset and poll its run:
+
+```bash
+curl -X POST http://127.0.0.1:8274/get/daily_report
+# Copy run_id from the response into the status URL:
+curl http://127.0.0.1:8274/status/RETURNED_RUN_ID
+```
+
+Replace `daily_report` with an asset in the deployed pipeline. Remote users reach the
+same API through the authenticating proxy described below. See the
+[Python client](/reference/server-api/#python-client) for the equivalent SDK calls.
+
+The broader [server-ledger design (RFC-0007)](/rfcs/0007-server-mode/) is accepted but
+**not implemented in v0.24.0**. `[server] url`, `BARCA_SERVER`, the CLI `--server`/`--local`
+flags and laptop runs sharing the server's ledger are pending #393, #394 and #402.
+Ordinary `barca get` and `barca.get()` still run locally. A remote artifact store does
+not give another machine access to this server's cache/history; use `BARCA_STATE=off`
+when serving with a remote store, as described below.
+
 ## Listen on another interface
 
 ```bash
@@ -37,13 +68,13 @@ network. An nginx upstream can then be `http://barca:8274/`, with no shared netw
 
 ## In a container
 
-This example pins barca 0.22.0. It has two services: barca, and an nginx that shares
+This example pins barca 0.24.0. It has two services: barca, and an nginx that shares
 barca's network namespace so that it can reach `127.0.0.1:8274`.
 
 ```dockerfile
 # Dockerfile
 FROM python:3.13-slim
-RUN pip install --no-cache-dir --only-binary=:all: 'barca==0.22.0'
+RUN pip install --no-cache-dir --only-binary=:all: 'barca==0.24.0'
 WORKDIR /project
 CMD ["barca", "serve", "--timezone", "utc"]
 ```
@@ -91,7 +122,7 @@ server {
 ```
 $ docker compose up -d
 $ curl -s http://127.0.0.1:8080/health
-{"read_only":false,"scheduler":true,"status":"ok","version":"0.22.0","load_errors":[]}
+{"read_only":false,"scheduler":true,"status":"ok","version":"0.24.0","load_errors":[]}
 ```
 
 `docker compose ps` shows the `barca` service as `healthy` once the first check passes, and
@@ -99,7 +130,7 @@ the proxy starts after that.
 
 What each part is for:
 
-- **The image.** v0.22.0 publishes core wheels and native archives for both x86-64 and
+- **The image.** v0.24.0 publishes core wheels and native archives for both x86-64 and
   arm64 Linux with glibc or musl. Debian slim selects the native GNU wheel; Alpine selects
   the native musl wheel. The example needs no `platform: linux/amd64` override or Rust
   compiler. Add your pipeline's own dependencies separately; their wheels and Barca's
@@ -136,7 +167,7 @@ before you bind it to anything wider, add [authentication](#authentication) at t
 
 ### Native Debian and Alpine targets
 
-The v0.22.0 release verifies fresh official PyPI wheel installations and downloaded
+The v0.24.0 release verifies fresh official PyPI wheel installations and downloaded
 GitHub native archives on native x86-64 and arm64 runners. Each target runs a core
 pipeline, reuses its cache, serves `/health`, and serves the embedded UI without a
 compiler or a source checkout.
@@ -152,7 +183,7 @@ For an Alpine core deployment, use the same Compose configuration with this imag
 
 ```dockerfile
 FROM python:3.13-alpine
-RUN pip install --no-cache-dir --only-binary=:all: 'barca==0.22.0'
+RUN pip install --no-cache-dir --only-binary=:all: 'barca==0.24.0'
 WORKDIR /project
 CMD ["barca", "serve", "--timezone", "utc"]
 ```
@@ -175,7 +206,7 @@ services:
 
 Pin `barca==0.21.0` in that image. Without a compatible wheel, pip can fall back to a
 source build requiring Rust; `--only-binary=:all:` makes an unavailable wheel explicit.
-The legacy override is unnecessary for the verified v0.22.0 Linux targets above.
+The legacy override is unnecessary for the verified v0.24.0 Linux targets above.
 
 ### What happens on restart
 

@@ -1,5 +1,12 @@
 # Scheduling and `barca serve`
 
+`barca serve` currently runs deployed code on one machine and exposes the HTTP API,
+web UI and cron scheduler. Use the HTTP API or `barca.Client` to trigger remote work.
+Ordinary `barca get` and `barca.get()` run locally. The accepted server-ledger design
+(RFC-0007), including CLI `--server`/`--local`, server URL configuration and laptop
+runs against the server's ledger, is not implemented in v0.24.0 (#393, #394, #402).
+Deployment instructions: https://barca.sh/deploying/.
+
 Freshness is recorded on every node. Only `Schedule(...)` starts automatic runs:
 
 | Freshness | Meaning |
@@ -104,6 +111,46 @@ The detail URL switches to the durable run ID so it can be reopened after a serv
 The same inspection is available through `GET /runs?limit=100` and `GET /runs/{id}` and
 uses private DB snapshots. Logs and materialized steps survive restart; cached counts
 remain, but cached per-step reports and final output require the server's retained result.
+
+## Calling the server
+
+Deploy the project code and its Python dependencies on the server, keep `.barca/` on
+persistent storage, and start `barca serve pipeline.py`. Workers execute on that machine.
+From another terminal, trigger a deployed asset or task:
+
+```bash
+curl -X POST http://127.0.0.1:8274/get/daily_report  # an asset and its dependencies
+curl -X POST http://127.0.0.1:8274/run/publish      # a task; refreshes its upstream assets
+curl http://127.0.0.1:8274/status/RETURNED_RUN_ID   # use run_id from the POST response
+```
+
+Replace the target names with functions in the deployed pipeline. The POST returns a
+polling handle immediately; poll until `status` is `complete`, `failed` or `cancelled`.
+The completed result contains an artifact pointer whose path is relative to the server's
+project root. HTTP does not return that file's bytes. Remote clients use the URL of the
+private server or its authenticating proxy in place of the loopback address above.
+
+The standard-library Python client wraps the same API:
+
+```python
+from barca import Client
+
+client = Client("http://127.0.0.1:8274")
+run = client.get("daily_report")
+result = run.wait(timeout=600)
+print(result["status"])
+```
+
+With a remote artifact store configured, serving requires local metadata:
+
+```bash
+BARCA_STATE=off barca serve pipeline.py  # local ledger; artifact uploads still enabled
+```
+
+Other machines do not get cache/history sharing from that artifact store. CLI `--server`,
+`[server] url`, `BARCA_SERVER` and local runs posting results to the server's ledger belong
+to the unimplemented RFC-0007 design. `barca.get()` starts a local CLI process; use
+`Client.get()` for the HTTP request above.
 
 ## Stopping the server
 
