@@ -14,6 +14,10 @@ and these tags are available on the same releases page.
 
 ## Pending 0.24.0
 
+### Bug Fixes
+
+- Follow project helper values, classes and mapping keys in `match` patterns so edits invalidate affected cached assets.
+
 ### Removed
 
 - **Breaking:** removed `barca get|run --no-cache` and `barca.get(no_cache=...)`.

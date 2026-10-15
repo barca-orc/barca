@@ -1003,9 +1003,21 @@ impl<'p> UseCollector<'p> {
         }
     }
 
-    // The statements and expressions visited below are exactly the ones every earlier release
-    // visited: visiting more (a decorator, a default value, an `except` type, ...) would add
-    // names, and so change the hash of code that has not changed.
+    /// Patterns contain evaluated value/class/key expressions as well as capture names.
+    /// Let Ruff walk nested patterns; only expressions contribute references.
+    fn pattern(&mut self, pattern: &Pattern) {
+        struct Values<'c, 'p>(&'c mut UseCollector<'p>);
+        impl<'a> Visitor<'a> for Values<'_, '_> {
+            fn visit_expr(&mut self, expr: &'a Expr) {
+                self.0.expr(expr);
+            }
+        }
+        Values(self).visit_pattern(pattern);
+    }
+
+    // Extend this traversal one construct family at a time: following previously omitted
+    // references invalidates existing cached code. Keep the manual and regression controls
+    // aligned with each deliberate extension.
     fn stmt(&mut self, stmt: &Stmt) {
         match stmt {
             Stmt::Expr(s) => self.expr(&s.value),
@@ -1050,6 +1062,7 @@ impl<'p> UseCollector<'p> {
             Stmt::Match(s) => {
                 self.expr(&s.subject);
                 for case in &s.cases {
+                    self.pattern(&case.pattern);
                     self.exprs(case.guard.as_deref());
                     self.stmts(&case.body);
                 }
@@ -2054,6 +2067,45 @@ def my_asset():
         );
     }
 
+    #[test]
+    fn match_pattern_expressions_follow_helpers_without_reading_captures() {
+        for pattern in [
+            "helpers.compute",
+            "helpers.compute | 2",
+            "helpers.compute as captured",
+            "[helpers.compute, *rest]",
+            "{helpers.compute: captured}",
+            "helpers.compute(captured)",
+            "object(value=helpers.compute)",
+        ] {
+            for import in ["import helpers\n", ""] {
+                let local = if import.is_empty() {
+                    "    import helpers\n"
+                } else {
+                    ""
+                };
+                let entry = format!(
+                    "{import}\ndef my_asset(x):\n{local}    match x:\n        case {pattern}:\n            return 1\n    return 0\n"
+                );
+                assert_ne!(
+                    hash_of(&entry, &one("helpers", HELPERS_V1), &[]),
+                    hash_of(&entry, &one("helpers", HELPERS_V2), &[]),
+                    "{entry}"
+                );
+            }
+        }
+        for pattern in ["compute", "[compute, *rest]", "{1: compute, **rest}"] {
+            let entry = format!(
+                "from helpers import compute\n\ndef my_asset(x):\n    match x:\n        case {pattern}:\n            return 1\n    return 0\n"
+            );
+            assert_eq!(
+                hash_of(&entry, &one("helpers", HELPERS_V1), &[]),
+                hash_of(&entry, &one("helpers", HELPERS_V2), &[]),
+                "capture is not a read: {entry}"
+            );
+        }
+    }
+
     // ─── Known limitations, as `barca docs cache` lists them ─────────────────────
 
     /// Not followed today. Each of these is in the manual ("Not followed"); when one starts
@@ -2099,10 +2151,6 @@ def my_asset():
             (
                 "except type",
                 "import helpers\n\ndef my_asset():\n    try:\n        return 1\n    except helpers.compute:\n        return 2\n",
-            ),
-            (
-                "match pattern",
-                "import helpers\n\ndef my_asset(x):\n    match x:\n        case helpers.compute:\n            return 1\n",
             ),
             (
                 "module reached through another module",

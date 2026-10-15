@@ -418,3 +418,7 @@ Decorated pipeline functions with top-level project star imports conservatively 
 imported module and its static imports. Literal `__all__` lists/tuples also let discovery
 preserve Barca decorators and groups whose local names are absent from that export set;
 computed or mutated sets remain uncertain. See [decorator discovery](/reference/api/decorators/).
+
+Project values and classes referenced by `match` patterns participate in cache hashes,
+including mapping keys and nested alternatives/sequences. Capture names are bindings,
+not reads of a same-named imported helper.
