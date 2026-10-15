@@ -176,13 +176,13 @@ barca get order_count pipeline.py --refresh-all                   # every asset 
 ```
 
 `--refresh` takes one comma-separated list (`--refresh a,b`), and `barca run` takes the same
-three flags. Use it also after a change the run hash does not see: a star import, an
+three flags. Use it also after a change the run hash does not see: an
 installed package, a module outside the project root, or an environment variable the
 function reads without declaring it in `@asset(env=[...])`.
 
 More: `barca docs cache` has the complete list, under "Not followed".
 
-Module-level `if` and `try` imports are tracked conservatively without executing their
+Module-level `if`, `try`, `for`, `while`, `with` and `match` bindings are tracked conservatively without executing their
 conditions during static analysis. Reading a name bound there includes the module source and
 its statically visible imports and references in the dependency cone; editing an inactive
 branch's project helper can invalidate that step too. Later assignments, functions, classes
@@ -194,11 +194,51 @@ Project helper references in exception handler types are tracked too, including 
 tuples and `except*`. Changing a referenced exception type invalidates its consumers;
 existing affected consumers may recompute once after this dependency-tracking correction.
 
+Project helper references in set literals are tracked too: changing `helpers.compute` in
+`{helpers.compute()}` invalidates its cached consumers. Existing affected consumers may
+recompute once after upgrading to this dependency-tracking correction.
+
 Default argument expressions in steps and reached helpers also contribute dependencies,
 including keyword-only defaults and defaults in nested functions or lambdas. Editing
 `helpers.compute` in `def value(x=helpers.compute()): ...` invalidates the cached consumer.
 Defaults use the enclosing scope before the new parameters bind. Consumers may recompute
 once after upgrading to this dependency-tracking correction.
+
+Decorated pipeline functions with top-level project star imports conservatively hash the
+imported module and its static imports. Literal `__all__` lists/tuples also let discovery
+preserve Barca decorators and groups whose local names are absent from that export set;
+computed or mutated sets remain uncertain. See [decorator discovery](/reference/api/decorators/).
+
+Assignment receivers and indices such as `table[key()] = value` follow project helpers,
+including annotated/unpacked/chained targets and targets in loops, context managers and
+comprehensions. See `barca docs cache` for the complete dependency rules.
+
+Project helper references in `for` and `while` `else:` blocks participate in cache hashes,
+including loops inside undecorated helpers. Static hashing follows both the body and the
+`else:` block even when a particular execution uses `break`.
+
+Project values and classes referenced by `match` patterns participate in cache hashes,
+including mapping keys and nested alternatives/sequences. Capture names are bindings,
+not reads of a same-named imported helper.
+
+Decorators on ordinary helper functions and classes follow project references, including
+nested definitions and decorator-factory arguments. Step decorator metadata continues
+to follow the selective rules in `barca docs cache`.
+
+Tuple/list/starred module-level unpacking and augmented name assignments retain project
+helper provenance, including aliases captured before later overwrites. Their consumers
+conservatively hash the module source and references; unrelated assets keep selective cones.
+
+Module-level `for`, `while`, `with` and `match` bindings retain project-helper provenance
+conservatively, like existing `if`/`try` bindings. Consumers hash the module source and
+static references, including aliases captured before overwrites. Unrelated assets retain
+selective cones; runtime namespace mutation is still not statically resolved.
+
+Ordinary helper modules with project star imports conservatively retain their contributing
+sources, including functions, classes, captured constants and forwarded exports. Multiple,
+conditional and transitive stars are included without executing imports during planning; an
+unrelated export edit may recompute consumers. Decorator discovery still requires the
+existing literal-export provenance.
 
 ## 5. Tasks, and `get` versus `run`
 
@@ -380,7 +420,7 @@ barca get total pipelines/      # read only the files under pipelines/
   asset's run hash covers the definitions it uses from your project's modules. Editing
   `clean`, or anything `clean` calls, re-runs `rows` and what depends on it. Editing another
   function in `helpers.py` re-runs nothing.
-- The standard library, installed packages, modules outside the project root, star imports in undecorated helpers
+- The standard library, installed packages, modules outside the project root
   and imports built at run time are not followed. After changing one of those, use
   `--refresh`.
 
@@ -423,8 +463,3 @@ recorded and shown by `barca list` and have no effect at run time today.
 - [CLI reference](/reference/cli/) and [Configuration](/reference/config/).
 - [Patterns](/patterns/01-asset-to-asset/) for common shapes and what to avoid.
 - `barca history` and `barca stats <asset>` for past runs and timings.
-
-Decorated pipeline functions with top-level project star imports conservatively hash the
-imported module and its static imports. Literal `__all__` lists/tuples also let discovery
-preserve Barca decorators and groups whose local names are absent from that export set;
-computed or mutated sets remain uncertain. See [decorator discovery](/reference/api/decorators/).

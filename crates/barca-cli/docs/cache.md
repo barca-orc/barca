@@ -204,7 +204,8 @@ look for helpers, and it never reads or hashes the standard library or installed
 wherever the virtualenv is (`.venv/`, `venv/`, inside or outside the project): after upgrading
 a package, recompute with `--refresh-all` or `--refresh` (below).
 
-Names bound inside a module-level `if` or `try` are followed conservatively. Barca does not
+Names bound inside module-level `if`, `try`, `for`, `while`, `with` and `match` blocks
+are followed conservatively. Barca does not
 execute the condition to choose an import or fallback definition: a step reading such a name
 hashes the module's source and follows its statically visible imports and references. Editing
 an inactive branch's project helper can therefore re-run the step too. This provenance is
@@ -218,12 +219,44 @@ If a reached helper catches `helpers.Error`, changing that project definition in
 its consumers. A bare `except:` adds no exception-type dependency. Existing affected
 consumers may recompute once after this dependency-tracking correction.
 
+References in set literal elements are followed, just like list and tuple elements.
+For example, `{helpers.compute()}` includes the project helper's dependency cone; a set of
+constants adds no helper dependency. Existing affected consumers may recompute once after
+this dependency-tracking correction.
+
 Default argument expressions are followed for steps and reached helpers, including
 positional-only and keyword-only parameters, nested functions and lambdas. For example,
 `def value(x=helpers.compute()): ...` includes `helpers.compute` in the dependency cone.
 The default is resolved in the enclosing scope, before the new parameter bindings exist.
 Editing that helper invalidates its consumers; unrelated steps retain their cached results.
 Existing cached consumers may recompute once after this dependency-tracking correction.
+
+Helper references in `for`/`while` `else:` blocks are followed, including inside undecorated
+project helper functions. As with `if` branches, static hashing follows the block even if
+a particular run exits the loop with `break`.
+
+Value, class and mapping-key expressions inside `match` patterns follow project helpers,
+including nested sequence, alternative and capture patterns. Capture names themselves
+are bindings, not reads of an imported value.
+
+Ordinary helper functions and classes follow names used in their decorators, including
+decorator factories/arguments and nested definitions. Decorators are resolved in the
+enclosing scope before the decorated definition's parameters/class bindings. A step's own
+Barca decorator metadata still follows "Which decorator arguments count" above.
+
+Module-level tuple/list/starred unpacking and augmented name assignments retain helper
+provenance conservatively: a consumer hashes the module source and its static references.
+Earlier aliases remain covered even when the binding is overwritten later. Editing an
+unrelated definition in that same module can therefore recompute these consumers; assets
+that do not reach such bindings retain selective cones.
+
+Project star imports in ordinary helper modules are tracked conservatively. Consumers of
+functions, classes, captured constants and forwarded exports include the contributing module
+sources and their static dependencies, including multiple and transitive star imports.
+Conditional star imports are included without selecting a branch. An edit to another export
+in those modules may recompute a consumer. Installed packages and the import-depth limit
+remain separate limitations; this does not extend decorator discovery beyond its existing
+literal-export rules.
 
 #### Not followed
 
@@ -234,20 +267,9 @@ An edit in one of these does not change the hash; recompute with `--refresh-all`
 - imports built at run time: `importlib.import_module(name)`, `__import__(name)`, and
   `getattr` on anything but a module barca can see imported. Static analysis cannot follow
   these, and barca does not run your code to plan;
-- Star imports inside undecorated helper functions/modules, and names a module defines
-  dynamically or inside other module-level
-  control flow such as a `for`, `while`, `with` or `match` (module-level `if` and `try` bindings
-  are covered conservatively above);
-- module-level constants bound by tuple unpacking (`A, B = 1, 2`), and augmented assignments to
-  a module-level name (`A += 1`): only a plain `A = ...` or `A: int = ...` is a definition;
+- names defined dynamically through runtime namespace mutation;
 - a module reached through another module's `import` (`from helpers import other` where
   `helpers.py` does `import other`): import it directly;
-- what a helper refers to only in a decorator, a `match` pattern, a set literal (`{f()}`),
-  an assignment target
-  (`table[key()] = ...`) or a loop's `else:` block. The helper's own text is hashed, but those
-  references are not followed. (This is about helper functions. The decorators of a step
-  itself are covered by "Which decorator arguments count" above; default argument references
-  are followed as described above);
 - helpers more than six project modules away along an import chain.
 
 Conflicting ordinary project imports are rejected before user code runs. If two pipeline
@@ -256,6 +278,10 @@ directories each have `helpers.py`, qualify the imports (`from east.helpers impo
 Unambiguous sibling helpers still work; previous tasks do not add implicit import paths.
 Literal imports in inactive branches and unused functions may conservatively require
 qualification. Dynamic imports and user mutations of import paths are not statically proven.
+
+Inside functions, evaluated assignment receivers and indices are followed, including `table[key()] = value`,
+annotated assignments, unpacking/chained targets, and targets in `for`, `with` and
+comprehensions. Writing a bare name does not read its old imported value.
 
 #### After upgrading to 0.19
 

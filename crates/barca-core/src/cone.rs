@@ -61,6 +61,7 @@ pub struct Module {
     package: Option<String>,
     definitions: OnceCell<HashMap<String, ModuleDef>>,
     star_exports: OnceCell<Option<Vec<String>>>,
+    imported_stars: OnceCell<Vec<String>>,
 }
 
 impl Module {
@@ -77,6 +78,7 @@ impl Module {
             package,
             definitions: OnceCell::new(),
             star_exports: OnceCell::new(),
+            imported_stars: OnceCell::new(),
         }
     }
 
@@ -147,6 +149,37 @@ impl Module {
                 .as_ref()
                 .map_or(base.clone(), |m| format!("{base}.{m}")),
         )
+    }
+
+    /// Every literal star-import target, including module-level control-flow blocks.
+    fn imported_stars(&self) -> &[String] {
+        self.imported_stars.get_or_init(|| {
+            struct Stars<'p> {
+                package: Option<&'p str>,
+                modules: BTreeSet<String>,
+            }
+            impl<'a> Visitor<'a> for Stars<'_> {
+                fn visit_stmt(&mut self, stmt: &'a Stmt) {
+                    for (_, binding) in import_bindings(stmt, self.package) {
+                        if let ModuleDef::FromImport { module, name } = binding
+                            && name == "*"
+                            && module != "barca"
+                        {
+                            self.modules.insert(module);
+                        }
+                    }
+                    visitor::walk_stmt(self, stmt);
+                }
+            }
+            let mut stars = Stars {
+                package: self.package.as_deref(),
+                modules: BTreeSet::new(),
+            };
+            if let Ok(parsed) = parse_module(&self.source) {
+                visitor::walk_body(&mut stars, &parsed.syntax().body);
+            }
+            stars.modules.into_iter().collect()
+        })
     }
 
     /// The module's top-level definitions, parsed on first use and then kept.
@@ -480,6 +513,12 @@ impl Cone<'_> {
                 self.import(next, original, name, depth + 1);
                 true
             }
+            None if !module.imported_stars().is_empty() => {
+                // Star exports need not be literal assignments in this module. Preserve all
+                // contributing sources rather than guessing which export installed a name.
+                self.whole(module, depth);
+                true
+            }
             Some(ModuleDef::ModuleImport { .. }) | None => false,
         }
     }
@@ -491,22 +530,39 @@ impl Cone<'_> {
         }
         let candidates = self.modules.module(name).into_iter();
         for module in candidates.chain(self.modules.alternatives(name)) {
-            if !self.visited.insert(format!("{}:*", module.name)) {
-                continue;
-            }
-            self.parts
-                .push((format!("{}:*", module.name), module.source.clone()));
-            let every_definition = Uses {
-                names: module.definitions().keys().cloned().collect(),
-                ..Uses::default()
-            };
-            let site = Site {
-                module: &module,
+            self.whole(&module, depth);
+        }
+    }
+
+    fn whole(&mut self, module: &Module, depth: usize) {
+        if depth >= MAX_MODULES_DEEP || !self.visited.insert(format!("{}:*", module.name)) {
+            return;
+        }
+        self.parts
+            .push((format!("{}:*", module.name), module.source.clone()));
+        let every_definition = Uses {
+            names: module.definitions().keys().cloned().collect(),
+            local: module
+                .imported_stars()
+                .iter()
+                .map(|target| LocalUse {
+                    bound: "*".into(),
+                    binding: ModuleDef::ModuleImport {
+                        module: target.clone(),
+                    },
+                    attrs: Vec::new(),
+                })
+                .collect(),
+            ..Uses::default()
+        };
+        self.follow(
+            Site {
+                module,
                 is_pipeline: false,
                 depth: depth + 1,
-            };
-            self.follow(site, &every_definition);
-        }
+            },
+            &every_definition,
+        );
     }
 }
 
@@ -540,10 +596,6 @@ fn collect_definitions(source: &str, package: Option<&str>) -> HashMap<String, M
     let mut defs: HashMap<String, ModuleDef> = HashMap::new();
     let barca = crate::decorator_args::BarcaNames::of(&parsed.syntax().body);
     let mut conservative_functions = Vec::new();
-    let has_foreign_star = parsed.syntax().body.iter().any(|stmt| {
-        matches!(stmt, Stmt::ImportFrom(i) if i.names.iter().any(|a| a.name.as_str() == "*")
-            && !(i.level == 0 && i.module.as_ref().is_some_and(|m| m.as_str() == "barca")))
-    });
     struct StaticImports<'p> {
         package: Option<&'p str>,
         uses: Vec<LocalUse>,
@@ -577,7 +629,22 @@ fn collect_definitions(source: &str, package: Option<&str>) -> HashMap<String, M
         uses: Vec::new(),
     };
     visitor::walk_body(&mut static_imports, &parsed.syntax().body);
+    let has_foreign_star = static_imports.uses.iter().any(|import| {
+        import.bound == "*"
+            && matches!(&import.binding, ModuleDef::ModuleImport { module } if module != "barca")
+    });
     let conditional_module = OnceCell::new();
+    let conservative_code = || {
+        conditional_module.get_or_init(|| {
+            let mut uses = UseCollector::new(package);
+            uses.stmts(&parsed.syntax().body);
+            uses.uses.local.extend(static_imports.uses.iter().cloned());
+            Code {
+                source_text: source.into(),
+                uses: uses.uses,
+            }
+        })
+    };
     let mut conditional_names = HashSet::new();
 
     for stmt in &parsed.syntax().body {
@@ -601,7 +668,10 @@ fn collect_definitions(source: &str, package: Option<&str>) -> HashMap<String, M
                             uses: uses.uses,
                         }
                     }
-                    None => code(func, uses),
+                    None => {
+                        uses.exprs(func.decorator_list.iter().map(|d| &d.expression));
+                        code(func, uses)
+                    }
                 };
                 // Project-aware discovery can recognize nodes after a safe star import.
                 // The standalone cone has no export resolver: keep decorated functions
@@ -621,6 +691,24 @@ fn collect_definitions(source: &str, package: Option<&str>) -> HashMap<String, M
                 defs.insert(class.name.to_string(), ModuleDef::Class(code(class, uses)));
             }
             Stmt::Assign(assign) => {
+                if assign
+                    .targets
+                    .iter()
+                    .any(|target| !matches!(target, Expr::Name(_)))
+                {
+                    let mut binder = Binder::new(package);
+                    for target in &assign.targets {
+                        binder.visit_expr(target);
+                    }
+                    for name in binder.finish().bindings.keys() {
+                        conditional_names.insert(name.clone());
+                        defs.insert(
+                            name.clone(),
+                            ModuleDef::Assignment(conservative_code().clone()),
+                        );
+                    }
+                    continue;
+                }
                 // Organizational declarations must not become dependencies when a local
                 // variable happens to share their name (the cone is conservative about locals).
                 if let Expr::Call(call) = assign.value.as_ref()
@@ -664,7 +752,13 @@ fn collect_definitions(source: &str, package: Option<&str>) -> HashMap<String, M
                     .into_iter()
                     .filter(|(_, binding)| !is_group_import(binding)),
             ),
-            Stmt::If(_) | Stmt::Try(_) => {
+            Stmt::If(_)
+            | Stmt::Try(_)
+            | Stmt::For(_)
+            | Stmt::While(_)
+            | Stmt::With(_)
+            | Stmt::AugAssign(_)
+            | Stmt::Match(_) => {
                 // Do not select a conditional binding by executing Python or by guessing
                 // which branch runs. The module may retain an earlier binding, install a
                 // different import or define a fallback function. Represent each possible
@@ -675,15 +769,7 @@ fn collect_definitions(source: &str, package: Option<&str>) -> HashMap<String, M
                 binder.visit_stmt(stmt);
                 let names = binder.finish().bindings;
                 if !names.is_empty() {
-                    let conservative = conditional_module.get_or_init(|| {
-                        let mut uses = UseCollector::new(package);
-                        uses.stmts(&parsed.syntax().body);
-                        uses.uses.local.extend(static_imports.uses.iter().cloned());
-                        Code {
-                            source_text: source.into(),
-                            uses: uses.uses,
-                        }
-                    });
+                    let conservative = conservative_code();
                     for name in names.keys().filter(|name| name.as_str() != "*") {
                         conditional_names.insert(name.clone());
                         defs.insert(name.clone(), ModuleDef::Assignment(conservative.clone()));
@@ -722,6 +808,16 @@ fn collect_definitions(source: &str, package: Option<&str>) -> HashMap<String, M
             code.uses.names.extend(names.iter().cloned());
             code.uses.values.extend(names.iter().cloned());
             code.uses.local.extend(static_imports.uses.iter().cloned());
+        }
+    }
+    if has_foreign_star {
+        for definition in defs.values_mut() {
+            if let ModuleDef::Function(code)
+            | ModuleDef::Class(code)
+            | ModuleDef::Assignment(code) = definition
+            {
+                code.uses.local.extend(static_imports.uses.iter().cloned());
+            }
         }
     }
     defs
@@ -975,8 +1071,9 @@ impl<'p> UseCollector<'p> {
         self.scoped(scope, |c| c.stmts(&func.body));
     }
 
-    /// A class contributes its bases and its body.
+    /// A class contributes its decorators, bases and body.
     fn class(&mut self, class: &ruff_python_ast::StmtClassDef) {
+        self.exprs(class.decorator_list.iter().map(|d| &d.expression));
         for base in class.arguments.iter().flat_map(|a| a.args.iter()) {
             self.expr(base);
         }
@@ -994,6 +1091,7 @@ impl<'p> UseCollector<'p> {
             c.exprs(results.iter().copied());
             for generator in generators {
                 c.expr(&generator.iter);
+                c.target(&generator.target);
                 c.exprs(&generator.ifs);
             }
         });
@@ -1011,6 +1109,41 @@ impl<'p> UseCollector<'p> {
         }
     }
 
+    /// Assignment evaluates receivers and indices, but does not read a bare binding name.
+    fn target(&mut self, target: &Expr) {
+        match target {
+            Expr::Attribute(a) => self.expr(&a.value),
+            Expr::Subscript(s) => {
+                self.expr(&s.value);
+                self.expr(&s.slice);
+            }
+            Expr::Tuple(t) => {
+                for item in &t.elts {
+                    self.target(item);
+                }
+            }
+            Expr::List(l) => {
+                for item in &l.elts {
+                    self.target(item);
+                }
+            }
+            Expr::Starred(s) => self.target(&s.value),
+            _ => {}
+        }
+    }
+
+    /// Patterns contain evaluated value/class/key expressions as well as capture names.
+    /// Let Ruff walk nested patterns; only expressions contribute references.
+    fn pattern(&mut self, pattern: &Pattern) {
+        struct Values<'c, 'p>(&'c mut UseCollector<'p>);
+        impl<'a> Visitor<'a> for Values<'_, '_> {
+            fn visit_expr(&mut self, expr: &'a Expr) {
+                self.0.expr(expr);
+            }
+        }
+        Values(self).visit_pattern(pattern);
+    }
+
     // Extend this traversal one construct family at a time: following previously omitted
     // references invalidates existing cached code. Keep the manual and regression controls
     // aligned with each deliberate extension.
@@ -1018,12 +1151,20 @@ impl<'p> UseCollector<'p> {
         match stmt {
             Stmt::Expr(s) => self.expr(&s.value),
             Stmt::Return(s) => self.exprs(s.value.as_deref()),
-            Stmt::Assign(s) => self.expr(&s.value),
+            Stmt::Assign(s) => {
+                self.expr(&s.value);
+                for target in &s.targets {
+                    self.target(target);
+                }
+            }
             Stmt::AugAssign(s) => {
                 self.expr(&s.target);
                 self.expr(&s.value);
             }
-            Stmt::AnnAssign(s) => self.exprs(s.value.as_deref()),
+            Stmt::AnnAssign(s) => {
+                self.exprs(s.value.as_deref());
+                self.target(&s.target);
+            }
             Stmt::If(s) => {
                 self.expr(&s.test);
                 self.stmts(&s.body);
@@ -1034,17 +1175,28 @@ impl<'p> UseCollector<'p> {
             }
             Stmt::For(s) => {
                 self.expr(&s.iter);
+                self.target(&s.target);
                 self.stmts(&s.body);
+                self.stmts(&s.orelse);
             }
             Stmt::While(s) => {
                 self.expr(&s.test);
                 self.stmts(&s.body);
+                self.stmts(&s.orelse);
             }
             Stmt::With(s) => {
-                self.exprs(s.items.iter().map(|item| &item.context_expr));
+                for item in &s.items {
+                    self.expr(&item.context_expr);
+                    if let Some(target) = &item.optional_vars {
+                        self.target(target);
+                    }
+                }
                 self.stmts(&s.body);
             }
-            Stmt::FunctionDef(s) => self.function(s),
+            Stmt::FunctionDef(s) => {
+                self.exprs(s.decorator_list.iter().map(|d| &d.expression));
+                self.function(s);
+            }
             Stmt::ClassDef(s) => self.class(s),
             Stmt::Try(s) => {
                 self.stmts(&s.body);
@@ -1059,6 +1211,7 @@ impl<'p> UseCollector<'p> {
             Stmt::Match(s) => {
                 self.expr(&s.subject);
                 for case in &s.cases {
+                    self.pattern(&case.pattern);
                     self.exprs(case.guard.as_deref());
                     self.stmts(&case.body);
                 }
@@ -1125,6 +1278,7 @@ impl<'p> UseCollector<'p> {
                 }
             }
             Expr::List(l) => self.exprs(&l.elts),
+            Expr::Set(s) => self.exprs(&s.elts),
             Expr::Tuple(t) => self.exprs(&t.elts),
             Expr::Lambda(l) => {
                 if let Some(parameters) = &l.parameters {
@@ -2089,6 +2243,43 @@ def my_asset():
     }
 
     #[test]
+    fn assignment_receivers_and_indices_follow_helpers() {
+        for body in [
+            "table[helpers.compute()] = 1",
+            "table[helpers.compute()]: int = 1",
+            "helpers.compute().value = 1",
+            "table[helpers.compute()], other = (1, 2)",
+            "*table[helpers.compute()], other = (1, 2)",
+            "for table[helpers.compute()] in [1]:\n        pass",
+            "with manager() as table[helpers.compute()]:\n        pass",
+            "result = [1 for table[helpers.compute()] in [1]]",
+        ] {
+            for import in ["import helpers\n", ""] {
+                let local = if import.is_empty() {
+                    "    import helpers\n"
+                } else {
+                    ""
+                };
+                let entry = format!(
+                    "{import}\ndef my_asset():\n{local}    table = {{}}\n    {body}\n    return table\n"
+                );
+                assert_ne!(
+                    hash_of(&entry, &one("helpers", HELPERS_V1), &[]),
+                    hash_of(&entry, &one("helpers", HELPERS_V2), &[]),
+                    "{body}"
+                );
+            }
+        }
+        // Writing a name is not a read of its previous imported binding.
+        let entry =
+            "from helpers import compute\n\ndef my_asset():\n    compute = 1\n    return 0\n";
+        assert_eq!(
+            hash_of(entry, &one("helpers", HELPERS_V1), &[]),
+            hash_of(entry, &one("helpers", HELPERS_V2), &[])
+        );
+    }
+
+    #[test]
     fn function_and_lambda_defaults_follow_the_enclosing_scope() {
         let project =
             |n: u32| sources(&[("helpers", &format!("def compute():\n    return {n}\n"))]);
@@ -2115,6 +2306,243 @@ def my_asset():
         );
     }
 
+    #[test]
+    fn set_literal_elements_follow_project_helpers() {
+        let project =
+            |n: u32| sources(&[("helpers", &format!("def compute():\n    return {n}\n"))]);
+        for entry in [
+            "import helpers\ndef my_asset():\n    return {helpers.compute()}\n",
+            "from helpers import compute\ndef my_asset():\n    return {compute(), 7}\n",
+            "def my_asset():\n    import helpers as local\n    return {local.compute(), 7}\n",
+        ] {
+            assert_ne!(
+                hash_of(entry, &project(1), &[]),
+                hash_of(entry, &project(2), &[]),
+                "{entry}"
+            );
+        }
+        let literal = "import helpers\ndef my_asset():\n    return {1, 7}\n";
+        assert_eq!(
+            hash_of(literal, &project(1), &[]),
+            hash_of(literal, &project(2), &[])
+        );
+    }
+
+    #[test]
+    fn loop_else_blocks_follow_project_helpers() {
+        for (prefix, loop_header) in [
+            ("def", "for _ in ()"),
+            ("def", "while False"),
+            ("async def", "async for _ in source()"),
+            ("def", "for _ in [1]"),
+        ] {
+            for import in ["import helpers\n", ""] {
+                let local = if import.is_empty() {
+                    "    import helpers\n"
+                } else {
+                    ""
+                };
+                let entry = format!(
+                    "{import}\n{prefix} my_asset():\n{local}    {loop_header}:\n        break\n    else:\n        return helpers.compute()\n    return 0\n"
+                );
+                assert_ne!(
+                    hash_of(&entry, &one("helpers", HELPERS_V1), &[]),
+                    hash_of(&entry, &one("helpers", HELPERS_V2), &[]),
+                    "{entry}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn match_pattern_expressions_follow_helpers_without_reading_captures() {
+        for pattern in [
+            "helpers.compute",
+            "helpers.compute | 2",
+            "helpers.compute as captured",
+            "[helpers.compute, *rest]",
+            "{helpers.compute: captured}",
+            "helpers.compute(captured)",
+            "object(value=helpers.compute)",
+        ] {
+            for import in ["import helpers\n", ""] {
+                let local = if import.is_empty() {
+                    "    import helpers\n"
+                } else {
+                    ""
+                };
+                let entry = format!(
+                    "{import}\ndef my_asset(x):\n{local}    match x:\n        case {pattern}:\n            return 1\n    return 0\n"
+                );
+                assert_ne!(
+                    hash_of(&entry, &one("helpers", HELPERS_V1), &[]),
+                    hash_of(&entry, &one("helpers", HELPERS_V2), &[]),
+                    "{entry}"
+                );
+            }
+        }
+        for pattern in ["compute", "[compute, *rest]", "{1: compute, **rest}"] {
+            let entry = format!(
+                "from helpers import compute\n\ndef my_asset(x):\n    match x:\n        case {pattern}:\n            return 1\n    return 0\n"
+            );
+            assert_eq!(
+                hash_of(&entry, &one("helpers", HELPERS_V1), &[]),
+                hash_of(&entry, &one("helpers", HELPERS_V2), &[]),
+                "capture is not a read: {entry}"
+            );
+        }
+    }
+
+    #[test]
+    fn helper_decorator_expressions_are_followed_outside_the_decorated_scope() {
+        for entry in [
+            "from helpers import compute\n\n@compute\ndef inner(): return 1\n\ndef my_asset(): return inner()\n",
+            "import helpers\n\n@wrap(helpers.compute())\ndef inner(): return 1\n\ndef my_asset(): return inner()\n",
+            "def my_asset():\n    from helpers import compute\n    @compute\n    def inner(compute): return 1\n    return inner(None)\n",
+            "from helpers import compute\n\n@compute\nclass Inner: pass\n\ndef my_asset(): return Inner()\n",
+            "def my_asset():\n    from helpers import compute\n    @compute\n    class Inner: compute = 1\n    return Inner()\n",
+        ] {
+            assert_ne!(
+                hash_of(entry, &one("helpers", HELPERS_V1), &[]),
+                hash_of(entry, &one("helpers", HELPERS_V2), &[]),
+                "{entry}"
+            );
+        }
+    }
+
+    #[test]
+    fn ordinary_helper_keeps_decorator_text_and_follows_its_values() {
+        let pipeline = |decorator: &str, size: &str| {
+            format!(
+                "from barca import asset\nSIZE = {size}\n\n\n{decorator}\ndef helper():\n    return 1\n\n\n@asset()\ndef my_asset():\n    return helper()\n"
+            )
+        };
+        let before = cone_hash(&pipeline("@lru_cache(maxsize=SIZE)", "1"), "my_asset");
+        assert_ne!(
+            before,
+            cone_hash(&pipeline("@lru_cache( maxsize = SIZE )", "1"), "my_asset")
+        );
+        assert_ne!(
+            before,
+            cone_hash(&pipeline("@lru_cache(maxsize=SIZE)", "2"), "my_asset")
+        );
+    }
+
+    #[test]
+    fn unpacked_and_augmented_module_bindings_follow_their_helper_provenance() {
+        for bindings in [
+            "VALUE, OTHER = compute(), 7",
+            "[VALUE, OTHER] = [compute(), 7]",
+            "VALUE, *REST = [compute(), 7, 8]",
+            "VALUE = 0\nVALUE += compute()",
+            "VALUE, OTHER = compute(), 7\nCAPTURED = VALUE\nVALUE = 0",
+            "VALUE = 0\nVALUE += compute()\nCAPTURED = VALUE\nVALUE = 0",
+        ] {
+            let name = if bindings.contains("CAPTURED") {
+                "CAPTURED"
+            } else {
+                "VALUE"
+            };
+            let entry = format!(
+                "from helpers import compute\n{bindings}\n\ndef my_asset(): return {name}\n"
+            );
+            assert_ne!(
+                hash_of(&entry, &one("helpers", HELPERS_V1), &[]),
+                hash_of(&entry, &one("helpers", HELPERS_V2), &[]),
+                "{bindings}"
+            );
+        }
+    }
+
+    #[test]
+    fn module_level_tuple_and_augmented_constant_edits_change_hashes() {
+        // These formerly omitted definitions now conservatively contribute their module.
+        let tuple = |b: u32| format!("A, B = 1, {b}\n\ndef my_asset():\n    return B\n");
+        assert_ne!(
+            cone_hash(&tuple(2), "my_asset"),
+            cone_hash(&tuple(3), "my_asset")
+        );
+        let augmented = |n: u32| format!("A = 1\nA += {n}\n\ndef my_asset():\n    return A\n");
+        assert_ne!(
+            cone_hash(&augmented(2), "my_asset"),
+            cone_hash(&augmented(3), "my_asset")
+        );
+    }
+
+    #[test]
+    fn module_control_flow_bindings_follow_project_helpers() {
+        for (bindings, expression) in [
+            ("for _ in [0]:\n    VALUE = compute()", "VALUE"),
+            (
+                "VALUE = 0\nwhile VALUE == 0:\n    VALUE = compute()",
+                "VALUE",
+            ),
+            ("with manager(compute()) as VALUE:\n    pass", "VALUE"),
+            ("match compute():\n    case VALUE:\n        pass", "VALUE"),
+            (
+                "for _ in [0]:\n    def result(): return compute()",
+                "result()",
+            ),
+            (
+                "with manager():\n    class Result:\n        value = compute()",
+                "Result.value",
+            ),
+            (
+                "for _ in [0]:\n    VALUE = compute()\nCAPTURED = VALUE\nVALUE = 0",
+                "CAPTURED",
+            ),
+        ] {
+            let entry = format!(
+                "from helpers import compute\n{bindings}\n\ndef my_asset(): return {expression}\n"
+            );
+            assert_ne!(
+                hash_of(&entry, &one("helpers", HELPERS_V1), &[]),
+                hash_of(&entry, &one("helpers", HELPERS_V2), &[]),
+                "{bindings}"
+            );
+        }
+    }
+
+    #[test]
+    fn helper_star_imports_follow_all_sources_and_transitive_exports() {
+        for (helper, expression) in [
+            (
+                "from values import *\ndef result(): return VALUE",
+                "helpers.result()",
+            ),
+            (
+                "from values import *\nclass Holder: value = VALUE",
+                "helpers.Holder.value",
+            ),
+            ("from values import *\nCAPTURED = VALUE", "helpers.CAPTURED"),
+            ("from values import *", "helpers.VALUE"),
+            ("from values import *\nfrom other import *", "helpers.VALUE"),
+            (
+                "if True:\n    from values import *\ndef result(): return VALUE",
+                "helpers.result()",
+            ),
+            (
+                "from middle import *\ndef result(): return VALUE",
+                "helpers.result()",
+            ),
+        ] {
+            let entry = format!("import helpers\n\ndef my_asset(): return {expression}\n");
+            let modules = |value| {
+                sources(&[
+                    ("helpers", helper),
+                    ("values", &format!("VALUE = {value}\n")),
+                    ("other", "OTHER = 7\n"),
+                    ("middle", "from values import *\n"),
+                ])
+            };
+            assert_ne!(
+                hash_of(&entry, &modules(1), &[]),
+                hash_of(&entry, &modules(222), &[]),
+                "{helper}"
+            );
+        }
+    }
+
     // ─── Known limitations, as `barca docs cache` lists them ─────────────────────
 
     /// Not followed today. Each of these is in the manual ("Not followed"); when one starts
@@ -2126,36 +2554,12 @@ def my_asset():
         let v2 = one("helpers", HELPERS_V2);
         for (what, entry) in [
             (
-                "star import",
-                "from helpers import *\n\ndef my_asset():\n    return compute()\n",
-            ),
-            (
                 "importlib",
                 "import importlib\n\ndef my_asset():\n    return importlib.import_module('helpers').compute()\n",
             ),
             (
                 "__import__",
                 "def my_asset():\n    return __import__('helpers').compute()\n",
-            ),
-            (
-                "decorator",
-                "from helpers import compute\n\ndef wrap(v):\n    return lambda f: f\n\n@wrap(compute())\ndef inner():\n    return 1\n\ndef my_asset():\n    return inner()\n",
-            ),
-            (
-                "set literal",
-                "import helpers\n\ndef my_asset():\n    return {helpers.compute()}\n",
-            ),
-            (
-                "loop else",
-                "import helpers\n\ndef my_asset():\n    for _ in ():\n        pass\n    else:\n        return helpers.compute()\n",
-            ),
-            (
-                "assignment target",
-                "import helpers\n\ndef my_asset():\n    t = {}\n    t[helpers.compute()] = 1\n    return t\n",
-            ),
-            (
-                "match pattern",
-                "import helpers\n\ndef my_asset(x):\n    match x:\n        case helpers.compute:\n            return 1\n",
             ),
             (
                 "module reached through another module",
@@ -2186,22 +2590,6 @@ def my_asset():
         assert_ne!(
             hash_of(entry, &nested(1), &[]),
             hash_of(entry, &nested(2), &[])
-        );
-    }
-
-    #[test]
-    fn module_level_tuple_and_augmented_assignments_are_not_tracked() {
-        // Documented under "Not followed". Tracking either would add the constant to the cone
-        // of every step that already uses one, changing hashes 0.17 computed.
-        let tuple = |b: u32| format!("A, B = 1, {b}\n\ndef my_asset():\n    return B\n");
-        assert_eq!(
-            cone_hash(&tuple(2), "my_asset"),
-            cone_hash(&tuple(3), "my_asset")
-        );
-        let augmented = |n: u32| format!("A = 1\nA += {n}\n\ndef my_asset():\n    return A\n");
-        assert_eq!(
-            cone_hash(&augmented(2), "my_asset"),
-            cone_hash(&augmented(3), "my_asset")
         );
     }
 
@@ -2627,26 +3015,6 @@ def shadowing(helpers, json):
                 "100"
             ),
             "a counted argument of the upstream"
-        );
-    }
-
-    /// A helper that is not a node keeps contributing its text as written, decorators included,
-    /// as every earlier release hashed it; the names in its decorators are still not followed.
-    #[test]
-    fn a_helper_that_is_not_a_node_is_hashed_as_written() {
-        let pipeline = |decorator: &str, size: &str| {
-            format!(
-                "from barca import asset\nSIZE = {size}\n\n\n{decorator}\ndef helper():\n    return 1\n\n\n@asset()\ndef my_asset():\n    return helper()\n"
-            )
-        };
-        let before = cone_hash(&pipeline("@lru_cache(maxsize=SIZE)", "1"), "my_asset");
-        assert_ne!(
-            before,
-            cone_hash(&pipeline("@lru_cache( maxsize = SIZE )", "1"), "my_asset")
-        );
-        assert_eq!(
-            before,
-            cone_hash(&pipeline("@lru_cache(maxsize=SIZE)", "2"), "my_asset")
         );
     }
 }
