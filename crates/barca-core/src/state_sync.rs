@@ -15,6 +15,7 @@
 
 use crate::BarcaError;
 use crate::config::ResolvedConfig;
+use crate::helper_proc::{OutputFailed as HelperFailed, run_to_output as run_helper};
 use crate::state_carry::Carried;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -403,77 +404,6 @@ fn invalid_shared_state(
         }
     }
     BarcaError::Other(message)
-}
-
-enum HelperFailed {
-    Spawn(std::io::Error),
-    TimedOut(std::time::Duration),
-    Cancelled,
-}
-
-/// Run a state helper to its end and collect its output. This is the only way a state helper
-/// is started.
-///
-/// The helper is stopped, and the call fails, when `cancel` fires or when it is still running
-/// after `limit`. Stopped means asked to stop (SIGTERM, on which it removes the temp file it
-/// was writing), waited for, and killed if it is still there after
-/// [`crate::helper_proc::STOP_GRACE`]: the call does not return while the helper is alive.
-/// Dropping the call kills the helper.
-///
-/// Like every helper it is started out of reach of the terminal's Ctrl-C, which is the
-/// coordinator's to act on, and with a lifeline, so that it exits by itself if this process is
-/// killed (see [`crate::helper_proc`]).
-async fn run_helper(
-    mut cmd: Command,
-    cancel: Option<&CancellationToken>,
-    limit: Option<std::time::Duration>,
-) -> Result<std::process::Output, HelperFailed> {
-    crate::helper_proc::shield_from_ctrl_c(&mut cmd);
-    crate::helper_proc::give_lifeline(&mut cmd);
-    cmd.stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true);
-    let mut child = crate::helper_proc::spawn(&mut cmd).map_err(HelperFailed::Spawn)?;
-    let pid = child.id();
-    // Held until the helper is done or told to stop: `wait_with_output` would close it at
-    // once.
-    let lifeline = child.stdin.take();
-    let output = child.wait_with_output();
-    tokio::pin!(output);
-    let cancelled = async {
-        match cancel {
-            Some(c) => c.cancelled().await,
-            None => std::future::pending().await,
-        }
-    };
-    let timed_out = async {
-        match limit {
-            Some(limit) => tokio::time::sleep(limit).await,
-            None => std::future::pending().await,
-        }
-    };
-    let why = tokio::select! {
-        // A helper that has finished is never reported as stopped: if the interrupt and the
-        // end of an upload arrive together, the upload happened.
-        biased;
-        out = &mut output => return out.map_err(HelperFailed::Spawn),
-        _ = cancelled => HelperFailed::Cancelled,
-        _ = timed_out => HelperFailed::TimedOut(limit.expect("a limit that passed")),
-    };
-    // The lifeline stays open while the helper is asked to stop: it has one way out at a
-    // time, the orderly one (SIGTERM unwinds through its cleanup).
-    if let Some(pid) = pid {
-        let grace = crate::helper_proc::STOP_GRACE;
-        crate::helper_proc::terminate(pid);
-        if tokio::time::timeout(grace, &mut output).await.is_err() {
-            crate::helper_proc::kill(pid);
-            // A killed process is gone at once. Its output could only stay open if it had
-            // handed its pipes to a child of its own; do not wait for that for ever.
-            let _ = tokio::time::timeout(grace, &mut output).await;
-        }
-    }
-    drop(lifeline);
-    Err(why)
 }
 
 /// When a state helper failed because a directory sits where the shared history file belongs

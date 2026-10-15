@@ -113,6 +113,7 @@ CASES: list[tuple[str, list[str], str, int]] = [
     ("status", ["status", "pipeline.py", "--json", "--sample", "1"], "stdout", 0),
     ("history", ["history", "--json", "--limit", "1"], "stdout", 0),
     ("stats", ["stats", "total", "pipeline.py", "--json"], "stdout", 0),
+    ("doctor", ["doctor", "pipeline.py", "--json"], "stdout", 0),
     ("docs_index", ["docs", "--json"], "stdout", 0),
     ("docs_topic", ["docs", "cache", "--json"], "stdout", 0),
     ("error_usage", ["get", "nope", "pipeline.py", "--json"], "stderr", 2),

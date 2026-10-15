@@ -47,6 +47,7 @@ barca get total pipeline.py      # second time: everything is a cache hit
 | `barca list [files...]` | List nodes with kind, freshness and dependencies (`--json`, `--limit`/`--all`, `--fields`; `barca docs agents`). |
 | `barca status [target] [files...]` | Per node: cache state and why, last run, artifact rows/columns (`--json`, `--limit`/`--all`, `--fields`). |
 | `barca sql "<query>" [files...]` | Query cached results with DuckDB; each asset is a view (`barca docs sql`). Experimental. |
+| `barca doctor [files...]` | Check project, Python, cache, metadata and stores without running steps (`barca docs doctor`). |
 | `barca plan [files...]` | Emit the tiered execution plan as JSON. |
 | `barca history` / `barca stats` | Past runs; timing and cache statistics (`--json`, `--fields`; history takes `--limit`/`--all`). |
 | `barca serve [files...]` | HTTP API, cron scheduler and the web UI (`/ui/`). |
@@ -85,3 +86,5 @@ Run `barca docs` for one-line summaries of every topic.
 Use `barca docs groups` for organizational nesting in the UI and CLI.
 
 - `barca docs logs` — read captured stdout independently of progress and results.
+
+Use `barca docs doctor` for prerequisite checks and a copyable local-only debugging profile.

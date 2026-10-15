@@ -16,6 +16,12 @@ The older notes below are preserved as historical records. Their former
 "Unreleased" section describes work that has already shipped; it is not the
 current pending-release queue.
 
+## Pending 0.24.0
+
+### Features
+
+- Add `barca doctor` prerequisite checks, credential identity diagnostics and a documented local-only debugging profile.
+
 ## Historical notes (formerly "Unreleased")
 
 ### Breaking changes

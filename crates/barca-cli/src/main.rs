@@ -209,6 +209,9 @@ async fn run_cli(cli: Cli, ctx: &Context) -> Result<(), CliError> {
             .map_err(|e| get_run_error(e, ctx, &hint_files))
         }
         Cli::Plan { files } => plan_cmd(files, &python).await.map_err(engine),
+        Cli::Doctor { files, format, env } => {
+            doctor_cmd(files, env.as_deref(), &python, is_json(format)).await
+        }
         Cli::Logs {
             run_id,
             step,

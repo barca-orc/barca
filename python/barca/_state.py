@@ -382,5 +382,6 @@ if __name__ == "__main__":
         print(f"conflict: {_storage.safe_error(str(exc))}", file=sys.stderr)
         sys.exit(_EXIT_CONFLICT)
     except Exception as exc:
-        print(f"error: {_storage.safe_error(f'{type(exc).__name__}: {exc}')}", file=sys.stderr)
+        uri = sys.argv[2] if len(sys.argv) > 2 else ""
+        print(f"error: {_storage.describe_error(uri, exc)}", file=sys.stderr)
         sys.exit(1)

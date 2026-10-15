@@ -181,6 +181,18 @@ Planning reads no state and takes no --env.
 Experimental: the layout may change between releases (barca docs contract).
 More: barca docs agents";
 
+const DOCTOR_HELP: &str = "\
+Examples:
+  barca doctor                      # diagnose the discovered project
+  barca doctor pipeline.py --json    # structured checks, no steps executed
+  barca doctor src/ --env local --pretty   # selected sources and environment
+
+Checks project root, Python, config, state mode, cache writability, metadata integrity,
+static source parsing, and configured stores. Never imports pipeline modules or evaluates
+dynamic partition expressions. Prints the report on stdout; exit 0 when all checks pass,
+3 when a prerequisite fails. Store probes list but never create buckets or objects.
+More: barca docs doctor";
+
 const LOGS_HELP: &str = "\
 Examples:
   barca logs 7f30b3e9 --pretty          # captured stdout lines, without progress messages
@@ -460,6 +472,17 @@ pub(crate) enum Cli {
     Plan {
         /// Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`)
         files: Vec<PathBuf>,
+    },
+    /// Diagnose project prerequisites without running pipeline steps
+    #[command(after_help = DOCTOR_HELP)]
+    Doctor {
+        /// Python files or directories to inspect (default: discovered project sources)
+        files: Vec<PathBuf>,
+        #[command(flatten)]
+        format: FormatFlags,
+        /// Environment name (separates cache/state per environment)
+        #[arg(long)]
+        env: Option<String>,
     },
     /// Read a run's captured step stdout, without progress messages
     #[command(after_help = LOGS_HELP)]

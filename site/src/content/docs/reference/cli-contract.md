@@ -48,6 +48,7 @@ outside the `GENERATED` blocks is written by hand.
 
 | Item | Why |
 |---|---|
+| `barca doctor` and its JSON | prerequisite check names and provider-specific identity data may evolve; failed checks exit 3 with the report on stdout and the standard error envelope on stderr |
 | `barca plan` and its JSON | prints the planner's internal phase/stream layout, which changes with scheduling work (`reason` is an object, `{"type": "initial"}` or `{"type": "fan_in", "node_id": ...}`) |
 | `barca serve` and all its flags | the HTTP API and scheduler are young: no auth, no shared remote state, routes may change. Its JSON is the engine's own serialization (for example `GET /assets` has `freshness: {"type": "Always"}` and `stats.node_id`), not the CLI's |
 | `get -o/--output`, `run -o/--output` | kept for compatibility; `--json` / `--pretty` are the canonical spelling |
@@ -76,6 +77,7 @@ outside the `GENERATED` blocks is written by hand.
 | `barca get` | `[<ARGS>...]` | stable | Get asset value(s) — cache-aware, runs only the needed subgraph |
 | `barca run` | `<ARGS>...` | stable | Run a task and its dependency cone — the task always re-runs |
 | `barca plan` | `[<FILES>...]` | experimental: prints the planner's internal phase/stream layout, which changes with scheduling work | Parse source files and emit the execution plan as JSON |
+| `barca doctor` | `[<FILES>...]` | experimental: new prerequisite report; check names and provider-specific data may evolve | Diagnose project prerequisites without running pipeline steps |
 | `barca logs` | `<RUN_ID>` | stable | Read a run's captured step stdout, without progress messages |
 | `barca history` | - | stable | Show recent run history |
 | `barca stats` | `<TARGET> [<FILES>...]` | stable | Show execution statistics for an asset |
@@ -159,6 +161,15 @@ default, and any aliases.
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
 | `<FILES>...` | - | - | experimental (with the command) | Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`) |
+
+#### barca doctor
+
+| Argument | Value | Notes | Stability | Description |
+|---|---|---|---|---|
+| `<FILES>...` | - | - | experimental (with the command) | Python files or directories to inspect (default: discovered project sources) |
+| `--json` | - | default `false` | experimental (with the command) | Emit JSON on stdout (the default when stdout is not a terminal) |
+| `--pretty` | - | default `false` | experimental (with the command) | Emit human-readable output (the default when stdout is a terminal) |
+| `--env` | `ENV` | - | experimental (with the command) | Environment name (separates cache/state per environment) |
 
 #### barca logs
 
@@ -1389,3 +1400,33 @@ and `specs/task-output.md` for flush, failure and ordering boundaries.
 | `[].line` | string | always |
 | `[].node_id` | string | always |
 <!-- END GENERATED schema logs -->
+
+### Doctor report (experimental)
+
+<!-- BEGIN GENERATED schema doctor -->
+| Key | Type | Present |
+|---|---|---|
+| `checks` | array | always |
+| `checks[]` | object | always |
+| `checks[].data` | object | always |
+| `checks[].data.artifacts` | string | sometimes |
+| `checks[].data.barca_version` | string | sometimes |
+| `checks[].data.enabled` | boolean | sometimes |
+| `checks[].data.executable` | string | sometimes |
+| `checks[].data.file` | string | sometimes |
+| `checks[].data.files` | array | sometimes |
+| `checks[].data.files[]` | string | always |
+| `checks[].data.found` | boolean | sometimes |
+| `checks[].data.metadata` | string | sometimes |
+| `checks[].data.mode` | string | sometimes |
+| `checks[].data.name` | string | sometimes |
+| `checks[].data.nodes` | integer | sometimes |
+| `checks[].data.path` | string | sometimes |
+| `checks[].data.source` | string | sometimes |
+| `checks[].data.uri` | null | sometimes |
+| `checks[].data.version` | string | sometimes |
+| `checks[].detail` | string | always |
+| `checks[].name` | string | always |
+| `checks[].ok` | boolean | always |
+| `ok` | boolean | always |
+<!-- END GENERATED schema doctor -->
