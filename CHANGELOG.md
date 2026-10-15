@@ -17,6 +17,9 @@ and these tags are available on the same releases page.
 ### Bug Fixes
 
 - Track project star imports in ordinary helper modules conservatively, including functions/classes, captured constants, forwarded exports, multiple/conditional imports and transitive stars.
+- Follow project helper references in function and lambda default arguments, including
+  nested functions and keyword-only defaults. Editing those helpers now invalidates their
+  consumers. Existing affected consumers may recompute once after upgrading.
 
 ### Features
 
@@ -26,6 +29,7 @@ and these tags are available on the same releases page.
 - **Breaking:** agent completion and permanent failure lines append `attempts=N` after
   retries. Allow this optional suffix when parsing those lines, or read the structured
   `steps[].attempts` field instead.
+
 ### Removed
 
 - **Breaking:** removed `barca get|run --no-cache` and `barca.get(no_cache=...)`.
