@@ -2,6 +2,10 @@
 
 export type LastMaterialization = {
 /**
+ * SHA-256 of the serialized artifact, absent for legacy materializations.
+ */
+content_hash?: string | null,
+/**
  * `success` or `failed`.
  */
 status: string,

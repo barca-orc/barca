@@ -40,7 +40,11 @@ warning?: string | null,
  * read in this run, does not have the hash recorded for it. The store's copy was used,
  * and `warning` says which and how to recompute it. Absent otherwise (never `false`).
  */
-artifact_mismatch?: boolean | null, partitions?: PartitionSummary | null,
+artifact_mismatch?: boolean | null,
+/**
+ * This recompute produced different bytes for the same node and run hash.
+ */
+bytes_changed?: boolean | null, partitions?: PartitionSummary | null,
 /**
  * Declared env values the step used (`@asset(env=[...])`): name -> value, `null` when unset,
  * `"<redacted>"` for secret-looking names. Absent when the node declares no env.

@@ -655,12 +655,10 @@ def _materialize(
         snapshot_prefix = os.environ.get("BARCA_UPLOAD_SNAPSHOT_PREFIX")
         if snapshot_prefix and not step.get("branch"):
             size, content_hash, upload_snapshot = serialize_for_upload(
-                result, path, fmt, snapshot_prefix, want_hash=step.get("kind") == "sensor"
+                result, path, fmt, snapshot_prefix, want_hash=True
             )
-        elif step.get("kind") == "sensor":
-            size, content_hash = serialize_hashed(result, path, fmt)
         else:
-            size = serialize(result, path, fmt)
+            size, content_hash = serialize_hashed(result, path, fmt)
     elapsed += time.perf_counter() - _ser_wall0
     if timing and timing.get("cpu_seconds") is not None:
         timing = {

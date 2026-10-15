@@ -172,6 +172,10 @@ each marked stable or experimental.
 
 More: `barca docs status`, `barca docs sql`.
 
+Recomputes also check artifact bytes: if unchanged code and inputs produce a different
+SHA-256 digest, barca warns and sets `steps[].bytes_changed: true`. `barca status` retains
+the last such event. This is a byte comparison; serializer metadata can also differ.
+
 ## Data from outside comes in through a sensor
 
 An asset that reads a file, a bucket or a table in its own body has the same code and the

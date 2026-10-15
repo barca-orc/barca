@@ -133,7 +133,7 @@ default, and any aliases.
 | `--no-cache` | - | default `false`; hidden from `--help` | experimental: deprecated: the old spelling of --refresh-all; warns on stderr and will be removed | Deprecated spelling of --refresh-all (prints a warning; removed in a future minor) |
 | `--dry-run` | - | default `false` | stable | Show what this command would do (each step cached or will-run, and why) without executing steps or recording a run (shared history may synchronize) |
 | `--agent` | - | default `false` | stable | Agent-friendly output: plain structured progress lines instead of visual progress bar |
-| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `partitions`, `env` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones |
+| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `partitions`, `env` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
 
 #### barca run
@@ -150,7 +150,7 @@ default, and any aliases.
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `--agent` | - | default `false` | stable | Agent-friendly output: plain structured progress lines instead of visual progress bar |
-| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `partitions`, `env` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones |
+| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `partitions`, `env` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
 
 #### barca plan
@@ -215,7 +215,7 @@ default, and any aliases.
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `-l, --limit` | `LIMIT` | - | stable | Maximum nodes, in topological order (default: every node in JSON, 100 in a human table) |
 | `--all` | - | default `false` | stable | Show every node (no limit) |
-| `--fields` | comma-separated: `id`, `name`, `kind`, `inputs`, `partitioned`, `cache`, `partitions`, `last_materialization`, `shape`, `env` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `nodes`. Implies --json. An unknown key is a usage error listing the valid ones |
+| `--fields` | comma-separated: `id`, `name`, `kind`, `inputs`, `partitioned`, `cache`, `partitions`, `last_materialization`, `last_bytes_change`, `shape`, `env` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `nodes`. Implies --json. An unknown key is a usage error listing the valid ones |
 | `--sample` | `N` | - | experimental: sample rows come from a Python helper whose output may grow | Include up to N sample rows from each json/parquet/CSV artifact (off by default; pickles are never sampled) |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
 
@@ -611,6 +611,7 @@ entries:
 | `steps[]` | object | always |
 | `steps[].artifact` | string | sometimes |
 | `steps[].artifact_mismatch` | boolean | sometimes |
+| `steps[].bytes_changed` | boolean | sometimes |
 | `steps[].detail` | string | sometimes |
 | `steps[].id` | string | always |
 | `steps[].kind` | string | always |
@@ -903,6 +904,7 @@ counts every node even when `nodes` is truncated.
 | `nodes[].kind` | string | always |
 | `nodes[].last_materialization` | object | always |
 | `nodes[].last_materialization.artifact` | null \| string | always |
+| `nodes[].last_materialization.content_hash` | string | sometimes |
 | `nodes[].last_materialization.created_at` | string | always |
 | `nodes[].last_materialization.elapsed_seconds` | null \| number | always |
 | `nodes[].last_materialization.error` | string | sometimes |
@@ -1230,6 +1232,89 @@ names do not define Barca nodes. For a foreign wrapper intended to remain a node
 stack it with a genuine Barca decorator; see `barca docs assets`.
 
 `list --groups` is experimental: JSON returns `{groups: [{id, name, description, members, output}]}`. IDs and member/output references are strings; members is an array of strings. The default `list` schema is unchanged. Groups are organizational metadata and cannot be execution targets.
+
+### Recompute byte checks
+
+Successful materializations record SHA-256 digests. A different digest for the same node
+and run hash emits `[barca] warning: <node> produced different bytes for the same code and inputs; the function is not deterministic`
+and adds `steps[].bytes_changed: true` (otherwise absent). Partitioned reports aggregate
+that flag, and stderr identifies each changed key. This warning does not change exit codes.
+Status nodes optionally expose `last_bytes_change: {node_id, run_hash, content_hash, created_at}`,
+retained after later unchanged recomputes; latest materializations expose `content_hash`
+when known. These additive keys are stable. See `barca docs cache` and
+`specs/materialization-digests.md`. Server-post and store-repair semantics remain proposed.
+
+#### Recomputed output with changed bytes
+
+<!-- BEGIN GENERATED schema get_bytes_changed -->
+| Key | Type | Present |
+|---|---|---|
+| `elapsed_seconds` | number | always |
+| `final_output` | `<user value>` | always |
+| `phases` | integer | always |
+| `run_id` | string | always |
+| `status` | string | always |
+| `steps` | array | always |
+| `steps[]` | object | always |
+| `steps[].bytes_changed` | boolean | always |
+| `steps[].detail` | string | always |
+| `steps[].id` | string | always |
+| `steps[].kind` | string | always |
+| `steps[].reason` | string | always |
+| `steps[].run_hash` | string | always |
+| `steps[].status` | string | always |
+| `steps_executed` | integer | always |
+| `warnings` | array | always |
+<!-- END GENERATED schema get_bytes_changed -->
+
+#### Status retaining the last byte change
+
+<!-- BEGIN GENERATED schema status_bytes_changed -->
+| Key | Type | Present |
+|---|---|---|
+| `nodes` | array | always |
+| `nodes[]` | object | always |
+| `nodes[].cache` | object | always |
+| `nodes[].cache.artifact` | string | always |
+| `nodes[].cache.detail` | string | always |
+| `nodes[].cache.reason` | string | always |
+| `nodes[].cache.run_hash` | string | always |
+| `nodes[].cache.state` | string | always |
+| `nodes[].env` | array | always |
+| `nodes[].id` | string | always |
+| `nodes[].inputs` | array | always |
+| `nodes[].kind` | string | always |
+| `nodes[].last_bytes_change` | object | always |
+| `nodes[].last_bytes_change.content_hash` | string | always |
+| `nodes[].last_bytes_change.created_at` | string | always |
+| `nodes[].last_bytes_change.node_id` | string | always |
+| `nodes[].last_bytes_change.run_hash` | string | always |
+| `nodes[].last_materialization` | object | always |
+| `nodes[].last_materialization.artifact` | string | always |
+| `nodes[].last_materialization.content_hash` | string | always |
+| `nodes[].last_materialization.created_at` | string | always |
+| `nodes[].last_materialization.elapsed_seconds` | number | always |
+| `nodes[].last_materialization.format` | string | always |
+| `nodes[].last_materialization.run_hash` | string | always |
+| `nodes[].last_materialization.size_bytes` | integer | always |
+| `nodes[].last_materialization.status` | string | always |
+| `nodes[].name` | string | always |
+| `nodes[].partitioned` | boolean | always |
+| `nodes[].shape` | object | always |
+| `nodes[].shape.type` | string | always |
+| `root` | string | always |
+| `summary` | object | always |
+| `summary.always_runs` | integer | always |
+| `summary.cached` | integer | always |
+| `summary.never_run` | integer | always |
+| `summary.partial` | integer | always |
+| `summary.stale` | integer | always |
+| `summary.unknown` | integer | always |
+| `target` | null | always |
+| `targets` | array | always |
+| `total` | integer | always |
+| `truncated` | boolean | always |
+<!-- END GENERATED schema status_bytes_changed -->
 
 ### CSV artifact format
 
