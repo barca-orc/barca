@@ -168,7 +168,7 @@ class result_batch:
             count = len(self.messages)
             if count != notified:
                 try:
-                    send_message({"type": "result_checkpoint"})
+                    send_message({"type": "result_checkpoint", "completed": count})
                 except OSError:
                     return
                 notified = count
@@ -223,7 +223,12 @@ def emit_step_completed(node_id: str, artifact: dict) -> None:
 
 
 def emit_step_error(
-    node_id: str, error_type: str, message: str, traceback: str, elapsed: float
+    node_id: str,
+    error_type: str,
+    message: str,
+    traceback: str,
+    elapsed: float,
+    import_seconds: float | None = None,
 ) -> None:
     """Report a step failed."""
     _report_repeated_warnings()
@@ -235,6 +240,7 @@ def emit_step_error(
             "message": message,
             "traceback": traceback,
             "elapsed": elapsed,
+            **({"import_seconds": import_seconds} if import_seconds is not None else {}),
         }
     )
 

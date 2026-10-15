@@ -6,7 +6,9 @@ status : string
 steps : array
 steps[] : object
 steps[].artifact : string  (optional)
+steps[].attempts : integer  (optional)
 steps[].detail : string  (optional)
+steps[].elapsed_seconds : number  (optional)
 steps[].env : object  (optional)
 steps[].env.<name> : null|string
 steps[].id : string

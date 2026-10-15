@@ -18,6 +18,24 @@ and these tags are available on the same releases page.
 
 - Follow project helper references inside set literals. Editing those helpers now invalidates
   their cached consumers. Existing affected consumers may recompute once after upgrading.
+- Follow project helper references in function and lambda default arguments, including
+  nested functions and keyword-only defaults. Editing those helpers now invalidates their
+  consumers. Existing affected consumers may recompute once after upgrading.
+
+### Features
+
+- Run JSON reports executed-step durations and attempts, with slow module imports
+  reported separately. History JSON totals recorded materialization attempts; stats
+  retains per-materialization attempts. Timeout errors identify the step id.
+- **Breaking:** agent completion and permanent failure lines append `attempts=N` after
+  retries. Allow this optional suffix when parsing those lines, or read the structured
+  `steps[].attempts` field instead.
+
+### Removed
+
+- **Breaking:** removed `barca get|run --no-cache` and `barca.get(no_cache=...)`.
+  Use `--refresh-all` and `refresh_all=True`, respectively. The CLI alias is now an
+  unknown-flag usage error (exit 2); Python rejects the removed keyword.
 
 The older notes below are preserved as historical records. Their former
 "Unreleased" section describes work that has already shipped; it is not the

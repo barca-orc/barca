@@ -124,7 +124,6 @@ async fn run_cli(cli: Cli, ctx: &Context) -> Result<(), CliError> {
             refresh,
             no_cascade,
             refresh_all,
-            no_cache,
             dry_run,
             agent,
             fields,
@@ -147,7 +146,7 @@ async fn run_cli(cli: Cli, ctx: &Context) -> Result<(), CliError> {
             }
             let hint_files: Vec<PathBuf> = ctx.files.iter().map(PathBuf::from).collect();
             let targets = targets_arg(target.as_deref(), &hint_files)?;
-            let policy = cache_policy(refresh, no_cascade, refresh_all, no_cache);
+            let policy = cache_policy(refresh, no_cascade, refresh_all);
             get_cmd(
                 env.as_deref(),
                 targets,
@@ -167,7 +166,6 @@ async fn run_cli(cli: Cli, ctx: &Context) -> Result<(), CliError> {
             refresh,
             no_cascade,
             refresh_all,
-            no_cache,
             dry_run,
             output,
             format,
@@ -192,7 +190,7 @@ async fn run_cli(cli: Cli, ctx: &Context) -> Result<(), CliError> {
                 ));
             }
             let hint_files: Vec<PathBuf> = ctx.files.iter().map(PathBuf::from).collect();
-            let policy = cache_policy(refresh, no_cascade, refresh_all, no_cache);
+            let policy = cache_policy(refresh, no_cascade, refresh_all);
             let targets = targets_arg(Some(&target), &hint_files)?;
             run_cmd(
                 env.as_deref(),
@@ -209,7 +207,16 @@ async fn run_cli(cli: Cli, ctx: &Context) -> Result<(), CliError> {
             .map_err(|e| get_run_error(e, ctx, &hint_files))
         }
         Cli::Plan { files } => plan_cmd(files, &python).await.map_err(engine),
+        Cli::Logs {
+            run_id,
+            step,
+            format,
+            env,
+        } => logs_cmd(env.as_deref(), &run_id, step.as_deref(), is_json(format))
+            .await
+            .map_err(engine),
         Cli::History {
+            reconcile,
             limit,
             all,
             format,
@@ -218,9 +225,15 @@ async fn run_cli(cli: Cli, ctx: &Context) -> Result<(), CliError> {
         } => {
             let json = fields_json(format, fields.as_deref())?;
             let limit = inspection_limit(limit, all, json, 10);
-            history_cmd(env.as_deref(), limit, json, fields.as_deref())
-                .await
-                .map_err(engine)
+            history_cmd(
+                env.as_deref(),
+                limit,
+                json,
+                fields.as_deref(),
+                reconcile.as_deref(),
+            )
+            .await
+            .map_err(engine)
         }
         Cli::Stats {
             target,

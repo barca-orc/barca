@@ -63,6 +63,7 @@ const GET_HELP: &str = "\
 Examples:
   BARCA_REMOTE=off barca get total pipeline.py   # local artifacts and history for this process
   barca get total                          # find `total` anywhere in the project and get it
+  barca get total pipeline.py --json --fields id,status,elapsed_seconds,attempts   # timing and retries
   barca get total pipelines/               # only read files under pipelines/
   barca get                                # every asset and sensor in the project, never tasks
   barca get pipeline.py                    # every asset and sensor, never tasks; prints the last asset's value
@@ -100,7 +101,6 @@ runs even if another fails; exit 1 if any failed.
 Refresh: the same vocabulary as `barca run`. --refresh takes ONE comma-separated list of assets in
 the cone (the target itself may be named) and also re-runs everything downstream of them;
 --no-cascade re-runs only the named ones. --refresh-all re-runs every asset in the cone.
---no-cache is a deprecated spelling of --refresh-all: it still works and warns on stderr.
 A cached step whose artifact file is gone is computed again when something needs to read it (a
 step that runs takes it as an input, or it is a target), with reason `artifact_missing` and a
 warning on stderr. A missing artifact that nothing reads is left alone (barca docs cache).
@@ -147,8 +147,7 @@ as an input a step never uses (barca docs assets); [] when there are none.
 assets you name and every asset downstream of them in the task's cone (reason `refresh_cascade`),
 so fresh data reaches the task. --no-cascade re-runs only the named assets; cached assets
 downstream of them then do not reflect the refresh, and barca warns. A name that is not an
-upstream asset is an error. --no-cache is a deprecated spelling of --refresh-all: it still works
-and warns on stderr.
+upstream asset is an error.
 An upstream asset that is cached but whose artifact file is gone is computed again before the task
 reads it (reason `artifact_missing`, a warning on stderr), so a deleted artifact does not fail the
 run (barca docs cache).
@@ -181,16 +180,34 @@ Planning reads no state and takes no --env.
 Experimental: the layout may change between releases (barca docs contract).
 More: barca docs agents";
 
+const LOGS_HELP: &str = "\
+Examples:
+  barca logs 7f30b3e9 --pretty          # captured stdout lines, without progress messages
+  barca logs 7f30b3e9 --step report --pretty   # one function name or exact node id
+  barca logs 7f30b3e9 --json            # [{node_id, line}] in recorded order
+  barca logs 7f30b3e9 --env dev         # read another environment's local history
+
+Replace the example id with run_id from barca run/get --json or barca history.
+Reads the local recorded stdout lines; does not execute or import pipeline code. Unknown runs
+and ambiguous step names are usage errors. Missing/unknown steps are usage errors; a recorded
+step that printed nothing returns no lines. Prints emitted before a failed step are retained.
+More: barca docs logs";
+
 const HISTORY_HELP: &str = "\
 Examples:
   barca history                # last 10 in a terminal, every run as JSON when piped
   barca history -l 25          # last 25
   barca history --all          # every recorded run
+  barca history --reconcile RUN_ID --json   # record a verified-stopped run as interrupted
   barca history --json         # {runs: [...], total, truncated, hint?}, even in a terminal
   barca history --pretty       # the table, even when piped
-  barca history --fields run_id,status,elapsed_seconds   # JSON with only these keys per run
+  barca history --fields run_id,status,elapsed_seconds,attempts   # JSON with only these keys per run
   barca history --env dev      # runs recorded in another environment
 
+--reconcile is an explicit write: first verify the run stopped. It refuses a proven live
+owner and terminal rows. It prints only that run, preserving progress and cached results;
+no end time or duration is invented. Ordinary history inspection never reconciles an
+unknown owner automatically.
 Newest first. When more runs exist than are shown, JSON says `\"truncated\": true` with the
 `total`, and the table prints a one-line note on stderr. In JSON, `files` is an array: the .py
 files the run was given.
@@ -364,7 +381,7 @@ pub(crate) enum Cli {
         /// Assets to force re-materialize, as ONE comma-separated list (`--refresh a,b`, not
         /// `--refresh a b`); the target itself may be named. Every asset downstream of them in
         /// the target's cone re-materializes too (see --no-cascade)
-        #[arg(long, value_delimiter = ',', conflicts_with_all = ["refresh_all", "no_cache"])]
+        #[arg(long, value_delimiter = ',', conflicts_with = "refresh_all")]
         refresh: Option<Vec<String>>,
         /// With --refresh: re-materialize only the named assets, not what is downstream of
         /// them. Cached downstream assets then do not reflect the refresh; barca warns
@@ -373,9 +390,6 @@ pub(crate) enum Cli {
         /// Force re-materialize EVERY asset in the target's cone (nothing comes from cache)
         #[arg(long)]
         refresh_all: bool,
-        /// Deprecated spelling of --refresh-all (prints a warning; removed in a future minor)
-        #[arg(long, hide = true, conflicts_with = "refresh_all")]
-        no_cache: bool,
         /// Show what this command would do (each step cached or will-run, and why) without
         /// executing steps or recording a run (shared history may synchronize)
         #[arg(long)]
@@ -405,7 +419,7 @@ pub(crate) enum Cli {
         /// Upstream assets to force re-materialize, as ONE comma-separated list
         /// (`--refresh a,b`, not `--refresh a b`). Every asset downstream of them in the
         /// task's cone re-materializes too (see --no-cascade)
-        #[arg(long, value_delimiter = ',', conflicts_with_all = ["refresh_all", "no_cache"])]
+        #[arg(long, value_delimiter = ',', conflicts_with = "refresh_all")]
         refresh: Option<Vec<String>>,
         /// With --refresh: re-materialize only the named assets, not what is downstream of
         /// them. Cached downstream assets then do not reflect the refresh; barca warns
@@ -414,9 +428,6 @@ pub(crate) enum Cli {
         /// Force re-materialize EVERY asset in the task's cone (nothing comes from cache)
         #[arg(long)]
         refresh_all: bool,
-        /// Deprecated spelling of --refresh-all (prints a warning; removed in a future minor)
-        #[arg(long, hide = true, conflicts_with = "refresh_all")]
-        no_cache: bool,
         /// Show what this command would do (each step cached or will-run, and why) without
         /// executing steps or recording a run (shared history may synchronize)
         #[arg(long)]
@@ -443,9 +454,26 @@ pub(crate) enum Cli {
         /// Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`)
         files: Vec<PathBuf>,
     },
+    /// Read a run's captured step stdout, without progress messages
+    #[command(after_help = LOGS_HELP)]
+    Logs {
+        /// Exact run id from get/run JSON or history
+        run_id: String,
+        /// Function name or exact node id (including a partition key when desired)
+        #[arg(long)]
+        step: Option<String>,
+        #[command(flatten)]
+        format: FormatFlags,
+        /// Environment whose local history to read
+        #[arg(long)]
+        env: Option<String>,
+    },
     /// Show recent run history
     #[command(after_help = HISTORY_HELP)]
     History {
+        /// After verifying a run stopped, record it as interrupted; refuses a proven live owner
+        #[arg(long, value_name = "RUN_ID", conflicts_with_all = ["limit", "all"])]
+        reconcile: Option<String>,
         /// Maximum recent runs (default: every run in JSON, 10 in a human table)
         #[arg(short, long)]
         limit: Option<usize>,

@@ -36,6 +36,10 @@ const HELP_WIDTH: usize = 100;
 /// `docs <TOPIC>`); `barca` is the top level.
 pub const EXPERIMENTAL: &[(&str, &str)] = &[
     (
+        "history --reconcile",
+        "explicit operator recovery for stopped runs whose owner cannot be verified",
+    ),
+    (
         "list --groups",
         "Organizational group hierarchy and metadata shape are experimental",
     ),
@@ -58,14 +62,6 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
     (
         "run --output",
         "kept for compatibility; --json / --pretty are the canonical spelling",
-    ),
-    (
-        "get --no-cache",
-        "deprecated: the old spelling of --refresh-all; warns on stderr and will be removed",
-    ),
-    (
-        "run --no-cache",
-        "deprecated: the old spelling of --refresh-all; warns on stderr and will be removed",
     ),
     (
         "status --sample",

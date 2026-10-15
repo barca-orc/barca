@@ -42,6 +42,18 @@ warning?: string | null,
  */
 artifact_mismatch?: boolean | null,
 /**
+ * Active elapsed seconds across this step's attempts and executed partition keys.
+ */
+elapsed_seconds?: number | null,
+/**
+ * Maximum attempts on an executed partition key; absent on cache hits/dry runs.
+ */
+attempts?: number | null,
+/**
+ * Slow module imports included in elapsed_seconds, summed across attempts/keys.
+ */
+import_seconds?: number | null,
+/**
  * This recompute produced different bytes for the same node and run hash.
  */
 bytes_changed?: boolean | null, partitions?: PartitionSummary | null,

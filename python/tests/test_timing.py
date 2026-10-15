@@ -72,7 +72,7 @@ class TestStatsAccuracy:
     """Verify mean, median, max, p95 are computed correctly from known distributions."""
 
     def _run_n_times(self, f, target, n):
-        """Run the asset n times with no_cache to get n materialization records."""
+        """Run the asset n times with refresh_all to get n materialization records."""
         for _ in range(n):
             barca.get(target, f, refresh_all=True)
 

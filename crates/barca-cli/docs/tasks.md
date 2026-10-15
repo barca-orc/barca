@@ -214,3 +214,16 @@ Parallel branch results, including small JSON values, are always passed as file 
 Protocol v3 batches result metadata into columnar arrays and uses transient metadata receipts
 so a crashed later item does not replay earlier completions. Old worker packages are refused
 before execution; reinstall matching Barca packages if a protocol mismatch is reported.
+
+## Task results and stdout
+
+A task follows the same output rules as an asset. A returned dict appears in `final_output`
+under `barca run --json`, under `-o value`, and from `barca.run(...)`. The CLI still uses
+artifact references for binary/tabular formats (`barca docs types`); the Python API reads
+those references. Captured stdout is stored
+separately. Human/value modes show each print on stderr as `[pipeline.py:report] text`;
+`--agent` progress keeps its `[barca]` prefix. JSON output suppresses captured prints.
+Use `barca logs RUN_ID --pretty` for only the recorded lines, or `--json` for
+`[{node_id, line}]`. Complete lines and trailing partial lines flushed on return/failure
+are recorded. `--step report` selects a function name; exact node ids disambiguate.
+See `barca docs logs` for the full contract.

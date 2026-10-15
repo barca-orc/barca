@@ -11,7 +11,9 @@ status : string
 steps : array
 steps[] : object
 steps[].artifact : string  (optional)
+steps[].attempts : integer  (optional)
 steps[].detail : string  (optional)
+steps[].elapsed_seconds : number  (optional)
 steps[].id : string
 steps[].kind : string
 steps[].reason : string  (optional)

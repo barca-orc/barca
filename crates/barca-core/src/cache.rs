@@ -69,7 +69,6 @@ use crate::{dag::Dag, db, dispatch, dispatch::OutputRef, planner::Phase};
 pub(crate) enum RunReason {
     Task,
     Sensor,
-    NoCache,
     Refresh,
     /// Downstream of an asset named in `--refresh` (the cascade); `root` is that asset.
     RefreshCascade {
@@ -87,7 +86,6 @@ impl RunReason {
         match self {
             RunReason::Task => "task",
             RunReason::Sensor => "sensor",
-            RunReason::NoCache => "no_cache",
             RunReason::Refresh => "refresh",
             RunReason::RefreshCascade { .. } => "refresh_cascade",
             RunReason::RefreshAll => "refresh_all",
@@ -100,7 +98,6 @@ impl RunReason {
         match self {
             RunReason::Task => "tasks always re-run".to_string(),
             RunReason::Sensor => "sensors always re-run".to_string(),
-            RunReason::NoCache => "--no-cache".to_string(),
             RunReason::Refresh => "named in --refresh".to_string(),
             RunReason::RefreshCascade { root } => {
                 format!("downstream of refreshed '{root}'")
@@ -298,7 +295,6 @@ pub(crate) fn in_dependency_order<'p>(
 pub(crate) async fn decide_step(
     dag: &Dag,
     policy: &CachePolicy,
-    no_cache: bool,
     cache: Option<&db::CacheReader>,
     state: &mut DecideState,
     step: &crate::planner::StreamStep,
@@ -354,9 +350,6 @@ pub(crate) async fn decide_step(
         Some(crate::NodeKind::Task) => return Ok((step, Decision::Run(RunReason::Task))),
         Some(crate::NodeKind::Sensor) => return Ok((step, Decision::Run(RunReason::Sensor))),
         _ => {}
-    }
-    if no_cache {
-        return Ok((step, Decision::Run(RunReason::NoCache)));
     }
 
     // Refresh policy (`barca run`): force-rerun assets named in the refresh set and, when
@@ -1188,7 +1181,6 @@ def report(values: list) -> int:
         let result = decide_step(
             &dag,
             &CachePolicy::CacheAware,
-            false,
             Some(&cache),
             &mut state,
             &consumer,
@@ -1294,7 +1286,7 @@ def report(values: list) -> int:
             for phase in &phases {
                 state.register_phase(phase);
                 for (_, st) in in_dependency_order(&dag, phase) {
-                    decide_step(&dag, &CachePolicy::CacheAware, false, None, &mut state, st)
+                    decide_step(&dag, &CachePolicy::CacheAware, None, &mut state, st)
                         .await
                         .unwrap();
                 }
@@ -1379,7 +1371,6 @@ def report(values: list) -> int:
             let error = match decide_step(
                 &dag,
                 &CachePolicy::RefreshAll,
-                true,
                 None,
                 &mut state,
                 &consumer,
@@ -1409,7 +1400,7 @@ def report(values: list) -> int:
                 for phase in &phases {
                     state.register_phase(phase);
                     for (_, st) in in_dependency_order(&dag, phase) {
-                        decide_step(&dag, &CachePolicy::CacheAware, false, None, &mut state, st)
+                        decide_step(&dag, &CachePolicy::CacheAware, None, &mut state, st)
                             .await
                             .unwrap();
                     }
@@ -1476,16 +1467,10 @@ def report(values: list) -> int:
                 &HashMap::new(),
                 None,
             );
-            let (decided, _) = decide_step(
-                &dag,
-                &CachePolicy::CacheAware,
-                false,
-                None,
-                &mut state,
-                &consumer,
-            )
-            .await
-            .unwrap();
+            let (decided, _) =
+                decide_step(&dag, &CachePolicy::CacheAware, None, &mut state, &consumer)
+                    .await
+                    .unwrap();
             assert_eq!(decided.run_hashes[&consumer_id], expected);
             assert!(state.complete_upstreams.contains(&upstream));
         }
