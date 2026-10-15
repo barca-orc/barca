@@ -74,7 +74,7 @@ echo $?
 
 In JSON output mode (whenever the output rule above picks JSON: piped or captured stdout,
 `--json`, `-o json` or `BARCA_OUTPUT=json`; `plan` always; `docs` with `--json`) an error is
-**one JSON line**, the last line on stderr:
+**one JSON line** on stderr (a failed run adds its summary afterwards):
 
 ```
 {"code":2,"error":"Asset 'nope' not found. Available: pipeline.py:src, pipeline.py:total, pipeline.py:clean","kind":"usage","remediation":"Run `barca list pipeline.py` to see available assets and tasks."}
@@ -99,16 +99,17 @@ A failed step looks like this (one line; wrapped here):
  "traceback":"  File \"/abs/path/pipeline.py\", line 11, in clean\n    return x / 0\n           ~~^~~"}
 ```
 
-Parse it from the last stderr line; earlier lines are progress and your steps' own output.
+Read the last JSON object on stderr with `kind` and `error`; other lines are progress,
+your steps' own output and the final run summary.
 In human mode (a terminal, `--pretty`, `-o pretty` or `-o value`) the same error is plain prose with the
-remediation on the last lines. Errors never go to stdout. From Python, `barca.BarcaError` carries
+remediation before the final run summary. Errors never go to stdout. From Python, `barca.BarcaError` carries
 the envelope as attributes: `kind`, `code`, `remediation`, `node`, `traceback`, `artifact_dir`.
 
 When a step fails in JSON mode, `get`/`run` still print one result line on stdout, so you can
 read the outcome without parsing stderr: `{"status": "failed", "failed_node": ..., "error": ...,
 "run_id", "steps", ...}`, where the failed step's `status` is `failed`. A successful result has
-`"status": "success"`. Just before the error, stderr gets one greppable line:
-`[barca] run failed: step 'pipeline.py:clean' failed (exit 1)`.
+`"status": "success"`. After the error, stderr ends with one greppable line:
+`[barca] run failed: step 'pipeline.py:clean' failed: ZeroDivisionError: division by zero; 0 downstream steps skipped (exit 1)`.
 
 `get`/`run` JSON fields: `status` (`success`, or `failed` as above), `run_id`, `elapsed_seconds`,
 `steps_executed` (0 means everything was a cache hit), `phases`, `steps` (what happened to each
@@ -139,7 +140,7 @@ calls. The output has the same run fields (`status` is `failed` when any target 
   raised: the target itself or something upstream of it (the same key a failed single-target run
   uses).
 - Exit code 1 if any target failed. stdout carries the full JSON (so you see which targets
-  passed); stderr has one `error: target '<name>' failed ...` line each, then the error envelope
+  passed); stderr has the error envelope and final summary
   for the first failed target (`kind: "step_failed"`).
 - One target (or a repeated name, `a,a`) gives exactly the single-target output.
 - `--dry-run` with several targets reports the union once (`steps`, `summary`), and `targets`

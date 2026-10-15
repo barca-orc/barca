@@ -313,7 +313,7 @@ def runs(tmp_path_factory) -> dict:
             f"barca {' '.join(argv)}: exit {proc.returncode}, expected {code}\n"
             f"stdout: {proc.stdout}\nstderr: {proc.stderr}"
         )
-        text = proc.stdout if stream == "stdout" else proc.stderr.strip().splitlines()[-1]
+        text = proc.stdout if stream == "stdout" else next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{"))
         doc = json.loads(text)
         s = schema(doc)
         out[case] = (s, render_snapshot(argv, stream, code, s), proc)

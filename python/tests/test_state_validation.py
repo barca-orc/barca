@@ -177,7 +177,7 @@ def test_an_invalid_shared_history_never_replaces_the_local_one(
         out = a.barca(*args)
         refused(out, state_uri, why)
         # In JSON mode the reason is the error envelope, the last line on stderr.
-        envelope = json.loads(out.stderr.strip().splitlines()[-1])
+        envelope = json.loads(next(line for line in reversed(out.stderr.splitlines()) if line.startswith("{")))
         assert (envelope["code"], envelope["kind"]) == (3, "infra"), envelope
         assert local_files(a) == before, args
         assert state_uri.read_bytes() == bad, "the command wrote to the shared history"
@@ -659,7 +659,7 @@ def test_a_history_damaged_by_an_older_barca_is_refused_with_a_one_line_reason_f
     (new.root / "a_0.py").write_text(quick("a_0"))
     out = new.barca("status", "a_0.py", "--json")
     refused(out, state_uri)
-    envelope = json.loads(out.stderr.strip().splitlines()[-1])
+    envelope = json.loads(next(line for line in reversed(out.stderr.splitlines()) if line.startswith("{")))
     # What is wrong, in the one line of `error`: no banner, no list.
     assert "\n" not in envelope["error"] and "***" not in envelope["error"], envelope["error"]
     if kind == "pages nothing refers to":

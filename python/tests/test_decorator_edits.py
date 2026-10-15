@@ -334,7 +334,7 @@ def test_an_unknown_argument_edit_is_rejected_before_using_the_cache(project):
     )
     assert proc.returncode == 2
     assert proc.stdout == ""
-    error = json.loads(proc.stderr.strip().splitlines()[-1])
+    error = json.loads(next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{")))
     assert error["kind"] == "usage"
     assert "`mode` is not an argument of @asset" in error["error"]
     write(project, before)

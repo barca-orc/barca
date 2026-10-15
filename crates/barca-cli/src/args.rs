@@ -111,10 +111,11 @@ sensor and skips tasks (previously it ran tasks too); stderr names the skipped t
 `barca run` command. A file with only tasks gets nothing: exit 0, empty `steps`.
 The target comes before the files: `barca get pipeline.py total` exits 2 and prints
 `barca get total pipeline.py`.
-Errors: in JSON mode the last stderr line is one JSON object {error, code, kind, remediation},
+Errors: in JSON mode stderr contains one JSON error object {error, code, kind, remediation},
 plus node, traceback and artifact_dir when a step failed. Exit 1 step failed, 2 usage error,
 3 barca/infra failure, 130 cancelled. A failed step still prints a stdout result line with
-status \"failed\" and failed_node.
+status \"failed\" and failed_node. Stderr ends with the failed step, its first error line,
+and the count of skipped downstream nodes.
 A required history-write failure exits 3 and preserves previously committed history.
 More: barca docs cache, barca docs types, barca docs agents";
 
@@ -154,10 +155,11 @@ The target must be a task; use `barca get` for assets. The target comes before t
 `barca run pipeline.py deploy` exits 2 and prints `barca run deploy pipeline.py`. Every usage
 error exits 2 and ends by pointing at `barca list` (with the files you gave, if any).
 No files: barca reads every file in the project that imports barca (barca docs discovery).
-Errors: in JSON mode the last stderr line is one JSON object {error, code, kind, remediation}
+Errors: in JSON mode stderr contains one JSON error object {error, code, kind, remediation}
 (see barca docs agents). Exit 1 step failed, 2 usage error, 3 barca/infra failure, 130 cancelled.
 A raising task, or one that calls sys.exit(), fails the run: exit 1, and the stdout JSON line has
-status \"failed\" and failed_node.
+status \"failed\" and failed_node. Stderr ends with the failed step, its first error line,
+and the count of skipped downstream nodes.
 More: barca docs tasks, barca docs cache, barca docs agents";
 
 const PLAN_HELP: &str = "\
