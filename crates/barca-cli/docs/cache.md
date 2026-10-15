@@ -213,6 +213,13 @@ captured the conditional value before that replacement. Even an unconditional re
 therefore retain conservative invalidation. Ordinary definitions
 that do not use these uncertain bindings keep their selective dependency cones.
 
+Default argument expressions are followed for steps and reached helpers, including
+positional-only and keyword-only parameters, nested functions and lambdas. For example,
+`def value(x=helpers.compute()): ...` includes `helpers.compute` in the dependency cone.
+The default is resolved in the enclosing scope, before the new parameter bindings exist.
+Editing that helper invalidates its consumers; unrelated steps retain their cached results.
+Existing cached consumers may recompute once after this dependency-tracking correction.
+
 #### Not followed
 
 An edit in one of these does not change the hash; recompute with `--refresh-all` or `--refresh`:
@@ -230,12 +237,12 @@ An edit in one of these does not change the hash; recompute with `--refresh-all`
   a module-level name (`A += 1`): only a plain `A = ...` or `A: int = ...` is a definition;
 - a module reached through another module's `import` (`from helpers import other` where
   `helpers.py` does `import other`): import it directly;
-- what a helper refers to only in a default argument value, an `except` clause's
+- what a helper refers to only in an `except` clause's
   exception type, a `match` pattern, a set literal (`{f()}`), an assignment target
   (`table[key()] = ...`) or a loop's `else:` block. The helper's own text is hashed, but those
   references are not followed. (This is about helper functions. The decorators of a step
-  itself are covered by "Which decorator arguments count" above; its default argument values
-  are hashed as part of the function but the names in them are not followed);
+  itself are covered by "Which decorator arguments count" above; default argument references
+  are followed as described above);
 - helpers more than six project modules away along an import chain.
 
 Conflicting ordinary project imports are rejected before user code runs. If two pipeline

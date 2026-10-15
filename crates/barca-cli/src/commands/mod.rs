@@ -1,3 +1,5 @@
+mod doctor;
+pub(crate) use doctor::*;
 mod execute;
 mod plan;
 pub(crate) use plan::*;

@@ -196,3 +196,34 @@ order. `--env <name>` reads another environment's state (`barca docs cache`).
 An explicit `@asset(name="orders_clean")` uses `orders_clean` in status and as its SQL
 view name, matching `list`, `get` and `stats`. Inspection reads the existing artifact
 without importing or rerunning its producer.
+
+## Run timing and attempts
+
+`get --json` and `run --json` add `elapsed_seconds` and `attempts` to executed steps,
+including failed steps. Cached steps and dry runs omit them. Elapsed time sums active
+worker time across attempts: module import, input loading, the call and artifact
+serialization; retry backoff is excluded. After a worker disconnect, elapsed time falls
+back to the coordinator's observed in-flight time. For a partitioned step, elapsed time
+sums its executed keys (and can exceed run wall time); attempts is the maximum for any
+one key, not the number of keys.
+
+```bash
+barca get total pipeline.py --json --fields id,status,elapsed_seconds,attempts,import_seconds
+barca history --json --fields run_id,status,attempts
+barca stats total pipeline.py --json
+```
+
+Before importing a module, a worker prints `[barca] importing <module>` on stderr.
+Imports longer than one second add `import_seconds` to the step report, summed across
+attempts and executed keys. This time is included in `elapsed_seconds`; it is not an
+extra charge. A reused module adds no import time. Framework import diagnostics remain
+visible under `--json`; task prints remain accessible through `barca logs`.
+
+`--agent` completion and final failure lines append `attempts=N` when N exceeds one.
+Completion lines retain their existing final-attempt duration. `history --json` adds
+`attempts`, the total attempts in recorded materialization rows (zero for an all-cached
+run; upload-failure rows retain their existing transfer-attempt counts). `stats` shows
+attempts per recorded materialization and its stored final-attempt duration.
+Timeout errors name the step id, including its partition key.
+
+Older read-only snapshots without attempt metadata report a null history attempt total.

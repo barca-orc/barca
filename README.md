@@ -20,6 +20,8 @@ Qualified imports (`@barca.asset()`) and imported aliases (`@a()` after
 needs to run, and runs it in Python worker processes. Results are stored as files under
 `.barca/`. An asset runs again only when its code or its inputs change; sensors and tasks
 run every time.
+Project helper references in default arguments are tracked too, including nested functions
+and lambdas; editing the helper invalidates its cached consumers.
 
 There is no server to run and no configuration file to write. `barca serve` adds
 schedules, an HTTP API and a web UI when you want them.
@@ -274,6 +276,10 @@ More: `barca docs big-inputs`, `barca docs types`.
 
 ## Commands
 
+Run JSON reports elapsed time and attempts for executed steps; slow imports are reported
+separately as `import_seconds`. `barca docs status` explains retry and partition timing;
+`barca history --json` and `barca stats` expose recorded attempts.
+
 The target comes first, then files or directories. Both are optional: with no files,
 barca reads every `.py` file under the project root that imports barca
 (`barca docs discovery`). A project star import with a literal `__all__` preserves Barca
@@ -295,6 +301,7 @@ error (exit 2) that names the right one. `barca pipeline.py` is short for
 | `barca get [target] [files...]` | Get one asset, several (`a,b`), or with no target every asset and sensor. Runs only what is not cached. |
 | `barca run <task> [files...]` | Run a task, or several (`a,b`), and what they depend on. The task always runs. |
 | &nbsp;&nbsp;`get` and `run` flags | `--refresh a,b`, `--no-cascade`, `--refresh-all`, `--dry-run`, `--env <name>`, `--agent` (plain progress lines), `--json`, `--pretty`, `--fields` |
+| `barca doctor [files...]` | Check project, Python, cache, metadata and stores without running steps (`--json`, `--pretty`, `--env`). See `barca docs doctor` for local-only debugging. |
 | `barca logs RUN_ID [--step NAME]` | Read captured step stdout (`--json`, `--pretty`, `--env`). |
 | `barca list [files...]` | JSON: every definition; human table: at most 100. Definitions with its kind, freshness, inputs and declared `env`. `--json`, `--pretty`, `--limit N`, `--all`, `--fields`; `--groups` shows organizational nesting |
 | `barca status [target] [files...]` | JSON: every node; human table: at most 100. Per node: cache state and why, last run, artifact rows and columns. `--sample N`, `--json`, `--pretty`, `--limit N`, `--all`, `--fields`, `--env` |

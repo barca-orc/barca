@@ -396,7 +396,7 @@ def load_module(source_file):
     return load_pipeline_module(source_file)
 
 
-def _run_with_timeout(fn, kwargs, timeout_seconds):
+def _run_with_timeout(fn, kwargs, timeout_seconds, *, label=None):
     """Run a function with a timeout. Raises TimeoutError if exceeded."""
     import threading
     from contextvars import copy_context
@@ -421,7 +421,7 @@ def _run_with_timeout(fn, kwargs, timeout_seconds):
     thread.join(timeout=timeout_seconds)
 
     if thread.is_alive():
-        raise TimeoutError(f"Function '{fn.__name__}' exceeded timeout of {timeout_seconds}s")
+        raise TimeoutError(f"Step '{label or fn.__name__}' exceeded timeout of {timeout_seconds}s")
     if exception is not None:
         raise exception
     return result
@@ -520,7 +520,7 @@ def _execute(fn, kwargs, step):
     timeout = step.get("timeout_seconds", 0)
     t0 = time.perf_counter()
     if timeout and timeout > 0:
-        result = _run_with_timeout(fn, kwargs, timeout)
+        result = _run_with_timeout(fn, kwargs, timeout, label=step.get("node_id"))
     else:
         result = fn(**kwargs) if kwargs else fn()
     elapsed = time.perf_counter() - t0
@@ -743,7 +743,12 @@ def run_batch(batch):
                         timeout = step.get("timeout_seconds", 0)
                         t0 = time.time()
                         if timeout and timeout > 0:
-                            result = _run_with_timeout(lambda: fn(*d_args, **d_kwargs), {}, timeout)
+                            result = _run_with_timeout(
+                                lambda: fn(*d_args, **d_kwargs),
+                                {},
+                                timeout,
+                                label=step.get("node_id"),
+                            )
                         else:
                             result = fn(*d_args, **d_kwargs)
                         elapsed = time.time() - t0
@@ -805,7 +810,9 @@ def run_batch(batch):
                     timeout = step.get("timeout_seconds", 0)
                     t0 = time.time()
                     if timeout and timeout > 0:
-                        result = _run_with_timeout(lambda: fn(*d_args, **d_kwargs), {}, timeout)
+                        result = _run_with_timeout(
+                            lambda: fn(*d_args, **d_kwargs), {}, timeout, label=step.get("node_id")
+                        )
                     else:
                         result = fn(*d_args, **d_kwargs)
                     elapsed = time.time() - t0
@@ -942,16 +949,20 @@ def _run_daemon_step(step, modules, art_dir, lru):
     bound_views: list[str] = []
     # Set when this step is a parallel() branch whose return value could not be written.
     unwritable = False
+    import_seconds = None
 
     try:
         source = str(Path(step["source_file"]).resolve())
         activate_source_path(source)
         emitter = _stdout_for_step(node_id)
         if source not in modules:
+            print(f"[barca] importing {source}", file=sys.stderr, flush=True)
+            import_start = time.perf_counter()
             try:
                 with contextlib.redirect_stdout(emitter):
                     modules[source] = load_module(source)
             finally:
+                import_seconds = time.perf_counter() - import_start
                 emitter.flush()
         fn = getattr(modules[source], step["function_name"])
 
@@ -1002,12 +1013,14 @@ def _run_daemon_step(step, modules, art_dir, lru):
             try:
                 if d_args:
                     if timeout and timeout > 0:
-                        result = _run_with_timeout(lambda: fn(*d_args, **kwargs), {}, timeout)
+                        result = _run_with_timeout(
+                            lambda: fn(*d_args, **kwargs), {}, timeout, label=node_id
+                        )
                     else:
                         result = fn(*d_args, **kwargs)
                 else:
                     if timeout and timeout > 0:
-                        result = _run_with_timeout(lambda: fn(**kwargs), {}, timeout)
+                        result = _run_with_timeout(lambda: fn(**kwargs), {}, timeout, label=node_id)
                     else:
                         result = fn(**kwargs)
             finally:
@@ -1042,7 +1055,15 @@ def _run_daemon_step(step, modules, art_dir, lru):
                 step,
                 wall,
                 elapsed_in_artifact=True,
-                timing={"cpu_seconds": cpu, "max_rss_bytes": _peak_rss_bytes()},
+                timing={
+                    "cpu_seconds": cpu,
+                    "max_rss_bytes": _peak_rss_bytes(),
+                    **(
+                        {"import_seconds": import_seconds}
+                        if import_seconds and import_seconds > 1
+                        else {}
+                    ),
+                },
                 before_emit=tracing.finish,
             )
         except Exception as exc:
@@ -1096,6 +1117,7 @@ def _run_daemon_step(step, modules, art_dir, lru):
             message=message,
             traceback=_user_traceback(exc),
             elapsed=wall,
+            import_seconds=import_seconds if import_seconds and import_seconds > 1 else None,
         )
         return False
 

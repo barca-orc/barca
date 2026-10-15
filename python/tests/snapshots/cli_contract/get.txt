@@ -6,7 +6,9 @@ run_id : string
 status : string
 steps : array
 steps[] : object
+steps[].attempts : integer
 steps[].detail : string
+steps[].elapsed_seconds : number
 steps[].env : object  (optional)
 steps[].env.<name> : null|string
 steps[].id : string

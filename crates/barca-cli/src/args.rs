@@ -63,6 +63,7 @@ const GET_HELP: &str = "\
 Examples:
   BARCA_REMOTE=off barca get total pipeline.py   # local artifacts and history for this process
   barca get total                          # find `total` anywhere in the project and get it
+  barca get total pipeline.py --json --fields id,status,elapsed_seconds,attempts   # timing and retries
   barca get total pipelines/               # only read files under pipelines/
   barca get                                # every asset and sensor in the project, never tasks
   barca get pipeline.py                    # every asset and sensor, never tasks; prints the last asset's value
@@ -179,6 +180,18 @@ Planning reads no state and takes no --env.
 Experimental: the layout may change between releases (barca docs contract).
 More: barca docs agents";
 
+const DOCTOR_HELP: &str = "\
+Examples:
+  barca doctor                      # diagnose the discovered project
+  barca doctor pipeline.py --json    # structured checks, no steps executed
+  barca doctor src/ --env local --pretty   # selected sources and environment
+
+Checks project root, Python, config, state mode, cache writability, metadata integrity,
+static source parsing, and configured stores. Never imports pipeline modules or evaluates
+dynamic partition expressions. Prints the report on stdout; exit 0 when all checks pass,
+3 when a prerequisite fails. Store probes list but never create buckets or objects.
+More: barca docs doctor";
+
 const LOGS_HELP: &str = "\
 Examples:
   barca logs 7f30b3e9 --pretty          # captured stdout lines, without progress messages
@@ -200,7 +213,7 @@ Examples:
   barca history --reconcile RUN_ID --json   # record a verified-stopped run as interrupted
   barca history --json         # {runs: [...], total, truncated, hint?}, even in a terminal
   barca history --pretty       # the table, even when piped
-  barca history --fields run_id,status,elapsed_seconds   # JSON with only these keys per run
+  barca history --fields run_id,status,elapsed_seconds,attempts   # JSON with only these keys per run
   barca history --env dev      # runs recorded in another environment
 
 --reconcile is an explicit write: first verify the run stopped. It refuses a proven live
@@ -452,6 +465,17 @@ pub(crate) enum Cli {
     Plan {
         /// Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`)
         files: Vec<PathBuf>,
+    },
+    /// Diagnose project prerequisites without running pipeline steps
+    #[command(after_help = DOCTOR_HELP)]
+    Doctor {
+        /// Python files or directories to inspect (default: discovered project sources)
+        files: Vec<PathBuf>,
+        #[command(flatten)]
+        format: FormatFlags,
+        /// Environment name (separates cache/state per environment)
+        #[arg(long)]
+        env: Option<String>,
     },
     /// Read a run's captured step stdout, without progress messages
     #[command(after_help = LOGS_HELP)]

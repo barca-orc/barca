@@ -12,6 +12,7 @@ pub mod db;
 mod db_schema;
 pub mod decorator_args;
 pub mod definition;
+pub mod diagnostics;
 pub mod discover;
 pub mod dispatch;
 pub mod envdeps;

@@ -6,8 +6,10 @@ run_id : string
 status : string
 steps : array
 steps[] : object
+steps[].attempts : integer
 steps[].bytes_changed : boolean
 steps[].detail : string
+steps[].elapsed_seconds : number
 steps[].id : string
 steps[].kind : string
 steps[].reason : string
