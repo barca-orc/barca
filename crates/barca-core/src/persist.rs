@@ -538,8 +538,13 @@ pub(crate) fn telemetry_report(
     // an unpartitioned step.
     let attempts = |node_id: &str| {
         let id = crate::StepId::parse(node_id);
-        (id.display() == id.base_id())
-            .then(|| l.all_attempts.get(id.base_id()).copied().unwrap_or(1))
+        (id.display() == id.base_id()).then(|| {
+            l.all_attempts
+                .get(&id.display())
+                .or_else(|| l.all_attempts.get(id.base_id()))
+                .copied()
+                .unwrap_or(1)
+        })
     };
 
     let mut steps: Vec<StepReport> = Vec::new();
@@ -697,7 +702,12 @@ async fn write_terminal_ledger(
         row.format = oref.format.clone();
         row.size_bytes = oref.size_bytes;
         row.elapsed_seconds = oref.elapsed_seconds;
-        row.attempts = l.all_attempts.get(&base).copied().unwrap_or(1);
+        row.attempts = l
+            .all_attempts
+            .get(node_id)
+            .or_else(|| l.all_attempts.get(&base))
+            .copied()
+            .unwrap_or(1);
         row.sinks_json = l.all_sinks.get(node_id).cloned();
         row.cpu_seconds = cpu;
         row.max_rss_bytes = rss;

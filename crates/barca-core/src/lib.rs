@@ -35,6 +35,7 @@ pub mod protocol;
 pub mod queries;
 mod recover;
 pub mod report;
+mod result_journal;
 pub mod results;
 mod run_owner;
 pub mod schedule;

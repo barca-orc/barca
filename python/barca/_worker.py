@@ -636,31 +636,21 @@ def _materialize(
     # asset that reads the sensor, so a changed output re-runs them.
     content_hash = None
     upload_snapshot = None
-    # A branch's small JSON result is not written at all: its text goes back in the report
-    # and on to the caller (barca/_branches.py). The text is what the file would have held.
-    inline_json = None
-    if branch_path and fmt == "json":
-        from barca import _branches
-
-        inline_json = _branches.small_json(result)
-    if inline_json is not None:
-        path, size = "", len(inline_json)
+    # A directory where the artifact file belongs is not an artifact: it is moved out of
+    # the way (never deleted) so the step's result can be written. Sinks are the user's
+    # paths and never get this treatment.
+    local = _storage.local_path_of(path)
+    if local is not None:
+        _storage.make_way(local)
+    snapshot_prefix = os.environ.get("BARCA_UPLOAD_SNAPSHOT_PREFIX")
+    if snapshot_prefix and not step.get("branch"):
+        size, content_hash, upload_snapshot = serialize_for_upload(
+            result, path, fmt, snapshot_prefix, want_hash=step.get("kind") == "sensor"
+        )
+    elif step.get("kind") == "sensor":
+        size, content_hash = serialize_hashed(result, path, fmt)
     else:
-        # A directory where the artifact file belongs is not an artifact: it is moved out of
-        # the way (never deleted) so the step's result can be written. Sinks are the user's
-        # paths and never get this treatment.
-        local = _storage.local_path_of(path)
-        if local is not None:
-            _storage.make_way(local)
-        snapshot_prefix = os.environ.get("BARCA_UPLOAD_SNAPSHOT_PREFIX")
-        if snapshot_prefix and not step.get("branch"):
-            size, content_hash, upload_snapshot = serialize_for_upload(
-                result, path, fmt, snapshot_prefix, want_hash=step.get("kind") == "sensor"
-            )
-        elif step.get("kind") == "sensor":
-            size, content_hash = serialize_hashed(result, path, fmt)
-        else:
-            size = serialize(result, path, fmt)
+        size = serialize(result, path, fmt)
     elapsed += time.perf_counter() - _ser_wall0
     if timing and timing.get("cpu_seconds") is not None:
         timing = {
@@ -670,8 +660,6 @@ def _materialize(
     artifact: dict = {"path": str(path), "format": fmt, "size_bytes": size}
     if upload_snapshot is not None:
         artifact["upload_snapshot"] = upload_snapshot
-    if inline_json is not None:
-        artifact["json"] = inline_json
     if content_hash is not None:
         artifact["content_hash"] = content_hash
     if step.get("branch") and fmt in ("parquet", "csv"):
@@ -1175,6 +1163,7 @@ def run_daemon():
         # the unstarted remainder).
         if msg.get("type") == "execute_batch":
             from barca import _wire
+
             steps = _wire.decode_steps(msg)
         elif msg.get("type") == "execute":
             steps = [msg.get("step", {})]
@@ -1182,9 +1171,10 @@ def run_daemon():
             continue
 
         try:
-            for step in steps:
-                if not _run_daemon_step(step, modules, art_dir, lru):
-                    break
+            with _runtime.result_batch(msg.get("result_journal")):
+                for step in steps:
+                    if not _run_daemon_step(step, modules, art_dir, lru):
+                        break
         except (BrokenPipeError, ConnectionResetError, OSError):
             # Socket was closed (e.g. replacement worker killed) — exit cleanly.
             break

@@ -998,12 +998,11 @@ fn collect_outputs(
     for (&item_id, artifact_val) in coord.outputs() {
         let item = coord.item(item_id);
         let node_id = item.step_id.display();
-        // Attempts made for this item (dispatch count), keyed by base node
-        // id — how the success-row INSERT looks it up.
-        session.state.all_attempts.insert(
-            crate::StepId::parse(&node_id).base_id().to_string(),
-            item.attempts,
-        );
+        // Attempts belong to this exact lease, including its partition key.
+        session
+            .state
+            .all_attempts
+            .insert(node_id.clone(), item.attempts);
         let oref = dispatch::OutputRef {
             path: artifact_val
                 .get("path")

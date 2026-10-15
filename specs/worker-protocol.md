@@ -1,84 +1,116 @@
 # Worker and transfer protocol
 
-Specification 1; protocol version 3. **Draft implementation, not released.** Issue #82
-also requires the compact batch profile below before this work is ready to merge.
+Specification 1; protocol version 3. Implemented on this branch; not released.
 
 ## Framing and negotiation
 
-Every frame is a four-byte unsigned big-endian payload length followed by UTF-8 JSON.
-The existing readers reject frames larger than 256 MiB. JSON is readable and Python's
-stdlib suffices; optional orjson changes encoding speed, not the wire format.
+Each frame is a four-byte unsigned big-endian length followed by UTF-8 JSON.
+Readers reject payload lengths greater than 256 MiB before allocation. Python's
+stdlib suffices; optional orjson changes encoding speed, not the wire layout.
 
-The helper's first frame is:
+The helper first sends `{"type":"hello","role":"worker","protocol_version":3}`
+(or role `transfer`). The coordinator validates the role and integer version and
+acknowledges `{"type":"hello","role":"coordinator","protocol_version":3}`.
+A missing/mismatched version or role gets `protocol_error` with `message` and the
+expected version, then connection refusal. The error says to reinstall matching
+Barca packages. Connection and negotiation share the ten-second startup deadline.
+Rejected, exited and cancelled helpers are reaped; no work precedes acknowledgement.
+The historical standalone stderr batch protocol is independently version 2.
+
+## Compact tables
+
+A table is `{header: object, dims: [string], rows: [[value]], missing?: [[integer]]}`.
+The header holds fields present and equal on every item. Each row has exactly one
+cell per dimension. Dimensions are unique and cannot overlap header keys. Omitted
+cells are null with their column index in that row's optional `missing` mask; an
+explicit null has no missing index. Masks have one entry per row, valid unique
+integer column indexes, and no booleans. Missing fields and null remain distinct.
+
+`execute_batch` has `items: table`, optional `kwargs: table`, and a coordinator-owned
+`result_journal` path. Items contain execution metadata (`node_id`, source, function,
+kind, serializer, inputs, argument references, annotations and policy). Equal fields
+appear once in the header. Keyword/partition dimensions appear once in the kwargs
+table; constant dimensions may be hoisted. The worker reconstructs `direct_kwargs`.
+No-input/argument/type/sink empties, null optional fields, `branch:false` and zero
+(timeout disabled) are omitted. Missing timeout means zero, not the 300-second
+coordinator default. Retry policy stays coordinator-owned; artifact directory is
+already hoisted into worker environment setup. Singleton `execute` uses the same
+normalized step fields without a table.
+
+Results are one `results` message per assigned batch (a successful prefix plus the
+failure if execution stops), or one single-row frame for singleton execution:
 
 ```json
-{"type":"hello","role":"worker","protocol_version":3}
+{"type":"results","node_ids":["a","b"],"statuses":["step_completed","blocked"],"elapsed_seconds":[0.01,null],"details":{"header":{},"dims":["format","path","reason","size_bytes"],"rows":[["json","/a.json",null,12],[null,null,"sensor",null]],"missing":[[2],[0,1,3]]}}
 ```
 
-A transfer helper uses `role: "transfer"`. The coordinator checks the expected role and
-an integer version equal to its own, then acknowledges:
+All parallel arrays and detail rows have equal lengths. Status is `step_completed`,
+`step_error` or `blocked`. Completion metadata requires path, format and byte size;
+elapsed time comes from its parallel array. Error metadata requires error type,
+message and traceback, with elapsed time in the array. Blocked metadata requires
+reason. Optional metadata retains timing, digest, sinks, frame reader and the private
+upload snapshot reference. Unknown statuses, invalid identity/time types, malformed
+tables, missing required metadata and inline `json` artifact data are rejected.
+Legacy per-item result message variants are not accepted after v3 negotiation.
 
-```json
-{"type":"hello","role":"coordinator","protocol_version":3}
-```
+## Completion ownership while batching
 
-Mismatch, missing version or a wrong role gets `protocol_error` with `message` and the
-expected `protocol_version`, then connection refusal. The actionable error names the
-helper's version and says to reinstall Barca in the Python environment used for the run.
-Connection plus negotiation is bounded by the existing ten-second startup deadline.
-A rejected, exited or cancelled helper is stopped and reaped before startup returns;
-no work is assigned before acknowledgement. Standalone calls without `BARCA_SOCKET`
-remain standalone. The historical stderr batch protocol has its own version 2.
+The coordinator creates one private temporary result journal per multi-item batch
+under `.barca/staging/<coordinator-pid>/`. The worker appends UTF-8 JSON lines, each a
+fixed four-cell metadata row `[node_id,status,elapsed,details]`, before beginning the
+next item. The append is unbuffered; the OS retains complete rows if only the worker
+process crashes. These transient receipts do not require machine-crash durability.
 
-## Current draft messages
+While a batch is running, a background sender coalesces `result_checkpoint` notifications
+at a 10 ms sampling interval when new entries exist. The coordinator drains complete
+journal rows before every incoming frame, including `submit`, and before treating EOF
+as a worker crash. An incomplete final line is ignored. Thus earlier completions close
+their own leases before only the in-flight item consumes retry budget; unstarted items
+return to the queue unchanged. This also keeps progress checkpoints and remote uploads
+flowing during a long later step. Sampling is not a hard real-time deadline.
 
-After negotiation, requests and replies retain the existing tagged JSON shapes:
+The final compact result frame is deduplicated against journal receipts; conflicting
+or out-of-order/unleased receipts fail the connection. A worker becomes assignable
+again only after the final frame, even when every lease was closed from the journal.
+This prevents a following batch from replacing an earlier journal prematurely. The
+journal is removed when its I/O task ends the batch, disconnects or is aborted. It
+contains metadata and file references, never artifact values. Dead coordinator PID
+staging cleanup remains the crash backstop. Workers never access the metadata DB.
 
-| Direction | Message types |
-| --- | --- |
-| coordinator → worker | `execute`, `execute_batch`, `parallel_response`, `cancel`, `done` |
-| worker → coordinator | `step_completed`, `step_error`, `blocked`, `log`, `submit`, `heartbeat`, `repeated_warnings` |
-| coordinator → transfer | `put`, `get`, `probe`, `shutdown` |
-| transfer → coordinator | `done`, `error` (matched to requests by `id`) |
+## Other messages and artifact data
 
-[protocol.rs](../crates/barca-core/src/protocol.rs) owns typed result/transfer shapes;
-[io_loop.rs](../crates/barca-core/src/io_loop.rs) builds execution requests.
-[_runtime.py](../python/barca/_runtime.py) and [_worker.py](../python/barca/_worker.py)
-are the Python peers. Transfer replies retain hash, size, fetch/mismatch and failure
-attempt/missing metadata. The transfer protocol never carries file bytes.
+Coordinator → worker: `execute`, `execute_batch`, `parallel_response`, `cancel`, `done`.
+Worker → coordinator: `results`, `result_checkpoint`, `log`, `submit`, `heartbeat`,
+`repeated_warnings`. Coordinator → transfer: `put`, `get`, `probe`, `shutdown`.
+Transfer → coordinator: `done`, `error`, correlated by request id.
 
-## Compact batch profile still to implement
-
-This is the remaining requirement of #82, not a claim about the current draft:
-
-- Hoist batch-invariant execution fields (source, function, serializer, artifact directory,
-  retry policy) into a header.
-- Put partition dimension names once beside value rows, rather than repeating each name
-  in 10,000 dictionaries.
-- Omit empty/default fields whose absence has the same meaning on the peer.
-- Encode per-item result status and elapsed values as arrays in a batched result message.
-  Preserve the coordinator's per-step lease, retry and crash-recovery guarantees while
-  choosing when to flush; coalescing must not silently charge the wrong step's retry budget.
-- Artifact data travels by reference. The current small inline JSON branch-result and
-  legacy inline response paths need to be removed or replaced as part of this profile.
-- A Rust ↔ Python conformance round trip must cover representative requests and replies,
-  including a 10,000-row batch, with malformed/missing-field controls.
+A successful parallel response requires `artifact: {path,format,frame_type?}`. Every
+branch return value, including small JSON, is written to its run/group-owned file.
+Legacy inline result/value/text paths are removed. Readers use the returned frame
+reader and files stay live through the calling step's lifetime. Argument/partition
+selectors remain execution metadata; materialized outputs and DAG inputs travel by
+file reference. Transfer replies preserve digest, size, fetch/mismatch and failure
+attempt/missing fields; the transfer protocol never carries file bytes.
 
 ## Version policy and conformance
 
-Worker/transfer protocol versions are independent of the package, plan document and DB
-format versions. Optional additive fields may stay within a version when both readers
-have the documented default; changed meanings, framing, required fields or incompatible
-message variants require a protocol version bump. A mismatched package fails before work
-rather than pretending to negotiate an older format.
+Protocol, package, plan and DB versions are independent. Additive optional fields
+may retain a version when both readers have documented defaults. Changed meanings,
+framing, required fields or incompatible variants require a version bump. Older
+packages are rejected before work; no legacy inline negotiation fallback exists.
 
-Current negotiation controls are in [Rust protocol tests](../crates/barca-core/src/protocol.rs)
-and [real Python/CLI handshake tests](../python/tests/test_protocol_handshake.py).
-[transfer tests](../crates/barca-core/src/transfer.rs) keep failure/cancellation cleanup
-under negotiation. The batch conformance coverage remains outstanding.
+[wire.rs](../crates/barca-core/src/wire.rs) tests an actual Rust → Python stdlib → Rust
+round trip of 10,000 execution rows and mixed completion/error/blocked rows, including
+null/missing values and private upload references. Malformed shapes and inline data
+are negative controls. [result_journal.rs](../crates/barca-core/src/result_journal.rs)
+checks partial writes, duplicates, invalid receipts and deletion.
+[compact runtime tests](../python/tests/test_compact_worker_protocol.py) observe real
+multi-item result frames and prove crash/exception retry accounting without replaying
+earlier side effects. [parallel tests](../python/tests/test_parallel_results.py) cover
+nested handoff and file-only values; [handshake tests](../python/tests/test_protocol_handshake.py)
+cover wrong versions, cancellation and reaping. Runtime framing tests cover size limits.
 
-Plan documents independently carry `plan_version: 1`, on both CLI and HTTP output.
-Consumers of persisted plans should reject unsupported versions (absence means an
-unversioned older document). The CLI contract and OpenAPI `Plan` schema own that shape.
-Database format compatibility remains owned by [metadata-schema.md](metadata-schema.md);
-this change neither bumps the DB format nor replaces history.
+Plan documents independently carry `plan_version:1` on CLI and HTTP output. Consumers
+should reject unsupported versions; absence identifies an older unversioned document.
+The CLI contract and OpenAPI Plan schema own that shape. DB compatibility remains in
+[metadata-schema.md](metadata-schema.md); this change does not bump its format.
