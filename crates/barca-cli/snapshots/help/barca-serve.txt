@@ -57,4 +57,7 @@ can reach the port can trigger runs, so keep it on a private network or behind a
 Invalid sources and their graph dependents are excluded; healthy definitions and schedules
 continue. Startup logs, /health load_errors and the UI show unloaded files and affected nodes.
 --watch restores repaired configured sources; one-shot commands remain strict.
+Trigger deployed runs through HTTP or barca.Client. Ordinary get/run commands execute locally;
+CLI --server, server URL configuration and the shared-ledger design are not implemented yet.
+With a remote artifact store, set BARCA_STATE=off to retain local metadata.
 More: barca docs scheduling

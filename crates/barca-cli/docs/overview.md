@@ -71,7 +71,7 @@ that; see `barca docs agents`.
 - `barca docs remote` — share one cache across machines (S3, GCS, Azure) with a few environment variables
 - `barca docs partitions` — fan-out over keys, fan-in with `collect`
 - `barca docs sinks` — export outputs to local or remote paths
-- `barca docs scheduling` — freshness, cron schedules, `barca serve`
+- `barca docs scheduling` — freshness, cron schedules, `barca serve`, HTTP/Python client setup and current server-mode limits
 - `barca docs telemetry` — report runs and steps to Datadog (`BARCA_TELEMETRY=datadog`)
 - `barca docs status` — one view of cache state, last run and artifact shape per node
 - `barca docs sql` — query cached results with DuckDB while debugging, without writing a step
