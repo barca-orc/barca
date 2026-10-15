@@ -1074,6 +1074,7 @@ Reconciled history (same envelope; unknown end timestamp and duration remain nul
 |---|---|---|
 | `runs` | array | always |
 | `runs[]` | object | always |
+| `runs[].attempts` | integer | always |
 | `runs[].command` | string | always |
 | `runs[].elapsed_seconds` | null | always |
 | `runs[].files` | array | always |

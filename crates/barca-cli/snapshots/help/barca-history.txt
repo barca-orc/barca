@@ -8,7 +8,7 @@ Options:
       --all                 Show every recorded run (no limit)
       --json                Emit JSON on stdout (the default when stdout is not a terminal)
       --pretty              Emit human-readable output (the default when stdout is a terminal)
-      --fields <FIELDS>     Output JSON with only these keys (comma-separated) on each entry of `runs`. Implies --json. An unknown key is a usage error listing the valid ones [possible values: run_id, command, files, target, status, steps_total, steps_executed, steps_cached, started_at, finished_at, elapsed_seconds]
+      --fields <FIELDS>     Output JSON with only these keys (comma-separated) on each entry of `runs`. Implies --json. An unknown key is a usage error listing the valid ones [possible values: run_id, command, files, target, status, steps_total, steps_executed, steps_cached, attempts, started_at, finished_at, elapsed_seconds]
       --env <ENV>           Environment name (separates cache/state per environment)
   -h, --help                Print help
 

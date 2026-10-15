@@ -15,11 +15,11 @@ The `--help` snapshots and the flag tables live in `crates/barca-cli/src/contrac
 """
 
 import json
-import sqlite3
-from contextlib import closing
 import os
 import re
+import sqlite3
 import subprocess
+from contextlib import closing
 from pathlib import Path
 
 import pytest
