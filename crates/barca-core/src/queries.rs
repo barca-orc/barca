@@ -33,6 +33,7 @@ pub fn plan_from_dag(dag: &crate::dag::Dag) -> PlanResult {
 
     let warnings = crate::warnings::for_plan(dag, &plan);
     PlanResult {
+        plan_version: crate::results::PLAN_VERSION,
         warnings,
         total_steps: plan.total_steps,
         phases: plan

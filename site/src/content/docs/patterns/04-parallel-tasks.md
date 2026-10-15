@@ -137,9 +137,8 @@ cannot be passed back to the step that called parallel(): TypeError: cannot pick
 Through 0.19.0 only JSON values came back. Any other return value (a set, a date, a DataFrame)
 reached the caller as `None`, with no error or warning, and the run succeeded.
 
-A small JSON result (up to 4 KB of JSON text) is passed in a message and never written to
-disk. Any other result is not sent between processes: the caller reads it from the file the
-branch's worker wrote. Those files belong to the run:
+Every result, including small JSON values, is passed by file reference: the caller reads
+the value from the file its branch wrote. Those files belong to the run:
 `.barca/branches/<run>-<pid>/<group>/<branch>.<ext>`, one directory per `parallel()` call. Two
 runs at the same time (two runs under `barca serve`, two `barca` processes in one project)
 never read each other's results. Barca removes a call's directory when the step that made the
@@ -150,3 +149,8 @@ it. Branch results are not uploaded to an artifact store, with or without one co
 Through 0.19.0 these files were written into the artifact directory under the branch's name and
 never removed, and two runs of one pipeline at the same time could receive each other's branch
 results.
+
+Protocol v3 passes every branch result through its run-owned artifact file, including small
+JSON values. Result metadata is batched; transient completion receipts preserve finished
+items when a later batch item crashes. Older worker packages are refused during startup
+with an instruction to reinstall matching Barca packages.

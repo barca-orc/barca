@@ -60,6 +60,7 @@ pub struct Module {
     /// `__init__.py`, its parent package for a regular module, `None` at the top level.
     package: Option<String>,
     definitions: OnceCell<HashMap<String, ModuleDef>>,
+    star_exports: OnceCell<Option<Vec<String>>>,
 }
 
 impl Module {
@@ -75,6 +76,7 @@ impl Module {
             source: source.into(),
             package,
             definitions: OnceCell::new(),
+            star_exports: OnceCell::new(),
         }
     }
 
@@ -118,6 +120,33 @@ impl Module {
             visitor::walk_body(&mut imports, &parsed.syntax().body);
         }
         imports.names
+    }
+
+    /// A finite literal export set, parsed once per imported project module.
+    pub(crate) fn star_exports(&self) -> Option<Vec<String>> {
+        self.star_exports
+            .get_or_init(|| crate::decorator_args::literal_star_exports(&self.source))
+            .clone()
+    }
+
+    /// Resolve a star import using the same package rules as dependency hashing.
+    pub(crate) fn star_import_module(
+        &self,
+        import: &ruff_python_ast::StmtImportFrom,
+    ) -> Option<String> {
+        if import.level == 0 {
+            return import.module.as_ref().map(|m| m.to_string());
+        }
+        let base = package_ancestor(
+            self.package.as_deref()?,
+            (import.level as usize).saturating_sub(1),
+        )?;
+        Some(
+            import
+                .module
+                .as_ref()
+                .map_or(base.clone(), |m| format!("{base}.{m}")),
+        )
     }
 
     /// The module's top-level definitions, parsed on first use and then kept.
@@ -511,6 +540,10 @@ fn collect_definitions(source: &str, package: Option<&str>) -> HashMap<String, M
     let mut defs: HashMap<String, ModuleDef> = HashMap::new();
     let barca = crate::decorator_args::BarcaNames::of(&parsed.syntax().body);
     let mut conservative_functions = Vec::new();
+    let has_foreign_star = parsed.syntax().body.iter().any(|stmt| {
+        matches!(stmt, Stmt::ImportFrom(i) if i.names.iter().any(|a| a.name.as_str() == "*")
+            && !(i.level == 0 && i.module.as_ref().is_some_and(|m| m.as_str() == "barca")))
+    });
     struct StaticImports<'p> {
         package: Option<&'p str>,
         uses: Vec<LocalUse>,
@@ -570,6 +603,13 @@ fn collect_definitions(source: &str, package: Option<&str>) -> HashMap<String, M
                     }
                     None => code(func, uses),
                 };
+                // Project-aware discovery can recognize nodes after a safe star import.
+                // The standalone cone has no export resolver: keep decorated functions
+                // conservative and follow the whole imported module, including constants
+                // installed under names that never appear in explicit import bindings.
+                if has_foreign_star && !func.decorator_list.is_empty() {
+                    conservative_functions.push(func.name.to_string());
+                }
                 defs.insert(func.name.to_string(), ModuleDef::Function(function));
             }
             Stmt::ClassDef(class) => {

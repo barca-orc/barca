@@ -42,7 +42,7 @@ def test_terminal_insert_fault_is_an_infra_error_and_preserves_prior_history(tmp
     sql(tmp_path, "CREATE UNIQUE INDEX terminal_fault ON materializations(node_id)")
     failed = run(tmp_path, "get", "pipeline.py", "--refresh-all", "--json")
     assert failed.returncode == 3, failed.stderr
-    error = json.loads(failed.stderr.strip().splitlines()[-1])
+    error = json.loads(next(line for line in reversed(failed.stderr.splitlines()) if line.startswith("{")))
     assert error["code"] == 3
     assert "failed to record terminal step" in error["error"]
     assert sql(tmp_path, "SELECT run_id, node_id, status FROM materializations") == before

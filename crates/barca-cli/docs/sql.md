@@ -27,7 +27,7 @@ quote in SQL (`select * from "pipelines/a.py:orders"`); stderr lists them. Pass 
 directories after the query to limit the views to those files
 (`barca sql "select * from orders" pipeline.py`).
 
-Only parquet and json results can be queried: DataFrames, Arrow tables and DuckDB relations are
+Only parquet, CSV and json results can be queried: DataFrames, Arrow tables and DuckDB relations are
 stored as parquet; a dict or a list of dicts as json. A JSON list of scalars is
 a view with one column named `json` (for example, `[1, 2]` becomes two rows). A pickled result (any other Python object)
 is not a view.

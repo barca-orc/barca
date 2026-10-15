@@ -148,7 +148,7 @@ def test_a_failed_agent_run_names_the_step_and_does_not_say_done(project):
     ), proc.stderr
     summary = [line for line in lines if " steps | " in line]
     assert summary and "failed in" in summary[-1] and "done" not in summary[-1], summary
-    assert "[barca] run failed: step 'failing.py:broken' failed (exit 1)" in proc.stderr
+    assert lines[-1] == "[barca] run failed: step 'failing.py:broken' failed: ValueError: broken on purpose; 0 downstream steps skipped (exit 1)"
 
 
 def test_warnings_are_lowercase(project):

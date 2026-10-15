@@ -18,8 +18,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
-
-from barca.api import _find_binary
+from barca.api import _error_envelope, _find_binary
 
 pytest.importorskip("duckdb")
 pytest.importorskip("numpy")
@@ -448,7 +447,8 @@ def failed_with(root: Path, target: str, pool: int = 4) -> str:
     doc = json.loads(out)
     assert doc["status"] == "failed" and "final_output" not in doc, doc
     assert doc["failed_node"] == f"pipeline.py:{target}"
-    envelope = json.loads(err.strip().splitlines()[-1])
+    envelope = _error_envelope(err)
+    assert envelope is not None, err
     assert envelope["kind"] == "step_failed" and envelope["node"] == f"pipeline.py:{target}"
     assert doc["error"] in envelope["error"]
     return doc["error"]
@@ -596,27 +596,22 @@ def test_collect_reads_artifacts_and_raises_for_a_lost_value(tmp_path):
         _branches.collect(missing, items)
 
 
-def test_collect_accepts_inline_values_from_an_older_coordinator():
-    """A barca binary from before this change answers with JSON values inline."""
-    from barca import _branches
+def test_collect_refuses_inline_values_from_an_older_coordinator():
+    from barca import BranchResultError, _branches
 
-    answer = [{"status": "ok", "result": {"i": 1}}, {"status": "ok", "result": None}]
-    assert _branches.collect(answer, [{"fn_ref": "p.py:f"}] * 2) == [{"i": 1}, None]
+    with pytest.raises(BranchResultError, match="artifact file reference"):
+        _branches.collect([{"status": "ok", "result": {"i": 1}}], [{"fn_ref": "p.py:f"}])
 
 
-def test_a_small_json_result_is_text_in_the_report_and_a_large_one_is_a_file():
-    """The text is what `json.dump` writes, so the caller parses what a file would hold."""
-    import io
+@pytest.mark.parametrize("value", [{"b": 1, "a": [1, 2]}, 10**30, None, "é", "x" * 5000])
+def test_all_json_branch_results_are_files(tmp_path, value):
+    from barca import _worker
 
-    from barca import _branches
-
-    for value in [{"b": 1, "a": (1, 2)}, float("nan"), 10**30, None, "é"]:
-        written = io.StringIO()
-        json.dump(value, written)
-        assert _branches.small_json(value) == written.getvalue()
-    at_limit = "x" * (_branches.INLINE_JSON_MAX_CHARS - 2)  # two quotes
-    assert _branches.small_json(at_limit) is not None
-    assert _branches.small_json(at_limit + "x") is None
+    artifact = _worker._materialize(
+        value, "branch", tmp_path, {"branch": True, "branch_path": str(tmp_path / "result")}, 0
+    )
+    assert "json" not in artifact and artifact["path"]
+    assert json.loads(Path(artifact["path"]).read_text()) == value
 
 
 def test_the_submit_message_asks_for_artifact_results(monkeypatch):

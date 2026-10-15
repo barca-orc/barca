@@ -21,7 +21,6 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
 from barca.api import _find_binary
 
 REPO = Path(__file__).resolve().parents[2]
@@ -146,6 +145,13 @@ def summary(t: dict, side: int) -> dict:
 MISMATCH_ARGV = ["get", "summary", "pipeline.py", "--refresh", "total", "--json"]
 SETUP_CASES: list[tuple[str, list[str], str, int]] = [
     ("get_artifact_mismatch", MISMATCH_ARGV, "stdout", 0),
+    (
+        "get_bytes_changed",
+        ["get", "value", "pipeline.py", "--refresh", "value", "--json"],
+        "stdout",
+        0,
+    ),
+    ("status_bytes_changed", ["status", "pipeline.py", "--json"], "stdout", 0),
 ]
 ALL_CASES = CASES + SETUP_CASES
 
@@ -313,9 +319,36 @@ def runs(tmp_path_factory) -> dict:
             f"barca {' '.join(argv)}: exit {proc.returncode}, expected {code}\n"
             f"stdout: {proc.stdout}\nstderr: {proc.stderr}"
         )
-        text = proc.stdout if stream == "stdout" else proc.stderr.strip().splitlines()[-1]
+        text = (
+            proc.stdout
+            if stream == "stdout"
+            else next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{"))
+        )
         doc = json.loads(text)
         s = schema(doc)
+        out[case] = (s, render_snapshot(argv, stream, code, s), proc)
+
+    digest_case = tmp_path_factory.mktemp("contract_digest")
+    (digest_case / "pipeline.py").write_text(
+        "from pathlib import Path\nfrom barca import asset\n@asset()\ndef value(): return Path('external.txt').read_text()\n"
+    )
+    (digest_case / "external.txt").write_text("before")
+    baseline = subprocess.run(
+        [binary, "get", "value", "pipeline.py", "--json"],
+        cwd=digest_case,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert baseline.returncode == 0, baseline.stderr
+    (digest_case / "external.txt").write_text("after")
+    for case, argv, stream, code in SETUP_CASES[1:]:
+        proc = subprocess.run(
+            [binary, *argv], cwd=digest_case, env=env, capture_output=True, text=True, timeout=60
+        )
+        assert proc.returncode == code, proc.stderr
+        s = schema(json.loads(proc.stdout))
         out[case] = (s, render_snapshot(argv, stream, code, s), proc)
 
     store_case = tmp_path_factory.mktemp("contract_store")
@@ -481,3 +514,31 @@ def test_artifact_mismatch_is_a_boolean_on_the_steps_concerned_and_absent_elsewh
     # No other fixture run has a mismatch, so no other schema has the key.
     for case, *_ in CASES:
         assert "steps[].artifact_mismatch" not in runs[case][0], case
+
+
+@pytest.mark.parametrize("command", ["list", "status"])
+def test_inspection_contract_over_one_hundred_nodes(tmp_path, command):
+    """JSON has complete coverage by default; an explicit bound keeps the envelope."""
+    source = "from barca import asset\n" + "\n".join(
+        f"@asset()\ndef node_{i}():\n    return {i}\n" for i in range(121)
+    )
+    (tmp_path / "large.py").write_text(source)
+
+    def invoke(*extra):
+        result = subprocess.run(
+            [_find_binary(), command, "large.py", "--json", *extra],
+            cwd=tmp_path,
+            env=_env(),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 0, result.stderr
+        return json.loads(result.stdout)
+
+    full = invoke()
+    assert len(full["nodes"]) == full["total"] == 121
+    assert full["truncated"] is False and "hint" not in full
+    bounded = invoke("--limit", "100")
+    assert len(bounded["nodes"]) == 100 and bounded["total"] == 121
+    assert bounded["truncated"] is True and "--all" in bounded["hint"]

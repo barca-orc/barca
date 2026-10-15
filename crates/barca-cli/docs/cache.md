@@ -222,7 +222,8 @@ An edit in one of these does not change the hash; recompute with `--refresh-all`
 - imports built at run time: `importlib.import_module(name)`, `__import__(name)`, and
   `getattr` on anything but a module barca can see imported. Static analysis cannot follow
   these, and barca does not run your code to plan;
-- `from helpers import *`, and names a module defines dynamically or inside other module-level
+- Star imports inside undecorated helper functions/modules, and names a module defines
+  dynamically or inside other module-level
   control flow such as a `for`, `while`, `with` or `match` (module-level `if` and `try` bindings
   are covered conservatively above);
 - module-level constants bound by tuple unpacking (`A, B = 1, 2`), and augmented assignments to
@@ -790,3 +791,41 @@ barca plan pipeline.py          # what would run, in phases, without running it
 
 `steps_executed` in `barca get`'s JSON output is the number of steps that actually ran; a fully
 cached second run reports 0 for assets.
+
+A decorated pipeline function in a file with a top-level project star import conservatively
+hashes the imported module and its static imports. Editing any part of that module can
+invalidate the node; this preserves cache safety when discovery proves its literal `__all__`.
+
+## Upload receipts during a concurrent refresh
+
+An upload pins the serializing run's bytes before publishing the reusable local artifact
+path. Its confirmed hash and byte count describe those uploaded bytes, even when another
+run replaces that path before the transfer starts. Sensor content hashes keep their existing
+meaning; ordinary asset rows use the confirmed upload hash. Failed or cancelled uploads do
+not record a successful remote materialization. Staging is removed at confirmation or run
+shutdown, with dead-process cleanup as the crash backstop.
+
+Paths still identify code and inputs, so a later refresh can replace local and remote bytes.
+This receipt guarantee does not isolate concurrent result reads from those replacements.
+
+## Recompute byte checks
+
+Every new successful materialization records a SHA-256 digest of the serialized bytes.
+A recompute of the same node and run hash compares with its preceding successful digest.
+If the bytes differ, barca warns that the function is not deterministic and sets
+`steps[].bytes_changed: true` in run JSON. A new code/input hash is an expected change
+and does not warn. Legacy rows without a digest establish a baseline on recompute.
+This checks serialized bytes, so a serializer that emits variable metadata can also warn.
+Artifact paths and exit codes are unchanged.
+
+`barca status` shows the last such event even after a later unchanged recompute. JSON
+includes `last_bytes_change` with the exact node id, run hash, digest and UTC timestamp,
+and `last_materialization.content_hash` when a digest was recorded. Partition events
+are compared per key; the run's partitioned step report is marked if any key changed.
+Checkpoint and terminal writes retain the same finding without creating a second row.
+See `specs/materialization-digests.md` for the native boundary.
+
+```bash
+barca get orders pipeline.py --refresh orders --json   # compare recomputed bytes with the last digest
+barca status orders pipeline.py --json                 # last byte-change event and current digest
+```

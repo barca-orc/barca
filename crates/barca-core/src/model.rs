@@ -357,6 +357,7 @@ pub struct SinkDecl {
 pub enum SerializerKind {
     Json,
     Parquet,
+    Csv,
     Pickle,
     Text,
     Yaml,

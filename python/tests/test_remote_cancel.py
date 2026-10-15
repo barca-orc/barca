@@ -441,7 +441,7 @@ def test_a_wrap_up_push_that_fails_is_a_note_and_the_exit_code_stays_130(project
     run.end()
 
     assert run.proc.returncode == 130, run.stderr
-    envelope = json.loads(run.stderr.strip().splitlines()[-1])
+    envelope = json.loads(next(line for line in reversed(run.stderr.splitlines()) if line.startswith("{")))
     assert envelope["kind"] == "cancelled", envelope
     assert "[barca] the shared history was not updated (shared state push to " in run.stderr
     assert "is a directory, not the shared history file" in run.stderr, run.stderr
@@ -554,7 +554,7 @@ def test_ctrl_c_after_a_failed_run_was_shared_leaves_its_record_as_it_is(project
     run.end()
 
     assert run.proc.returncode == 130, run.stderr
-    assert json.loads(run.stderr.strip().splitlines()[-1])["kind"] == "cancelled"
+    assert json.loads(next(line for line in reversed(run.stderr.splitlines()) if line.startswith("{")))["kind"] == "cancelled"
     assert [pid for pid in run.helpers() if alive(pid)] == []
     assert temp_files(root, store) == []
     assert history(root, store)[0]["status"] == "failed"

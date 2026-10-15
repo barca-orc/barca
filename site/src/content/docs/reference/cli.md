@@ -243,6 +243,9 @@ counted over that target's cone. The full shapes are in `barca docs agents`.
 
 ## plan
 
+The document includes `plan_version: 1`, independent of the package and database versions.
+Consumers of saved plans should reject unsupported versions.
+
 Parse the source files and print the execution plan as JSON, without running anything.
 The pool size matches execution: available cores, or a positive `BARCA_POOL_SIZE`.
 Experimental: the layout follows the planner and may change between releases. Each phase's
@@ -253,6 +256,7 @@ state, so `plan` takes no `--env` and does not say what is cached; use `--dry-ru
 ```
 $ barca plan pipeline.py
 {
+  "plan_version": 1,
   "total_steps": 3,
   "phases": [
     {
@@ -278,7 +282,7 @@ $ barca plan pipeline.py
 ## history
 
 Show recent runs from `.barca/metadata.db`: run id, command, status, step counts and timing.
-The default is the 10 most recent.
+The human table defaults to the 10 most recent; JSON returns every run unless `--limit` is explicit.
 
 ```
 $ barca history
@@ -294,11 +298,12 @@ Times are UTC. `--fields` takes `run_id`, `command`, `files`, `target`, `status`
 `elapsed_seconds`.
 
 ```bash
-barca history -l 25               # last 25 (default 10); --all for every recorded run
+barca history -l 25               # last 25; human default 10, JSON default every run
 barca history --json              # {"runs": [...], "total": N, "truncated": bool, "hint"?: "..."}
 barca history --fields run_id,status   # JSON with only these keys per run
 ```
 
+History JSON returns every run unless `--limit N` is explicit; the human table defaults to 10.
 When more runs exist than are shown, the JSON has `"truncated": true`, the `total`, and a `hint`;
 the table prints the same hint as one line on stderr. See [Bounded output](#bounded-output). Each
 run's `files` is an array of the `.py` files it was given.
@@ -411,7 +416,7 @@ barca list pipeline.py --fields id,inputs   # JSON with only these keys per node
 In JSON, `freshness` is `always`, `manual` or `schedule` (lowercase, like `kind`); a scheduled node
 also has `schedule`, its cron expression. `list` reads no state, so it takes no `--env`.
 
-`list` prints at most 100 nodes by default, in topological order; see
+`list` prints every node in JSON by default, in topological order; human tables show at most 100; see
 [Bounded output](#bounded-output).
 
 When any node declares environment variables (`@asset(env=["SOURCE_CSV"])`), the table gains an
@@ -419,8 +424,9 @@ ENV column listing them; `--json` always includes `env` (an empty list when none
 
 ## Bounded output
 
-List-shaped commands (`list`, `status`, `history`) are bounded by default so a large project cannot flood
-a terminal or an agent's context. Their JSON is an envelope:
+List-shaped commands (`list`, `status`, `history`) return every item in JSON unless `--limit N`
+is explicit, including piped output and `--fields`. Human tables show at most 100 nodes or
+10 history runs by default; `--all` removes the bound. Their JSON keeps its envelope:
 
 ```json
 {"nodes": [...], "total": 312, "truncated": true,
@@ -446,7 +452,7 @@ with the reason, its last run, and the shape of its result. It runs nothing.
 barca status total pipeline.py                   # only `total` and its upstream cone
 barca status total,notify pipeline.py            # several targets: the union of their cones
 barca status pipeline.py --json                  # {target, targets, nodes, summary, total, truncated, root}
-barca status pipeline.py --json --sample 5       # plus up to 5 sample rows per json/parquet artifact
+barca status pipeline.py --json --sample 5       # plus up to 5 sample rows per json/parquet/CSV artifact
 ```
 
 ```
@@ -491,7 +497,8 @@ missing_keys}` (up to 20 keys). `last_materialization` is the most recently run 
 `partition` field), and `shape` describes that key's artifact.
 
 Each node also lists `env`, the environment variables it declares with `env=[...]`. Like `list`,
-status shows at most 100 nodes unless you pass `--limit N` or `--all`; the `summary` still counts
+status returns every node in JSON unless `--limit N` is explicit. Its human table shows at most
+100 nodes unless you pass `--limit N` or `--all`; the `summary` still counts
 every node, and the JSON reports `total` and `truncated` (see [Bounded output](#bounded-output)).
 
 With [shared history](/reference/remote-storage/), status first pulls it, as a run does.
@@ -508,7 +515,7 @@ is a usage error (exit 2). See `barca docs status`.
 Query cached results with DuckDB. Every asset, sensor and task with a result on disk is a view
 named after its declared `name=`, or its function when unset; a partitioned asset is one
 view with a `partition` column. No step
-runs, your code is not imported, and no run is recorded. Only parquet and json results are
+runs, your code is not imported, and no run is recorded. Only parquet, CSV and json results are
 views; a pickled result cannot be queried. Install SQL support with `uv add 'barca[sql]'`. With a remote store it first pulls the shared history into `.barca/`, and the
 artifacts of the views a query names are downloaded into `.barca/sql-cache/` and reused.
 Experimental.
@@ -570,7 +577,7 @@ target: a syntax error, or a decorator called with an argument it does not defin
 
 In JSON output mode (whenever results are JSON: piped or captured stdout, `--json`, `-o json` or
 `BARCA_OUTPUT=json`; `plan` always; `docs` with `--json`), an error is a single JSON line, the
-last line on stderr:
+last JSON error object on stderr (a failed run adds its summary afterwards):
 
 ```
 {"code":2,"error":"Asset 'nope' not found. Available: pipeline.py:orders, pipeline.py:total, pipeline.py:notify","kind":"usage","remediation":"Run `barca list pipeline.py` to see available assets and tasks."}
@@ -593,8 +600,8 @@ same fields as attributes (`kind`, `code`, `remediation`, `node`, `traceback`, `
 When a step fails in JSON mode, `get`/`run` still print one result line on stdout, so you can
 read the outcome without parsing stderr: `{"status": "failed", "failed_node": ..., "error": ...,
 "run_id", "steps", ...}`, where the failed step's `status` is `failed`. A successful result has
-`"status": "success"`. Just before the error, stderr gets one greppable line:
-`[barca] run failed: step 'pipeline.py:clean' failed (exit 1)`.
+`"status": "success"`. After the error, stderr ends with one greppable line:
+`[barca] run failed: step 'pipeline.py:clean' failed: ZeroDivisionError: division by zero; 0 downstream steps skipped (exit 1)`.
 
 ## version
 

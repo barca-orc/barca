@@ -23,7 +23,7 @@ enum Freshness { always | manual | schedule }
 
 enum EdgeKind { direct | collect | partition_source }
 
-enum SerializerKind { json | parquet | pickle | text | yaml }
+enum SerializerKind { json | parquet | csv | pickle | text | yaml }
 
 enum RunStatus { success | failed }
 
@@ -566,6 +566,14 @@ surface PythonDecorators {
     @guarantee DecoratorsAreNoOps
         -- All decorators are identity functions. User code runs
         -- identically with or without barca installed.
+
+    @guarantee ProjectStarImportProvenance
+        -- An importable project module's single literal __all__ list/tuple of strings
+        -- with no other references to __all__ and no namespace reflection
+        -- preserves Barca bindings absent from that export set. Colliding local names
+        -- (including aliases and group) lose provenance. Missing/computed/mutated or
+        -- reflective export sets remain unknown. No installed module is imported.
+        -- Conformance: python/tests/test_static_barca_bindings.py.
 
     @guarantee StaticAnalysisOnly
         -- Barca never imports user modules during planning.

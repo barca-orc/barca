@@ -48,6 +48,9 @@ pub struct NodeStatus {
     /// The most recent execution (successful or failed); `null` if it never ran. Cache hits
     /// are not executions and do not appear here.
     pub last_materialization: Option<LastMaterialization>,
+    /// Last recompute whose bytes differed for unchanged code and inputs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_bytes_change: Option<db::BytesChange>,
     /// Shape of `last_materialization`'s artifact (`null` when there is none).
     #[cfg_attr(feature = "ts", ts(type = "unknown"))]
     pub shape: Option<serde_json::Value>,
@@ -101,6 +104,9 @@ pub struct PartitionState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct LastMaterialization {
+    /// SHA-256 of the serialized artifact, absent for legacy materializations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
     /// `success` or `failed`.
     pub status: String,
     /// When it was recorded (UTC, `YYYY-MM-DD HH:MM:SS`).
@@ -242,6 +248,7 @@ async fn status_from_dag_with_membership(
         states.insert(id.to_string(), cache.state.clone());
 
         let last_materialization = history.latest.map(|m| LastMaterialization {
+            content_hash: m.content_hash,
             partition: partition_of(&m.node_id),
             status: m.status,
             created_at: m.created_at,
@@ -269,6 +276,7 @@ async fn status_from_dag_with_membership(
             cache,
             partitions: partitions.filter(|_| !node.extracted.partitions.is_empty()),
             last_materialization,
+            last_bytes_change: history.last_bytes_change,
             shape: None,
             env: node.extracted.env.clone(),
         });
@@ -587,7 +595,9 @@ mod tests {
 
     fn history(latest_status: Option<&str>, ever: bool) -> db::NodeHistory {
         db::NodeHistory {
+            last_bytes_change: None,
             latest: latest_status.map(|s| db::MaterializationRecord {
+                content_hash: None,
                 node_id: "p.py:a".into(),
                 run_hash: Some("h1".into()),
                 artifact_path: None,

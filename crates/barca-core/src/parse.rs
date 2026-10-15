@@ -80,6 +80,7 @@ pub fn extract_nodes(source: &str, file_path: &str) -> Result<Vec<ExtractedNode>
 pub(crate) fn extract_pipeline(
     source: &str,
     file: &str,
+    star_exports: impl Fn(&ast::StmtImportFrom) -> Option<Vec<String>>,
 ) -> Result<(Vec<ExtractedNode>, Vec<crate::groups::Declaration>), crate::BarcaError> {
     let parsed = parse_module(source).map_err(|e| {
         crate::BarcaError::Parse(
@@ -91,7 +92,10 @@ pub(crate) fn extract_pipeline(
         )
     })?;
     let body = &parsed.syntax().body;
-    let names = FileNames::collect(body);
+    let names = FileNames::with_barca(
+        body,
+        crate::decorator_args::BarcaNames::with_star_exports(body, star_exports),
+    );
     let mut nodes = Vec::new();
     for stmt in body {
         if let Stmt::FunctionDef(func) = stmt
@@ -101,7 +105,10 @@ pub(crate) fn extract_pipeline(
             nodes.push(node);
         }
     }
-    Ok((nodes, crate::groups::extract_body(body, file)?))
+    Ok((
+        nodes,
+        crate::groups::extract_body_with_names(body, file, &names)?,
+    ))
 }
 
 /// What the top-level names of a file are bound to, for resolving `inputs=` references:
@@ -120,8 +127,12 @@ pub(crate) struct FileNames {
 
 impl FileNames {
     pub(crate) fn collect(body: &[Stmt]) -> Self {
+        Self::with_barca(body, crate::decorator_args::BarcaNames::of(body))
+    }
+
+    fn with_barca(body: &[Stmt], barca: crate::decorator_args::BarcaNames) -> Self {
         let mut names = FileNames {
-            barca: crate::decorator_args::BarcaNames::of(body),
+            barca,
             ..FileNames::default()
         };
         for stmt in body {
@@ -427,6 +438,7 @@ fn extract_serializer_kind(expr: &Expr) -> Option<SerializerKind> {
     match name.to_lowercase().as_str() {
         "json" => Some(SerializerKind::Json),
         "parquet" => Some(SerializerKind::Parquet),
+        "csv" => Some(SerializerKind::Csv),
         "pickle" => Some(SerializerKind::Pickle),
         "text" => Some(SerializerKind::Text),
         "yaml" => Some(SerializerKind::Yaml),

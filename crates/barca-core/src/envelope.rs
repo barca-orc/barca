@@ -136,6 +136,8 @@ pub struct ErrorEnvelope {
     prose: String,
     /// Whether `prose` already contains the remediation (so it is not printed twice).
     prose_has_remediation: bool,
+    /// Local CLI presentation only; the wire error schema is unchanged.
+    run_failure_line: Option<String>,
 }
 
 impl Serialize for ErrorEnvelope {
@@ -188,6 +190,7 @@ impl<'de> Deserialize<'de> for ErrorEnvelope {
             artifact_dir: wire.artifact_dir,
             prose,
             prose_has_remediation: false,
+            run_failure_line: None,
         })
     }
 }
@@ -209,6 +212,7 @@ impl ErrorEnvelope {
             traceback: None,
             artifact_dir: None,
             prose_has_remediation: true,
+            run_failure_line: None,
             prose: prose.trim_end().to_string(),
         }
     }
@@ -240,6 +244,16 @@ impl ErrorEnvelope {
                 artifact_dir: step.artifact_dir.clone(),
                 prose: e.to_string(),
                 prose_has_remediation: false,
+                run_failure_line: Some(format!(
+                    "[barca] run failed: step '{}' failed: {}; {} downstream steps skipped (exit 1)",
+                    step.node,
+                    step.summary().lines().next().unwrap_or("unknown error"),
+                    step.run.as_ref().map_or(0, |run| run
+                        .steps
+                        .iter()
+                        .filter(|s| s.status.as_deref() == Some("skipped"))
+                        .count()),
+                )),
             };
         }
         let fallback = match &e {
@@ -292,6 +306,7 @@ impl ErrorEnvelope {
                 artifact_dir: None,
                 prose: prose.trim_end().to_string(),
                 prose_has_remediation: false,
+                run_failure_line: None,
             },
         }
     }
@@ -338,6 +353,11 @@ impl ErrorEnvelope {
             m.insert("artifact_dir".into(), json!(self.artifact_dir));
         }
         Value::Object(m)
+    }
+
+    /// The final one-line CLI run summary, after the detailed error.
+    pub fn run_failure_line(&self) -> Option<&str> {
+        self.run_failure_line.as_deref()
     }
 
     /// The human-mode text: the prose, then the remediation unless the prose already has it.

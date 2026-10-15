@@ -1389,10 +1389,15 @@ components:
       type: object
       additionalProperties: false
       required:
+      - plan_version
       - total_steps
       - phases
       - warnings
       properties:
+        plan_version:
+          type: integer
+          const: 1
+          description: Plan document format version, independent of the package, database and worker protocol versions.
         total_steps: &id027
           type: integer
           minimum: 0
@@ -1442,6 +1447,9 @@ components:
         artifact: *id002
         warning: *id002
         artifact_mismatch: *id026
+        bytes_changed:
+          type: boolean
+          const: true
         partitions:
           $ref: '#/components/schemas/PartitionSummary'
         env:
@@ -1601,6 +1609,16 @@ components:
           - type: 'null'
         partition: *id002
         error: *id002
+        content_hash: *id002
+    BytesChange:
+      type: object
+      additionalProperties: false
+      required: [node_id, run_hash, content_hash, created_at]
+      properties:
+        node_id: *id002
+        run_hash: *id002
+        content_hash: *id002
+        created_at: *id002
     NodeStatus:
       type: object
       additionalProperties: false
@@ -1633,6 +1651,8 @@ components:
           $ref: '#/components/schemas/Cache'
         partitions: &id033
           $ref: '#/components/schemas/PartitionState'
+        last_bytes_change:
+          $ref: '#/components/schemas/BytesChange'
         last_materialization: &id034
           anyOf:
           - $ref: '#/components/schemas/Materialization'

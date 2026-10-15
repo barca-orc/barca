@@ -31,7 +31,7 @@ def test_state_directory_names_an_object_before_user_import(tmp_path, scheme):
         timeout=15,
     )
     assert proc.returncode == 3, proc.stderr
-    envelope = json.loads(proc.stderr.strip().splitlines()[-1])
+    envelope = json.loads(next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{")))
     assert envelope["kind"] == "infra"
     assert "BARCA_STATE_URI" in envelope["error"]
     assert "file or object" in envelope["error"]
