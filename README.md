@@ -19,12 +19,10 @@ Qualified imports (`@barca.asset()`) and imported aliases (`@a()` after
 `barca` binary, written in Rust, reads the source without importing it, works out what
 needs to run, and runs it in Python worker processes. Results are stored as files under
 `.barca/`. An asset runs again only when its code or its inputs change; sensors and tasks
-run every time. Project helper references in default arguments (including nested functions
-and lambdas) and exception handler types (including tuples and `except*`) are tracked too;
-editing those helpers invalidates their cached consumers.
-
-and lambdas) and set literals are tracked too; editing those helpers invalidates their
-cached consumers.
+run every time. Project helper references in defaults, decorators, exception handler types,
+set literals, match patterns, assignment targets and loop `else:` blocks contribute to cache
+hashes. Module-level control-flow bindings, unpacked/augmented constants and helper-module
+star imports retain their dependencies conservatively.
 
 There is no server to run and no configuration file to write. `barca serve` adds
 schedules, an HTTP API and a web UI when you want them.
@@ -246,8 +244,11 @@ Unpacked and augmented module constants retain project-helper provenance conserv
 
 Module-level control-flow bindings retain project-helper provenance conservatively.
 
-More: `barca docs cache`, which also lists what the run hash does not see (star imports in
-undecorated helpers, installed packages, environment variables not declared with `env=`).
+Project star imports in ordinary helper modules conservatively follow imported source,
+including functions, classes, captured constants and forwarded exports.
+
+More: `barca docs cache`, which also lists what the run hash does not see (installed packages
+and environment variables not declared with `env=`).
 
 ## Large inputs
 

@@ -61,6 +61,7 @@ pub struct Module {
     package: Option<String>,
     definitions: OnceCell<HashMap<String, ModuleDef>>,
     star_exports: OnceCell<Option<Vec<String>>>,
+    imported_stars: OnceCell<Vec<String>>,
 }
 
 impl Module {
@@ -77,6 +78,7 @@ impl Module {
             package,
             definitions: OnceCell::new(),
             star_exports: OnceCell::new(),
+            imported_stars: OnceCell::new(),
         }
     }
 
@@ -147,6 +149,37 @@ impl Module {
                 .as_ref()
                 .map_or(base.clone(), |m| format!("{base}.{m}")),
         )
+    }
+
+    /// Every literal star-import target, including module-level control-flow blocks.
+    fn imported_stars(&self) -> &[String] {
+        self.imported_stars.get_or_init(|| {
+            struct Stars<'p> {
+                package: Option<&'p str>,
+                modules: BTreeSet<String>,
+            }
+            impl<'a> Visitor<'a> for Stars<'_> {
+                fn visit_stmt(&mut self, stmt: &'a Stmt) {
+                    for (_, binding) in import_bindings(stmt, self.package) {
+                        if let ModuleDef::FromImport { module, name } = binding
+                            && name == "*"
+                            && module != "barca"
+                        {
+                            self.modules.insert(module);
+                        }
+                    }
+                    visitor::walk_stmt(self, stmt);
+                }
+            }
+            let mut stars = Stars {
+                package: self.package.as_deref(),
+                modules: BTreeSet::new(),
+            };
+            if let Ok(parsed) = parse_module(&self.source) {
+                visitor::walk_body(&mut stars, &parsed.syntax().body);
+            }
+            stars.modules.into_iter().collect()
+        })
     }
 
     /// The module's top-level definitions, parsed on first use and then kept.
@@ -480,6 +513,12 @@ impl Cone<'_> {
                 self.import(next, original, name, depth + 1);
                 true
             }
+            None if !module.imported_stars().is_empty() => {
+                // Star exports need not be literal assignments in this module. Preserve all
+                // contributing sources rather than guessing which export installed a name.
+                self.whole(module, depth);
+                true
+            }
             Some(ModuleDef::ModuleImport { .. }) | None => false,
         }
     }
@@ -491,22 +530,39 @@ impl Cone<'_> {
         }
         let candidates = self.modules.module(name).into_iter();
         for module in candidates.chain(self.modules.alternatives(name)) {
-            if !self.visited.insert(format!("{}:*", module.name)) {
-                continue;
-            }
-            self.parts
-                .push((format!("{}:*", module.name), module.source.clone()));
-            let every_definition = Uses {
-                names: module.definitions().keys().cloned().collect(),
-                ..Uses::default()
-            };
-            let site = Site {
-                module: &module,
+            self.whole(&module, depth);
+        }
+    }
+
+    fn whole(&mut self, module: &Module, depth: usize) {
+        if depth >= MAX_MODULES_DEEP || !self.visited.insert(format!("{}:*", module.name)) {
+            return;
+        }
+        self.parts
+            .push((format!("{}:*", module.name), module.source.clone()));
+        let every_definition = Uses {
+            names: module.definitions().keys().cloned().collect(),
+            local: module
+                .imported_stars()
+                .iter()
+                .map(|target| LocalUse {
+                    bound: "*".into(),
+                    binding: ModuleDef::ModuleImport {
+                        module: target.clone(),
+                    },
+                    attrs: Vec::new(),
+                })
+                .collect(),
+            ..Uses::default()
+        };
+        self.follow(
+            Site {
+                module,
                 is_pipeline: false,
                 depth: depth + 1,
-            };
-            self.follow(site, &every_definition);
-        }
+            },
+            &every_definition,
+        );
     }
 }
 
@@ -540,10 +596,6 @@ fn collect_definitions(source: &str, package: Option<&str>) -> HashMap<String, M
     let mut defs: HashMap<String, ModuleDef> = HashMap::new();
     let barca = crate::decorator_args::BarcaNames::of(&parsed.syntax().body);
     let mut conservative_functions = Vec::new();
-    let has_foreign_star = parsed.syntax().body.iter().any(|stmt| {
-        matches!(stmt, Stmt::ImportFrom(i) if i.names.iter().any(|a| a.name.as_str() == "*")
-            && !(i.level == 0 && i.module.as_ref().is_some_and(|m| m.as_str() == "barca")))
-    });
     struct StaticImports<'p> {
         package: Option<&'p str>,
         uses: Vec<LocalUse>,
@@ -577,6 +629,10 @@ fn collect_definitions(source: &str, package: Option<&str>) -> HashMap<String, M
         uses: Vec::new(),
     };
     visitor::walk_body(&mut static_imports, &parsed.syntax().body);
+    let has_foreign_star = static_imports.uses.iter().any(|import| {
+        import.bound == "*"
+            && matches!(&import.binding, ModuleDef::ModuleImport { module } if module != "barca")
+    });
     let conditional_module = OnceCell::new();
     let conservative_code = || {
         conditional_module.get_or_init(|| {
@@ -752,6 +808,16 @@ fn collect_definitions(source: &str, package: Option<&str>) -> HashMap<String, M
             code.uses.names.extend(names.iter().cloned());
             code.uses.values.extend(names.iter().cloned());
             code.uses.local.extend(static_imports.uses.iter().cloned());
+        }
+    }
+    if has_foreign_star {
+        for definition in defs.values_mut() {
+            if let ModuleDef::Function(code)
+            | ModuleDef::Class(code)
+            | ModuleDef::Assignment(code) = definition
+            {
+                code.uses.local.extend(static_imports.uses.iter().cloned());
+            }
         }
     }
     defs
@@ -2437,6 +2503,46 @@ def my_asset():
         }
     }
 
+    #[test]
+    fn helper_star_imports_follow_all_sources_and_transitive_exports() {
+        for (helper, expression) in [
+            (
+                "from values import *\ndef result(): return VALUE",
+                "helpers.result()",
+            ),
+            (
+                "from values import *\nclass Holder: value = VALUE",
+                "helpers.Holder.value",
+            ),
+            ("from values import *\nCAPTURED = VALUE", "helpers.CAPTURED"),
+            ("from values import *", "helpers.VALUE"),
+            ("from values import *\nfrom other import *", "helpers.VALUE"),
+            (
+                "if True:\n    from values import *\ndef result(): return VALUE",
+                "helpers.result()",
+            ),
+            (
+                "from middle import *\ndef result(): return VALUE",
+                "helpers.result()",
+            ),
+        ] {
+            let entry = format!("import helpers\n\ndef my_asset(): return {expression}\n");
+            let modules = |value| {
+                sources(&[
+                    ("helpers", helper),
+                    ("values", &format!("VALUE = {value}\n")),
+                    ("other", "OTHER = 7\n"),
+                    ("middle", "from values import *\n"),
+                ])
+            };
+            assert_ne!(
+                hash_of(&entry, &modules(1), &[]),
+                hash_of(&entry, &modules(222), &[]),
+                "{helper}"
+            );
+        }
+    }
+
     // ─── Known limitations, as `barca docs cache` lists them ─────────────────────
 
     /// Not followed today. Each of these is in the manual ("Not followed"); when one starts
@@ -2448,28 +2554,12 @@ def my_asset():
         let v2 = one("helpers", HELPERS_V2);
         for (what, entry) in [
             (
-                "star import",
-                "from helpers import *\n\ndef my_asset():\n    return compute()\n",
-            ),
-            (
                 "importlib",
                 "import importlib\n\ndef my_asset():\n    return importlib.import_module('helpers').compute()\n",
             ),
             (
                 "__import__",
                 "def my_asset():\n    return __import__('helpers').compute()\n",
-            ),
-            (
-                "decorator",
-                "from helpers import compute\n\ndef wrap(v):\n    return lambda f: f\n\n@wrap(compute())\ndef inner():\n    return 1\n\ndef my_asset():\n    return inner()\n",
-            ),
-            (
-                "loop else",
-                "import helpers\n\ndef my_asset():\n    for _ in ():\n        pass\n    else:\n        return helpers.compute()\n",
-            ),
-            (
-                "match pattern",
-                "import helpers\n\ndef my_asset(x):\n    match x:\n        case helpers.compute:\n            return 1\n",
             ),
             (
                 "module reached through another module",
@@ -2502,7 +2592,6 @@ def my_asset():
             hash_of(entry, &nested(2), &[])
         );
     }
-
 
     // ─── Hashing quirks kept on purpose ──────────────────────────────────────────
 
@@ -2928,7 +3017,4 @@ def shadowing(helpers, json):
             "a counted argument of the upstream"
         );
     }
-
-    /// A helper that is not a node keeps contributing its text as written, decorators included,
-    /// as every earlier release hashed it; the names in its decorators are still not followed.
 }

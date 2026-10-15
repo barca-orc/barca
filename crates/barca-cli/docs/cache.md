@@ -231,6 +231,33 @@ The default is resolved in the enclosing scope, before the new parameter binding
 Editing that helper invalidates its consumers; unrelated steps retain their cached results.
 Existing cached consumers may recompute once after this dependency-tracking correction.
 
+Helper references in `for`/`while` `else:` blocks are followed, including inside undecorated
+project helper functions. As with `if` branches, static hashing follows the block even if
+a particular run exits the loop with `break`.
+
+Value, class and mapping-key expressions inside `match` patterns follow project helpers,
+including nested sequence, alternative and capture patterns. Capture names themselves
+are bindings, not reads of an imported value.
+
+Ordinary helper functions and classes follow names used in their decorators, including
+decorator factories/arguments and nested definitions. Decorators are resolved in the
+enclosing scope before the decorated definition's parameters/class bindings. A step's own
+Barca decorator metadata still follows "Which decorator arguments count" above.
+
+Module-level tuple/list/starred unpacking and augmented name assignments retain helper
+provenance conservatively: a consumer hashes the module source and its static references.
+Earlier aliases remain covered even when the binding is overwritten later. Editing an
+unrelated definition in that same module can therefore recompute these consumers; assets
+that do not reach such bindings retain selective cones.
+
+Project star imports in ordinary helper modules are tracked conservatively. Consumers of
+functions, classes, captured constants and forwarded exports include the contributing module
+sources and their static dependencies, including multiple and transitive star imports.
+Conditional star imports are included without selecting a branch. An edit to another export
+in those modules may recompute a consumer. Installed packages and the import-depth limit
+remain separate limitations; this does not extend decorator discovery beyond its existing
+literal-export rules.
+
 #### Not followed
 
 An edit in one of these does not change the hash; recompute with `--refresh-all` or `--refresh`:
@@ -240,42 +267,9 @@ An edit in one of these does not change the hash; recompute with `--refresh-all`
 - imports built at run time: `importlib.import_module(name)`, `__import__(name)`, and
   `getattr` on anything but a module barca can see imported. Static analysis cannot follow
   these, and barca does not run your code to plan;
-- Star imports inside undecorated helper functions/modules, and names a module defines
-  dynamically or inside other module-level
-  control flow such as a `for`, `while`, `with` or `match` (module-level `if` and `try` bindings
-  are covered conservatively above);
-
-  dynamically through runtime namespace mutation (ordinary control-flow bindings are covered
-  conservatively above);
-- module-level constants bound by tuple unpacking (`A, B = 1, 2`), and augmented assignments to
-  a module-level name (`A += 1`): only a plain `A = ...` or `A: int = ...` is a definition;
+- names defined dynamically through runtime namespace mutation;
 - a module reached through another module's `import` (`from helpers import other` where
   `helpers.py` does `import other`): import it directly;
-- what a helper refers to only in a decorator, a `match` pattern, a set literal (`{f()}`),
-  an assignment target
-
-- what a helper refers to only in a decorator, an `except` clause's exception type,
-  a `match` pattern, an assignment target
-  (`table[key()] = ...`) or a loop's `else:` block. The helper's own text is hashed, but those
-
-- what a helper refers to only in a decorator, an `except` clause's
-
-- what a helper refers to only in an `except` clause's
-  exception type, a `match` pattern, a set literal (`{f()}`), an assignment target
-  (`table[key()] = ...`). The helper's own text is hashed, but those
-
-- what a helper refers to only in a decorator, an `except` clause's exception type,
-  a set literal (`{f()}`), an assignment target
-  (`table[key()] = ...`) or a loop's `else:` block. The helper's own text is hashed, but those
-  references are not followed. (This is about helper functions. The decorators of a step
-  itself are covered by "Which decorator arguments count" above; default argument references
-  are followed as described above);
-
-- what a helper refers to only in a decorator, an `except` clause's exception type,
-  a `match` pattern, a set literal (`{f()}`), or a loop's `else:` block. The helper's own text
-  is hashed, but those references are not followed. The decorators of a step itself are
-  covered by "Which decorator arguments count" above; default references are followed
-  as described above;
 - helpers more than six project modules away along an import chain.
 
 Conflicting ordinary project imports are rejected before user code runs. If two pipeline
@@ -287,8 +281,7 @@ qualification. Dynamic imports and user mutations of import paths are not static
 
 Inside functions, evaluated assignment receivers and indices are followed, including `table[key()] = value`,
 annotated assignments, unpacking/chained targets, and targets in `for`, `with` and
-comprehensions. Writing a bare name does not read its old imported value. This does not add
-support for tuple/augmented module-level constant definitions or loop `else:` blocks.
+comprehensions. Writing a bare name does not read its old imported value.
 
 #### After upgrading to 0.19
 
@@ -885,22 +878,3 @@ See `specs/materialization-digests.md` for the native boundary.
 barca get orders pipeline.py --refresh orders --json   # compare recomputed bytes with the last digest
 barca status orders pipeline.py --json                 # last byte-change event and current digest
 ```
-
-Helper references in `for`/`while` `else:` blocks are followed, including inside undecorated
-project helper functions. As with `if` branches, static hashing follows the block even if
-a particular run exits the loop with `break`.
-
-Value, class and mapping-key expressions inside `match` patterns follow project helpers,
-including nested sequence, alternative and capture patterns. Capture names themselves
-are bindings, not reads of an imported value.
-
-Ordinary helper functions and classes follow names used in their decorators, including
-decorator factories/arguments and nested definitions. Decorators are resolved in the
-enclosing scope before the decorated definition's parameters/class bindings. A step's own
-Barca decorator metadata still follows "Which decorator arguments count" above.
-
-Module-level tuple/list/starred unpacking and augmented name assignments retain helper
-provenance conservatively: a consumer hashes the module source and its static references.
-Earlier aliases remain covered even when the binding is overwritten later. Editing an
-unrelated definition in that same module can therefore recompute these consumers; assets
-that do not reach such bindings retain selective cones.
