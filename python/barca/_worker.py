@@ -47,26 +47,20 @@ _EXT_FORMATS = {
 
 
 class _LineEmitter(io.TextIOBase):
-    """A stdout proxy that streams complete lines to the coordinator as they
-    are written, so user `print()` output shows up live in the UI — while still
-    passing the text through to the real stdout, preserving the terminal
-    behaviour CLI users expect. Buffers a partial trailing line until the next
-    newline or an explicit flush."""
+    """Capture Python stdout as complete node-attributed metadata lines.
+
+    The coordinator owns display policy; this stream never writes user text directly
+    to the worker's inherited descriptors. Partial lines flush on return or failure.
+    """
 
     def __init__(self, node_id):
         self.node_id = node_id
         self._buf = ""
-        # The real stdout, captured before redirect_stdout swaps sys.stdout.
-        self._passthrough = sys.stdout
+        # The coordinator renders this metadata event; user stdout never bypasses it.
 
     def write(self, s):
         from barca import _runtime
 
-        # Tee to the real stdout so `print()` still shows on the terminal.
-        try:
-            self._passthrough.write(s)
-        except Exception:
-            pass
         self._buf += s
         while "\n" in self._buf:
             line, self._buf = self._buf.split("\n", 1)
@@ -74,15 +68,26 @@ class _LineEmitter(io.TextIOBase):
         return len(s)
 
     def flush(self):
-        from barca import _runtime
+        if self._buf and not sys.is_finalizing():
+            from barca import _runtime
 
-        try:
-            self._passthrough.flush()
-        except Exception:
-            pass
-        if self._buf:
             _runtime.emit_log(self.node_id, self._buf)
             self._buf = ""
+
+
+_step_stdout = None
+
+
+def _stdout_for_step(node_id):
+    # Import-time stdout handlers may retain this stream. Reuse it so they follow
+    # the current step rather than retaining whichever step first imported a module.
+    global _step_stdout
+    if _step_stdout is None:
+        _step_stdout = _LineEmitter(node_id)
+    else:
+        _step_stdout.flush()
+        _step_stdout.node_id = node_id
+    return _step_stdout
 
 
 def _peak_rss_bytes() -> int:
@@ -941,8 +946,13 @@ def _run_daemon_step(step, modules, art_dir, lru):
     try:
         source = str(Path(step["source_file"]).resolve())
         activate_source_path(source)
+        emitter = _stdout_for_step(node_id)
         if source not in modules:
-            modules[source] = load_module(source)
+            try:
+                with contextlib.redirect_stdout(emitter):
+                    modules[source] = load_module(source)
+            finally:
+                emitter.flush()
         fn = getattr(modules[source], step["function_name"])
 
         # From here until the result is written, Ctrl-C interrupts the step.
@@ -988,7 +998,6 @@ def _run_daemon_step(step, modules, art_dir, lru):
 
         timeout = step.get("timeout_seconds", 0)
         # Capture user stdout and stream it live, line by line.
-        emitter = _LineEmitter(node_id)
         with contextlib.redirect_stdout(emitter):
             try:
                 if d_args:

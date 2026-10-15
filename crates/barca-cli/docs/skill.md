@@ -74,8 +74,9 @@ barca get total pipeline.py --refresh-all         # recompute an asset's whole c
   pointer, `{"_barca_artifact": {"path", "format", "size_bytes"}}`), and `warnings`: always an
   array, `[]` or plan-time warnings such as an input a step never uses (also one
   `[barca] warning: ...` line each on stderr; fix them, they cost load time).
-- Your steps' own `print` output goes to stderr, so stdout is only the result.
-- **stderr** has progress and errors. In JSON mode its **last line** is the error envelope
+- Retrieve captured step stdout with `barca logs RUN_ID --json`. JSON runs suppress captured
+  prints; other modes show them on stderr with `[node_id]` prefixes.
+- **stderr** has progress and errors. In JSON mode find the error-envelope JSON line
   `{"error", "code", "kind", "remediation"}`, plus `node`, `traceback`, `artifact_dir` for a
   failed step. `remediation` is usually the command to run next.
 

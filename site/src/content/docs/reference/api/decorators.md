@@ -608,3 +608,8 @@ preserve exact dtypes, indexes, null/empty-string distinctions or nested columns
 Unsupported values fail rather than falling back to pickle. Remote lazy CSV inputs are
 materialized before exposing their lazy interface. Frames still default to Parquet.
 CSV artifacts are also available to `barca sql` and `barca status --sample`.
+
+Task return values appear in `barca run` results as asset values do. Captured stdout is
+available through `barca logs RUN_ID --pretty` or `--json`, separately from progress.
+JSON run/get output suppresses step prints. In other modes stderr prefixes each line
+with its node id; framework agent lines retain `[barca]` prefixes.

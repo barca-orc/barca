@@ -36,6 +36,10 @@ const HELP_WIDTH: usize = 100;
 /// `docs <TOPIC>`); `barca` is the top level.
 pub const EXPERIMENTAL: &[(&str, &str)] = &[
     (
+        "history --reconcile",
+        "explicit operator recovery for stopped runs whose owner cannot be verified",
+    ),
+    (
         "list --groups",
         "Organizational group hierarchy and metadata shape are experimental",
     ),

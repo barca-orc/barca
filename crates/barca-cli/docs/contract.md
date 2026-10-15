@@ -70,6 +70,7 @@ outside the `GENERATED` blocks is written by hand.
 | `barca get` | `[<ARGS>...]` | stable | Get asset value(s) — cache-aware, runs only the needed subgraph |
 | `barca run` | `<ARGS>...` | stable | Run a task and its dependency cone — the task always re-runs |
 | `barca plan` | `[<FILES>...]` | experimental: prints the planner's internal phase/stream layout, which changes with scheduling work | Parse source files and emit the execution plan as JSON |
+| `barca logs` | `<RUN_ID>` | stable | Read a run's captured step stdout, without progress messages |
 | `barca history` | - | stable | Show recent run history |
 | `barca stats` | `<TARGET> [<FILES>...]` | stable | Show execution statistics for an asset |
 | `barca serve` | `[<FILES>...]` | experimental: the HTTP API and scheduler are young: no auth, no shared remote state, routes may change | Run a long-running HTTP server exposing the orchestrator as a JSON API |
@@ -151,10 +152,21 @@ default, and any aliases.
 |---|---|---|---|---|
 | `<FILES>...` | - | - | experimental (with the command) | Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`) |
 
+#### barca logs
+
+| Argument | Value | Notes | Stability | Description |
+|---|---|---|---|---|
+| `<RUN_ID>` | - | required | stable | Exact run id from get/run JSON or history |
+| `--step` | `STEP` | - | stable | Function name or exact node id (including a partition key when desired) |
+| `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
+| `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
+| `--env` | `ENV` | - | stable | Environment whose local history to read |
+
 #### barca history
 
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
+| `--reconcile` | `RUN_ID` | - | experimental: explicit operator recovery for stopped runs whose owner cannot be verified | After verifying a run stopped, record it as interrupted; refuses a proven live owner |
 | `-l, --limit` | `LIMIT` | - | stable | Maximum recent runs (default: every run in JSON, 10 in a human table) |
 | `--all` | - | default `false` | stable | Show every recorded run (no limit) |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
@@ -247,7 +259,7 @@ default, and any aliases.
 
 ## Output selection (stable)
 
-`get`, `run`, `list`, `status`, `history` and `stats` choose JSON or human output on stdout by
+`get`, `run`, `logs`, `list`, `status`, `history` and `stats` choose JSON or human output on stdout by
 one rule, first match wins:
 
 1. a flag: `--json` or `--pretty` (on `get`/`run` also `-o json|value|pretty`); `--fields`
@@ -953,6 +965,14 @@ counts every node even when `nodes` is truncated.
 
 ### history
 
+Experimental `--reconcile RUN_ID` is an explicit write after the operator verifies the run
+stopped. It returns just that run in the existing envelope (`total: 1`, `truncated: false`),
+recorded as `interrupted`. It refuses a proven live owner, a non-running row or unknown id
+(exit 2); database errors are exit 3. `--limit` and `--all` conflict with it; `--fields`,
+output selection and `--env` still apply. Successful step rows/artifacts and progress are
+preserved, and an unknown end time/duration is not invented. Ordinary history stays read-only.
+
+
 <!-- BEGIN GENERATED schema history -->
 | Key | Type | Present |
 |---|---|---|
@@ -988,6 +1008,28 @@ it has recorded so far in `steps_executed`, and
 Terminal status/counts and successful/failed step rows commit in one transaction. A required
 write failure reports the existing infrastructure error (exit 3) and preserves previous
 history/progress and run state; captured output is written separately afterward.
+
+Reconciled history (same envelope; unknown end timestamp and duration remain null):
+
+<!-- BEGIN GENERATED schema history_reconciled -->
+| Key | Type | Present |
+|---|---|---|
+| `runs` | array | always |
+| `runs[]` | object | always |
+| `runs[].command` | string | always |
+| `runs[].elapsed_seconds` | null | always |
+| `runs[].files` | array | always |
+| `runs[].finished_at` | null | always |
+| `runs[].run_id` | string | always |
+| `runs[].started_at` | string | always |
+| `runs[].status` | string | always |
+| `runs[].steps_cached` | integer | always |
+| `runs[].steps_executed` | integer | always |
+| `runs[].steps_total` | integer | always |
+| `runs[].target` | string | always |
+| `total` | integer | always |
+| `truncated` | boolean | always |
+<!-- END GENERATED schema history_reconciled -->
 
 ### stats
 
@@ -1323,3 +1365,22 @@ with `serializer="csv"`. CSV sink extensions select CSV automatically. Frames co
 to default to Parquet. CSV requires a supported tabular value; readers infer types.
 Status samples represent CSV cells as strings, and SQL views support CSV artifacts.
 See `barca docs types` and `specs/artifact-formats.md`.
+
+### Task stdout and logs
+
+`logs RUN_ID` is stable. JSON returns an array of `{node_id: string, line: string}` objects
+in recorded order; text returns only the lines. `--step` selects an exact id/base id/function
+name; ambiguous or absent steps and missing runs exit 2. Silent recorded steps return no
+lines. `--env` selects local history; logs does not import source or contact a remote store.
+Task return values remain `final_output` as for assets. Get/run JSON mode suppresses captured
+stdout lines; non-JSON modes prefix them with `[node_id]` on stderr. Agent framework lines
+remain `[barca]`-prefixed. Retrieve captured output with `barca logs`. See `barca docs logs`
+and `specs/task-output.md` for flush, failure and ordering boundaries.
+
+<!-- BEGIN GENERATED schema logs -->
+| Key | Type | Present |
+|---|---|---|
+| `[]` | object | always |
+| `[].line` | string | always |
+| `[].node_id` | string | always |
+<!-- END GENERATED schema logs -->
