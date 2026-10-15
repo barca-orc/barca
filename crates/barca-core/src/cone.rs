@@ -986,6 +986,7 @@ impl<'p> UseCollector<'p> {
             c.exprs(results.iter().copied());
             for generator in generators {
                 c.expr(&generator.iter);
+                c.target(&generator.target);
                 c.exprs(&generator.ifs);
             }
         });
@@ -1003,19 +1004,49 @@ impl<'p> UseCollector<'p> {
         }
     }
 
-    // The statements and expressions visited below are exactly the ones every earlier release
-    // visited: visiting more (a decorator, a default value, an `except` type, ...) would add
-    // names, and so change the hash of code that has not changed.
+    /// Assignment evaluates receivers and indices, but does not read a bare binding name.
+    fn target(&mut self, target: &Expr) {
+        match target {
+            Expr::Attribute(a) => self.expr(&a.value),
+            Expr::Subscript(s) => {
+                self.expr(&s.value);
+                self.expr(&s.slice);
+            }
+            Expr::Tuple(t) => {
+                for item in &t.elts {
+                    self.target(item);
+                }
+            }
+            Expr::List(l) => {
+                for item in &l.elts {
+                    self.target(item);
+                }
+            }
+            Expr::Starred(s) => self.target(&s.value),
+            _ => {}
+        }
+    }
+
+    // Follow references evaluated by each supported statement/expression. New construct
+    // families need regression coverage and release notes because they change cache hashes.
     fn stmt(&mut self, stmt: &Stmt) {
         match stmt {
             Stmt::Expr(s) => self.expr(&s.value),
             Stmt::Return(s) => self.exprs(s.value.as_deref()),
-            Stmt::Assign(s) => self.expr(&s.value),
+            Stmt::Assign(s) => {
+                self.expr(&s.value);
+                for target in &s.targets {
+                    self.target(target);
+                }
+            }
             Stmt::AugAssign(s) => {
                 self.expr(&s.target);
                 self.expr(&s.value);
             }
-            Stmt::AnnAssign(s) => self.exprs(s.value.as_deref()),
+            Stmt::AnnAssign(s) => {
+                self.exprs(s.value.as_deref());
+                self.target(&s.target);
+            }
             Stmt::If(s) => {
                 self.expr(&s.test);
                 self.stmts(&s.body);
@@ -1026,6 +1057,7 @@ impl<'p> UseCollector<'p> {
             }
             Stmt::For(s) => {
                 self.expr(&s.iter);
+                self.target(&s.target);
                 self.stmts(&s.body);
             }
             Stmt::While(s) => {
@@ -1033,7 +1065,12 @@ impl<'p> UseCollector<'p> {
                 self.stmts(&s.body);
             }
             Stmt::With(s) => {
-                self.exprs(s.items.iter().map(|item| &item.context_expr));
+                for item in &s.items {
+                    self.expr(&item.context_expr);
+                    if let Some(target) = &item.optional_vars {
+                        self.target(target);
+                    }
+                }
                 self.stmts(&s.body);
             }
             Stmt::FunctionDef(s) => self.function(s),
@@ -2054,6 +2091,43 @@ def my_asset():
         );
     }
 
+    #[test]
+    fn assignment_receivers_and_indices_follow_helpers() {
+        for body in [
+            "table[helpers.compute()] = 1",
+            "table[helpers.compute()]: int = 1",
+            "helpers.compute().value = 1",
+            "table[helpers.compute()], other = (1, 2)",
+            "*table[helpers.compute()], other = (1, 2)",
+            "for table[helpers.compute()] in [1]:\n        pass",
+            "with manager() as table[helpers.compute()]:\n        pass",
+            "result = [1 for table[helpers.compute()] in [1]]",
+        ] {
+            for import in ["import helpers\n", ""] {
+                let local = if import.is_empty() {
+                    "    import helpers\n"
+                } else {
+                    ""
+                };
+                let entry = format!(
+                    "{import}\ndef my_asset():\n{local}    table = {{}}\n    {body}\n    return table\n"
+                );
+                assert_ne!(
+                    hash_of(&entry, &one("helpers", HELPERS_V1), &[]),
+                    hash_of(&entry, &one("helpers", HELPERS_V2), &[]),
+                    "{body}"
+                );
+            }
+        }
+        // Writing a name is not a read of its previous imported binding.
+        let entry =
+            "from helpers import compute\n\ndef my_asset():\n    compute = 1\n    return 0\n";
+        assert_eq!(
+            hash_of(entry, &one("helpers", HELPERS_V1), &[]),
+            hash_of(entry, &one("helpers", HELPERS_V2), &[])
+        );
+    }
+
     // ─── Known limitations, as `barca docs cache` lists them ─────────────────────
 
     /// Not followed today. Each of these is in the manual ("Not followed"); when one starts
@@ -2091,10 +2165,6 @@ def my_asset():
             (
                 "loop else",
                 "import helpers\n\ndef my_asset():\n    for _ in ():\n        pass\n    else:\n        return helpers.compute()\n",
-            ),
-            (
-                "assignment target",
-                "import helpers\n\ndef my_asset():\n    t = {}\n    t[helpers.compute()] = 1\n    return t\n",
             ),
             (
                 "except type",

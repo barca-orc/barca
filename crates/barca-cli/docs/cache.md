@@ -231,9 +231,8 @@ An edit in one of these does not change the hash; recompute with `--refresh-all`
 - a module reached through another module's `import` (`from helpers import other` where
   `helpers.py` does `import other`): import it directly;
 - what a helper refers to only in a decorator, a default argument value, an `except` clause's
-  exception type, a `match` pattern, a set literal (`{f()}`), an assignment target
-  (`table[key()] = ...`) or a loop's `else:` block. The helper's own text is hashed, but those
-  references are not followed. (This is about helper functions. The decorators of a step
+  exception type, a `match` pattern, a set literal (`{f()}`), or a loop's `else:` block.
+  The helper's own text is hashed, but those references are not followed. (This is about helper functions. The decorators of a step
   itself are covered by "Which decorator arguments count" above; its default argument values
   are hashed as part of the function but the names in them are not followed);
 - helpers more than six project modules away along an import chain.
@@ -244,6 +243,11 @@ directories each have `helpers.py`, qualify the imports (`from east.helpers impo
 Unambiguous sibling helpers still work; previous tasks do not add implicit import paths.
 Literal imports in inactive branches and unused functions may conservatively require
 qualification. Dynamic imports and user mutations of import paths are not statically proven.
+
+Inside functions, evaluated assignment receivers and indices are followed, including `table[key()] = value`,
+annotated assignments, unpacking/chained targets, and targets in `for`, `with` and
+comprehensions. Writing a bare name does not read its old imported value. This does not add
+support for tuple/augmented module-level constant definitions or loop `else:` blocks.
 
 #### After upgrading to 0.19
 
