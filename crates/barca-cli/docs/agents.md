@@ -423,3 +423,8 @@ barca get --help               # flags and runnable examples (every command has 
 ```
 
 Online: https://barca.sh/
+
+Plan documents include `plan_version: 1`, independent of the package and database versions.
+Workers and the transfer helper negotiate their socket protocol before receiving work.
+A version mismatch exits 3 and names the helper version and expected version; reinstall
+Barca in the Python environment used for the run. The handshake does not import pipeline code.

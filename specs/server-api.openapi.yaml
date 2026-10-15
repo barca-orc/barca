@@ -1389,10 +1389,15 @@ components:
       type: object
       additionalProperties: false
       required:
+      - plan_version
       - total_steps
       - phases
       - warnings
       properties:
+        plan_version:
+          type: integer
+          const: 1
+          description: Plan document format version, independent of the package, database and worker protocol versions.
         total_steps: &id027
           type: integer
           minimum: 0

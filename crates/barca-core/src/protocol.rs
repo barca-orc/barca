@@ -12,6 +12,41 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
 
+/// Negotiated worker/transfer wire version, independent of package and DB versions.
+pub const PROTOCOL_VERSION: u32 = 3;
+
+/// Negotiate before a helper can receive work. The caller bounds this together
+/// with connection startup and owns reaping the child on every error path.
+pub(crate) async fn accept_hello<S>(stream: &mut S, role: &str) -> io::Result<()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    let hello: Option<serde_json::Value> = read_frame(stream).await.map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "invalid {role} protocol hello: {e}; reinstall barca in this Python environment"
+            ),
+        )
+    })?;
+    let version = hello
+        .as_ref()
+        .and_then(|v| v.get("protocol_version"))
+        .and_then(|v| v.as_u64());
+    let valid = hello.as_ref().is_some_and(|v| {
+        v["type"] == "hello" && v["role"] == role && version == Some(u64::from(PROTOCOL_VERSION))
+    });
+    if !valid {
+        let found = version.map_or_else(|| "unversioned".to_string(), |v| format!("v{v}"));
+        let message = format!(
+            "{role} protocol {found}, coordinator expects v{PROTOCOL_VERSION}; reinstall barca in the Python environment used for this run"
+        );
+        let _ = write_frame(stream, &serde_json::json!({"type": "protocol_error", "message": message, "protocol_version": PROTOCOL_VERSION})).await;
+        return Err(io::Error::new(io::ErrorKind::InvalidData, message));
+    }
+    write_frame(stream, &serde_json::json!({"type": "hello", "role": "coordinator", "protocol_version": PROTOCOL_VERSION})).await
+}
+
 // ─── Worker → Coordinator ────────────────────────────────────────────────────
 
 /// Messages sent from a Python worker to the Rust coordinator.
@@ -42,7 +77,7 @@ pub enum WorkerMessage {
         /// The worker reads each branch's result from its artifact, so the response names
         /// the artifacts ([`ParallelResult::Ok::artifact`]) and carries no values. A worker
         /// from an older barca Python package (0.19.0 or earlier) does not send this and gets the
-        /// values inline, as it expects.
+        /// legacy request is refused; negotiated v3 workers always set this.
         #[serde(default)]
         artifact_results: bool,
     },
@@ -101,10 +136,6 @@ pub struct ArtifactRef {
     /// none for the result.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frame_type: Option<String>,
-    /// For a `parallel()` branch whose result is a small JSON value: its text, sent instead
-    /// of writing a file (`path` is then empty). See [`BranchArtifact::json`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub json: Option<String>,
 }
 
 /// Outcome of a single `@sink` write. Sink failures never fail the parent
@@ -134,16 +165,11 @@ pub enum CoordinatorMessage {
 
 /// Result of a single parallel branch.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "status", rename_all = "snake_case")]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ParallelResult {
-    /// The branch returned. A worker that asked for artifact results gets `artifact` (it
-    /// reads the value itself, with the code that reads a step's input); one that did not
-    /// gets `result`.
+    /// The branch returned an artifact file reference. Values never ride this response.
     Ok {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        result: Option<serde_json::Value>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        artifact: Option<BranchArtifact>,
+        artifact: BranchArtifact,
     },
     Error {
         error: String,
@@ -152,6 +178,7 @@ pub enum ParallelResult {
 
 /// Where a branch's return value is: the artifact its worker wrote, like any step's output.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BranchArtifact {
     pub path: String,
     /// `json`, `pickle` or `parquet`.
@@ -159,12 +186,6 @@ pub struct BranchArtifact {
     /// See [`ArtifactRef::frame_type`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frame_type: Option<String>,
-    /// A small JSON result's text, as the branch's worker sent it (`python/barca/_branches.py`,
-    /// `small_json`: a few KB at most). There is then no file and `path` is empty. The text is
-    /// never parsed here: the calling worker parses what the branch's worker wrote. A fan-out
-    /// of thousands of small branches creates, reads and removes no files this way.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub json: Option<String>,
 }
 
 // ─── Coordinator ↔ transfer helper ───────────────────────────────────────────
@@ -242,6 +263,12 @@ fn yes() -> bool {
 pub fn encode_message<T: Serialize>(msg: &T) -> io::Result<Vec<u8>> {
     let payload =
         serde_json::to_vec(msg).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    if payload.len() > 256 * 1024 * 1024 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "message too large",
+        ));
+    }
     let len = payload.len() as u32;
     let mut frame = Vec::with_capacity(4 + payload.len());
     frame.extend_from_slice(&len.to_be_bytes());
@@ -269,7 +296,7 @@ pub fn read_message<R: Read, T: for<'de> Deserialize<'de>>(
     }
     let len = u32::from_be_bytes(len_buf) as usize;
 
-    // Safety: reject absurdly large messages (> 256MB)
+    // Reject oversized payloads before allocating.
     if len > 256 * 1024 * 1024 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -356,7 +383,7 @@ mod tests {
                 finished_at: None,
                 wall_seconds: None,
                 frame_type: None,
-                json: None,
+
                 sinks: Vec::new(),
             },
         };
@@ -383,8 +410,11 @@ mod tests {
         let msg = CoordinatorMessage::ParallelResponse {
             results: vec![
                 ParallelResult::Ok {
-                    result: Some(serde_json::json!({"value": 42})),
-                    artifact: None,
+                    artifact: BranchArtifact {
+                        path: "/a.json".into(),
+                        format: "json".into(),
+                        frame_type: None,
+                    },
                 },
                 ParallelResult::Error {
                     error: "timeout".to_string(),
@@ -401,8 +431,8 @@ mod tests {
             CoordinatorMessage::ParallelResponse { results } => {
                 assert_eq!(results.len(), 2);
                 match &results[0] {
-                    ParallelResult::Ok { result, .. } => {
-                        assert_eq!(result, &Some(serde_json::json!({"value": 42})));
+                    ParallelResult::Ok { artifact, .. } => {
+                        assert_eq!(artifact.path, "/a.json");
                     }
                     _ => panic!("expected Ok"),
                 }
@@ -433,7 +463,7 @@ mod tests {
                 finished_at: None,
                 wall_seconds: None,
                 frame_type: None,
-                json: None,
+
                 sinks: vec![
                     SinkOutcome {
                         path: "exports/out.parquet".to_string(),
@@ -612,7 +642,7 @@ mod tests {
                     finished_at: None,
                     wall_seconds: None,
                     frame_type: None,
-                    json: None,
+
                     sinks: Vec::new(),
                 },
             },
@@ -703,20 +733,21 @@ mod tests {
         let msg = CoordinatorMessage::ParallelResponse {
             results: vec![
                 ParallelResult::Ok {
-                    result: Some(serde_json::json!([1, 2, 3])),
-                    artifact: None,
+                    artifact: BranchArtifact {
+                        path: "/a.json".into(),
+                        format: "json".into(),
+                        frame_type: None,
+                    },
                 },
                 ParallelResult::Error {
                     error: "division by zero".to_string(),
                 },
                 ParallelResult::Ok {
-                    result: None,
-                    artifact: Some(BranchArtifact {
+                    artifact: BranchArtifact {
                         path: "/artifacts/work_branch_3.pkl".to_string(),
                         format: "pickle".to_string(),
                         frame_type: None,
-                        json: None,
-                    }),
+                    },
                 },
             ],
         };
@@ -733,8 +764,8 @@ mod tests {
 
                 // First: Ok with array
                 match &results[0] {
-                    ParallelResult::Ok { result, .. } => {
-                        assert_eq!(result, &Some(serde_json::json!([1, 2, 3])));
+                    ParallelResult::Ok { artifact, .. } => {
+                        assert_eq!(artifact.path, "/a.json");
                     }
                     _ => panic!("expected Ok"),
                 }
@@ -749,9 +780,8 @@ mod tests {
 
                 // Third: Ok, by artifact
                 match &results[2] {
-                    ParallelResult::Ok { result, artifact } => {
-                        assert!(result.is_none());
-                        assert_eq!(artifact.as_ref().unwrap().format, "pickle");
+                    ParallelResult::Ok { artifact } => {
+                        assert_eq!(artifact.format, "pickle");
                     }
                     _ => panic!("expected Ok"),
                 }
@@ -764,7 +794,7 @@ mod tests {
     // shapes; pin them.
     #[test]
     fn parallel_wire_shapes() {
-        // A worker from 0.19.0 or earlier sends no `artifact_results`: it gets values inline.
+        // Missing artifact capability is decoded only so the coordinator can refuse it.
         let old: WorkerMessage = serde_json::from_str(r#"{"type":"submit","items":[]}"#).unwrap();
         assert!(matches!(
             old,
@@ -785,13 +815,11 @@ mod tests {
         ));
 
         let by_artifact = ParallelResult::Ok {
-            result: None,
-            artifact: Some(BranchArtifact {
+            artifact: BranchArtifact {
                 path: "/a/b.parquet".to_string(),
                 format: "parquet".to_string(),
                 frame_type: Some("polars".to_string()),
-                json: None,
-            }),
+            },
         };
         assert_eq!(
             serde_json::to_value(&by_artifact).unwrap(),
@@ -800,30 +828,12 @@ mod tests {
                 "artifact": {"path": "/a/b.parquet", "format": "parquet", "frame_type": "polars"},
             })
         );
-        let small = ParallelResult::Ok {
-            result: None,
-            artifact: Some(BranchArtifact {
-                path: "/a/b.json".to_string(),
-                format: "json".to_string(),
-                frame_type: None,
-                json: Some(r#"{"b": 1, "a": NaN}"#.to_string()),
-            }),
-        };
-        assert_eq!(
-            serde_json::to_value(&small).unwrap(),
-            serde_json::json!({
-                "status": "ok",
-                "artifact": {"path": "/a/b.json", "format": "json", "json": "{\"b\": 1, \"a\": NaN}"},
-            })
-        );
-        let inline = ParallelResult::Ok {
-            result: Some(serde_json::json!(null)),
-            artifact: None,
-        };
-        assert_eq!(
-            serde_json::to_value(&inline).unwrap(),
-            serde_json::json!({"status": "ok", "result": null})
-        );
+        for inline in [
+            serde_json::json!({"status":"ok","result":1}),
+            serde_json::json!({"status":"ok","artifact":{"path":"/a.json","format":"json","json":"1"}}),
+        ] {
+            assert!(serde_json::from_value::<ParallelResult>(inline).is_err());
+        }
 
         // The frame type a branch's worker reports survives the coordinator.
         let reported: ArtifactRef = serde_json::from_str(
@@ -979,5 +989,44 @@ mod tests {
             .unwrap();
         let got: serde_json::Value = read_frame(&mut b).await.unwrap().unwrap();
         assert_eq!(got, serde_json::json!({"type": "shutdown"}));
+    }
+
+    #[tokio::test]
+    async fn helper_hello_requires_matching_version_and_role() {
+        for role in ["worker", "transfer"] {
+            for version in [0, 2, PROTOCOL_VERSION, PROTOCOL_VERSION + 1] {
+                let (mut client, mut server) = tokio::io::duplex(4096);
+                write_frame(&mut client, &serde_json::json!({"type": "hello", "role": role, "protocol_version": version})).await.unwrap();
+                let accepted = accept_hello(&mut server, role).await;
+                let response: serde_json::Value = read_frame(&mut client).await.unwrap().unwrap();
+                if version == PROTOCOL_VERSION {
+                    assert!(accepted.is_ok());
+                    assert_eq!(
+                        response,
+                        serde_json::json!({"type":"hello", "role":"coordinator", "protocol_version":PROTOCOL_VERSION})
+                    );
+                } else {
+                    let error = accepted.unwrap_err().to_string();
+                    assert!(error.contains(&format!("protocol v{version}")), "{error}");
+                    assert!(error.contains("reinstall barca"), "{error}");
+                    assert_eq!(response["type"], "protocol_error");
+                }
+            }
+        }
+        for hello in [
+            serde_json::json!({"type":"heartbeat"}),
+            serde_json::json!({"type":"hello", "role":"transfer", "protocol_version":PROTOCOL_VERSION}),
+            serde_json::json!({"type":"hello", "role":"worker", "protocol_version":"3"}),
+        ] {
+            let (mut client, mut server) = tokio::io::duplex(4096);
+            write_frame(&mut client, &hello).await.unwrap();
+            assert!(
+                accept_hello(&mut server, "worker")
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("reinstall barca")
+            );
+        }
     }
 }
