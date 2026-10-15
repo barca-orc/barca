@@ -664,7 +664,12 @@ fn collect_definitions(source: &str, package: Option<&str>) -> HashMap<String, M
                     .into_iter()
                     .filter(|(_, binding)| !is_group_import(binding)),
             ),
-            Stmt::If(_) | Stmt::Try(_) => {
+            Stmt::If(_)
+            | Stmt::Try(_)
+            | Stmt::For(_)
+            | Stmt::While(_)
+            | Stmt::With(_)
+            | Stmt::Match(_) => {
                 // Do not select a conditional binding by executing Python or by guessing
                 // which branch runs. The module may retain an earlier binding, install a
                 // different import or define a fallback function. Represent each possible
@@ -2052,6 +2057,40 @@ def my_asset():
             hash_of(entry, &project(1), &[]),
             hash_of(entry, &project(2), &[])
         );
+    }
+
+    #[test]
+    fn module_control_flow_bindings_follow_project_helpers() {
+        for (bindings, expression) in [
+            ("for _ in [0]:\n    VALUE = compute()", "VALUE"),
+            (
+                "VALUE = 0\nwhile VALUE == 0:\n    VALUE = compute()",
+                "VALUE",
+            ),
+            ("with manager(compute()) as VALUE:\n    pass", "VALUE"),
+            ("match compute():\n    case VALUE:\n        pass", "VALUE"),
+            (
+                "for _ in [0]:\n    def result(): return compute()",
+                "result()",
+            ),
+            (
+                "with manager():\n    class Result:\n        value = compute()",
+                "Result.value",
+            ),
+            (
+                "for _ in [0]:\n    VALUE = compute()\nCAPTURED = VALUE\nVALUE = 0",
+                "CAPTURED",
+            ),
+        ] {
+            let entry = format!(
+                "from helpers import compute\n{bindings}\n\ndef my_asset(): return {expression}\n"
+            );
+            assert_ne!(
+                hash_of(&entry, &one("helpers", HELPERS_V1), &[]),
+                hash_of(&entry, &one("helpers", HELPERS_V2), &[]),
+                "{bindings}"
+            );
+        }
     }
 
     // ─── Known limitations, as `barca docs cache` lists them ─────────────────────

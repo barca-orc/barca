@@ -418,3 +418,8 @@ Decorated pipeline functions with top-level project star imports conservatively 
 imported module and its static imports. Literal `__all__` lists/tuples also let discovery
 preserve Barca decorators and groups whose local names are absent from that export set;
 computed or mutated sets remain uncertain. See [decorator discovery](/reference/api/decorators/).
+
+Module-level `for`, `while`, `with` and `match` bindings retain project-helper provenance
+conservatively, like existing `if`/`try` bindings. Consumers hash the module source and
+static references, including aliases captured before overwrites. Unrelated assets retain
+selective cones; runtime namespace mutation is still not statically resolved.
