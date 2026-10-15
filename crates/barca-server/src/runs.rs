@@ -230,6 +230,7 @@ pub async fn detail(
                     ok,
                     elapsed_seconds,
                     error,
+                    ..
                 } if !steps.iter().any(|s| s.node_id == node_id) => steps.push(db::RunStep {
                     node_id,
                     status: if ok { "success" } else { "failed" }.into(),

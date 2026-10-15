@@ -1,0 +1,19 @@
+# barca get value pipeline.py --json --agent  (stdout, exit 0)
+elapsed_seconds : number
+final_output : <user value>
+phases : integer
+run_id : string
+status : string
+steps : array
+steps[] : object
+steps[].attempts : integer
+steps[].detail : string
+steps[].elapsed_seconds : number
+steps[].id : string
+steps[].import_seconds : number
+steps[].kind : string
+steps[].reason : string
+steps[].run_hash : string
+steps[].status : string
+steps_executed : integer
+warnings : array

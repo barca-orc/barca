@@ -734,3 +734,8 @@ path or set `BARCA_STATE=off` to use local history.
 - `barca status` does not describe a remote json or pickle result larger than 16 MB, and
   `barca sql` downloads a whole artifact before querying it.
 - `.barca/artifacts/` has no size cap (see Failures).
+
+## Diagnose configuration
+
+Run `barca doctor --pretty` before a run to check configured stores and credential identity.
+See `barca docs doctor` for check limits and a copyable local-only debugging profile.

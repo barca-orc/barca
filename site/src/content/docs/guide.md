@@ -190,6 +190,12 @@ and imports retain that provenance because earlier aliases may have captured the
 value; an unconditional replacement can therefore still invalidate conservatively. Steps that do not use these uncertain
 bindings retain their selective cones.
 
+Default argument expressions in steps and reached helpers also contribute dependencies,
+including keyword-only defaults and defaults in nested functions or lambdas. Editing
+`helpers.compute` in `def value(x=helpers.compute()): ...` invalidates the cached consumer.
+Defaults use the enclosing scope before the new parameters bind. Consumers may recompute
+once after upgrading to this dependency-tracking correction.
+
 ## 5. Tasks, and `get` versus `run`
 
 A task is a step that does something: deploy, notify, upload. It is never cached.

@@ -30,6 +30,11 @@ macro_rules! topic {
 
 /// Every topic, in index order. Add new topics here (and a file under `docs/`).
 pub const TOPICS: &[Topic] = &[
+    topic!(
+        "doctor",
+        "Check project prerequisites without running steps",
+        "doctor.md"
+    ),
     topic!("logs", "Read a run's recorded step stdout", "logs.md"),
     topic!(
         "groups",
