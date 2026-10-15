@@ -12,6 +12,41 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
 
+/// Negotiated worker/transfer wire version, independent of package and DB versions.
+pub const PROTOCOL_VERSION: u32 = 3;
+
+/// Negotiate before a helper can receive work. The caller bounds this together
+/// with connection startup and owns reaping the child on every error path.
+pub(crate) async fn accept_hello<S>(stream: &mut S, role: &str) -> io::Result<()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    let hello: Option<serde_json::Value> = read_frame(stream).await.map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "invalid {role} protocol hello: {e}; reinstall barca in this Python environment"
+            ),
+        )
+    })?;
+    let version = hello
+        .as_ref()
+        .and_then(|v| v.get("protocol_version"))
+        .and_then(|v| v.as_u64());
+    let valid = hello.as_ref().is_some_and(|v| {
+        v["type"] == "hello" && v["role"] == role && version == Some(u64::from(PROTOCOL_VERSION))
+    });
+    if !valid {
+        let found = version.map_or_else(|| "unversioned".to_string(), |v| format!("v{v}"));
+        let message = format!(
+            "{role} protocol {found}, coordinator expects v{PROTOCOL_VERSION}; reinstall barca in the Python environment used for this run"
+        );
+        let _ = write_frame(stream, &serde_json::json!({"type": "protocol_error", "message": message, "protocol_version": PROTOCOL_VERSION})).await;
+        return Err(io::Error::new(io::ErrorKind::InvalidData, message));
+    }
+    write_frame(stream, &serde_json::json!({"type": "hello", "role": "coordinator", "protocol_version": PROTOCOL_VERSION})).await
+}
+
 // ─── Worker → Coordinator ────────────────────────────────────────────────────
 
 /// Messages sent from a Python worker to the Rust coordinator.
@@ -972,5 +1007,44 @@ mod tests {
             .unwrap();
         let got: serde_json::Value = read_frame(&mut b).await.unwrap().unwrap();
         assert_eq!(got, serde_json::json!({"type": "shutdown"}));
+    }
+
+    #[tokio::test]
+    async fn helper_hello_requires_matching_version_and_role() {
+        for role in ["worker", "transfer"] {
+            for version in [0, 2, PROTOCOL_VERSION, PROTOCOL_VERSION + 1] {
+                let (mut client, mut server) = tokio::io::duplex(4096);
+                write_frame(&mut client, &serde_json::json!({"type": "hello", "role": role, "protocol_version": version})).await.unwrap();
+                let accepted = accept_hello(&mut server, role).await;
+                let response: serde_json::Value = read_frame(&mut client).await.unwrap().unwrap();
+                if version == PROTOCOL_VERSION {
+                    assert!(accepted.is_ok());
+                    assert_eq!(
+                        response,
+                        serde_json::json!({"type":"hello", "role":"coordinator", "protocol_version":PROTOCOL_VERSION})
+                    );
+                } else {
+                    let error = accepted.unwrap_err().to_string();
+                    assert!(error.contains(&format!("protocol v{version}")), "{error}");
+                    assert!(error.contains("reinstall barca"), "{error}");
+                    assert_eq!(response["type"], "protocol_error");
+                }
+            }
+        }
+        for hello in [
+            serde_json::json!({"type":"heartbeat"}),
+            serde_json::json!({"type":"hello", "role":"transfer", "protocol_version":PROTOCOL_VERSION}),
+            serde_json::json!({"type":"hello", "role":"worker", "protocol_version":"3"}),
+        ] {
+            let (mut client, mut server) = tokio::io::duplex(4096);
+            write_frame(&mut client, &hello).await.unwrap();
+            assert!(
+                accept_hello(&mut server, "worker")
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("reinstall barca")
+            );
+        }
     }
 }

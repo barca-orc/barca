@@ -1153,11 +1153,15 @@ async fn start_worker(
     let connected = tokio::select! {
         // A connection that is there is taken, whatever else is also true by now.
         biased;
-        accepted = tokio::time::timeout(WORKER_CONNECT_LIMIT, listener.accept()) => match accepted {
-            Ok(Ok((stream, _))) => Ok(stream),
-            Ok(Err(e)) => Err(SpawnError::Failed(format!("accept: {e}"))),
+        accepted = tokio::time::timeout(WORKER_CONNECT_LIMIT, async {
+            let (mut stream, _) = listener.accept().await?;
+            crate::protocol::accept_hello(&mut stream, "worker").await?;
+            Ok::<_, std::io::Error>(stream)
+        }) => match accepted {
+            Ok(Ok(stream)) => Ok(stream),
+            Ok(Err(e)) => Err(SpawnError::Failed(format!("worker {worker_id} connection/protocol: {e}"))),
             Err(_) => Err(SpawnError::Failed(format!(
-                "timeout waiting for worker {worker_id} to connect"
+                "timeout waiting for worker {worker_id} to connect and announce protocol v{}; reinstall barca in this Python environment", crate::protocol::PROTOCOL_VERSION
             ))),
         },
         _ = cancel.cancelled() => Err(SpawnError::Cancelled),

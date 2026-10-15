@@ -1012,6 +1012,10 @@ are `null` when the asset never ran; `recent_runs[].error_message` is a string f
 
 ### plan (experimental)
 
+Every plan includes `plan_version: 1`, independent of the package version, worker protocol,
+and metadata database schema. Consumers of persisted plans must reject unsupported plan
+versions; a missing field identifies a legacy, unversioned plan.
+
 `phases[].reason` is `{"type": "initial"}` for the first phase or `{"type": "fan_in", "node_id":
 "<id>"}` for a phase that waits on a node gathering several upstream results. `plan` reads no
 state and takes no `--env`.
@@ -1034,6 +1038,7 @@ The phase/stream layout uses the same pool as execution: available cores, or a p
 | `phases[].streams[].steps` | array | always |
 | `phases[].streams[].steps[]` | string | always |
 | `phases[].streams[].stream_id` | string | always |
+| `plan_version` | integer | always |
 | `total_steps` | integer | always |
 | `warnings` | array | always |
 | `warnings[]` | object | always |

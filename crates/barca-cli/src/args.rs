@@ -166,10 +166,11 @@ Examples:
   barca plan pipeline.py              # phases and steps that would run; nothing executes
   barca plan pipeline.py other.py     # several files form one DAG
 
-Output: always pretty-printed JSON {total_steps, phases: [{reason, streams: [{stream_id, steps}]}],
+Output: always pretty-printed JSON {plan_version, total_steps, phases: [{reason, streams: [{stream_id, steps}]}],
 warnings}. `warnings` is always an array ([] when there are none) of {kind, node, param, message}:
 plan-time warnings such as an input a step never uses, each also one `[barca] warning: ...` line on
 stderr (barca docs assets, \"Unused inputs\").
+`plan_version` is 1: the plan document format, independent of the package and database versions.
 `reason` is an object: {\"type\": \"initial\"} or {\"type\": \"fan_in\", \"node_id\": ...}.
 Planning uses the execution pool size (available cores, or BARCA_POOL_SIZE).
 Parsing is static; partitions(<expression>) evaluates Python while loading its keys.

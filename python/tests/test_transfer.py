@@ -462,6 +462,8 @@ class ProcessHelper:
         finally:
             server.close()
         self.peer.settimeout(30)
+        assert _recv(self.peer) == {"type": "hello", "role": "transfer", "protocol_version": _runtime.PROTOCOL_VERSION}
+        _send(self.peer, {"type": "hello", "role": "coordinator", "protocol_version": _runtime.PROTOCOL_VERSION})
 
     def request(self, msg: dict) -> None:
         _send(self.peer, msg)

@@ -12,6 +12,7 @@ behavior.
 | Python decorator grammar and execution model | [user-api.allium](user-api.allium), [decisions](user-api-decisions.md) | Mixed implemented grammar and design rules; specification 1. Ignored grammar cases and unresolved decisions are aspirations. | [grammar_spec.rs](../crates/barca-core/tests/grammar_spec.rs); runtime acceptance remains in core and Python integration suites |
 | Metadata format compatibility | [metadata-schema.md](metadata-schema.md) | Implemented compatibility policy; database format 1, legacy 0 | [db_schema.rs](../crates/barca-core/src/db_schema.rs), [state_validate.rs](../crates/barca-core/src/state_validate.rs), snapshot/carry tests in [db.rs](../crates/barca-core/src/db.rs) |
 | CLI flags, messages and JSON envelopes | [existing CLI contract](../crates/barca-cli/docs/contract.md) and native help/JSON snapshots | Current implemented contract, existing ownership retained; no separate specification version | [CLI integration tests](../python/tests/test_cli_contract.py), Rust CLI snapshot tests |
+| Worker/transfer socket protocol | [worker-protocol.md](worker-protocol.md) | Draft specification 1 / protocol 3; compact batch profile still outstanding | [protocol tests](../crates/barca-core/src/protocol.rs), [Python/CLI negotiation](../python/tests/test_protocol_handshake.py) |
 
 The existing CLI normative document and snapshots remain in their established locations.
 This inventory does not duplicate or migrate them. Future boundary specifications should

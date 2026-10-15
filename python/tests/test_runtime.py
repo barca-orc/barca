@@ -287,6 +287,19 @@ class TestConnect:
                 server.bind(sock_path)
                 server.listen(1)
 
+                def accept():
+                    peer, _ = server.accept()
+                    try:
+                        header = peer.recv(4)
+                        length = struct.unpack(">I", header)[0]
+                        hello = json.loads(peer.recv(length))
+                        assert hello == {"type": "hello", "role": "worker", "protocol_version": _runtime.PROTOCOL_VERSION}
+                        reply = json.dumps({"type": "hello", "role": "coordinator", "protocol_version": _runtime.PROTOCOL_VERSION}).encode()
+                        peer.sendall(struct.pack(">I", len(reply)) + reply)
+                    finally:
+                        peer.close()
+                thread = threading.Thread(target=accept)
+                thread.start()
                 with patch.dict(os.environ, {"BARCA_SOCKET": sock_path}):
                     conn = _runtime.connect()
                     assert conn is not None
@@ -294,6 +307,8 @@ class TestConnect:
                     conn.close()
                     _runtime._socket = None
 
+                thread.join(5)
+                assert not thread.is_alive()
                 server.close()
         finally:
             _runtime._socket = original_socket

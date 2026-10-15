@@ -351,7 +351,7 @@ def main() -> int:
     # Deaf to Ctrl-C, so this process must notice by itself when the coordinator is gone.
     _lifeline.watch()
     try:
-        sock = _runtime.connect()
+        sock = _runtime.connect(role="transfer")
     except OSError as exc:
         # No socket to connect to. If the coordinator has gone (it failed, or was cancelled,
         # before it ever used this helper) there is nobody to tell: exit without a word.

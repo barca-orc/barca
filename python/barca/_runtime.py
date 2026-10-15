@@ -20,6 +20,8 @@ except ImportError:
 
 # ─── Socket connection ────────────────────────────────────────────────────────
 
+PROTOCOL_VERSION = 3
+
 _socket: socket.socket | None = None
 # Separate locks: whole frames never interleave on either direction, and a
 # thread parked in recv_message never blocks senders (heartbeats, or the
@@ -28,7 +30,7 @@ _send_lock = threading.Lock()
 _recv_lock = threading.Lock()
 
 
-def connect() -> socket.socket | None:
+def connect(role: str = "worker") -> socket.socket | None:
     """Connect to the executor's Unix socket (once per worker process).
     Returns None if not running inside a barca worker.
     """
@@ -41,9 +43,33 @@ def connect() -> socket.socket | None:
         return None
 
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.connect(path)
-    _socket = sock
-    return _socket
+    try:
+        sock.settimeout(10)
+        sock.connect(path)
+        _socket = sock
+        send_message({"type": "hello", "role": role, "protocol_version": PROTOCOL_VERSION})
+        try:
+            reply = recv_message()
+        except (RuntimeError, ValueError) as error:
+            raise RuntimeError(
+                f"invalid coordinator protocol hello: {error}; reinstall barca"
+            ) from error
+        if not isinstance(reply, dict):
+            raise RuntimeError("invalid coordinator protocol hello; reinstall barca")
+        if reply.get("type") == "protocol_error":
+            raise RuntimeError(reply.get("message", "barca protocol mismatch; reinstall barca"))
+        if type(reply.get("protocol_version")) is not int or (reply.get("type"), reply.get("role"), reply.get("protocol_version")) != (
+            "hello", "coordinator", PROTOCOL_VERSION,
+        ):
+            raise RuntimeError(
+                f"coordinator did not acknowledge {role} protocol v{PROTOCOL_VERSION}; reinstall barca"
+            )
+        sock.settimeout(None)
+        return _socket
+    except BaseException:
+        sock.close()
+        _socket = None
+        raise
 
 
 def is_worker() -> bool:
