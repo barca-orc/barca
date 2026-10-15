@@ -257,6 +257,10 @@ An edit in one of these does not change the hash; recompute with `--refresh-all`
 - what a helper refers to only in a decorator, an `except` clause's
   exception type, a `match` pattern, a set literal (`{f()}`), an assignment target
   (`table[key()] = ...`). The helper's own text is hashed, but those
+
+- what a helper refers to only in a decorator, an `except` clause's exception type,
+  a set literal (`{f()}`), an assignment target
+  (`table[key()] = ...`) or a loop's `else:` block. The helper's own text is hashed, but those
   references are not followed. (This is about helper functions. The decorators of a step
   itself are covered by "Which decorator arguments count" above; default argument references
   are followed as described above);
@@ -879,3 +883,7 @@ barca status orders pipeline.py --json                 # last byte-change event 
 Helper references in `for`/`while` `else:` blocks are followed, including inside undecorated
 project helper functions. As with `if` branches, static hashing follows the block even if
 a particular run exits the loop with `break`.
+
+Value, class and mapping-key expressions inside `match` patterns follow project helpers,
+including nested sequence, alternative and capture patterns. Capture names themselves
+are bindings, not reads of an imported value.

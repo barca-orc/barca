@@ -441,3 +441,7 @@ limitations; see `barca docs cache`.
 Project helper references in `for` and `while` `else:` blocks participate in cache hashes,
 including loops inside undecorated helpers. Static hashing follows both the body and the
 `else:` block even when a particular execution uses `break`.
+
+Project values and classes referenced by `match` patterns participate in cache hashes,
+including mapping keys and nested alternatives/sequences. Capture names are bindings,
+not reads of a same-named imported helper.
