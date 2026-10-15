@@ -36,7 +36,7 @@ from typing import Any
 from barca import _storage
 
 _MISSING_TABLE = re.compile(r"Table with name (.+?) does not exist")
-_QUERYABLE = ("parquet", "json")
+_QUERYABLE = ("parquet", "json", "csv")
 DEFAULT_CACHE_DIR = os.path.join(".barca", "sql-cache")
 # Remote artifacts fetched at once.
 MAX_FETCHERS = 8
@@ -62,18 +62,20 @@ def _quote_str(s: str) -> str:
 
 
 def _source(fmt: str, path: str) -> str:
+    if fmt == "csv":
+        return f"read_csv_auto({_quote_str(path)}, header=true)"
     if fmt == "parquet":
         return f"read_parquet({_quote_str(path)})"
     if fmt == "json":
         return f"read_json_auto({_quote_str(path)})"
-    raise ValueError(f"{fmt} artifacts cannot be queried (only parquet and json)")
+    raise ValueError(f"{fmt} artifacts cannot be queried (only parquet, json and csv)")
 
 
 def _register(con, view: dict) -> str | None:
     """Create the view; return why it is unavailable, or None."""
     fmt = view["format"]
     if fmt not in _QUERYABLE:
-        return f"a {fmt} artifact cannot be queried; only parquet and json artifacts can"
+        return f"a {fmt} artifact cannot be queried; only parquet, json and csv artifacts can"
     name = _quote_ident(view["name"])
     if view.get("placeholder"):
         why = f"barca: the remote artifact of {view['name']} was not fetched for this query"
