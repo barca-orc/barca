@@ -240,6 +240,8 @@ Helper references in `for` and `while` `else:` blocks also participate in cache 
 
 Project constants and classes referenced only in `match` patterns also participate in cache hashes.
 
+Decorators on ordinary project helper functions/classes also follow their helper references.
+
 More: `barca docs cache`, which also lists what the run hash does not see (star imports in
 undecorated helpers, installed packages, environment variables not declared with `env=`).
 

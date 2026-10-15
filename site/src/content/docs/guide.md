@@ -445,3 +445,7 @@ including loops inside undecorated helpers. Static hashing follows both the body
 Project values and classes referenced by `match` patterns participate in cache hashes,
 including mapping keys and nested alternatives/sequences. Capture names are bindings,
 not reads of a same-named imported helper.
+
+Decorators on ordinary helper functions and classes follow project references, including
+nested definitions and decorator-factory arguments. Step decorator metadata continues
+to follow the selective rules in `barca docs cache`.

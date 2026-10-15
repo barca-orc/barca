@@ -255,6 +255,8 @@ An edit in one of these does not change the hash; recompute with `--refresh-all`
   (`table[key()] = ...`) or a loop's `else:` block. The helper's own text is hashed, but those
 
 - what a helper refers to only in a decorator, an `except` clause's
+
+- what a helper refers to only in an `except` clause's
   exception type, a `match` pattern, a set literal (`{f()}`), an assignment target
   (`table[key()] = ...`). The helper's own text is hashed, but those
 
@@ -887,3 +889,8 @@ a particular run exits the loop with `break`.
 Value, class and mapping-key expressions inside `match` patterns follow project helpers,
 including nested sequence, alternative and capture patterns. Capture names themselves
 are bindings, not reads of an imported value.
+
+Ordinary helper functions and classes follow names used in their decorators, including
+decorator factories/arguments and nested definitions. Decorators are resolved in the
+enclosing scope before the decorated definition's parameters/class bindings. A step's own
+Barca decorator metadata still follows "Which decorator arguments count" above.

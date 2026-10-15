@@ -28,6 +28,8 @@ and these tags are available on the same releases page.
 - Follow project helper references in `for`/`while` `else:` blocks so edits invalidate affected cached assets.
 
 - Follow project helper values, classes and mapping keys in `match` patterns so edits invalidate affected cached assets.
+
+- Follow project helper references in ordinary function/class decorators, including nested definitions and decorator-factory arguments.
 - Follow project helper references in function and lambda default arguments, including
   nested functions and keyword-only defaults. Editing those helpers now invalidates their
   consumers. Existing affected consumers may recompute once after upgrading.
