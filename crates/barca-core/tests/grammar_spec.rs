@@ -1674,3 +1674,23 @@ fn sensor_inputs_are_left_to_the_dag_error() {
     let src = "from barca import sensor\n\n@sensor(inputs={})\ndef s():\n    return (True, 1)\n";
     assert!(extract_nodes(src, "test.py").is_ok());
 }
+
+#[test]
+fn csv_serializer_on_all_step_kinds_and_sinks() {
+    let src = r#"
+from barca import asset, sensor, task, sink
+@asset(serializer="csv")
+@sink("orders.csv", serializer="csv")
+def orders(): pass
+@sensor(serializer="csv")
+def source(): pass
+@task(serializer="csv")
+def report(): pass
+"#;
+    let nodes = extract_nodes(src, "test.py").unwrap();
+    assert_eq!(nodes.len(), 3);
+    for node in &nodes {
+        assert_eq!(node.artifact_serializer, Some(SerializerKind::Csv));
+    }
+    assert_eq!(nodes[0].sinks[0].serializer, Some(SerializerKind::Csv));
+}

@@ -129,3 +129,119 @@ def test_mutated_module_wrapper_executes_and_invalidates_cache(tmp_path):
     assert changed.returncode == 0, changed.stderr
     assert json.loads(changed.stdout)["steps_executed"] == 1
     assert json.loads(changed.stdout)["final_output"] == 9
+
+
+def test_noncolliding_project_star_import_preserves_nodes_and_groups(tmp_path):
+    (tmp_path / "barca.toml").write_text("")
+    (tmp_path / "shared.py").write_text(
+        "__all__ = ['_MODEL_YEAR']\n_MODEL_YEAR = 2026\n"
+        "raise RuntimeError('planning must not import shared')\n"
+    )
+    (tmp_path / "pipeline.py").write_text(
+        "from barca import asset, group\nfrom shared import *\n"
+        "@asset\ndef foo(): return _MODEL_YEAR\n"
+        "g = group('G', members=[foo], output=foo)\n"
+    )
+    out = invoke(tmp_path, "list", "pipeline.py", "--json")
+    assert out.returncode == 0, out.stderr
+    data = json.loads(out.stdout)
+    assert [node["id"] for node in data["nodes"]] == ["pipeline.py:foo"]
+    groups = invoke(tmp_path, "list", "pipeline.py", "--groups", "--json")
+    assert groups.returncode == 0, groups.stderr
+    assert len(json.loads(groups.stdout)["groups"]) == 1
+
+
+@pytest.mark.parametrize(
+    "exports,expected",
+    [
+        ("__all__ = ['YEAR']", ["foo", "job"]),
+        ("__all__ = ()", ["foo", "job"]),
+        ("__all__: list[str] = ['YEAR']", ["foo", "job"]),
+        ("__all__ = ['asset']", ["job"]),
+        ("__all__ = ['task']", ["foo"]),
+        ("__all__ = ['a']", ["job"]),
+        ("__all__ = ['YEAR']\n__all__.append('asset')", []),
+        ("__all__ = ['YEAR']\n__all__ += ['asset']", []),
+        ("__all__ = make_exports()", []),
+        ("__all__ = ['YEAR']\nif True: __all__ = ['asset']", []),
+        ("__all__ = ['YEAR']\nfrom other import *", []),
+        ("__all__ = ['YEAR']\nfrom builtins import globals as g\ng()['__all__'] = ['asset']", []),
+        ("__all__ = ['YEAR']\nexec('anything')", []),
+        ("__all__ = ['YEAR']\ntry: pass\nexcept Exception as __all__: pass", []),
+        ("__all__ = ['YEAR']\nmatch value:\n    case __all__: pass", []),
+        ("YEAR = 2026", []),
+    ],
+)
+def test_star_exports_only_invalidate_affected_bindings(tmp_path, exports, expected):
+    (tmp_path / "barca.toml").write_text("")
+    (tmp_path / "shared.py").write_text(exports + "\nraise RuntimeError('must not import')\n")
+    # Exercise aliases as well as the canonical export name.
+    alias = "asset as a" if "['a']" in exports else "asset"
+    decorator = "a" if alias.endswith("as a") else "asset"
+    (tmp_path / "pipeline.py").write_text(
+        f"from barca import {alias}, task\nfrom shared import *\n"
+        f"@{decorator}()\ndef foo(): return 1\n"
+        "@task()\ndef job(): return 2\n"
+    )
+    result = invoke(tmp_path, "list", "pipeline.py", "--json")
+    assert result.returncode == 0, result.stderr
+    assert sorted(n["id"].split(":")[-1] for n in json.loads(result.stdout)["nodes"]) == sorted(
+        expected
+    )
+
+
+@pytest.mark.parametrize("import_line", ["from .shared import *", "from pkg.shared import *"])
+def test_package_star_exports_match_worker_import_path(tmp_path, import_line):
+    (tmp_path / "barca.toml").write_text("")
+    package = tmp_path / "pkg"
+    package.mkdir()
+    (package / "__init__.py").write_text("")
+    (package / "shared.py").write_text("__all__ = ['YEAR']\nYEAR = 2026\n")
+    (tmp_path / "shared.py").write_text("__all__ = ['asset']\n")
+    (package / "pipeline.py").write_text(
+        f"from barca import asset\n{import_line}\n@asset()\ndef foo(): return YEAR\n"
+    )
+    listed = invoke(tmp_path, "list", "pkg/pipeline.py", "--json")
+    assert listed.returncode == 0, listed.stderr
+    assert json.loads(listed.stdout)["total"] == 1
+    first = invoke(tmp_path, "get", "foo", "pkg/pipeline.py", "--json")
+    assert first.returncode == 0, first.stderr
+    assert json.loads(first.stdout)["final_output"] == 2026
+    (package / "shared.py").write_text("__all__ = ['YEAR']\nYEAR = 2027\n")
+    again = invoke(tmp_path, "get", "foo", "pkg/pipeline.py", "--json")
+    assert again.returncode == 0, again.stderr
+    assert json.loads(again.stdout)["final_output"] == 2027
+    assert json.loads(again.stdout)["steps_executed"] == 1
+
+
+@pytest.mark.parametrize(
+    "import_line,decorator",
+    [
+        ("from barca import asset as a", "a"),
+        ("import barca as b", "b.asset"),
+    ],
+)
+def test_safe_star_import_retains_argument_validation(tmp_path, import_line, decorator):
+    (tmp_path / "barca.toml").write_text("")
+    (tmp_path / "shared.py").write_text("__all__ = ['YEAR']\nYEAR = 2026\n")
+    (tmp_path / "pipeline.py").write_text(
+        f"{import_line}\nfrom shared import *\n@{decorator}(input={{}})\ndef foo(): return YEAR\n"
+    )
+    result = invoke(tmp_path, "list", "pipeline.py", "--json")
+    assert result.returncode == 2
+    assert "`input` is not an argument" in result.stderr
+
+
+def test_colliding_group_export_leaves_nodes_discoverable(tmp_path):
+    (tmp_path / "barca.toml").write_text("")
+    (tmp_path / "shared.py").write_text("__all__ = ['group']\n")
+    (tmp_path / "pipeline.py").write_text(
+        "from barca import asset, group\nfrom shared import *\n"
+        "@asset()\ndef foo(): return 1\ng = group('G', members=[foo], output=foo)\n"
+    )
+    result = invoke(tmp_path, "list", "pipeline.py", "--json")
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["total"] == 1
+    groups = invoke(tmp_path, "list", "pipeline.py", "--groups", "--json")
+    assert groups.returncode == 0, groups.stderr
+    assert json.loads(groups.stdout)["groups"] == []

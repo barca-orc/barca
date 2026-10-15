@@ -139,8 +139,7 @@ def barca(cwd: Path, *args: str, env: dict | None = None, binary: str | None = N
 
 
 def run_failed_line(proc) -> str:
-    """The greppable `[barca] run failed: ...` line. It comes right before the error, so in JSON
-    mode it is the line before the error envelope (#154), which is always the last stderr line."""
+    """The greppable `[barca] run failed: ...` line ends stderr, after the error envelope."""
     lines = [ln for ln in proc.stderr.strip().splitlines() if ln.startswith("[barca] run failed")]
     assert len(lines) == 1, proc.stderr
     return lines[0]

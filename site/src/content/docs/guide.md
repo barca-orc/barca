@@ -370,7 +370,7 @@ barca get total pipelines/      # read only the files under pipelines/
   asset's run hash covers the definitions it uses from your project's modules. Editing
   `clean`, or anything `clean` calls, re-runs `rows` and what depends on it. Editing another
   function in `helpers.py` re-runs nothing.
-- The standard library, installed packages, modules outside the project root, star imports
+- The standard library, installed packages, modules outside the project root, star imports in undecorated helpers
   and imports built at run time are not followed. After changing one of those, use
   `--refresh`.
 
@@ -413,3 +413,8 @@ recorded and shown by `barca list` and have no effect at run time today.
 - [CLI reference](/reference/cli/) and [Configuration](/reference/config/).
 - [Patterns](/patterns/01-asset-to-asset/) for common shapes and what to avoid.
 - `barca history` and `barca stats <asset>` for past runs and timings.
+
+Decorated pipeline functions with top-level project star imports conservatively hash the
+imported module and its static imports. Literal `__all__` lists/tuples also let discovery
+preserve Barca decorators and groups whose local names are absent from that export set;
+computed or mutated sets remain uncertain. See [decorator discovery](/reference/api/decorators/).

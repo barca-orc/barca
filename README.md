@@ -77,7 +77,7 @@ install SQL support with `uv add 'barca[sql]'`.
 
 ```
 .barca/metadata.db                          run history and the record of what is cached
-.barca/artifacts/<node>/<run_hash>.<ext>    one file per result: .json, .pkl or .parquet
+.barca/artifacts/<node>/<run_hash>.<ext>    one file per result: .json, .pkl, .parquet or .csv
 .barca/envs/<env>/                          the same two, for each --env other than the default
 ```
 
@@ -134,7 +134,7 @@ summary   asset  stale   changed       success 2026-10-07 18:14:53 0.00s  dict (
 1 cached, 1 stale, 0 never run, 0 partial, 0 unknown, 0 always run
 ```
 
-`barca sql` makes every node with a json or parquet result a view named after its
+`barca sql` makes every node with a json, CSV or parquet result a view named after its
 declared `name=`, or its function when unset, so you can inspect data without writing a step
 or a script. Partitioned views include current known keys; removed-key results
 remain in history:
@@ -171,6 +171,10 @@ reference, and `barca docs contract` lists every command, flag, exit code and JS
 each marked stable or experimental.
 
 More: `barca docs status`, `barca docs sql`.
+
+Recomputes also check artifact bytes: if unchanged code and inputs produce a different
+SHA-256 digest, barca warns and sets `steps[].bytes_changed: true`. `barca status` retains
+the last such event. This is a byte comparison; serializer metadata can also differ.
 
 ## Data from outside comes in through a sensor
 
@@ -224,12 +228,14 @@ barca get order_count pipeline.py --refresh-all                   # every asset 
 `--refresh` takes one comma-separated list (`--refresh a,b`). `--no-cache` is a deprecated
 spelling of `--refresh-all`. Do not delete files under `.barca/` to force a recompute.
 
-More: `barca docs cache`, which also lists what the run hash does not see (star imports,
-installed packages, environment variables not declared with `env=`).
+More: `barca docs cache`, which also lists what the run hash does not see (star imports in
+undecorated helpers, installed packages, environment variables not declared with `env=`).
 
 ## Large inputs
 
-A DataFrame, Arrow table or DuckDB relation is stored as parquet. The annotation on the
+A DataFrame, Arrow table or DuckDB relation is stored as parquet by default. Use
+`@asset(serializer="csv")` for CSV artifacts or `@sink("exports/orders.csv")` for a CSV export.
+CSV has a header and no pandas index; readers infer types. The annotation on the
 consuming parameter decides how it is read back:
 
 | Annotation | What is read |
@@ -268,7 +274,8 @@ More: `barca docs big-inputs`, `barca docs types`.
 
 The target comes first, then files or directories. Both are optional: with no files,
 barca reads every `.py` file under the project root that imports barca
-(`barca docs discovery`).
+(`barca docs discovery`). A project star import with a literal `__all__` preserves Barca
+decorator and group bindings when its exports do not collide with their local names.
 
 ```bash
 barca get summary pipeline.py     # an asset and what it depends on
@@ -286,15 +293,18 @@ error (exit 2) that names the right one. `barca pipeline.py` is short for
 | `barca get [target] [files...]` | Get one asset, several (`a,b`), or with no target every asset and sensor. Runs only what is not cached. |
 | `barca run <task> [files...]` | Run a task, or several (`a,b`), and what they depend on. The task always runs. |
 | &nbsp;&nbsp;`get` and `run` flags | `--refresh a,b`, `--no-cascade`, `--refresh-all`, `--dry-run`, `--env <name>`, `--agent` (plain progress lines), `--json`, `--pretty`, `--fields` |
-| `barca list [files...]` | Every definition with its kind, freshness, inputs and declared `env`. `--json`, `--pretty`, `--limit N`, `--all`, `--fields`; `--groups` shows organizational nesting |
-| `barca status [target] [files...]` | Per node: cache state and why, last run, artifact rows and columns. `--sample N`, `--json`, `--pretty`, `--limit N`, `--all`, `--fields`, `--env` |
+| `barca list [files...]` | JSON: every definition; human table: at most 100. Definitions with its kind, freshness, inputs and declared `env`. `--json`, `--pretty`, `--limit N`, `--all`, `--fields`; `--groups` shows organizational nesting |
+| `barca status [target] [files...]` | JSON: every node; human table: at most 100. Per node: cache state and why, last run, artifact rows and columns. `--sample N`, `--json`, `--pretty`, `--limit N`, `--all`, `--fields`, `--env` |
 | `barca sql "<query>" [files...]` | Query cached results with DuckDB (experimental). `--json`, `--pretty`, `--limit N`, `--all`, `--env` |
-| `barca plan [files...]` | The execution plan as JSON (experimental), using the execution pool size. No flags. |
-| `barca history` | Recent runs. `--limit N` (default 10), `--all`, `--json`, `--pretty`, `--fields`, `--env`; `--reconcile RUN_ID` explicitly records a verified-stopped run as interrupted |
+| `barca plan [files...]` | Versioned plan JSON (`plan_version: 1`). The execution plan as JSON (experimental), using the execution pool size. No flags. |
+| `barca history` | Every run in JSON, 10 in a human table. `--limit N`, `--all`, `--json`, `--pretty`, `--fields`, `--env`; `--reconcile RUN_ID` explicitly records a verified-stopped run as interrupted |
 | `barca stats <target> [files...]` | Timing and cache statistics for one asset. `--json`, `--pretty`, `--fields`, `--env` |
 | `barca serve [files...]` | HTTP API, cron scheduler and web UI. `--port N`, `--host IP`, `--watch`, `--no-schedule`, `--timezone`, `--read-only`, `--env` |
 | `barca docs [topic]` | The manual, compiled into the binary. `--all`, `--json`, `--fields` |
 | `barca version` | Print the version (also `barca --version`). |
+
+Failed runs end stderr with the failed step, its first error line and the count of skipped
+downstream nodes. JSON retains the detailed step and target outcomes.
 
 `--fields a,b` keeps only those keys on each item of the JSON output. Every
 `barca <command> --help` ends with runnable examples.

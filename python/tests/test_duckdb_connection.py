@@ -337,7 +337,7 @@ def fail(orders):
                 def reject_write(*args, **kwargs):
                     raise OSError("injected artifact write failure")
 
-                scoped.setattr(_worker, "serialize", reject_write)
+                scoped.setattr(_worker, "serialize_hashed", reject_write)
             ok = _worker._run_daemon_step(step, modules, str(tmp_path / "arts"), lru)
         assert ok == (outcome == "success")
         if ok:

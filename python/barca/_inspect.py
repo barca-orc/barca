@@ -52,6 +52,9 @@ def shape(path: str, fmt: str, sample: int = 0, fields: bool = False) -> dict:
             return {"note": "artifact file not found"}
         if fmt == "parquet":
             return _parquet_shape(path, sample)
+        if fmt == "csv":
+            with open(path, "rb") as f:
+                return _csv_shape(f, sample)
         if fmt == "json":
             with open(path, "rb") as f:
                 return _json_shape(f, sample, fields)
@@ -69,7 +72,7 @@ def shape(path: str, fmt: str, sample: int = 0, fields: bool = False) -> dict:
 
 def _remote_shape(path: str, fmt: str, sample: int, fields: bool = False) -> dict:
     """Shape of an artifact in an object store. Raises; `shape` turns that into a note."""
-    if fmt not in ("parquet", "json", "pickle"):
+    if fmt not in ("parquet", "json", "pickle", "csv"):
         return {"note": f"unknown format '{fmt}'"}
     if fmt == "parquet":
         try:
@@ -104,9 +107,37 @@ def _remote_shape(path: str, fmt: str, sample: int, fields: bool = False) -> dic
         if not type(e).__module__.startswith("pyarrow"):  # the store, not this file's content
             _store_down.setdefault(scheme, f"{type(e).__name__}: {_storage.first_line(e)}")
         raise
+    if fmt == "csv":
+        return _csv_shape(data, sample)
     if fmt == "json":
         return _json_shape(data, sample, fields)
     return {"type": _pickle_type(data)}
+
+
+def _csv_shape(source: IO[bytes], sample: int) -> dict:
+    """CSV cells are text; counting rows streams through the file."""
+    import csv
+
+    text = io.TextIOWrapper(source, encoding="utf-8", newline="")
+    try:
+        reader = csv.DictReader(text)
+        columns = reader.fieldnames or []
+        count = 0
+        rows = []
+        for row in reader:
+            count += 1
+            if len(rows) < sample:
+                rows.append(row)
+        out = {
+            "type": "table",
+            "rows": count,
+            "columns": [{"name": name, "type": "string"} for name in columns],
+        }
+        if sample > 0:
+            out["sample"] = rows
+        return out
+    finally:
+        text.detach()
 
 
 def _mb(n: int) -> str:

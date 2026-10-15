@@ -19,9 +19,7 @@ Options:
           Show the organizational hierarchy (groups are never executable nodes)
 
   -l, --limit <LIMIT>
-          Maximum number of nodes to show, in topological order
-
-          [default: 100]
+          Maximum nodes, in topological order (default: every node in JSON, 100 in a human table)
 
       --all
           Show every node (no limit)
@@ -35,7 +33,7 @@ Options:
           Print help (see a summary with '-h')
 
 Examples:
-  barca list                         # every node in the project (files that import barca)
+  barca list                         # project nodes (human table: at most 100)
   barca list pipelines/              # only files under pipelines/ (trailing / marks a directory)
   barca list .                       # the current directory and below
   barca list pipeline.py             # nodes, including qualified/aliased Barca decorators
@@ -44,7 +42,7 @@ Examples:
   barca list pipeline.py --pretty    # the table, even when piped
   barca list pipeline.py --fields id,inputs   # JSON with only these keys per node
   barca list big.py --limit 20       # first 20 nodes (topological order)
-  barca list big.py --all            # every node (default: at most 100)
+  barca list big.py --all            # every node in the human table (default: at most 100)
   barca list a.py b.py               # several files form one DAG
 
 An ENV column (and `env` in JSON) lists the environment variables each node declares with
@@ -59,4 +57,5 @@ reports the times it will fire at (barca docs scheduling).
 Node ids are relative to the project root (`root` in JSON; barca docs discovery).
 Run this first to confirm barca discovered your nodes. When more nodes exist than are shown,
 JSON says `"truncated": true` with the `total`, and the table prints a note on stderr.
+JSON returns every item unless --limit is given; human tables keep their default bound.
 More: barca docs assets, barca docs agents

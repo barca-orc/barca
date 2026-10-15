@@ -70,32 +70,21 @@ fn load_blocking(
     partial: bool,
 ) -> Result<(Dag, Vec<LoadError>), BarcaError> {
     let mut errors = Vec::new();
-    // Parse every file once.
+    // Read pipeline sources first, so discovery and hashing share the import-path cache.
     let mut sources: Vec<(PathBuf, std::rc::Rc<str>)> = Vec::with_capacity(file_args.len());
     let mut group_declarations = Vec::new();
     let mut nodes_by_file: Vec<Vec<crate::model::ExtractedNode>> = Vec::new();
     for arg in file_args {
         let path = PathBuf::from(arg);
-        let parsed = fs::read_to_string(&path)
-            .map_err(|e| BarcaError::Usage(format!("{}: {e}", path.display())))
-            .and_then(|source| {
-                extract_pipeline(&source, arg).map(|(nodes, groups)| (source, nodes, groups))
-            });
-        let (source, nodes, groups) = match parsed {
-            Ok(parsed) => parsed,
-            Err(error) if partial => {
-                errors.push(LoadError {
-                    file: arg.clone(),
-                    error: error.to_string(),
-                    affected_nodes: Vec::new(),
-                });
-                continue;
-            }
-            Err(error) => return Err(error),
-        };
-        group_declarations.extend(groups);
-        nodes_by_file.push(nodes);
-        sources.push((path, source.into()));
+        match fs::read_to_string(&path) {
+            Ok(source) => sources.push((path, source.into())),
+            Err(error) if partial => errors.push(LoadError {
+                file: arg.clone(),
+                error: error.to_string(),
+                affected_nodes: Vec::new(),
+            }),
+            Err(error) => return Err(BarcaError::Usage(format!("{}: {error}", path.display()))),
+        }
     }
 
     // Dependency cones. The project root is the working directory (the CLI changes into it),
@@ -108,6 +97,25 @@ fn load_blocking(
             .iter()
             .map(|(path, source)| (path.as_path(), source.clone())),
     );
+    for (index, (path, source)) in sources.iter().enumerate() {
+        let file = path.to_string_lossy();
+        let pipeline = cones.pipeline(index);
+        match extract_pipeline(source, &file, |import| pipeline.star_exports(import)) {
+            Ok((nodes, groups)) => {
+                nodes_by_file.push(nodes);
+                group_declarations.extend(groups);
+            }
+            Err(error) if partial => {
+                errors.push(LoadError {
+                    file: file.into_owned(),
+                    error: error.to_string(),
+                    affected_nodes: Vec::new(),
+                });
+                nodes_by_file.push(Vec::new());
+            }
+            Err(error) => return Err(error),
+        }
+    }
     let import_errors = cones.validate_imports(&nodes_by_file);
     if !partial && let Some(error) = import_errors.values().next() {
         return Err(BarcaError::Usage(error.clone()));

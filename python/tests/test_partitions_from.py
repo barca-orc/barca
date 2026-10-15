@@ -254,7 +254,7 @@ def test_partitioned_input_to_unpartitioned_consumer_is_a_usage_error(tmp_path):
         assert "collect(sales)" in proc.stderr, proc.stderr
         assert "partitions_from(sales)" in proc.stderr, proc.stderr
     proc = run(tmp_path, "get", "summary", "p.py", "--json")
-    err = json.loads(proc.stderr.strip().splitlines()[-1])
+    err = json.loads(next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{")))
     assert err["kind"] == "usage" and err["code"] == 2
     assert "collect(sales)" in err["remediation"]
     assert "partitions_from(sales)" in err["remediation"]

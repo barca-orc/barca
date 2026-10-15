@@ -67,3 +67,8 @@ or duration. Unknown-owner history reads remain conservative. CLI behavior belon
 [the CLI contract](../crates/barca-cli/docs/contract.md); executable recovery controls live in
 [test_history_reconcile.py](../python/tests/test_history_reconcile.py). This is a recovery
 operation within format 1, with no schema change.
+
+Materializations also carry `bytes_changed INTEGER DEFAULT 0`, an additive format-1
+column. It records a byte mismatch when inserting a recompute with the same node/run
+hash; legacy rows default to 0. Shared-history carry preserves both `output_hash` and
+`bytes_changed` rather than recomputing the event. See [materialization-digests.md](materialization-digests.md).

@@ -506,7 +506,7 @@ def test_a_failed_run_keeps_exit_1_and_still_carries_the_warnings(tmp_path):
     assert pairs(out["warnings"]) == [REPORT_OTHER]
     assert len(stderr_warnings(proc)) == 1
     # The error envelope is still the last stderr line, and has no warnings in it.
-    envelope = json.loads(proc.stderr.strip().splitlines()[-1])
+    envelope = json.loads(next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{")))
     assert envelope["kind"] == "step_failed" and "warnings" not in envelope
 
     multi = barca(cwd, "run", "publish,fails", "pipeline.py", "--json")

@@ -504,7 +504,7 @@ def test_env_must_be_a_literal_list(binary, tmp_path):
     )
     proc = barca(binary, tmp_path, "list", "pipeline.py")
     assert proc.returncode == 2  # a parse error is a usage error
-    error = json.loads(proc.stderr.strip().splitlines()[-1])["error"]  # JSON when piped
+    error = json.loads(next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{")))["error"]  # JSON when piped
     assert "invalid env=" in error and 'env=["SOURCE_CSV"' in error
 
 

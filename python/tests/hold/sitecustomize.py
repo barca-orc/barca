@@ -19,6 +19,8 @@ Points:
 - ``put``     the transfer helper is about to upload an artifact (``_storage.put_file``)
 - ``get``     the transfer helper is about to download one (``_storage.get_file``); its temp
               file exists already
+- ``consume-input`` before a worker reads the upstream value artifact
+- ``upload-open`` before the transfer helper opens or pins an upload source
 - ``uploaded`` the artifact SDK upload returned, before its receipt reaches the coordinator
 - ``partial-get`` the concrete artifact stage has a flushed prefix of actual SDK bytes,
               before that first write completes; other files and downloads are untouched
@@ -105,6 +107,32 @@ def _install(point: str, directory: Path) -> None:
         wrap("put_file", transferring)
     elif point == "get":
         wrap("get_file", transferring)
+    elif point == "consume-input":
+        from barca import _artifacts
+        real_deserialize = _artifacts.deserialize
+
+        def read_after_hold(path, *args, **kwargs):
+            if _is_worker() and "--value/" in str(path):
+                _hold(point, directory)
+            return real_deserialize(path, *args, **kwargs)
+
+        _artifacts.deserialize = read_after_hold
+    elif point == "upload-open":
+        from barca import _artifacts
+
+        if hasattr(_artifacts, "_pin_file"):
+            real_pin = _artifacts._pin_file
+
+            def pin_after_hold(*args):
+                if transferring():
+                    _hold(point, directory)
+                return real_pin(*args)
+
+            _artifacts._pin_file = pin_after_hold
+        else:
+            # Before #381 the SDK opened the live source directly. Keep the
+            # same event available for differential regression evidence.
+            wrap("put_file", transferring)
     elif point == "uploaded":
         real_put = _storage.put_file
 

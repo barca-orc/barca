@@ -567,7 +567,14 @@ pub fn first_multi_failure(result: &MultiResult) -> Option<crate::BarcaError> {
                 node: t.failed_node.clone().unwrap_or_else(|| name.clone()),
                 message: t.error.clone().unwrap_or_else(|| "unknown error".into()),
                 artifact_dir: None,
-                run: None,
+                run: Some(Box::new(crate::PartialRun {
+                    run_id: result.run_id.clone(),
+                    elapsed_seconds: result.elapsed_seconds,
+                    steps_executed: result.steps_executed,
+                    phases: result.phases,
+                    steps: result.steps.clone(),
+                    warnings: result.warnings.clone(),
+                })),
             },
         )));
     }
@@ -660,36 +667,17 @@ pub fn render_multi(
             );
             for (name, t) in &per_target {
                 let status = t["status"].as_str().unwrap_or("?");
+                if status != "success" {
+                    continue;
+                }
                 line!(rendered, "\n{name}: {status}");
-                match t.get("final_output") {
-                    Some(v) => line!(rendered, "{}", serde_json::to_string_pretty(v).unwrap()),
-                    None => line!(
-                        rendered,
-                        "  failed at {}",
-                        t["failed_node"].as_str().unwrap_or("(did not run)")
-                    ),
+                if let Some(v) = t.get("final_output") {
+                    line!(rendered, "{}", serde_json::to_string_pretty(v).unwrap());
                 }
             }
         }
     }
 
-    if result.any_failed() {
-        for (name, t) in &result.targets {
-            if t.status == "success" {
-                continue;
-            }
-            let at = t
-                .failed_node
-                .as_deref()
-                .map(|s| format!(" (failed step: {s})"))
-                .unwrap_or_default();
-            note!(
-                rendered,
-                "error: target '{name}' failed{at}: {}",
-                t.error.as_deref().unwrap_or("unknown error")
-            );
-        }
-    }
     rendered
 }
 

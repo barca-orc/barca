@@ -168,6 +168,45 @@ macro_rules! trace_point {
         }
     };
 }
+/// Flat PID-owned staging, shared with Python's dead-owner cleanup. One prefix
+/// per run permits concurrent server runs; no live run's files are swept.
+struct UploadSnapshots {
+    prefix: std::path::PathBuf,
+}
+impl UploadSnapshots {
+    fn new(run_id: &str) -> Result<Self, BarcaError> {
+        let prefix = crate::transfer::upload_snapshot_prefix(run_id)?;
+        std::fs::create_dir_all(prefix.parent().expect("snapshot prefix has a parent"))
+            .map_err(|e| BarcaError::Other(format!("create upload staging: {e}")))?;
+        Ok(Self { prefix })
+    }
+}
+impl Drop for UploadSnapshots {
+    fn drop(&mut self) {
+        let Some(parent) = self.prefix.parent() else {
+            return;
+        };
+        let Some(prefix) = self.prefix.file_name() else {
+            return;
+        };
+        if let Ok(entries) = std::fs::read_dir(parent) {
+            for entry in entries.flatten() {
+                if entry
+                    .file_name()
+                    .to_string_lossy()
+                    .trim_start_matches('.')
+                    .starts_with(prefix.to_string_lossy().as_ref())
+                {
+                    std::fs::remove_file(entry.path()).ok();
+                }
+            }
+        }
+        // Keep the empty PID directory while this process lives. Removing it
+        // races another server run that created its guard but has not written
+        // a snapshot yet. Python's existing dead-PID cleanup removes it later.
+    }
+}
+
 struct RunStart {
     trace: Trace,
     cancel: CancellationToken,
@@ -177,6 +216,7 @@ struct RunStart {
     state_sync_on: bool,
     transfer_start: Option<crate::transfer::Launching>,
     pull: Option<Background<Result<(state_sync::Pulled, std::time::Duration), BarcaError>>>,
+    upload_snapshots: Option<UploadSnapshots>,
 }
 impl RunStart {
     fn begin(request: &ExecuteRequest<'_>) -> Result<Self, BarcaError> {
@@ -208,6 +248,10 @@ impl RunStart {
         });
         // Not a task: the helper connects on its own while this function goes on, and the value
         // stops it if this function returns before using it (see `transfer::Launching`).
+        let upload_snapshots = cfg
+            .remote_artifacts()
+            .then(|| UploadSnapshots::new(&run_id))
+            .transpose()?;
         let transfer_start = match cfg.remote_artifacts() {
             true => Some(TransferClient::launch(python, cfg, &run_id)?),
             false => None,
@@ -222,6 +266,7 @@ impl RunStart {
             state_sync_on,
             pull,
             transfer_start,
+            upload_snapshots,
         })
     }
 }
@@ -500,6 +545,10 @@ async fn start_workers(
     // phases so workers keep their interpreter (and imported user modules)
     // warm between phases.
     let io_config = crate::io_loop::IoConfig {
+        upload_snapshot_prefix: started
+            .upload_snapshots
+            .as_ref()
+            .map(|s| s.prefix.to_string_lossy().into_owned()),
         python: python.to_path_buf(),
         pool_size,
         run_id: run_id.clone(),
@@ -949,12 +998,11 @@ fn collect_outputs(
     for (&item_id, artifact_val) in coord.outputs() {
         let item = coord.item(item_id);
         let node_id = item.step_id.display();
-        // Attempts made for this item (dispatch count), keyed by base node
-        // id — how the success-row INSERT looks it up.
-        session.state.all_attempts.insert(
-            crate::StepId::parse(&node_id).base_id().to_string(),
-            item.attempts,
-        );
+        // Attempts belong to this exact lease, including its partition key.
+        session
+            .state
+            .all_attempts
+            .insert(node_id.clone(), item.attempts);
         let oref = dispatch::OutputRef {
             path: artifact_val
                 .get("path")
@@ -1266,7 +1314,7 @@ async fn return_outputs(
     session: &mut RunSession<'_, '_>,
     elapsed: f64,
 ) -> Result<Executed, BarcaError> {
-    let (step_reports, outcomes, final_output) = finalize_outputs(
+    let (mut step_reports, outcomes, final_output) = finalize_outputs(
         &session.prepared.dag,
         &session.prepared.targets,
         &session.prepared.exec_plan,
@@ -1280,6 +1328,18 @@ async fn return_outputs(
         &session.started.cancel,
     )
     .await?;
+
+    let changed =
+        db::changed_bytes_in_run(&session.request.cfg.db_path, &session.started.run_id).await?;
+    for node in &changed {
+        crate::errln!(
+            "[barca] warning: {node} produced different bytes for the same code and inputs; the function is not deterministic"
+        );
+        let base = crate::StepId::parse(node).base_id().to_string();
+        if let Some(report) = step_reports.iter_mut().find(|report| report.id == base) {
+            report.bytes_changed = Some(true);
+        }
+    }
 
     Ok(Executed {
         result: GetResult {
@@ -1420,6 +1480,33 @@ async fn finalize_outputs(
             report.status = Some("skipped".to_string());
             report.reason = Some("upstream_failed".to_string());
             report.detail = Some("a step it depends on failed".to_string());
+        }
+    }
+
+    // Later phases may never have been decided after a single-target failure. Keep
+    // their blocked nodes in the detailed result too, once per base node (as with
+    // merged partition reports), so the human count covers the whole planned cone.
+    let mut reported: std::collections::HashSet<String> =
+        step_reports.iter().map(|s| s.id.clone()).collect();
+    for step in exec_plan
+        .phases
+        .iter()
+        .flat_map(|p| &p.streams)
+        .flat_map(|s| &s.steps)
+    {
+        let base = step.step_id.base_id();
+        if !reported.contains(base)
+            && let Some(up) = blocking_failure(dag, base, failed_bases)
+        {
+            reported.insert(base.to_string());
+            step_reports.push(StepReport {
+                id: base.to_string(),
+                kind: kind_str(dag.get_node(base).map(|n| n.kind())),
+                status: Some("skipped".to_string()),
+                reason: Some("upstream_failed".to_string()),
+                detail: Some(format!("depends on '{}', which failed", short_name(up))),
+                ..Default::default()
+            });
         }
     }
 
@@ -2087,10 +2174,22 @@ async fn dispatch_phase(
                     StepRow::from_artifact(node_id, run_hash, artifact, attempts),
                     at.clone(),
                 );
+                let snapshot = artifact
+                    .get("upload_snapshot")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
+                let source = snapshot.as_deref().unwrap_or(path);
+                let cleanup = snapshot.clone();
                 if let Some(at) = s.client.upload_confirmed(
                     node_id,
                     path,
-                    Box::new(move |receipt| record(receipt.sha256.clone())),
+                    source,
+                    Box::new(move |receipt| {
+                        record(receipt.sha256.clone());
+                        if let Some(path) = cleanup {
+                            std::fs::remove_file(path).ok();
+                        }
+                    }),
                 ) {
                     store_paths.insert(node_id.to_string(), at);
                 }
@@ -2668,6 +2767,27 @@ async fn publish_history(
 }
 #[cfg(test)]
 mod store_tests {
+    #[test]
+    fn upload_snapshot_cleanup_preserves_another_live_runs_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        let a = super::UploadSnapshots {
+            prefix: directory.path().join("upload-a-"),
+        };
+        let b = super::UploadSnapshots {
+            prefix: directory.path().join("upload-b-"),
+        };
+        let owned = directory.path().join("upload-a-source.tmp");
+        let helper_stage = directory.path().join(".upload-a-source.tmp.helper.tmp");
+        std::fs::write(&owned, b"11").unwrap();
+        std::fs::write(&helper_stage, b"11").unwrap();
+        drop(a);
+        assert!(!owned.exists() && !helper_stage.exists());
+        let later = directory.path().join("upload-b-source.tmp");
+        std::fs::write(&later, b"222").unwrap();
+        drop(b);
+        assert!(!later.exists());
+    }
+
     use super::*;
     use crate::cache::{CacheHit, resolve_cache_hit};
     use crate::transfer::ArtifactLayout;

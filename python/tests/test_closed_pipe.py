@@ -265,7 +265,7 @@ def test_a_failed_step_is_still_exit_1(project: Path) -> None:
     proc = run_barca(project, "run", "broken", "pipeline.py", "--json", stdout_closed=True)
     assert_quiet(proc)
     assert proc.returncode == 1
-    envelope = json.loads(proc.stderr.strip().splitlines()[-1])
+    envelope = json.loads(next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{")))
     assert envelope["kind"] == "step_failed"
     assert envelope["node"] == "pipeline.py:broken"
 
@@ -279,7 +279,7 @@ def test_a_usage_error_is_still_exit_2(project: Path) -> None:
     proc = run_barca(project, "get", "nope", "pipeline.py", "--json", stdout_closed=True)
     assert_quiet(proc)
     assert proc.returncode == 2
-    assert json.loads(proc.stderr.strip().splitlines()[-1])["kind"] == "usage"
+    assert json.loads(next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{")))["kind"] == "usage"
 
     proc = run_barca(
         project, "get", "nope", "pipeline.py", "--json", stdout_closed=True, stderr_closed=True

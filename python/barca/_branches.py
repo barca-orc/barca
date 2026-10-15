@@ -18,10 +18,7 @@ a `BranchResultError` raised from `parallel()`: the calling step fails and the r
 (The coordinator used to read the artifacts itself and send the values inline. It could do
 that for JSON only, and every other value reached the caller as `None`, with no error: #285.)
 
-A large value never travels over the socket: the caller reads it from its file. A JSON value
-whose text is a few KB at most (`INLINE_JSON_MAX_CHARS`) is not written to a file at all: the
-branch's worker sends the text `json.dump` would have written, in its report, and the caller
-parses it. A fan-out of thousands of small branches then creates, reads and removes no files.
+All branch results travel by file reference, including small JSON values.
 
 Branch results are files of the run, not artifacts: `.barca/branches/<run>-<pid>/<group>/`,
 one directory per parallel group, written nowhere else and never uploaded. The coordinator
@@ -32,18 +29,6 @@ however it ends, and the directories of runs that were killed when the next run 
 
 import json
 import os
-
-# The largest JSON text a branch's worker sends back in its report instead of writing a file
-# (`small_json`). Larger results, and everything that is not JSON, are files the caller reads.
-INLINE_JSON_MAX_CHARS = 4096
-
-
-def small_json(value) -> str | None:
-    """The text `json.dump` would write for `value` (it is ASCII: one character, one byte),
-    when it is small enough to travel in a message; `None` when it is not."""
-    text = json.dumps(value)
-    return text if len(text) <= INLINE_JSON_MAX_CHARS else None
-
 
 # `error_type` of a branch that finished but whose return value could not be written. No
 # Python class name contains a dot, so no exception raised by user code reports this.
@@ -71,7 +56,7 @@ def unwritable(step: dict, value, exc: BaseException) -> Exception:
 
 def frame_type(value, fmt: str) -> str | None:
     """The reader that gives back the type `value` has, when it was written as parquet."""
-    if fmt != "parquet":
+    if fmt not in ("parquet", "csv"):
         return None
     from barca._artifacts import _frame_kind
 
@@ -83,10 +68,8 @@ def frame_type(value, fmt: str) -> str | None:
 
 def _read(artifact: dict, source_file: str):
     path, fmt = artifact["path"], artifact["format"]
-    text = artifact.get("json")
-    if text is not None:
-        # A small json result: the text the branch's worker would have written to a file.
-        return json.loads(text)
+    if "json" in artifact or not path:
+        raise ValueError("branch results require an artifact file reference; reinstall barca")
     if fmt == "json":
         # What `_artifacts.deserialize` gives for a local json artifact (the same parser on
         # the same bytes; `json.dump` writes ASCII), read with as few calls as it takes: a
@@ -135,9 +118,9 @@ def collect(results: list[dict], items: list[dict]) -> list:
             continue
         artifact = result.get("artifact")
         if artifact is None:
-            # A coordinator from 0.19.0 or earlier: JSON values inline.
-            out.append(result.get("result"))
-            continue
+            raise BranchResultError(
+                "branch results require an artifact file reference; reinstall barca"
+            )
         try:
             out.append(_read(artifact, fn_ref.rpartition(":")[0]))
         except Exception as exc:
