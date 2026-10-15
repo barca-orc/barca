@@ -41,7 +41,7 @@ Options:
       --fields <FIELDS>
           Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones
 
-          [possible values: id, kind, action, status, reason, detail, run_hash, artifact, warning, artifact_mismatch, partitions, env]
+          [possible values: id, kind, action, status, reason, detail, run_hash, artifact, warning, artifact_mismatch, bytes_changed, partitions, env]
 
       --env <ENV>
           Environment name (separates cache/state per environment)
@@ -84,8 +84,9 @@ The target must be a task; use `barca get` for assets. The target comes before t
 `barca run pipeline.py deploy` exits 2 and prints `barca run deploy pipeline.py`. Every usage
 error exits 2 and ends by pointing at `barca list` (with the files you gave, if any).
 No files: barca reads every file in the project that imports barca (barca docs discovery).
-Errors: in JSON mode the last stderr line is one JSON object {error, code, kind, remediation}
+Errors: in JSON mode stderr contains one JSON error object {error, code, kind, remediation}
 (see barca docs agents). Exit 1 step failed, 2 usage error, 3 barca/infra failure, 130 cancelled.
 A raising task, or one that calls sys.exit(), fails the run: exit 1, and the stdout JSON line has
-status "failed" and failed_node.
+status "failed" and failed_node. Stderr ends with the failed step, its first error line,
+and the count of skipped downstream nodes.
 More: barca docs tasks, barca docs cache, barca docs agents

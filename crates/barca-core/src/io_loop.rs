@@ -41,6 +41,7 @@ use crate::protocol::{CoordinatorMessage, ParallelResult, WorkerMessage, read_fr
 // ─── Configuration ───────────────────────────────────────────────────────────
 
 pub struct IoConfig {
+    pub upload_snapshot_prefix: Option<String>,
     pub python: PathBuf,
     pub pool_size: usize,
     pub run_id: String,
@@ -75,6 +76,7 @@ struct WorkerHandle {
     _task: JoinHandle<()>,
     /// Items leased to this worker, in execution order (front = in-flight).
     leases: VecDeque<ItemId>,
+    batch_open: bool,
     /// When the current front lease became the in-flight item (assignment or the previous
     /// completion). Drives the "still running" progress report.
     front_since: std::time::Instant,
@@ -97,11 +99,15 @@ struct FrozenWorker {
     rest: VecDeque<ItemId>,
     /// Whether the worker reads branch results from their artifacts (`Submit::artifact_results`).
     artifact_results: bool,
+    batch_open: bool,
 }
 
 // ─── Events ──────────────────────────────────────────────────────────────────
 
 enum IoEvent {
+    BatchFinished {
+        worker_id: usize,
+    },
     Message {
         worker_id: usize,
         msg: Box<WorkerMessage>,
@@ -133,14 +139,44 @@ async fn worker_io_task(
     mut cmd_rx: mpsc::Receiver<serde_json::Value>,
     event_tx: mpsc::Sender<IoEvent>,
 ) {
+    let mut journal: Option<crate::result_journal::ResultJournal> = None;
     loop {
         tokio::select! {
-            result = read_frame::<_, WorkerMessage>(&mut stream) => {
+            result = read_frame::<_, serde_json::Value>(&mut stream) => {
+                // Drain first on every control frame and on EOF: Submit must see the
+                // correct front lease, and a crash must not replay completed items.
+                if let Some(receipts) = journal.as_mut() {
+                    let Ok(messages) = receipts.read_available() else {
+                        let _ = event_tx.send(IoEvent::Disconnected { worker_id }).await;
+                        break;
+                    };
+                    for msg in messages {
+                        if event_tx.send(IoEvent::Message { worker_id, msg: Box::new(msg) }).await.is_err() { return; }
+                    }
+                }
                 match result {
-                    Ok(Some(msg)) => {
-                        if event_tx.send(IoEvent::Message { worker_id, msg: Box::new(msg) }).await.is_err() {
+                    Ok(Some(frame)) => {
+                        if frame["type"] == "result_checkpoint" { continue; }
+                        let batched = frame["type"] == "results";
+                        let messages = if batched { crate::wire::decode_results(&frame) }
+                            else if matches!(frame["type"].as_str(), Some("step_completed" | "step_error" | "blocked")) { Err("v3 results require a compact result frame".into()) }
+                            else { serde_json::from_value(frame).map(|message| vec![message]).map_err(|e| e.to_string()) };
+                        let Ok(messages) = messages else {
+                            let _ = event_tx.send(IoEvent::Disconnected { worker_id }).await;
                             break;
+                        };
+                        for msg in messages {
+                            let accepted = match journal.as_mut() {
+                                Some(receipts) => receipts.accept(&msg), None => Ok(true),
+                            };
+                            match accepted {
+                                Ok(false) => continue,
+                                Ok(true) => {},
+                                Err(_) => { let _ = event_tx.send(IoEvent::Disconnected { worker_id }).await; return; }
+                            }
+                            if event_tx.send(IoEvent::Message { worker_id, msg: Box::new(msg) }).await.is_err() { return; }
                         }
+                        if batched && journal.take().is_some() && event_tx.send(IoEvent::BatchFinished {worker_id}).await.is_err() { return; }
                     }
                     Ok(None) | Err(_) => {
                         let _ = event_tx.send(IoEvent::Disconnected { worker_id }).await;
@@ -150,7 +186,13 @@ async fn worker_io_task(
             }
             cmd = cmd_rx.recv() => {
                 match cmd {
-                    Some(msg) => {
+                    Some(mut msg) => {
+                        if msg["type"] == "execute_batch" {
+                            match crate::result_journal::ResultJournal::new(&mut msg) {
+                                Ok(receipts) => journal = Some(receipts),
+                                Err(_) => { let _ = event_tx.send(IoEvent::Disconnected { worker_id }).await; break; }
+                            }
+                        }
                         if write_frame(&mut stream, &msg).await.is_err() {
                             let _ = event_tx.send(IoEvent::Disconnected { worker_id }).await;
                             break;
@@ -650,6 +692,7 @@ impl WorkerPool {
                             original_worker_id: worker_id,
                             rest,
                             artifact_results,
+                            batch_open: handle.batch_open,
                         });
 
                         // Assign ready items (children are now in the ready queue)
@@ -672,6 +715,13 @@ impl WorkerPool {
                         }
                     }
                 },
+                IoEvent::BatchFinished { worker_id } => {
+                    if let Some(handle) = self.workers.get_mut(&worker_id) {
+                        handle.batch_open = false;
+                    }
+                    self.resume_frozen(coord).await;
+                    self.assign_ready(coord, cost, cancel).await;
+                }
                 IoEvent::Disconnected { worker_id } => {
                     // Worker crashed — its in-flight item failed; unstarted
                     // leases return to the queue for another worker.
@@ -863,7 +913,7 @@ impl WorkerPool {
             let wid = match self
                 .workers
                 .iter()
-                .find(|(_, w)| w.leases.is_empty())
+                .find(|(_, w)| w.leases.is_empty() && !w.batch_open)
                 .map(|(&id, _)| id)
             {
                 Some(id) => id,
@@ -933,13 +983,13 @@ impl WorkerPool {
 
             let msg = if batch.len() == 1 {
                 let step = self.traced_step(coord.item(batch[0]), coord);
-                serde_json::json!({"type": "execute", "step": step})
+                serde_json::json!({"type": "execute", "step": crate::wire::normalize_step(&step)})
             } else {
                 let steps: Vec<serde_json::Value> = batch
                     .iter()
                     .map(|&iid| self.traced_step(coord.item(iid), coord))
                     .collect();
-                serde_json::json!({"type": "execute_batch", "steps": steps})
+                crate::wire::encode_steps(&steps)
             };
 
             if self.trace_on {
@@ -971,6 +1021,7 @@ impl WorkerPool {
                 }
                 continue;
             }
+            handle.batch_open = batch.len() > 1;
             handle.leases = batch.into_iter().collect();
             handle.front_since = std::time::Instant::now();
         }
@@ -1000,7 +1051,7 @@ impl WorkerPool {
             let Some(idle) = self
                 .workers
                 .iter()
-                .find(|(_, w)| w.leases.is_empty())
+                .find(|(_, w)| w.leases.is_empty() && !w.batch_open)
                 .map(|(&id, _)| id)
             else {
                 return;
@@ -1065,6 +1116,7 @@ impl WorkerPool {
                         // Still executing the parent task, with the rest of its batch
                         // behind it.
                         leases: std::iter::once(fw.parent_item).chain(fw.rest).collect(),
+                        batch_open: fw.batch_open,
                         front_since: std::time::Instant::now(),
                     },
                 );
@@ -1122,6 +1174,12 @@ async fn spawn_worker(
         .stderr(crate::term::child_output())
         .stdin(Stdio::null());
 
+    if let Some(prefix) = &config.upload_snapshot_prefix {
+        cmd.env("BARCA_UPLOAD_SNAPSHOT_PREFIX", prefix);
+    } else {
+        cmd.env_remove("BARCA_UPLOAD_SNAPSHOT_PREFIX");
+    }
+
     // Ctrl-C means something to a worker only while it runs a step. It starts outside the
     // terminal's job, so that one arriving while the interpreter starts is not a traceback,
     // and joins the job once it handles the signal itself.
@@ -1153,11 +1211,15 @@ async fn start_worker(
     let connected = tokio::select! {
         // A connection that is there is taken, whatever else is also true by now.
         biased;
-        accepted = tokio::time::timeout(WORKER_CONNECT_LIMIT, listener.accept()) => match accepted {
-            Ok(Ok((stream, _))) => Ok(stream),
-            Ok(Err(e)) => Err(SpawnError::Failed(format!("accept: {e}"))),
+        accepted = tokio::time::timeout(WORKER_CONNECT_LIMIT, async {
+            let (mut stream, _) = listener.accept().await?;
+            crate::protocol::accept_hello(&mut stream, "worker").await?;
+            Ok::<_, std::io::Error>(stream)
+        }) => match accepted {
+            Ok(Ok(stream)) => Ok(stream),
+            Ok(Err(e)) => Err(SpawnError::Failed(format!("worker {worker_id} connection/protocol: {e}"))),
             Err(_) => Err(SpawnError::Failed(format!(
-                "timeout waiting for worker {worker_id} to connect"
+                "timeout waiting for worker {worker_id} to connect and announce protocol v{}; reinstall barca in this Python environment", crate::protocol::PROTOCOL_VERSION
             ))),
         },
         _ = cancel.cancelled() => Err(SpawnError::Cancelled),
@@ -1194,6 +1256,7 @@ async fn start_worker(
         cmd_tx,
         _task: task,
         leases: VecDeque::new(),
+        batch_open: false,
         front_since: std::time::Instant::now(),
     })
 }
@@ -1349,53 +1412,23 @@ fn branch_result(
             .and_then(|v| v.as_str())
             .filter(|v| !v.is_empty())
     };
-    // A small JSON result came in the branch's report and has no file (`ArtifactRef::json`).
-    let text = artifact
-        .and_then(|a| a.get("json"))
-        .and_then(|v| v.as_str());
-    let Some(format) = field("format") else {
+    if !artifact_results || artifact.is_some_and(|a| a.get("json").is_some()) {
         return ParallelResult::Error {
-            error: "the branch finished but did not report its result".to_string(),
-        };
-    };
-    let path = field("path");
-    if path.is_none() && text.is_none() {
-        return ParallelResult::Error {
-            error: "the branch finished but did not report where its result is".to_string(),
+            error:
+                "branch results require artifact file references in protocol v3; reinstall barca"
+                    .into(),
         };
     }
-    if artifact_results {
-        return ParallelResult::Ok {
-            result: None,
-            artifact: Some(crate::protocol::BranchArtifact {
-                path: path.unwrap_or_default().to_string(),
-                format: format.to_string(),
-                frame_type: field("frame_type").map(str::to_string),
-                json: text.map(str::to_string),
-            }),
+    let (Some(format), Some(path)) = (field("format"), field("path")) else {
+        return ParallelResult::Error {
+            error: "the branch finished but did not report its result file".into(),
         };
-    }
-    let path = path.unwrap_or_default();
-    let inline = if format == "json" {
-        std::fs::read_to_string(path)
-            .map_err(|e| e.to_string())
-            .and_then(|text| {
-                serde_json::from_str::<serde_json::Value>(&text).map_err(|e| e.to_string())
-            })
-    } else {
-        Err(format!("it was written as {format}, not JSON"))
     };
-    match inline {
-        Ok(value) => ParallelResult::Ok {
-            result: Some(value),
-            artifact: None,
-        },
-        Err(why) => ParallelResult::Error {
-            error: format!(
-                "the branch's return value cannot be passed to this worker ({why}). The barca \
-                 Python package this worker runs is older than the barca command; install \
-                 matching versions."
-            ),
+    ParallelResult::Ok {
+        artifact: crate::protocol::BranchArtifact {
+            path: path.to_string(),
+            format: format.to_string(),
+            frame_type: field("frame_type").map(str::to_string),
         },
     }
 }
@@ -1578,29 +1611,11 @@ mod tests {
         );
     }
 
-    /// A small JSON result arrives as text in the branch's report and is passed on exactly
-    /// as it is: nothing here parses it (this text is not JSON a Rust parser accepts, and its
-    /// key order is kept), and there is no file to read.
     #[test]
-    fn a_small_json_branch_result_is_passed_on_as_text_unparsed() {
-        let text = r#"{"b": 1, "a": NaN, "n": 1000000000000000000000000000000}"#;
-        let reported = serde_json::json!({
-            "path": "", "format": "json", "size_bytes": text.len(), "json": text
-        });
-        let ParallelResult::Ok {
-            result: None,
-            artifact: Some(sent),
-        } = branch_result(Ok(Some(&reported)), true)
-        else {
-            panic!("expected an artifact answer");
-        };
-        assert_eq!(sent.json.as_deref(), Some(text));
-        assert_eq!((sent.path.as_str(), sent.format.as_str()), ("", "json"));
-
-        // Neither a path nor a text: an error, not a null.
-        let nothing = serde_json::json!({"path": "", "format": "json", "size_bytes": 0});
+    fn inline_branch_results_are_refused() {
+        let inline = serde_json::json!({"path":"", "format":"json", "size_bytes":3, "json":"123"});
         assert!(matches!(
-            branch_result(Ok(Some(&nothing)), true),
+            branch_result(Ok(Some(&inline)), true),
             ParallelResult::Error { .. }
         ));
     }
@@ -1620,50 +1635,23 @@ mod tests {
             if let Some(t) = frame_type {
                 artifact["frame_type"] = serde_json::json!(t);
             }
-            let ParallelResult::Ok { result, artifact } = branch_result(Ok(Some(&artifact)), true)
-            else {
+            let ParallelResult::Ok { artifact } = branch_result(Ok(Some(&artifact)), true) else {
                 panic!("a finished {format} branch must be ok");
             };
-            assert_eq!(result, None);
             assert_eq!(
                 artifact,
-                Some(crate::protocol::BranchArtifact {
+                crate::protocol::BranchArtifact {
                     path: "/nowhere/branch.out".to_string(),
                     format: format.to_string(),
                     frame_type: frame_type.map(str::to_string),
-                    json: None,
-                })
+                }
             );
         }
     }
 
-    /// A worker from an older Python package gets JSON values inline as before, and an error
-    /// (where it got `None`) for a value that cannot be passed that way.
     #[test]
-    fn a_worker_that_did_not_ask_for_artifacts_gets_json_inline_or_an_error() {
-        let dir = tempfile::tempdir().unwrap();
-        let json = dir.path().join("a.json");
-        std::fs::write(&json, r#"{"i": 1}"#).unwrap();
-        let artifact = serde_json::json!({"path": json.to_str().unwrap(), "format": "json"});
-        let ParallelResult::Ok { result, artifact } = branch_result(Ok(Some(&artifact)), false)
-        else {
-            panic!("a JSON result is passed inline");
-        };
-        assert_eq!(result, Some(serde_json::json!({"i": 1})));
-        assert_eq!(artifact, None);
-
-        let pickle = serde_json::json!({"path": "/nowhere/a.pkl", "format": "pickle"});
-        let ParallelResult::Error { error } = branch_result(Ok(Some(&pickle)), false) else {
-            panic!("a pickled result must not become a silent null");
-        };
-        assert!(
-            error.contains("written as pickle") && error.contains("older than"),
-            "{error}"
-        );
-
-        let nan = dir.path().join("nan.json");
-        std::fs::write(&nan, "NaN").unwrap();
-        let artifact = serde_json::json!({"path": nan.to_str().unwrap(), "format": "json"});
+    fn legacy_inline_requests_are_refused() {
+        let artifact = serde_json::json!({"path":"/a.json", "format":"json", "size_bytes":3});
         assert!(matches!(
             branch_result(Ok(Some(&artifact)), false),
             ParallelResult::Error { .. }
@@ -1957,6 +1945,7 @@ mod tests {
                         cmd_tx,
                         _task: tokio::spawn(async {}),
                         leases: VecDeque::new(),
+                        batch_open: false,
                         front_since: std::time::Instant::now(),
                     },
                 );
@@ -1991,6 +1980,7 @@ mod tests {
 
             let pool = WorkerPool {
                 config: IoConfig {
+                    upload_snapshot_prefix: None,
                     python: PathBuf::from("python3"),
                     pool_size: n,
                     run_id: "test-shutdown".to_string(),

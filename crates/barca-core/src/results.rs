@@ -140,6 +140,9 @@ pub struct StepReport {
     /// and `warning` says which and how to recompute it. Absent otherwise (never `false`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifact_mismatch: Option<bool>,
+    /// This recompute produced different bytes for the same node and run hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes_changed: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub partitions: Option<PartitionSummary>,
     /// Declared env values the step used (`@asset(env=[...])`): name -> value, `null` when unset,
@@ -275,9 +278,13 @@ pub struct ExplainSummary {
     pub unknown: usize,
 }
 
+pub const PLAN_VERSION: u32 = 1;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct PlanResult {
+    /// Version of this plan document, independent of the package/worker/DB versions.
+    pub plan_version: u32,
     pub total_steps: usize,
     pub phases: Vec<PlanPhase>,
     /// Plan-time warnings for the planned steps (`[]` when there are none).

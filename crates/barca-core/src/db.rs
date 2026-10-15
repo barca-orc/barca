@@ -1941,6 +1941,7 @@ pub async fn get_asset_stats(db_path: &str, node_id: &str) -> Result<AssetStats,
 /// One row of `materializations`, as `barca status` reports it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaterializationRecord {
+    pub content_hash: Option<String>,
     /// Exact node id, including the partition suffix for a partitioned step.
     pub node_id: String,
     pub run_hash: Option<String>,
@@ -1954,9 +1955,45 @@ pub struct MaterializationRecord {
     pub created_at: String,
 }
 
+/// The last observed change in bytes for unchanged code and inputs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct BytesChange {
+    pub node_id: String,
+    pub run_hash: String,
+    pub content_hash: String,
+    pub created_at: String,
+}
+
+/// Nodes whose materialization in this run differed from the preceding digest.
+pub(crate) async fn changed_bytes_in_run(
+    db_path: &str,
+    run_id: &str,
+) -> Result<Vec<String>, BarcaError> {
+    let _g = db_guard().await;
+    let (_db, conn) = open_conn(db_path).await?;
+    let mut rows = conn.query(
+        "SELECT node_id FROM materializations INDEXED BY idx_mat_run WHERE run_id = ?1 AND bytes_changed = 1 ORDER BY node_id",
+        [run_id],
+    ).await.map_err(|e| BarcaError::Db(format!("failed to read byte changes: {e}")))?;
+    let mut nodes = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to read byte changes: {e}")))?
+    {
+        nodes.push(
+            row.get::<String>(0)
+                .map_err(|e| BarcaError::Db(format!("failed to read node id: {e}")))?,
+        );
+    }
+    Ok(nodes)
+}
+
 /// What the metadata DB knows about one node (all partition keys of a partitioned node).
 #[derive(Debug, Clone, Default)]
 pub struct NodeHistory {
+    pub last_bytes_change: Option<BytesChange>,
     /// The most recent materialization attempt, successful or not.
     pub latest: Option<MaterializationRecord>,
     /// Whether any attempt ever succeeded.
@@ -1980,7 +2017,7 @@ pub async fn node_histories(
             .query(
                 &format!(
                     "SELECT node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, \
-                     elapsed_seconds, status, error_message, created_at FROM materializations \
+                     elapsed_seconds, status, error_message, created_at, output_hash FROM materializations \
                      WHERE {filter} ORDER BY id DESC LIMIT 1"
                 ),
                 [base.clone(), prefix.clone()],
@@ -1994,6 +2031,7 @@ pub async fn node_histories(
         {
             let opt = |i: usize| row.get::<String>(i).ok().filter(|s| !s.is_empty());
             h.latest = Some(MaterializationRecord {
+                content_hash: opt(9),
                 node_id: row.get::<String>(0).unwrap_or_default(),
                 run_hash: opt(1),
                 artifact_path: opt(2),
@@ -2020,6 +2058,23 @@ pub async fn node_histories(
             .await
             .map_err(|e| BarcaError::Db(format!("failed to read row: {e}")))?
             .is_some();
+        drop(rows);
+        let mut rows = conn.query(
+            &format!("SELECT node_id, run_hash, output_hash, created_at FROM materializations WHERE {filter} AND bytes_changed = 1 ORDER BY id DESC LIMIT 1"),
+            [base.clone(), format!("{base}[")],
+        ).await.map_err(|e| BarcaError::Db(format!("failed to query byte change: {e}")))?;
+        if let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| BarcaError::Db(format!("failed to read byte change: {e}")))?
+        {
+            h.last_bytes_change = Some(BytesChange {
+                node_id: row.get::<String>(0).unwrap_or_default(),
+                run_hash: row.get::<String>(1).unwrap_or_default(),
+                content_hash: row.get::<String>(2).unwrap_or_default(),
+                created_at: row.get::<String>(3).unwrap_or_default(),
+            });
+        }
         out.insert(base.clone(), h);
     }
     Ok(out)

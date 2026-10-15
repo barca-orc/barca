@@ -530,6 +530,16 @@ pub struct PipelineCones<'a> {
 }
 
 impl PipelineCones<'_> {
+    /// Literal project exports, through the worker's import path and shared source cache.
+    pub(crate) fn star_exports(
+        &self,
+        import: &ruff_python_ast::StmtImportFrom,
+    ) -> Option<Vec<String>> {
+        let name = self.module.star_import_module(import)?;
+        let module = self.modules.module(&name)?;
+        module.star_exports()
+    }
+
     /// The cone hash of a top-level function of the file ([`cone::cone_hash`]).
     pub fn hash(&self, function_name: &str) -> String {
         cone::cone_hash(&self.module, function_name, self.modules)

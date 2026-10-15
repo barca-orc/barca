@@ -211,6 +211,15 @@ fn spec_matches_router_paths_and_methods_and_all_schemas_compile() {
     let v = validator(&json!({"$ref":"#/components/schemas/RunState"}));
     assert!(!v.is_valid(&json!({"handle":"r","status":"pending"})));
     assert!(!v.is_valid(&json!({"handle":"r","status":"queued","result":null,"error":null,"started_at":1.0,"finished_at":null})));
+    let step = validator(&json!({"$ref":"#/components/schemas/StepReport"}));
+    assert!(step.is_valid(&json!({"id":"p.py:a", "kind":"asset", "bytes_changed":true})));
+    assert!(!step.is_valid(&json!({"id":"p.py:a", "kind":"asset", "bytes_changed":false})));
+    assert!(!step.is_valid(&json!({"id":"p.py:a", "kind":"asset", "bytes_changed":"true"})));
+    let event = validator(&json!({"$ref":"#/components/schemas/BytesChange"}));
+    assert!(event.is_valid(&json!({"node_id":"p.py:a", "run_hash":"h", "content_hash":"digest", "created_at":"2026-10-15 00:00:00"})));
+    assert!(!event.is_valid(
+        &json!({"node_id":"p.py:a", "run_hash":"h", "created_at":"2026-10-15 00:00:00"})
+    ));
     let health = validator(&json!({"$ref":"#/components/schemas/Health"}));
     assert!(health.is_valid(
         &json!({"status":"ok","version":"1","read_only":false,"scheduler":false,"load_errors":[]})

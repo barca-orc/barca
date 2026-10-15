@@ -2,7 +2,7 @@
 [barca] <n>/<total> steps | done in <secs>s
 [barca] <n>/<total> steps | failed in <secs>s
 [barca] checking artifact store <store>/default/artifacts (timeout <secs>s)
-[barca] run failed: step 'pipeline.py:broken' failed (exit 1)
+[barca] run failed: step 'pipeline.py:broken' failed: ValueError: contract fixture failure; 0 downstream steps skipped (exit 1)
 [barca] step:pipeline.py:broken failed: ValueError: contract fixture failure
 [barca] step:pipeline.py:keys completed <secs>s (<n>/<total>)
 [barca] step:pipeline.py:numbers cached

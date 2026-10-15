@@ -2,7 +2,11 @@
 import type { PlanPhase } from "./PlanPhase";
 import type { PlanWarning } from "./PlanWarning";
 
-export type PlanResult = { total_steps: number, phases: Array<PlanPhase>,
+export type PlanResult = {
+/**
+ * Version of this plan document, independent of the package/worker/DB versions.
+ */
+plan_version: number, total_steps: number, phases: Array<PlanPhase>,
 /**
  * Plan-time warnings for the planned steps (`[]` when there are none).
  */

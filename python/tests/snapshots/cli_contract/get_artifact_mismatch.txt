@@ -8,6 +8,7 @@ steps : array
 steps[] : object
 steps[].artifact : string  (optional)
 steps[].artifact_mismatch : boolean  (optional)
+steps[].bytes_changed : boolean  (optional)
 steps[].detail : string  (optional)
 steps[].id : string
 steps[].kind : string

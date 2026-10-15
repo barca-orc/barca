@@ -59,3 +59,8 @@ snapshot and older-schema migration tests remain part of the acceptance suite.
 Process protocol handshakes, plan JSON versioning and wire/batch conformance are
 separate slices of issue #82. This change does not complete that entire issue or
 merge the earlier destructive-reset proposal in PR #258.
+
+Materializations also carry `bytes_changed INTEGER DEFAULT 0`, an additive format-1
+column. It records a byte mismatch when inserting a recompute with the same node/run
+hash; legacy rows default to 0. Shared-history carry preserves both `output_hash` and
+`bytes_changed` rather than recomputing the event. See [materialization-digests.md](materialization-digests.md).

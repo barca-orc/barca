@@ -43,7 +43,7 @@ Options:
       --fields <FIELDS>
           Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones
 
-          [possible values: id, kind, action, status, reason, detail, run_hash, artifact, warning, artifact_mismatch, partitions, env]
+          [possible values: id, kind, action, status, reason, detail, run_hash, artifact, warning, artifact_mismatch, bytes_changed, partitions, env]
 
       --env <ENV>
           Environment name (separates cache/state per environment)
@@ -60,6 +60,7 @@ Examples:
   barca get total pipeline.py              # one target and only its upstream cone
   barca get total,orders pipeline.py       # several targets in one run; shared upstream runs once
   barca get total pipeline.py other.py     # target defined across several files
+  barca get orders pipeline.py --refresh orders --json  # check recomputed artifact bytes
   barca get total pipeline.py --refresh-all        # recompute everything in that cone
   barca get total pipeline.py --refresh clean      # recompute clean and everything downstream of it
   barca get total pipeline.py --refresh clean --no-cascade   # recompute only clean
@@ -81,7 +82,7 @@ secrets redacted). `warnings` is always an array: plan-time warnings for the ste
 planned, [] when there are none; each is {kind, node, param, message} and is also one
 `[barca] warning: ...` line on stderr. The only kind is unused_input: a step declares an input its
 function never uses (barca docs assets, "Unused inputs"). Warnings never change the exit code.
---dry-run reports the same list. For parquet/pickle assets final_output is a pointer,
+--dry-run reports the same list. For parquet/CSV/pickle assets final_output is a pointer,
 {"_barca_artifact": {"path", "format", "size_bytes"}}; the Python API (barca.get)
 loads the value for you.
 Several targets (`a,b`, comma-separated, no spaces): final_output is replaced by `targets`, keyed by
@@ -102,9 +103,10 @@ sensor and skips tasks (previously it ran tasks too); stderr names the skipped t
 `barca run` command. A file with only tasks gets nothing: exit 0, empty `steps`.
 The target comes before the files: `barca get pipeline.py total` exits 2 and prints
 `barca get total pipeline.py`.
-Errors: in JSON mode the last stderr line is one JSON object {error, code, kind, remediation},
+Errors: in JSON mode stderr contains one JSON error object {error, code, kind, remediation},
 plus node, traceback and artifact_dir when a step failed. Exit 1 step failed, 2 usage error,
 3 barca/infra failure, 130 cancelled. A failed step still prints a stdout result line with
-status "failed" and failed_node.
+status "failed" and failed_node. Stderr ends with the failed step, its first error line,
+and the count of skipped downstream nodes.
 A required history-write failure exits 3 and preserves previously committed history.
 More: barca docs cache, barca docs types, barca docs agents

@@ -110,24 +110,62 @@ pub fn discover(
 }
 
 fn walk(root: &Path, dir: &Path, out: &mut Vec<String>, apply_excludes: bool) {
+    let Ok(resolved_root) = root.canonicalize() else {
+        return;
+    };
+    walk_inner(
+        root,
+        &resolved_root,
+        dir,
+        out,
+        apply_excludes,
+        &mut Vec::new(),
+    );
+}
+
+fn walk_inner(
+    root: &Path,
+    resolved_root: &Path,
+    dir: &Path,
+    out: &mut Vec<String>,
+    apply_excludes: bool,
+    ancestors: &mut Vec<PathBuf>,
+) {
+    let Ok(resolved_dir) = root.join(dir).canonicalize() else {
+        return;
+    };
+    if ancestors.contains(&resolved_dir) {
+        return;
+    }
     let Ok(entries) = std::fs::read_dir(root.join(dir)) else {
         return;
     };
+    ancestors.push(resolved_dir);
     let mut entries: Vec<_> = entries.flatten().collect();
     entries.sort_by_key(|e| e.file_name());
     for entry in entries {
         let path = dir.join(entry.file_name());
         let name = entry.file_name().to_string_lossy().to_string();
         let Ok(ft) = entry.file_type() else { continue };
-        if ft.is_dir() {
+        let linked_dir = ft.is_symlink() && entry.path().is_dir();
+        if linked_dir
+            && !entry
+                .path()
+                .canonicalize()
+                .is_ok_and(|p| p.starts_with(resolved_root))
+        {
+            continue;
+        }
+        if ft.is_dir() || linked_dir {
             if apply_excludes && excluded_dir(&name) {
                 continue;
             }
-            walk(root, &path, out, apply_excludes);
+            walk_inner(root, resolved_root, &path, out, apply_excludes, ancestors);
         } else if name.ends_with(".py") && !(apply_excludes && excluded_file(&name)) {
             out.push(slash(&path));
         }
     }
+    ancestors.pop();
 }
 
 /// `./a/b.py` -> `a/b.py`, with `/` separators.
@@ -288,5 +326,68 @@ mod tests {
             discover(r, &[], &DiscoveryToml::default()).unwrap_err()
         });
         assert!(matches!(err, BarcaError::Usage(m) if m.contains("no @asset")));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn directory_links_follow_in_root_targets_with_patterns_and_excludes() {
+        use std::os::unix::fs::symlink;
+        in_tree(&[("tests/stage.py", B), ("tests/test_hidden.py", B)], |r| {
+            symlink("tests", r.join("pipeline")).unwrap();
+            assert_eq!(
+                discover(r, &[], &DiscoveryToml::default()).unwrap(),
+                vec!["pipeline/stage.py"]
+            );
+            for pattern in ["pipeline/stage.py", "pipeline/**/*.py"] {
+                let cfg = DiscoveryToml {
+                    include: Some(vec![pattern.into()]),
+                    exclude: None,
+                };
+                let got = discover(r, &[], &cfg).unwrap();
+                assert!(got.contains(&"pipeline/stage.py".into()));
+            }
+            let cfg = DiscoveryToml {
+                include: Some(vec!["pipeline/**".into()]),
+                exclude: Some(vec!["pipeline/test_hidden.py".into()]),
+            };
+            assert_eq!(discover(r, &[], &cfg).unwrap(), vec!["pipeline/stage.py"]);
+            assert_eq!(
+                discover(r, &["pipeline".into()], &DiscoveryToml::default()).unwrap(),
+                vec!["pipeline/stage.py"]
+            );
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_links_skip_escapes_and_cycles_but_explicit_files_still_work() {
+        use std::os::unix::fs::symlink;
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("stage.py"), B).unwrap();
+        in_tree(&[("p/stage.py", B)], |r| {
+            symlink(outside.path(), r.join("external")).unwrap();
+            symlink("missing", r.join("dangling")).unwrap();
+            symlink("..", r.join("p/loop")).unwrap();
+            symlink(".", r.join("self")).unwrap();
+            symlink(outside.path().join("stage.py"), r.join("linked.py")).unwrap();
+            let cfg = DiscoveryToml {
+                include: Some(vec!["**/*.py".into()]),
+                exclude: None,
+            };
+            assert_eq!(
+                discover(r, &[], &cfg).unwrap(),
+                vec!["linked.py", "p/stage.py"]
+            );
+            assert_eq!(
+                discover(r, &["external/stage.py".into()], &cfg).unwrap(),
+                vec!["external/stage.py"]
+            );
+            // A symlinked checkout root is resolved before applying the boundary.
+            let alias = outside.path().join("project");
+            symlink(r, &alias).unwrap();
+            assert_eq!(
+                discover(&alias, &[], &cfg).unwrap(),
+                vec!["linked.py", "p/stage.py"]
+            );
+        });
     }
 }
