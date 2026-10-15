@@ -1068,10 +1068,12 @@ impl<'p> UseCollector<'p> {
                 self.expr(&s.iter);
                 self.target(&s.target);
                 self.stmts(&s.body);
+                self.stmts(&s.orelse);
             }
             Stmt::While(s) => {
                 self.expr(&s.test);
                 self.stmts(&s.body);
+                self.stmts(&s.orelse);
             }
             Stmt::With(s) => {
                 for item in &s.items {
@@ -2211,6 +2213,32 @@ def my_asset():
             hash_of(literal, &project(1), &[]),
             hash_of(literal, &project(2), &[])
         );
+    }
+
+    #[test]
+    fn loop_else_blocks_follow_project_helpers() {
+        for (prefix, loop_header) in [
+            ("def", "for _ in ()"),
+            ("def", "while False"),
+            ("async def", "async for _ in source()"),
+            ("def", "for _ in [1]"),
+        ] {
+            for import in ["import helpers\n", ""] {
+                let local = if import.is_empty() {
+                    "    import helpers\n"
+                } else {
+                    ""
+                };
+                let entry = format!(
+                    "{import}\n{prefix} my_asset():\n{local}    {loop_header}:\n        break\n    else:\n        return helpers.compute()\n    return 0\n"
+                );
+                assert_ne!(
+                    hash_of(&entry, &one("helpers", HELPERS_V1), &[]),
+                    hash_of(&entry, &one("helpers", HELPERS_V2), &[]),
+                    "{entry}"
+                );
+            }
+        }
     }
 
     // ─── Known limitations, as `barca docs cache` lists them ─────────────────────

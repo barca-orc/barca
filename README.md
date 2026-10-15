@@ -236,6 +236,8 @@ all assets to recompute. Do not delete files under `.barca/` to force a recomput
 Evaluated assignment receivers and indices (for example `table[key()] = value`) also
 follow project helpers, including targets in loops, context managers and comprehensions.
 
+Helper references in `for` and `while` `else:` blocks also participate in cache hashes.
+
 More: `barca docs cache`, which also lists what the run hash does not see (star imports in
 undecorated helpers, installed packages, environment variables not declared with `env=`).
 

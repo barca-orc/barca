@@ -437,3 +437,7 @@ Assignment receivers and indices such as `table[key()] = value` follow project h
 including annotated/unpacked/chained targets and targets in loops, context managers and
 comprehensions. Module-level tuple/augmented constants and loop `else:` remain separate
 limitations; see `barca docs cache`.
+
+Project helper references in `for` and `while` `else:` blocks participate in cache hashes,
+including loops inside undecorated helpers. Static hashing follows both the body and the
+`else:` block even when a particular execution uses `break`.
