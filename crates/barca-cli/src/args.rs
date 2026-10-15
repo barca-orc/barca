@@ -181,7 +181,7 @@ More: barca docs agents";
 
 const HISTORY_HELP: &str = "\
 Examples:
-  barca history                # last 10 runs: a table in a terminal, JSON when piped
+  barca history                # last 10 in a terminal, every run as JSON when piped
   barca history -l 25          # last 25
   barca history --all          # every recorded run
   barca history --json         # {runs: [...], total, truncated, hint?}, even in a terminal
@@ -192,6 +192,7 @@ Examples:
 Newest first. When more runs exist than are shown, JSON says `\"truncated\": true` with the
 `total`, and the table prints a one-line note on stderr. In JSON, `files` is an array: the .py
 files the run was given.
+JSON returns every item unless --limit is given; human tables keep their default bound.
 More: barca docs agents, barca docs cache";
 
 const STATS_HELP: &str = "\
@@ -227,7 +228,7 @@ More: barca docs scheduling";
 
 const LIST_HELP: &str = "\
 Examples:
-  barca list                         # every node in the project (files that import barca)
+  barca list                         # project nodes (human table: at most 100)
   barca list pipelines/              # only files under pipelines/ (trailing / marks a directory)
   barca list .                       # the current directory and below
   barca list pipeline.py             # nodes, including qualified/aliased Barca decorators
@@ -236,7 +237,7 @@ Examples:
   barca list pipeline.py --pretty    # the table, even when piped
   barca list pipeline.py --fields id,inputs   # JSON with only these keys per node
   barca list big.py --limit 20       # first 20 nodes (topological order)
-  barca list big.py --all            # every node (default: at most 100)
+  barca list big.py --all            # every node in the human table (default: at most 100)
   barca list a.py b.py               # several files form one DAG
 
 An ENV column (and `env` in JSON) lists the environment variables each node declares with
@@ -251,6 +252,7 @@ reports the times it will fire at (barca docs scheduling).
 Node ids are relative to the project root (`root` in JSON; barca docs discovery).
 Run this first to confirm barca discovered your nodes. When more nodes exist than are shown,
 JSON says `\"truncated\": true` with the `total`, and the table prints a note on stderr.
+JSON returns every item unless --limit is given; human tables keep their default bound.
 More: barca docs assets, barca docs agents";
 
 const STATUS_HELP: &str = "\
@@ -262,7 +264,7 @@ Examples:
   barca status pipeline.py --json          # {target, targets, nodes, summary, total, truncated, root}, even in a terminal
   barca status pipeline.py --pretty        # the table, even when piped
   barca status pipeline.py --fields id,cache   # JSON with only these keys per node
-  barca status big.py --limit 20           # first 20 nodes (default: at most 100); the summary counts all
+  barca status big.py --limit 20           # first 20 nodes; the summary counts all
   barca status total pipeline.py --json --sample 5   # add up to 5 sample rows per json/parquet artifact
   barca status pipeline.py --env dev       # state recorded in another environment
 
@@ -276,6 +278,7 @@ may import the source to resolve keys. Shape (rows, columns, type) is read from 
 artifact file only. With remote storage it is read from the bucket: a parquet footer by ranged
 requests, json and pickle by a download of up to 16 MB (larger ones get a `note`). A store that
 cannot be reached is a `note` on each shape, not a failed command.
+JSON returns every item unless --limit is given; human tables keep their default bound.
 More: barca docs status, barca docs agents";
 
 const SQL_HELP: &str = "\
@@ -441,9 +444,9 @@ pub(crate) enum Cli {
     /// Show recent run history
     #[command(after_help = HISTORY_HELP)]
     History {
-        /// Number of recent runs to show
-        #[arg(short, long, default_value = "10")]
-        limit: usize,
+        /// Maximum recent runs (default: every run in JSON, 10 in a human table)
+        #[arg(short, long)]
+        limit: Option<usize>,
         /// Show every recorded run (no limit)
         #[arg(long, conflicts_with = "limit")]
         all: bool,
@@ -518,9 +521,9 @@ pub(crate) enum Cli {
         /// Show the organizational hierarchy (groups are never executable nodes)
         #[arg(long, conflicts_with_all = ["limit", "all", "fields"])]
         groups: bool,
-        /// Maximum number of nodes to show, in topological order
-        #[arg(short, long, default_value_t = bounded::LIST_DEFAULT_LIMIT)]
-        limit: usize,
+        /// Maximum nodes, in topological order (default: every node in JSON, 100 in a human table)
+        #[arg(short, long)]
+        limit: Option<usize>,
         /// Show every node (no limit)
         #[arg(long, conflicts_with = "limit")]
         all: bool,
@@ -542,9 +545,9 @@ pub(crate) enum Cli {
         args: Vec<String>,
         #[command(flatten)]
         format: FormatFlags,
-        /// Maximum number of nodes to show, in topological order
-        #[arg(short, long, default_value_t = bounded::LIST_DEFAULT_LIMIT)]
-        limit: usize,
+        /// Maximum nodes, in topological order (default: every node in JSON, 100 in a human table)
+        #[arg(short, long)]
+        limit: Option<usize>,
         /// Show every node (no limit)
         #[arg(long, conflicts_with = "limit")]
         all: bool,
