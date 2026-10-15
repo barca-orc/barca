@@ -222,7 +222,8 @@ An edit in one of these does not change the hash; recompute with `--refresh-all`
 - imports built at run time: `importlib.import_module(name)`, `__import__(name)`, and
   `getattr` on anything but a module barca can see imported. Static analysis cannot follow
   these, and barca does not run your code to plan;
-- `from helpers import *`, and names a module defines dynamically or inside other module-level
+- Star imports inside undecorated helper functions/modules, and names a module defines
+  dynamically or inside other module-level
   control flow such as a `for`, `while`, `with` or `match` (module-level `if` and `try` bindings
   are covered conservatively above);
 - module-level constants bound by tuple unpacking (`A, B = 1, 2`), and augmented assignments to
@@ -791,3 +792,7 @@ barca plan pipeline.py          # what would run, in phases, without running it
 
 `steps_executed` in `barca get`'s JSON output is the number of steps that actually ran; a fully
 cached second run reports 0 for assets.
+
+A decorated pipeline function in a file with a top-level project star import conservatively
+hashes the imported module and its static imports. Editing any part of that module can
+invalidate the node; this preserves cache safety when discovery proves its literal `__all__`.

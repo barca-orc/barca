@@ -85,16 +85,20 @@ Rename `input` to `inputs`, or remove it. See `barca docs assets`.
   the pipeline. Only the first such argument in a file is reported.
 - Importing the module (`python pipeline.py`) raises
   `TypeError: asset() got an unexpected keyword argument 'after'`.
-- Not checked: a decorator or helper that is not positively barca's. A name is checked only
-  when `from barca import <name>` (or `from barca import *`) stands at the top level of the
-  module and nothing else binds the name at module level (an assignment such as
-  `task = app.task`, a `def` or `class`, another import, also inside `try:` or `if`, a loop or
-  `with` target, `global`, a later `from other import *`). Celery's or Prefect's
-  `@task(bind=True)` is left alone. Also not checked: the values of the arguments (an `inputs=`
-  that is not a dict literal is still read as "no inputs"), and `parallel()` and
-  `parallel_map()`.
-- `import barca as b` with `@b.asset(...)` and `from barca import asset as a` with `@a(...)`
-  are not read as nodes at all, so nothing is checked there and `barca list` shows nothing.
+- Qualified and aliased top-level Barca imports are checked. Foreign imports and explicit
+  rebinding disable recognition of the affected name. A later star import disables it only
+  when the export set is unknown or includes that local name. Namespace reflection retains
+  conservative discovery but disables argument checks. Argument values and task-body
+  `parallel()` / `parallel_map()` calls are not checked here.
+
+A later `from shared import *` preserves imported Barca names when the project module has
+one literal `__all__` list or tuple of strings, with no other references to `__all__`,
+that does not export those local names.
+Only colliding names lose recognition, including imported aliases and `group`. Barca uses
+the same package and sibling import paths as its workers and reads the source without
+importing it. Missing, computed, conditional or mutated export sets, installed modules and
+namespace reflection remain uncertain; put the Barca import last or use explicit imports.
+Star-import dependency hashing remains conservative.
 
 ## @asset
 

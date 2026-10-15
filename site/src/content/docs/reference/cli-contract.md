@@ -1010,6 +1010,14 @@ history/progress and run state; captured output is written separately afterward.
 `id` is the node id (`file.py:name`), the same key every other command uses. The timing fields
 are `null` when the asset never ran; `recent_runs[].error_message` is a string for failed runs.
 
+
+### Project star-import discovery
+
+A later project star import preserves imported Barca bindings absent from its single literal
+`__all__` list/tuple with no other references to `__all__`. Colliding local names lose recognition; unknown, computed, mutated and
+reflective export sets keep the conservative fallback. Source inspection does not import
+user modules. This changes discovery and argument validation, with no new flags or JSON keys.
+
 ### plan (experimental)
 
 `phases[].reason` is `{"type": "initial"}` for the first phase or `{"type": "fan_in", "node_id":
