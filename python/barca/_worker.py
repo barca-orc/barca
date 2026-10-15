@@ -47,16 +47,15 @@ _EXT_FORMATS = {
 
 
 class _LineEmitter(io.TextIOBase):
-    """A stdout proxy that streams complete lines to the coordinator as they
-    are written, so user `print()` output shows up live in the UI — while still
-    passing the text through to the real stdout, preserving the terminal
-    behaviour CLI users expect. Buffers a partial trailing line until the next
-    newline or an explicit flush."""
+    """Capture Python stdout as complete node-attributed metadata lines.
+
+    The coordinator owns display policy; this stream never writes user text directly
+    to the worker's inherited descriptors. Partial lines flush on return or failure.
+    """
 
     def __init__(self, node_id):
         self.node_id = node_id
         self._buf = ""
-        # The real stdout, captured before redirect_stdout swaps sys.stdout.
         # The coordinator renders this metadata event; user stdout never bypasses it.
 
     def write(self, s):
@@ -69,9 +68,9 @@ class _LineEmitter(io.TextIOBase):
         return len(s)
 
     def flush(self):
-        from barca import _runtime
+        if self._buf and not sys.is_finalizing():
+            from barca import _runtime
 
-        if self._buf:
             _runtime.emit_log(self.node_id, self._buf)
             self._buf = ""
 

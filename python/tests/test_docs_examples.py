@@ -504,7 +504,9 @@ def test_env_must_be_a_literal_list(binary, tmp_path):
     )
     proc = barca(binary, tmp_path, "list", "pipeline.py")
     assert proc.returncode == 2  # a parse error is a usage error
-    error = json.loads(next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{")))["error"]  # JSON when piped
+    error = json.loads(
+        next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{"))
+    )["error"]  # JSON when piped
     assert "invalid env=" in error and 'env=["SOURCE_CSV"' in error
 
 
@@ -517,7 +519,9 @@ def test_tasks_topic_example(binary, topics, tmp_path):
 
     # send_email receives the report: the asset runs, then the task.
     first = barca(binary, tmp_path, "run", "send_email", "pipeline.py")
-    assert "sending report with 42 rows" in first.stderr  # a step's print goes to stderr
+    assert "sending report with 42 rows" not in first.stderr
+    recorded = barca(binary, tmp_path, "logs", result(first)["run_id"], "--json")
+    assert any(row["line"] == "sending report with 42 rows" for row in json.loads(recorded.stdout))
     assert {k: v["status"] for k, v in steps(result(first)).items()} == {
         "report": "ran",
         "send_email": "ran",
@@ -540,7 +544,9 @@ def test_tasks_topic_example(binary, topics, tmp_path):
     # notify runs after migrate; `_migrate` is ordering only and receives None.
     notify = barca(binary, tmp_path, "run", "notify", "pipeline.py")
     assert set(steps(result(notify))) == {"migrate", "notify"}
-    assert notify.stderr.index("migrating") < notify.stderr.index("migration done")
+    recorded = barca(binary, tmp_path, "logs", result(notify)["run_id"], "--json")
+    lines = [row["line"] for row in json.loads(recorded.stdout)]
+    assert lines.index("migrating") < lines.index("migration done")
 
     # get on a task is an error; a bare get never runs tasks and says how to run them.
     wrong = barca(binary, tmp_path, "get", "send_email", "pipeline.py")

@@ -15,6 +15,7 @@ behavior.
 | Artifact formats and CSV outputs | [artifact-formats.md](artifact-formats.md) | Implemented; specification 1 | [CSV conformance](../python/tests/test_csv_outputs.py), [decorator grammar](../crates/barca-core/tests/grammar_spec.rs) |
 | Artifact upload ownership and receipts | [artifact-upload-receipts.md](artifact-upload-receipts.md) | Implemented; specification 1 | [controlled overlaps](../python/tests/test_upload_snapshot_receipts.py), [cancellation/crash lifecycle](../python/tests/test_remote_cancel.py), transfer and persistence Rust tests |
 | Metadata format compatibility | [metadata-schema.md](metadata-schema.md) | Implemented compatibility policy; database format 1, legacy 0 | [db_schema.rs](../crates/barca-core/src/db_schema.rs), [state_validate.rs](../crates/barca-core/src/state_validate.rs), snapshot/carry tests in [db.rs](../crates/barca-core/src/db.rs) |
+| Task results and recorded stdout | [task-output.md](task-output.md) | Implemented; specification 1 | [Task/stdout conformance](../python/tests/test_task_logs.py), CLI snapshots and Rust log persistence tests |
 | CLI flags, messages and JSON envelopes | [existing CLI contract](../crates/barca-cli/docs/contract.md) and native help/JSON snapshots | Current implemented contract, existing ownership retained; no separate specification version | [CLI integration tests](../python/tests/test_cli_contract.py), Rust CLI snapshot tests |
 
 The existing CLI normative document and snapshots remain in their established locations.

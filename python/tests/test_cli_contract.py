@@ -67,6 +67,7 @@ def keys(parts: list) -> list:
 # that plan `report` show a filled `warnings` array and the others an empty one.
 @task(inputs={"t": total, "rows": numbers})
 def report(t: dict, rows: list) -> dict:
+    print("task output")
     return {"reported": t["total"]}
 
 
@@ -145,6 +146,7 @@ def summary(t: dict, side: int) -> dict:
 MISMATCH_ARGV = ["get", "summary", "pipeline.py", "--refresh", "total", "--json"]
 SETUP_CASES: list[tuple[str, list[str], str, int]] = [
     ("get_artifact_mismatch", MISMATCH_ARGV, "stdout", 0),
+    ("logs", ["logs", "RUN_ID", "--step", "report", "--json"], "stdout", 0),
     (
         "get_bytes_changed",
         ["get", "value", "pipeline.py", "--refresh", "value", "--json"],
@@ -328,6 +330,13 @@ def runs(tmp_path_factory) -> dict:
         s = schema(doc)
         out[case] = (s, render_snapshot(argv, stream, code, s), proc)
 
+    run_id = json.loads(out["run_multi_target_failed"][2].stdout)["run_id"]
+    logs_argv = ["logs", run_id, "--step", "report", "--json"]
+    proc = barca(logs_argv)
+    assert proc.returncode == 0, proc.stderr
+    s = schema(json.loads(proc.stdout))
+    out["logs"] = (s, render_snapshot(SETUP_CASES[1][1], "stdout", 0, s), proc)
+
     digest_case = tmp_path_factory.mktemp("contract_digest")
     (digest_case / "pipeline.py").write_text(
         "from pathlib import Path\nfrom barca import asset\n@asset()\ndef value(): return Path('external.txt').read_text()\n"
@@ -343,7 +352,7 @@ def runs(tmp_path_factory) -> dict:
     )
     assert baseline.returncode == 0, baseline.stderr
     (digest_case / "external.txt").write_text("after")
-    for case, argv, stream, code in SETUP_CASES[1:]:
+    for case, argv, stream, code in SETUP_CASES[2:]:
         proc = subprocess.run(
             [binary, *argv], cwd=digest_case, env=env, capture_output=True, text=True, timeout=60
         )

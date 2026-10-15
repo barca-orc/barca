@@ -293,10 +293,12 @@ error (exit 2) that names the right one. `barca pipeline.py` is short for
 | `barca get [target] [files...]` | Get one asset, several (`a,b`), or with no target every asset and sensor. Runs only what is not cached. |
 | `barca run <task> [files...]` | Run a task, or several (`a,b`), and what they depend on. The task always runs. |
 | &nbsp;&nbsp;`get` and `run` flags | `--refresh a,b`, `--no-cascade`, `--refresh-all`, `--dry-run`, `--env <name>`, `--agent` (plain progress lines), `--json`, `--pretty`, `--fields` |
+| `barca logs RUN_ID [--step NAME]` | Read captured step stdout (`--json`, `--pretty`, `--env`). |
 | `barca list [files...]` | JSON: every definition; human table: at most 100. Definitions with its kind, freshness, inputs and declared `env`. `--json`, `--pretty`, `--limit N`, `--all`, `--fields`; `--groups` shows organizational nesting |
 | `barca status [target] [files...]` | JSON: every node; human table: at most 100. Per node: cache state and why, last run, artifact rows and columns. `--sample N`, `--json`, `--pretty`, `--limit N`, `--all`, `--fields`, `--env` |
 | `barca sql "<query>" [files...]` | Query cached results with DuckDB (experimental). `--json`, `--pretty`, `--limit N`, `--all`, `--env` |
 | `barca plan [files...]` | The execution plan as JSON (experimental), using the execution pool size. No flags. |
+| `barca logs RUN_ID [--step NAME]` | Read captured step stdout (`--json` for structured lines). |
 | `barca history` | Every run in JSON, 10 in a human table. `--limit N`, `--all`, `--json`, `--pretty`, `--fields`, `--env` |
 | `barca stats <target> [files...]` | Timing and cache statistics for one asset. `--json`, `--pretty`, `--fields`, `--env` |
 | `barca serve [files...]` | HTTP API, cron scheduler and web UI. `--port N`, `--host IP`, `--watch`, `--no-schedule`, `--timezone`, `--read-only`, `--env` |
@@ -404,6 +406,10 @@ Install `barca[datadog]` in your job environment to add named Python executions 
 nested library traces in the same job trace. In the `<DD_SERVICE>-python` service,
 select `barca.execute` to see jobs by their canonical names. See `barca docs telemetry`
 for setup, tags, and delivery limits.
+
+`barca logs RUN_ID --pretty` reads recorded step stdout without progress messages.
+Use `--step report` for one function or exact node id, or `--json` for `[{node_id, line}]`.
+JSON get/run output suppresses step prints; other modes prefix them with the node id on stderr.
 
 ## The manual
 
