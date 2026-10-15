@@ -163,7 +163,7 @@ default, and any aliases.
 
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
-| `-l, --limit` | `LIMIT` | default `10` | stable | Number of recent runs to show |
+| `-l, --limit` | `LIMIT` | - | stable | Maximum recent runs (default: every run in JSON, 10 in a human table) |
 | `--all` | - | default `false` | stable | Show every recorded run (no limit) |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
@@ -202,7 +202,7 @@ default, and any aliases.
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `--groups` | - | default `false` | experimental: Organizational group hierarchy and metadata shape are experimental | Show the organizational hierarchy (groups are never executable nodes) |
-| `-l, --limit` | `LIMIT` | default `100` | stable | Maximum number of nodes to show, in topological order |
+| `-l, --limit` | `LIMIT` | - | stable | Maximum nodes, in topological order (default: every node in JSON, 100 in a human table) |
 | `--all` | - | default `false` | stable | Show every node (no limit) |
 | `--fields` | comma-separated: `id`, `kind`, `freshness`, `schedule`, `inputs`, `env`, `next_fire` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `nodes`. Implies --json. An unknown key is a usage error listing the valid ones |
 
@@ -213,7 +213,7 @@ default, and any aliases.
 | `<ARGS>...` | - | - | stable | [TARGET[,TARGET...]] [file.py\|dir/ ...] — both optional; no files reads the whole project (`barca docs discovery`) |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
-| `-l, --limit` | `LIMIT` | default `100` | stable | Maximum number of nodes to show, in topological order |
+| `-l, --limit` | `LIMIT` | - | stable | Maximum nodes, in topological order (default: every node in JSON, 100 in a human table) |
 | `--all` | - | default `false` | stable | Show every node (no limit) |
 | `--fields` | comma-separated: `id`, `name`, `kind`, `inputs`, `partitioned`, `cache`, `partitions`, `last_materialization`, `shape`, `env` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `nodes`. Implies --json. An unknown key is a usage error listing the valid ones |
 | `--sample` | `N` | - | experimental: sample rows come from a Python helper whose output may grow | Include up to N sample rows from each json/parquet artifact (off by default; pickles are never sampled) |
@@ -385,6 +385,12 @@ stderr. A caller cannot tell from the exit code
 that part of the result was not read: it is the caller that stopped reading. A write to stdout
 that fails for any other reason (a full disk behind `> result.json`) is exit 3, with one line
 on stderr.
+
+`list`, `status` and `history` return every item in JSON by default, including piped
+stdout, `--fields` and `BARCA_OUTPUT=json`. An explicit `--limit N` applies in either
+format; `--all` cannot be combined with it. Human tables default to 100 nodes for
+`list`/`status` and 10 runs for `history`. Truncation still reports `total`, `truncated`
+and a `hint` naming `--all`; the status summary still counts every node.
 
 ## JSON output schemas
 
