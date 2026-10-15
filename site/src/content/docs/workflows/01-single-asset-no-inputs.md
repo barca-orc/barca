@@ -137,7 +137,7 @@ with `env=`, files the function reads) is listed in `barca docs cache`. A functi
 file or a bucket is computed once and then served from cache; see
 [Sensors and external observations](/workflows/06-sensors-and-external-observations/).
 
-`--no-cache` still works as a deprecated spelling of `--refresh-all` and prints a warning.
+`--no-cache` was removed in 0.24.0; use `--refresh-all`.
 
 ## Preview without running
 

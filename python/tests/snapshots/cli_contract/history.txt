@@ -2,6 +2,7 @@
 hint : string
 runs : array
 runs[] : object
+runs[].attempts : integer
 runs[].command : string
 runs[].elapsed_seconds : number
 runs[].files : array

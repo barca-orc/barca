@@ -19,8 +19,9 @@ Qualified imports (`@barca.asset()`) and imported aliases (`@a()` after
 `barca` binary, written in Rust, reads the source without importing it, works out what
 needs to run, and runs it in Python worker processes. Results are stored as files under
 `.barca/`. An asset runs again only when its code or its inputs change; sensors and tasks
-run every time. Project helper references in exception handler types are tracked too,
-including tuples and `except*`; editing those helpers invalidates their cached consumers.
+run every time. Project helper references in default arguments (including nested functions
+and lambdas) and exception handler types (including tuples and `except*`) are tracked too;
+editing those helpers invalidates their cached consumers.
 
 There is no server to run and no configuration file to write. `barca serve` adds
 schedules, an HTTP API and a web UI when you want them.
@@ -226,8 +227,8 @@ barca get order_count pipeline.py --refresh orders --no-cascade   # only orders;
 barca get order_count pipeline.py --refresh-all                   # every asset the target depends on
 ```
 
-`--refresh` takes one comma-separated list (`--refresh a,b`). `--no-cache` is a deprecated
-spelling of `--refresh-all`. Do not delete files under `.barca/` to force a recompute.
+`--refresh` takes one comma-separated list (`--refresh a,b`). Use `--refresh-all` to force
+all assets to recompute. Do not delete files under `.barca/` to force a recompute.
 
 More: `barca docs cache`, which also lists what the run hash does not see (star imports in
 undecorated helpers, installed packages, environment variables not declared with `env=`).
@@ -273,6 +274,10 @@ More: `barca docs big-inputs`, `barca docs types`.
 
 ## Commands
 
+Run JSON reports elapsed time and attempts for executed steps; slow imports are reported
+separately as `import_seconds`. `barca docs status` explains retry and partition timing;
+`barca history --json` and `barca stats` expose recorded attempts.
+
 The target comes first, then files or directories. Both are optional: with no files,
 barca reads every `.py` file under the project root that imports barca
 (`barca docs discovery`). A project star import with a literal `__all__` preserves Barca
@@ -294,11 +299,12 @@ error (exit 2) that names the right one. `barca pipeline.py` is short for
 | `barca get [target] [files...]` | Get one asset, several (`a,b`), or with no target every asset and sensor. Runs only what is not cached. |
 | `barca run <task> [files...]` | Run a task, or several (`a,b`), and what they depend on. The task always runs. |
 | &nbsp;&nbsp;`get` and `run` flags | `--refresh a,b`, `--no-cascade`, `--refresh-all`, `--dry-run`, `--env <name>`, `--agent` (plain progress lines), `--json`, `--pretty`, `--fields` |
+| `barca logs RUN_ID [--step NAME]` | Read captured step stdout (`--json`, `--pretty`, `--env`). |
 | `barca list [files...]` | JSON: every definition; human table: at most 100. Definitions with its kind, freshness, inputs and declared `env`. `--json`, `--pretty`, `--limit N`, `--all`, `--fields`; `--groups` shows organizational nesting |
 | `barca status [target] [files...]` | JSON: every node; human table: at most 100. Per node: cache state and why, last run, artifact rows and columns. `--sample N`, `--json`, `--pretty`, `--limit N`, `--all`, `--fields`, `--env` |
 | `barca sql "<query>" [files...]` | Query cached results with DuckDB (experimental). `--json`, `--pretty`, `--limit N`, `--all`, `--env` |
 | `barca plan [files...]` | Versioned plan JSON (`plan_version: 1`). The execution plan as JSON (experimental), using the execution pool size. No flags. |
-| `barca history` | Every run in JSON, 10 in a human table. `--limit N`, `--all`, `--json`, `--pretty`, `--fields`, `--env` |
+| `barca history` | Every run in JSON, 10 in a human table. `--limit N`, `--all`, `--json`, `--pretty`, `--fields`, `--env`; `--reconcile RUN_ID` explicitly records a verified-stopped run as interrupted |
 | `barca stats <target> [files...]` | Timing and cache statistics for one asset. `--json`, `--pretty`, `--fields`, `--env` |
 | `barca serve [files...]` | HTTP API, cron scheduler and web UI. `--port N`, `--host IP`, `--watch`, `--no-schedule`, `--timezone`, `--read-only`, `--env` |
 | `barca docs [topic]` | The manual, compiled into the binary. `--all`, `--json`, `--fields` |
@@ -308,7 +314,8 @@ Failed runs end stderr with the failed step, its first error line and the count 
 downstream nodes. JSON retains the detailed step and target outcomes.
 
 `--fields a,b` keeps only those keys on each item of the JSON output. Every
-`barca <command> --help` ends with runnable examples.
+`barca <command> --help` ends with runnable examples. For a full refresh use `--refresh-all`
+(or `refresh_all=True` in Python); the deprecated alias is removed in 0.24.0.
 
 ## Partitions
 
@@ -405,6 +412,10 @@ Install `barca[datadog]` in your job environment to add named Python executions 
 nested library traces in the same job trace. In the `<DD_SERVICE>-python` service,
 select `barca.execute` to see jobs by their canonical names. See `barca docs telemetry`
 for setup, tags, and delivery limits.
+
+`barca logs RUN_ID --pretty` reads recorded step stdout without progress messages.
+Use `--step report` for one function or exact node id, or `--json` for `[{node_id, line}]`.
+JSON get/run output suppresses step prints; other modes prefix them with the node id on stderr.
 
 ## The manual
 

@@ -41,7 +41,7 @@ Options:
       --fields <FIELDS>
           Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones
 
-          [possible values: id, kind, action, status, reason, detail, run_hash, artifact, warning, artifact_mismatch, bytes_changed, partitions, env]
+          [possible values: id, kind, action, status, reason, detail, run_hash, artifact, warning, artifact_mismatch, bytes_changed, elapsed_seconds, attempts, import_seconds, partitions, env]
 
       --env <ENV>
           Environment name (separates cache/state per environment)
@@ -75,8 +75,7 @@ as an input a step never uses (barca docs assets); [] when there are none.
 assets you name and every asset downstream of them in the task's cone (reason `refresh_cascade`),
 so fresh data reaches the task. --no-cascade re-runs only the named assets; cached assets
 downstream of them then do not reflect the refresh, and barca warns. A name that is not an
-upstream asset is an error. --no-cache is a deprecated spelling of --refresh-all: it still works
-and warns on stderr.
+upstream asset is an error.
 An upstream asset that is cached but whose artifact file is gone is computed again before the task
 reads it (reason `artifact_missing`, a warning on stderr), so a deleted artifact does not fail the
 run (barca docs cache).

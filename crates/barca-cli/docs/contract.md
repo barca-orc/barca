@@ -46,7 +46,6 @@ outside the `GENERATED` blocks is written by hand.
 | `barca plan` and its JSON | prints the planner's internal phase/stream layout, which changes with scheduling work (`reason` is an object, `{"type": "initial"}` or `{"type": "fan_in", "node_id": ...}`) |
 | `barca serve` and all its flags | the HTTP API and scheduler are young: no auth, no shared remote state, routes may change. Its JSON is the engine's own serialization (for example `GET /assets` has `freshness: {"type": "Always"}` and `stats.node_id`), not the CLI's |
 | `get -o/--output`, `run -o/--output` | kept for compatibility; `--json` / `--pretty` are the canonical spelling |
-| `get --no-cache`, `run --no-cache` | deprecated (hidden): the old spelling of `--refresh-all`. Still works, prints `[barca] warning: --no-cache is deprecated ...` on stderr, and will be removed in a future minor release |
 | `status --sample` and `nodes[].shape` | read by a Python helper (`barca._inspect`) whose output may grow per format; the wording of `shape.note` (an unreadable, too large or unreachable artifact) may change |
 | `BARCA_PROGRESS_SECS`, `BARCA_POOL_SIZE`, `BARCA_COMM_COST_SECONDS`, `BARCA_TRACE_TIMING` | tuning and benchmarking knobs |
 | `BARCA_TELEMETRY` and the spans it sends | new: span names, tags and metrics may change |
@@ -71,6 +70,7 @@ outside the `GENERATED` blocks is written by hand.
 | `barca get` | `[<ARGS>...]` | stable | Get asset value(s) — cache-aware, runs only the needed subgraph |
 | `barca run` | `<ARGS>...` | stable | Run a task and its dependency cone — the task always re-runs |
 | `barca plan` | `[<FILES>...]` | experimental: prints the planner's internal phase/stream layout, which changes with scheduling work | Parse source files and emit the execution plan as JSON |
+| `barca logs` | `<RUN_ID>` | stable | Read a run's captured step stdout, without progress messages |
 | `barca history` | - | stable | Show recent run history |
 | `barca stats` | `<TARGET> [<FILES>...]` | stable | Show execution statistics for an asset |
 | `barca serve` | `[<FILES>...]` | experimental: the HTTP API and scheduler are young: no auth, no shared remote state, routes may change | Run a long-running HTTP server exposing the orchestrator as a JSON API |
@@ -125,10 +125,9 @@ default, and any aliases.
 | `--refresh` | comma-separated names | - | stable | Assets to force re-materialize, as ONE comma-separated list (`--refresh a,b`, not `--refresh a b`); the target itself may be named. Every asset downstream of them in the target's cone re-materializes too (see --no-cascade) |
 | `--no-cascade` | - | default `false` | stable | With --refresh: re-materialize only the named assets, not what is downstream of them. Cached downstream assets then do not reflect the refresh; barca warns |
 | `--refresh-all` | - | default `false` | stable | Force re-materialize EVERY asset in the target's cone (nothing comes from cache) |
-| `--no-cache` | - | default `false`; hidden from `--help` | experimental: deprecated: the old spelling of --refresh-all; warns on stderr and will be removed | Deprecated spelling of --refresh-all (prints a warning; removed in a future minor) |
 | `--dry-run` | - | default `false` | stable | Show what this command would do (each step cached or will-run, and why) without executing steps or recording a run (shared history may synchronize) |
 | `--agent` | - | default `false` | stable | Agent-friendly output: plain structured progress lines instead of visual progress bar |
-| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `partitions`, `env` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones |
+| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `partitions`, `env` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
 
 #### barca run
@@ -139,13 +138,12 @@ default, and any aliases.
 | `--refresh` | comma-separated names | - | stable | Upstream assets to force re-materialize, as ONE comma-separated list (`--refresh a,b`, not `--refresh a b`). Every asset downstream of them in the task's cone re-materializes too (see --no-cascade) |
 | `--no-cascade` | - | default `false` | stable | With --refresh: re-materialize only the named assets, not what is downstream of them. Cached downstream assets then do not reflect the refresh; barca warns |
 | `--refresh-all` | - | default `false` | stable | Force re-materialize EVERY asset in the task's cone (nothing comes from cache) |
-| `--no-cache` | - | default `false`; hidden from `--help` | experimental: deprecated: the old spelling of --refresh-all; warns on stderr and will be removed | Deprecated spelling of --refresh-all (prints a warning; removed in a future minor) |
 | `--dry-run` | - | default `false` | stable | Show what this command would do (each step cached or will-run, and why) without executing steps or recording a run (shared history may synchronize) |
 | `-o, --output` | `json\|value\|pretty` | - | experimental: kept for compatibility; --json / --pretty are the canonical spelling | Output format (kept for compatibility; --json / --pretty are the canonical spelling) |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `--agent` | - | default `false` | stable | Agent-friendly output: plain structured progress lines instead of visual progress bar |
-| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `partitions`, `env` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones |
+| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `partitions`, `env` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
 
 #### barca plan
@@ -154,15 +152,26 @@ default, and any aliases.
 |---|---|---|---|---|
 | `<FILES>...` | - | - | experimental (with the command) | Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`) |
 
+#### barca logs
+
+| Argument | Value | Notes | Stability | Description |
+|---|---|---|---|---|
+| `<RUN_ID>` | - | required | stable | Exact run id from get/run JSON or history |
+| `--step` | `STEP` | - | stable | Function name or exact node id (including a partition key when desired) |
+| `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
+| `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
+| `--env` | `ENV` | - | stable | Environment whose local history to read |
+
 #### barca history
 
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
+| `--reconcile` | `RUN_ID` | - | experimental: explicit operator recovery for stopped runs whose owner cannot be verified | After verifying a run stopped, record it as interrupted; refuses a proven live owner |
 | `-l, --limit` | `LIMIT` | - | stable | Maximum recent runs (default: every run in JSON, 10 in a human table) |
 | `--all` | - | default `false` | stable | Show every recorded run (no limit) |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
-| `--fields` | comma-separated: `run_id`, `command`, `files`, `target`, `status`, `steps_total`, `steps_executed`, `steps_cached`, `started_at`, `finished_at`, `elapsed_seconds` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `runs`. Implies --json. An unknown key is a usage error listing the valid ones |
+| `--fields` | comma-separated: `run_id`, `command`, `files`, `target`, `status`, `steps_total`, `steps_executed`, `steps_cached`, `attempts`, `started_at`, `finished_at`, `elapsed_seconds` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `runs`. Implies --json. An unknown key is a usage error listing the valid ones |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
 
 #### barca stats
@@ -250,7 +259,7 @@ default, and any aliases.
 
 ## Output selection (stable)
 
-`get`, `run`, `list`, `status`, `history` and `stats` choose JSON or human output on stdout by
+`get`, `run`, `logs`, `list`, `status`, `history` and `stats` choose JSON or human output on stdout by
 one rule, first match wins:
 
 1. a flag: `--json` or `--pretty` (on `get`/`run` also `-o json|value|pretty`); `--fields`
@@ -381,6 +390,10 @@ that part of the result was not read: it is the caller that stopped reading. A w
 that fails for any other reason (a full disk behind `> result.json`) is exit 3, with one line
 on stderr.
 
+Breaking in 0.24.0: the deprecated `get`/`run --no-cache` flag is removed (usage error,
+exit 2). Use `--refresh-all`. Python `barca.get` also removes the deprecated keyword;
+use `refresh_all=True`.
+
 `list`, `status` and `history` return every item in JSON by default, including piped
 stdout, `--fields` and `BARCA_OUTPUT=json`. An explicit `--limit N` applies in either
 format; `--all` cannot be combined with it. Human tables default to 100 nodes for
@@ -445,7 +458,9 @@ the set of `kind` values grows additively.
 | `status` | string | always |
 | `steps` | array | always |
 | `steps[]` | object | always |
+| `steps[].attempts` | integer | always |
 | `steps[].detail` | string | always |
+| `steps[].elapsed_seconds` | number | always |
 | `steps[].env` | object | sometimes |
 | `steps[].env.<name>` | null \| string | always |
 | `steps[].id` | string | always |
@@ -464,14 +479,46 @@ the set of `kind` values grows additively.
   `task`, `sensor`, `refresh`, `refresh_cascade`, `refresh_all`, `not_materialized`,
   `artifact_missing`, `partitions_unknown`, `sensor_output_unknown`, with `detail` in words.
   `artifact_missing` is a step that has a cached result whose artifact file is gone
-  and is needed (`barca docs cache`). (`no_cache` is gone: `--no-cache` now reports
-  `refresh_all`.)
+  and is needed (`barca docs cache`).
 - `get` and `run` share one refresh vocabulary: `--refresh a,b` (cascading downstream),
   `--no-cascade`, `--refresh-all`. `artifact` appears on cached steps, `run_hash`
   on unpartitioned steps, `warning` on a cached step whose upstream was refreshed without
   cascading and on a step with `artifact_mismatch` (see "A store copy that differs from its
   recorded hash" below), `env` on nodes that declare `env=[...]` (`null` for an unset variable,
   `"<redacted>"` for secret-looking names).
+
+Executed steps also carry `attempts` and `elapsed_seconds`, including failures.
+Elapsed seconds sum active reported time across attempts; backoff is excluded. For
+partition summaries, elapsed time sums executed keys while attempts is the maximum
+per key. Cached steps and dry runs omit these keys. Worker disconnects use the
+coordinator's observed in-flight time. Slow module imports (> 1 second) add
+`import_seconds`, included in elapsed time and summed across attempts/keys. Reused
+modules add no import time. The conditional import field is snapshotted with a
+controlled slow-import/retry fixture below; ordinary schema fixtures exclude it to
+avoid depending on CI machine speed. `barca docs status` explains the timing scopes.
+
+<!-- BEGIN GENERATED schema get_timing_retry -->
+| Key | Type | Present |
+|---|---|---|
+| `elapsed_seconds` | number | always |
+| `final_output` | `<user value>` | always |
+| `phases` | integer | always |
+| `run_id` | string | always |
+| `status` | string | always |
+| `steps` | array | always |
+| `steps[]` | object | always |
+| `steps[].attempts` | integer | always |
+| `steps[].detail` | string | always |
+| `steps[].elapsed_seconds` | number | always |
+| `steps[].id` | string | always |
+| `steps[].import_seconds` | number | always |
+| `steps[].kind` | string | always |
+| `steps[].reason` | string | always |
+| `steps[].run_hash` | string | always |
+| `steps[].status` | string | always |
+| `steps_executed` | integer | always |
+| `warnings` | array | always |
+<!-- END GENERATED schema get_timing_retry -->
 
 For a parquet or pickle artifact, `final_output` is a pointer instead of the value:
 
@@ -490,7 +537,9 @@ For a parquet or pickle artifact, `final_output` is a pointer instead of the val
 | `steps` | array | always |
 | `steps[]` | object | always |
 | `steps[].artifact` | string | sometimes |
+| `steps[].attempts` | integer | sometimes |
 | `steps[].detail` | string | sometimes |
+| `steps[].elapsed_seconds` | number | sometimes |
 | `steps[].id` | string | always |
 | `steps[].kind` | string | always |
 | `steps[].reason` | string | sometimes |
@@ -512,7 +561,9 @@ A partitioned step carries `partitions` (counted in keys; `will_run_keys` lists 
 | `status` | string | always |
 | `steps` | array | always |
 | `steps[]` | object | always |
+| `steps[].attempts` | integer | always |
 | `steps[].detail` | string | always |
+| `steps[].elapsed_seconds` | number | always |
 | `steps[].id` | string | always |
 | `steps[].kind` | string | always |
 | `steps[].partitions` | object | sometimes |
@@ -541,7 +592,9 @@ A partitioned step carries `partitions` (counted in keys; `will_run_keys` lists 
 | `steps` | array | always |
 | `steps[]` | object | always |
 | `steps[].artifact` | string | sometimes |
+| `steps[].attempts` | integer | sometimes |
 | `steps[].detail` | string | sometimes |
+| `steps[].elapsed_seconds` | number | sometimes |
 | `steps[].env` | object | sometimes |
 | `steps[].env.<name>` | null \| string | always |
 | `steps[].id` | string | always |
@@ -575,7 +628,9 @@ envelope goes to stderr:
 | `steps` | array | always |
 | `steps[]` | object | always |
 | `steps[].artifact` | string | sometimes |
+| `steps[].attempts` | integer | sometimes |
 | `steps[].detail` | string | sometimes |
+| `steps[].elapsed_seconds` | number | sometimes |
 | `steps[].env` | object | sometimes |
 | `steps[].env.<name>` | null \| string | always |
 | `steps[].id` | string | always |
@@ -606,8 +661,10 @@ entries:
 | `steps[]` | object | always |
 | `steps[].artifact` | string | sometimes |
 | `steps[].artifact_mismatch` | boolean | sometimes |
+| `steps[].attempts` | integer | sometimes |
 | `steps[].bytes_changed` | boolean | sometimes |
 | `steps[].detail` | string | sometimes |
+| `steps[].elapsed_seconds` | number | sometimes |
 | `steps[].id` | string | always |
 | `steps[].kind` | string | always |
 | `steps[].reason` | string | sometimes |
@@ -687,7 +744,9 @@ failed, and the exit code is then 1. Steps skipped because an upstream failed ha
 | `steps` | array | always |
 | `steps[]` | object | always |
 | `steps[].artifact` | string | sometimes |
+| `steps[].attempts` | integer | sometimes |
 | `steps[].detail` | string | sometimes |
+| `steps[].elapsed_seconds` | number | sometimes |
 | `steps[].env` | object | sometimes |
 | `steps[].env.<name>` | null \| string | always |
 | `steps[].id` | string | always |
@@ -953,12 +1012,26 @@ counts every node even when `nodes` is truncated.
 
 ### history
 
+`runs[].attempts` is the sum of attempts in its recorded materialization rows, including
+executed partition keys; an all-cached run has zero. Upload-failure rows retain their
+existing transfer-attempt counts. `stats.recent_runs[].attempts` continues to report
+attempts per materialization, with the stored final-attempt duration.
+
+Experimental `--reconcile RUN_ID` is an explicit write after the operator verifies the run
+stopped. It returns just that run in the existing envelope (`total: 1`, `truncated: false`),
+recorded as `interrupted`. It refuses a proven live owner, a non-running row or unknown id
+(exit 2); database errors are exit 3. `--limit` and `--all` conflict with it; `--fields`,
+output selection and `--env` still apply. Successful step rows/artifacts and progress are
+preserved, and an unknown end time/duration is not invented. Ordinary history stays read-only.
+
+
 <!-- BEGIN GENERATED schema history -->
 | Key | Type | Present |
 |---|---|---|
 | `hint` | string | always |
 | `runs` | array | always |
 | `runs[]` | object | always |
+| `runs[].attempts` | integer | always |
 | `runs[].command` | string | always |
 | `runs[].elapsed_seconds` | number | always |
 | `runs[].files` | array | always |
@@ -988,6 +1061,29 @@ it has recorded so far in `steps_executed`, and
 Terminal status/counts and successful/failed step rows commit in one transaction. A required
 write failure reports the existing infrastructure error (exit 3) and preserves previous
 history/progress and run state; captured output is written separately afterward.
+
+Reconciled history (same envelope; unknown end timestamp and duration remain null):
+
+<!-- BEGIN GENERATED schema history_reconciled -->
+| Key | Type | Present |
+|---|---|---|
+| `runs` | array | always |
+| `runs[]` | object | always |
+| `runs[].attempts` | integer | always |
+| `runs[].command` | string | always |
+| `runs[].elapsed_seconds` | null | always |
+| `runs[].files` | array | always |
+| `runs[].finished_at` | null | always |
+| `runs[].run_id` | string | always |
+| `runs[].started_at` | string | always |
+| `runs[].status` | string | always |
+| `runs[].steps_cached` | integer | always |
+| `runs[].steps_executed` | integer | always |
+| `runs[].steps_total` | integer | always |
+| `runs[].target` | string | always |
+| `total` | integer | always |
+| `truncated` | boolean | always |
+<!-- END GENERATED schema history_reconciled -->
 
 ### stats
 
@@ -1159,6 +1255,7 @@ placeholders:
 [barca] <n>/<total> steps | done in <secs>s
 [barca] <n>/<total> steps | failed in <secs>s
 [barca] checking artifact store <store>/default/artifacts (timeout <secs>s)
+[barca] importing <module>
 [barca] run failed: step 'pipeline.py:broken' failed: ValueError: contract fixture failure; 0 downstream steps skipped (exit 1)
 [barca] step:pipeline.py:broken failed: ValueError: contract fixture failure
 [barca] step:pipeline.py:keys completed <secs>s (<n>/<total>)
@@ -1167,6 +1264,7 @@ placeholders:
 [barca] step:pipeline.py:per_key[k=b] completed <secs>s (<n>/<total>)
 [barca] step:pipeline.py:report completed <secs>s (<n>/<total>)
 [barca] step:pipeline.py:total cached env CONTRACT_API_TOKEN=<unset> CONTRACT_REGION=eu
+[barca] step:pipeline.py:value completed <secs>s (<n>/<total>) attempts=2
 [barca] uploading <n> artifacts to <store>/default/artifacts (timeout <secs>s per attempt); waiting for confirmation
 [barca] warning: pipeline.py:report never uses its input `rows`. It is still loaded in full each time the step runs, and it counts toward the step's cache key. Use it, remove it from inputs=, or rename the parameter `_rows` if it is there for ordering only (a `_` input is not loaded and never flagged)
 ```
@@ -1256,8 +1354,10 @@ when known. These additive keys are stable. See `barca docs cache` and
 | `status` | string | always |
 | `steps` | array | always |
 | `steps[]` | object | always |
+| `steps[].attempts` | integer | always |
 | `steps[].bytes_changed` | boolean | always |
 | `steps[].detail` | string | always |
+| `steps[].elapsed_seconds` | number | always |
 | `steps[].id` | string | always |
 | `steps[].kind` | string | always |
 | `steps[].reason` | string | always |
@@ -1323,3 +1423,29 @@ with `serializer="csv"`. CSV sink extensions select CSV automatically. Frames co
 to default to Parquet. CSV requires a supported tabular value; readers infer types.
 Status samples represent CSV cells as strings, and SQL views support CSV artifacts.
 See `barca docs types` and `specs/artifact-formats.md`.
+
+### Task stdout and logs
+
+`logs RUN_ID` is stable. JSON returns an array of `{node_id: string, line: string}` objects
+in recorded order; text returns only the lines. `--step` selects an exact id/base id/function
+name; ambiguous or absent steps and missing runs exit 2. Silent recorded steps return no
+lines. `--env` selects local history; logs does not import source or contact a remote store.
+Task return values remain `final_output` as for assets. Get/run JSON mode suppresses captured
+stdout lines; non-JSON modes prefix them with `[node_id]` on stderr. Agent framework lines
+remain `[barca]`-prefixed. Retrieve captured output with `barca logs`. See `barca docs logs`
+and `specs/task-output.md` for flush, failure and ordering boundaries.
+
+<!-- BEGIN GENERATED schema logs -->
+| Key | Type | Present |
+|---|---|---|
+| `[]` | object | always |
+| `[].line` | string | always |
+| `[].node_id` | string | always |
+<!-- END GENERATED schema logs -->
+
+Import progress uses `[barca] importing <module>` before a module is loaded. Completion
+and permanent failure step lines append `attempts=N` only when N > 1; their existing
+prefixes and completion durations remain. Timeout messages identify the step, rather
+than the internal callable wrapper.
+
+Older read-only snapshots without attempt metadata report a null history attempt total.

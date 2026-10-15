@@ -30,21 +30,14 @@ pub(crate) fn usage_line(sub: &str) -> &'static str {
 }
 
 /// The cache policy of `get` / `run`: one vocabulary on both (`--refresh a,b`, `--no-cascade`,
-/// `--refresh-all`). `--no-cache` is the deprecated spelling of `--refresh-all`.
+/// `--refresh-all`).
 pub(crate) fn cache_policy(
     refresh: Option<Vec<String>>,
     no_cascade: bool,
     refresh_all: bool,
-    no_cache: bool,
 ) -> barca_core::cache::CachePolicy {
     use barca_core::cache::CachePolicy;
-    if no_cache {
-        barca_core::errln!(
-            "[barca] warning: --no-cache is deprecated and will be removed in a future minor \
-             release; use --refresh-all"
-        );
-    }
-    match (refresh_all || no_cache, refresh) {
+    match (refresh_all, refresh) {
         (true, _) => CachePolicy::RefreshAll,
         (false, Some(names)) => CachePolicy::RefreshSelective {
             names,
@@ -202,7 +195,7 @@ pub(crate) fn json_output(cli: &Cli) -> bool {
             fields_json(*format, fields.as_deref()).unwrap_or(false)
         }
         Cli::Docs { json, fields, .. } => *json || fields.is_some(),
-        Cli::Sql { format, .. } => is_json(*format),
+        Cli::Sql { format, .. } | Cli::Logs { format, .. } => is_json(*format),
         Cli::Serve { .. } | Cli::Version => false,
     }
 }
@@ -220,6 +213,7 @@ pub(crate) fn context(cli: &Cli) -> Context {
         Cli::Sql { files, .. } => ("sql", paths(files)),
         Cli::Status { args, .. } => ("status", paths(&split_target_files(args.clone()).1)),
         Cli::History { .. } => ("history", Vec::new()),
+        Cli::Logs { .. } => ("logs", Vec::new()),
         Cli::Docs { .. } => ("docs", Vec::new()),
         Cli::Version => ("version", Vec::new()),
     };
@@ -347,7 +341,7 @@ pub(crate) fn enter_project_root(cli: &mut Cli) -> Result<(), barca_core::BarcaE
         | Cli::List { files, .. } => {
             *files = expand(std::mem::take(files))?;
         }
-        Cli::History { .. } | Cli::Docs { .. } | Cli::Version => {}
+        Cli::History { .. } | Cli::Logs { .. } | Cli::Docs { .. } | Cli::Version => {}
     }
     Ok(())
 }

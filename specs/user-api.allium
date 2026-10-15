@@ -288,7 +288,7 @@ rule RejectCycle {
 -- ── Execution: barca get ─────────────────────────────────
 
 rule GetAsset {
-    when: GetAsset(target, files, no_cache)
+    when: GetAsset(target, files, refresh_all)
 
     requires: target = null or target.kind = asset
     -- If target specified, must be an asset. Tasks use barca run.
@@ -299,7 +299,7 @@ rule GetAsset {
     ensures:
         for phase in plan.phases:
             for step in phase.steps:
-                if not no_cache and cache_hit(step):
+                if not refresh_all and cache_hit(step):
                     -- Skip execution, use cached artifact
                     step.status = cached
                 else:
@@ -355,7 +355,7 @@ rule RunTask {
     @guidance
         -- If refresh is empty/null, upstream assets are cache-aware (like get).
         -- If refresh lists specific asset names, only those are force-rerun.
-        -- --refresh-all / --no-cache force-rerun ALL upstream assets.
+        -- --refresh-all force-reruns ALL upstream assets.
 }
 
 -- ── Step execution ───────────────────────────────────────
@@ -585,7 +585,7 @@ surface Cli {
     facing user: PythonDeveloper
 
     provides:
-        GetAsset(target, files, no_cache)
+        GetAsset(target, files, refresh_all)
         RunTask(target, files, refresh)
         PlanDag(files)
         ShowHistory(limit)

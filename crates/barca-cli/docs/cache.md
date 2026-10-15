@@ -218,6 +218,13 @@ If a reached helper catches `helpers.Error`, changing that project definition in
 its consumers. A bare `except:` adds no exception-type dependency. Existing affected
 consumers may recompute once after this dependency-tracking correction.
 
+Default argument expressions are followed for steps and reached helpers, including
+positional-only and keyword-only parameters, nested functions and lambdas. For example,
+`def value(x=helpers.compute()): ...` includes `helpers.compute` in the dependency cone.
+The default is resolved in the enclosing scope, before the new parameter bindings exist.
+Editing that helper invalidates its consumers; unrelated steps retain their cached results.
+Existing cached consumers may recompute once after this dependency-tracking correction.
+
 #### Not followed
 
 An edit in one of these does not change the hash; recompute with `--refresh-all` or `--refresh`:
@@ -235,12 +242,12 @@ An edit in one of these does not change the hash; recompute with `--refresh-all`
   a module-level name (`A += 1`): only a plain `A = ...` or `A: int = ...` is a definition;
 - a module reached through another module's `import` (`from helpers import other` where
   `helpers.py` does `import other`): import it directly;
-- what a helper refers to only in a decorator, a default argument value, a `match` pattern,
-  a set literal (`{f()}`), an assignment target
+- what a helper refers to only in a decorator, a `match` pattern, a set literal (`{f()}`),
+  an assignment target
   (`table[key()] = ...`) or a loop's `else:` block. The helper's own text is hashed, but those
   references are not followed. (This is about helper functions. The decorators of a step
-  itself are covered by "Which decorator arguments count" above; its default argument values
-  are hashed as part of the function but the names in them are not followed);
+  itself are covered by "Which decorator arguments count" above; default argument references
+  are followed as described above);
 - helpers more than six project modules away along an import chain.
 
 Conflicting ordinary project imports are rejected before user code runs. If two pipeline
@@ -570,10 +577,9 @@ Known limits:
 Previously `--refresh` did not cascade: it re-ran only the named assets and left their downstream
 assets cached. It now cascades by default; `--no-cascade` keeps the old behavior.
 
-`barca get` takes the same three flags as `barca run` (it used to have only `--no-cache`). On
-`get` the target is an asset, so `--refresh` may name it too. `--no-cache` still works on both
-commands as a deprecated spelling of `--refresh-all`: it prints
-`[barca] warning: --no-cache is deprecated ...` and will be removed in a future minor release.
+`barca get` takes the same three flags as `barca run`. On `get` the target is an asset,
+so `--refresh` may name it too. The deprecated `--no-cache` alias is removed in 0.24.0;
+use `--refresh-all`. In Python, use `barca.get(..., refresh_all=True)`.
 
 ### Exactly what `--refresh` does
 
@@ -762,6 +768,17 @@ Known limits:
     (0.18.1 reported this one, from the host name and process id);
   - a run started by barca 0.19.0 or earlier, which is judged by its process id and host
     name: in a container, on another machine, or once its process id has been reused.
+
+After verifying that the process or container has stopped, explicitly reconcile an uncertain
+row with `barca history --reconcile RUN_ID --json`. This records only that row as
+`interrupted` and prints it in the normal history envelope (`runs`, `total: 1`,
+`truncated: false`); `--fields` and human output also work. It refuses a proven live owner,
+a terminal row, an unknown id, and combining `--reconcile` with `--limit` or `--all`.
+It preserves recorded step counts, successful materializations and artifacts, and leaves
+unknown end time and duration as `null`. It does not stop a process. Ordinary history reads
+still keep an uncertain owner `running`; reconciliation is your assertion that it stopped.
+The change is local to the selected environment's metadata database.
+
 - `interrupted` is written to the history by the next `get` or `run`, under the same rule.
 - A marker is removed by its process when its runs have ended. One left by a killed
   process stays while its run reads `running`, and is removed by a later `get` or `run`

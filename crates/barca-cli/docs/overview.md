@@ -83,3 +83,5 @@ that; see `barca docs agents`.
 Run `barca docs` for one-line summaries of every topic.
 
 Use `barca docs groups` for organizational nesting in the UI and CLI.
+
+- `barca docs logs` — read captured stdout independently of progress and results.

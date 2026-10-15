@@ -194,6 +194,12 @@ Project helper references in exception handler types are tracked too, including 
 tuples and `except*`. Changing a referenced exception type invalidates its consumers;
 existing affected consumers may recompute once after this dependency-tracking correction.
 
+Default argument expressions in steps and reached helpers also contribute dependencies,
+including keyword-only defaults and defaults in nested functions or lambdas. Editing
+`helpers.compute` in `def value(x=helpers.compute()): ...` invalidates the cached consumer.
+Defaults use the enclosing scope before the new parameters bind. Consumers may recompute
+once after upgrading to this dependency-tracking correction.
+
 ## 5. Tasks, and `get` versus `run`
 
 A task is a step that does something: deploy, notify, upload. It is never cached.
