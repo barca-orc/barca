@@ -25,6 +25,7 @@ and these tags are available on the same releases page.
 
 ### Features
 
+- Add `barca doctor` prerequisite checks, credential identity diagnostics and a documented local-only debugging profile.
 - Run JSON reports executed-step durations and attempts, with slow module imports
   reported separately. History JSON totals recorded materialization attempts; stats
   retains per-materialization attempts. Timeout errors identify the step id.

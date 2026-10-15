@@ -36,6 +36,10 @@ const HELP_WIDTH: usize = 100;
 /// `docs <TOPIC>`); `barca` is the top level.
 pub const EXPERIMENTAL: &[(&str, &str)] = &[
     (
+        "doctor",
+        "new prerequisite report; check names and provider-specific data may evolve",
+    ),
+    (
         "history --reconcile",
         "explicit operator recovery for stopped runs whose owner cannot be verified",
     ),
