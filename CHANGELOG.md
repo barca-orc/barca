@@ -14,6 +14,10 @@ and these tags are available on the same releases page.
 
 ## Pending 0.24.0
 
+### Bug Fixes
+
+- Track project star imports in ordinary helper modules conservatively, including functions/classes, captured constants, forwarded exports, multiple/conditional imports and transitive stars.
+
 ### Features
 
 - Run JSON reports executed-step durations and attempts, with slow module imports

@@ -222,8 +222,7 @@ An edit in one of these does not change the hash; recompute with `--refresh-all`
 - imports built at run time: `importlib.import_module(name)`, `__import__(name)`, and
   `getattr` on anything but a module barca can see imported. Static analysis cannot follow
   these, and barca does not run your code to plan;
-- Star imports inside undecorated helper functions/modules, and names a module defines
-  dynamically or inside other module-level
+- Names a module defines dynamically or inside other module-level
   control flow such as a `for`, `while`, `with` or `match` (module-level `if` and `try` bindings
   are covered conservatively above);
 - module-level constants bound by tuple unpacking (`A, B = 1, 2`), and augmented assignments to
@@ -840,3 +839,11 @@ See `specs/materialization-digests.md` for the native boundary.
 barca get orders pipeline.py --refresh orders --json   # compare recomputed bytes with the last digest
 barca status orders pipeline.py --json                 # last byte-change event and current digest
 ```
+
+Project star imports in ordinary helper modules are tracked conservatively. Consumers of
+functions, classes, captured constants and forwarded exports include the contributing module
+sources and their static dependencies, including multiple and transitive star imports.
+Conditional star imports are included without selecting a branch. An edit to another export
+in those modules may recompute a consumer. Installed packages and the import-depth limit
+remain separate limitations; this does not extend decorator discovery beyond its existing
+literal-export rules.

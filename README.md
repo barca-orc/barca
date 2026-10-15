@@ -228,8 +228,11 @@ barca get order_count pipeline.py --refresh-all                   # every asset 
 `--refresh` takes one comma-separated list (`--refresh a,b`). Use `--refresh-all` to force
 all assets to recompute. Do not delete files under `.barca/` to force a recompute.
 
-More: `barca docs cache`, which also lists what the run hash does not see (star imports in
-undecorated helpers, installed packages, environment variables not declared with `env=`).
+Project star imports in ordinary helper modules conservatively follow imported source,
+including functions, classes, captured constants and forwarded exports.
+
+More: `barca docs cache`, which also lists what the run hash does not see (installed packages
+and environment variables not declared with `env=`).
 
 ## Large inputs
 

@@ -176,7 +176,7 @@ barca get order_count pipeline.py --refresh-all                   # every asset 
 ```
 
 `--refresh` takes one comma-separated list (`--refresh a,b`), and `barca run` takes the same
-three flags. Use it also after a change the run hash does not see: a star import, an
+three flags. Use it also after a change the run hash does not see: an
 installed package, a module outside the project root, or an environment variable the
 function reads without declaring it in `@asset(env=[...])`.
 
@@ -370,7 +370,7 @@ barca get total pipelines/      # read only the files under pipelines/
   asset's run hash covers the definitions it uses from your project's modules. Editing
   `clean`, or anything `clean` calls, re-runs `rows` and what depends on it. Editing another
   function in `helpers.py` re-runs nothing.
-- The standard library, installed packages, modules outside the project root, star imports in undecorated helpers
+- The standard library, installed packages, modules outside the project root
   and imports built at run time are not followed. After changing one of those, use
   `--refresh`.
 
@@ -418,3 +418,9 @@ Decorated pipeline functions with top-level project star imports conservatively 
 imported module and its static imports. Literal `__all__` lists/tuples also let discovery
 preserve Barca decorators and groups whose local names are absent from that export set;
 computed or mutated sets remain uncertain. See [decorator discovery](/reference/api/decorators/).
+
+Ordinary helper modules with project star imports conservatively retain their contributing
+sources, including functions, classes, captured constants and forwarded exports. Multiple,
+conditional and transitive stars are included without executing imports during planning; an
+unrelated export edit may recompute consumers. Decorator discovery still requires the
+existing literal-export provenance.
