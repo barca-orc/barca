@@ -231,21 +231,10 @@ barca get order_count pipeline.py --refresh-all                   # every asset 
 `--refresh` takes one comma-separated list (`--refresh a,b`). Use `--refresh-all` to force
 all assets to recompute. Do not delete files under `.barca/` to force a recompute.
 
-Evaluated assignment receivers and indices (for example `table[key()] = value`) also
-follow project helpers, including targets in loops, context managers and comprehensions.
-
-Helper references in `for` and `while` `else:` blocks also participate in cache hashes.
-
-Project constants and classes referenced only in `match` patterns also participate in cache hashes.
-
-Decorators on ordinary project helper functions/classes also follow their helper references.
-
-Unpacked and augmented module constants retain project-helper provenance conservatively.
-
-Module-level control-flow bindings retain project-helper provenance conservatively.
-
-Project star imports in ordinary helper modules conservatively follow imported source,
-including functions, classes, captured constants and forwarded exports.
+Cache hashes follow project references in assignment receivers and indices, loop `else:`
+blocks, match patterns and ordinary helper decorators. Unpacked/augmented module constants,
+module-level control-flow bindings and helper-module star imports retain their dependencies
+conservatively; edits to other definitions in those modules can also invalidate consumers.
 
 More: `barca docs cache`, which also lists what the run hash does not see (installed packages
 and environment variables not declared with `env=`).
