@@ -128,6 +128,17 @@ def safe_error(message: str) -> str:
                 message = message.replace(value, "<redacted>")
 
     redact(options)
+    for name in (
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "AZURE_STORAGE_ACCOUNT_KEY",
+        "AZURE_CLIENT_SECRET",
+        "AZURE_STORAGE_SAS_TOKEN",
+    ):
+        value = os.environ.get(name)
+        if value:
+            message = message.replace(value, "<redacted>")
     return message
 
 
@@ -393,6 +404,15 @@ def get_file(src: str, local_path: "str | Path") -> None:
     get_fs(src).get_file(src, str(local_path))
 
 
+def describe_error(uri: str, exc: BaseException) -> str:
+    """Provider error with configured identity/recovery when authentication failed."""
+    from barca import _identity
+
+    message = f"{type(exc).__name__}: {exc}"
+    hint = _identity.error_hint(uri, exc)
+    return safe_error(f"{hint}\n{message}" if hint else message)
+
+
 def check_store(root: str) -> None:
     """Raise unless the store holding `root` is positively there and can be listed.
 
@@ -412,7 +432,15 @@ def check_store(root: str) -> None:
         with os.scandir(local) as entries:  # raises unless it is a readable directory
             next(entries, None)
         return
-    fs = get_fs(root)
+    try:
+        fs = get_fs(root)
+    except Exception as exc:
+        from barca import _identity
+
+        hint = _identity.error_hint(root, exc)
+        if hint:
+            raise PermissionError(f"{hint}\n{type(exc).__name__}: {exc}") from exc
+        raise
     container = fs._strip_protocol(root).strip("/").split("/", 1)[0]
     if not container:
         raise ValueError(f"no bucket or container in {root}")
@@ -423,9 +451,12 @@ def check_store(root: str) -> None:
         fs.ls(container, detail=False)
     except Exception as exc:
         status = http_status(exc)
-        if isinstance(exc, PermissionError) or status in (401, 403):
+        from barca import _identity
+
+        hint = _identity.error_hint(root, exc, fs)
+        if hint:
             raise PermissionError(
-                f"listing {container!r} is not permitted ({type(exc).__name__}: {exc}). "
+                f"{hint}\nlisting {container!r} is not permitted ({type(exc).__name__}: {exc}). "
                 f"These credentials may read and write objects but cannot list the "
                 f"{_container_word(root)}; barca needs {list_permission(root)} to tell a "
                 f"missing artifact from a missing store"

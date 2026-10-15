@@ -1,0 +1,24 @@
+# barca doctor pipeline.py --json  (stdout, exit 0)
+checks : array
+checks[] : object
+checks[].data : object
+checks[].data.artifacts : string  (optional)
+checks[].data.barca_version : string  (optional)
+checks[].data.enabled : boolean  (optional)
+checks[].data.executable : string  (optional)
+checks[].data.file : string  (optional)
+checks[].data.files : array  (optional)
+checks[].data.files[] : string
+checks[].data.found : boolean  (optional)
+checks[].data.metadata : string  (optional)
+checks[].data.mode : string  (optional)
+checks[].data.name : string  (optional)
+checks[].data.nodes : integer  (optional)
+checks[].data.path : string  (optional)
+checks[].data.source : string  (optional)
+checks[].data.uri : null  (optional)
+checks[].data.version : string  (optional)
+checks[].detail : string
+checks[].name : string
+checks[].ok : boolean
+ok : boolean
