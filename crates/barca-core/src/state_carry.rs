@@ -94,6 +94,7 @@ pub(crate) const STEP_COLUMNS: &[&str] = &[
     "cpu_seconds",
     "max_rss_bytes",
     "output_hash",
+    "bytes_changed",
     "run_id",
     "error_type",
 ];
@@ -724,6 +725,11 @@ mod tests {
             .await
             .unwrap();
 
+        {
+            let _guard = db::db_guard().await;
+            let (_db, conn) = db::open_conn(&local).await.unwrap();
+            conn.execute("UPDATE materializations SET bytes_changed = 1, output_hash = 'changed-digest' WHERE run_id = 'killed' AND node_id = 'f.py:a'", ()).await.unwrap();
+        }
         let carried = carry(&local, &pulled).await;
         assert_eq!(
             (carried.runs, carried.steps, carried.log_lines),

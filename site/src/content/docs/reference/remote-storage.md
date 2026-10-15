@@ -804,3 +804,18 @@ Sensor content identities and computation-hash artifact paths keep their existin
 
 A later refresh can still overwrite local and remote objects, and concurrent result reads
 are not isolated by this receipt fix. See the [native receipt contract](https://github.com/barca-orc/barca/blob/main/specs/artifact-upload-receipts.md).
+
+## Recompute byte checks
+
+All new successful materializations record the SHA-256 of producer-owned serialized
+bytes, including local-only runs. Recomputing the same node under the same run hash
+compares with its preceding successful digest. Changed bytes emit a non-determinism
+warning and set `steps[].bytes_changed: true`; new code/input hashes and legacy rows
+without digests do not warn. This compares bytes, including serializer metadata.
+Paths and exit codes are unchanged.
+
+`barca status` retains the last mismatch event after later unchanged recomputes. JSON
+exposes `last_bytes_change: {node_id, run_hash, content_hash, created_at}` and the latest
+materialization's `content_hash`. Partition keys are checked individually. Progress
+checkpoints, terminal writes and carried history retain the finding without duplicating it.
+The separate RFC-0009 store repair and RFC-0007 ledger acceptance paths remain proposed.

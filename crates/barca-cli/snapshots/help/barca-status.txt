@@ -24,7 +24,7 @@ Options:
       --fields <FIELDS>
           Output JSON with only these keys (comma-separated) on each entry of `nodes`. Implies --json. An unknown key is a usage error listing the valid ones
 
-          [possible values: id, name, kind, inputs, partitioned, cache, partitions, last_materialization, shape, env]
+          [possible values: id, name, kind, inputs, partitioned, cache, partitions, last_materialization, last_bytes_change, shape, env]
 
       --sample <N>
           Include up to N sample rows from each json/parquet/CSV artifact (off by default; pickles are never sampled)
