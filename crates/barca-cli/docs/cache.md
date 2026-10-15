@@ -226,8 +226,6 @@ An edit in one of these does not change the hash; recompute with `--refresh-all`
   dynamically or inside other module-level
   control flow such as a `for`, `while`, `with` or `match` (module-level `if` and `try` bindings
   are covered conservatively above);
-- module-level constants bound by tuple unpacking (`A, B = 1, 2`), and augmented assignments to
-  a module-level name (`A += 1`): only a plain `A = ...` or `A: int = ...` is a definition;
 - a module reached through another module's `import` (`from helpers import other` where
   `helpers.py` does `import other`): import it directly;
 - what a helper refers to only in a decorator, a default argument value, an `except` clause's
@@ -840,3 +838,9 @@ See `specs/materialization-digests.md` for the native boundary.
 barca get orders pipeline.py --refresh orders --json   # compare recomputed bytes with the last digest
 barca status orders pipeline.py --json                 # last byte-change event and current digest
 ```
+
+Module-level tuple/list/starred unpacking and augmented name assignments retain helper
+provenance conservatively: a consumer hashes the module source and its static references.
+Earlier aliases remain covered even when the binding is overwritten later. Editing an
+unrelated definition in that same module can therefore recompute these consumers; assets
+that do not reach such bindings retain selective cones.

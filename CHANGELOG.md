@@ -14,6 +14,10 @@ and these tags are available on the same releases page.
 
 ## Pending 0.24.0
 
+### Bug Fixes
+
+- Retain project-helper provenance for unpacked and augmented module constants, including aliases captured before later overwrites. Consumers conservatively hash the module source and static references.
+
 ### Features
 
 - Run JSON reports executed-step durations and attempts, with slow module imports

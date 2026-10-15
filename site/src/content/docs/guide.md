@@ -418,3 +418,7 @@ Decorated pipeline functions with top-level project star imports conservatively 
 imported module and its static imports. Literal `__all__` lists/tuples also let discovery
 preserve Barca decorators and groups whose local names are absent from that export set;
 computed or mutated sets remain uncertain. See [decorator discovery](/reference/api/decorators/).
+
+Tuple/list/starred module-level unpacking and augmented name assignments retain project
+helper provenance, including aliases captured before later overwrites. Their consumers
+conservatively hash the module source and references; unrelated assets keep selective cones.

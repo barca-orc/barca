@@ -578,6 +578,17 @@ fn collect_definitions(source: &str, package: Option<&str>) -> HashMap<String, M
     };
     visitor::walk_body(&mut static_imports, &parsed.syntax().body);
     let conditional_module = OnceCell::new();
+    let conservative_code = || {
+        conditional_module.get_or_init(|| {
+            let mut uses = UseCollector::new(package);
+            uses.stmts(&parsed.syntax().body);
+            uses.uses.local.extend(static_imports.uses.iter().cloned());
+            Code {
+                source_text: source.into(),
+                uses: uses.uses,
+            }
+        })
+    };
     let mut conditional_names = HashSet::new();
 
     for stmt in &parsed.syntax().body {
@@ -621,6 +632,24 @@ fn collect_definitions(source: &str, package: Option<&str>) -> HashMap<String, M
                 defs.insert(class.name.to_string(), ModuleDef::Class(code(class, uses)));
             }
             Stmt::Assign(assign) => {
+                if assign
+                    .targets
+                    .iter()
+                    .any(|target| !matches!(target, Expr::Name(_)))
+                {
+                    let mut binder = Binder::new(package);
+                    for target in &assign.targets {
+                        binder.visit_expr(target);
+                    }
+                    for name in binder.finish().bindings.keys() {
+                        conditional_names.insert(name.clone());
+                        defs.insert(
+                            name.clone(),
+                            ModuleDef::Assignment(conservative_code().clone()),
+                        );
+                    }
+                    continue;
+                }
                 // Organizational declarations must not become dependencies when a local
                 // variable happens to share their name (the cone is conservative about locals).
                 if let Expr::Call(call) = assign.value.as_ref()
@@ -664,9 +693,9 @@ fn collect_definitions(source: &str, package: Option<&str>) -> HashMap<String, M
                     .into_iter()
                     .filter(|(_, binding)| !is_group_import(binding)),
             ),
-            Stmt::If(_) | Stmt::Try(_) => {
-                // Do not select a conditional binding by executing Python or by guessing
-                // which branch runs. The module may retain an earlier binding, install a
+            Stmt::If(_) | Stmt::Try(_) | Stmt::AugAssign(_) => {
+                // Do not recover binding provenance by executing Python or by guessing
+                // which branch/value applies. The module may retain an earlier binding, install a
                 // different import or define a fallback function. Represent each possible
                 // bound name using the existing conservative Code path: the module's source
                 // plus its references and all statically visible imports. Ordinary names
@@ -675,15 +704,7 @@ fn collect_definitions(source: &str, package: Option<&str>) -> HashMap<String, M
                 binder.visit_stmt(stmt);
                 let names = binder.finish().bindings;
                 if !names.is_empty() {
-                    let conservative = conditional_module.get_or_init(|| {
-                        let mut uses = UseCollector::new(package);
-                        uses.stmts(&parsed.syntax().body);
-                        uses.uses.local.extend(static_imports.uses.iter().cloned());
-                        Code {
-                            source_text: source.into(),
-                            uses: uses.uses,
-                        }
-                    });
+                    let conservative = conservative_code();
                     for name in names.keys().filter(|name| name.as_str() != "*") {
                         conditional_names.insert(name.clone());
                         defs.insert(name.clone(), ModuleDef::Assignment(conservative.clone()));
@@ -2054,6 +2075,32 @@ def my_asset():
         );
     }
 
+    #[test]
+    fn unpacked_and_augmented_module_bindings_follow_their_helper_provenance() {
+        for bindings in [
+            "VALUE, OTHER = compute(), 7",
+            "[VALUE, OTHER] = [compute(), 7]",
+            "VALUE, *REST = [compute(), 7, 8]",
+            "VALUE = 0\nVALUE += compute()",
+            "VALUE, OTHER = compute(), 7\nCAPTURED = VALUE\nVALUE = 0",
+            "VALUE = 0\nVALUE += compute()\nCAPTURED = VALUE\nVALUE = 0",
+        ] {
+            let name = if bindings.contains("CAPTURED") {
+                "CAPTURED"
+            } else {
+                "VALUE"
+            };
+            let entry = format!(
+                "from helpers import compute\n{bindings}\n\ndef my_asset(): return {name}\n"
+            );
+            assert_ne!(
+                hash_of(&entry, &one("helpers", HELPERS_V1), &[]),
+                hash_of(&entry, &one("helpers", HELPERS_V2), &[]),
+                "{bindings}"
+            );
+        }
+    }
+
     // ─── Known limitations, as `barca docs cache` lists them ─────────────────────
 
     /// Not followed today. Each of these is in the manual ("Not followed"); when one starts
@@ -2137,16 +2184,15 @@ def my_asset():
     }
 
     #[test]
-    fn module_level_tuple_and_augmented_assignments_are_not_tracked() {
-        // Documented under "Not followed". Tracking either would add the constant to the cone
-        // of every step that already uses one, changing hashes 0.17 computed.
+    fn module_level_tuple_and_augmented_constant_edits_change_hashes() {
+        // These formerly omitted definitions now conservatively contribute their module.
         let tuple = |b: u32| format!("A, B = 1, {b}\n\ndef my_asset():\n    return B\n");
-        assert_eq!(
+        assert_ne!(
             cone_hash(&tuple(2), "my_asset"),
             cone_hash(&tuple(3), "my_asset")
         );
         let augmented = |n: u32| format!("A = 1\nA += {n}\n\ndef my_asset():\n    return A\n");
-        assert_eq!(
+        assert_ne!(
             cone_hash(&augmented(2), "my_asset"),
             cone_hash(&augmented(3), "my_asset")
         );
