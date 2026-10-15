@@ -140,7 +140,11 @@ def test_a_tick_recomputes_only_what_changed_on_the_input_side(tmp_path):
     assert rows.get("publish", 0) >= 6, f"scheduled task did not run per tick: {context}"
     assert rows.get("model") == 1, f"an unchanged upstream of a task was recomputed: {context}"
     assert rows.get("feed") == 2, f"feed should run once per sensor value: {context}"
-    assert "publish v1" in err and "publish v2" in err, f"task did not see the new value: {err}"
+    with sqlite3.connect(tmp_path / ".barca" / "metadata.db") as db:
+        lines = [row[0] for row in db.execute("SELECT line FROM logs")]
+    assert "publish v1" in lines and "publish v2" in lines, (
+        f"task did not see the new value: {lines}\n{err}"
+    )
     # A scheduled asset is recomputed when its sensor changed, and skipped when nothing did.
     assert rows.get("tracked") == 2, f"tracked should run once per sensor value: {context}"
     assert rows.get("no_inputs") == 1, f"an asset with nothing changed was recomputed: {context}"

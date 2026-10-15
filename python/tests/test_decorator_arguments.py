@@ -17,9 +17,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 import barca
+import pytest
 from barca.api import _find_binary
 
 ASSET_ACCEPTS = (
@@ -245,7 +244,10 @@ def test_partitions_and_serializer_work_on_tasks_and_sensors_as_on_0_18_1(tmp_pa
     assert [(s["id"], s["partitions"]["total"]) for s in result["steps"]] == [
         ("pipeline.py:publish", 2)
     ]
-    assert sorted(line for line in proc.stderr.splitlines() if line.startswith("publishing")) == [
+    logs = barca_cmd(tmp_path, "logs", result["run_id"], "--json")
+    assert logs.returncode == 0, logs.stderr
+    assert "publishing" not in proc.stderr
+    assert sorted(row["line"] for row in json.loads(logs.stdout)) == [
         "publishing a",
         "publishing b",
     ]
