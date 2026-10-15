@@ -14,6 +14,12 @@ and these tags are available on the same releases page.
 
 ## Pending 0.24.0
 
+### Bug Fixes
+
+- Follow project helper references in function and lambda default arguments, including
+  nested functions and keyword-only defaults. Editing those helpers now invalidates their
+  consumers. Existing affected consumers may recompute once after upgrading.
+
 ### Features
 
 - Add `barca doctor` prerequisite checks, credential identity diagnostics and a documented local-only debugging profile.
