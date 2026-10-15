@@ -296,6 +296,11 @@ barca stats total pipeline.py --json  # timings and cache hit rate for one asset
 Source parsing is static and planning executes no pipeline step. `partitions(<expression>)`
 can evaluate Python and import its module while resolving keys.
 
+For an old or container-owned run that still reads `running` after you verified it stopped,
+use `barca history --reconcile RUN_ID --json`. It records `interrupted`, prints just that
+run using the normal history envelope, preserves successful results, and refuses a proven
+live owner. Ordinary history inspection stays read-only. See `barca docs cache`.
+
 ## Bounded output: --limit, --all, --fields
 
 `list`, `status` and `history` return every item in JSON unless `--limit N` is explicit.

@@ -200,11 +200,16 @@ Examples:
   barca history                # last 10 in a terminal, every run as JSON when piped
   barca history -l 25          # last 25
   barca history --all          # every recorded run
+  barca history --reconcile RUN_ID --json   # record a verified-stopped run as interrupted
   barca history --json         # {runs: [...], total, truncated, hint?}, even in a terminal
   barca history --pretty       # the table, even when piped
   barca history --fields run_id,status,elapsed_seconds,attempts   # JSON with only these keys per run
   barca history --env dev      # runs recorded in another environment
 
+--reconcile is an explicit write: first verify the run stopped. It refuses a proven live
+owner and terminal rows. It prints only that run, preserving progress and cached results;
+no end time or duration is invented. Ordinary history inspection never reconciles an
+unknown owner automatically.
 Newest first. When more runs exist than are shown, JSON says `\"truncated\": true` with the
 `total`, and the table prints a one-line note on stderr. In JSON, `files` is an array: the .py
 files the run was given.
@@ -474,6 +479,9 @@ pub(crate) enum Cli {
     /// Show recent run history
     #[command(after_help = HISTORY_HELP)]
     History {
+        /// After verifying a run stopped, record it as interrupted; refuses a proven live owner
+        #[arg(long, value_name = "RUN_ID", conflicts_with_all = ["limit", "all"])]
+        reconcile: Option<String>,
         /// Maximum recent runs (default: every run in JSON, 10 in a human table)
         #[arg(short, long)]
         limit: Option<usize>,
