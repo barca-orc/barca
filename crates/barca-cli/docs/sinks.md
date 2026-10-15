@@ -23,10 +23,11 @@ def summary() -> dict:
 
 - Paths are local or any fsspec URI (`abfss://`, `s3://`, `gs://`). Remote schemes need the
   matching extra (`pip install "barca[s3]"`, `[azure]`, `[gcs]`, or `[remote]`).
-- The format comes from `serializer=` (`json`, `pickle`, `parquet`), else the path extension
-  (`.json`, `.pkl`/`.pickle`, `.parquet`), else the parent asset's artifact format.
-- A parquet sink needs a DataFrame, Arrow table or DuckDB relation. Anything else is a sink
-  failure: barca never writes pickle bytes under a `.parquet` name.
+- The format comes from `serializer=` (`json`, `pickle`, `parquet`, `csv`), else the path extension
+  (`.json`, `.pkl`/`.pickle`, `.parquet`, `.csv`), else the parent asset's artifact format.
+- A CSV sink writes a header with no pandas index. CSV readers infer types; see `barca docs types`.
+- A parquet or CSV sink needs a DataFrame, Arrow table or DuckDB relation. Anything else is a sink
+  failure: barca never writes pickle bytes under a `.parquet` or `.csv` name.
 - Several `@sink` decorators may be stacked on one asset.
 - A sink is written when its asset runs; an asset served from cache does not write its sinks.
   Adding a `@sink` or editing one (its path or `serializer=`) therefore changes the asset's run

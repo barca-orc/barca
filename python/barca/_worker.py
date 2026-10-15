@@ -42,6 +42,7 @@ _EXT_FORMATS = {
     ".pkl": "pickle",
     ".pickle": "pickle",
     ".parquet": "parquet",
+    ".csv": "csv",
 }
 
 
@@ -563,10 +564,10 @@ def _write_sinks(result, step, node_id, primary_fmt):
         dest = sink.get("path", "")
         try:
             fmt = sink.get("serializer") or _EXT_FORMATS.get(_storage.suffix(dest)) or primary_fmt
-            if fmt not in ("json", "pickle", "parquet"):
+            if fmt not in ("json", "pickle", "parquet", "csv"):
                 raise ValueError(
                     f"sink serializer '{fmt}' is not supported yet "
-                    "(supported: json, pickle, parquet)"
+                    "(supported: json, pickle, parquet, csv)"
                 )
             if fmt == "parquet" and resolve_format(result, fmt, warn=False) != "parquet":
                 # An artifact may fall back to pickle (barca picks its file name), but a sink's
@@ -671,7 +672,7 @@ def _materialize(
         artifact["json"] = inline_json
     if content_hash is not None:
         artifact["content_hash"] = content_hash
-    if step.get("branch") and fmt == "parquet":
+    if step.get("branch") and fmt in ("parquet", "csv"):
         # The caller of parallel() gets back the frame type the branch returned.
         from barca import _branches
 

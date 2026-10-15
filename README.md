@@ -77,7 +77,7 @@ install SQL support with `uv add 'barca[sql]'`.
 
 ```
 .barca/metadata.db                          run history and the record of what is cached
-.barca/artifacts/<node>/<run_hash>.<ext>    one file per result: .json, .pkl or .parquet
+.barca/artifacts/<node>/<run_hash>.<ext>    one file per result: .json, .pkl, .parquet or .csv
 .barca/envs/<env>/                          the same two, for each --env other than the default
 ```
 
@@ -134,7 +134,7 @@ summary   asset  stale   changed       success 2026-10-07 18:14:53 0.00s  dict (
 1 cached, 1 stale, 0 never run, 0 partial, 0 unknown, 0 always run
 ```
 
-`barca sql` makes every node with a json or parquet result a view named after its
+`barca sql` makes every node with a json, CSV or parquet result a view named after its
 declared `name=`, or its function when unset, so you can inspect data without writing a step
 or a script. Partitioned views include current known keys; removed-key results
 remain in history:
@@ -233,7 +233,9 @@ undecorated helpers, installed packages, environment variables not declared with
 
 ## Large inputs
 
-A DataFrame, Arrow table or DuckDB relation is stored as parquet. The annotation on the
+A DataFrame, Arrow table or DuckDB relation is stored as parquet by default. Use
+`@asset(serializer="csv")` for CSV artifacts or `@sink("exports/orders.csv")` for a CSV export.
+CSV has a header and no pandas index; readers infer types. The annotation on the
 consuming parameter decides how it is read back:
 
 | Annotation | What is read |

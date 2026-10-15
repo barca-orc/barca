@@ -37,7 +37,7 @@ def _rows(tmp_path):
         ).fetchall()
 
 
-@pytest.mark.parametrize("fmt", ["json", "pickle", "parquet"])
+@pytest.mark.parametrize("fmt", ["json", "pickle", "parquet", "csv"])
 @pytest.mark.parametrize("trigger", ["refresh", "missing"])
 def test_recompute_compares_digest_and_retains_last_event(tmp_path, fmt, trigger):
     source = f"""
@@ -47,7 +47,7 @@ from barca import asset
 @asset(serializer={fmt!r})
 def result():
     value = int(Path("external.txt").read_text())
-    return pd.DataFrame({{"value": [value]}}) if {fmt!r} == "parquet" else {{"value": value}}
+    return pd.DataFrame({{"value": [value]}}) if {fmt!r} in ("parquet", "csv") else {{"value": value}}
 """
     (tmp_path / "pipeline.py").write_text(source)
     (tmp_path / "external.txt").write_text("7")

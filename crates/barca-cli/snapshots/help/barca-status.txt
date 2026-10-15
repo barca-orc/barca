@@ -27,7 +27,7 @@ Options:
           [possible values: id, name, kind, inputs, partitioned, cache, partitions, last_materialization, last_bytes_change, shape, env]
 
       --sample <N>
-          Include up to N sample rows from each json/parquet artifact (off by default; pickles are never sampled)
+          Include up to N sample rows from each json/parquet/CSV artifact (off by default; pickles are never sampled)
 
       --env <ENV>
           Environment name (separates cache/state per environment)
@@ -44,7 +44,7 @@ Examples:
   barca status pipeline.py --pretty        # the table, even when piped
   barca status pipeline.py --fields id,cache   # JSON with only these keys per node
   barca status big.py --limit 20           # first 20 nodes; the summary counts all
-  barca status total pipeline.py --json --sample 5   # add up to 5 sample rows per json/parquet artifact
+  barca status total pipeline.py --json --sample 5   # add up to 5 sample rows per json/parquet/CSV artifact
   barca status pipeline.py --env dev       # state recorded in another environment
 
 Cache state per node: cached, stale (ran before; code or inputs changed, or its artifact file is

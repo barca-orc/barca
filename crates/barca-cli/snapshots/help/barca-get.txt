@@ -82,7 +82,7 @@ secrets redacted). `warnings` is always an array: plan-time warnings for the ste
 planned, [] when there are none; each is {kind, node, param, message} and is also one
 `[barca] warning: ...` line on stderr. The only kind is unused_input: a step declares an input its
 function never uses (barca docs assets, "Unused inputs"). Warnings never change the exit code.
---dry-run reports the same list. For parquet/pickle assets final_output is a pointer,
+--dry-run reports the same list. For parquet/CSV/pickle assets final_output is a pointer,
 {"_barca_artifact": {"path", "format", "size_bytes"}}; the Python API (barca.get)
 loads the value for you.
 Several targets (`a,b`, comma-separated, no spaces): final_output is replaced by `targets`, keyed by

@@ -91,7 +91,7 @@ secrets redacted). `warnings` is always an array: plan-time warnings for the ste
 planned, [] when there are none; each is {kind, node, param, message} and is also one
 `[barca] warning: ...` line on stderr. The only kind is unused_input: a step declares an input its
 function never uses (barca docs assets, \"Unused inputs\"). Warnings never change the exit code.
---dry-run reports the same list. For parquet/pickle assets final_output is a pointer,
+--dry-run reports the same list. For parquet/CSV/pickle assets final_output is a pointer,
 {\"_barca_artifact\": {\"path\", \"format\", \"size_bytes\"}}; the Python API (barca.get)
 loads the value for you.
 Several targets (`a,b`, comma-separated, no spaces): final_output is replaced by `targets`, keyed by
@@ -266,7 +266,7 @@ Examples:
   barca status pipeline.py --pretty        # the table, even when piped
   barca status pipeline.py --fields id,cache   # JSON with only these keys per node
   barca status big.py --limit 20           # first 20 nodes; the summary counts all
-  barca status total pipeline.py --json --sample 5   # add up to 5 sample rows per json/parquet artifact
+  barca status total pipeline.py --json --sample 5   # add up to 5 sample rows per json/parquet/CSV artifact
   barca status pipeline.py --env dev       # state recorded in another environment
 
 Cache state per node: cached, stale (ran before; code or inputs changed, or its artifact file is
@@ -298,7 +298,7 @@ Examples:
 Every asset, sensor and task with a result on disk is a view named after its declared name
 (or its function name when unnamed; full id, quoted, when two nodes share a name; stderr says so).
 An asset whose code or inputs changed is still queryable at its last result, with a note on stderr.
-Only parquet and json results can be queried; pickles cannot. Runs in an in-memory DuckDB over
+Only parquet, CSV and json results can be queried; pickles cannot. Runs in an in-memory DuckDB over
 artifact files; no pipeline step runs and no new run is recorded. Install SQL support: uv add 'barca[sql]'.
 partitions(<expression>) may evaluate Python while loading its keys.
 Partitioned views include current known keys only; removed keys stay in history. Unknown derived
@@ -330,7 +330,7 @@ Topics are compiled into the binary: offline, and always matching this version."
     about = "Invisible asset orchestrator. Discover a project's assets and tasks with `barca list <file.py>`",
     long_about = "Barca runs Python asset graphs with caching by run hash.\n\
                   Every asset output is fully materialized to an artifact file at step \
-                  boundaries (json, pickle, or parquet) — that persistence is the cache \
+                  boundaries (json, pickle, parquet, or CSV) — that persistence is the cache \
                   checkpoint. pandas/polars DataFrames, pyarrow Tables and duckdb relations \
                   are written as parquet; parameter type annotations choose how downstream \
                   steps read it back (pandas by default, or polars, pyarrow, duckdb) but do \
@@ -556,7 +556,7 @@ pub(crate) enum Cli {
         /// Implies --json. An unknown key is a usage error listing the valid ones
         #[arg(long, value_delimiter = ',', value_parser = PossibleValuesParser::new(bounded::STATUS_FIELDS))]
         fields: Option<Vec<String>>,
-        /// Include up to N sample rows from each json/parquet artifact (off by default; pickles
+        /// Include up to N sample rows from each json/parquet/CSV artifact (off by default; pickles
         /// are never sampled)
         #[arg(long, value_name = "N")]
         sample: Option<usize>,
