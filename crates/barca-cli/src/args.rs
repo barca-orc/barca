@@ -100,7 +100,6 @@ runs even if another fails; exit 1 if any failed.
 Refresh: the same vocabulary as `barca run`. --refresh takes ONE comma-separated list of assets in
 the cone (the target itself may be named) and also re-runs everything downstream of them;
 --no-cascade re-runs only the named ones. --refresh-all re-runs every asset in the cone.
---no-cache is a deprecated spelling of --refresh-all: it still works and warns on stderr.
 A cached step whose artifact file is gone is computed again when something needs to read it (a
 step that runs takes it as an input, or it is a target), with reason `artifact_missing` and a
 warning on stderr. A missing artifact that nothing reads is left alone (barca docs cache).
@@ -147,8 +146,7 @@ as an input a step never uses (barca docs assets); [] when there are none.
 assets you name and every asset downstream of them in the task's cone (reason `refresh_cascade`),
 so fresh data reaches the task. --no-cascade re-runs only the named assets; cached assets
 downstream of them then do not reflect the refresh, and barca warns. A name that is not an
-upstream asset is an error. --no-cache is a deprecated spelling of --refresh-all: it still works
-and warns on stderr.
+upstream asset is an error.
 An upstream asset that is cached but whose artifact file is gone is computed again before the task
 reads it (reason `artifact_missing`, a warning on stderr), so a deleted artifact does not fail the
 run (barca docs cache).
@@ -394,7 +392,7 @@ pub(crate) enum Cli {
         /// Assets to force re-materialize, as ONE comma-separated list (`--refresh a,b`, not
         /// `--refresh a b`); the target itself may be named. Every asset downstream of them in
         /// the target's cone re-materializes too (see --no-cascade)
-        #[arg(long, value_delimiter = ',', conflicts_with_all = ["refresh_all", "no_cache"])]
+        #[arg(long, value_delimiter = ',', conflicts_with = "refresh_all")]
         refresh: Option<Vec<String>>,
         /// With --refresh: re-materialize only the named assets, not what is downstream of
         /// them. Cached downstream assets then do not reflect the refresh; barca warns
@@ -403,9 +401,6 @@ pub(crate) enum Cli {
         /// Force re-materialize EVERY asset in the target's cone (nothing comes from cache)
         #[arg(long)]
         refresh_all: bool,
-        /// Deprecated spelling of --refresh-all (prints a warning; removed in a future minor)
-        #[arg(long, hide = true, conflicts_with = "refresh_all")]
-        no_cache: bool,
         /// Show what this command would do (each step cached or will-run, and why) without
         /// executing steps or recording a run (shared history may synchronize)
         #[arg(long)]
@@ -435,7 +430,7 @@ pub(crate) enum Cli {
         /// Upstream assets to force re-materialize, as ONE comma-separated list
         /// (`--refresh a,b`, not `--refresh a b`). Every asset downstream of them in the
         /// task's cone re-materializes too (see --no-cascade)
-        #[arg(long, value_delimiter = ',', conflicts_with_all = ["refresh_all", "no_cache"])]
+        #[arg(long, value_delimiter = ',', conflicts_with = "refresh_all")]
         refresh: Option<Vec<String>>,
         /// With --refresh: re-materialize only the named assets, not what is downstream of
         /// them. Cached downstream assets then do not reflect the refresh; barca warns
@@ -444,9 +439,6 @@ pub(crate) enum Cli {
         /// Force re-materialize EVERY asset in the task's cone (nothing comes from cache)
         #[arg(long)]
         refresh_all: bool,
-        /// Deprecated spelling of --refresh-all (prints a warning; removed in a future minor)
-        #[arg(long, hide = true, conflicts_with = "refresh_all")]
-        no_cache: bool,
         /// Show what this command would do (each step cached or will-run, and why) without
         /// executing steps or recording a run (shared history may synchronize)
         #[arg(long)]

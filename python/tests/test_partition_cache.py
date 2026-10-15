@@ -80,7 +80,7 @@ def test_a_removed_key_is_not_resurrected(project):
     assert shrunk["steps_executed"] == 1  # only the fan-in; both remaining keys were cached
 
 
-def test_no_cache_still_reruns_every_partition(project):
+def test_refresh_all_reruns_every_partition(project):
     get(project)
     forced = get(project, "--refresh-all")
     assert forced["steps_executed"] == 4

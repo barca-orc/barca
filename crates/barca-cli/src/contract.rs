@@ -68,14 +68,6 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
         "kept for compatibility; --json / --pretty are the canonical spelling",
     ),
     (
-        "get --no-cache",
-        "deprecated: the old spelling of --refresh-all; warns on stderr and will be removed",
-    ),
-    (
-        "run --no-cache",
-        "deprecated: the old spelling of --refresh-all; warns on stderr and will be removed",
-    ),
-    (
         "status --sample",
         "sample rows come from a Python helper whose output may grow",
     ),
