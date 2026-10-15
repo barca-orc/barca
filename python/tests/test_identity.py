@@ -206,3 +206,17 @@ def test_provider_errors_redact_environment_credentials(monkeypatch):
     assert "private-" not in message
     assert "explicit access key" in message
     assert "aws sts get-caller-identity" in message
+
+
+def test_explicit_s3_credential_recovery_does_not_select_an_unrelated_profile(monkeypatch):
+    monkeypatch.setenv("AWS_PROFILE", "unrelated-profile")
+    monkeypatch.setenv(
+        "BARCA_STORAGE_OPTIONS",
+        json.dumps({"s3": {"key": "selected-access-key", "secret": "selected-secret"}}),
+    )
+    hint = _identity.error_hint("s3://bucket", PermissionError("denied"))
+    assert "storage options or AWS environment variables" in hint
+    assert "those same credentials" in hint
+    assert "unrelated-profile" not in hint
+    assert "selected-access-key" not in hint
+    assert "selected-secret" not in hint

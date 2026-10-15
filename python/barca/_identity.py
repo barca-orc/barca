@@ -51,7 +51,9 @@ def context(uri, fs=None):
         if _fingerprint(key):
             result["credential_fingerprint"] = _fingerprint(key)
         result["recovery"] = (
-            f"Run aws sts get-caller-identity using AWS_PROFILE={shlex.quote(profile)}; refresh that profile's credentials (for SSO: aws sso login --profile {shlex.quote(profile)})."
+            "Reload the selected S3 access key/session token in storage options or AWS environment variables; run aws sts get-caller-identity with those same credentials."
+            if key
+            else f"Run aws sts get-caller-identity using AWS_PROFILE={shlex.quote(profile)}; refresh that profile's credentials (for SSO: aws sso login --profile {shlex.quote(profile)})."
         )
         hostname = (urlsplit(endpoint).hostname or "").lower()
         if hostname.endswith(".r2.cloudflarestorage.com"):
