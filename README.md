@@ -383,6 +383,11 @@ has to come in through a sensor. A scheduled sensor's tick runs the sensor and d
 trigger the assets that read it. The other freshness values, `Always` (the default) and
 `Manual`, are recorded and shown by `barca list` and have no effect at run time today.
 
+The server-ledger design in RFC-0007 is accepted but not implemented in v0.24.0:
+CLI `--server`, server URL configuration and laptop runs against the shared ledger are
+still pending. Use HTTP or `barca.Client` to run deployed code on today's server;
+ordinary `barca get` and `barca.get()` execute locally.
+
 Runs started over HTTP are asynchronous: `POST` returns a `run_id`, and you poll
 `/status/<run_id>`.
 

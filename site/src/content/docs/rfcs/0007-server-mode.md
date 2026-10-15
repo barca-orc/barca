@@ -11,6 +11,11 @@ description: 'One deployed barca serve owns the record of what exists. Laptops r
 
 ---
 
+> **Implementation status (v0.24.0):** Accepted design, not shipped functionality.
+> The server URL settings, CLI `--server`/`--local` flags, shared-ledger operations and
+> parity contract below are pending #393, #394 and #402. For a working setup today,
+> follow [Deploying barca serve](/deploying/) and the [current HTTP API](/reference/server-api/).
+
 ## 1. Summary
 
 A team deploys one `barca serve` and points every client at it with one setting: `[server] url`

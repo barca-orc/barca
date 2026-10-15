@@ -10,6 +10,11 @@ The server binds to `127.0.0.1` and has no authentication: anyone who can reach 
 start and cancel runs. To reach it from another machine, put a reverse proxy that authenticates
 in front of it (see [Deploying](/deploying/)).
 
+**v0.24.0 scope:** this is the implemented `barca serve` API. The accepted
+[server-ledger RFC](/rfcs/0007-server-mode/) is still awaiting implementation (#393,
+#394, #402): CLI `--server`, server URL configuration and local runs against a shared
+ledger are unavailable. Use this API or `barca.Client` to run deployed code remotely.
+
 Runs execute inside the server process, in the background. A run in progress is tracked in
 memory and can be cancelled with `DELETE /run/{run_id}`. Finished runs are written to
 `.barca/metadata.db`, like runs from the command line.

@@ -1,5 +1,12 @@
 # Scheduling and `barca serve`
 
+`barca serve` currently runs deployed code on one machine and exposes the HTTP API,
+web UI and cron scheduler. Use the HTTP API or `barca.Client` to trigger remote work.
+Ordinary `barca get` and `barca.get()` run locally. The accepted server-ledger design
+(RFC-0007), including CLI `--server`/`--local`, server URL configuration and laptop
+runs against the server's ledger, is not implemented in v0.24.0 (#393, #394, #402).
+Deployment instructions: https://barca.sh/deploying/.
+
 Freshness is recorded on every node. Only `Schedule(...)` starts automatic runs:
 
 | Freshness | Meaning |
