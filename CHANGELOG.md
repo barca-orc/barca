@@ -14,6 +14,14 @@ and these tags are available on the same releases page.
 
 ## Pending 0.24.0
 
+### Features
+
+- Run JSON reports executed-step durations and attempts, with slow module imports
+  reported separately. History JSON totals recorded materialization attempts; stats
+  retains per-materialization attempts. Timeout errors identify the step id.
+- **Breaking:** agent completion and permanent failure lines append `attempts=N` after
+  retries. Allow this optional suffix when parsing those lines, or read the structured
+  `steps[].attempts` field instead.
 ### Removed
 
 - **Breaking:** removed `barca get|run --no-cache` and `barca.get(no_cache=...)`.

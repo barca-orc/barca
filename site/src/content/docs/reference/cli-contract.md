@@ -132,7 +132,7 @@ default, and any aliases.
 | `--refresh-all` | - | default `false` | stable | Force re-materialize EVERY asset in the target's cone (nothing comes from cache) |
 | `--dry-run` | - | default `false` | stable | Show what this command would do (each step cached or will-run, and why) without executing steps or recording a run (shared history may synchronize) |
 | `--agent` | - | default `false` | stable | Agent-friendly output: plain structured progress lines instead of visual progress bar |
-| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `partitions`, `env` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones |
+| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `partitions`, `env` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
 
 #### barca run
@@ -148,7 +148,7 @@ default, and any aliases.
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `--agent` | - | default `false` | stable | Agent-friendly output: plain structured progress lines instead of visual progress bar |
-| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `partitions`, `env` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones |
+| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `partitions`, `env` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
 
 #### barca plan
@@ -176,7 +176,7 @@ default, and any aliases.
 | `--all` | - | default `false` | stable | Show every recorded run (no limit) |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
-| `--fields` | comma-separated: `run_id`, `command`, `files`, `target`, `status`, `steps_total`, `steps_executed`, `steps_cached`, `started_at`, `finished_at`, `elapsed_seconds` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `runs`. Implies --json. An unknown key is a usage error listing the valid ones |
+| `--fields` | comma-separated: `run_id`, `command`, `files`, `target`, `status`, `steps_total`, `steps_executed`, `steps_cached`, `attempts`, `started_at`, `finished_at`, `elapsed_seconds` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `runs`. Implies --json. An unknown key is a usage error listing the valid ones |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
 
 #### barca stats
@@ -463,7 +463,9 @@ the set of `kind` values grows additively.
 | `status` | string | always |
 | `steps` | array | always |
 | `steps[]` | object | always |
+| `steps[].attempts` | integer | always |
 | `steps[].detail` | string | always |
+| `steps[].elapsed_seconds` | number | always |
 | `steps[].env` | object | sometimes |
 | `steps[].env.<name>` | null \| string | always |
 | `steps[].id` | string | always |
@@ -490,6 +492,39 @@ the set of `kind` values grows additively.
   recorded hash" below), `env` on nodes that declare `env=[...]` (`null` for an unset variable,
   `"<redacted>"` for secret-looking names).
 
+Executed steps also carry `attempts` and `elapsed_seconds`, including failures.
+Elapsed seconds sum active reported time across attempts; backoff is excluded. For
+partition summaries, elapsed time sums executed keys while attempts is the maximum
+per key. Cached steps and dry runs omit these keys. Worker disconnects use the
+coordinator's observed in-flight time. Slow module imports (> 1 second) add
+`import_seconds`, included in elapsed time and summed across attempts/keys. Reused
+modules add no import time. The conditional import field is snapshotted with a
+controlled slow-import/retry fixture below; ordinary schema fixtures exclude it to
+avoid depending on CI machine speed. `barca docs status` explains the timing scopes.
+
+<!-- BEGIN GENERATED schema get_timing_retry -->
+| Key | Type | Present |
+|---|---|---|
+| `elapsed_seconds` | number | always |
+| `final_output` | `<user value>` | always |
+| `phases` | integer | always |
+| `run_id` | string | always |
+| `status` | string | always |
+| `steps` | array | always |
+| `steps[]` | object | always |
+| `steps[].attempts` | integer | always |
+| `steps[].detail` | string | always |
+| `steps[].elapsed_seconds` | number | always |
+| `steps[].id` | string | always |
+| `steps[].import_seconds` | number | always |
+| `steps[].kind` | string | always |
+| `steps[].reason` | string | always |
+| `steps[].run_hash` | string | always |
+| `steps[].status` | string | always |
+| `steps_executed` | integer | always |
+| `warnings` | array | always |
+<!-- END GENERATED schema get_timing_retry -->
+
 For a parquet or pickle artifact, `final_output` is a pointer instead of the value:
 
 <!-- BEGIN GENERATED schema get_artifact_pointer -->
@@ -507,7 +542,9 @@ For a parquet or pickle artifact, `final_output` is a pointer instead of the val
 | `steps` | array | always |
 | `steps[]` | object | always |
 | `steps[].artifact` | string | sometimes |
+| `steps[].attempts` | integer | sometimes |
 | `steps[].detail` | string | sometimes |
+| `steps[].elapsed_seconds` | number | sometimes |
 | `steps[].id` | string | always |
 | `steps[].kind` | string | always |
 | `steps[].reason` | string | sometimes |
@@ -529,7 +566,9 @@ A partitioned step carries `partitions` (counted in keys; `will_run_keys` lists 
 | `status` | string | always |
 | `steps` | array | always |
 | `steps[]` | object | always |
+| `steps[].attempts` | integer | always |
 | `steps[].detail` | string | always |
+| `steps[].elapsed_seconds` | number | always |
 | `steps[].id` | string | always |
 | `steps[].kind` | string | always |
 | `steps[].partitions` | object | sometimes |
@@ -558,7 +597,9 @@ A partitioned step carries `partitions` (counted in keys; `will_run_keys` lists 
 | `steps` | array | always |
 | `steps[]` | object | always |
 | `steps[].artifact` | string | sometimes |
+| `steps[].attempts` | integer | sometimes |
 | `steps[].detail` | string | sometimes |
+| `steps[].elapsed_seconds` | number | sometimes |
 | `steps[].env` | object | sometimes |
 | `steps[].env.<name>` | null \| string | always |
 | `steps[].id` | string | always |
@@ -592,7 +633,9 @@ envelope goes to stderr:
 | `steps` | array | always |
 | `steps[]` | object | always |
 | `steps[].artifact` | string | sometimes |
+| `steps[].attempts` | integer | sometimes |
 | `steps[].detail` | string | sometimes |
+| `steps[].elapsed_seconds` | number | sometimes |
 | `steps[].env` | object | sometimes |
 | `steps[].env.<name>` | null \| string | always |
 | `steps[].id` | string | always |
@@ -623,8 +666,10 @@ entries:
 | `steps[]` | object | always |
 | `steps[].artifact` | string | sometimes |
 | `steps[].artifact_mismatch` | boolean | sometimes |
+| `steps[].attempts` | integer | sometimes |
 | `steps[].bytes_changed` | boolean | sometimes |
 | `steps[].detail` | string | sometimes |
+| `steps[].elapsed_seconds` | number | sometimes |
 | `steps[].id` | string | always |
 | `steps[].kind` | string | always |
 | `steps[].reason` | string | sometimes |
@@ -704,7 +749,9 @@ failed, and the exit code is then 1. Steps skipped because an upstream failed ha
 | `steps` | array | always |
 | `steps[]` | object | always |
 | `steps[].artifact` | string | sometimes |
+| `steps[].attempts` | integer | sometimes |
 | `steps[].detail` | string | sometimes |
+| `steps[].elapsed_seconds` | number | sometimes |
 | `steps[].env` | object | sometimes |
 | `steps[].env.<name>` | null \| string | always |
 | `steps[].id` | string | always |
@@ -970,6 +1017,11 @@ counts every node even when `nodes` is truncated.
 
 ### history
 
+`runs[].attempts` is the sum of attempts in its recorded materialization rows, including
+executed partition keys; an all-cached run has zero. Upload-failure rows retain their
+existing transfer-attempt counts. `stats.recent_runs[].attempts` continues to report
+attempts per materialization, with the stored final-attempt duration.
+
 Experimental `--reconcile RUN_ID` is an explicit write after the operator verifies the run
 stopped. It returns just that run in the existing envelope (`total: 1`, `truncated: false`),
 recorded as `interrupted`. It refuses a proven live owner, a non-running row or unknown id
@@ -984,6 +1036,7 @@ preserved, and an unknown end time/duration is not invented. Ordinary history st
 | `hint` | string | always |
 | `runs` | array | always |
 | `runs[]` | object | always |
+| `runs[].attempts` | integer | always |
 | `runs[].command` | string | always |
 | `runs[].elapsed_seconds` | number | always |
 | `runs[].files` | array | always |
@@ -1021,6 +1074,7 @@ Reconciled history (same envelope; unknown end timestamp and duration remain nul
 |---|---|---|
 | `runs` | array | always |
 | `runs[]` | object | always |
+| `runs[].attempts` | integer | always |
 | `runs[].command` | string | always |
 | `runs[].elapsed_seconds` | null | always |
 | `runs[].files` | array | always |
@@ -1206,6 +1260,7 @@ placeholders:
 [barca] <n>/<total> steps | done in <secs>s
 [barca] <n>/<total> steps | failed in <secs>s
 [barca] checking artifact store <store>/default/artifacts (timeout <secs>s)
+[barca] importing <module>
 [barca] run failed: step 'pipeline.py:broken' failed: ValueError: contract fixture failure; 0 downstream steps skipped (exit 1)
 [barca] step:pipeline.py:broken failed: ValueError: contract fixture failure
 [barca] step:pipeline.py:keys completed <secs>s (<n>/<total>)
@@ -1214,6 +1269,7 @@ placeholders:
 [barca] step:pipeline.py:per_key[k=b] completed <secs>s (<n>/<total>)
 [barca] step:pipeline.py:report completed <secs>s (<n>/<total>)
 [barca] step:pipeline.py:total cached env CONTRACT_API_TOKEN=<unset> CONTRACT_REGION=eu
+[barca] step:pipeline.py:value completed <secs>s (<n>/<total>) attempts=2
 [barca] uploading <n> artifacts to <store>/default/artifacts (timeout <secs>s per attempt); waiting for confirmation
 [barca] warning: pipeline.py:report never uses its input `rows`. It is still loaded in full each time the step runs, and it counts toward the step's cache key. Use it, remove it from inputs=, or rename the parameter `_rows` if it is there for ordering only (a `_` input is not loaded and never flagged)
 ```
@@ -1303,8 +1359,10 @@ when known. These additive keys are stable. See `barca docs cache` and
 | `status` | string | always |
 | `steps` | array | always |
 | `steps[]` | object | always |
+| `steps[].attempts` | integer | always |
 | `steps[].bytes_changed` | boolean | always |
 | `steps[].detail` | string | always |
+| `steps[].elapsed_seconds` | number | always |
 | `steps[].id` | string | always |
 | `steps[].kind` | string | always |
 | `steps[].reason` | string | always |
@@ -1389,3 +1447,10 @@ and `specs/task-output.md` for flush, failure and ordering boundaries.
 | `[].line` | string | always |
 | `[].node_id` | string | always |
 <!-- END GENERATED schema logs -->
+
+Import progress uses `[barca] importing <module>` before a module is loaded. Completion
+and permanent failure step lines append `attempts=N` only when N > 1; their existing
+prefixes and completion durations remain. Timeout messages identify the step, rather
+than the internal callable wrapper.
+
+Older read-only snapshots without attempt metadata report a null history attempt total.

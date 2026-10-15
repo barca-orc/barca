@@ -89,6 +89,7 @@ struct FrozenWorker {
     cmd_tx: mpsc::Sender<serde_json::Value>,
     _task: JoinHandle<()>,
     parent_item: ItemId,
+    front_since: std::time::Instant,
     group_id: GroupId,
     /// The worker_id used when this worker was originally spawned (matches
     /// the worker_io_task's worker_id, so events arrive with this key).
@@ -510,6 +511,7 @@ impl WorkerPool {
                                 ok: true,
                                 elapsed_seconds: artifact.elapsed_seconds,
                                 error: None,
+                                import_seconds: artifact.import_seconds,
                             });
                         }
                         coord.on_item_completed(item_id);
@@ -524,7 +526,8 @@ impl WorkerPool {
                         error_type,
                         message,
                         traceback,
-                        ..
+                        elapsed,
+                        import_seconds,
                     } => {
                         let Some(item_id) = self.take_lease(worker_id, node_id, coord) else {
                             crate::errln!(
@@ -545,8 +548,9 @@ impl WorkerPool {
                             ev(RunEvent::StepFinished {
                                 node_id: node_id.clone(),
                                 ok: false,
-                                elapsed_seconds: None,
+                                elapsed_seconds: Some(elapsed),
                                 error: Some(error.clone()),
+                                import_seconds,
                             });
                         }
                         if let FailureAction::RetryAfter(delay) =
@@ -696,6 +700,7 @@ impl WorkerPool {
                             cmd_tx: handle.cmd_tx,
                             _task: handle._task,
                             parent_item: item_id,
+                            front_since: handle.front_since,
                             group_id,
                             original_worker_id: worker_id,
                             rest,
@@ -735,6 +740,17 @@ impl WorkerPool {
                     // leases return to the queue for another worker.
                     if let Some(mut handle) = self.workers.remove(&worker_id) {
                         if let Some(in_flight) = handle.leases.pop_front() {
+                            if let Some(ref mut ev) = on_event {
+                                ev(RunEvent::StepFinished {
+                                    node_id: coord.item(in_flight).step_id.display(),
+                                    ok: false,
+                                    elapsed_seconds: Some(
+                                        handle.front_since.elapsed().as_secs_f64(),
+                                    ),
+                                    error: Some("worker disconnected".to_string()),
+                                    import_seconds: None,
+                                });
+                            }
                             if let FailureAction::RetryAfter(delay) =
                                 coord.on_item_failed(in_flight, "worker disconnected".to_string())
                             {
@@ -758,6 +774,18 @@ impl WorkerPool {
                         // and when its branches finished there was nobody to resume: the run
                         // never ended (#333).
                         let mut fw = self.frozen.swap_remove(at);
+                        if let Some(ref mut ev) = on_event {
+                            ev(RunEvent::StepFinished {
+                                node_id: coord.item(fw.parent_item).step_id.display(),
+                                ok: false,
+                                elapsed_seconds: Some(fw.front_since.elapsed().as_secs_f64()),
+                                error: Some(
+                                    "worker disconnected while waiting for parallel() branches"
+                                        .to_string(),
+                                ),
+                                import_seconds: None,
+                            });
+                        }
                         coord.abandon_group(fw.group_id);
                         if let FailureAction::RetryAfter(delay) = coord.on_item_failed(
                             fw.parent_item,
