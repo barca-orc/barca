@@ -1,0 +1,16 @@
+# barca history --reconcile orphan-run --json  (stdout, exit 0)
+runs : array
+runs[] : object
+runs[].command : string
+runs[].elapsed_seconds : null
+runs[].files : array
+runs[].finished_at : null
+runs[].run_id : string
+runs[].started_at : string
+runs[].status : string
+runs[].steps_cached : integer
+runs[].steps_executed : integer
+runs[].steps_total : integer
+runs[].target : string
+total : integer
+truncated : boolean

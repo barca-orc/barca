@@ -1,4 +1,4 @@
-//! Read-only commands: `plan`, `history`, `stats` and the node listing behind `barca list`.
+//! Inspection commands: `plan`, `history`, `stats` and the node listing behind `barca list`.
 //!
 //! None of these run a step. They read the project's source (statically) or the metadata DB.
 
@@ -66,6 +66,17 @@ pub async fn history(
     let total = db::count_runs(&cfg.db_path).await?;
     let runs = db::get_recent_runs(&cfg.db_path, limit.unwrap_or(total)).await?;
     Ok((runs, total))
+}
+
+/// Record a running row as interrupted after the operator has verified it stopped.
+/// This is the explicit write exception to ordinary, read-only history inspection.
+pub async fn reconcile_run(
+    cfg: &crate::config::ResolvedConfig,
+    run_id: &str,
+) -> Result<db::RunRecord, BarcaError> {
+    db::ensure_env_dirs(&cfg.env)?;
+    db::init_db(&cfg.db_path).await?;
+    db::reconcile_run(&cfg.db_path, run_id).await
 }
 
 // ─── stats ────────────────────────────────────────────────────────────────────

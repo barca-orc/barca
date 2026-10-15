@@ -1719,6 +1719,68 @@ pub async fn get_recent_runs(db_path: &str, limit: usize) -> Result<Vec<RunRecor
     read_runs(db_path, None, limit).await
 }
 
+/// Explicit operator reconciliation when a run is known to have stopped but its
+/// owner cannot be proven dead (for example, an old row or a VM-shared mount).
+/// Positive live-owner evidence always refuses the operation. Preserve successful
+/// materializations and all counters; nobody observed an end time or duration.
+pub async fn reconcile_run(db_path: &str, run_id: &str) -> Result<RunRecord, BarcaError> {
+    {
+        let _g = db_guard().await;
+        let (_db, conn) = open_conn(db_path).await?;
+        let mut rows = conn
+            .query(
+                "SELECT status, pid, COALESCE(owner, '') FROM runs WHERE run_id = ?1",
+                [run_id],
+            )
+            .await
+            .map_err(|e| BarcaError::Db(format!("failed to read run: {e}")))?;
+        let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| BarcaError::Db(format!("failed to read run: {e}")))?
+        else {
+            return Err(BarcaError::Usage(format!(
+                "no run '{run_id}' in this environment\nUse barca history --all to find the run id."
+            )));
+        };
+        let status = row
+            .get::<String>(0)
+            .map_err(|e| BarcaError::Db(e.to_string()))?;
+        if status != "running" {
+            return Err(BarcaError::Usage(format!(
+                "run '{run_id}' is already {status}; only running rows can be reconciled"
+            )));
+        }
+        let owner = row
+            .get::<String>(2)
+            .map_err(|e| BarcaError::Db(e.to_string()))?;
+        let on = crate::run_owner::System::for_db(db_path);
+        if crate::run_owner::judge_json(row.get::<i64>(1).ok(), &owner, &on)
+            == crate::run_owner::Owner::Alive
+        {
+            return Err(BarcaError::Usage(format!(
+                "run '{run_id}' has a live owner\nWait for or stop that run before reconciling its history."
+            )));
+        }
+        drop(rows);
+        let changed = conn
+            .execute(
+                "UPDATE runs SET status = 'interrupted' WHERE run_id = ?1 AND status = 'running'",
+                [run_id],
+            )
+            .await
+            .map_err(|e| BarcaError::Db(format!("failed to reconcile run: {e}")))?;
+        if changed == 0 {
+            return Err(BarcaError::Usage(format!(
+                "run '{run_id}' ended while it was being reconciled; read barca history again"
+            )));
+        }
+    }
+    get_run(db_path, run_id)
+        .await?
+        .ok_or_else(|| BarcaError::Db(format!("reconciled run '{run_id}' could not be read")))
+}
+
 /// Read a durable run by id, including the same interrupted-owner diagnosis as history.
 pub async fn get_run(db_path: &str, run_id: &str) -> Result<Option<RunRecord>, BarcaError> {
     Ok(read_runs(db_path, Some(run_id), 1)

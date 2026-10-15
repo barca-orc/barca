@@ -15,6 +15,8 @@ The `--help` snapshots and the flag tables live in `crates/barca-cli/src/contrac
 """
 
 import json
+import sqlite3
+from contextlib import closing
 import os
 import re
 import subprocess
@@ -115,6 +117,7 @@ CASES: list[tuple[str, list[str], str, int]] = [
     ("docs_topic", ["docs", "cache", "--json"], "stdout", 0),
     ("error_usage", ["get", "nope", "pipeline.py", "--json"], "stderr", 2),
     ("error_usage_parse", ["list", "pipeline.py", "--jsn", "--json"], "stderr", 2),
+    ("history_reconciled", ["history", "--reconcile", "orphan-run", "--json"], "stdout", 0),
 ]
 
 # Cases that need a setup of their own, run after CASES: (case, stream, expected exit code).
@@ -304,6 +307,13 @@ def runs(tmp_path_factory) -> dict:
 
     out: dict = {}
     for case, argv, stream, code in CASES:
+        if case == "history_reconciled":
+            with closing(sqlite3.connect(cwd / ".barca/metadata.db")) as conn:
+                conn.execute(
+                    "INSERT INTO runs(run_id,command,files,target,status,steps_total,steps_executed,pid,host,owner) "
+                    "VALUES ('orphan-run','get','[]','total','running',3,1,1,'unavailable-container','')"
+                )
+                conn.commit()
         # error_step_failed reads the same invocation's stderr as run_failed.
         if case == "error_step_failed":
             proc = out["run_failed"][2]

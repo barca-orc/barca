@@ -59,3 +59,11 @@ snapshot and older-schema migration tests remain part of the acceptance suite.
 Process protocol handshakes, plan JSON versioning and wire/batch conformance are
 separate slices of issue #82. This change does not complete that entire issue or
 merge the earlier destructive-reset proposal in PR #258.
+
+An explicit `barca history --reconcile RUN_ID` may record a `running` row as `interrupted`
+after the operator verifies the run stopped. It refuses positive live-owner evidence and
+terminal rows, preserves materializations/progress, and records no invented end timestamp
+or duration. Unknown-owner history reads remain conservative. CLI behavior belongs to
+[the CLI contract](../crates/barca-cli/docs/contract.md); executable recovery controls live in
+[test_history_reconcile.py](../python/tests/test_history_reconcile.py). This is a recovery
+operation within format 1, with no schema change.

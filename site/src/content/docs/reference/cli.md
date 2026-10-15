@@ -277,6 +277,18 @@ $ barca plan pipeline.py
 
 ## history
 
+
+After verifying that the process or container has stopped, explicitly reconcile an uncertain
+row with `barca history --reconcile RUN_ID --json`. This records only that row as
+`interrupted` and prints it in the normal history envelope (`runs`, `total: 1`,
+`truncated: false`); `--fields` and human output also work. It refuses a proven live owner,
+a terminal row, an unknown id, and combining `--reconcile` with `--limit` or `--all`.
+It preserves recorded step counts, successful materializations and artifacts, and leaves
+unknown end time and duration as `null`. It does not stop a process. Ordinary history reads
+still keep an uncertain owner `running`; reconciliation is your assertion that it stopped.
+The change is local to the selected environment's metadata database.
+
+
 Show recent runs from `.barca/metadata.db`: run id, command, status, step counts and timing.
 The default is the 10 most recent.
 
