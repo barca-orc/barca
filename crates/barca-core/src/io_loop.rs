@@ -143,10 +143,18 @@ async fn worker_io_task(
     loop {
         tokio::select! {
             result = read_frame::<_, serde_json::Value>(&mut stream) => {
-                // Drain first on every control frame and on EOF: Submit must see the
-                // correct front lease, and a crash must not replay completed items.
-                if let Some(receipts) = journal.as_mut() {
-                    let Ok(messages) = receipts.read_available() else {
+                // File receipts can be ahead of socket consumption. Only publish a
+                // counted prefix after its earlier stdout frames were consumed. Submit
+                // blocks the producer, and EOF follows all complete socket frames.
+                let through = match &result {
+                    Ok(Some(frame)) if frame["type"] == "result_checkpoint" => frame.get("completed").and_then(serde_json::Value::as_u64).and_then(|n| usize::try_from(n).ok()),
+                    Ok(Some(frame)) if frame["type"] == "results" => frame["node_ids"].as_array().map(Vec::len),
+                    Ok(Some(frame)) if frame["type"] == "submit" => Some(usize::MAX),
+                    Ok(None) | Err(_) => Some(usize::MAX),
+                    _ => None,
+                };
+                if let (Some(receipts), Some(count)) = (journal.as_mut(), through) {
+                    let Ok(messages) = receipts.read_through(count) else {
                         let _ = event_tx.send(IoEvent::Disconnected { worker_id }).await;
                         break;
                     };
@@ -1440,6 +1448,82 @@ mod tests {
     use super::*;
     use crate::coordinator::ItemSpec;
     use std::collections::HashMap;
+
+    #[tokio::test]
+    async fn completed_receipts_do_not_overtake_their_stdout_frames() {
+        let (stream, mut peer) = UnixStream::pair().unwrap();
+        let (commands, rx) = mpsc::channel(2);
+        let (events, mut event_rx) = mpsc::channel(16);
+        let task = tokio::spawn(worker_io_task(0, stream, rx, events));
+        commands
+            .send(crate::wire::encode_steps(&[
+                serde_json::json!({"node_id":"a"}),
+                serde_json::json!({"node_id":"b"}),
+            ]))
+            .await
+            .unwrap();
+        let assigned: serde_json::Value = read_frame(&mut peer).await.unwrap().unwrap();
+        let mut peer = peer.into_std().unwrap();
+        peer.set_nonblocking(false).unwrap();
+        let a = serde_json::json!({"path":"/a.json","format":"json","size_bytes":1});
+        let b = serde_json::json!({"path":"/b.json","format":"json","size_bytes":1});
+        // Queue a valid producer sequence before this single-threaded runtime polls
+        // the receiver. The journal is ahead of socket consumption, not socket writes.
+        crate::protocol::write_message(
+            &mut peer,
+            &serde_json::json!({"type":"log","node_id":"a","line":"a output"}),
+        )
+        .unwrap();
+        std::fs::write(
+            assigned["result_journal"].as_str().unwrap(),
+            format!("{}\n", serde_json::json!(["a", "step_completed", 0.1, a])),
+        )
+        .unwrap();
+        crate::protocol::write_message(
+            &mut peer,
+            &serde_json::json!({"type":"result_checkpoint","completed":1}),
+        )
+        .unwrap();
+        crate::protocol::write_message(
+            &mut peer,
+            &serde_json::json!({"type":"log","node_id":"b","line":"b output"}),
+        )
+        .unwrap();
+        {
+            use std::io::Write;
+            let mut file = std::fs::OpenOptions::new()
+                .append(true)
+                .open(assigned["result_journal"].as_str().unwrap())
+                .unwrap();
+            writeln!(
+                file,
+                "{}",
+                serde_json::json!(["b", "step_completed", 0.2, b])
+            )
+            .unwrap();
+        }
+        crate::protocol::write_message(&mut peer, &serde_json::json!({"type":"results","node_ids":["a","b"],"statuses":["step_completed","step_completed"],"elapsed_seconds":[0.1,0.2],"details":crate::wire::encode_table(&[a,b],true)})).unwrap();
+        let mut seen = Vec::new();
+        for _ in 0..5 {
+            let event = tokio::time::timeout(Duration::from_secs(2), event_rx.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            seen.push(match event {
+                IoEvent::Message { msg, .. } => match *msg {
+                    WorkerMessage::Log { node_id, .. } => format!("log:{node_id}"),
+                    WorkerMessage::StepCompleted { node_id, .. } => format!("done:{node_id}"),
+                    other => panic!("unexpected {other:?}"),
+                },
+                IoEvent::BatchFinished { .. } => "finished".to_string(),
+                _ => panic!("unexpected event"),
+            });
+        }
+        drop(commands);
+        drop(peer);
+        task.await.unwrap();
+        assert_eq!(seen, ["log:a", "done:a", "log:b", "done:b", "finished"]);
+    }
 
     #[test]
     fn build_step_json_includes_sinks() {
