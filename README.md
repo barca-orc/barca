@@ -244,6 +244,8 @@ Decorators on ordinary project helper functions/classes also follow their helper
 
 Unpacked and augmented module constants retain project-helper provenance conservatively.
 
+Module-level control-flow bindings retain project-helper provenance conservatively.
+
 More: `barca docs cache`, which also lists what the run hash does not see (star imports in
 undecorated helpers, installed packages, environment variables not declared with `env=`).
 

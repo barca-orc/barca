@@ -36,6 +36,8 @@ and these tags are available on the same releases page.
   nested functions and keyword-only defaults. Editing those helpers now invalidates their
   consumers. Existing affected consumers may recompute once after upgrading.
 
+- Retain project-helper provenance for names, functions and classes bound inside module-level `for`, `while`, `with` and `match` blocks. Consumers conservatively hash module source and static references.
+
 ### Features
 
 - Add `barca doctor` prerequisite checks, credential identity diagnostics and a documented local-only debugging profile.

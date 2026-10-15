@@ -453,3 +453,8 @@ to follow the selective rules in `barca docs cache`.
 Tuple/list/starred module-level unpacking and augmented name assignments retain project
 helper provenance, including aliases captured before later overwrites. Their consumers
 conservatively hash the module source and references; unrelated assets keep selective cones.
+
+Module-level `for`, `while`, `with` and `match` bindings retain project-helper provenance
+conservatively, like existing `if`/`try` bindings. Consumers hash the module source and
+static references, including aliases captured before overwrites. Unrelated assets retain
+selective cones; runtime namespace mutation is still not statically resolved.

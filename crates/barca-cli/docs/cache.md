@@ -204,7 +204,8 @@ look for helpers, and it never reads or hashes the standard library or installed
 wherever the virtualenv is (`.venv/`, `venv/`, inside or outside the project): after upgrading
 a package, recompute with `--refresh-all` or `--refresh` (below).
 
-Names bound inside a module-level `if` or `try` are followed conservatively. Barca does not
+Names bound inside module-level `if`, `try`, `for`, `while`, `with` and `match` blocks
+are followed conservatively. Barca does not
 execute the condition to choose an import or fallback definition: a step reading such a name
 hashes the module's source and follows its statically visible imports and references. Editing
 an inactive branch's project helper can therefore re-run the step too. This provenance is
@@ -243,6 +244,11 @@ An edit in one of these does not change the hash; recompute with `--refresh-all`
   dynamically or inside other module-level
   control flow such as a `for`, `while`, `with` or `match` (module-level `if` and `try` bindings
   are covered conservatively above);
+
+  dynamically through runtime namespace mutation (ordinary control-flow bindings are covered
+  conservatively above);
+- module-level constants bound by tuple unpacking (`A, B = 1, 2`), and augmented assignments to
+  a module-level name (`A += 1`): only a plain `A = ...` or `A: int = ...` is a definition;
 - a module reached through another module's `import` (`from helpers import other` where
   `helpers.py` does `import other`): import it directly;
 - what a helper refers to only in a decorator, a `match` pattern, a set literal (`{f()}`),
