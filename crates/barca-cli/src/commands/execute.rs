@@ -103,3 +103,22 @@ pub(crate) fn read_final_output(oref: &barca_core::dispatch::OutputRef) -> serde
         artifact_metadata(oref)
     }
 }
+
+/// Drain streamed events through completion; stdout remains exclusively the command result.
+pub(crate) fn user_logs(
+    mode: OutputMode,
+) -> (
+    tokio::sync::mpsc::UnboundedSender<barca_core::RunEvent>,
+    tokio::task::JoinHandle<()>,
+) {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let show = !matches!(mode, OutputMode::Json);
+    let task = tokio::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            if show && let barca_core::RunEvent::Log { node_id, line } = event {
+                barca_core::errln!("[{node_id}] {line}");
+            }
+        }
+    });
+    (tx, task)
+}

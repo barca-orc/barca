@@ -26,8 +26,9 @@ pub(crate) async fn get_cmd(
         )
         .await;
     }
+    let (events, log_task) = super::execute::user_logs(mode);
     if targets.len() > 1 {
-        let result = barca_core::commands::get_many(
+        let result = barca_core::commands::get_many_streaming(
             &cfg,
             &targets,
             &file_args,
@@ -35,12 +36,15 @@ pub(crate) async fn get_cmd(
             policy,
             agent,
             cancel_on_ctrl_c(),
+            Some(events),
         )
-        .await?;
+        .await;
+        let _ = log_task.await;
+        let result = result?;
         return print_multi(&result, mode, "got", fields);
     }
     let target = targets.into_iter().next();
-    let result = barca_core::commands::get(
+    let result = barca_core::commands::get_streaming(
         &cfg,
         target.as_deref(),
         &file_args,
@@ -48,9 +52,11 @@ pub(crate) async fn get_cmd(
         policy,
         agent,
         cancel_on_ctrl_c(),
+        Some(events),
     )
-    .await
-    .inspect_err(|e| print_failed_run(e, mode))?;
+    .await;
+    let _ = log_task.await;
+    let result = result.inspect_err(|e| print_failed_run(e, mode))?;
     super::emit(barca_core::report::render_get(
         &result,
         target.as_deref(),
