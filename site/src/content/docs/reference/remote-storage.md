@@ -819,3 +819,5 @@ exposes `last_bytes_change: {node_id, run_hash, content_hash, created_at}` and t
 materialization's `content_hash`. Partition keys are checked individually. Progress
 checkpoints, terminal writes and carried history retain the finding without duplicating it.
 The separate RFC-0009 store repair and RFC-0007 ledger acceptance paths remain proposed.
+
+See [Doctor and local debugging](/reference/doctor/) for prerequisite checks and a local-only debugging profile.

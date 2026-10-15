@@ -161,6 +161,76 @@ pub(crate) async fn stop(child: &mut Child) {
     let _ = child.kill().await;
 }
 
+pub(crate) enum OutputFailed {
+    Spawn(std::io::Error),
+    TimedOut(std::time::Duration),
+    Cancelled,
+}
+
+/// Run a finite helper with a lifeline, bounded lifetime, and captured output.
+///
+/// The helper is stopped, and the call fails, when `cancel` fires or when it is still running
+/// after `limit`. Stopped means asked to stop (SIGTERM, on which it removes the temp file it
+/// was writing), waited for, and killed if it is still there after
+/// [`crate::helper_proc::STOP_GRACE`]: the call does not return while the helper is alive.
+/// Dropping the call kills the helper.
+///
+/// Like every helper it is started out of reach of the terminal's Ctrl-C, which is the
+/// coordinator's to act on, and with a lifeline, so that it exits by itself if this process is
+/// killed (see [`crate::helper_proc`]).
+pub(crate) async fn run_to_output(
+    mut cmd: Command,
+    cancel: Option<&crate::CancellationToken>,
+    limit: Option<std::time::Duration>,
+) -> Result<std::process::Output, OutputFailed> {
+    crate::helper_proc::shield_from_ctrl_c(&mut cmd);
+    crate::helper_proc::give_lifeline(&mut cmd);
+    cmd.stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    let mut child = crate::helper_proc::spawn(&mut cmd).map_err(OutputFailed::Spawn)?;
+    let pid = child.id();
+    // Held until the helper is done or told to stop: `wait_with_output` would close it at
+    // once.
+    let lifeline = child.stdin.take();
+    let output = child.wait_with_output();
+    tokio::pin!(output);
+    let cancelled = async {
+        match cancel {
+            Some(c) => c.cancelled().await,
+            None => std::future::pending().await,
+        }
+    };
+    let timed_out = async {
+        match limit {
+            Some(limit) => tokio::time::sleep(limit).await,
+            None => std::future::pending().await,
+        }
+    };
+    let why = tokio::select! {
+        // A helper that has finished is never reported as stopped: if the interrupt and the
+        // end of an upload arrive together, the upload happened.
+        biased;
+        out = &mut output => return out.map_err(OutputFailed::Spawn),
+        _ = cancelled => OutputFailed::Cancelled,
+        _ = timed_out => OutputFailed::TimedOut(limit.expect("a limit that passed")),
+    };
+    // The lifeline stays open while the helper is asked to stop: it has one way out at a
+    // time, the orderly one (SIGTERM unwinds through its cleanup).
+    if let Some(pid) = pid {
+        let grace = crate::helper_proc::STOP_GRACE;
+        crate::helper_proc::terminate(pid);
+        if tokio::time::timeout(grace, &mut output).await.is_err() {
+            crate::helper_proc::kill(pid);
+            // A killed process is gone at once. Its output could only stay open if it had
+            // handed its pipes to a child of its own; do not wait for that for ever.
+            let _ = tokio::time::timeout(grace, &mut output).await;
+        }
+    }
+    drop(lifeline);
+    Err(why)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -175,6 +245,7 @@ mod tests {
         for (source, module) in [
             (include_str!("io_loop.rs"), "barca._worker"),
             (include_str!("state_sync.rs"), "barca._state"),
+            (include_str!("diagnostics.rs"), "barca._doctor"),
             (include_str!("status.rs"), "barca._inspect"),
             (include_str!("sql.rs"), "barca._sql"),
             (include_str!("transfer.rs"), "barca._transfer"),

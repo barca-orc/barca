@@ -54,6 +54,7 @@ export default defineConfig({
           label: 'Reference',
           items: [
             { label: 'CLI', slug: 'reference/cli' },
+            { label: 'Doctor and Local Debugging', slug: 'reference/doctor' },
             { label: 'Discovery', slug: 'reference/discovery' },
             { label: 'barca sql', slug: 'reference/sql' },
             { label: 'Agent Skill', slug: 'reference/agent-skill' },
