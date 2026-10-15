@@ -17,6 +17,18 @@ and these tags are available on the same releases page.
 ### Bug Fixes
 
 - Follow project helper calls in assignment receivers and indices, including annotated, unpacked, loop, context-manager and comprehension targets. Editing such a helper now invalidates affected cached assets.
+- Follow project helper references in function and lambda default arguments, including
+  nested functions and keyword-only defaults. Editing those helpers now invalidates their
+  consumers. Existing affected consumers may recompute once after upgrading.
+
+### Features
+
+- Run JSON reports executed-step durations and attempts, with slow module imports
+  reported separately. History JSON totals recorded materialization attempts; stats
+  retains per-materialization attempts. Timeout errors identify the step id.
+- **Breaking:** agent completion and permanent failure lines append `attempts=N` after
+  retries. Allow this optional suffix when parsing those lines, or read the structured
+  `steps[].attempts` field instead.
 
 ### Removed
 

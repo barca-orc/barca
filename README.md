@@ -20,6 +20,8 @@ Qualified imports (`@barca.asset()`) and imported aliases (`@a()` after
 needs to run, and runs it in Python worker processes. Results are stored as files under
 `.barca/`. An asset runs again only when its code or its inputs change; sensors and tasks
 run every time.
+Project helper references in default arguments are tracked too, including nested functions
+and lambdas; editing the helper invalidates its cached consumers.
 
 There is no server to run and no configuration file to write. `barca serve` adds
 schedules, an HTTP API and a web UI when you want them.
@@ -274,6 +276,10 @@ json and pickle inputs are always read whole.
 More: `barca docs big-inputs`, `barca docs types`.
 
 ## Commands
+
+Run JSON reports elapsed time and attempts for executed steps; slow imports are reported
+separately as `import_seconds`. `barca docs status` explains retry and partition timing;
+`barca history --json` and `barca stats` expose recorded attempts.
 
 The target comes first, then files or directories. Both are optional: with no files,
 barca reads every `.py` file under the project root that imports barca

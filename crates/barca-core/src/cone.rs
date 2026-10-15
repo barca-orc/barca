@@ -6,8 +6,8 @@
 //! read, and add at most a constant marker.
 //!
 //! 1. **Definitions.** A module's definitions are its top-level `def`s, `class`es, assignments
-//!    and imports ([`ModuleDef`]). A function contributes its body; a class contributes its
-//!    bases, keywords and whole body (methods and class-level code).
+//!    and imports ([`ModuleDef`]). A function contributes its defaults and body; a class
+//!    contributes its bases, keywords and whole body (methods and class-level code).
 //! 2. **Names.** Code that mentions the name of a definition of its own module adds that
 //!    definition's source and, transitively, what it uses. Local scopes are *not* resolved for
 //!    this rule: a parameter called `rate` counts as a use of a module-level `rate`. That can
@@ -961,8 +961,16 @@ impl<'p> UseCollector<'p> {
         binder.finish()
     }
 
-    /// A function contributes its body (not its decorators, defaults or annotations).
+    /// Defaults execute in the enclosing scope, before the function's parameters bind.
+    /// Decorators and annotations retain their existing policy.
+    fn defaults(&mut self, parameters: &ruff_python_ast::Parameters) {
+        for parameter in parameters.iter() {
+            self.exprs(parameter.default());
+        }
+    }
+
     fn function(&mut self, func: &ruff_python_ast::StmtFunctionDef) {
+        self.defaults(&func.parameters);
         let scope = self.block_scope(Some(&func.parameters), &func.body);
         self.scoped(scope, |c| c.stmts(&func.body));
     }
@@ -1027,8 +1035,9 @@ impl<'p> UseCollector<'p> {
         }
     }
 
-    // Follow references evaluated by each supported statement/expression. New construct
-    // families need regression coverage and release notes because they change cache hashes.
+    // Extend this traversal one construct family at a time: following previously omitted
+    // references invalidates existing cached code. Keep the manual and regression controls
+    // aligned with each deliberate extension.
     fn stmt(&mut self, stmt: &Stmt) {
         match stmt {
             Stmt::Expr(s) => self.expr(&s.value),
@@ -1155,6 +1164,9 @@ impl<'p> UseCollector<'p> {
             Expr::List(l) => self.exprs(&l.elts),
             Expr::Tuple(t) => self.exprs(&t.elts),
             Expr::Lambda(l) => {
+                if let Some(parameters) = &l.parameters {
+                    self.defaults(parameters);
+                }
                 let scope = self.block_scope(l.parameters.as_deref(), &[]);
                 self.scoped(scope, |c| c.expr(&l.body));
             }
@@ -2128,6 +2140,33 @@ def my_asset():
         );
     }
 
+    #[test]
+    fn function_and_lambda_defaults_follow_the_enclosing_scope() {
+        let project =
+            |n: u32| sources(&[("helpers", &format!("def compute():\n    return {n}\n"))]);
+        for entry in [
+            "import helpers\ndef my_asset(x=helpers.compute()):\n    return x\n",
+            "import helpers\nasync def my_asset(*, x=helpers.compute()):\n    return x\n",
+            "from helpers import compute\ndef inner(x=compute(), /):\n    return x\ndef my_asset():\n    return inner()\n",
+            "import helpers\ndef my_asset():\n    def inner(helpers=helpers.compute()):\n        return helpers\n    return inner()\n",
+            "import helpers\ndef my_asset():\n    return (lambda helpers=helpers.compute(): helpers)()\n",
+            // The default follows an import in the outer function even when the
+            // inner parameter shadows its name.
+            "def my_asset():\n    import helpers as local\n    def inner(local=local.compute()):\n        return local\n    return inner()\n",
+        ] {
+            assert_ne!(
+                hash_of(entry, &project(1), &[]),
+                hash_of(entry, &project(2), &[]),
+                "{entry}"
+            );
+        }
+        let unused = "import helpers\ndef unused(x=helpers.compute()):\n    return x\ndef my_asset():\n    return 7\n";
+        assert_eq!(
+            hash_of(unused, &project(1), &[]),
+            hash_of(unused, &project(2), &[])
+        );
+    }
+
     // ─── Known limitations, as `barca docs cache` lists them ─────────────────────
 
     /// Not followed today. Each of these is in the manual ("Not followed"); when one starts
@@ -2153,10 +2192,6 @@ def my_asset():
             (
                 "decorator",
                 "from helpers import compute\n\ndef wrap(v):\n    return lambda f: f\n\n@wrap(compute())\ndef inner():\n    return 1\n\ndef my_asset():\n    return inner()\n",
-            ),
-            (
-                "default argument",
-                "from helpers import compute\n\ndef inner(x=compute()):\n    return x\n\ndef my_asset():\n    return inner()\n",
             ),
             (
                 "set literal",
