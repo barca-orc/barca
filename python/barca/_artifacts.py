@@ -31,6 +31,7 @@ _FORMAT_EXTENSIONS = {
     "json": ".json",
     "pickle": ".pkl",
     "parquet": ".parquet",
+    "csv": ".csv",
 }
 
 # Staging area for remote uploads/downloads. Deliberately on project disk
@@ -260,7 +261,7 @@ def serialize_for_upload(
 def _serialize(
     value: Any, path: "Path | str", fmt: str, want_hash: bool, *, snapshot: Path | None = None
 ) -> tuple[int, str | None]:
-    if fmt not in ("json", "pickle", "parquet"):
+    if fmt not in ("json", "pickle", "parquet", "csv"):
         raise ValueError(f"Unknown format: {fmt}")
 
     size = 0
@@ -272,6 +273,8 @@ def _serialize(
         elif fmt == "pickle":
             with open(tmp, "wb") as f:
                 pickle.dump(value, f, protocol=5)
+        elif fmt == "csv":
+            _write_csv(value, tmp)
         else:
             _write_parquet(value, tmp)
         size = tmp.stat().st_size
@@ -284,6 +287,28 @@ def _serialize(
         if snapshot is not None:
             _pin_file(tmp, snapshot)
     return size, digest
+
+
+def _write_csv(value: Any, path: Path) -> None:
+    """Write tabular CSV with a header and no pandas index column."""
+    kind = _frame_kind(value)
+    if kind == "pandas":
+        value.to_csv(str(path), index=False)
+    elif kind == "polars":
+        if type(value).__name__ == "LazyFrame":
+            value = value.collect()
+        value.write_csv(str(path))
+    elif kind == "pyarrow":
+        import pyarrow.csv as pc
+
+        pc.write_csv(value, str(path))
+    elif kind == "duckdb":
+        value.write_csv(str(path), header=True)
+    else:
+        raise TypeError(
+            f"csv format requires a DataFrame, Arrow table or DuckDB relation, "
+            f"got {type(value).__name__}"
+        )
 
 
 def _write_parquet(value: Any, path: Path) -> None:
@@ -321,7 +346,7 @@ def _write_parquet(value: Any, path: Path) -> None:
 def deserialize(path: "Path | str", fmt: str, *, frame_type: str | None = None) -> Any:
     """Read an artifact from a local path or remote URI using the given format.
 
-    ``frame_type`` selects the parquet reader when ``fmt == "parquet"``.
+    ``frame_type`` selects the tabular reader for parquet and CSV.
     Supported values: ``pandas`` (default), ``polars``, ``polars_lazy``, ``pyarrow``, ``duckdb``.
 
     A remote parquet artifact read with a lazy type (``duckdb``, ``polars_lazy``) is read in
@@ -334,6 +359,19 @@ def deserialize(path: "Path | str", fmt: str, *, frame_type: str | None = None) 
         tmp = _make_temp(_staging_dir(), prefix="fetch-")
         try:
             _storage.get_file(str(path), tmp)
+            # CSV has no ranged Parquet scanner. Materialize remote lazy reads before
+            # removing the download, then expose the requested lazy interface.
+            if fmt == "csv" and frame_type == "polars_lazy":
+                return _deserialize_csv(tmp, frame_type="polars").lazy()
+            if fmt == "csv" and frame_type == "duckdb":
+                import duckdb
+
+                con = duckdb.connect(":memory:")
+                con.execute(
+                    "CREATE TABLE downloaded_csv AS SELECT * FROM read_csv(?, header=true)",
+                    [str(tmp)],
+                )
+                return con.table("downloaded_csv")
             return _deserialize_local(tmp, fmt, frame_type=frame_type)
         finally:
             tmp.unlink(missing_ok=True)
@@ -386,10 +424,36 @@ def _deserialize_local(path: Path, fmt: str, *, frame_type: str | None = None) -
         with open(path, "rb") as f:
             return _ProjectUnpickler(f).load()
 
+    if fmt == "csv":
+        return _deserialize_csv(path, frame_type=frame_type or "pandas")
+
     if fmt == "parquet":
         return _deserialize_parquet(path, frame_type=frame_type or "pandas")
 
     raise ValueError(f"Unknown format: {fmt}")
+
+
+def _deserialize_csv(path: Path, *, frame_type: str = "pandas") -> Any:
+    """CSV readers infer types; CSV does not preserve a frame's original schema."""
+    if frame_type in ("polars", "polars_lazy"):
+        import polars as pl
+
+        return pl.scan_csv(str(path)) if frame_type == "polars_lazy" else pl.read_csv(str(path))
+    if frame_type == "pyarrow":
+        import pyarrow.csv as pc
+
+        return pc.read_csv(str(path))
+    if frame_type == "duckdb":
+        import duckdb
+
+        return duckdb.read_csv(str(path), header=True)
+    if frame_type == "pandas":
+        import pandas as pd
+
+        return pd.read_csv(str(path))
+    raise ValueError(
+        f"Unknown frame type {frame_type!r} (supported: pandas, polars, polars_lazy, pyarrow, duckdb)"
+    )
 
 
 def _deserialize_parquet(path: Path, *, frame_type: str = "pandas") -> Any:

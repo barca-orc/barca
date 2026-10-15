@@ -23,7 +23,7 @@ enum Freshness { always | manual | schedule }
 
 enum EdgeKind { direct | collect | partition_source }
 
-enum SerializerKind { json | parquet | pickle | text | yaml }
+enum SerializerKind { json | parquet | csv | pickle | text | yaml }
 
 enum RunStatus { success | failed }
 

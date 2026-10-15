@@ -103,6 +103,7 @@ fn human_size(bytes: u64) -> String {
 fn format_of(path: &str) -> String {
     match Path::new(path).extension().and_then(|e| e.to_str()) {
         Some("parquet") => "parquet",
+        Some("csv") => "csv",
         Some("json") => "json",
         Some("pkl") | Some("pickle") => "pickle",
         _ => "unknown",
@@ -313,7 +314,7 @@ pub async fn sql(
                 BarcaError::Usage(format!(
                     "'{name}' cannot be queried: {why}\n\
                      Return a DataFrame, Arrow table, DuckDB relation or list of dicts to store \
-                     it as parquet or json."
+                     it as parquet, CSV or json."
                 ))
             } else {
                 BarcaError::Usage(format!("no view named '{table}'\n{}", available()))
@@ -380,6 +381,7 @@ mod tests {
         assert_eq!(format_of(".barca/artifacts/a/h.parquet"), "parquet");
         assert_eq!(format_of("x.json"), "json");
         assert_eq!(format_of("x.pkl"), "pickle");
+        assert_eq!(format_of("x.csv"), "csv");
         assert_eq!(format_of("x"), "unknown");
     }
 

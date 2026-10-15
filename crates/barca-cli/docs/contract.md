@@ -211,7 +211,7 @@ default, and any aliases.
 | `-l, --limit` | `LIMIT` | - | stable | Maximum nodes, in topological order (default: every node in JSON, 100 in a human table) |
 | `--all` | - | default `false` | stable | Show every node (no limit) |
 | `--fields` | comma-separated: `id`, `name`, `kind`, `inputs`, `partitioned`, `cache`, `partitions`, `last_materialization`, `shape`, `env` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `nodes`. Implies --json. An unknown key is a usage error listing the valid ones |
-| `--sample` | `N` | - | experimental: sample rows come from a Python helper whose output may grow | Include up to N sample rows from each json/parquet artifact (off by default; pickles are never sampled) |
+| `--sample` | `N` | - | experimental: sample rows come from a Python helper whose output may grow | Include up to N sample rows from each json/parquet/CSV artifact (off by default; pickles are never sampled) |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
 
 #### barca sql
@@ -1225,3 +1225,11 @@ names do not define Barca nodes. For a foreign wrapper intended to remain a node
 stack it with a genuine Barca decorator; see `barca docs assets`.
 
 `list --groups` is experimental: JSON returns `{groups: [{id, name, description, members, output}]}`. IDs and member/output references are strings; members is an array of strings. The default `list` schema is unchanged. Groups are organizational metadata and cannot be execution targets.
+
+### CSV artifact format
+
+An artifact reference may have `format: "csv"` and a `.csv` path when explicitly selected
+with `serializer="csv"`. CSV sink extensions select CSV automatically. Frames continue
+to default to Parquet. CSV requires a supported tabular value; readers infer types.
+Status samples represent CSV cells as strings, and SQL views support CSV artifacts.
+See `barca docs types` and `specs/artifact-formats.md`.

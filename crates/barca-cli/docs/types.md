@@ -10,7 +10,7 @@ How barca stores each step's output and how it hands values to downstream steps.
 | JSON-serializable value (dict, list, str, int, float, bool, None) | json (`.json`) |
 | anything else | pickle (`.pkl`, protocol 5) |
 
-- Override with `@asset(serializer="json" | "pickle" | "parquet")`.
+- Override with `@asset(serializer="json" | "pickle" | "parquet" | "csv")`.
 - The **return annotation does not choose the format**; the value (or `serializer=`) does.
 - Asking for parquet on a value that cannot be written as parquet falls back to pickle and
   prints a warning on stderr.
@@ -20,7 +20,7 @@ How barca stores each step's output and how it hands values to downstream steps.
 
 ## Input: parameter annotations pick the reader
 
-For parquet artifacts, the annotation on the *consuming* parameter selects the reader:
+For parquet and CSV artifacts, the annotation on the *consuming* parameter selects the reader:
 
 | Annotation | Downstream receives |
 |---|---|
@@ -127,3 +127,31 @@ barca.duckdb_connection().execute("SET threads = 4")   # runs once per worker pr
   define several assets or return the one you want cached.
 
 See also: `barca docs big-inputs`, `barca docs cache`, `barca docs examples/duckdb`.
+
+## CSV outputs
+
+Use `@asset(serializer="csv")`, `@sensor(serializer="csv")` or
+`@task(serializer="csv")` for a DataFrame, Arrow table or DuckDB relation.
+`@sink("exports/orders.csv")` infers CSV from the extension; `serializer="csv"`
+also works on a sink. CSV writes a header without a pandas index column. The default
+format for frames remains Parquet.
+
+Consuming parameter annotations select the CSV reader using the table above. CSV
+readers infer types: indexes, exact dtypes, null/empty-string distinctions and nested
+columns are not guaranteed to round-trip. Unsupported values fail rather than writing
+pickle under a `.csv` name. Remote CSV lazy inputs are downloaded and materialized
+before exposing a LazyFrame or relation; ranged lazy reads apply only to Parquet.
+`barca status --sample` reports CSV cells as strings; `barca sql` can query CSV results.
+
+```python
+import pandas as pd
+from barca import asset, sink
+
+
+@asset(serializer="csv")
+@sink("exports/orders.csv")
+def orders() -> pd.DataFrame:
+    return pd.DataFrame({"id": [1, 2], "amount": [9.5, 12.0]})
+```
+
+The CSV boundary is specified in `specs/artifact-formats.md`.
