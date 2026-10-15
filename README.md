@@ -272,6 +272,10 @@ More: `barca docs big-inputs`, `barca docs types`.
 
 ## Commands
 
+Run JSON reports elapsed time and attempts for executed steps; slow imports are reported
+separately as `import_seconds`. `barca docs status` explains retry and partition timing;
+`barca history --json` and `barca stats` expose recorded attempts.
+
 The target comes first, then files or directories. Both are optional: with no files,
 barca reads every `.py` file under the project root that imports barca
 (`barca docs discovery`). A project star import with a literal `__all__` preserves Barca

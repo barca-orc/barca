@@ -8,7 +8,7 @@ behavior.
 
 | Boundary | Native specification | Status / version | Executable conformance |
 | --- | --- | --- | --- |
-| HTTP routes and wire bodies | [server-api.openapi.yaml](server-api.openapi.yaml) (OpenAPI 3.1 / JSON Schema 2020-12) | Current implemented surface; specification 1 | [Rust router conformance](../crates/barca-server/tests/openapi.rs), [real Python Client conformance](../python/tests/test_http_openapi_client.py) |
+| HTTP routes and wire bodies | [server-api.openapi.yaml](server-api.openapi.yaml) (OpenAPI 3.1 / JSON Schema 2020-12) | Current implemented surface; specification 2 | [Rust router conformance](../crates/barca-server/tests/openapi.rs), [real Python Client conformance](../python/tests/test_http_openapi_client.py) |
 | Python decorator grammar and execution model | [user-api.allium](user-api.allium), [decisions](user-api-decisions.md) | Mixed implemented grammar and design rules; specification 1. Ignored grammar cases and unresolved decisions are aspirations. | [grammar_spec.rs](../crates/barca-core/tests/grammar_spec.rs), [project star-import provenance](../python/tests/test_static_barca_bindings.py); runtime acceptance remains in core and Python integration suites |
 | Materialization digests and recompute checks | [materialization-digests.md](materialization-digests.md) | Implemented producer/recompute scope; specification 1. Server acceptance and store repair remain proposed. | [CLI digest conformance](../python/tests/test_materialization_digests.py), persistence/state-carry Rust tests |
 
@@ -18,7 +18,7 @@ behavior.
 | Task results and recorded stdout | [task-output.md](task-output.md) | Implemented; specification 1 | [Task/stdout conformance](../python/tests/test_task_logs.py), CLI snapshots and Rust log persistence tests |
 | Project prerequisites and credential diagnostics | [doctor.md](doctor.md) | Implemented; specification 1, experimental check data | [no-execution controls](../python/tests/test_doctor.py), [identity adapters](../python/tests/test_identity.py), CLI snapshots |
 | CLI flags, messages and JSON envelopes | [existing CLI contract](../crates/barca-cli/docs/contract.md) and native help/JSON snapshots | Current implemented contract, existing ownership retained; no separate specification version | [CLI integration tests](../python/tests/test_cli_contract.py), Rust CLI snapshot tests |
-| Worker/transfer socket protocol | [worker-protocol.md](worker-protocol.md) | Implemented on branch; specification 2 / protocol 3 | [protocol tests](../crates/barca-core/src/protocol.rs), [Python/CLI negotiation](../python/tests/test_protocol_handshake.py), [batched runtime/crash controls](../python/tests/test_compact_worker_protocol.py) |
+| Worker/transfer socket protocol | [worker-protocol.md](worker-protocol.md) | Implemented on branch; specification 3 / protocol 3 | [protocol tests](../crates/barca-core/src/protocol.rs), [Python/CLI negotiation](../python/tests/test_protocol_handshake.py), [batched runtime/crash controls](../python/tests/test_compact_worker_protocol.py) |
 
 The existing CLI normative document and snapshots remain in their established locations.
 This inventory does not duplicate or migrate them. Future boundary specifications should

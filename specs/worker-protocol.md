@@ -1,6 +1,6 @@
 # Worker and transfer protocol
 
-Specification 2; protocol version 3. Implemented on this branch; not released.
+Specification 3; protocol version 3. Implemented on this branch; not released.
 
 ## Framing and negotiation
 
@@ -83,6 +83,17 @@ This prevents a following batch from replacing an earlier journal prematurely. T
 journal is removed when its I/O task ends the batch, disconnects or is aborted. It
 contains metadata and file references, never artifact values. Dead coordinator PID
 staging cleanup remains the crash backstop. Workers never access the metadata DB.
+
+## Step timing metadata
+
+Completion artifact metadata and error details optionally include `import_seconds`
+when loading the module took longer than one second. Missing means no slow import was
+reported; module reuse adds none. It is included in the existing elapsed duration,
+not added on top. Compact tables and checkpoint receipts preserve the field. This
+additive optional metadata retains protocol version 3. Timeouts identify the step id.
+[Timing conformance](../python/tests/test_run_step_timing.py) exercises retries,
+slow imports, timeout identity and worker disconnects; protocol tests cover optional
+error metadata.
 
 ## Other messages and artifact data
 

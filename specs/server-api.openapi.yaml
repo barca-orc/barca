@@ -2,8 +2,8 @@
 openapi: 3.1.0
 info:
   title: Barca current HTTP API
-  version: '1'
-  description: 'Normative current wire contract; specification version 1 is independent
+  version: '2'
+  description: 'Normative current wire contract; specification version 2 is independent
     of package versions. Scope: registered barca-server routes and fallback responses.
     No authentication is implemented (security is empty); read-only is an operating
     mode. No proposed RFC command routes, authorization, freshness eligibility or
@@ -1450,6 +1450,15 @@ components:
         bytes_changed:
           type: boolean
           const: true
+        elapsed_seconds:
+          type: number
+          minimum: 0
+        attempts:
+          type: integer
+          minimum: 1
+        import_seconds:
+          type: number
+          exclusiveMinimum: 1
         partitions:
           $ref: '#/components/schemas/PartitionSummary'
         env:
@@ -1976,6 +1985,9 @@ components:
           node_id: *id002
           ok: *id026
           elapsed_seconds: *id028
+          import_seconds:
+            type: number
+            exclusiveMinimum: 1
           error: *id002
       - type: object
         additionalProperties: false

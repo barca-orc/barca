@@ -285,6 +285,8 @@ struct RunState {
     step_clocks: HashMap<String, (f64, f64)>,
     all_failures: Vec<dispatch::StepFailure>,
     all_attempts: HashMap<String, u32>,
+    // Worker-reported active duration and slow import duration, including failed attempts.
+    step_durations: HashMap<String, (f64, f64)>,
     steps_executed: usize,
     total_steps: usize,
     total_estimated: f64,
@@ -972,6 +974,7 @@ async fn dispatch_ready(
             total_steps: session.state.total_steps,
             event_tx: &session.request.event_tx,
             logs_buffer: &mut session.state.logs_buffer,
+            step_durations: &mut session.state.step_durations,
             cancel: &session.started.cancel,
         })
         .await;
@@ -1103,6 +1106,10 @@ async fn collect_failures(
             continue;
         }
         let node_id = item.step_id.display();
+        session
+            .state
+            .all_attempts
+            .insert(node_id.clone(), item.attempts);
         if error_msg.starts_with(BLOCKED_ARTIFACT_PATH) {
             // The step ran; its result could not be written because barca's artifact
             // directory is in a state barca cannot repair. Infrastructure (exit 3), not a
@@ -1120,7 +1127,15 @@ async fn collect_failures(
             continue;
         }
         if session.request.agent_mode {
-            crate::errln!("{}", failed_step_line(&node_id, error_msg));
+            crate::errln!(
+                "{}{}",
+                failed_step_line(&node_id, error_msg),
+                if item.attempts > 1 {
+                    format!(" attempts={}", item.attempts)
+                } else {
+                    String::new()
+                }
+            );
         }
         if first_non_group_failure.is_none() {
             first_non_group_failure = Some((node_id.clone(), error_msg.to_string()));
@@ -1326,6 +1341,26 @@ async fn return_outputs(
         &session.started.cancel,
     )
     .await?;
+
+    let mut attempts_by_base: HashMap<String, u32> = HashMap::new();
+    for (node, attempts) in &session.state.all_attempts {
+        let id = crate::StepId::parse(node);
+        if id.partition.0.contains_key("_branch") {
+            continue;
+        }
+        let base = id.base_id().to_string();
+        let count = attempts_by_base.entry(base).or_default();
+        *count = (*count).max(*attempts);
+    }
+    for report in &mut step_reports {
+        if let Some(attempts) = attempts_by_base.get(&report.id) {
+            report.attempts = Some(*attempts);
+        }
+        if let Some((elapsed, imports)) = session.state.step_durations.get(&report.id) {
+            report.elapsed_seconds = Some(*elapsed);
+            report.import_seconds = (*imports > 1.0).then_some(*imports);
+        }
+    }
 
     let changed =
         db::changed_bytes_in_run(&session.request.cfg.db_path, &session.started.run_id).await?;
@@ -2057,6 +2092,7 @@ struct DispatchPhase<'a> {
     total_steps: usize,
     event_tx: &'a Option<UnboundedSender<crate::RunEvent>>,
     logs_buffer: &'a mut Vec<(String, String)>,
+    step_durations: &'a mut HashMap<String, (f64, f64)>,
     cancel: &'a CancellationToken,
 }
 
@@ -2087,6 +2123,7 @@ async fn dispatch_phase(
         mut total_steps,
         event_tx,
         logs_buffer,
+        step_durations,
         cancel,
     } = ctx;
     let mut coord = crate::coordinator::Coordinator::new();
@@ -2204,12 +2241,17 @@ async fn dispatch_phase(
                 bar.set_message(format!("{short_name} done"));
             } else if agent_mode {
                 crate::errln!(
-                    "[barca] step:{} completed {:.1}s ({}/{}){}",
+                    "[barca] step:{} completed {:.1}s ({}/{}){}{}",
                     node_id,
                     elapsed_s.unwrap_or(0.0),
                     completed_steps,
                     total_steps,
-                    env_suffix(dag, node_id)
+                    env_suffix(dag, node_id),
+                    if attempts > 1 {
+                        format!(" attempts={attempts}")
+                    } else {
+                        String::new()
+                    }
                 );
             }
         },
@@ -2226,6 +2268,20 @@ async fn dispatch_phase(
         } = ev
         {
             logs_sink.push((node_id.clone(), line.clone()));
+        }
+        if let crate::RunEvent::StepFinished {
+            ref node_id,
+            elapsed_seconds: Some(elapsed),
+            import_seconds,
+            ..
+        } = ev
+        {
+            let id = crate::StepId::parse(node_id);
+            if !id.partition.0.contains_key("_branch") {
+                let duration = step_durations.entry(id.base_id().to_string()).or_default();
+                duration.0 += elapsed;
+                duration.1 += import_seconds.unwrap_or(0.0);
+            }
         }
         if let Some(ref tx) = event_tx_phase {
             let _ = tx.send(ev);
