@@ -10,9 +10,22 @@
 #[cfg(test)]
 use serde_json::Value;
 
-/// Default number of nodes `barca list` prints. High enough that typical pipelines (tens of
-/// nodes) are never truncated; a generated 300-node DAG is bounded and says so.
+/// Default number of nodes in a human `list` or `status` table. JSON is unlimited.
 pub const LIST_DEFAULT_LIMIT: usize = 100;
+
+/// Explicit limits apply to either format; JSON otherwise returns every item.
+pub fn inspection_limit(
+    limit: Option<usize>,
+    all: bool,
+    json: bool,
+    human_default: usize,
+) -> Option<usize> {
+    if all {
+        None
+    } else {
+        limit.or_else(|| (!json).then_some(human_default))
+    }
+}
 
 /// Item fields of `barca list --json` (`nodes[]`). `next_fire` appears only on scheduled nodes.
 pub const LIST_FIELDS: &[&str] = &[

@@ -29,7 +29,7 @@ def _result(r: subprocess.CompletedProcess) -> dict:
 
 
 def _envelope(r: subprocess.CompletedProcess) -> dict:
-    return json.loads(r.stderr.strip().splitlines()[-1])
+    return json.loads(next(line for line in reversed(r.stderr.splitlines()) if line.startswith("{")))
 
 
 ONLY_PREFIXED = """

@@ -1423,6 +1423,33 @@ async fn finalize_outputs(
         }
     }
 
+    // Later phases may never have been decided after a single-target failure. Keep
+    // their blocked nodes in the detailed result too, once per base node (as with
+    // merged partition reports), so the human count covers the whole planned cone.
+    let mut reported: std::collections::HashSet<String> =
+        step_reports.iter().map(|s| s.id.clone()).collect();
+    for step in exec_plan
+        .phases
+        .iter()
+        .flat_map(|p| &p.streams)
+        .flat_map(|s| &s.steps)
+    {
+        let base = step.step_id.base_id();
+        if !reported.contains(base)
+            && let Some(up) = blocking_failure(dag, base, failed_bases)
+        {
+            reported.insert(base.to_string());
+            step_reports.push(StepReport {
+                id: base.to_string(),
+                kind: kind_str(dag.get_node(base).map(|n| n.kind())),
+                status: Some("skipped".to_string()),
+                reason: Some("upstream_failed".to_string()),
+                detail: Some(format!("depends on '{}', which failed", short_name(up))),
+                ..Default::default()
+            });
+        }
+    }
+
     let outcomes = target_outcomes(dag, targets, all_outputs, all_failures);
 
     let final_output = final_output_of(exec_plan, &target_ids, keep_going, all_outputs);

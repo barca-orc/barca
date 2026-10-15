@@ -223,8 +223,8 @@ def test_failure_message_and_envelope_are_unchanged(tmp_path: Path) -> None:
     r = _barca(tmp_path, "get", "broken", "p.py", "--json")
     assert r.returncode == 1, r.stderr
     lines = r.stderr.splitlines()
-    assert "[barca] run failed: step 'p.py:broken' failed (exit 1)" in lines
-    envelope = json.loads(lines[-1])
+    assert lines[-1] == f"[barca] run failed: step 'p.py:broken' failed: ValueError: {NETRC}; 0 downstream steps skipped (exit 1)"
+    envelope = json.loads(next(line for line in reversed(lines) if line.startswith("{")))
     assert envelope["error"] == f"step 'p.py:broken' failed: ValueError: {NETRC}"
     assert envelope["kind"] == "step_failed" and envelope["node"] == "p.py:broken"
     assert envelope["traceback"] == (

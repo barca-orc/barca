@@ -53,6 +53,15 @@ aliased imports work). Bare names with no competing binding retain legacy
 source-snippet recognition. Namespace reflection retains conservative discovery,
 but disables provenance-based validation and uses conservative hashing.
 
+A later `from shared import *` preserves imported Barca names when the project module has
+one literal `__all__` list or tuple of strings, with no other references to `__all__`,
+that does not export those local names.
+Only colliding names lose recognition, including imported aliases and `group`. Barca uses
+the same package and sibling import paths as its workers and reads the source without
+importing it. Missing, computed, conditional or mutated export sets, installed modules and
+namespace reflection remain uncertain; put the Barca import last or use explicit imports.
+Star-import dependency hashing remains conservative.
+
 ## Options on `@asset`
 
 | Option | Meaning |
@@ -146,24 +155,17 @@ In JSON mode the first line is the envelope's `error` and the second its `remedi
 
 Not checked:
 
-- A decorator or helper that is not positively barca's. A name is checked only when a
-  `from barca import <name>` (or `from barca import *`) stands at the top level of the module
-  and nothing else in the file binds that name at module level: no assignment
-  (`task = app.task`), `def`, `class`, other import (`from prefect import task`, also inside
-  `try:` or `if`), loop or `with` target, `global` in a function, or `from other import *`
-  after the barca import. Celery's or Prefect's `@task(bind=True)` in a file that also uses
-  barca is therefore left alone, and so is a file with no such import at all. When barca
-  cannot be sure, it does not check. (barca still reads such a function as a node, as it
-  always has: it recognises its decorators by their plain names.)
+- A decorator or helper that is not positively Barca's. Qualified and aliased top-level
+  Barca imports are checked. Assignments, foreign imports, `def`, `class`, loop or `with`
+  targets and `global` writes disable recognition of the affected name. A later star import
+  disables recognition only when its exports are unknown or include that local name.
+  Celery's or Prefect's `@task(bind=True)` stays untouched. Namespace reflection retains
+  conservative discovery but disables argument checks.
 - What a helper receives through `*` or `**` (`partitions(*keys)`).
 - The values. `inputs=` that is not a dict literal (`inputs=dict(raw=raw)`,
   `inputs=make_inputs()`) is still read as "no inputs", without a message. `env=` is the
   exception: anything but a list of string literals is an error.
 - `parallel()` and `parallel_map()`: their arguments are your own.
-
-**Limitation:** barca recognises its decorators by their plain names. `import barca as b` with
-`@b.asset(...)`, and `from barca import asset as a` with `@a(...)`, are not read as nodes at
-all: `barca list` shows nothing for them, and no argument is checked.
 
 ## Environment variables: `env=`
 

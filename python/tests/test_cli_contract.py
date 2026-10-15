@@ -313,7 +313,7 @@ def runs(tmp_path_factory) -> dict:
             f"barca {' '.join(argv)}: exit {proc.returncode}, expected {code}\n"
             f"stdout: {proc.stdout}\nstderr: {proc.stderr}"
         )
-        text = proc.stdout if stream == "stdout" else proc.stderr.strip().splitlines()[-1]
+        text = proc.stdout if stream == "stdout" else next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{"))
         doc = json.loads(text)
         s = schema(doc)
         out[case] = (s, render_snapshot(argv, stream, code, s), proc)
@@ -481,3 +481,25 @@ def test_artifact_mismatch_is_a_boolean_on_the_steps_concerned_and_absent_elsewh
     # No other fixture run has a mismatch, so no other schema has the key.
     for case, *_ in CASES:
         assert "steps[].artifact_mismatch" not in runs[case][0], case
+
+
+@pytest.mark.parametrize("command", ["list", "status"])
+def test_inspection_contract_over_one_hundred_nodes(tmp_path, command):
+    """JSON has complete coverage by default; an explicit bound keeps the envelope."""
+    source = "from barca import asset\n" + "\n".join(
+        f"@asset()\ndef node_{i}():\n    return {i}\n" for i in range(121)
+    )
+    (tmp_path / "large.py").write_text(source)
+    def invoke(*extra):
+        result = subprocess.run(
+            [_find_binary(), command, "large.py", "--json", *extra],
+            cwd=tmp_path, env=_env(), capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode == 0, result.stderr
+        return json.loads(result.stdout)
+    full = invoke()
+    assert len(full["nodes"]) == full["total"] == 121
+    assert full["truncated"] is False and "hint" not in full
+    bounded = invoke("--limit", "100")
+    assert len(bounded["nodes"]) == 100 and bounded["total"] == 121
+    assert bounded["truncated"] is True and "--all" in bounded["hint"]

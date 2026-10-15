@@ -6,6 +6,7 @@ mod args;
 mod input;
 use input::*;
 mod bounded;
+use bounded::inspection_limit;
 mod commands;
 use args::*;
 use commands::*;
@@ -104,15 +105,6 @@ fn main() {
             .emit(json)
         });
     if let Err(e) = rt.block_on(run_cli(cli, &ctx)) {
-        // A failed run gets one greppable line naming the step, right before the error.
-        if e.kind == ErrorKind::StepFailed
-            && let Some(node) = &e.node
-        {
-            barca_core::errln!(
-                "[barca] run failed: step '{node}' failed (exit {})",
-                e.code()
-            );
-        }
         e.emit(json);
     }
     drop(rt);
@@ -225,7 +217,7 @@ async fn run_cli(cli: Cli, ctx: &Context) -> Result<(), CliError> {
             env,
         } => {
             let json = fields_json(format, fields.as_deref())?;
-            let limit = (!all).then_some(limit);
+            let limit = inspection_limit(limit, all, json, 10);
             history_cmd(env.as_deref(), limit, json, fields.as_deref())
                 .await
                 .map_err(engine)
@@ -258,7 +250,7 @@ async fn run_cli(cli: Cli, ctx: &Context) -> Result<(), CliError> {
             fields,
         } => {
             let json = fields_json(format, fields.as_deref())?;
-            let limit = (!all).then_some(limit);
+            let limit = inspection_limit(limit, all, json, bounded::LIST_DEFAULT_LIMIT);
             list_cmd(files, groups, json, limit, fields.as_deref(), &python)
                 .await
                 .map_err(engine)
@@ -304,7 +296,7 @@ async fn run_cli(cli: Cli, ctx: &Context) -> Result<(), CliError> {
             }
             let hint_files: Vec<PathBuf> = ctx.files.iter().map(PathBuf::from).collect();
             let targets = targets_arg(target.as_deref(), &hint_files)?;
-            let limit = (!all).then_some(limit);
+            let limit = inspection_limit(limit, all, json, bounded::LIST_DEFAULT_LIMIT);
             status_cmd(
                 env.as_deref(),
                 targets,

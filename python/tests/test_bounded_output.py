@@ -1,6 +1,6 @@
 """Bounded list output: `--limit`, `--all`, truncation reporting, and `--fields`.
 
-`list` and `history` print at most a default number of items. JSON output is an envelope that
+Human tables have default bounds; JSON returns every item unless explicitly limited. JSON output is an envelope that
 says whether it was truncated (`truncated`, `total`, `hint`); the human table prints a one-line
 note on stderr instead. `--fields a,b` keeps only those keys on each item of any JSON output, and
 an unknown field is a usage error (exit 2) that lists the valid ones.
@@ -74,11 +74,11 @@ def test_list_json_is_an_envelope_and_small_pipelines_are_not_truncated(project)
     assert [n["id"].split(":")[-1] for n in out["nodes"]] == ["numbers", "total", "report"]
 
 
-def test_list_default_limit_truncates_large_pipelines_and_says_so(project):
+def test_list_json_default_returns_large_pipelines_in_full(project):
     out = ok(barca(project, "list", "big.py", "--json"))
-    assert len(out["nodes"]) == 100
-    assert out["total"] == 120 and out["truncated"] is True
-    assert "--limit" in out["hint"] and "--all" in out["hint"]
+    assert len(out["nodes"]) == 120
+    assert out["total"] == 120 and out["truncated"] is False
+    assert "hint" not in out
 
 
 def test_list_limit_and_all(project):
@@ -209,3 +209,32 @@ def test_fields_with_pretty_is_a_usage_error(project):
         proc = barca(project, *args)
         assert proc.returncode == 2, (args, proc.stderr)
         assert "--fields applies to JSON output" in proc.stderr
+
+
+@pytest.mark.parametrize("command", ["list", "status"])
+@pytest.mark.parametrize("flags", [[], ["--json"], ["--fields", "id"]])
+def test_json_formats_return_all_nodes_unless_explicitly_limited(project, command, flags):
+    out = ok(barca(project, command, "big.py", *flags))
+    assert len(out["nodes"]) == 120 and not out["truncated"]
+    limited = ok(barca(project, command, "big.py", *flags, "--limit", "0"))
+    assert limited["nodes"] == [] and limited["total"] == 120 and limited["truncated"]
+    assert "--all" in limited["hint"]
+
+
+@pytest.mark.parametrize("command", ["list", "status"])
+def test_human_node_tables_keep_default_bound(project, command):
+    table = barca(project, command, "big.py", "--pretty")
+    assert table.returncode == 0, table.stderr
+    assert "100 of 120" in table.stderr and "--all" in table.stderr
+    full = barca(project, command, "big.py", "--pretty", "--all")
+    assert full.returncode == 0 and "100 of 120" not in full.stderr
+
+
+def test_history_json_returns_all_runs_and_human_keeps_ten(project):
+    for _ in range(12):
+        ok(barca(project, "get", "total", "pipeline.py"))
+    for flags in [[], ["--json"], ["--fields", "run_id"]]:
+        out = ok(barca(project, "history", *flags))
+        assert len(out["runs"]) == 12 and out["total"] == 12 and not out["truncated"]
+    table = barca(project, "history", "--pretty")
+    assert table.returncode == 0 and "10 of 12" in table.stderr

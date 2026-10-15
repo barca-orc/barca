@@ -92,7 +92,7 @@ def test_state_off_rejects_bad_store_before_importing_user_code(project, mode, d
     assert not (root / "user.imported").exists()
     with pytest.raises(ProcessLookupError):
         os.kill(int((root / "helper.pid").read_text()), 0)
-    envelope = json.loads(out.stderr.splitlines()[-1])
+    envelope = json.loads(next(line for line in reversed(out.stderr.splitlines()) if line.startswith("{")))
     assert envelope["kind"] == "infra"
     with sqlite3.connect(root / ".barca/metadata.db") as db:
         assert db.execute("SELECT status, steps_executed FROM runs").fetchall() == [("failed", 0)]

@@ -137,7 +137,7 @@ def finish(values): return values
     args = ("finish", "pipeline.py") if command == "run" else ("pipeline.py",)
     proc = invoke(tmp_path, 1, command, *args)
     assert proc.returncode == 2, proc.stderr
-    envelope = json.loads(proc.stderr.strip().splitlines()[-1])
+    envelope = json.loads(next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{")))
     assert envelope["kind"] == "usage"
     assert "mixing partitions() and partitions_from()" in envelope["error"]
     assert "partitions([...])" in envelope["remediation"]

@@ -149,9 +149,9 @@ def test_a_failing_target_does_not_stop_the_others(project):
     assert failed["failed_node"] == "pipeline.py:boom"
     assert "check failed on purpose" in failed["error"]
     assert "boom" in proc.stderr
-    # The run reports failure on stdout, and the error envelope (#154) is the last stderr line.
+    # The run reports failure on stdout, and stderr ends with the failure summary after its error envelope.
     assert out["status"] == "failed"
-    envelope = json.loads(proc.stderr.strip().splitlines()[-1])
+    envelope = json.loads(next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{")))
     assert envelope["kind"] == "step_failed" and envelope["node"] == "pipeline.py:boom"
 
 
