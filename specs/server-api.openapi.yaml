@@ -1442,6 +1442,9 @@ components:
         artifact: *id002
         warning: *id002
         artifact_mismatch: *id026
+        bytes_changed:
+          type: boolean
+          const: true
         partitions:
           $ref: '#/components/schemas/PartitionSummary'
         env:
@@ -1601,6 +1604,16 @@ components:
           - type: 'null'
         partition: *id002
         error: *id002
+        content_hash: *id002
+    BytesChange:
+      type: object
+      additionalProperties: false
+      required: [node_id, run_hash, content_hash, created_at]
+      properties:
+        node_id: *id002
+        run_hash: *id002
+        content_hash: *id002
+        created_at: *id002
     NodeStatus:
       type: object
       additionalProperties: false
@@ -1633,6 +1646,8 @@ components:
           $ref: '#/components/schemas/Cache'
         partitions: &id033
           $ref: '#/components/schemas/PartitionState'
+        last_bytes_change:
+          $ref: '#/components/schemas/BytesChange'
         last_materialization: &id034
           anyOf:
           - $ref: '#/components/schemas/Materialization'

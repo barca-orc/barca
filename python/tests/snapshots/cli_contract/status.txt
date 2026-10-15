@@ -15,6 +15,7 @@ nodes[].inputs[] : string
 nodes[].kind : string
 nodes[].last_materialization : object
 nodes[].last_materialization.artifact : null|string
+nodes[].last_materialization.content_hash : string  (optional)
 nodes[].last_materialization.created_at : string
 nodes[].last_materialization.elapsed_seconds : null|number
 nodes[].last_materialization.error : string  (optional)

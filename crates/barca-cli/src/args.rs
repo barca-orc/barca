@@ -69,6 +69,7 @@ Examples:
   barca get total pipeline.py              # one target and only its upstream cone
   barca get total,orders pipeline.py       # several targets in one run; shared upstream runs once
   barca get total pipeline.py other.py     # target defined across several files
+  barca get orders pipeline.py --refresh orders --json  # check recomputed artifact bytes
   barca get total pipeline.py --refresh-all        # recompute everything in that cone
   barca get total pipeline.py --refresh clean      # recompute clean and everything downstream of it
   barca get total pipeline.py --refresh clean --no-cascade   # recompute only clean
