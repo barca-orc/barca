@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from barca.api import _find_binary
+from barca.api import _error_envelope, _find_binary
 
 pytest.importorskip("duckdb")
 pytest.importorskip("numpy")
@@ -448,7 +448,8 @@ def failed_with(root: Path, target: str, pool: int = 4) -> str:
     doc = json.loads(out)
     assert doc["status"] == "failed" and "final_output" not in doc, doc
     assert doc["failed_node"] == f"pipeline.py:{target}"
-    envelope = json.loads(err.strip().splitlines()[-1])
+    envelope = _error_envelope(err)
+    assert envelope is not None, err
     assert envelope["kind"] == "step_failed" and envelope["node"] == f"pipeline.py:{target}"
     assert doc["error"] in envelope["error"]
     return doc["error"]
