@@ -179,8 +179,11 @@ def later(value):
     try:
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
-            assert proc.poll() is None
-            if any(row[4] == 1 for row in _rows(tmp_path)):
+            if proc.poll() is not None:
+                out, err = proc.communicate()
+                pytest.fail(f"held run ended before checkpoint: {err}")
+            status, _ = _cli(tmp_path, "status", "value", "pipeline.py", "--json")
+            if any(node.get("last_bytes_change") for node in status["nodes"]):
                 break
             time.sleep(0.05)
         else:
