@@ -213,6 +213,11 @@ captured the conditional value before that replacement. Even an unconditional re
 therefore retain conservative invalidation. Ordinary definitions
 that do not use these uncertain bindings keep their selective dependency cones.
 
+References in set literal elements are followed, just like list and tuple elements.
+For example, `{helpers.compute()}` includes the project helper's dependency cone; a set of
+constants adds no helper dependency. Existing affected consumers may recompute once after
+this dependency-tracking correction.
+
 #### Not followed
 
 An edit in one of these does not change the hash; recompute with `--refresh-all` or `--refresh`:
@@ -231,7 +236,7 @@ An edit in one of these does not change the hash; recompute with `--refresh-all`
 - a module reached through another module's `import` (`from helpers import other` where
   `helpers.py` does `import other`): import it directly;
 - what a helper refers to only in a decorator, a default argument value, an `except` clause's
-  exception type, a `match` pattern, a set literal (`{f()}`), an assignment target
+  exception type, a `match` pattern, an assignment target
   (`table[key()] = ...`) or a loop's `else:` block. The helper's own text is hashed, but those
   references are not followed. (This is about helper functions. The decorators of a step
   itself are covered by "Which decorator arguments count" above; its default argument values

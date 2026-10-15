@@ -1003,9 +1003,9 @@ impl<'p> UseCollector<'p> {
         }
     }
 
-    // The statements and expressions visited below are exactly the ones every earlier release
-    // visited: visiting more (a decorator, a default value, an `except` type, ...) would add
-    // names, and so change the hash of code that has not changed.
+    // Extend this traversal one construct family at a time: following previously omitted
+    // references invalidates existing cached code. Keep the manual and regression controls
+    // aligned with each deliberate extension.
     fn stmt(&mut self, stmt: &Stmt) {
         match stmt {
             Stmt::Expr(s) => self.expr(&s.value),
@@ -1116,6 +1116,7 @@ impl<'p> UseCollector<'p> {
                 }
             }
             Expr::List(l) => self.exprs(&l.elts),
+            Expr::Set(s) => self.exprs(&s.elts),
             Expr::Tuple(t) => self.exprs(&t.elts),
             Expr::Lambda(l) => {
                 let scope = self.block_scope(l.parameters.as_deref(), &[]);
@@ -2054,6 +2055,28 @@ def my_asset():
         );
     }
 
+    #[test]
+    fn set_literal_elements_follow_project_helpers() {
+        let project =
+            |n: u32| sources(&[("helpers", &format!("def compute():\n    return {n}\n"))]);
+        for entry in [
+            "import helpers\ndef my_asset():\n    return {helpers.compute()}\n",
+            "from helpers import compute\ndef my_asset():\n    return {compute(), 7}\n",
+            "def my_asset():\n    import helpers as local\n    return {local.compute(), 7}\n",
+        ] {
+            assert_ne!(
+                hash_of(entry, &project(1), &[]),
+                hash_of(entry, &project(2), &[]),
+                "{entry}"
+            );
+        }
+        let literal = "import helpers\ndef my_asset():\n    return {1, 7}\n";
+        assert_eq!(
+            hash_of(literal, &project(1), &[]),
+            hash_of(literal, &project(2), &[])
+        );
+    }
+
     // ─── Known limitations, as `barca docs cache` lists them ─────────────────────
 
     /// Not followed today. Each of these is in the manual ("Not followed"); when one starts
@@ -2083,10 +2106,6 @@ def my_asset():
             (
                 "default argument",
                 "from helpers import compute\n\ndef inner(x=compute()):\n    return x\n\ndef my_asset():\n    return inner()\n",
-            ),
-            (
-                "set literal",
-                "import helpers\n\ndef my_asset():\n    return {helpers.compute()}\n",
             ),
             (
                 "loop else",
