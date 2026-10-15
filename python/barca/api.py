@@ -168,7 +168,6 @@ def get(
     refresh: list[str] | None = None,
     refresh_all: bool = False,
     cascade: bool = True,
-    no_cache: bool = False,
 ) -> Any:
     """Get asset value(s).
 
@@ -181,19 +180,9 @@ def get(
     those assets (the target may be one of them) and everything downstream of
     them; ``cascade=False`` (``--no-cascade``) re-materializes only the named
     ones. ``refresh_all=True`` re-materializes every asset in the cone.
-    ``no_cache=True`` is the deprecated spelling of ``refresh_all=True``.
 
     Returns the deserialized value of the target asset directly.
     """
-    if no_cache:
-        import warnings
-
-        warnings.warn(
-            "barca.get(no_cache=True) is deprecated; use refresh_all=True",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        refresh_all = True
     args: list[str] = ["get", target_or_file, *extra_files, "--json"]
     args += _refresh_args(refresh, refresh_all, cascade)
     result = _exec(args)

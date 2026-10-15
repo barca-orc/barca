@@ -8,7 +8,6 @@ refresh vocabulary.
 import json
 import os
 import subprocess
-import warnings
 from pathlib import Path
 
 import pytest
@@ -153,7 +152,8 @@ def test_a_failed_agent_run_names_the_step_and_does_not_say_done(project):
 
 
 def test_warnings_are_lowercase(project):
-    proc = barca_cli(project, "get", "total", "pipeline.py", "--json", "--no-cache")
+    assert barca_cli(project, "get", "total", "pipeline.py", "--json").returncode == 0
+    proc = barca_cli(project, "get", "total", "pipeline.py", "--json", "--refresh", "src", "--no-cascade")
     assert "[barca] warning: " in proc.stderr
     assert "[barca] Warning" not in proc.stderr
 
@@ -163,9 +163,7 @@ def test_python_api_get_shares_the_refresh_vocabulary(project, monkeypatch):
     assert barca.get("total", "pipeline.py") == {"total": 1}
     assert barca.get("total", "pipeline.py", refresh=["src"]) == {"total": 1}
     assert barca.get("total", "pipeline.py", refresh_all=True) == {"total": 1}
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        assert barca.get("total", "pipeline.py", no_cache=True) == {"total": 1}
-    assert any(issubclass(w.category, DeprecationWarning) for w in caught)
+    with pytest.raises(TypeError, match="unexpected keyword argument"):
+        barca.get("total", "pipeline.py", no_cache=True)
     assert barca.stats("total", "pipeline.py")["id"] == "pipeline.py:total"
     assert barca.history(1)[0]["files"] == ["pipeline.py"]

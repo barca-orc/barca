@@ -56,7 +56,6 @@ pub async fn get(
         target_names: &names,
         file_args,
         python,
-        no_cache: false,
         agent_mode,
         policy,
         command_label: "get",
@@ -84,7 +83,6 @@ pub async fn run(
         target_names: &[target_name.to_string()],
         file_args,
         python,
-        no_cache: false,
         agent_mode,
         policy,
         command_label: "run",
@@ -105,7 +103,7 @@ pub async fn get_streaming(
     python: &std::path::Path,
     policy: CachePolicy,
     agent_mode: bool,
-    cancel: CancellationToken,
+    cancel: impl Into<crate::interrupt::Interrupt>,
     event_tx: Option<UnboundedSender<crate::RunEvent>>,
 ) -> Result<GetResult, BarcaError> {
     let names: Vec<String> = target_name.map(str::to_string).into_iter().collect();
@@ -115,7 +113,6 @@ pub async fn get_streaming(
         target_names: &names,
         file_args,
         python,
-        no_cache: false,
         agent_mode,
         policy,
         command_label: "get",
@@ -135,7 +132,7 @@ pub async fn run_streaming(
     python: &std::path::Path,
     policy: CachePolicy,
     agent_mode: bool,
-    cancel: CancellationToken,
+    cancel: impl Into<crate::interrupt::Interrupt>,
     event_tx: Option<UnboundedSender<crate::RunEvent>>,
 ) -> Result<GetResult, BarcaError> {
     execute(ExecuteRequest {
@@ -144,7 +141,6 @@ pub async fn run_streaming(
         target_names: &[target_name.to_string()],
         file_args,
         python,
-        no_cache: false,
         agent_mode,
         policy,
         command_label: "run",
@@ -167,18 +163,42 @@ pub async fn get_many(
     agent_mode: bool,
     cancel: impl Into<crate::interrupt::Interrupt>,
 ) -> Result<MultiResult, BarcaError> {
+    get_many_streaming(
+        cfg,
+        target_names,
+        file_args,
+        python,
+        policy,
+        agent_mode,
+        cancel,
+        None,
+    )
+    .await
+}
+
+/// Streaming counterpart that preserves the multi-target execution policy.
+#[allow(clippy::too_many_arguments)]
+pub async fn get_many_streaming(
+    cfg: &crate::config::ResolvedConfig,
+    target_names: &[String],
+    file_args: &[String],
+    python: &std::path::Path,
+    policy: CachePolicy,
+    agent_mode: bool,
+    cancel: impl Into<crate::interrupt::Interrupt>,
+    event_tx: Option<UnboundedSender<crate::RunEvent>>,
+) -> Result<MultiResult, BarcaError> {
     execute(ExecuteRequest {
         dag: None,
         cfg,
         target_names,
         file_args,
         python,
-        no_cache: false,
         agent_mode,
         policy,
         command_label: "get",
         interrupt: cancel.into(),
-        event_tx: None,
+        event_tx,
     })
     .await
     .map(Executed::into_multi)
@@ -195,18 +215,42 @@ pub async fn run_many(
     agent_mode: bool,
     cancel: impl Into<crate::interrupt::Interrupt>,
 ) -> Result<MultiResult, BarcaError> {
+    run_many_streaming(
+        cfg,
+        target_names,
+        file_args,
+        python,
+        policy,
+        agent_mode,
+        cancel,
+        None,
+    )
+    .await
+}
+
+/// Streaming counterpart that preserves the multi-target execution policy.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_many_streaming(
+    cfg: &crate::config::ResolvedConfig,
+    target_names: &[String],
+    file_args: &[String],
+    python: &std::path::Path,
+    policy: CachePolicy,
+    agent_mode: bool,
+    cancel: impl Into<crate::interrupt::Interrupt>,
+    event_tx: Option<UnboundedSender<crate::RunEvent>>,
+) -> Result<MultiResult, BarcaError> {
     execute(ExecuteRequest {
         dag: None,
         cfg,
         target_names,
         file_args,
         python,
-        no_cache: false,
         agent_mode,
         policy,
         command_label: "run",
         interrupt: cancel.into(),
-        event_tx: None,
+        event_tx,
     })
     .await
     .map(Executed::into_multi)
@@ -232,7 +276,6 @@ pub async fn get_streaming_from_dag(
         target_names: &names,
         file_args,
         python,
-        no_cache: false,
         agent_mode,
         policy,
         command_label: "get",
@@ -262,7 +305,6 @@ pub async fn run_streaming_from_dag(
         target_names: &[target_name.to_string()],
         file_args,
         python,
-        no_cache: false,
         agent_mode,
         policy,
         command_label: "run",

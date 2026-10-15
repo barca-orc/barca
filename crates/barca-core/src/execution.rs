@@ -149,7 +149,6 @@ pub(crate) struct ExecuteRequest<'a> {
     pub(crate) target_names: &'a [String],
     pub(crate) file_args: &'a [String],
     pub(crate) python: &'a std::path::Path,
-    pub(crate) no_cache: bool,
     pub(crate) agent_mode: bool,
     pub(crate) policy: CachePolicy,
     pub(crate) command_label: &'a str,
@@ -286,6 +285,8 @@ struct RunState {
     step_clocks: HashMap<String, (f64, f64)>,
     all_failures: Vec<dispatch::StepFailure>,
     all_attempts: HashMap<String, u32>,
+    // Worker-reported active duration and slow import duration, including failed attempts.
+    step_durations: HashMap<String, (f64, f64)>,
     steps_executed: usize,
     total_steps: usize,
     total_estimated: f64,
@@ -825,7 +826,6 @@ async fn expand_and_decide(
     let decided = decide_phase(DecidePhase {
         dag: &session.prepared.dag,
         policy: &session.request.policy,
-        no_cache: session.request.no_cache,
         cfg: session.request.cfg,
         phase_ref,
         decide_state: &mut session.state.decide_state,
@@ -974,6 +974,7 @@ async fn dispatch_ready(
             total_steps: session.state.total_steps,
             event_tx: &session.request.event_tx,
             logs_buffer: &mut session.state.logs_buffer,
+            step_durations: &mut session.state.step_durations,
             cancel: &session.started.cancel,
         })
         .await;
@@ -1105,6 +1106,10 @@ async fn collect_failures(
             continue;
         }
         let node_id = item.step_id.display();
+        session
+            .state
+            .all_attempts
+            .insert(node_id.clone(), item.attempts);
         if error_msg.starts_with(BLOCKED_ARTIFACT_PATH) {
             // The step ran; its result could not be written because barca's artifact
             // directory is in a state barca cannot repair. Infrastructure (exit 3), not a
@@ -1122,7 +1127,15 @@ async fn collect_failures(
             continue;
         }
         if session.request.agent_mode {
-            crate::errln!("{}", failed_step_line(&node_id, error_msg));
+            crate::errln!(
+                "{}{}",
+                failed_step_line(&node_id, error_msg),
+                if item.attempts > 1 {
+                    format!(" attempts={}", item.attempts)
+                } else {
+                    String::new()
+                }
+            );
         }
         if first_non_group_failure.is_none() {
             first_non_group_failure = Some((node_id.clone(), error_msg.to_string()));
@@ -1328,6 +1341,26 @@ async fn return_outputs(
         &session.started.cancel,
     )
     .await?;
+
+    let mut attempts_by_base: HashMap<String, u32> = HashMap::new();
+    for (node, attempts) in &session.state.all_attempts {
+        let id = crate::StepId::parse(node);
+        if id.partition.0.contains_key("_branch") {
+            continue;
+        }
+        let base = id.base_id().to_string();
+        let count = attempts_by_base.entry(base).or_default();
+        *count = (*count).max(*attempts);
+    }
+    for report in &mut step_reports {
+        if let Some(attempts) = attempts_by_base.get(&report.id) {
+            report.attempts = Some(*attempts);
+        }
+        if let Some((elapsed, imports)) = session.state.step_durations.get(&report.id) {
+            report.elapsed_seconds = Some(*elapsed);
+            report.import_seconds = (*imports > 1.0).then_some(*imports);
+        }
+    }
 
     let changed =
         db::changed_bytes_in_run(&session.request.cfg.db_path, &session.started.run_id).await?;
@@ -1548,20 +1581,13 @@ pub(crate) async fn explain_dag(
     target_names: &[String],
     python: &std::path::Path,
     policy: CachePolicy,
-    no_cache: bool,
     command_label: &str,
 ) -> Result<ExplainResult, BarcaError> {
-    Ok(explain_dag_with_membership(
-        dag,
-        cfg,
-        target_names,
-        python,
-        policy,
-        no_cache,
-        command_label,
+    Ok(
+        explain_dag_with_membership(dag, cfg, target_names, python, policy, command_label)
+            .await?
+            .0,
     )
-    .await?
-    .0)
 }
 
 /// Full actual prediction membership, moved without changing public reports.
@@ -1571,7 +1597,6 @@ pub(crate) async fn explain_dag_with_membership(
     target_names: &[String],
     python: &std::path::Path,
     policy: CachePolicy,
-    no_cache: bool,
     command_label: &str,
 ) -> Result<(ExplainResult, crate::cache::ExpandedMembership), BarcaError> {
     let targets = resolve_targets(dag, target_names, command_label)?;
@@ -1638,7 +1663,6 @@ pub(crate) async fn explain_dag_with_membership(
     let mut prediction = Prediction {
         dag,
         policy: &policy,
-        no_cache,
         cache: cache.as_ref(),
         layout: layout.as_ref(),
         pool_size,
@@ -1707,7 +1731,6 @@ pub(crate) async fn explain_dag_with_membership(
 struct Prediction<'a> {
     dag: &'a Dag,
     policy: &'a CachePolicy,
-    no_cache: bool,
     cache: Option<&'a db::CacheReader>,
     layout: Option<&'a ArtifactLayout>,
     pool_size: usize,
@@ -1820,16 +1843,8 @@ async fn predict_steps(
             .find(|up| ctx.hash_unknown.contains(&up_base(up)))
             .cloned();
 
-        let (step, decision) = decide_step(
-            ctx.dag,
-            ctx.policy,
-            ctx.no_cache,
-            ctx.cache,
-            ctx.state,
-            step,
-        )
-        .await?;
-        // Forced to run whatever the cache holds (task, sensor, refresh, --no-cache).
+        let (step, decision) = decide_step(ctx.dag, ctx.policy, ctx.cache, ctx.state, step).await?;
+        // Forced to run whatever the cache holds (task, sensor, refresh).
         let forced = matches!(
             &decision,
             Decision::Run(reason) if *reason != RunReason::NotMaterialized
@@ -1943,7 +1958,6 @@ async fn predict_phase(ctx: &mut Prediction<'_>, phase: &Phase) -> Result<(), Ba
 struct DecidePhase<'a> {
     dag: &'a Dag,
     policy: &'a CachePolicy,
-    no_cache: bool,
     cfg: &'a crate::config::ResolvedConfig,
     phase_ref: &'a Phase,
     decide_state: &'a mut DecideState,
@@ -1961,7 +1975,6 @@ async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaError> {
     let DecidePhase {
         dag,
         policy,
-        no_cache,
         cfg,
         phase_ref,
         decide_state,
@@ -1987,8 +2000,7 @@ async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaError> {
         vec![Vec::new(); phase_ref.streams.len()];
     for (stream_idx, step) in in_dependency_order(dag, phase_ref) {
         let uncached_steps = &mut uncached[stream_idx];
-        let (step, decision) =
-            decide_step(dag, policy, no_cache, Some(&cache), decide_state, step).await?;
+        let (step, decision) = decide_step(dag, policy, Some(&cache), decide_state, step).await?;
         let decision = localize_decision(decision, &step, store);
         step_reports.push(report_for(dag, &step, &decision, false));
         let display_id = step.step_id.display();
@@ -2080,6 +2092,7 @@ struct DispatchPhase<'a> {
     total_steps: usize,
     event_tx: &'a Option<UnboundedSender<crate::RunEvent>>,
     logs_buffer: &'a mut Vec<(String, String)>,
+    step_durations: &'a mut HashMap<String, (f64, f64)>,
     cancel: &'a CancellationToken,
 }
 
@@ -2110,6 +2123,7 @@ async fn dispatch_phase(
         mut total_steps,
         event_tx,
         logs_buffer,
+        step_durations,
         cancel,
     } = ctx;
     let mut coord = crate::coordinator::Coordinator::new();
@@ -2227,12 +2241,17 @@ async fn dispatch_phase(
                 bar.set_message(format!("{short_name} done"));
             } else if agent_mode {
                 crate::errln!(
-                    "[barca] step:{} completed {:.1}s ({}/{}){}",
+                    "[barca] step:{} completed {:.1}s ({}/{}){}{}",
                     node_id,
                     elapsed_s.unwrap_or(0.0),
                     completed_steps,
                     total_steps,
-                    env_suffix(dag, node_id)
+                    env_suffix(dag, node_id),
+                    if attempts > 1 {
+                        format!(" attempts={attempts}")
+                    } else {
+                        String::new()
+                    }
                 );
             }
         },
@@ -2249,6 +2268,20 @@ async fn dispatch_phase(
         } = ev
         {
             logs_sink.push((node_id.clone(), line.clone()));
+        }
+        if let crate::RunEvent::StepFinished {
+            ref node_id,
+            elapsed_seconds: Some(elapsed),
+            import_seconds,
+            ..
+        } = ev
+        {
+            let id = crate::StepId::parse(node_id);
+            if !id.partition.0.contains_key("_branch") {
+                let duration = step_durations.entry(id.base_id().to_string()).or_default();
+                duration.0 += elapsed;
+                duration.1 += import_seconds.unwrap_or(0.0);
+            }
         }
         if let Some(ref tx) = event_tx_phase {
             let _ = tx.send(ev);

@@ -47,26 +47,20 @@ _EXT_FORMATS = {
 
 
 class _LineEmitter(io.TextIOBase):
-    """A stdout proxy that streams complete lines to the coordinator as they
-    are written, so user `print()` output shows up live in the UI — while still
-    passing the text through to the real stdout, preserving the terminal
-    behaviour CLI users expect. Buffers a partial trailing line until the next
-    newline or an explicit flush."""
+    """Capture Python stdout as complete node-attributed metadata lines.
+
+    The coordinator owns display policy; this stream never writes user text directly
+    to the worker's inherited descriptors. Partial lines flush on return or failure.
+    """
 
     def __init__(self, node_id):
         self.node_id = node_id
         self._buf = ""
-        # The real stdout, captured before redirect_stdout swaps sys.stdout.
-        self._passthrough = sys.stdout
+        # The coordinator renders this metadata event; user stdout never bypasses it.
 
     def write(self, s):
         from barca import _runtime
 
-        # Tee to the real stdout so `print()` still shows on the terminal.
-        try:
-            self._passthrough.write(s)
-        except Exception:
-            pass
         self._buf += s
         while "\n" in self._buf:
             line, self._buf = self._buf.split("\n", 1)
@@ -74,15 +68,26 @@ class _LineEmitter(io.TextIOBase):
         return len(s)
 
     def flush(self):
-        from barca import _runtime
+        if self._buf and not sys.is_finalizing():
+            from barca import _runtime
 
-        try:
-            self._passthrough.flush()
-        except Exception:
-            pass
-        if self._buf:
             _runtime.emit_log(self.node_id, self._buf)
             self._buf = ""
+
+
+_step_stdout = None
+
+
+def _stdout_for_step(node_id):
+    # Import-time stdout handlers may retain this stream. Reuse it so they follow
+    # the current step rather than retaining whichever step first imported a module.
+    global _step_stdout
+    if _step_stdout is None:
+        _step_stdout = _LineEmitter(node_id)
+    else:
+        _step_stdout.flush()
+        _step_stdout.node_id = node_id
+    return _step_stdout
 
 
 def _peak_rss_bytes() -> int:
@@ -391,7 +396,7 @@ def load_module(source_file):
     return load_pipeline_module(source_file)
 
 
-def _run_with_timeout(fn, kwargs, timeout_seconds):
+def _run_with_timeout(fn, kwargs, timeout_seconds, *, label=None):
     """Run a function with a timeout. Raises TimeoutError if exceeded."""
     import threading
     from contextvars import copy_context
@@ -416,7 +421,7 @@ def _run_with_timeout(fn, kwargs, timeout_seconds):
     thread.join(timeout=timeout_seconds)
 
     if thread.is_alive():
-        raise TimeoutError(f"Function '{fn.__name__}' exceeded timeout of {timeout_seconds}s")
+        raise TimeoutError(f"Step '{label or fn.__name__}' exceeded timeout of {timeout_seconds}s")
     if exception is not None:
         raise exception
     return result
@@ -515,7 +520,7 @@ def _execute(fn, kwargs, step):
     timeout = step.get("timeout_seconds", 0)
     t0 = time.perf_counter()
     if timeout and timeout > 0:
-        result = _run_with_timeout(fn, kwargs, timeout)
+        result = _run_with_timeout(fn, kwargs, timeout, label=step.get("node_id"))
     else:
         result = fn(**kwargs) if kwargs else fn()
     elapsed = time.perf_counter() - t0
@@ -738,7 +743,12 @@ def run_batch(batch):
                         timeout = step.get("timeout_seconds", 0)
                         t0 = time.time()
                         if timeout and timeout > 0:
-                            result = _run_with_timeout(lambda: fn(*d_args, **d_kwargs), {}, timeout)
+                            result = _run_with_timeout(
+                                lambda: fn(*d_args, **d_kwargs),
+                                {},
+                                timeout,
+                                label=step.get("node_id"),
+                            )
                         else:
                             result = fn(*d_args, **d_kwargs)
                         elapsed = time.time() - t0
@@ -800,7 +810,9 @@ def run_batch(batch):
                     timeout = step.get("timeout_seconds", 0)
                     t0 = time.time()
                     if timeout and timeout > 0:
-                        result = _run_with_timeout(lambda: fn(*d_args, **d_kwargs), {}, timeout)
+                        result = _run_with_timeout(
+                            lambda: fn(*d_args, **d_kwargs), {}, timeout, label=step.get("node_id")
+                        )
                     else:
                         result = fn(*d_args, **d_kwargs)
                     elapsed = time.time() - t0
@@ -937,12 +949,21 @@ def _run_daemon_step(step, modules, art_dir, lru):
     bound_views: list[str] = []
     # Set when this step is a parallel() branch whose return value could not be written.
     unwritable = False
+    import_seconds = None
 
     try:
         source = str(Path(step["source_file"]).resolve())
         activate_source_path(source)
+        emitter = _stdout_for_step(node_id)
         if source not in modules:
-            modules[source] = load_module(source)
+            print(f"[barca] importing {source}", file=sys.stderr, flush=True)
+            import_start = time.perf_counter()
+            try:
+                with contextlib.redirect_stdout(emitter):
+                    modules[source] = load_module(source)
+            finally:
+                import_seconds = time.perf_counter() - import_start
+                emitter.flush()
         fn = getattr(modules[source], step["function_name"])
 
         # From here until the result is written, Ctrl-C interrupts the step.
@@ -988,17 +1009,18 @@ def _run_daemon_step(step, modules, art_dir, lru):
 
         timeout = step.get("timeout_seconds", 0)
         # Capture user stdout and stream it live, line by line.
-        emitter = _LineEmitter(node_id)
         with contextlib.redirect_stdout(emitter):
             try:
                 if d_args:
                     if timeout and timeout > 0:
-                        result = _run_with_timeout(lambda: fn(*d_args, **kwargs), {}, timeout)
+                        result = _run_with_timeout(
+                            lambda: fn(*d_args, **kwargs), {}, timeout, label=node_id
+                        )
                     else:
                         result = fn(*d_args, **kwargs)
                 else:
                     if timeout and timeout > 0:
-                        result = _run_with_timeout(lambda: fn(**kwargs), {}, timeout)
+                        result = _run_with_timeout(lambda: fn(**kwargs), {}, timeout, label=node_id)
                     else:
                         result = fn(**kwargs)
             finally:
@@ -1033,7 +1055,15 @@ def _run_daemon_step(step, modules, art_dir, lru):
                 step,
                 wall,
                 elapsed_in_artifact=True,
-                timing={"cpu_seconds": cpu, "max_rss_bytes": _peak_rss_bytes()},
+                timing={
+                    "cpu_seconds": cpu,
+                    "max_rss_bytes": _peak_rss_bytes(),
+                    **(
+                        {"import_seconds": import_seconds}
+                        if import_seconds and import_seconds > 1
+                        else {}
+                    ),
+                },
                 before_emit=tracing.finish,
             )
         except Exception as exc:
@@ -1087,6 +1117,7 @@ def _run_daemon_step(step, modules, art_dir, lru):
             message=message,
             traceback=_user_traceback(exc),
             elapsed=wall,
+            import_seconds=import_seconds if import_seconds and import_seconds > 1 else None,
         )
         return False
 

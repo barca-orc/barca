@@ -1,0 +1,4 @@
+# barca logs RUN_ID --step report --json  (stdout, exit 0)
+[] : object
+[].line : string
+[].node_id : string

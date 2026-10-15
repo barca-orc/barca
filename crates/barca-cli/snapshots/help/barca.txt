@@ -7,6 +7,7 @@ Commands:
   get      Get asset value(s) — cache-aware, runs only the needed subgraph
   run      Run a task and its dependency cone — the task always re-runs
   plan     Parse source files and emit the execution plan as JSON
+  logs     Read a run's captured step stdout, without progress messages
   history  Show recent run history
   stats    Show execution statistics for an asset
   serve    Run a long-running HTTP server exposing the orchestrator as a JSON API

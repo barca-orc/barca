@@ -14,7 +14,7 @@ save it as a file, for example `barca docs skill > .claude/skills/barca/SKILL.md
 
 ## Output format: JSON unless stdout is a terminal
 
-`get`, `run`, `list`, `status`, `history` and `stats` pick their stdout format by one rule, first match wins:
+`get`, `run`, `logs`, `list`, `status`, `history` and `stats` pick their stdout format by one rule, first match wins:
 
 1. **A flag:** `--json` forces JSON, `--pretty` forces human output (tables, summaries).
    `get`/`run` also keep `-o json|value|pretty`; `-o value` prints only the final value.
@@ -39,7 +39,8 @@ BARCA_OUTPUT=json barca get total pipeline.py
 - **stdout** carries the result: one JSON object for `get`/`run`, the plan JSON for `plan`, and
   JSON for `list`/`history`/`stats` (whenever the rule above picks JSON). It is safe to parse.
 - **stderr** carries progress (`[barca] 2/2 steps | done in 0.0s`), your own `print` output from
-  steps, warnings and errors. The progress bar draws only when stderr is a terminal; barca
+  steps in non-JSON modes, warnings and errors. JSON mode retains captured prints in
+  `barca logs RUN_ID --json`; non-JSON modes prefix them with `[node_id]`. The progress bar draws only when stderr is a terminal; barca
   writes no ANSI colour or cursor codes to a stream that is not one. Use `--agent` for plain
   progress lines (`[barca] 1/2 ...`) on stderr instead of a progress bar.
 - **Exit codes:** one per kind of failure, so you can decide what to do from the code alone.
@@ -259,8 +260,8 @@ invisible to barca (`barca docs assets`).
 - `--refresh a` re-runs `a` and every asset downstream of it in the target's cone (reason
   `refresh_cascade`). `--no-cascade` re-runs only what you name; cached downstream assets then
   do not reflect the refresh and barca warns on stderr. Details: `barca docs cache`.
-- `--refresh-all` re-runs every asset in the cone. `--no-cache` is its deprecated spelling: it
-  still works, prints `[barca] warning: --no-cache is deprecated ...`, and will be removed.
+- `--refresh-all` re-runs every asset in the cone. The deprecated `--no-cache` alias was
+  removed in 0.24.0; it is a usage error (exit 2). Python uses `refresh_all=True`.
 - On `get` the target itself may be named (`barca get total pipeline.py --refresh total`).
 - An unknown name is an error (exit 2, `kind: usage`) listing the valid upstream assets.
 
@@ -294,6 +295,11 @@ barca stats total pipeline.py --json  # timings and cache hit rate for one asset
 
 Source parsing is static and planning executes no pipeline step. `partitions(<expression>)`
 can evaluate Python and import its module while resolving keys.
+
+For an old or container-owned run that still reads `running` after you verified it stopped,
+use `barca history --reconcile RUN_ID --json`. It records `interrupted`, prints just that
+run using the normal history envelope, preserves successful results, and refuses a proven
+live owner. Ordinary history inspection stays read-only. See `barca docs cache`.
 
 ## Bounded output: --limit, --all, --fields
 

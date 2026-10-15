@@ -57,8 +57,8 @@ barca get total pipeline.py --refresh-all         # recompute an asset's whole c
 - `--refresh a b` is an error that tells you to write `--refresh a,b`.
 - `--refresh` cascades: downstream assets re-run too (reason `refresh_cascade`). With
   `--no-cascade` they stay cached, do not reflect the refresh, and barca warns.
-- `get` and `run` take the same `--refresh`, `--no-cascade` and `--refresh-all`. `--no-cache` is
-  a deprecated spelling of `--refresh-all` (it warns); do not use it.
+- `get` and `run` take the same `--refresh`, `--no-cascade` and `--refresh-all`.
+  In Python, force a full refresh with `refresh_all=True`.
 - Data that changes in place (a blob overwritten at the same path): an asset that reads a
   `@sensor` re-runs when the sensor's returned value changes, so have a sensor return the etag.
   `--dry-run` and `status` assume the sensor returns its last value; before it ever ran, its
@@ -74,8 +74,9 @@ barca get total pipeline.py --refresh-all         # recompute an asset's whole c
   pointer, `{"_barca_artifact": {"path", "format", "size_bytes"}}`), and `warnings`: always an
   array, `[]` or plan-time warnings such as an input a step never uses (also one
   `[barca] warning: ...` line each on stderr; fix them, they cost load time).
-- Your steps' own `print` output goes to stderr, so stdout is only the result.
-- **stderr** has progress and errors. In JSON mode its **last line** is the error envelope
+- Retrieve captured step stdout with `barca logs RUN_ID --json`. JSON runs suppress captured
+  prints; other modes show them on stderr with `[node_id]` prefixes.
+- **stderr** has progress and errors. In JSON mode find the error-envelope JSON line
   `{"error", "code", "kind", "remediation"}`, plus `node`, `traceback`, `artifact_dir` for a
   failed step. `remediation` is usually the command to run next.
 

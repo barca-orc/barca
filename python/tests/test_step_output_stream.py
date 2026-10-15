@@ -1,4 +1,4 @@
-"""A step's own print() output goes to stderr, never stdout.
+"""Step stdout never pollutes results; JSON mode retains it only in recorded logs.
 
 stdout carries only barca's result (one JSON document in JSON mode), so
 `barca run ... | jq` works even when steps print. Before this fix the worker
@@ -41,11 +41,17 @@ def test_step_prints_go_to_stderr_and_stdout_is_pure_json(tmp_path: Path) -> Non
     r = _barca(tmp_path, "run", "chatty", "p.py", "--json")
     assert r.returncode == 0, r.stderr
     assert "hello" not in r.stdout and "raw write" not in r.stdout
-    assert "hello from an asset" in r.stderr
-    assert "hello from a task" in r.stderr
-    assert "raw write" in r.stderr
+    assert "hello from an asset" not in r.stderr
+    assert "hello from a task" not in r.stderr
+    assert "raw write" not in r.stderr
     doc = json.loads(r.stdout)  # the whole of stdout is one JSON document
     assert doc["final_output"] == {"n": 2}
+    logs = _barca(tmp_path, "logs", doc["run_id"], "--json")
+    assert [row["line"] for row in json.loads(logs.stdout)] == [
+        "hello from an asset",
+        "hello from a task",
+        "raw write",
+    ]
 
 
 def test_get_stdout_is_pure_json_with_printing_asset(tmp_path: Path) -> None:

@@ -17,7 +17,9 @@ The `--help` snapshots and the flag tables live in `crates/barca-cli/src/contrac
 import json
 import os
 import re
+import sqlite3
 import subprocess
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -67,6 +69,7 @@ def keys(parts: list) -> list:
 # that plan `report` show a filled `warnings` array and the others an empty one.
 @task(inputs={"t": total, "rows": numbers})
 def report(t: dict, rows: list) -> dict:
+    print("task output")
     return {"reported": t["total"]}
 
 
@@ -114,6 +117,7 @@ CASES: list[tuple[str, list[str], str, int]] = [
     ("docs_topic", ["docs", "cache", "--json"], "stdout", 0),
     ("error_usage", ["get", "nope", "pipeline.py", "--json"], "stderr", 2),
     ("error_usage_parse", ["list", "pipeline.py", "--jsn", "--json"], "stderr", 2),
+    ("history_reconciled", ["history", "--reconcile", "orphan-run", "--json"], "stdout", 0),
 ]
 
 # Cases that need a setup of their own, run after CASES: (case, stream, expected exit code).
@@ -145,6 +149,7 @@ def summary(t: dict, side: int) -> dict:
 MISMATCH_ARGV = ["get", "summary", "pipeline.py", "--refresh", "total", "--json"]
 SETUP_CASES: list[tuple[str, list[str], str, int]] = [
     ("get_artifact_mismatch", MISMATCH_ARGV, "stdout", 0),
+    ("logs", ["logs", "RUN_ID", "--step", "report", "--json"], "stdout", 0),
     (
         "get_bytes_changed",
         ["get", "value", "pipeline.py", "--refresh", "value", "--json"],
@@ -153,7 +158,13 @@ SETUP_CASES: list[tuple[str, list[str], str, int]] = [
     ),
     ("status_bytes_changed", ["status", "pipeline.py", "--json"], "stdout", 0),
 ]
-ALL_CASES = CASES + SETUP_CASES
+TIMING_CASE = (
+    "get_timing_retry",
+    ["get", "value", "pipeline.py", "--json", "--agent"],
+    "stdout",
+    0,
+)
+ALL_CASES = CASES + SETUP_CASES + [TIMING_CASE]
 
 # Values that are user data, not barca's schema: recorded as `<user value>`.
 USER_VALUES = {"final_output", "targets.<name>.final_output", "nodes[].shape.sample", "rows"}
@@ -228,6 +239,15 @@ def schema(doc) -> dict[str, tuple[str, bool]]:
     return dict(sorted(out.items()))
 
 
+def command_schema(doc, *, slow_import=False):
+    # Import reporting has a real wall-time threshold. Keep normal cases stable on
+    # slow CI hosts and snapshot that optional field in the controlled timing case.
+    if not slow_import and isinstance(doc, dict):
+        for step in doc.get("steps", []):
+            step.pop("import_seconds", None)
+    return schema(doc)
+
+
 def render_snapshot(argv: list[str], stream: str, code: int, s: dict) -> str:
     lines = [f"# barca {' '.join(argv)}  ({stream}, exit {code})"]
     for path, (ty, always) in s.items():
@@ -244,6 +264,8 @@ def render_table(s: dict) -> str:
 
 
 def normalize_agent_line(line: str) -> str:
+    if line.startswith("[barca] importing "):
+        return "[barca] importing <module>"
     line = re.sub(r"\d+(\.\d+)?s\b", "<secs>s", line)
     line = re.sub(r"\(\d+/\d+\)", "(<n>/<total>)", line)
     line = re.sub(r"\] \d+/\d+ steps", "] <n>/<total> steps", line)
@@ -310,6 +332,13 @@ def runs(tmp_path_factory) -> dict:
 
     out: dict = {}
     for case, argv, stream, code in CASES:
+        if case == "history_reconciled":
+            with closing(sqlite3.connect(cwd / ".barca/metadata.db")) as conn:
+                conn.execute(
+                    "INSERT INTO runs(run_id,command,files,target,status,steps_total,steps_executed,pid,host,owner) "
+                    "VALUES ('orphan-run','get','[]','total','running',3,1,1,'unavailable-container','')"
+                )
+                conn.commit()
         # error_step_failed reads the same invocation's stderr as run_failed.
         if case == "error_step_failed":
             proc = out["run_failed"][2]
@@ -325,8 +354,15 @@ def runs(tmp_path_factory) -> dict:
             else next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{"))
         )
         doc = json.loads(text)
-        s = schema(doc)
+        s = command_schema(doc)
         out[case] = (s, render_snapshot(argv, stream, code, s), proc)
+
+    run_id = json.loads(out["run_multi_target_failed"][2].stdout)["run_id"]
+    logs_argv = ["logs", run_id, "--step", "report", "--json"]
+    proc = barca(logs_argv)
+    assert proc.returncode == 0, proc.stderr
+    s = command_schema(json.loads(proc.stdout))
+    out["logs"] = (s, render_snapshot(SETUP_CASES[1][1], "stdout", 0, s), proc)
 
     digest_case = tmp_path_factory.mktemp("contract_digest")
     (digest_case / "pipeline.py").write_text(
@@ -343,24 +379,45 @@ def runs(tmp_path_factory) -> dict:
     )
     assert baseline.returncode == 0, baseline.stderr
     (digest_case / "external.txt").write_text("after")
-    for case, argv, stream, code in SETUP_CASES[1:]:
+    for case, argv, stream, code in SETUP_CASES[2:]:
         proc = subprocess.run(
             [binary, *argv], cwd=digest_case, env=env, capture_output=True, text=True, timeout=60
         )
         assert proc.returncode == code, proc.stderr
-        s = schema(json.loads(proc.stdout))
+        s = command_schema(json.loads(proc.stdout))
         out[case] = (s, render_snapshot(argv, stream, code, s), proc)
 
     store_case = tmp_path_factory.mktemp("contract_store")
     proc = _artifact_mismatch_run(binary, store_case, env)
-    s = schema(json.loads(proc.stdout))
+    s = command_schema(json.loads(proc.stdout))
     out["get_artifact_mismatch"] = (s, render_snapshot(MISMATCH_ARGV, "stdout", 0, s), proc)
+
+    timing_case = tmp_path_factory.mktemp("contract_timing")
+    (timing_case / "pipeline.py").write_text(
+        "import time\nfrom pathlib import Path\nfrom barca import asset\n"
+        "time.sleep(1.1)\n@asset(retries=2)\ndef value():\n"
+        "    path = Path('attempted')\n    if not path.exists():\n"
+        "        path.touch()\n        raise ValueError('retry fixture')\n    return 42\n"
+    )
+    _, argv, stream, code = TIMING_CASE
+    timing = subprocess.run(
+        [binary, *argv], cwd=timing_case, env=env, capture_output=True, text=True, timeout=60
+    )
+    assert timing.returncode == code, timing.stderr
+    timing_doc = json.loads(timing.stdout)
+    assert timing_doc["steps"][0]["attempts"] == 2
+    assert timing_doc["steps"][0]["import_seconds"] > 2
+    s = command_schema(timing_doc, slow_import=True)
+    out[TIMING_CASE[0]] = (s, render_snapshot(argv, stream, code, s), timing)
 
     agent: set[str] = set()
     for line in proc.stderr.splitlines():
         if line.startswith(("[barca] checking artifact store ", "[barca] uploading ")):
             line = line.replace(str(store_case / "store"), "<store>")
             line = re.sub(r"uploading \d+ artifacts", "uploading <n> artifacts", line)
+            agent.add(normalize_agent_line(line))
+    for line in timing.stderr.splitlines():
+        if line.startswith("[barca] "):
             agent.add(normalize_agent_line(line))
     for argv in AGENT_RUNS:
         proc = barca(argv)
