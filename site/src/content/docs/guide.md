@@ -449,3 +449,7 @@ not reads of a same-named imported helper.
 Decorators on ordinary helper functions and classes follow project references, including
 nested definitions and decorator-factory arguments. Step decorator metadata continues
 to follow the selective rules in `barca docs cache`.
+
+Tuple/list/starred module-level unpacking and augmented name assignments retain project
+helper provenance, including aliases captured before later overwrites. Their consumers
+conservatively hash the module source and references; unrelated assets keep selective cones.

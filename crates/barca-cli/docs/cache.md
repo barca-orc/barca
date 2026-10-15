@@ -243,8 +243,6 @@ An edit in one of these does not change the hash; recompute with `--refresh-all`
   dynamically or inside other module-level
   control flow such as a `for`, `while`, `with` or `match` (module-level `if` and `try` bindings
   are covered conservatively above);
-- module-level constants bound by tuple unpacking (`A, B = 1, 2`), and augmented assignments to
-  a module-level name (`A += 1`): only a plain `A = ...` or `A: int = ...` is a definition;
 - a module reached through another module's `import` (`from helpers import other` where
   `helpers.py` does `import other`): import it directly;
 - what a helper refers to only in a decorator, a `match` pattern, a set literal (`{f()}`),
@@ -894,3 +892,9 @@ Ordinary helper functions and classes follow names used in their decorators, inc
 decorator factories/arguments and nested definitions. Decorators are resolved in the
 enclosing scope before the decorated definition's parameters/class bindings. A step's own
 Barca decorator metadata still follows "Which decorator arguments count" above.
+
+Module-level tuple/list/starred unpacking and augmented name assignments retain helper
+provenance conservatively: a consumer hashes the module source and its static references.
+Earlier aliases remain covered even when the binding is overwritten later. Editing an
+unrelated definition in that same module can therefore recompute these consumers; assets
+that do not reach such bindings retain selective cones.
