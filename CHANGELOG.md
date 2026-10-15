@@ -14,6 +14,10 @@ and these tags are available on the same releases page.
 
 ## Pending 0.24.0
 
+### Bug Fixes
+
+- Follow project helper references in ordinary function/class decorators, including nested definitions and decorator-factory arguments.
+
 ### Removed
 
 - **Breaking:** removed `barca get|run --no-cache` and `barca.get(no_cache=...)`.

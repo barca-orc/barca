@@ -601,7 +601,10 @@ fn collect_definitions(source: &str, package: Option<&str>) -> HashMap<String, M
                             uses: uses.uses,
                         }
                     }
-                    None => code(func, uses),
+                    None => {
+                        uses.exprs(func.decorator_list.iter().map(|d| &d.expression));
+                        code(func, uses)
+                    }
                 };
                 // Project-aware discovery can recognize nodes after a safe star import.
                 // The standalone cone has no export resolver: keep decorated functions
@@ -967,8 +970,9 @@ impl<'p> UseCollector<'p> {
         self.scoped(scope, |c| c.stmts(&func.body));
     }
 
-    /// A class contributes its bases and its body.
+    /// A class contributes its decorators, bases and body.
     fn class(&mut self, class: &ruff_python_ast::StmtClassDef) {
+        self.exprs(class.decorator_list.iter().map(|d| &d.expression));
         for base in class.arguments.iter().flat_map(|a| a.args.iter()) {
             self.expr(base);
         }
@@ -1003,9 +1007,9 @@ impl<'p> UseCollector<'p> {
         }
     }
 
-    // The statements and expressions visited below are exactly the ones every earlier release
-    // visited: visiting more (a decorator, a default value, an `except` type, ...) would add
-    // names, and so change the hash of code that has not changed.
+    // Extend this traversal one construct family at a time: following previously omitted
+    // references invalidates existing cached code. Keep the manual and regression controls
+    // aligned with each deliberate extension.
     fn stmt(&mut self, stmt: &Stmt) {
         match stmt {
             Stmt::Expr(s) => self.expr(&s.value),
@@ -1036,7 +1040,10 @@ impl<'p> UseCollector<'p> {
                 self.exprs(s.items.iter().map(|item| &item.context_expr));
                 self.stmts(&s.body);
             }
-            Stmt::FunctionDef(s) => self.function(s),
+            Stmt::FunctionDef(s) => {
+                self.exprs(s.decorator_list.iter().map(|d| &d.expression));
+                self.function(s);
+            }
             Stmt::ClassDef(s) => self.class(s),
             Stmt::Try(s) => {
                 self.stmts(&s.body);
@@ -2054,6 +2061,23 @@ def my_asset():
         );
     }
 
+    #[test]
+    fn helper_decorator_expressions_are_followed_outside_the_decorated_scope() {
+        for entry in [
+            "from helpers import compute\n\n@compute\ndef inner(): return 1\n\ndef my_asset(): return inner()\n",
+            "import helpers\n\n@wrap(helpers.compute())\ndef inner(): return 1\n\ndef my_asset(): return inner()\n",
+            "def my_asset():\n    from helpers import compute\n    @compute\n    def inner(compute): return 1\n    return inner(None)\n",
+            "from helpers import compute\n\n@compute\nclass Inner: pass\n\ndef my_asset(): return Inner()\n",
+            "def my_asset():\n    from helpers import compute\n    @compute\n    class Inner: compute = 1\n    return Inner()\n",
+        ] {
+            assert_ne!(
+                hash_of(entry, &one("helpers", HELPERS_V1), &[]),
+                hash_of(entry, &one("helpers", HELPERS_V2), &[]),
+                "{entry}"
+            );
+        }
+    }
+
     // ─── Known limitations, as `barca docs cache` lists them ─────────────────────
 
     /// Not followed today. Each of these is in the manual ("Not followed"); when one starts
@@ -2075,10 +2099,6 @@ def my_asset():
             (
                 "__import__",
                 "def my_asset():\n    return __import__('helpers').compute()\n",
-            ),
-            (
-                "decorator",
-                "from helpers import compute\n\ndef wrap(v):\n    return lambda f: f\n\n@wrap(compute())\ndef inner():\n    return 1\n\ndef my_asset():\n    return inner()\n",
             ),
             (
                 "default argument",
@@ -2577,10 +2597,9 @@ def shadowing(helpers, json):
         );
     }
 
-    /// A helper that is not a node keeps contributing its text as written, decorators included,
-    /// as every earlier release hashed it; the names in its decorators are still not followed.
+    /// Ordinary helpers retain their exact decorator text and now also follow its values.
     #[test]
-    fn a_helper_that_is_not_a_node_is_hashed_as_written() {
+    fn ordinary_helper_keeps_decorator_text_and_follows_its_values() {
         let pipeline = |decorator: &str, size: &str| {
             format!(
                 "from barca import asset\nSIZE = {size}\n\n\n{decorator}\ndef helper():\n    return 1\n\n\n@asset()\ndef my_asset():\n    return helper()\n"
@@ -2591,7 +2610,7 @@ def shadowing(helpers, json):
             before,
             cone_hash(&pipeline("@lru_cache( maxsize = SIZE )", "1"), "my_asset")
         );
-        assert_eq!(
+        assert_ne!(
             before,
             cone_hash(&pipeline("@lru_cache(maxsize=SIZE)", "2"), "my_asset")
         );

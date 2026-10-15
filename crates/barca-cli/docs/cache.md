@@ -230,7 +230,7 @@ An edit in one of these does not change the hash; recompute with `--refresh-all`
   a module-level name (`A += 1`): only a plain `A = ...` or `A: int = ...` is a definition;
 - a module reached through another module's `import` (`from helpers import other` where
   `helpers.py` does `import other`): import it directly;
-- what a helper refers to only in a decorator, a default argument value, an `except` clause's
+- what a helper refers to only in a default argument value, an `except` clause's
   exception type, a `match` pattern, a set literal (`{f()}`), an assignment target
   (`table[key()] = ...`) or a loop's `else:` block. The helper's own text is hashed, but those
   references are not followed. (This is about helper functions. The decorators of a step
@@ -840,3 +840,8 @@ See `specs/materialization-digests.md` for the native boundary.
 barca get orders pipeline.py --refresh orders --json   # compare recomputed bytes with the last digest
 barca status orders pipeline.py --json                 # last byte-change event and current digest
 ```
+
+Ordinary helper functions and classes follow names used in their decorators, including
+decorator factories/arguments and nested definitions. Decorators are resolved in the
+enclosing scope before the decorated definition's parameters/class bindings. A step's own
+Barca decorator metadata still follows "Which decorator arguments count" above.
