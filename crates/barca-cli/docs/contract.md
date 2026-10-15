@@ -169,6 +169,7 @@ default, and any aliases.
 
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
+| `--reconcile` | `RUN_ID` | - | experimental: explicit operator recovery for stopped runs whose owner cannot be verified | After verifying a run stopped, record it as interrupted; refuses a proven live owner |
 | `-l, --limit` | `LIMIT` | - | stable | Maximum recent runs (default: every run in JSON, 10 in a human table) |
 | `--all` | - | default `false` | stable | Show every recorded run (no limit) |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
@@ -964,6 +965,14 @@ counts every node even when `nodes` is truncated.
 
 ### history
 
+Experimental `--reconcile RUN_ID` is an explicit write after the operator verifies the run
+stopped. It returns just that run in the existing envelope (`total: 1`, `truncated: false`),
+recorded as `interrupted`. It refuses a proven live owner, a non-running row or unknown id
+(exit 2); database errors are exit 3. `--limit` and `--all` conflict with it; `--fields`,
+output selection and `--env` still apply. Successful step rows/artifacts and progress are
+preserved, and an unknown end time/duration is not invented. Ordinary history stays read-only.
+
+
 <!-- BEGIN GENERATED schema history -->
 | Key | Type | Present |
 |---|---|---|
@@ -999,6 +1008,28 @@ it has recorded so far in `steps_executed`, and
 Terminal status/counts and successful/failed step rows commit in one transaction. A required
 write failure reports the existing infrastructure error (exit 3) and preserves previous
 history/progress and run state; captured output is written separately afterward.
+
+Reconciled history (same envelope; unknown end timestamp and duration remain null):
+
+<!-- BEGIN GENERATED schema history_reconciled -->
+| Key | Type | Present |
+|---|---|---|
+| `runs` | array | always |
+| `runs[]` | object | always |
+| `runs[].command` | string | always |
+| `runs[].elapsed_seconds` | null | always |
+| `runs[].files` | array | always |
+| `runs[].finished_at` | null | always |
+| `runs[].run_id` | string | always |
+| `runs[].started_at` | string | always |
+| `runs[].status` | string | always |
+| `runs[].steps_cached` | integer | always |
+| `runs[].steps_executed` | integer | always |
+| `runs[].steps_total` | integer | always |
+| `runs[].target` | string | always |
+| `total` | integer | always |
+| `truncated` | boolean | always |
+<!-- END GENERATED schema history_reconciled -->
 
 ### stats
 
