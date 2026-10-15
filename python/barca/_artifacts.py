@@ -17,6 +17,7 @@ import json
 import os
 import pickle
 import re
+import shutil
 import tempfile
 import threading
 import time
@@ -227,7 +228,38 @@ def serialize_hashed(value: Any, path: "Path | str", fmt: str) -> tuple[int, str
     return size, digest
 
 
-def _serialize(value: Any, path: "Path | str", fmt: str, want_hash: bool) -> tuple[int, str | None]:
+def _pin_file(source: "str | Path", snapshot: Path) -> None:
+    """Keep atomically published bytes alive; copy only when linking is unavailable."""
+    snapshot.unlink(missing_ok=True)
+    try:
+        os.link(source, snapshot)
+    except OSError:
+        # The caller still owns the serializer's staging file. Cross-filesystem
+        # artifact layouts cannot hard-link it; copy that stable source instead.
+        shutil.copyfile(source, snapshot)
+
+
+def serialize_for_upload(
+    value: Any, path: "Path | str", fmt: str, prefix: str, *, want_hash: bool
+) -> tuple[int, str | None, str]:
+    """Pin this producer's staged bytes before publishing the reusable artifact path.
+
+    The run coordinator owns the snapshot's lifetime, through confirmed upload,
+    cancellation or failure. Its PID staging directory also permits crash cleanup.
+    """
+    prefix_path = Path(prefix)
+    snapshot = _make_temp(prefix_path.parent, prefix=prefix_path.name)
+    try:
+        size, digest = _serialize(value, path, fmt, want_hash, snapshot=snapshot)
+        return size, digest, str(snapshot)
+    except BaseException:
+        snapshot.unlink(missing_ok=True)
+        raise
+
+
+def _serialize(
+    value: Any, path: "Path | str", fmt: str, want_hash: bool, *, snapshot: Path | None = None
+) -> tuple[int, str | None]:
     if fmt not in ("json", "pickle", "parquet"):
         raise ValueError(f"Unknown format: {fmt}")
 
@@ -249,6 +281,8 @@ def _serialize(value: Any, path: "Path | str", fmt: str, want_hash: bool) -> tup
                 for chunk in iter(lambda: f.read(1 << 20), b""):
                     h.update(chunk)
             digest = h.hexdigest()
+        if snapshot is not None:
+            _pin_file(tmp, snapshot)
     return size, digest
 
 

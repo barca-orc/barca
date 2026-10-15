@@ -792,3 +792,15 @@ barca get pipeline.py
 
 Prefer `BARCA_REMOTE_URI` with `BARCA_STATE=off`, which does the same and keeps `--env`
 separation.
+
+## Upload receipt ownership
+
+The serializer pins each remote-backed step's bytes before publishing its reusable local
+artifact path. The upload receipt's SHA-256 and byte count describe that exact snapshot,
+even when another refresh replaces the path before transfer begins. Same-filesystem pinning
+uses a hard link; other layouts copy the owned staging file. Confirmed uploads release it,
+and cancellation/failure cleanup and dead-process staging cleanup cover abandoned snapshots.
+Sensor content identities and computation-hash artifact paths keep their existing formats.
+
+A later refresh can still overwrite local and remote objects, and concurrent result reads
+are not isolated by this receipt fix. See the [native receipt contract](https://github.com/barca-orc/barca/blob/main/specs/artifact-upload-receipts.md).

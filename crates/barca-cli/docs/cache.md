@@ -791,3 +791,15 @@ barca plan pipeline.py          # what would run, in phases, without running it
 
 `steps_executed` in `barca get`'s JSON output is the number of steps that actually ran; a fully
 cached second run reports 0 for assets.
+
+## Upload receipts during a concurrent refresh
+
+An upload pins the serializing run's bytes before publishing the reusable local artifact
+path. Its confirmed hash and byte count describe those uploaded bytes, even when another
+run replaces that path before the transfer starts. Sensor content hashes keep their existing
+meaning; ordinary asset rows use the confirmed upload hash. Failed or cancelled uploads do
+not record a successful remote materialization. Staging is removed at confirmation or run
+shutdown, with dead-process cleanup as the crash backstop.
+
+Paths still identify code and inputs, so a later refresh can replace local and remote bytes.
+This receipt guarantee does not isolate concurrent result reads from those replacements.

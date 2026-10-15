@@ -41,6 +41,7 @@ use crate::protocol::{CoordinatorMessage, ParallelResult, WorkerMessage, read_fr
 // ─── Configuration ───────────────────────────────────────────────────────────
 
 pub struct IoConfig {
+    pub upload_snapshot_prefix: Option<String>,
     pub python: PathBuf,
     pub pool_size: usize,
     pub run_id: String,
@@ -1122,6 +1123,12 @@ async fn spawn_worker(
         .stderr(crate::term::child_output())
         .stdin(Stdio::null());
 
+    if let Some(prefix) = &config.upload_snapshot_prefix {
+        cmd.env("BARCA_UPLOAD_SNAPSHOT_PREFIX", prefix);
+    } else {
+        cmd.env_remove("BARCA_UPLOAD_SNAPSHOT_PREFIX");
+    }
+
     // Ctrl-C means something to a worker only while it runs a step. It starts outside the
     // terminal's job, so that one arriving while the interpreter starts is not a traceback,
     // and joins the job once it handles the signal itself.
@@ -1991,6 +1998,7 @@ mod tests {
 
             let pool = WorkerPool {
                 config: IoConfig {
+                    upload_snapshot_prefix: None,
                     python: PathBuf::from("python3"),
                     pool_size: n,
                     run_id: "test-shutdown".to_string(),
