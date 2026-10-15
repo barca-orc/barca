@@ -65,6 +65,8 @@ pub enum WorkerMessage {
         message: String,
         traceback: String,
         elapsed: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        import_seconds: Option<f64>,
     },
     /// A step was blocked because an upstream failed.
     Blocked { node_id: String, reason: String },
@@ -111,6 +113,9 @@ pub struct ArtifactRef {
     pub size_bytes: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub elapsed_seconds: Option<f64>,
+    /// Slow module import duration, included in elapsed_seconds; absent at <= 1 second.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub import_seconds: Option<f64>,
     /// CPU time the task consumed (`time.process_time` delta) — the truest
     /// measure of work; feeds the coordinator's cost estimator.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -373,6 +378,7 @@ mod tests {
             node_id: "load_data".to_string(),
             artifact: ArtifactRef {
                 upload_snapshot: None,
+                import_seconds: None,
                 path: "/tmp/artifacts/load_data.json".to_string(),
                 format: "json".to_string(),
                 size_bytes: 1024,
@@ -453,6 +459,7 @@ mod tests {
             node_id: "n".to_string(),
             artifact: ArtifactRef {
                 upload_snapshot: None,
+                import_seconds: None,
                 path: "abfss://cont@acct.dfs.core.windows.net/arts/n.parquet".to_string(),
                 format: "parquet".to_string(),
                 size_bytes: 42,
@@ -573,6 +580,7 @@ mod tests {
             message: "invalid input".to_string(),
             traceback: "Traceback (most recent call last):\n  ...".to_string(),
             elapsed: 1.5,
+            import_seconds: Some(1.1),
         };
 
         let mut buffer = Vec::new();
@@ -589,12 +597,14 @@ mod tests {
                 message,
                 traceback,
                 elapsed,
+                import_seconds,
             } => {
                 assert_eq!(node_id, "transform");
                 assert_eq!(error_type, "ValueError");
                 assert_eq!(message, "invalid input");
                 assert!(traceback.contains("Traceback"));
                 assert!((elapsed - 1.5).abs() < f64::EPSILON);
+                assert_eq!(import_seconds, Some(1.1));
             }
             _ => panic!("expected StepError"),
         }
@@ -632,6 +642,7 @@ mod tests {
                 node_id: "step_1".to_string(),
                 artifact: ArtifactRef {
                     upload_snapshot: None,
+                    import_seconds: None,
                     path: "/tmp/step_1.json".to_string(),
                     format: "json".to_string(),
                     size_bytes: 512,

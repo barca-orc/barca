@@ -140,6 +140,15 @@ pub struct StepReport {
     /// and `warning` says which and how to recompute it. Absent otherwise (never `false`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifact_mismatch: Option<bool>,
+    /// Active elapsed seconds across this step's attempts and executed partition keys.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elapsed_seconds: Option<f64>,
+    /// Maximum attempts on an executed partition key; absent on cache hits/dry runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempts: Option<u32>,
+    /// Slow module imports included in elapsed_seconds, summed across attempts/keys.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub import_seconds: Option<f64>,
     /// This recompute produced different bytes for the same node and run hash.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bytes_changed: Option<bool>,

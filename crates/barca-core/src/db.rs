@@ -69,6 +69,9 @@ pub struct RunRecord {
     pub steps_total: Option<i64>,
     pub steps_executed: i64,
     pub steps_cached: i64,
+    /// Total recorded materialization attempts; cached steps contribute zero.
+    #[serde(default)]
+    pub attempts: Option<i64>,
     pub started_at: String,
     pub finished_at: Option<String>,
     pub elapsed_seconds: Option<f64>,
@@ -1759,9 +1762,32 @@ async fn read_runs(
     // A run whose process died is reported as `interrupted`, not as still `running`. Reported,
     // not written: reading history must not change the database (the next run records it).
     let interrupted = interrupted_runs(&conn, db_path).await;
+    // Inspection also reads legacy snapshots without migrating them. Unknown attempt
+    // metadata is null, rather than fabricating a zero or requiring newer columns.
+    let mut columns = conn
+        .query("PRAGMA table_info(materializations)", ())
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to inspect materialization columns: {e}")))?;
+    let mut names = std::collections::HashSet::new();
+    while let Some(row) = columns
+        .next()
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to read materialization columns: {e}")))?
+    {
+        names.insert(
+            row.get::<String>(1)
+                .map_err(|e| BarcaError::Db(e.to_string()))?,
+        );
+    }
+    drop(columns);
+    let attempts = if names.contains("run_id") && names.contains("attempts") {
+        "(SELECT COALESCE(SUM(attempts), 0) FROM materializations WHERE run_id = runs.run_id)"
+    } else {
+        "NULL"
+    };
     let mut rows = conn
         .query(
-            "SELECT run_id, command, files, target, status, steps_total, steps_executed, steps_cached, started_at, finished_at, elapsed_seconds FROM runs WHERE (?1 = '' OR run_id = ?1) ORDER BY id DESC LIMIT ?2",
+            &format!("SELECT run_id, command, files, target, status, steps_total, steps_executed, steps_cached, started_at, finished_at, elapsed_seconds, {attempts} FROM runs WHERE (?1 = '' OR run_id = ?1) ORDER BY id DESC LIMIT ?2"),
             [run_id.unwrap_or_default().to_string(), limit.to_string()],
         )
         .await
@@ -1790,6 +1816,7 @@ async fn read_runs(
             steps_total: row.get::<i64>(5).ok(),
             steps_executed: row.get::<i64>(6).unwrap_or(0),
             steps_cached: row.get::<i64>(7).unwrap_or(0),
+            attempts: row.get::<i64>(11).ok(),
             started_at: row.get::<String>(8).unwrap_or_default(),
             finished_at: {
                 let t = row.get::<String>(9).unwrap_or_default();
@@ -3980,6 +4007,8 @@ mod tests {
         let status = reported(&db_path).await;
         assert_eq!(status["killed"], "interrupted");
         assert_eq!(status["going"], "running");
+        let history = get_recent_runs(&db_path, 10).await.unwrap();
+        assert!(history.iter().all(|run| run.attempts.is_none()));
     }
 
     #[tokio::test(flavor = "multi_thread")]
