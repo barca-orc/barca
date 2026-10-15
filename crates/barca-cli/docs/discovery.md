@@ -33,6 +33,12 @@ A walk skips:
   `node_modules`, `site-packages`, `build`, `dist`, `tests`, `test`;
 - files named `test_*.py`, `*_test.py`, `conftest.py`, `setup.py`.
 
+
+Directory symlinks are followed only when their resolved target stays inside the resolved
+project root; ancestor loops, dangling links and links to outside directories are skipped.
+Include and exclude patterns match the symlink path, and built-in directory exclusions still
+apply. Per-file `.py` symlinks and explicitly named files may point outside the root.
+
 One-shot commands report a file that imports barca and fails to parse as an error
 (exit 2) naming that file. `barca serve` keeps healthy definitions loaded and excludes
 invalid sources and graph-dependent definitions, including dependents in otherwise
