@@ -22,6 +22,11 @@ and these tags are available on the same releases page.
 - **Breaking:** agent completion and permanent failure lines append `attempts=N` after
   retries. Allow this optional suffix when parsing those lines, or read the structured
   `steps[].attempts` field instead.
+### Removed
+
+- **Breaking:** removed `barca get|run --no-cache` and `barca.get(no_cache=...)`.
+  Use `--refresh-all` and `refresh_all=True`, respectively. The CLI alias is now an
+  unknown-flag usage error (exit 2); Python rejects the removed keyword.
 
 The older notes below are preserved as historical records. Their former
 "Unreleased" section describes work that has already shipped; it is not the

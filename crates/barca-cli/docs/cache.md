@@ -565,10 +565,9 @@ Known limits:
 Previously `--refresh` did not cascade: it re-ran only the named assets and left their downstream
 assets cached. It now cascades by default; `--no-cascade` keeps the old behavior.
 
-`barca get` takes the same three flags as `barca run` (it used to have only `--no-cache`). On
-`get` the target is an asset, so `--refresh` may name it too. `--no-cache` still works on both
-commands as a deprecated spelling of `--refresh-all`: it prints
-`[barca] warning: --no-cache is deprecated ...` and will be removed in a future minor release.
+`barca get` takes the same three flags as `barca run`. On `get` the target is an asset,
+so `--refresh` may name it too. The deprecated `--no-cache` alias is removed in 0.24.0;
+use `--refresh-all`. In Python, use `barca.get(..., refresh_all=True)`.
 
 ### Exactly what `--refresh` does
 
