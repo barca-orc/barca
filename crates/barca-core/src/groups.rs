@@ -39,8 +39,17 @@ pub(crate) fn extract(source: &str, file: &str) -> Result<Vec<Declaration>, Barc
     extract_body(body, file)
 }
 
+#[cfg(test)]
 pub(crate) fn extract_body(body: &[Stmt], file: &str) -> Result<Vec<Declaration>, BarcaError> {
     let names = FileNames::collect(body);
+    extract_body_with_names(body, file, &names)
+}
+
+pub(crate) fn extract_body_with_names(
+    body: &[Stmt],
+    file: &str,
+    names: &FileNames,
+) -> Result<Vec<Declaration>, BarcaError> {
     let mut result = Vec::new();
     for stmt in body {
         let (target, value) = match stmt {
