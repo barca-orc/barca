@@ -163,6 +163,11 @@ def result(proc: subprocess.CompletedProcess) -> dict:
     return json.loads(proc.stdout)
 
 
+def log_lines(root: Path, doc: dict) -> list[str]:
+    records = json.loads(cli(root, "logs", doc["run_id"], "--json").stdout)
+    return [record["line"] for record in records]
+
+
 def by_name(doc: dict, key: str) -> dict[str, str | None]:
     """`key` of every step (or status node), by function name."""
     return {s["id"].rsplit(":", 1)[1]: s.get(key) for s in doc["steps"]}
@@ -212,7 +217,7 @@ def test_a_task_recomputes_an_upstream_whose_artifact_was_deleted(tmp_path):
     # It says why, in the step and on stderr.
     assert by_name(doc, "reason")["model"] == "artifact_missing"
     assert "pipeline.py:model: the artifact of its cached result is missing" in again.stderr
-    assert "publish 1" in again.stderr
+    assert "publish 1" in log_lines(root, doc)
     assert doc["steps_executed"] == 2
 
     # The artifact is back where it was, so it is a plain cache hit from then on.
@@ -552,7 +557,7 @@ def test_a_run_killed_during_a_recompute_is_interrupted_and_the_next_one_recover
     doc = result(proc)
     assert by_name(doc, "status")["publish"] == "ran"
     assert by_name(doc, "status")["b"] in ("ran", "cached")
-    assert "publish 2" in proc.stderr
+    assert "publish 2" in log_lines(root, doc)
     assert len(artifacts(root, "b")) == 1
     assert [r["status"] for r in history(root)[:2]] == ["success", "interrupted"]
 
@@ -720,7 +725,7 @@ def test_an_unavailable_directory_store_does_not_lose_hits_that_are_on_disk(tmp_
 
     proc = cli(root, "run", "publish", "--json", **env)
     assert statuses(proc) == {"model": "cached", "publish": "ran"}
-    assert "publish 1" in proc.stderr
+    assert "publish 1" in log_lines(root, result(proc))
     plan = result(cli(root, "run", "publish", "--dry-run", "--json", **env))
     assert by_name(plan, "action") == {"model": "cached", "publish": "run"}
 
@@ -762,7 +767,7 @@ def test_an_input_gone_from_both_disk_and_store_is_recomputed_for_its_reader(tmp
     doc = result(proc)
     assert by_name(doc, "status") == {"model": "ran", "publish": "ran"}
     assert by_name(doc, "reason")["model"] == "artifact_missing"
-    assert "publish 1" in proc.stderr
+    assert "publish 1" in log_lines(root, result(proc))
     assert store_files(store, "model") == [stored]
 
 

@@ -42,6 +42,9 @@ def test_long_batch_publishes_progress_before_it_ends(tmp_path, monkeypatch):
     with _runtime.result_batch(tmp_path / "results"):
         _runtime.emit_blocked("a", "sensor")
         assert notified.wait(2)
+        assert (
+            next(frame["completed"] for frame in sent if frame["type"] == "result_checkpoint") == 1
+        )
         assert not any(frame["type"] == "results" for frame in sent)
     assert sent[-1]["statuses"] == ["blocked"]
 
@@ -68,6 +71,7 @@ from pathlib import Path
 from barca import asset, partitions
 @asset(partitions={{"k": partitions({keys!r})}}, retries=2)
 def leaf(k):
+    print(f"leaf-{{k}}")
     with open("calls", "a") as f:
         f.write(k + "\\n")
     if k == "3" and Path("enabled").exists() and not Path("failed-once").exists():
@@ -127,4 +131,15 @@ def leaf(k):
         for line in path.read_text().splitlines()
     ]
     assert any(count > 1 for count in counts), counts
+    recorded = subprocess.run(
+        [_find_binary(), "logs", result["run_id"], "--json"],
+        cwd=tmp_path,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=15,
+    )
+    assert recorded.returncode == 0, recorded.stderr
+    lines = [row["line"] for row in json.loads(recorded.stdout)]
+    assert all(lines.count(f"leaf-{key}") == (2 if key == "3" else 1) for key in keys), lines
     assert not list((tmp_path / ".barca/staging").rglob("results-*"))

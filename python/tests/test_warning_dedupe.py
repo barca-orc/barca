@@ -206,8 +206,7 @@ def test_step_prints_raw_stderr_and_error_records_are_unchanged(tmp_path: Path) 
             f"{tmp_path.resolve() / 'p.py'}:20: UserWarning: deprecated thing",
             '  warnings.warn("deprecated thing")',
         ]
-        # the step's stdout, flushed when the worker exits
-        + ["same stdout line"] * 5
+        # JSON mode stores captured stdout separately; explicit stderr stays here.
     )
     assert _not_barca(r.stderr) == expected, r.stderr
     barca_lines = [ln for ln in r.stderr.splitlines() if ln.startswith("[barca]")]
@@ -223,7 +222,10 @@ def test_failure_message_and_envelope_are_unchanged(tmp_path: Path) -> None:
     r = _barca(tmp_path, "get", "broken", "p.py", "--json")
     assert r.returncode == 1, r.stderr
     lines = r.stderr.splitlines()
-    assert lines[-1] == f"[barca] run failed: step 'p.py:broken' failed: ValueError: {NETRC}; 0 downstream steps skipped (exit 1)"
+    assert (
+        lines[-1]
+        == f"[barca] run failed: step 'p.py:broken' failed: ValueError: {NETRC}; 0 downstream steps skipped (exit 1)"
+    )
     envelope = json.loads(next(line for line in reversed(lines) if line.startswith("{")))
     assert envelope["error"] == f"step 'p.py:broken' failed: ValueError: {NETRC}"
     assert envelope["kind"] == "step_failed" and envelope["node"] == "p.py:broken"

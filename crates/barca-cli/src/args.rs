@@ -181,16 +181,34 @@ Planning reads no state and takes no --env.
 Experimental: the layout may change between releases (barca docs contract).
 More: barca docs agents";
 
+const LOGS_HELP: &str = "\
+Examples:
+  barca logs 7f30b3e9 --pretty          # captured stdout lines, without progress messages
+  barca logs 7f30b3e9 --step report --pretty   # one function name or exact node id
+  barca logs 7f30b3e9 --json            # [{node_id, line}] in recorded order
+  barca logs 7f30b3e9 --env dev         # read another environment's local history
+
+Replace the example id with run_id from barca run/get --json or barca history.
+Reads the local recorded stdout lines; does not execute or import pipeline code. Unknown runs
+and ambiguous step names are usage errors. Missing/unknown steps are usage errors; a recorded
+step that printed nothing returns no lines. Prints emitted before a failed step are retained.
+More: barca docs logs";
+
 const HISTORY_HELP: &str = "\
 Examples:
   barca history                # last 10 in a terminal, every run as JSON when piped
   barca history -l 25          # last 25
   barca history --all          # every recorded run
+  barca history --reconcile RUN_ID --json   # record a verified-stopped run as interrupted
   barca history --json         # {runs: [...], total, truncated, hint?}, even in a terminal
   barca history --pretty       # the table, even when piped
   barca history --fields run_id,status,elapsed_seconds   # JSON with only these keys per run
   barca history --env dev      # runs recorded in another environment
 
+--reconcile is an explicit write: first verify the run stopped. It refuses a proven live
+owner and terminal rows. It prints only that run, preserving progress and cached results;
+no end time or duration is invented. Ordinary history inspection never reconciles an
+unknown owner automatically.
 Newest first. When more runs exist than are shown, JSON says `\"truncated\": true` with the
 `total`, and the table prints a one-line note on stderr. In JSON, `files` is an array: the .py
 files the run was given.
@@ -443,9 +461,26 @@ pub(crate) enum Cli {
         /// Python files or directories to read (default: every .py file under the project root that imports barca; see `barca docs discovery`)
         files: Vec<PathBuf>,
     },
+    /// Read a run's captured step stdout, without progress messages
+    #[command(after_help = LOGS_HELP)]
+    Logs {
+        /// Exact run id from get/run JSON or history
+        run_id: String,
+        /// Function name or exact node id (including a partition key when desired)
+        #[arg(long)]
+        step: Option<String>,
+        #[command(flatten)]
+        format: FormatFlags,
+        /// Environment whose local history to read
+        #[arg(long)]
+        env: Option<String>,
+    },
     /// Show recent run history
     #[command(after_help = HISTORY_HELP)]
     History {
+        /// After verifying a run stopped, record it as interrupted; refuses a proven live owner
+        #[arg(long, value_name = "RUN_ID", conflicts_with_all = ["limit", "all"])]
+        reconcile: Option<String>,
         /// Maximum recent runs (default: every run in JSON, 10 in a human table)
         #[arg(short, long)]
         limit: Option<usize>,

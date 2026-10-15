@@ -1280,27 +1280,49 @@ pub async fn insert_logs(
     }
     let _g = db_guard().await;
     let (_db, conn) = open_conn(db_path).await?;
-    // A run's lines are written once. They can be here already when this is the replay after
-    // a shared-state conflict: the pull carried them over from the local database.
-    if let Ok(mut rows) = conn
+    // Store the entire ordered stream atomically. A failed write must not leave
+    // a partial stream that the idempotence check would mistake for a complete one.
+    let mut rows = conn
         .query("SELECT 1 FROM logs WHERE run_id = ?1 LIMIT 1", [run_id])
         .await
-        && matches!(rows.next().await, Ok(Some(_)))
+        .map_err(|e| BarcaError::Db(format!("failed to inspect recorded logs: {e}")))?;
+    if rows
+        .next()
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to read recorded logs: {e}")))?
+        .is_some()
     {
         return Ok(());
     }
-    for (seq, (node_id, line)) in lines.iter().enumerate() {
-        conn.execute(
-            "INSERT INTO logs (run_id, node_id, seq, line) VALUES (?1, ?2, ?3, ?4)",
-            (
-                run_id.to_string(),
-                node_id.clone(),
-                seq as i64,
-                line.clone(),
-            ),
-        )
+    drop(rows);
+    conn.execute("BEGIN", ())
         .await
-        .ok();
+        .map_err(|e| BarcaError::Db(format!("failed to begin log write: {e}")))?;
+    let result = async {
+        for (seq, (node_id, line)) in lines.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO logs (run_id, node_id, seq, line) VALUES (?1, ?2, ?3, ?4)",
+                (
+                    run_id.to_string(),
+                    node_id.clone(),
+                    seq as i64,
+                    line.clone(),
+                ),
+            )
+            .await
+            .map_err(|e| BarcaError::Db(format!("failed to record stdout: {e}")))?;
+        }
+        conn.execute("COMMIT", ())
+            .await
+            .map_err(|e| BarcaError::Db(format!("failed to commit recorded stdout: {e}")))?;
+        Ok(())
+    }
+    .await;
+    if let Err(error) = result {
+        conn.execute("ROLLBACK", ())
+            .await
+            .map_err(|e| BarcaError::Db(format!("{error}; log rollback failed: {e}")))?;
+        return Err(error);
     }
     Ok(())
 }
@@ -1717,6 +1739,68 @@ pub async fn finish_run(
 /// Retrieve recent run records, newest first.
 pub async fn get_recent_runs(db_path: &str, limit: usize) -> Result<Vec<RunRecord>, BarcaError> {
     read_runs(db_path, None, limit).await
+}
+
+/// Explicit operator reconciliation when a run is known to have stopped but its
+/// owner cannot be proven dead (for example, an old row or a VM-shared mount).
+/// Positive live-owner evidence always refuses the operation. Preserve successful
+/// materializations and all counters; nobody observed an end time or duration.
+pub async fn reconcile_run(db_path: &str, run_id: &str) -> Result<RunRecord, BarcaError> {
+    {
+        let _g = db_guard().await;
+        let (_db, conn) = open_conn(db_path).await?;
+        let mut rows = conn
+            .query(
+                "SELECT status, pid, COALESCE(owner, '') FROM runs WHERE run_id = ?1",
+                [run_id],
+            )
+            .await
+            .map_err(|e| BarcaError::Db(format!("failed to read run: {e}")))?;
+        let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| BarcaError::Db(format!("failed to read run: {e}")))?
+        else {
+            return Err(BarcaError::Usage(format!(
+                "no run '{run_id}' in this environment\nUse barca history --all to find the run id."
+            )));
+        };
+        let status = row
+            .get::<String>(0)
+            .map_err(|e| BarcaError::Db(e.to_string()))?;
+        if status != "running" {
+            return Err(BarcaError::Usage(format!(
+                "run '{run_id}' is already {status}; only running rows can be reconciled"
+            )));
+        }
+        let owner = row
+            .get::<String>(2)
+            .map_err(|e| BarcaError::Db(e.to_string()))?;
+        let on = crate::run_owner::System::for_db(db_path);
+        if crate::run_owner::judge_json(row.get::<i64>(1).ok(), &owner, &on)
+            == crate::run_owner::Owner::Alive
+        {
+            return Err(BarcaError::Usage(format!(
+                "run '{run_id}' has a live owner\nWait for or stop that run before reconciling its history."
+            )));
+        }
+        drop(rows);
+        let changed = conn
+            .execute(
+                "UPDATE runs SET status = 'interrupted' WHERE run_id = ?1 AND status = 'running'",
+                [run_id],
+            )
+            .await
+            .map_err(|e| BarcaError::Db(format!("failed to reconcile run: {e}")))?;
+        if changed == 0 {
+            return Err(BarcaError::Usage(format!(
+                "run '{run_id}' ended while it was being reconciled; read barca history again"
+            )));
+        }
+    }
+    get_run(db_path, run_id)
+        .await?
+        .ok_or_else(|| BarcaError::Db(format!("reconciled run '{run_id}' could not be read")))
 }
 
 /// Read a durable run by id, including the same interrupted-owner diagnosis as history.
@@ -4278,5 +4362,34 @@ mod tests {
         assert!(hinted.contains("outside barca"), "{hinted}");
         let other = db_open_error("disk I/O error").to_string();
         assert!(!other.contains("outside barca"), "{other}");
+    }
+    #[tokio::test]
+    async fn a_log_write_failure_rolls_back_the_stream_and_can_be_retried() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("logs.db").to_string_lossy().to_string();
+        init_db(&path).await.unwrap();
+        {
+            let _guard = db_guard().await;
+            let (_db, conn) = open_conn(&path).await.unwrap();
+            conn.execute("CREATE UNIQUE INDEX injected_log_failure ON logs(line)", ())
+                .await
+                .unwrap();
+        }
+        let lines = vec![
+            ("p.py:a".into(), "same".into()),
+            ("p.py:a".into(), "same".into()),
+        ];
+        assert!(insert_logs(&path, "r", &lines).await.is_err());
+        assert!(get_logs(&path, "r").await.unwrap().is_empty());
+        {
+            let _guard = db_guard().await;
+            let (_db, conn) = open_conn(&path).await.unwrap();
+            conn.execute("DROP INDEX injected_log_failure", ())
+                .await
+                .unwrap();
+        }
+        insert_logs(&path, "r", &lines).await.unwrap();
+        insert_logs(&path, "r", &lines).await.unwrap();
+        assert_eq!(get_logs(&path, "r").await.unwrap().len(), 2);
     }
 }

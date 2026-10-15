@@ -757,6 +757,17 @@ Known limits:
     (0.18.1 reported this one, from the host name and process id);
   - a run started by barca 0.19.0 or earlier, which is judged by its process id and host
     name: in a container, on another machine, or once its process id has been reused.
+
+After verifying that the process or container has stopped, explicitly reconcile an uncertain
+row with `barca history --reconcile RUN_ID --json`. This records only that row as
+`interrupted` and prints it in the normal history envelope (`runs`, `total: 1`,
+`truncated: false`); `--fields` and human output also work. It refuses a proven live owner,
+a terminal row, an unknown id, and combining `--reconcile` with `--limit` or `--all`.
+It preserves recorded step counts, successful materializations and artifacts, and leaves
+unknown end time and duration as `null`. It does not stop a process. Ordinary history reads
+still keep an uncertain owner `running`; reconciliation is your assertion that it stopped.
+The change is local to the selected environment's metadata database.
+
 - `interrupted` is written to the history by the next `get` or `run`, under the same rule.
 - A marker is removed by its process when its runs have ended. One left by a killed
   process stays while its run reads `running`, and is removed by a later `get` or `run`

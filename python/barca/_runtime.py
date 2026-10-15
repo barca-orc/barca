@@ -168,7 +168,7 @@ class result_batch:
             count = len(self.messages)
             if count != notified:
                 try:
-                    send_message({"type": "result_checkpoint"})
+                    send_message({"type": "result_checkpoint", "completed": count})
                 except OSError:
                     return
                 notified = count

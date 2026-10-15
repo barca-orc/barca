@@ -15,6 +15,8 @@ The `--help` snapshots and the flag tables live in `crates/barca-cli/src/contrac
 """
 
 import json
+import sqlite3
+from contextlib import closing
 import os
 import re
 import subprocess
@@ -67,6 +69,7 @@ def keys(parts: list) -> list:
 # that plan `report` show a filled `warnings` array and the others an empty one.
 @task(inputs={"t": total, "rows": numbers})
 def report(t: dict, rows: list) -> dict:
+    print("task output")
     return {"reported": t["total"]}
 
 
@@ -114,6 +117,7 @@ CASES: list[tuple[str, list[str], str, int]] = [
     ("docs_topic", ["docs", "cache", "--json"], "stdout", 0),
     ("error_usage", ["get", "nope", "pipeline.py", "--json"], "stderr", 2),
     ("error_usage_parse", ["list", "pipeline.py", "--jsn", "--json"], "stderr", 2),
+    ("history_reconciled", ["history", "--reconcile", "orphan-run", "--json"], "stdout", 0),
 ]
 
 # Cases that need a setup of their own, run after CASES: (case, stream, expected exit code).
@@ -145,6 +149,7 @@ def summary(t: dict, side: int) -> dict:
 MISMATCH_ARGV = ["get", "summary", "pipeline.py", "--refresh", "total", "--json"]
 SETUP_CASES: list[tuple[str, list[str], str, int]] = [
     ("get_artifact_mismatch", MISMATCH_ARGV, "stdout", 0),
+    ("logs", ["logs", "RUN_ID", "--step", "report", "--json"], "stdout", 0),
     (
         "get_bytes_changed",
         ["get", "value", "pipeline.py", "--refresh", "value", "--json"],
@@ -310,6 +315,13 @@ def runs(tmp_path_factory) -> dict:
 
     out: dict = {}
     for case, argv, stream, code in CASES:
+        if case == "history_reconciled":
+            with closing(sqlite3.connect(cwd / ".barca/metadata.db")) as conn:
+                conn.execute(
+                    "INSERT INTO runs(run_id,command,files,target,status,steps_total,steps_executed,pid,host,owner) "
+                    "VALUES ('orphan-run','get','[]','total','running',3,1,1,'unavailable-container','')"
+                )
+                conn.commit()
         # error_step_failed reads the same invocation's stderr as run_failed.
         if case == "error_step_failed":
             proc = out["run_failed"][2]
@@ -328,6 +340,13 @@ def runs(tmp_path_factory) -> dict:
         s = schema(doc)
         out[case] = (s, render_snapshot(argv, stream, code, s), proc)
 
+    run_id = json.loads(out["run_multi_target_failed"][2].stdout)["run_id"]
+    logs_argv = ["logs", run_id, "--step", "report", "--json"]
+    proc = barca(logs_argv)
+    assert proc.returncode == 0, proc.stderr
+    s = schema(json.loads(proc.stdout))
+    out["logs"] = (s, render_snapshot(SETUP_CASES[1][1], "stdout", 0, s), proc)
+
     digest_case = tmp_path_factory.mktemp("contract_digest")
     (digest_case / "pipeline.py").write_text(
         "from pathlib import Path\nfrom barca import asset\n@asset()\ndef value(): return Path('external.txt').read_text()\n"
@@ -343,7 +362,7 @@ def runs(tmp_path_factory) -> dict:
     )
     assert baseline.returncode == 0, baseline.stderr
     (digest_case / "external.txt").write_text("after")
-    for case, argv, stream, code in SETUP_CASES[1:]:
+    for case, argv, stream, code in SETUP_CASES[2:]:
         proc = subprocess.run(
             [binary, *argv], cwd=digest_case, env=env, capture_output=True, text=True, timeout=60
         )
