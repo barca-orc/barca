@@ -232,7 +232,7 @@ An edit in one of these does not change the hash; recompute with `--refresh-all`
   `helpers.py` does `import other`): import it directly;
 - what a helper refers to only in a decorator, a default argument value, an `except` clause's
   exception type, a `match` pattern, a set literal (`{f()}`), an assignment target
-  (`table[key()] = ...`) or a loop's `else:` block. The helper's own text is hashed, but those
+  (`table[key()] = ...`). The helper's own text is hashed, but those
   references are not followed. (This is about helper functions. The decorators of a step
   itself are covered by "Which decorator arguments count" above; its default argument values
   are hashed as part of the function but the names in them are not followed);
@@ -840,3 +840,7 @@ See `specs/materialization-digests.md` for the native boundary.
 barca get orders pipeline.py --refresh orders --json   # compare recomputed bytes with the last digest
 barca status orders pipeline.py --json                 # last byte-change event and current digest
 ```
+
+Helper references in `for`/`while` `else:` blocks are followed, including inside undecorated
+project helper functions. As with `if` branches, static hashing follows the block even if
+a particular run exits the loop with `break`.

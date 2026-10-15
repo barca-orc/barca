@@ -14,6 +14,10 @@ and these tags are available on the same releases page.
 
 ## Pending 0.24.0
 
+### Bug Fixes
+
+- Follow project helper references in `for`/`while` `else:` blocks so edits invalidate affected cached assets.
+
 ### Removed
 
 - **Breaking:** removed `barca get|run --no-cache` and `barca.get(no_cache=...)`.

@@ -418,3 +418,7 @@ Decorated pipeline functions with top-level project star imports conservatively 
 imported module and its static imports. Literal `__all__` lists/tuples also let discovery
 preserve Barca decorators and groups whose local names are absent from that export set;
 computed or mutated sets remain uncertain. See [decorator discovery](/reference/api/decorators/).
+
+Project helper references in `for` and `while` `else:` blocks participate in cache hashes,
+including loops inside undecorated helpers. Static hashing follows both the body and the
+`else:` block even when a particular execution uses `break`.

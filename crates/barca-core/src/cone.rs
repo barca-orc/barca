@@ -1003,9 +1003,9 @@ impl<'p> UseCollector<'p> {
         }
     }
 
-    // The statements and expressions visited below are exactly the ones every earlier release
-    // visited: visiting more (a decorator, a default value, an `except` type, ...) would add
-    // names, and so change the hash of code that has not changed.
+    // Extend this traversal one construct family at a time: following previously omitted
+    // references invalidates existing cached code. Keep the manual and regression controls
+    // aligned with each deliberate extension.
     fn stmt(&mut self, stmt: &Stmt) {
         match stmt {
             Stmt::Expr(s) => self.expr(&s.value),
@@ -1027,10 +1027,12 @@ impl<'p> UseCollector<'p> {
             Stmt::For(s) => {
                 self.expr(&s.iter);
                 self.stmts(&s.body);
+                self.stmts(&s.orelse);
             }
             Stmt::While(s) => {
                 self.expr(&s.test);
                 self.stmts(&s.body);
+                self.stmts(&s.orelse);
             }
             Stmt::With(s) => {
                 self.exprs(s.items.iter().map(|item| &item.context_expr));
@@ -2054,6 +2056,32 @@ def my_asset():
         );
     }
 
+    #[test]
+    fn loop_else_blocks_follow_project_helpers() {
+        for (prefix, loop_header) in [
+            ("def", "for _ in ()"),
+            ("def", "while False"),
+            ("async def", "async for _ in source()"),
+            ("def", "for _ in [1]"),
+        ] {
+            for import in ["import helpers\n", ""] {
+                let local = if import.is_empty() {
+                    "    import helpers\n"
+                } else {
+                    ""
+                };
+                let entry = format!(
+                    "{import}\n{prefix} my_asset():\n{local}    {loop_header}:\n        break\n    else:\n        return helpers.compute()\n    return 0\n"
+                );
+                assert_ne!(
+                    hash_of(&entry, &one("helpers", HELPERS_V1), &[]),
+                    hash_of(&entry, &one("helpers", HELPERS_V2), &[]),
+                    "{entry}"
+                );
+            }
+        }
+    }
+
     // ─── Known limitations, as `barca docs cache` lists them ─────────────────────
 
     /// Not followed today. Each of these is in the manual ("Not followed"); when one starts
@@ -2087,10 +2115,6 @@ def my_asset():
             (
                 "set literal",
                 "import helpers\n\ndef my_asset():\n    return {helpers.compute()}\n",
-            ),
-            (
-                "loop else",
-                "import helpers\n\ndef my_asset():\n    for _ in ():\n        pass\n    else:\n        return helpers.compute()\n",
             ),
             (
                 "assignment target",
