@@ -19,9 +19,9 @@ Qualified imports (`@barca.asset()`) and imported aliases (`@a()` after
 `barca` binary, written in Rust, reads the source without importing it, works out what
 needs to run, and runs it in Python worker processes. Results are stored as files under
 `.barca/`. An asset runs again only when its code or its inputs change; sensors and tasks
-run every time.
-Project helper references in default arguments are tracked too, including nested functions
-and lambdas; editing the helper invalidates its cached consumers.
+run every time. Project helper references in default arguments (including nested functions
+and lambdas) and exception handler types (including tuples and `except*`) are tracked too;
+editing those helpers invalidates their cached consumers.
 
 There is no server to run and no configuration file to write. `barca serve` adds
 schedules, an HTTP API and a web UI when you want them.
