@@ -133,13 +133,14 @@ def _report_repeated_warnings() -> None:
 def emit_step_completed(node_id: str, artifact: dict) -> None:
     """Report a step completed successfully."""
     _report_repeated_warnings()
-    send_message(
+    from barca import _wire
+    send_message(_wire.encode_results([
         {
             "type": "step_completed",
             "node_id": node_id,
             "artifact": artifact,
         }
-    )
+    ]))
 
 
 def emit_step_error(
@@ -147,7 +148,8 @@ def emit_step_error(
 ) -> None:
     """Report a step failed."""
     _report_repeated_warnings()
-    send_message(
+    from barca import _wire
+    send_message(_wire.encode_results([
         {
             "type": "step_error",
             "node_id": node_id,
@@ -156,19 +158,20 @@ def emit_step_error(
             "traceback": traceback,
             "elapsed": elapsed,
         }
-    )
+    ]))
 
 
 def emit_blocked(node_id: str, reason: str) -> None:
     """Report a step was blocked."""
     _report_repeated_warnings()
-    send_message(
+    from barca import _wire
+    send_message(_wire.encode_results([
         {
             "type": "blocked",
             "node_id": node_id,
             "reason": reason,
         }
-    )
+    ]))
 
 
 def emit_heartbeat() -> None:

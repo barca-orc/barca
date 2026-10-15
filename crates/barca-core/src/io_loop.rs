@@ -135,11 +135,17 @@ async fn worker_io_task(
 ) {
     loop {
         tokio::select! {
-            result = read_frame::<_, WorkerMessage>(&mut stream) => {
+            result = read_frame::<_, serde_json::Value>(&mut stream) => {
                 match result {
-                    Ok(Some(msg)) => {
-                        if event_tx.send(IoEvent::Message { worker_id, msg: Box::new(msg) }).await.is_err() {
+                    Ok(Some(frame)) => {
+                        let messages = if frame["type"] == "results" { crate::wire::decode_results(&frame) }
+                            else { serde_json::from_value(frame).map(|message| vec![message]).map_err(|e| e.to_string()) };
+                        let Ok(messages) = messages else {
+                            let _ = event_tx.send(IoEvent::Disconnected { worker_id }).await;
                             break;
+                        };
+                        for msg in messages {
+                            if event_tx.send(IoEvent::Message { worker_id, msg: Box::new(msg) }).await.is_err() { return; }
                         }
                     }
                     Ok(None) | Err(_) => {
@@ -933,13 +939,13 @@ impl WorkerPool {
 
             let msg = if batch.len() == 1 {
                 let step = self.traced_step(coord.item(batch[0]), coord);
-                serde_json::json!({"type": "execute", "step": step})
+                serde_json::json!({"type": "execute", "step": crate::wire::normalize_step(&step)})
             } else {
                 let steps: Vec<serde_json::Value> = batch
                     .iter()
                     .map(|&iid| self.traced_step(coord.item(iid), coord))
                     .collect();
-                serde_json::json!({"type": "execute_batch", "steps": steps})
+                crate::wire::encode_steps(&steps)
             };
 
             if self.trace_on {

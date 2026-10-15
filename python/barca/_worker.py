@@ -1164,7 +1164,8 @@ def run_daemon():
         # coordinator kills this worker for a fresh interpreter and re-queues
         # the unstarted remainder).
         if msg.get("type") == "execute_batch":
-            steps = msg.get("steps", [])
+            from barca import _wire
+            steps = _wire.decode_steps(msg)
         elif msg.get("type") == "execute":
             steps = [msg.get("step", {})]
         else:
