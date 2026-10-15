@@ -209,8 +209,10 @@ def test_step_prints_raw_stderr_and_error_records_are_unchanged(tmp_path: Path) 
         # JSON mode stores captured stdout separately; explicit stderr stays here.
     )
     assert _not_barca(r.stderr) == expected, r.stderr
-    barca_lines = [ln for ln in r.stderr.splitlines() if ln.startswith("[barca]")]
-    assert barca_lines[:2] == [
+    barca_lines = [
+        ln for ln in r.stderr.splitlines() if ln.startswith("[barca]") and " more: " in ln
+    ]
+    assert barca_lines == [
         f"[barca] 4 more: {NETRC}",
         "[barca] 2 more: UserWarning: deprecated thing",
     ], r.stderr

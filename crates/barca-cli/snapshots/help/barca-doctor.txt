@@ -1,0 +1,23 @@
+Diagnose project prerequisites without running pipeline steps
+
+Usage: barca doctor [OPTIONS] [FILES]...
+
+Arguments:
+  [FILES]...  Python files or directories to inspect (default: discovered project sources)
+
+Options:
+      --json       Emit JSON on stdout (the default when stdout is not a terminal)
+      --pretty     Emit human-readable output (the default when stdout is a terminal)
+      --env <ENV>  Environment name (separates cache/state per environment)
+  -h, --help       Print help
+
+Examples:
+  barca doctor                      # diagnose the discovered project
+  barca doctor pipeline.py --json    # structured checks, no steps executed
+  barca doctor src/ --env local --pretty   # selected sources and environment
+
+Checks project root, Python, config, state mode, cache writability, metadata integrity,
+static source parsing, and configured stores. Never imports pipeline modules or evaluates
+dynamic partition expressions. Prints the report on stdout; exit 0 when all checks pass,
+3 when a prerequisite fails. Store probes list but never create buckets or objects.
+More: barca docs doctor

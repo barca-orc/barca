@@ -195,7 +195,9 @@ pub(crate) fn json_output(cli: &Cli) -> bool {
             fields_json(*format, fields.as_deref()).unwrap_or(false)
         }
         Cli::Docs { json, fields, .. } => *json || fields.is_some(),
-        Cli::Sql { format, .. } | Cli::Logs { format, .. } => is_json(*format),
+        Cli::Sql { format, .. } | Cli::Logs { format, .. } | Cli::Doctor { format, .. } => {
+            is_json(*format)
+        }
         Cli::Serve { .. } | Cli::Version => false,
     }
 }
@@ -207,6 +209,7 @@ pub(crate) fn context(cli: &Cli) -> Context {
         Cli::Get { args, .. } => ("get", paths(&split_target_files(args.clone()).1)),
         Cli::Run { args, .. } => ("run", paths(&split_target_files(args.clone()).1)),
         Cli::Plan { files, .. } => ("plan", paths(files)),
+        Cli::Doctor { files, .. } => ("doctor", paths(files)),
         Cli::Stats { files, .. } => ("stats", paths(files)),
         Cli::Serve { files, .. } => ("serve", paths(files)),
         Cli::List { files, .. } => ("list", paths(files)),
@@ -340,6 +343,9 @@ pub(crate) fn enter_project_root(cli: &mut Cli) -> Result<(), barca_core::BarcaE
         | Cli::Sql { files, .. }
         | Cli::List { files, .. } => {
             *files = expand(std::mem::take(files))?;
+        }
+        Cli::Doctor { files, .. } => {
+            *files = files.iter().map(|file| rebase(file)).collect();
         }
         Cli::History { .. } | Cli::Logs { .. } | Cli::Docs { .. } | Cli::Version => {}
     }

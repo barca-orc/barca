@@ -25,6 +25,9 @@ pub enum RunEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         #[cfg_attr(feature = "ts", ts(optional))]
         error: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "ts", ts(optional))]
+        import_seconds: Option<f64>,
     },
     /// The run finished (emitted by the server once execution completes).
     RunFinished { run_id: String, ok: bool },
@@ -68,6 +71,7 @@ mod tests {
             ok: true,
             elapsed_seconds: Some(1.5),
             error: None,
+            import_seconds: None,
         };
         assert_eq!(
             serde_json::to_value(&ev).unwrap(),
@@ -79,6 +83,7 @@ mod tests {
             ok: false,
             elapsed_seconds: None,
             error: Some("boom".into()),
+            import_seconds: None,
         };
         assert_eq!(
             serde_json::to_value(&failed).unwrap(),

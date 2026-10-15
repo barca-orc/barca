@@ -244,6 +244,7 @@ fn spec_matches_router_paths_and_methods_and_all_schemas_compile() {
             ok: false,
             elapsed_seconds: Some(1.0),
             error: Some("failed".into()),
+            import_seconds: Some(1.25),
         },
         barca_core::RunEvent::RunFinished {
             run_id: "r".into(),
