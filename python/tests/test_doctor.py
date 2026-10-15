@@ -78,6 +78,8 @@ def test_remote_off_ignores_remote_profile_and_finds_parent_root(tmp_path):
     assert by_name["project_root"]["data"]["source"] == "barca.toml"
     assert by_name["store:artifacts"]["data"]["enabled"] is False
     assert by_name["discovery"]["data"]["files"] == ["pipeline.py"]
+    human = cli(child, "../pipeline.py", "--pretty", BARCA_REMOTE="off")
+    assert "found from nearest barca.toml" in human.stdout
 
 
 def test_unwritable_cache_and_corrupt_metadata_are_preserved(tmp_path):
@@ -112,6 +114,7 @@ def test_shared_directory_store_is_read_only_and_identity_is_visible(tmp_path):
     assert list(store.iterdir()) == [state]
     pretty = cli(tmp_path, "--pretty")
     assert all(line.startswith("[ok] ") for line in pretty.stdout.splitlines())
+    assert "found from cwd" in pretty.stdout
     assert len(pretty.stdout.splitlines()) == len(checks(cli(tmp_path, "--json"))[0]["checks"])
 
 

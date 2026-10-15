@@ -69,7 +69,11 @@ pub async fn doctor(files: &[PathBuf], env: Option<&str>, python: &Path) -> Doct
     report.add(
         "project_root",
         true,
-        root.display().to_string(),
+        format!(
+            "{} (found from {})",
+            root.display(),
+            if found { "nearest barca.toml" } else { "cwd" }
+        ),
         json!({
             "path": root, "source": if found { "barca.toml" } else { "cwd" }
         }),
