@@ -189,8 +189,8 @@ happen on every run belongs in a task.
   takes no such options). A branch that runs longer than 300 seconds comes back as a
   `ParallelError` holding a `TimeoutError`. The calling step's own `timeout_seconds` keeps
   counting while it waits for its branches.
-- What a branch returns belongs to the run and is not an artifact. A small JSON value (up to
-  4 KB of JSON text) is passed in a message and never written. Anything else is a file,
+- What a branch returns belongs to the run and is not a cached artifact. Every result,
+  including small JSON values, is a file,
   `.barca/branches/<run>-<pid>/<group>/<branch>.<ext>`, one directory per `parallel()` call, so
   two runs at the same time never read each other's results. It is never uploaded to an
   artifact store. Barca removes a call's directory when the step that made the call ends, and
@@ -210,10 +210,17 @@ step (see above). Exit codes: `barca docs agents`.
 
 See also: `barca docs cache`, `barca docs examples/deploy-task`.
 
+Parallel branch results, including small JSON values, are always passed as file references.
+Protocol v3 batches result metadata into columnar arrays and uses transient metadata receipts
+so a crashed later item does not replay earlier completions. Old worker packages are refused
+before execution; reinstall matching Barca packages if a protocol mismatch is reported.
+
 ## Task results and stdout
 
-A task's return value is `final_output` in `barca run --json`, its value under `-o value`,
-and the value returned by `barca.run(...)`, as for an asset. Captured stdout is stored
+A task follows the same output rules as an asset. A returned dict appears in `final_output`
+under `barca run --json`, under `-o value`, and from `barca.run(...)`. The CLI still uses
+artifact references for binary/tabular formats (`barca docs types`); the Python API reads
+those references. Captured stdout is stored
 separately. Human/value modes show each print on stderr as `[pipeline.py:report] text`;
 `--agent` progress keeps its `[barca]` prefix. JSON output suppresses captured prints.
 Use `barca logs RUN_ID --pretty` for only the recorded lines, or `--json` for

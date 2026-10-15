@@ -17,6 +17,7 @@ behavior.
 | Metadata format compatibility | [metadata-schema.md](metadata-schema.md) | Implemented compatibility policy; database format 1, legacy 0 | [db_schema.rs](../crates/barca-core/src/db_schema.rs), [state_validate.rs](../crates/barca-core/src/state_validate.rs), snapshot/carry tests in [db.rs](../crates/barca-core/src/db.rs) |
 | Task results and recorded stdout | [task-output.md](task-output.md) | Implemented; specification 1 | [Task/stdout conformance](../python/tests/test_task_logs.py), CLI snapshots and Rust log persistence tests |
 | CLI flags, messages and JSON envelopes | [existing CLI contract](../crates/barca-cli/docs/contract.md) and native help/JSON snapshots | Current implemented contract, existing ownership retained; no separate specification version | [CLI integration tests](../python/tests/test_cli_contract.py), Rust CLI snapshot tests |
+| Worker/transfer socket protocol | [worker-protocol.md](worker-protocol.md) | Implemented on branch; specification 2 / protocol 3 | [protocol tests](../crates/barca-core/src/protocol.rs), [Python/CLI negotiation](../python/tests/test_protocol_handshake.py), [batched runtime/crash controls](../python/tests/test_compact_worker_protocol.py) |
 
 The existing CLI normative document and snapshots remain in their established locations.
 This inventory does not duplicate or migrate them. Future boundary specifications should

@@ -31,7 +31,6 @@ import time
 from pathlib import Path
 
 import pytest
-
 from barca.api import _find_binary
 
 PIPELINE = """

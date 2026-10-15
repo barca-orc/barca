@@ -153,10 +153,10 @@ remote store the parent gets `null` results with a warning). See
 > branch, the type and the reason. Child results are local files whatever the store, so
 > nothing differs under a remote store.
 >
-> A JSON result whose text is at most 4 KB is not written at all: the child's worker sends
-> the text `json.dump` would have written in its report, the coordinator passes it on
-> unparsed, and the parent parses it. A fan-out of thousands of small branches then creates
-> no files. The coordinator reads no child result in any case.
+> Protocol v3 (#82) also writes small JSON results to run-owned files. The earlier
+> 4 KB inline-text optimization is removed: all child values travel by file reference.
+> Batched metadata and transient completion receipts preserve finished leases if a later
+> batch item crashes. The coordinator reads no child result value.
 
 ### 4.4 Node-Kind Semantics
 

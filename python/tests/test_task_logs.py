@@ -152,3 +152,27 @@ def test_ambiguous_function_names_require_exact_identity(project):
         cli(project, "logs", doc["run_id"], "--step", "left.py:work", "--json").stdout
     )
     assert rows == [{"node_id": "left.py:work", "line": "left"}]
+
+
+def test_partition_filters_keep_exact_key_identity(project):
+    (project / "pipeline.py").write_text("""
+from barca import asset, partitions
+@asset(partitions={"k": partitions(["a", "b"])})
+def split(k):
+    print(k)
+    return k
+""")
+    doc = json.loads(cli(project, "get", "split", "pipeline.py", "--json").stdout)
+    rows = json.loads(cli(project, "logs", doc["run_id"], "--step", "split", "--json").stdout)
+    assert {row["line"] for row in rows} == {"a", "b"}
+    selected = json.loads(
+        cli(project, "logs", doc["run_id"], "--step", "pipeline.py:split[k=a]", "--json").stdout
+    )
+    assert selected == [{"node_id": "pipeline.py:split[k=a]", "line": "a"}]
+
+
+def test_logs_does_not_need_the_configured_store(project, monkeypatch):
+    doc = json.loads(cli(project, "run", "report", "pipeline.py", "--json").stdout)
+    monkeypatch.setenv("BARCA_REMOTE_URI", "s3://unreachable-no-driver-is-needed/logs")
+    rows = json.loads(cli(project, "logs", doc["run_id"], "--json").stdout)
+    assert any(row["line"] == "loading 3 files" for row in rows)

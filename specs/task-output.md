@@ -5,8 +5,9 @@ Scope: local CLI get/run stdout routing and recorded-log inspection.
 Conformance: `python/tests/test_task_logs.py`, CLI contract/help snapshots,
 log transaction tests in `crates/barca-core/src/db.rs`.
 
-Task return values use the same final-output path as assets: JSON run result `final_output`,
-`-o value`, and `barca.run(...)` expose a task's value independently of prints. Run stdout
+Task return values follow the existing asset output contract, including format-specific CLI
+artifact references. A returned dict appears under JSON `final_output`, `-o value` and
+`barca.run(...)`; the Python API also reads binary/tabular references. Prints are independent. Run stdout
 contains only the selected result. JSON mode suppresses captured step stdout on stderr.
 Other modes render each captured stdout line on stderr as `[<node_id>] <line>`. Framework
 agent lines remain `[barca]`-prefixed. Log capture and persistence do not depend on display.

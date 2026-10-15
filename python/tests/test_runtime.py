@@ -19,7 +19,6 @@ from unittest.mock import patch
 
 import pytest
 
-
 # ─── Framing round-trip ──────────────────────────────────────────────────────
 
 
@@ -287,6 +286,30 @@ class TestConnect:
                 server.bind(sock_path)
                 server.listen(1)
 
+                def accept():
+                    peer, _ = server.accept()
+                    try:
+                        header = peer.recv(4)
+                        length = struct.unpack(">I", header)[0]
+                        hello = json.loads(peer.recv(length))
+                        assert hello == {
+                            "type": "hello",
+                            "role": "worker",
+                            "protocol_version": _runtime.PROTOCOL_VERSION,
+                        }
+                        reply = json.dumps(
+                            {
+                                "type": "hello",
+                                "role": "coordinator",
+                                "protocol_version": _runtime.PROTOCOL_VERSION,
+                            }
+                        ).encode()
+                        peer.sendall(struct.pack(">I", len(reply)) + reply)
+                    finally:
+                        peer.close()
+
+                thread = threading.Thread(target=accept)
+                thread.start()
                 with patch.dict(os.environ, {"BARCA_SOCKET": sock_path}):
                     conn = _runtime.connect()
                     assert conn is not None
@@ -294,6 +317,8 @@ class TestConnect:
                     conn.close()
                     _runtime._socket = None
 
+                thread.join(5)
+                assert not thread.is_alive()
                 server.close()
         finally:
             _runtime._socket = original_socket
@@ -480,7 +505,9 @@ class TestEmitHelpers:
                 "my_node",
                 {"path": "/tmp/art.json", "format": "json", "size_bytes": 42},
             )
-            msg = self._read_message(s2)
+            from barca import _wire
+
+            msg = _wire.decode_results(self._read_message(s2))[0]
             assert msg["type"] == "step_completed"
             assert msg["node_id"] == "my_node"
             assert msg["artifact"]["format"] == "json"
@@ -499,7 +526,9 @@ class TestEmitHelpers:
                 traceback="Traceback...\nValueError: something broke",
                 elapsed=1.5,
             )
-            msg = self._read_message(s2)
+            from barca import _wire
+
+            msg = _wire.decode_results(self._read_message(s2))[0]
             assert msg["type"] == "step_error"
             assert msg["node_id"] == "failing_node"
             assert msg["error_type"] == "ValueError"
@@ -514,7 +543,9 @@ class TestEmitHelpers:
         s1, s2, original = self._setup_socket_pair()
         try:
             _runtime.emit_blocked("downstream_node", "upstream 'data' unavailable")
-            msg = self._read_message(s2)
+            from barca import _wire
+
+            msg = _wire.decode_results(self._read_message(s2))[0]
             assert msg["type"] == "blocked"
             assert msg["node_id"] == "downstream_node"
             assert "upstream" in msg["reason"]
@@ -737,3 +768,17 @@ class TestDisconnect:
             assert _runtime._socket is None
         finally:
             _runtime._socket = original_socket
+
+
+def test_receiver_rejects_oversized_header_without_waiting_for_body(monkeypatch):
+    from barca import _runtime
+
+    sender, receiver = socket.socketpair()
+    try:
+        monkeypatch.setattr(_runtime, "_socket", receiver)
+        sender.sendall(struct.pack(">I", 256 * 1024 * 1024 + 1))
+        with pytest.raises(ValueError, match="message too large"):
+            _runtime.recv_message()
+    finally:
+        sender.close()
+        receiver.close()

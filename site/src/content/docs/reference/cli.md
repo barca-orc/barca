@@ -243,6 +243,9 @@ counted over that target's cone. The full shapes are in `barca docs agents`.
 
 ## plan
 
+The document includes `plan_version: 1`, independent of the package and database versions.
+Consumers of saved plans should reject unsupported versions.
+
 Parse the source files and print the execution plan as JSON, without running anything.
 The pool size matches execution: available cores, or a positive `BARCA_POOL_SIZE`.
 Experimental: the layout follows the planner and may change between releases. Each phase's
@@ -253,6 +256,7 @@ state, so `plan` takes no `--env` and does not say what is cached; use `--dry-ru
 ```
 $ barca plan pipeline.py
 {
+  "plan_version": 1,
   "total_steps": 3,
   "phases": [
     {

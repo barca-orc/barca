@@ -13,7 +13,6 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
 from barca.api import _find_binary
 
 FENCE = re.compile(r"^```(\w*)\n(.*?)^```", re.S | re.M)

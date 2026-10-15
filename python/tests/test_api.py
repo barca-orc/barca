@@ -613,6 +613,7 @@ class TestPlan:
         """,
         )
         result = barca.plan(f)
+        assert result["plan_version"] == 1
         assert "total_steps" in result
         assert result["total_steps"] == 2
         assert "phases" in result

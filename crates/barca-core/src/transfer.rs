@@ -254,11 +254,15 @@ impl Launching {
     /// Wait for the helper to connect (it has 10 seconds from this call).
     pub async fn connect(mut self) -> Result<TransferClient, BarcaError> {
         let accepted = tokio::select! {
-            accepted = tokio::time::timeout(Duration::from_secs(10), self.listener.accept()) => {
+            accepted = tokio::time::timeout(Duration::from_secs(10), async {
+                let (mut stream, _) = self.listener.accept().await?;
+                crate::protocol::accept_hello(&mut stream, "transfer").await?;
+                Ok::<_, std::io::Error>(stream)
+            }) => {
                 match accepted {
-                    Ok(Ok((stream, _))) => Ok(stream),
-                    Ok(Err(e)) => Err(format!("transfer helper accept: {e}")),
-                    Err(_) => Err("timeout waiting for transfer helper to connect".to_string()),
+                    Ok(Ok(stream)) => Ok(stream),
+                    Ok(Err(e)) => Err(format!("transfer helper connection/protocol: {e}")),
+                    Err(_) => Err(format!("timeout waiting for transfer helper to connect and announce protocol v{}; reinstall barca in this Python environment", crate::protocol::PROTOCOL_VERSION)),
                 }
             }
             status = self.child.wait() => Err(format!(
@@ -798,6 +802,8 @@ def recv():
 def send(m):
     b = json.dumps(m).encode()
     with lock: s.sendall(struct.pack(">I", len(b)) + b)
+send({"type": "hello", "role": "transfer", "protocol_version": 3})
+assert recv() == {"type": "hello", "role": "coordinator", "protocol_version": 3}
 def handle(m):
     src, dst = (m["local"], m["remote"]) if m["type"] == "put" else (m["remote"], m["local"])
     if "slow" in m["remote"]: time.sleep(0.3)

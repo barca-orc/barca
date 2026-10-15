@@ -14,7 +14,7 @@ save it as a file, for example `barca docs skill > .claude/skills/barca/SKILL.md
 
 ## Output format: JSON unless stdout is a terminal
 
-`get`, `run`, `list`, `status`, `history` and `stats` pick their stdout format by one rule, first match wins:
+`get`, `run`, `logs`, `list`, `status`, `history` and `stats` pick their stdout format by one rule, first match wins:
 
 1. **A flag:** `--json` forces JSON, `--pretty` forces human output (tables, summaries).
    `get`/`run` also keep `-o json|value|pretty`; `-o value` prints only the final value.
@@ -39,7 +39,8 @@ BARCA_OUTPUT=json barca get total pipeline.py
 - **stdout** carries the result: one JSON object for `get`/`run`, the plan JSON for `plan`, and
   JSON for `list`/`history`/`stats` (whenever the rule above picks JSON). It is safe to parse.
 - **stderr** carries progress (`[barca] 2/2 steps | done in 0.0s`), your own `print` output from
-  steps, warnings and errors. The progress bar draws only when stderr is a terminal; barca
+  steps in non-JSON modes, warnings and errors. JSON mode retains captured prints in
+  `barca logs RUN_ID --json`; non-JSON modes prefix them with `[node_id]`. The progress bar draws only when stderr is a terminal; barca
   writes no ANSI colour or cursor codes to a stream that is not one. Use `--agent` for plain
   progress lines (`[barca] 1/2 ...`) on stderr instead of a progress bar.
 - **Exit codes:** one per kind of failure, so you can decide what to do from the code alone.
@@ -423,3 +424,8 @@ barca get --help               # flags and runnable examples (every command has 
 ```
 
 Online: https://barca.sh/
+
+Plan documents include `plan_version: 1`, independent of the package and database versions.
+Workers and the transfer helper negotiate their socket protocol before receiving work.
+A version mismatch exits 3 and names the helper version and expected version; reinstall
+Barca in the Python environment used for the run. The handshake does not import pipeline code.
