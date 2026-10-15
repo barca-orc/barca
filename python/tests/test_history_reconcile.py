@@ -1,15 +1,13 @@
 """Explicit recovery for stopped runs whose owner cannot be verified (#290)."""
 
 import json
-from contextlib import closing
 import os
 import sqlite3
 import subprocess
 import time
-from pathlib import Path
+from contextlib import closing
 
 import pytest
-
 from barca.api import _find_binary
 
 
@@ -106,8 +104,9 @@ def held():
         assert run["status"] == "running"
         denied = cli(tmp_path, "history", "--reconcile", run["run_id"], "--json")
         assert denied.returncode == 2 and "live owner" in denied.stderr
-        with closing(sqlite3.connect(tmp_path / ".barca/metadata.db")) as conn:
-            assert conn.execute("SELECT status FROM runs WHERE run_id=?", (run["run_id"],)).fetchone()[0] == "running"
+        after = cli(tmp_path, "history", "--json")
+        assert after.returncode == 0, after.stderr
+        assert json.loads(after.stdout)["runs"][0]["status"] == "running"
     finally:
         (tmp_path / "release").touch()
         try:
