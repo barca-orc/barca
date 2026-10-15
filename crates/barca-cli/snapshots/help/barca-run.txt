@@ -75,8 +75,7 @@ as an input a step never uses (barca docs assets); [] when there are none.
 assets you name and every asset downstream of them in the task's cone (reason `refresh_cascade`),
 so fresh data reaches the task. --no-cascade re-runs only the named assets; cached assets
 downstream of them then do not reflect the refresh, and barca warns. A name that is not an
-upstream asset is an error. --no-cache is a deprecated spelling of --refresh-all: it still works
-and warns on stderr.
+upstream asset is an error.
 An upstream asset that is cached but whose artifact file is gone is computed again before the task
 reads it (reason `artifact_missing`, a warning on stderr), so a deleted artifact does not fail the
 run (barca docs cache).

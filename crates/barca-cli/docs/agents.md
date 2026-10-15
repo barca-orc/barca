@@ -260,8 +260,8 @@ invisible to barca (`barca docs assets`).
 - `--refresh a` re-runs `a` and every asset downstream of it in the target's cone (reason
   `refresh_cascade`). `--no-cascade` re-runs only what you name; cached downstream assets then
   do not reflect the refresh and barca warns on stderr. Details: `barca docs cache`.
-- `--refresh-all` re-runs every asset in the cone. `--no-cache` is its deprecated spelling: it
-  still works, prints `[barca] warning: --no-cache is deprecated ...`, and will be removed.
+- `--refresh-all` re-runs every asset in the cone. The deprecated `--no-cache` alias was
+  removed in 0.24.0; it is a usage error (exit 2). Python uses `refresh_all=True`.
 - On `get` the target itself may be named (`barca get total pipeline.py --refresh total`).
 - An unknown name is an error (exit 2, `kind: usage`) listing the valid upstream assets.
 

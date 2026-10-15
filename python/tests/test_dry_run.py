@@ -2,7 +2,7 @@
 
 A dry run executes nothing and changes nothing (no `.barca` directory, no history record). It
 must predict reality: the number of steps it says will run equals `steps_executed` of the real
-command, across refresh / no-cache / partition scenarios.
+command, across refresh / partition scenarios.
 """
 
 import json
@@ -171,16 +171,12 @@ def test_dry_run_with_refresh_all_on_get_and_run(project):
 
 
 @pytest.mark.parametrize("command,target", [("get", "mid"), ("run", "report")])
-def test_no_cache_is_a_deprecated_spelling_of_refresh_all(project, command, target):
-    ok(barca(project, "run", "report", "pipeline.py"))
-    proc = barca(project, command, target, "pipeline.py", "--dry-run", "--no-cache")
-    by = steps_by_name(ok(proc))
-    assert by["src"]["reason"] == "refresh_all"
-    assert "[barca] warning: --no-cache is deprecated" in proc.stderr
-    assert "--refresh-all" in proc.stderr
-    # Hidden from the --help options list: one canonical spelling is shown.
-    options = barca(project, command, "--help").stdout.splitlines()
-    assert not [o for o in options if o.startswith("  ") and o.strip().startswith("--no-cache")]
+@pytest.mark.parametrize("extra", [[], ["--dry-run"]])
+def test_removed_cache_flag_is_a_usage_error(project, command, target, extra):
+    proc = barca(project, command, target, "pipeline.py", *extra, "--no-cache")
+    assert proc.returncode == 2
+    assert "unexpected argument '--no-cache'" in proc.stderr
+    assert not (project / ".barca").exists()
 
 
 def test_get_takes_refresh_with_cascade_like_run(project):
