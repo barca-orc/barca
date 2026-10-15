@@ -14,6 +14,12 @@ and these tags are available on the same releases page.
 
 ## Pending 0.24.0
 
+### Bug Fixes
+
+- Follow project helper references in function and lambda default arguments, including
+  nested functions and keyword-only defaults. Editing those helpers now invalidates their
+  consumers. Existing affected consumers may recompute once after upgrading.
+
 ### Features
 
 - Run JSON reports executed-step durations and attempts, with slow module imports
@@ -22,6 +28,7 @@ and these tags are available on the same releases page.
 - **Breaking:** agent completion and permanent failure lines append `attempts=N` after
   retries. Allow this optional suffix when parsing those lines, or read the structured
   `steps[].attempts` field instead.
+
 ### Removed
 
 - **Breaking:** removed `barca get|run --no-cache` and `barca.get(no_cache=...)`.
