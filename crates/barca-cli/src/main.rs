@@ -209,6 +209,14 @@ async fn run_cli(cli: Cli, ctx: &Context) -> Result<(), CliError> {
             .map_err(|e| get_run_error(e, ctx, &hint_files))
         }
         Cli::Plan { files } => plan_cmd(files, &python).await.map_err(engine),
+        Cli::Logs {
+            run_id,
+            step,
+            format,
+            env,
+        } => logs_cmd(env.as_deref(), &run_id, step.as_deref(), is_json(format))
+            .await
+            .map_err(engine),
         Cli::History {
             reconcile,
             limit,

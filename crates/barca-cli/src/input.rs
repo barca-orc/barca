@@ -202,7 +202,7 @@ pub(crate) fn json_output(cli: &Cli) -> bool {
             fields_json(*format, fields.as_deref()).unwrap_or(false)
         }
         Cli::Docs { json, fields, .. } => *json || fields.is_some(),
-        Cli::Sql { format, .. } => is_json(*format),
+        Cli::Sql { format, .. } | Cli::Logs { format, .. } => is_json(*format),
         Cli::Serve { .. } | Cli::Version => false,
     }
 }
@@ -220,6 +220,7 @@ pub(crate) fn context(cli: &Cli) -> Context {
         Cli::Sql { files, .. } => ("sql", paths(files)),
         Cli::Status { args, .. } => ("status", paths(&split_target_files(args.clone()).1)),
         Cli::History { .. } => ("history", Vec::new()),
+        Cli::Logs { .. } => ("logs", Vec::new()),
         Cli::Docs { .. } => ("docs", Vec::new()),
         Cli::Version => ("version", Vec::new()),
     };
@@ -347,7 +348,7 @@ pub(crate) fn enter_project_root(cli: &mut Cli) -> Result<(), barca_core::BarcaE
         | Cli::List { files, .. } => {
             *files = expand(std::mem::take(files))?;
         }
-        Cli::History { .. } | Cli::Docs { .. } | Cli::Version => {}
+        Cli::History { .. } | Cli::Logs { .. } | Cli::Docs { .. } | Cli::Version => {}
     }
     Ok(())
 }

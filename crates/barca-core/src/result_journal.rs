@@ -64,7 +64,21 @@ impl ResultJournal {
         Ok(true)
     }
 
+    #[cfg(test)]
     pub(crate) fn read_available(&mut self) -> Result<Vec<WorkerMessage>, String> {
+        self.read_through(usize::MAX)
+    }
+
+    pub(crate) fn read_through(&mut self, count: usize) -> Result<Vec<WorkerMessage>, String> {
+        let count = if count == usize::MAX {
+            self.expected.len()
+        } else {
+            count
+        };
+        if count > self.expected.len() {
+            return Err("checkpoint exceeds its assigned batch".into());
+        }
+
         self.file
             .as_file_mut()
             .take(256 * 1024 * 1024 + 1)
@@ -75,10 +89,13 @@ impl ResultJournal {
         }
         let mut messages = Vec::new();
         let mut consumed = 0;
-        while let Some(end) = self.pending[consumed..]
-            .iter()
-            .position(|byte| *byte == b'\n')
-        {
+        while self.seen.len() < count {
+            let Some(end) = self.pending[consumed..]
+                .iter()
+                .position(|byte| *byte == b'\n')
+            else {
+                break;
+            };
             let end = consumed + end;
             let row: Value =
                 serde_json::from_slice(&self.pending[consumed..end]).map_err(|e| e.to_string())?;

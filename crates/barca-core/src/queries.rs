@@ -80,6 +80,62 @@ pub async fn reconcile_run(
     db::reconcile_run(&cfg.db_path, run_id).await
 }
 
+/// Read recorded stdout without loading user source or contacting remote state.
+pub async fn logs(
+    cfg: &crate::config::ResolvedConfig,
+    run_id: &str,
+    step: Option<&str>,
+) -> Result<Vec<db::LogEntry>, BarcaError> {
+    db::ensure_env_dirs(&cfg.env)?;
+    db::init_db(&cfg.db_path).await?;
+    if db::get_run(&cfg.db_path, run_id).await?.is_none() {
+        return Err(BarcaError::Usage(format!(
+            "run '{run_id}' was not found; use barca history --json to find a run id"
+        )));
+    }
+    let logs = db::get_logs(&cfg.db_path, run_id).await?;
+    let Some(step) = step else {
+        return Ok(logs);
+    };
+    let recorded = db::get_run_steps(&cfg.db_path, run_id).await?;
+    let all: std::collections::BTreeSet<&str> = logs
+        .iter()
+        .map(|line| line.node_id.as_str())
+        .chain(recorded.iter().map(|row| row.node_id.as_str()))
+        .collect();
+    let matches: Vec<_> = all
+        .into_iter()
+        .filter(|id| {
+            let parsed = crate::StepId::parse(id);
+            *id == step
+                || parsed.base_id() == step
+                || parsed.base_id().rsplit(':').next() == Some(step)
+        })
+        .collect();
+    if matches.is_empty() {
+        return Err(BarcaError::Usage(format!(
+            "step '{step}' has no recorded execution or stdout in run '{run_id}'"
+        )));
+    }
+    // A base name may select all of its partitions, but never two different definitions.
+    let bases: std::collections::BTreeSet<_> = matches
+        .iter()
+        .map(|id| crate::StepId::parse(id).base_id().to_string())
+        .collect();
+    if bases.len() > 1 {
+        return Err(BarcaError::Usage(format!(
+            "step '{step}' is ambiguous; use one of: {}",
+            bases.into_iter().collect::<Vec<_>>().join(", ")
+        )));
+    }
+    let matches: std::collections::HashSet<String> =
+        matches.into_iter().map(String::from).collect();
+    Ok(logs
+        .into_iter()
+        .filter(|line| matches.contains(&line.node_id))
+        .collect())
+}
+
 // ─── stats ────────────────────────────────────────────────────────────────────
 
 pub async fn stats(

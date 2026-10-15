@@ -31,7 +31,6 @@ import time
 from pathlib import Path
 
 import pytest
-
 from barca.api import _find_binary
 
 PIPELINE = """
@@ -265,7 +264,9 @@ def test_a_failed_step_is_still_exit_1(project: Path) -> None:
     proc = run_barca(project, "run", "broken", "pipeline.py", "--json", stdout_closed=True)
     assert_quiet(proc)
     assert proc.returncode == 1
-    envelope = json.loads(next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{")))
+    envelope = json.loads(
+        next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{"))
+    )
     assert envelope["kind"] == "step_failed"
     assert envelope["node"] == "pipeline.py:broken"
 
@@ -279,7 +280,12 @@ def test_a_usage_error_is_still_exit_2(project: Path) -> None:
     proc = run_barca(project, "get", "nope", "pipeline.py", "--json", stdout_closed=True)
     assert_quiet(proc)
     assert proc.returncode == 2
-    assert json.loads(next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{")))["kind"] == "usage"
+    assert (
+        json.loads(
+            next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{"))
+        )["kind"]
+        == "usage"
+    )
 
     proc = run_barca(
         project, "get", "nope", "pipeline.py", "--json", stdout_closed=True, stderr_closed=True
@@ -479,12 +485,14 @@ def test_with_a_reader_a_steps_output_is_what_it_always_was(children: Path) -> N
     start = lines.index("marker: start")
     assert lines[start : start + len(expected)] == expected
     # Python's own buffered print() lines come when Python flushes them, as before.
-    assert "printed to stdout" in lines and "printed to stderr" in lines
+    assert "printed to stdout" not in lines and "printed to stderr" in lines
+    records = run_barca(children, "logs", json.loads(piped.stdout)["run_id"], "--json")
+    assert any(row["line"] == "printed to stdout" for row in json.loads(records.stdout))
     # barca's line about the step comes after everything the step wrote.
     completed = next(
         i for i, line in enumerate(lines) if "step:pipeline.py:ordered completed" in line
     )
-    assert completed > max(lines.index("printed to stdout"), lines.index("printed to stderr"))
+    assert completed > lines.index("printed to stderr")
     # Nothing of it is on stdout: that is the result alone.
     assert json.loads(piped.stdout)["final_output"] == 200
 

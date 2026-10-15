@@ -653,3 +653,17 @@ location. See [Configuration](/reference/config/#environments---env).
 - From 0.20.0: `POST /run/{target}` and `POST /get/{target}` answer 404, 409 or 400 for a
   target that cannot run; they used to answer 200 with a `run_id` of a run that then failed.
 - From 0.20.0: the `barca list` table column `NEXT FIRE` is `NEXT FIRE (LOCAL TIME)`.
+
+## Recorded stdout
+
+`barca logs RUN_ID --pretty` prints recorded step stdout, without progress or prefixes.
+`--json` returns `[{node_id, line}]` in recorded order. `--step report` selects a function
+name; use an exact node id if names collide, or a partitioned id to select one key.
+`--env dev` reads that environment's local history. It reads no pipeline source and makes
+no remote requests. Unknown runs/steps and ambiguous names exit 2; silent executed steps
+return no lines. Logs emitted before a failed step are retained.
+
+Task return values remain usable through `barca run --json`, `-o value`, and `barca.run(...)`.
+During get/run, non-JSON modes print stdout lines to stderr with `[node_id]` prefixes;
+`--agent` framework lines keep `[barca]` prefixes. JSON output suppresses captured prints;
+retrieve them with `barca logs` using the result's run id.
