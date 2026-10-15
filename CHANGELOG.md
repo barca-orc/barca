@@ -22,6 +22,8 @@ and these tags are available on the same releases page.
 
 - Follow project helper references inside set literals. Editing those helpers now invalidates
   their cached consumers. Existing affected consumers may recompute once after upgrading.
+
+- Follow project helper calls in assignment receivers and indices, including annotated, unpacked, loop, context-manager and comprehension targets. Editing such a helper now invalidates affected cached assets.
 - Follow project helper references in function and lambda default arguments, including
   nested functions and keyword-only defaults. Editing those helpers now invalidates their
   consumers. Existing affected consumers may recompute once after upgrading.

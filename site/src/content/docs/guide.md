@@ -432,3 +432,8 @@ Decorated pipeline functions with top-level project star imports conservatively 
 imported module and its static imports. Literal `__all__` lists/tuples also let discovery
 preserve Barca decorators and groups whose local names are absent from that export set;
 computed or mutated sets remain uncertain. See [decorator discovery](/reference/api/decorators/).
+
+Assignment receivers and indices such as `table[key()] = value` follow project helpers,
+including annotated/unpacked/chained targets and targets in loops, context managers and
+comprehensions. Module-level tuple/augmented constants and loop `else:` remain separate
+limitations; see `barca docs cache`.

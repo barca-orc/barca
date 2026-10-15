@@ -256,6 +256,12 @@ An edit in one of these does not change the hash; recompute with `--refresh-all`
   references are not followed. (This is about helper functions. The decorators of a step
   itself are covered by "Which decorator arguments count" above; default argument references
   are followed as described above);
+
+- what a helper refers to only in a decorator, an `except` clause's exception type,
+  a `match` pattern, a set literal (`{f()}`), or a loop's `else:` block. The helper's own text
+  is hashed, but those references are not followed. The decorators of a step itself are
+  covered by "Which decorator arguments count" above; default references are followed
+  as described above;
 - helpers more than six project modules away along an import chain.
 
 Conflicting ordinary project imports are rejected before user code runs. If two pipeline
@@ -264,6 +270,11 @@ directories each have `helpers.py`, qualify the imports (`from east.helpers impo
 Unambiguous sibling helpers still work; previous tasks do not add implicit import paths.
 Literal imports in inactive branches and unused functions may conservatively require
 qualification. Dynamic imports and user mutations of import paths are not statically proven.
+
+Inside functions, evaluated assignment receivers and indices are followed, including `table[key()] = value`,
+annotated assignments, unpacking/chained targets, and targets in `for`, `with` and
+comprehensions. Writing a bare name does not read its old imported value. This does not add
+support for tuple/augmented module-level constant definitions or loop `else:` blocks.
 
 #### After upgrading to 0.19
 
