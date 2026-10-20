@@ -336,20 +336,24 @@ async fn run_cli(cli: Cli, ctx: &Context) -> Result<(), CliError> {
             no_schedule,
             timezone,
             read_only,
+            drain_timeout,
             env,
-        } => serve_cmd(
-            env.as_deref(),
-            files,
-            host,
-            port,
-            watch,
-            !no_schedule,
-            timezone,
-            read_only,
-            &python,
-        )
-        .await
-        .map_err(engine),
+        } => {
+            serve_cmd(
+                env.as_deref(),
+                files,
+                host,
+                port,
+                watch,
+                !no_schedule,
+                timezone,
+                read_only,
+                drain_timeout,
+                &python,
+                ctx,
+            )
+            .await
+        }
         // Answered in main() before the runtime is built — never reaches here.
         Cli::Version => unreachable!("version is handled before runtime construction"),
         Cli::Docs { .. } => unreachable!("docs is handled before runtime construction"),

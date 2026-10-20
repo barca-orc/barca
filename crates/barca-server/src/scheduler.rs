@@ -396,7 +396,16 @@ pub async fn run_scheduler(state: AppState) {
     publish_registry(&state, &jobs, &book);
 
     loop {
-        sleep_to_next_second(&zone).await;
+        // A draining server starts no run: the scheduler stops, and a tick it misses is
+        // caught up by the next server's startup catch-up.
+        tokio::select! {
+            _ = sleep_to_next_second(&zone) => {}
+            _ = state.draining.cancelled() => {}
+        }
+        if state.is_draining() {
+            barca_core::errln!("[barca] scheduler stopped: the server is draining");
+            return;
+        }
 
         // `--watch`: re-read the job set when a source file changed.
         let current_gen = state.dag_generation.load(Ordering::Relaxed);

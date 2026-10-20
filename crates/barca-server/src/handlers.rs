@@ -30,7 +30,8 @@ const RUN_TIMEOUT: Duration = Duration::from_secs(600);
 /// No core work.
 pub async fn health(State(state): State<AppState>) -> Json<Value> {
     Json(json!({
-        "status": "ok",
+        // `draining` once the server was told to stop: it finishes its runs and starts none.
+        "status": if state.is_draining() { "draining" } else { "ok" },
         "version": env!("CARGO_PKG_VERSION"),
         "read_only": state.config.read_only,
         "load_errors": *state.load_errors.read().unwrap(),
@@ -38,6 +39,20 @@ pub async fn health(State(state): State<AppState>) -> Json<Value> {
         // uses to start the scheduler (on unless --no-schedule or --read-only).
         "scheduler": state.config.schedule && !state.config.read_only,
     }))
+}
+
+/// Refuse a new run while the server drains before it stops: `503` with `Retry-After`.
+/// Runs already admitted go on; `DELETE /run/{id}` and every read stay available.
+fn refuse_if_draining(state: &AppState) -> Result<(), ApiError> {
+    if state.is_draining() {
+        return Err(ApiError::Unavailable {
+            message: "this server is shutting down: it finishes the runs in flight and \
+                      accepts no new ones; retry against the server that replaces it"
+                .to_string(),
+            retry_after: state.retry_after_secs(),
+        });
+    }
+    Ok(())
 }
 
 /// Refuse a request that would run or cancel work on a `--read-only` server.
@@ -299,6 +314,7 @@ pub async fn asset_detail(
 /// skipped); returns a polling handle immediately.
 pub async fn run(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
     refuse_if_read_only(&state)?;
+    refuse_if_draining(&state)?;
     let dag = state.loaded_dag().await?;
     if !queries::list_assets_from_dag(&dag)
         .iter()
@@ -367,6 +383,7 @@ pub async fn run_target(
     Path(target): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     refuse_if_read_only(&state)?;
+    refuse_if_draining(&state)?;
     let node = check_target(&state, &target, "run").await?;
     let handle = start_run_task(state, target, node);
     Ok(Json(json!({ "run_id": handle })))
@@ -379,6 +396,7 @@ pub async fn get_target(
     Path(target): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     refuse_if_read_only(&state)?;
+    refuse_if_draining(&state)?;
     let node = check_target(&state, &target, "get").await?;
     let handle = start_run(state, Some(target), Some(node));
     Ok(Json(json!({ "run_id": handle })))
@@ -610,7 +628,11 @@ fn spawn_run(state: AppState, kind: RunKind, node: Option<String>) -> String {
 
     let st = state.clone();
     let h = handle.clone();
-    tokio::spawn(async move {
+    // Tracked, so a drain waits for it; inside the server's cancel-reason scope, so a run the
+    // server cancels records why.
+    let reason = state.cancel_reason.clone();
+    // Boxed: the run's future is large, and the scope must not hold it on the stack.
+    state.run_tasks.spawn(reason.scope(Box::pin(async move {
         // Bound concurrency: acquire a run slot. Runs execute in parallel; the
         // shared metadata.db is kept safe by barca-core's process-wide DB lock.
         let _permit = st.run_slots.acquire().await.ok();
@@ -619,7 +641,7 @@ fn spawn_run(state: AppState, kind: RunKind, node: Option<String>) -> String {
         if cancel.is_cancelled() {
             if let Some(mut r) = st.runs.get_mut(&h) {
                 r.status = RunStatus::Cancelled;
-                r.error = Some("run cancelled".to_string());
+                r.error = Some(st.cancelled_message());
                 r.finished_at = Some(now_ts());
             }
             channel.emit(RunEvent::RunFinished {
@@ -728,7 +750,7 @@ fn spawn_run(state: AppState, kind: RunKind, node: Option<String>) -> String {
                 }
                 Err(BarcaError::Cancelled) => {
                     r.status = RunStatus::Cancelled;
-                    r.error = Some("run cancelled".to_string());
+                    r.error = Some(st.cancelled_message());
                 }
                 Err(e) => {
                     r.status = RunStatus::Failed;
@@ -741,7 +763,7 @@ fn spawn_run(state: AppState, kind: RunKind, node: Option<String>) -> String {
             ok,
         });
         // The run slot is released here, freeing capacity for a queued run.
-    });
+    })));
 
     handle
 }

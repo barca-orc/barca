@@ -588,6 +588,7 @@ error: RefreshError: Reauthentication is needed.\n";
             state: crate::config::StateMode::Optimistic,
             push_retries: 2,
             storage_options_json: None,
+            drain_timeout_secs: 30,
         }
     }
 

@@ -207,6 +207,7 @@ default, and any aliases.
 | `--no-schedule` | - | default `false` | experimental (with the command) | Disable the cron scheduler (Schedule(...) assets will not auto-fire) |
 | `--timezone` | `TIMEZONE` | default `local` | experimental (with the command) | Timezone for cron evaluation: local (this machine's zone) or utc, in any letter case, or an IANA name such as America/New_York, which is case-sensitive. Any other value is a usage error |
 | `--read-only` | - | default `false` | experimental (with the command) | Inspect only: refuse runs, never schedule, read the metadata DB from snapshots |
+| `--drain-timeout` | `SECONDS` | - | experimental (with the command) | Seconds to wait for runs in flight after SIGTERM or SIGINT before cancelling them (exit 1). Default: [server] drain_timeout in barca.toml, else 30. 0 cancels at once |
 | `--env` | `ENV` | - | experimental (with the command) | Environment name (separates cache/state per environment) |
 
 #### barca list
@@ -340,8 +341,14 @@ error `kind`, which has one code. 143, which a shell reports for a process that 
 is never barca's own exit code. SIGKILL cannot be handled: the shell reports 137 and the run is
 later reported as `interrupted` (`barca docs cache`).
 
-`barca serve` is not a run: stopped by SIGINT or SIGTERM it cancels the runs in flight, records
-them as `cancelled` and exits 0 (`barca docs scheduling`, "Stopping the server").
+`barca serve` is not a run. Stopped by SIGINT or SIGTERM it drains: it refuses new runs (HTTP
+`503` with `Retry-After`) and waits for the runs in flight for up to `--drain-timeout` seconds
+(`[server] drain_timeout` in `barca.toml`, default 30). It exits 0 when they all finished. When
+the deadline passes or a second signal arrives first, it cancels the runs left (recorded as
+`cancelled`, reason `server shutdown`) and exits 1 with a `step_failed` error naming how many
+were cancelled, so deploy tooling can tell a forced stop from a clean drain (`barca docs
+scheduling`, "Stopping the server"). Exit 1 from `serve` means a forced stop, not a failed step
+of yours.
 
 An error in a pipeline file (a syntax error, a decorator argument barca does not define, an
 invalid `env=` or cron) fails every command that reads that file, whatever the target: `list`,

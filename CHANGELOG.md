@@ -14,6 +14,18 @@ and these tags are available on the same releases page.
 
 ## Pending
 
+### Breaking
+
+- **Breaking:** `barca serve` drains on SIGTERM or SIGINT instead of cancelling its runs at once
+  (#190). New runs get `503` with `Retry-After`, the scheduler stops, `GET /health` reports
+  `"status": "draining"`, and runs in flight finish, uploads included, for up to
+  `--drain-timeout` seconds (new flag; `[server] drain_timeout` in `barca.toml`; default 30). The
+  server then exits 0. When the deadline passes or a second signal arrives first, the runs left
+  are cancelled with reason `server shutdown` (in their logs, in `/status` `error`, and as
+  `barca.reason` on the `barca.run` span) and the server exits 1, where it used to exit 0.
+  For the old immediate cancel use `--drain-timeout 0` (it exits 1 when it cancels a run). Give the supervisor a stop grace period
+  longer than the drain timeout (Docker's default is 10 s).
+
 ### Performance
 
 - Cold runs of large partitioned pipelines scale linearly with the number of keys again: a

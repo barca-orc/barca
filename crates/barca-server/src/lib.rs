@@ -55,6 +55,15 @@ pub fn app(config: ServeConfig) -> axum::Router {
     routes::router(AppState::new(config))
 }
 
+/// [`app`] on a server that is draining (as after SIGTERM): runs are refused with `503`
+/// and `/health` says `draining`. For conformance tests; not part of the API.
+#[doc(hidden)]
+pub fn draining_app(config: ServeConfig) -> axum::Router {
+    let state = AppState::new(config);
+    state.draining.cancel();
+    routes::router(state)
+}
+
 /// [`app`], plus a function that starts the cron scheduler on the same state. For tests that
 /// must send requests before the first tick; not part of the API.
 #[doc(hidden)]
@@ -68,24 +77,32 @@ pub fn app_with_scheduler(
     })
 }
 
-/// Start the server on the caller's runtime: bind and serve until SIGINT (Ctrl-C) or
-/// SIGTERM. On shutdown, in-flight runs are cancelled (workers terminated, runs marked
-/// cancelled) before returning.
-pub async fn serve(config: ServeConfig) -> Result<(), ServeError> {
+/// How [`serve`] ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stopped {
+    /// Every run in flight finished during the drain (or there was none).
+    Drained,
+    /// The drain timeout passed, or a second SIGTERM/SIGINT came, while runs were still in
+    /// flight: that many runs were cancelled with reason `server shutdown`. `barca serve`
+    /// exits 1.
+    Forced { cancelled: usize },
+}
+
+/// Start the server on the caller's runtime: bind and serve until SIGTERM or SIGINT, then
+/// drain (#190).
+///
+/// The first signal starts the drain: new runs are refused with `503` and `Retry-After`, the
+/// scheduler stops, `/health` reports `draining`, and the runs in flight finish, uploads
+/// included, for at most `[server] drain_timeout` seconds (`--drain-timeout`, 30 by default).
+/// When the deadline passes or a second signal comes first, the runs still going are
+/// cancelled (workers terminated, runs recorded `cancelled` with reason `server shutdown`)
+/// and [`Stopped::Forced`] is returned.
+pub async fn serve(config: ServeConfig) -> Result<Stopped, ServeError> {
     // Before anything starts: an unknown zone must not become local time (#289).
     check_timezone(&config.timezone).map_err(ServeError::Timezone)?;
     // Before the address is announced, so a signal sent as soon as the server is seen to be
-    // up is already handled.
-    let mut stop = StopSignals::install()?;
-    let stopping = barca_core::CancellationToken::new();
-    tokio::spawn({
-        let stopping = stopping.clone();
-        async move {
-            let name = stop.recv().await;
-            barca_core::errln!("[barca] {name} received: stopping runs and shutting down");
-            stopping.cancel();
-        }
-    });
+    // up is already handled (a signal that arrives before it is awaited is kept).
+    let mut signals = StopSignals::install()?;
     let addr = std::net::SocketAddr::new(config.host, config.port);
     let n_files = config.files.len();
     let watch = config.watch;
@@ -130,6 +147,8 @@ pub async fn serve(config: ServeConfig) -> Result<(), ServeError> {
     let app = routes::router(state.clone());
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
+    // Cancelled once the runs are over: the listener closes and the connections end.
+    let stopping = barca_core::CancellationToken::new();
     let mut telemetry = telemetry::ServerTelemetry::start(state.clone(), stopping.clone());
     barca_core::errln!(
         "[barca] serving on http://{addr}  ({n_files} file{}{})",
@@ -145,59 +164,129 @@ pub async fn serve(config: ServeConfig) -> Result<(), ServeError> {
         );
     }
 
-    // On a stop signal the server stops accepting connections and waits for the open ones,
-    // while `stop_runs` stops the runs and then ends what would keep a connection open.
+    // The listener keeps serving through the drain (status polls, event streams, /health,
+    // the 503s). Once the runs are over the server stops accepting connections and waits
+    // for the open ones, for at most [`CONNECTION_GRACE`].
     use futures::FutureExt;
     let server =
         axum::serve(listener, app).with_graceful_shutdown(stopping.clone().cancelled_owned());
-    let runs_stopped = stop_runs(state.clone(), stopping).boxed().shared();
+    let lifecycle = {
+        let state = state.clone();
+        let stopping = stopping.clone();
+        async move {
+            let first = signals.recv().await;
+            let stopped = drain_then_stop(&state, first, signals.recv()).await;
+            stopping.cancel();
+            // Dropping the channels closes the event streams once each has delivered what
+            // its run emitted, the final `run_finished` included. A `GET /events/{run_id}`
+            // response stays open after its run finished (a browser tab on a run page holds
+            // one), and the server waits for open connections: one such stream used to
+            // keep a stopped server alive for ever.
+            state.events.clear();
+            stopped
+        }
+    }
+    .boxed()
+    .shared();
     tokio::select! {
         // Every connection closed (often there is none to wait for).
         served = server => served?,
         // Connections still open once the runs are over and the grace period has passed
         // are dropped with the server.
         _ = async {
-            runs_stopped.clone().await;
+            lifecycle.clone().await;
             tokio::time::sleep(CONNECTION_GRACE).await;
         } => {}
     }
-    runs_stopped.await;
+    let stopped = lifecycle.await;
     if let Some(telemetry) = telemetry.as_mut() {
         telemetry.finish().await;
     }
-    Ok(())
+    Ok(stopped)
 }
 
-/// How long shutdown waits for cancelled runs to stop their workers and record themselves.
+/// How long a forced stop waits for cancelled runs to stop their workers and record themselves.
 const RUN_STOP_LIMIT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// How long open connections get to finish once the runs are over.
 const CONNECTION_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// What shutdown does besides closing the listener. Once `stopping` is cancelled: cancel
-/// every run (their tokens are children of the shutdown token), wait, for at most
-/// [`RUN_STOP_LIMIT`], until the run tasks have terminated their workers, recorded the runs
-/// as `cancelled` and released their slots, then end the live event streams. The caller
-/// gives the connections [`CONNECTION_GRACE`] after that.
-///
-/// The event streams have to be ended here. A `GET /events/{run_id}` response stays open
-/// after its run finished (a browser tab on a run page holds one), and the server waits for
-/// open connections: one such stream used to keep a stopped server alive for ever.
-async fn stop_runs(state: AppState, stopping: barca_core::CancellationToken) {
-    stopping.cancelled().await;
-    state.shutdown.cancel();
-    let _ = tokio::time::timeout(
-        RUN_STOP_LIMIT,
-        state.run_slots.acquire_many(state.run_slot_count as u32),
-    )
-    .await;
-    // Dropping the channels closes the streams once each has delivered what its run
-    // emitted, the final `run_finished` included.
-    state.events.clear();
+/// The reason a run cancelled by a stopping server records, in its logs and on its
+/// `barca.run` span.
+pub const SHUTDOWN_REASON: &str = "server shutdown";
+
+/// Runs that have not finished: queued or executing.
+fn runs_in_flight(state: &AppState) -> usize {
+    state
+        .runs
+        .iter()
+        .filter(|r| {
+            matches!(
+                r.status,
+                state::RunStatus::Pending | state::RunStatus::Running
+            )
+        })
+        .count()
+}
+
+/// The drain, after the first stop signal (`first`). Stop admitting runs and stop the
+/// scheduler ([`AppState::draining`]), then wait until every run task has ended, for at most
+/// the drain timeout. If the deadline passes or `again` (the next stop signal) comes first,
+/// cancel the runs still in flight with reason [`SHUTDOWN_REASON`] and wait, for at most
+/// [`RUN_STOP_LIMIT`], until they have terminated their workers and recorded themselves.
+async fn drain_then_stop(
+    state: &AppState,
+    first: &str,
+    again: impl std::future::Future<Output = &'static str>,
+) -> Stopped {
+    let secs = state.config.resolved.drain_timeout_secs;
+    state.draining.cancel();
+    state.run_tasks.close();
+    let in_flight = runs_in_flight(state);
+    if in_flight > 0 {
+        barca_core::errln!(
+            "[barca] {first} received: draining — new runs are refused; waiting up to {secs}s \
+             for {in_flight} run{} in flight (send {first} again to stop now)",
+            if in_flight == 1 { "" } else { "s" }
+        );
+    } else {
+        barca_core::errln!("[barca] {first} received: no run in flight; shutting down");
+    }
+    let forced_by = tokio::select! {
+        _ = state.run_tasks.wait() => None,
+        _ = tokio::time::sleep(std::time::Duration::from_secs(secs)) => {
+            Some(format!("the drain timeout ({secs}s) passed"))
+        }
+        name = again => Some(format!("{name} received again")),
+    };
+    let cancelled = match forced_by {
+        None => 0,
+        Some(why) => {
+            let cancelled = runs_in_flight(state);
+            if cancelled > 0 {
+                barca_core::errln!(
+                    "[barca] {why}: cancelling {cancelled} run{} ({SHUTDOWN_REASON})",
+                    if cancelled == 1 { "" } else { "s" }
+                );
+            }
+            state.cancel_reason.set(SHUTDOWN_REASON);
+            state.shutdown.cancel();
+            let _ = tokio::time::timeout(RUN_STOP_LIMIT, state.run_tasks.wait()).await;
+            cancelled
+        }
+    };
+    if cancelled > 0 {
+        Stopped::Forced { cancelled }
+    } else {
+        if in_flight > 0 {
+            barca_core::errln!("[barca] drained: every run finished; shutting down");
+        }
+        Stopped::Drained
+    }
 }
 
 /// The signals that stop the server: SIGINT (Ctrl-C) and SIGTERM (`docker stop`, `kill`,
-/// systemd). Both do the same.
+/// systemd). Both do the same: the first starts the drain, the next one ends it.
 ///
 /// A handler is installed for each. That matters for a server that is process 1 of a
 /// container: the kernel delivers to process 1 only the signals it has a handler for, so

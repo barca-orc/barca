@@ -164,13 +164,48 @@ to the unimplemented RFC-0007 design. `barca.get()` starts a local CLI process; 
 
 ## Stopping the server
 
-SIGINT (Ctrl-C) and SIGTERM (`kill`, `docker stop`, systemd) stop the server the same way. It
-prints `[barca] SIGTERM received: stopping runs and shutting down`, stops accepting
-connections, cancels the runs in flight (their workers are stopped and the runs are recorded as
-`cancelled` in `barca history`), ends the open `/events` streams and exits 0. That normally
-takes less than a second. It is bounded: runs get 10 seconds to stop, and connections still open
-after that get 2 more. This also holds when barca is process 1 of a container, so a plain
-`docker stop` works.
+SIGINT (Ctrl-C) and SIGTERM (`kill`, `docker stop`, systemd) stop the server the same way: the
+first one starts a drain.
+
+```bash
+barca serve pipeline.py                      # on SIGTERM, runs in flight get 30 seconds
+barca serve pipeline.py --drain-timeout 300  # give them 5 minutes
+barca serve pipeline.py --drain-timeout 0    # cancel them at once
+```
+
+```toml
+# barca.toml (the flag wins)
+[server]
+drain_timeout = 300
+```
+
+During the drain the server prints `[barca] SIGTERM received: draining — new runs are refused;
+waiting up to 30s for 1 run in flight (send SIGTERM again to stop now)` and:
+
+- refuses new runs: `POST /run`, `POST /run/{target}` and `POST /get/{target}` answer `503`
+  with a `Retry-After` header of the drain timeout in seconds (at least 1);
+- stops the scheduler (`[barca] scheduler stopped: the server is draining`). A tick that falls
+  in the drain starts nothing; the next server's startup catch-up fires the job once;
+- reports `"status": "draining"` on `GET /health` (still `200`);
+- keeps answering reads, `/status`, `/events` and `DELETE /run/{id}`;
+- waits for the runs in flight, their artifact uploads included, to finish and be recorded.
+
+When they have all finished it prints `[barca] drained: every run finished; shutting down`,
+ends the open `/events` streams and exits 0. With nothing in flight that takes well under a
+second.
+
+When the drain timeout passes, or a second SIGTERM or SIGINT arrives, before the runs have
+finished, the runs still going are cancelled: their workers are stopped, the steps that finished are kept, and each run
+is recorded as `cancelled` in `barca history`, with `[barca] run cancelled: server shutdown`
+in its logs (`barca logs RUN_ID`) and `barca.reason: server shutdown` on its `barca.run`
+telemetry span. The server exits 1, after an error naming how many runs were cancelled, so a
+supervisor or deploy script can tell a forced stop from a clean drain. The cancelled runs get 10
+seconds to stop, and connections still open after that get 2 more.
+
+A supervisor kills the server when its own grace period runs out, so make that longer than the
+drain timeout: Docker's default is 10 seconds (`docker stop -t`, `stop_grace_period` in
+Compose), Kubernetes' 30 (`terminationGracePeriodSeconds`), systemd's 90 (`TimeoutStopSec`).
+This also holds when barca is process 1 of a container, so a plain `docker stop` drains.
 
 SIGHUP and SIGQUIT are not handled. Outside a container they end the process at once, and a run
 in flight is then reported as `interrupted` (`barca docs cache`); `nohup barca serve` keeps

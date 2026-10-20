@@ -330,6 +330,57 @@ def test_scheduled_runs_under_serve_are_reported(tmp_path, agent):
     assert all(r["service"] == "scheduler" and r["resource"].startswith("run ") for r in roots)
 
 
+def test_a_run_cancelled_by_a_stopping_server_says_why(tmp_path, agent):
+    """#190, #434 item 3: a run the drain did not finish is `cancelled` with a reason."""
+    import signal
+    import socket
+    import urllib.request
+
+    (tmp_path / "pipeline.py").write_text(
+        "import time\nfrom pathlib import Path\nfrom barca import task\n\n\n"
+        "@task()\n"
+        "def slow() -> None:\n"
+        '    Path("started").write_text("")\n'
+        "    time.sleep(60)\n"
+    )
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    base = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
+    serve = subprocess.Popen(
+        [_find_binary(), "serve", "pipeline.py", "--port", str(port), "--no-schedule",
+         "--drain-timeout", "0"],
+        cwd=tmp_path,
+        env={**base, **datadog(agent)},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            try:
+                req = urllib.request.Request(f"http://127.0.0.1:{port}/run/slow", method="POST")
+                urllib.request.urlopen(req, timeout=5).read()
+                break
+            except OSError:
+                time.sleep(0.1)
+        while not (tmp_path / "started").exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        serve.send_signal(signal.SIGTERM)
+        _, err = serve.communicate(timeout=30)
+    finally:
+        if serve.poll() is None:
+            serve.kill()
+            serve.communicate()
+    assert serve.returncode == 1, err
+
+    roots = [s for r in agent.requests for s in r["body"][0] if s["name"] == "barca.run"]
+    assert len(roots) == 1, roots
+    assert roots[0]["meta"]["barca.status"] == "cancelled", roots[0]
+    assert roots[0]["meta"]["barca.reason"] == "server shutdown", roots[0]
+
+
 @pytest.mark.parametrize("value", ["false", "False", "0", "", "no", "off"])
 def test_dd_trace_enabled_false_switches_datadog_off_silently(project, agent, value):
     proc = cli(project, "run", "publish", "--json", **datadog(agent, DD_TRACE_ENABLED=value))

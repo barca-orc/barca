@@ -84,6 +84,10 @@ default_env = "dev"
 exclude = ["scratch/**", "notebooks/**"]   # skipped in addition to the built-in list
 include = ["pipelines/**/*.py"]            # only these files (replaces the walk)
 
+[server]
+# Seconds `barca serve` waits for runs in flight on SIGTERM or SIGINT before cancelling them.
+drain_timeout = 30
+
 [remote]
 # Root of the remote store. Setting it turns remote storage on:
 # artifacts at {uri}/{env}/artifacts, shared history at {uri}/{env}/state/metadata.db.
@@ -114,6 +118,7 @@ endpoint_url = "https://<account-id>.r2.cloudflarestorage.com"
 | `default_env` | `default` | Environment name when `--env` and `BARCA_ENV` are absent. |
 | `[discovery].include` | none | Glob patterns; only matching files are discovered. See [Discovery](/reference/discovery/). |
 | `[discovery].exclude` | none | Glob patterns skipped in addition to the built-in list. |
+| `[server].drain_timeout` | 30 | Seconds `barca serve` waits for runs in flight once stopped with SIGTERM or SIGINT, before it cancels them and exits 1. `0` cancels at once. `--drain-timeout` overrides it. |
 | `[remote].uri` | none | Root of the remote store. |
 | `[remote].artifacts_uri` | `{uri}/{env}/artifacts` | Artifact location, used as written. |
 | `[remote].state_uri` | `{uri}/{env}/state/metadata.db` | Shared history location, used as written. |

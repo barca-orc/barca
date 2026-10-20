@@ -21,6 +21,9 @@ pub enum ApiError {
     Forbidden(String),
     /// The request cannot be served as asked (e.g. `POST /get/{target}` naming a task).
     BadRequest(String),
+    /// The server is draining before it stops and admits no new run: `503` with a
+    /// `Retry-After` of this many seconds.
+    Unavailable { message: String, retry_after: u64 },
 }
 
 impl From<BarcaError> for ApiError {
@@ -32,6 +35,20 @@ impl From<BarcaError> for ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
+            ApiError::Unavailable {
+                message,
+                retry_after,
+            } => {
+                let mut response = (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(envelope::http_error(message)),
+                )
+                    .into_response();
+                response
+                    .headers_mut()
+                    .insert(axum::http::header::RETRY_AFTER, retry_after.into());
+                return response;
+            }
             ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
             ApiError::Conflict(msg) => (StatusCode::CONFLICT, msg),
             ApiError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg),
