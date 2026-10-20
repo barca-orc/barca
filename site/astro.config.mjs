@@ -147,6 +147,7 @@ export default defineConfig({
             { label: 'RFC-0007: Server Mode', slug: 'rfcs/0007-server-mode' },
             { label: 'RFC-0008: Freshness Propagation', slug: 'rfcs/0008-freshness-propagation' },
             { label: 'RFC-0009: Store Backup & Restore', slug: 'rfcs/0009-store-backup-and-restore' },
+            { label: 'RFC-0011: Signed URLs', slug: 'rfcs/0011-signed-urls' },
           ],
         },
       ],

@@ -43,12 +43,6 @@ use std::cell::OnceCell;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
 
-/// How many project modules along an import chain are followed: a step that imports from `m1`,
-/// which imports from `m2`, ... reaches `m6` and no further (`barca docs cache`: "more than six
-/// project modules away"). It bounds re-export cycles; past it a name contributes only its
-/// marker. Depths count from 0 (the module the pipeline file imports), so the limit is exclusive.
-const MAX_MODULES_DEEP: usize = 6;
-
 // ─── Modules ─────────────────────────────────────────────────────────────────
 
 /// One Python source file under the name Python imports it by.
@@ -275,7 +269,6 @@ pub fn cone_hash(pipeline: &Module, function_name: &str, modules: &dyn ModuleSou
     let site = Site {
         module: pipeline,
         is_pipeline: true,
-        depth: 0,
     };
     cone.follow(site, &code.uses);
     cone.hash()
@@ -288,8 +281,6 @@ struct Site<'m> {
     /// The pipeline file's own definitions are labelled by bare name, an imported module's by
     /// `module:name`.
     is_pipeline: bool,
-    /// Import depth of the modules this site imports from.
-    depth: usize,
 }
 
 impl Site<'_> {
@@ -361,7 +352,7 @@ impl Cone<'_> {
                     ModuleDef::FromImport {
                         module,
                         name: original,
-                    } => self.import(module, original, name, site.depth),
+                    } => self.import(module, original, name),
                     ModuleDef::ModuleImport { .. } => {}
                 }
             }
@@ -398,29 +389,27 @@ impl Cone<'_> {
         attributes.sort();
         attributes.dedup();
         for (module, attr) in attributes {
-            self.attribute(&module, &attr, site.depth);
+            self.attribute(&module, &attr);
         }
 
         for reference in &uses.values {
             if let Some((binding, attrs)) = binding_of(definitions, reference)
                 && let Some(ModuleUse::Whole(module)) = self.module_use(binding, &attrs)
             {
-                self.whole_module(&module, site.depth);
+                self.whole_module(&module);
             }
         }
 
         for local in &uses.local {
             match self.module_use(&local.binding, &local.attrs) {
-                Some(ModuleUse::Attribute(module, attr)) => {
-                    self.attribute(&module, &attr, site.depth)
-                }
-                Some(ModuleUse::Whole(module)) => self.whole_module(&module, site.depth),
+                Some(ModuleUse::Attribute(module, attr)) => self.attribute(&module, &attr),
+                Some(ModuleUse::Whole(module)) => self.whole_module(&module),
                 None => {
                     if let ModuleDef::FromImport { module, name } = &local.binding
                         && self.modules.module(module).is_some()
                         && self.visited.insert(format!("{module}:{name}"))
                     {
-                        self.import(module, name, &local.bound, site.depth);
+                        self.import(module, name, &local.bound);
                     }
                 }
             }
@@ -431,36 +420,84 @@ impl Cone<'_> {
     /// anything else: a name that is not a module, or a module outside the project
     /// (`json.dumps`).
     fn module_use<S: AsRef<str>>(&self, binding: &ModuleDef, attrs: &[S]) -> Option<ModuleUse> {
-        let is_module = |name: &str| self.modules.module(name).is_some();
         let base = match binding {
             ModuleDef::ModuleImport { module } => module.clone(),
-            // `from pkg import mod`, where `pkg.mod` is itself a module.
-            ModuleDef::FromImport { module, name } => {
-                let full = join_dotted(module, &[name]);
-                if !is_module(&full) {
-                    return None;
-                }
-                full
-            }
+            // `from pkg import mod`, where `pkg.mod` is itself a module, or `from wrapper
+            // import helpers`, where `wrapper` binds `helpers` to a module by its own import.
+            ModuleDef::FromImport { module, name } => self.module_named(module, name)?,
             _ => return None,
         };
+        self.module_chain(base, attrs)
+    }
+
+    /// What `base.attrs...` uses, `base` being a project module.
+    fn module_chain<S: AsRef<str>>(&self, base: String, attrs: &[S]) -> Option<ModuleUse> {
+        let is_module = |name: &str| self.modules.module(name).is_some();
         // The whole chain names a module (`helpers`, `pkg.mod`): it is used as a value.
         let whole = join_dotted(&base, attrs);
         if is_module(&whole) {
             return Some(ModuleUse::Whole(whole));
         }
         // Otherwise the longest prefix that is a module; the next segment is the attribute read
-        // from it (`pkg.mod.f.x` reads `f` from `pkg.mod`).
-        (0..attrs.len()).rev().find_map(|k| {
-            let module = join_dotted(&base, &attrs[..k]);
-            is_module(&module).then(|| ModuleUse::Attribute(module, attrs[k].as_ref().to_string()))
-        })
+        // from it (`pkg.mod.f.x` reads `f` from `pkg.mod`), unless that module binds the
+        // attribute to another module by an import (`wrapper.helpers.f`, where `wrapper.py`
+        // does `import helpers`): the rest of the chain is then read from that module.
+        let k = (0..attrs.len())
+            .rev()
+            .find(|&k| is_module(&join_dotted(&base, &attrs[..k])))?;
+        let module = join_dotted(&base, &attrs[..k]);
+        let attr = attrs[k].as_ref();
+        match self.reexported_module(&module, attr) {
+            Some(next) => self.module_chain(next, &attrs[k + 1..]),
+            None => Some(ModuleUse::Attribute(module, attr.to_string())),
+        }
+    }
+
+    /// The project module `from module import name` binds: the submodule `module.name`, or a
+    /// module `module` itself binds to `name` by an import ([`Self::reexported_module`]).
+    fn module_named(&self, module: &str, name: &str) -> Option<String> {
+        let full = join_dotted(module, &[name]);
+        if self.modules.module(&full).is_some() {
+            return Some(full);
+        }
+        self.reexported_module(module, name)
+    }
+
+    /// The module that project module `module` binds to `name` by an import of its own:
+    /// `import helpers [as name]`, or `from other import name` that itself names one, followed
+    /// through any number of re-exports. Cycles end in `None`.
+    fn reexported_module(&self, module: &str, name: &str) -> Option<String> {
+        // The re-exports already followed; most lookups end before the first one.
+        let mut seen: Vec<(String, String)> = Vec::new();
+        let (mut module, mut name) = (module.to_string(), name.to_string());
+        loop {
+            match self.modules.module(&module)?.definitions().get(&name)? {
+                // Not necessarily a project module itself: `import pkg.mod` binds `pkg`, which
+                // may be a namespace package; [`Self::module_chain`] finds `pkg.mod` from it.
+                ModuleDef::ModuleImport { module: target } => return Some(target.clone()),
+                ModuleDef::FromImport {
+                    module: next,
+                    name: original,
+                } => {
+                    let full = join_dotted(next, &[original]);
+                    if self.modules.module(&full).is_some() {
+                        return Some(full);
+                    }
+                    if seen.iter().any(|(m, n)| m == next && n == original) {
+                        return None;
+                    }
+                    seen.push((module, name));
+                    (module, name) = (next.clone(), original.clone());
+                }
+                _ => return None,
+            }
+        }
     }
 
     /// Rule 4: `module.attr`, added once however many times it is read.
-    fn attribute(&mut self, module: &str, attr: &str, depth: usize) {
+    fn attribute(&mut self, module: &str, attr: &str) {
         if self.visited.insert(format!("{module}:{attr}")) {
-            self.import(module, attr, attr, depth);
+            self.import(module, attr, attr);
         }
     }
 
@@ -471,27 +508,53 @@ impl Cone<'_> {
     /// reached from inside its module (a recursive helper, say) is added twice. Every release
     /// since 0.10 has hashed it that way; adding it once would change those hashes and
     /// recompute their caches (`recursive_helper_hash_from_0_17_0_is_unchanged`).
-    fn import(&mut self, module: &str, name: &str, bound: &str, depth: usize) {
-        let found = (depth < MAX_MODULES_DEEP)
-            .then(|| self.modules.module(module))
-            .flatten();
-        if !found.is_some_and(|imported| self.definition(&imported, name, depth)) {
+    ///
+    /// Import chains of any length are followed. What ends them is that every definition's
+    /// uses are followed once (`visited`), and a re-export chain that comes back to a
+    /// `(module, name)` it already passed (`chain`) adds only its marker.
+    fn import(&mut self, module: &str, name: &str, bound: &str) {
+        self.import_along(module, name, bound, &mut Vec::new());
+    }
+
+    /// [`Self::import`], `chain` being the `(module, name)` re-exports already followed to
+    /// get here.
+    fn import_along(
+        &mut self,
+        module: &str,
+        name: &str,
+        bound: &str,
+        chain: &mut Vec<(String, String)>,
+    ) {
+        if chain.iter().any(|(m, n)| m == module && n == name) {
+            // A re-export cycle (`a` imports `x` from `b`, `b` imports it from `a`): Python
+            // cannot import it either. The marker records the binding.
+            self.parts
+                .push((bound.to_string(), format!("import:{module}:{bound}").into()));
+            return;
+        }
+        chain.push((module.to_string(), name.to_string()));
+        let found = self.modules.module(module);
+        if !found.is_some_and(|imported| self.definition(&imported, name, chain)) {
             // Not a project module, or nothing barca can read `name` from there (defined
             // dynamically, a module binding, a star import): a constant marker for the binding,
             // so the hash still says the name is imported.
             self.parts
                 .push((bound.to_string(), format!("import:{module}:{bound}").into()));
         }
-        if depth < MAX_MODULES_DEEP {
-            for alternative in self.modules.alternatives(module) {
-                self.definition(&alternative, name, depth);
-            }
+        for alternative in self.modules.alternatives(module) {
+            self.definition(&alternative, name, chain);
         }
+        chain.pop();
     }
 
     /// Add `module`'s definition of `name` and what it uses. `false` when it has none that can
     /// be read statically.
-    fn definition(&mut self, module: &Module, name: &str, depth: usize) -> bool {
+    fn definition(
+        &mut self,
+        module: &Module,
+        name: &str,
+        chain: &mut Vec<(String, String)>,
+    ) -> bool {
         match module.definitions().get(name) {
             Some(
                 ModuleDef::Function(code) | ModuleDef::Class(code) | ModuleDef::Assignment(code),
@@ -501,7 +564,6 @@ impl Cone<'_> {
                 let site = Site {
                     module,
                     is_pipeline: false,
-                    depth: depth + 1,
                 };
                 self.follow(site, &code.uses);
                 true
@@ -510,13 +572,13 @@ impl Cone<'_> {
                 module: next,
                 name: original,
             }) => {
-                self.import(next, original, name, depth + 1);
+                self.import_along(next, original, name, chain);
                 true
             }
             None if !module.imported_stars().is_empty() => {
                 // Star exports need not be literal assignments in this module. Preserve all
                 // contributing sources rather than guessing which export installed a name.
-                self.whole(module, depth);
+                self.whole(module);
                 true
             }
             Some(ModuleDef::ModuleImport { .. }) | None => false,
@@ -524,18 +586,15 @@ impl Cone<'_> {
     }
 
     /// Rule 5: the module's whole source, and everything its definitions use.
-    fn whole_module(&mut self, name: &str, depth: usize) {
-        if depth >= MAX_MODULES_DEEP {
-            return;
-        }
+    fn whole_module(&mut self, name: &str) {
         let candidates = self.modules.module(name).into_iter();
         for module in candidates.chain(self.modules.alternatives(name)) {
-            self.whole(&module, depth);
+            self.whole(&module);
         }
     }
 
-    fn whole(&mut self, module: &Module, depth: usize) {
-        if depth >= MAX_MODULES_DEEP || !self.visited.insert(format!("{}:*", module.name)) {
+    fn whole(&mut self, module: &Module) {
+        if !self.visited.insert(format!("{}:*", module.name)) {
             return;
         }
         self.parts
@@ -559,7 +618,6 @@ impl Cone<'_> {
             Site {
                 module,
                 is_pipeline: false,
-                depth: depth + 1,
             },
             &every_definition,
         );
@@ -2561,20 +2619,73 @@ def my_asset():
                 "__import__",
                 "def my_asset():\n    return __import__('helpers').compute()\n",
             ),
-            (
-                "module reached through another module",
-                "from reexport import helpers\n\ndef my_asset():\n    return helpers.compute()\n",
-            ),
         ] {
-            let with_reexport = |mut m: HashMap<String, String>| {
-                m.insert("reexport".into(), "import helpers\n".into());
-                m
-            };
             assert_eq!(
-                hash_of(entry, &with_reexport(v1.clone()), &[]),
-                hash_of(entry, &with_reexport(v2.clone()), &[]),
+                hash_of(entry, &v1, &[]),
+                hash_of(entry, &v2, &[]),
                 "{what} is followed now: update `barca docs cache`"
             );
+        }
+    }
+
+    /// A module reached through another module's plain `import` (#295): `from wrapper import
+    /// helpers`, `wrapper.helpers.compute`, a re-export of a re-export, an alias, a local
+    /// import and the module used as a value all follow `helpers`.
+    #[test]
+    fn a_module_reexported_by_a_plain_import_is_followed() {
+        let wrappers = [
+            ("wrapper", "import helpers\n"),
+            ("aliased", "import helpers as h\n"),
+            ("outer", "from wrapper import helpers\n"),
+            ("relay", "import outer\n"),
+        ];
+        let with = |helpers: &str| {
+            let mut m = one("helpers", helpers);
+            for (name, src) in wrappers {
+                m.insert(name.into(), src.into());
+            }
+            m
+        };
+        for entry in [
+            "from wrapper import helpers\n\ndef my_asset():\n    return helpers.compute()\n",
+            "import wrapper\n\ndef my_asset():\n    return wrapper.helpers.compute()\n",
+            "from aliased import h\n\ndef my_asset():\n    return h.compute()\n",
+            "from outer import helpers\n\ndef my_asset():\n    return helpers.compute()\n",
+            "import relay\n\ndef my_asset():\n    return relay.outer.helpers.compute()\n",
+            "def my_asset():\n    from wrapper import helpers\n    return helpers.compute()\n",
+            "from wrapper import helpers\n\ndef my_asset():\n    return getattr(helpers, 'compute')()\n",
+        ] {
+            assert_ne!(
+                hash_of(entry, &with(HELPERS_V1), &[]),
+                hash_of(entry, &with(HELPERS_V2), &[]),
+                "{entry}"
+            );
+        }
+        // Only the attribute read is followed: another helper in `helpers` stays out.
+        let entry =
+            "from wrapper import helpers\n\ndef my_asset():\n    return helpers.compute()\n";
+        assert_eq!(
+            hash_of(entry, &with(HELPERS_V1), &[]),
+            hash_of(entry, &with(HELPERS_UNRELATED_EDIT), &[])
+        );
+    }
+
+    /// Re-exports that never reach a module terminate: a module re-exported in a cycle, and a
+    /// re-exported name that is not a module.
+    #[test]
+    fn reexport_cycles_terminate() {
+        let project = sources(&[
+            ("a", "from b import helpers\n"),
+            ("b", "from a import helpers\n"),
+            ("c", "from d import f\n"),
+            ("d", "from c import f\n"),
+        ]);
+        for entry in [
+            "from a import helpers\n\ndef my_asset():\n    return helpers.compute()\n",
+            "import a\n\ndef my_asset():\n    return a.helpers.compute()\n",
+            "from c import f\n\ndef my_asset():\n    return f()\n",
+        ] {
+            assert!(!hash_of(entry, &project, &[]).is_empty(), "{entry}");
         }
     }
 
@@ -2667,8 +2778,10 @@ def my_asset():
     const STABLE_TWO_MARKERS: &str =
         "a1755524889bd9195e25225e96c217f3fede7587f0b64dc6be0d5c17b08e638a";
 
+    /// Import chains are followed at any depth (#295; up to 0.24 they stopped six modules
+    /// deep), and modules that import each other terminate.
     #[test]
-    fn import_chains_are_followed_six_modules_deep() {
+    fn import_chains_are_followed_at_any_depth() {
         // pipeline -> m1 -> m2 -> ... : each `mN.f` calls `mN+1.f`.
         let project = |modules: usize, leaf: u32| -> HashMap<String, String> {
             (1..=modules)
@@ -2686,14 +2799,27 @@ def my_asset():
                 .collect()
         };
         let entry = "from m1 import f\n\ndef my_asset():\n    return f()\n";
-        assert_ne!(
-            hash_of(entry, &project(6, 1), &[]),
-            hash_of(entry, &project(6, 2), &[])
-        );
-        assert_eq!(
-            hash_of(entry, &project(7, 1), &[]),
-            hash_of(entry, &project(7, 2), &[])
-        );
+        for depth in [6, 7, 10, 200] {
+            assert_ne!(
+                hash_of(entry, &project(depth, 1), &[]),
+                hash_of(entry, &project(depth, 2), &[]),
+                "{depth}"
+            );
+        }
+        // A cycle: every module's `f` calls the next one's, and the last calls the first's.
+        let ring = |leaf: u32| -> HashMap<String, String> {
+            (1..=12)
+                .map(|i| {
+                    let next = i % 12 + 1;
+                    let src = format!(
+                        "import m{next}\nfrom m{next} import f as g\n\nN = {}\n\ndef f(n):\n    return N if n == 0 else g(n - 1) + m{next}.N\n",
+                        if i == 12 { leaf } else { i }
+                    );
+                    (format!("m{i}"), src)
+                })
+                .collect()
+        };
+        assert_ne!(hash_of(entry, &ring(1), &[]), hash_of(entry, &ring(2), &[]));
     }
 
     // ─── Upgrade: what must not move (#194) ──────────────────────────────────────

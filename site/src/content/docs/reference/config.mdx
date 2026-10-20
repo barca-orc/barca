@@ -184,6 +184,19 @@ accept it. `plan` and `list` read no state and do not. The name comes from `--en
 `BARCA_ENV`, then `default_env`, then `default`, and may contain letters, digits, `.`, `_`
 and `-`; anything else exits 2.
 
+`get`, `run` and `serve` print the environment and artifact store they use once at startup,
+on stderr, when the environment comes from `default_env` or an artifact store is configured,
+so a one-off command on a machine set up for another environment says which one it uses:
+
+```
+[barca] env prod (default_env in barca.toml); artifact store local (.barca/envs/prod/artifacts)
+[barca] env dev (--env); artifact store s3://bucket/proj/dev/artifacts
+```
+
+The source in brackets is `--env`, `BARCA_ENV`, `default_env in barca.toml` or `built-in
+default`; credentials and signed URI queries are redacted. The line is never on stdout, so
+`--json` output is unchanged.
+
 | | env = `default` | named env `<e>` |
 |---|---|---|
 | local history | `.barca/metadata.db` | `.barca/envs/<e>/metadata.db` |

@@ -1202,6 +1202,7 @@ async fn collect_failures(
             .state
             .failed_bases
             .insert(item.step_id.base_id().to_string());
+        let clock = coord.failure_clock(item_id);
         session.state.all_failures.push(dispatch::StepFailure {
             node_id,
             error: dispatch::StepError {
@@ -1209,6 +1210,12 @@ async fn collect_failures(
                 message: error_msg.to_string(),
                 traceback: String::new(),
                 attempts: item.attempts,
+                started_unix_ns: clock.map(|(started, _)| {
+                    started
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |d| d.as_nanos() as u64)
+                }),
+                elapsed_seconds: clock.map(|(_, wall)| wall.as_secs_f64()),
             },
         });
     }
@@ -2819,6 +2826,8 @@ async fn drain_store(ctx: DrainStore<'_>, trace: &impl Fn(&str)) -> bool {
                         ),
                         traceback: String::new(),
                         attempts: f.attempts,
+                        started_unix_ns: None,
+                        elapsed_seconds: None,
                     },
                 });
                 detail.push(format!(
@@ -3037,6 +3046,8 @@ mod store_tests {
                 message: "upload to s3://b/f__a/h1.json failed: ConnectionError: reset".to_string(),
                 traceback: String::new(),
                 attempts: 4,
+                started_unix_ns: None,
+                elapsed_seconds: None,
             },
         }];
         let run_hashes = HashMap::from([("f:a".to_string(), "h1".to_string())]);

@@ -22,6 +22,9 @@ pub(crate) async fn serve_cmd(
                 .to_string(),
         ));
     }
+    if let Some(line) = resolved.startup_line() {
+        barca_core::errln!("{line}");
+    }
     let config = barca_server::ServeConfig {
         files: files.iter().map(|p| p.display().to_string()).collect(),
         host,

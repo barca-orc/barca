@@ -24,7 +24,45 @@ and these tags are available on the same releases page.
   link per result (default 1 hour, at most 7 days); with `--json` each `_barca_artifact` gains
   `url` and `url_expires_at`. Links download as `<node>.<ext>`. The URL goes to stdout only.
 
-## Pending 0.24.0
+### Performance
+
+- Cold runs of large partitioned pipelines scale linearly with the number of keys again: a
+  three-level chain of 20,000 keys runs cold in about 9.5 s instead of about 245 s, with a
+  0.55 GB coordinator instead of 5.3 GB (#345). Each key of a step used to wait on every key of
+  the previous step in its stream through its own edge; one shared gate per step now keeps the
+  same ordering. Dispatch also finds an upstream's output by id instead of scanning every
+  output, and the end-of-run check no longer scans every item on each event.
+
+## 0.24.2 (2026-10-20)
+
+### Bug Fixes
+
+- `barca serve`: a cron tick is skipped while any run of the same node is pending or running,
+  including one started by `POST /get`, `POST /run/{task}` or `POST /run`, not only one the
+  scheduler started (#432). The skip is logged with the run in flight, reported as
+  `last_skipped` and `skipped_for` in `GET /schedule`, and sent to telemetry as a `barca.run`
+  span with status `skipped` and `barca.reason: in_flight`.
+
+- Refresh dependency lockfiles (`uv.lock`, `ui/`, `site/`, the dagster benchmark) to clear the open critical and high Dependabot alerts: PyJWT 2.15.1, aiohttp 3.14.5, cryptography 50.0.2, urllib3 2.8.0, oauthlib 4.0.0, astro 7.4.1, wrangler 4.151.3, react-router 7.18.4 and vitest 4.1.12, plus patched transitives.
+
+- Failed `barca.step` telemetry spans now report their duration, from the first attempt to the
+  permanent failure (retries included; a timeout reports about its timeout), instead of a
+  zero-length span at the end of the run.
+
+- A worker that dies while running a step (#433) now names how it ended instead of a bare
+  `worker disconnected`: `worker for <node> exited with SIGKILL (possibly the OOM killer)`,
+  another signal by name, or `exited with code N`, in the step error, the run JSON and the
+  failure summary. `get`, `run` and `serve` print `[barca] env <env> (<source>); artifact store
+  <store>` once on stderr at startup when `default_env` from `barca.toml` or an artifact store
+  is in effect.
+
+- Follow a project module reached through another module's `import` (`from wrapper import
+  helpers` or `wrapper.helpers.f()` where `wrapper.py` does `import helpers`), and follow
+  import chains at any depth instead of stopping six project modules deep; modules that
+  import each other terminate. Editing such a helper now invalidates its consumers. Existing
+  affected consumers may recompute once after upgrading.
+
+## 0.24.0
 
 ### Breaking
 

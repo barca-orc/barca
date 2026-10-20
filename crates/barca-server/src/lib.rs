@@ -55,6 +55,19 @@ pub fn app(config: ServeConfig) -> axum::Router {
     routes::router(AppState::new(config))
 }
 
+/// [`app`], plus a function that starts the cron scheduler on the same state. For tests that
+/// must send requests before the first tick; not part of the API.
+#[doc(hidden)]
+pub fn app_with_scheduler(
+    config: ServeConfig,
+) -> (axum::Router, impl FnOnce() -> tokio::task::JoinHandle<()>) {
+    let state = AppState::new(config);
+    let router = routes::router(state.clone());
+    (router, move || {
+        tokio::spawn(scheduler::run_scheduler(state))
+    })
+}
+
 /// Start the server on the caller's runtime: bind and serve until SIGINT (Ctrl-C) or
 /// SIGTERM. On shutdown, in-flight runs are cancelled (workers terminated, runs marked
 /// cancelled) before returning.

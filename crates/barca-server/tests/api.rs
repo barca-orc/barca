@@ -384,6 +384,108 @@ async fn delete_cancels_in_flight_run() {
     }
 }
 
+/// A scheduled asset that ticks every second and sleeps far longer than the test takes.
+const SLOW_SCHEDULED_FIXTURE: &str = r#"
+import time
+from barca import asset, Schedule
+
+@asset(freshness=Schedule("* * * * * *"))
+def slow_tick() -> dict:
+    time.sleep(120)
+    return {"done": True}
+"#;
+
+/// #432: a run started over HTTP is in flight for the scheduler too. A due tick of the same
+/// node is skipped (no second run), and the skip is reported by `GET /schedule` with the
+/// handle of the run that caused it.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_due_tick_is_skipped_while_a_run_started_over_http_is_in_flight() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::{Duration, Instant};
+
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("ticks.py");
+    std::fs::write(&source, SLOW_SCHEDULED_FIXTURE).unwrap();
+    // As in `delete_cancels_in_flight_run`: workers import this checkout's python/ tree.
+    let py_tree = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../python");
+    let wrapper = dir.path().join("python");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\nPYTHONPATH=\"{}${{PYTHONPATH:+:$PYTHONPATH}}\" exec python3 \"$@\"\n",
+            py_tree.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let scaffold = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".barca");
+    let scaffold_preexisting = scaffold.exists();
+
+    let mut config = isolated_config(dir.path(), false);
+    config.files = vec![source.display().to_string()];
+    config.python = wrapper;
+    config.schedule = true;
+    config.timezone = "utc".to_string();
+    config.resolved.local_artifact_dir = config.resolved.artifact_root.clone();
+    std::fs::create_dir_all(&config.resolved.artifact_root).unwrap();
+    let (app, start_scheduler) = barca_server::app_with_scheduler(config);
+
+    // The run is started by hand, under the short name, before the scheduler has ever ticked.
+    let (status, body) = send(&app, "POST", "/get/slow_tick").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let handle = body["run_id"].as_str().expect("run handle").to_string();
+    let scheduler = start_scheduler();
+
+    // The job ticks every second. Wait for a tick to be recorded as skipped.
+    let t0 = Instant::now();
+    let entry = loop {
+        let (_, schedule) = send(&app, "GET", "/schedule").await;
+        if let Some(entry) = schedule
+            .as_array()
+            .and_then(|jobs| jobs.first())
+            .filter(|job| !job["last_skipped"].is_null())
+        {
+            break entry.clone();
+        }
+        assert!(
+            t0.elapsed() < Duration::from_secs(30),
+            "no tick was skipped: {schedule}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert!(
+        entry["id"].as_str().unwrap().ends_with(":slow_tick"),
+        "{entry}"
+    );
+    assert_eq!(entry["skipped_for"], handle.as_str(), "{entry}");
+    assert!(
+        entry["last_run"].is_null(),
+        "the scheduler started a second run: {entry}"
+    );
+
+    // Stop the scheduler before the run, so the next tick cannot start one, then cancel it.
+    scheduler.abort();
+    let _ = scheduler.await;
+    let (status, _) = send(&app, "DELETE", &format!("/run/{handle}")).await;
+    assert_eq!(status, StatusCode::OK);
+    loop {
+        let (_, s) = send(&app, "GET", &format!("/status/{handle}")).await;
+        if s["status"] == "cancelled" {
+            break;
+        }
+        assert!(
+            t0.elapsed() < Duration::from_secs(60),
+            "run did not stop: {s}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    if !scaffold_preexisting {
+        std::fs::remove_dir_all(&scaffold).ok();
+    }
+}
+
 /// A fixture with an asset, a task and (in a second file) a second asset named like the first.
 fn trigger_config(dir: &std::path::Path) -> ServeConfig {
     let mut config = isolated_config(dir, false);

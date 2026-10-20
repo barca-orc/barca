@@ -64,7 +64,8 @@ What the spans carry:
 | run, step | `barca.job` | canonical resolved job ids, sorted and comma-separated, or `all` |
 | run | `barca.run_id` | the run id `barca get --json` prints (also on every step span) |
 | run | `barca.command`, `barca.target` | `get` or `run`, and the target as given |
-| run | `barca.status` | `success`, `failed` or `cancelled`; the span is an error unless `success` |
+| run | `barca.status` | `success`, `failed` or `cancelled`; the span is an error unless `success`. `skipped` for a `barca serve` tick that started nothing, not an error |
+| run | `barca.reason`, `barca.in_flight_run` | on a skipped tick only: `in_flight`, and the `run_id` of the run of the same node that was still going. The span has no steps, no duration, and an id of its own |
 | run | `barca.steps.total`, `barca.steps.executed`, `barca.steps.cached` | step counts |
 | step | `barca.node`, `barca.kind` | node id; `asset`, `task` or `sensor` |
 | step | `barca.outcome` | `ran`, `cached` or `failed` |
@@ -78,7 +79,12 @@ Timing:
 - A step that ran is placed by its worker's clock: the span covers the function and writing its
   result. For a step that was retried, that is its last attempt.
 - A cached step is a zero-length span at the start of the run.
-- A failed step is a zero-length span at the end of the run. Its duration is not reported.
+- A failed step carries its duration: the span runs from the start of its first attempt to the
+  moment it failed for good, so retries and the wait between them are inside it, and a step that
+  timed out lasts about its `timeout_seconds`. This is wall time, so it can be longer than the
+  step's `elapsed_seconds` in `barca get --json`, which adds up only the time the attempts ran.
+- A step whose function ran but whose upload to a remote store failed (`UploadError`) is
+  placed by its worker's clock like a step that ran.
 
 Every run is kept: the trace is sent with sampling priority 1. Step spans are marked as
 measured, which asks Datadog to compute its trace metrics for `barca.step` as well as

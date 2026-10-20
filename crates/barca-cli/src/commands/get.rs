@@ -30,6 +30,9 @@ pub(crate) async fn get_cmd(
     if mode.url_expires.is_some() {
         signable_store(&cfg)?;
     }
+    if let Some(line) = cfg.startup_line() {
+        barca_core::errln!("{line}");
+    }
     let file_args: Vec<String> = files.iter().map(|p| p.display().to_string()).collect();
     if dry_run {
         return explain_cmd(

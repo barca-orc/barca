@@ -452,9 +452,12 @@ that copy. A final output another machine produced is downloaded first.
 - Before results are recorded, barca waits for every upload. The shared state never points
   at an artifact that is missing from the store.
 
-stderr reports each part, so remote cost is visible:
+stderr reports each part, so remote cost is visible. The first line names the environment
+and the store, printed once at startup by `get`, `run` and `serve` whenever a store is
+configured (`barca docs cache`, "Environments"):
 
 ```
+[barca] env default (built-in default); artifact store s3://bucket/proj/default/artifacts
 [barca] pulled state (48.0 KB) in 0.03s
 [barca] fetched 1 cached artifact (672.8 KB) in 0.1s
 [barca] uploaded 2 artifacts (672.8 KB); waited 0.0s at end of run

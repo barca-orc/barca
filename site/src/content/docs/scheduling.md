@@ -178,8 +178,13 @@ last run id and last status ([Server API](/reference/server-api/#scheduling)), a
 - **Catch-up.** If a tick passed while the server was down, the job fires once at startup
   (`[barca] catch-up run job.py:refresh → ...`). Ticks missed during a long outage are not
   replayed one for one. A job seen for the first time waits for its next tick.
-- **No overlap with itself.** If a job's previous run is still going when its next tick
-  arrives, that tick is skipped, not queued.
+- **No overlap.** If a run of the job's node is pending or running when a tick arrives, that
+  tick is skipped, not queued, whoever started the run: an earlier tick, `POST /get/{node}`,
+  `POST /run/{task}`, or `POST /run` (every asset and sensor, so not a scheduled task). The
+  server logs `[barca] scheduled run job.py:refresh skipped — run 1b942bb33182 of the same node
+  still in flight`, `GET /schedule` reports it as `last_skipped` and `skipped_for` (in memory
+  only), and telemetry sends a `barca.run` span with status `skipped`. A run of another node,
+  even one downstream whose cone includes this one, does not hold the tick back.
 - **New files and edits.** A run reads the source again each time, so an edit to a function
   takes effect at the next tick. A changed cron expression or a new scheduled node needs a
   restart, or `--watch`. A file added after startup needs a restart either way.

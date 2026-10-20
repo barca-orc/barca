@@ -147,6 +147,11 @@ pub struct Coordinator {
     done: HashSet<ItemId>,
     /// Permanently failed items.
     failed: HashMap<ItemId, String>,
+    /// When each failed item's first attempt started (wall clock), kept across retries.
+    first_attempt_at: HashMap<ItemId, std::time::SystemTime>,
+    /// For a permanently failed item: when its first attempt started and the wall time from
+    /// then to the permanent failure, retries and backoff included.
+    failure_clocks: HashMap<ItemId, (std::time::SystemTime, std::time::Duration)>,
     /// Skipped items (upstream data dep failed).
     skipped: HashSet<ItemId>,
     /// Items parked for retry backoff — not ready until requeue() is called.
@@ -155,6 +160,17 @@ pub struct Coordinator {
     outputs: HashMap<ItemId, serde_json::Value>,
     /// Parallel groups.
     groups: HashMap<GroupId, ParallelGroup>,
+    /// Ordering gates, by gate id: how many member items are not yet terminal (done, failed or
+    /// skipped). A gate stands for "every partition of the previous step in this stream", so a
+    /// step of K partitions after another of K costs K + K edges instead of K × K (#345). Gate
+    /// ids come from the item id space but are never items; an item waits on a gate through an
+    /// [`DepKind::Ordering`] dep, and the gate releases its waiters when it reaches zero.
+    gates: HashMap<ItemId, usize>,
+    /// Member item → the gates it counts toward.
+    member_gates: HashMap<ItemId, Vec<ItemId>>,
+    /// Item id of the latest recorded output for each display id, so dispatch resolves an
+    /// in-phase upstream in one lookup instead of scanning every output (#345).
+    output_by_display: HashMap<String, ItemId>,
     /// ID generators.
     next_item_id: u64,
     next_group_id: u64,
@@ -178,10 +194,15 @@ impl Coordinator {
             executing: HashSet::new(),
             done: HashSet::new(),
             failed: HashMap::new(),
+            first_attempt_at: HashMap::new(),
+            failure_clocks: HashMap::new(),
             skipped: HashSet::new(),
             waiting_retry: HashSet::new(),
             outputs: HashMap::new(),
             groups: HashMap::new(),
+            gates: HashMap::new(),
+            member_gates: HashMap::new(),
+            output_by_display: HashMap::new(),
             next_item_id: 0,
             next_group_id: 0,
         }
@@ -327,10 +348,22 @@ impl Coordinator {
         self.unblock_dependents(item_id);
     }
 
-    /// Mark an item as failed. Retries if budget remains, else cascades.
-    /// Backoff delay grows linearly: `retry_backoff_seconds * attempts`.
-    pub fn on_item_failed(&mut self, item_id: ItemId, error: String) -> FailureAction {
+    /// Mark an item as failed after an attempt that ran for `elapsed`. Retries if budget
+    /// remains, else cascades. Backoff delay grows linearly: `retry_backoff_seconds * attempts`.
+    pub fn on_item_failed(
+        &mut self,
+        item_id: ItemId,
+        error: String,
+        elapsed: std::time::Duration,
+    ) -> FailureAction {
         self.executing.remove(&item_id);
+
+        let now = std::time::SystemTime::now();
+        let attempt_start = now.checked_sub(elapsed).unwrap_or(now);
+        let first = *self
+            .first_attempt_at
+            .entry(item_id)
+            .or_insert(attempt_start);
 
         let item = self.items.get_mut(&item_id).unwrap();
 
@@ -346,6 +379,10 @@ impl Coordinator {
         } else {
             // Permanent failure
             self.failed.insert(item_id, error);
+            self.failure_clocks.insert(
+                item_id,
+                (first, now.duration_since(first).unwrap_or(elapsed)),
+            );
 
             if let Some(group_id) = self.items[&item_id].group {
                 let group = self.groups.get_mut(&group_id).unwrap();
@@ -469,19 +506,24 @@ impl Coordinator {
                 step: &'p crate::planner::StreamStep,
                 step_id: crate::StepId,
                 item_id: ItemId,
-                prev_items: Vec<ItemId>,
+                prev: Option<usize>,
             },
             Partition {
                 step: &'p crate::planner::StreamStep,
                 pk: &'p crate::model::PartitionKey,
                 partition_step_id: crate::StepId,
                 item_id: ItemId,
-                prev_items: Vec<ItemId>,
+                prev: Option<usize>,
             },
         }
 
         let mut node_to_item: HashMap<String, ItemId> = HashMap::new();
         let mut pending: Vec<Pending> = Vec::new();
+        // The items of each step in each stream, shared by every item of the next step in that
+        // stream (`prev` indexes it) instead of copied into each one.
+        let mut prev_sets: Vec<Vec<ItemId>> = Vec::new();
+        // The ordering gate standing for each prev set of more than one item, made on first use.
+        let mut set_gates: Vec<Option<Option<ItemId>>> = Vec::new();
 
         // Pass 1: reserve ids and register every display id this phase will
         // produce. Within-stream ordering chains (`prev_items`) only ever
@@ -489,7 +531,7 @@ impl Coordinator {
         // has already been reserved by this point in the walk — they don't
         // need a second pass.
         for stream in &phase.streams {
-            let mut prev_items: Vec<ItemId> = Vec::new();
+            let mut prev: Option<usize> = None;
             for step in &stream.steps {
                 if step.partition_keys.is_empty() {
                     let step_id = step.step_id.clone();
@@ -500,9 +542,10 @@ impl Coordinator {
                         step,
                         step_id,
                         item_id,
-                        prev_items: prev_items.clone(),
+                        prev,
                     });
-                    prev_items = vec![item_id];
+                    prev_sets.push(vec![item_id]);
+                    prev = Some(prev_sets.len() - 1);
                 } else {
                     let mut partition_item_ids: Vec<ItemId> = Vec::new();
 
@@ -518,11 +561,12 @@ impl Coordinator {
                             pk,
                             partition_step_id,
                             item_id,
-                            prev_items: prev_items.clone(),
+                            prev,
                         });
                     }
 
-                    prev_items = partition_item_ids;
+                    prev_sets.push(partition_item_ids);
+                    prev = Some(prev_sets.len() - 1);
                 }
             }
         }
@@ -530,13 +574,14 @@ impl Coordinator {
         // Pass 2: every id this phase will create is now in `node_to_item`,
         // so dependency resolution no longer depends on visit order.
         let count = pending.len();
+        set_gates.resize(prev_sets.len(), None);
         for p in pending {
             match p {
                 Pending::Plain {
                     step,
                     step_id,
                     item_id,
-                    prev_items,
+                    prev,
                 } => {
                     let mut deps = Vec::new();
                     for upstream_id in step.inputs.values() {
@@ -547,14 +592,7 @@ impl Coordinator {
                             });
                         }
                     }
-                    for &p in &prev_items {
-                        if !deps.iter().any(|d| d.upstream == p) {
-                            deps.push(Dep {
-                                upstream: p,
-                                kind: DepKind::Ordering,
-                            });
-                        }
-                    }
+                    self.push_ordering_deps(&mut deps, prev, &prev_sets, &mut set_gates);
 
                     let mut spec = ItemSpec::from_step(step);
                     for (param_name, upstream_id) in &step.inputs {
@@ -579,7 +617,7 @@ impl Coordinator {
                     pk,
                     partition_step_id,
                     item_id,
-                    prev_items,
+                    prev,
                 } => {
                     let partition_display = partition_step_id.display();
                     let mut deps = Vec::new();
@@ -603,14 +641,7 @@ impl Coordinator {
                         }
                     }
                     // Chain ordering from previous step's partitions
-                    for &p in &prev_items {
-                        if !deps.iter().any(|d| d.upstream == p) {
-                            deps.push(Dep {
-                                upstream: p,
-                                kind: DepKind::Ordering,
-                            });
-                        }
-                    }
+                    self.push_ordering_deps(&mut deps, prev, &prev_sets, &mut set_gates);
 
                     let mut spec = ItemSpec::from_step(step);
                     spec.run_hash = step.run_hashes.get(&partition_display).cloned();
@@ -675,10 +706,104 @@ impl Coordinator {
         count
     }
 
+    /// Order an item after every item of the previous step in its stream (`prev` indexes
+    /// `prev_sets`), as the stream's chain ordering requires. One item is depended on directly,
+    /// unless it is already a data dependency; several are depended on through one shared
+    /// gate, so the edges grow with the number of keys, not its square (#345).
+    fn push_ordering_deps(
+        &mut self,
+        deps: &mut Vec<Dep>,
+        prev: Option<usize>,
+        prev_sets: &[Vec<ItemId>],
+        set_gates: &mut [Option<Option<ItemId>>],
+    ) {
+        let Some(set) = prev else {
+            return;
+        };
+        match prev_sets[set].as_slice() {
+            [] => {}
+            [only] => {
+                if !deps.iter().any(|d| d.upstream == *only) {
+                    deps.push(Dep {
+                        upstream: *only,
+                        kind: DepKind::Ordering,
+                    });
+                }
+            }
+            members => {
+                let gate = *set_gates[set].get_or_insert_with(|| self.open_gate(members));
+                if let Some(gate) = gate {
+                    deps.push(Dep {
+                        upstream: gate,
+                        kind: DepKind::Ordering,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Make a gate over `members`, counting those not yet terminal. `None` when every member
+    /// already is, so there is nothing to wait for.
+    fn open_gate(&mut self, members: &[ItemId]) -> Option<ItemId> {
+        let waiting: Vec<ItemId> = members
+            .iter()
+            .copied()
+            .filter(|id| !self.is_terminal(*id))
+            .collect();
+        if waiting.is_empty() {
+            return None;
+        }
+        let gate = self.reserve_item_id();
+        self.gates.insert(gate, waiting.len());
+        for member in waiting {
+            self.member_gates.entry(member).or_default().push(gate);
+        }
+        Some(gate)
+    }
+
+    fn is_terminal(&self, id: ItemId) -> bool {
+        self.done.contains(&id) || self.failed.contains_key(&id) || self.skipped.contains(&id)
+    }
+
+    /// `item_id` has become terminal: count it off every gate it is a member of, and release
+    /// the waiters of each gate that has no member left to wait for.
+    fn settle_gates(&mut self, item_id: ItemId) {
+        let Some(gates) = self.member_gates.remove(&item_id) else {
+            return;
+        };
+        for gate in gates {
+            let Some(remaining) = self.gates.get_mut(&gate) else {
+                continue;
+            };
+            *remaining -= 1;
+            if *remaining == 0 {
+                self.gates.remove(&gate);
+                self.unblock_dependents(gate);
+            }
+        }
+    }
+
+    /// How many dependency edges the loaded items hold. Grows linearly with the number of
+    /// partition keys; the regression check for #345 holds it to that.
+    #[cfg(test)]
+    fn edge_count(&self) -> usize {
+        self.items
+            .values()
+            .map(|item| item.deps.len())
+            .sum::<usize>()
+            + self.gates.values().sum::<usize>()
+    }
+
     // ─── Queries ──────────────────────────────────────────────────────────
 
     /// Returns true when all items are in a terminal state.
     pub fn is_finished(&self) -> bool {
+        // The three sets hold only items, so while their sizes add up to fewer than the items
+        // some item is not terminal. This keeps the check, made once per event, from scanning
+        // every item until the run is nearly over (#345).
+        if self.done.len() + self.failed.len() + self.skipped.len() < self.items.len() {
+            return false;
+        }
         self.items.keys().all(|id| {
             self.done.contains(id) || self.failed.contains_key(id) || self.skipped.contains(id)
         })
@@ -709,6 +834,15 @@ impl Coordinator {
             .collect()
     }
 
+    /// When a permanently failed item's first attempt started, and the wall time from then
+    /// to its permanent failure (retries and backoff included).
+    pub fn failure_clock(
+        &self,
+        item_id: ItemId,
+    ) -> Option<(std::time::SystemTime, std::time::Duration)> {
+        self.failure_clocks.get(&item_id).copied()
+    }
+
     pub fn skipped_items(&self) -> Vec<ItemId> {
         self.skipped.iter().copied().collect()
     }
@@ -719,7 +853,18 @@ impl Coordinator {
 
     /// Record an output artifact for a completed item.
     pub fn record_output(&mut self, item_id: ItemId, artifact: serde_json::Value) {
+        if let Some(item) = self.items.get(&item_id) {
+            self.output_by_display
+                .insert(item.step_id.display(), item_id);
+        }
         self.outputs.insert(item_id, artifact);
+    }
+
+    /// The recorded output of the item whose display id is `display_id`, if any.
+    pub fn output_for_display(&self, display_id: &str) -> Option<&serde_json::Value> {
+        self.output_by_display
+            .get(display_id)
+            .and_then(|id| self.outputs.get(id))
     }
 
     /// Return all recorded outputs.
@@ -776,6 +921,7 @@ impl Coordinator {
                 None => {}
             }
         }
+        self.settle_gates(item_id);
     }
 
     /// Unblock dependents after successful completion.
@@ -808,6 +954,7 @@ impl Coordinator {
                 }
             }
         }
+        self.settle_gates(item_id);
     }
 }
 
@@ -947,7 +1094,7 @@ mod tests {
             }],
         );
         c.next_ready(); // pop a
-        c.on_item_failed(a, "boom".into());
+        c.on_item_failed(a, "boom".into(), std::time::Duration::ZERO);
         assert!(c.is_finished()); // b is skipped
         assert_eq!(c.skipped_items().len(), 1);
     }
@@ -965,7 +1112,7 @@ mod tests {
             }],
         );
         c.next_ready(); // pop a
-        c.on_item_failed(a, "boom".into());
+        c.on_item_failed(a, "boom".into(), std::time::Duration::ZERO);
         // b should be unblocked (ordering dep satisfied by failure)
         assert_eq!(c.next_ready(), Some(b));
     }
@@ -1006,7 +1153,11 @@ mod tests {
             "the two that had not started are dropped"
         );
         assert!(!c.is_group_complete(group), "one branch is still running");
-        c.on_item_failed(parent, "worker disconnected".to_string());
+        c.on_item_failed(
+            parent,
+            "worker disconnected".to_string(),
+            std::time::Duration::ZERO,
+        );
         assert!(!c.is_finished());
         c.on_item_completed(running);
         assert!(c.is_group_complete(group));
@@ -1038,7 +1189,7 @@ mod tests {
         s.retries = 3; // 3 attempts total
         let a = c.add_item(dummy_step_id("a"), s, vec![]);
         c.next_ready();
-        c.on_item_failed(a, "fail 1".into());
+        c.on_item_failed(a, "fail 1".into(), std::time::Duration::ZERO);
         // Should be back in ready (attempt 1 of 3)
         assert_eq!(c.ready_count(), 1);
         assert_eq!(c.next_ready(), Some(a));
@@ -1049,9 +1200,41 @@ mod tests {
         let mut c = Coordinator::new();
         let a = c.add_item(dummy_step_id("a"), spec("a"), vec![]); // retries=1 → no retry
         c.next_ready();
-        assert_eq!(c.on_item_failed(a, "boom".into()), FailureAction::Failed);
+        assert_eq!(
+            c.on_item_failed(a, "boom".into(), std::time::Duration::ZERO),
+            FailureAction::Failed
+        );
         assert_eq!(c.failed_items().len(), 1);
         assert!(c.is_finished());
+    }
+
+    #[test]
+    fn failure_clock_spans_first_attempt_to_permanent_failure() {
+        use std::time::Duration;
+        let mut c = Coordinator::new();
+        let mut s = spec("a");
+        s.retries = 2;
+        let a = c.add_item(dummy_step_id("a"), s, vec![]);
+
+        c.next_ready();
+        // The first attempt ran for 5 s; it is not yet permanent, so no clock.
+        c.on_item_failed(a, "fail 1".into(), Duration::from_secs(5));
+        assert_eq!(c.failure_clock(a), None);
+        c.next_ready();
+        let (started, wall) = match c.on_item_failed(a, "fail 2".into(), Duration::from_secs(3)) {
+            FailureAction::Failed => c.failure_clock(a).unwrap(),
+            other => panic!("expected a permanent failure, got {other:?}"),
+        };
+        // The wall time runs from the first attempt's start, so it covers both attempts.
+        assert!(wall >= Duration::from_secs(5), "{wall:?}");
+        assert!(wall < Duration::from_secs(6), "{wall:?}");
+        let ago = std::time::SystemTime::now()
+            .duration_since(started)
+            .unwrap();
+        assert!(
+            ago >= Duration::from_secs(5) && ago < Duration::from_secs(6),
+            "{ago:?}"
+        );
     }
 
     #[test]
@@ -1064,13 +1247,13 @@ mod tests {
         c.next_ready();
         assert_eq!(c.item(a).attempts, 1);
         assert_eq!(
-            c.on_item_failed(a, "fail 1".into()),
+            c.on_item_failed(a, "fail 1".into(), std::time::Duration::ZERO),
             FailureAction::RetryNow
         );
         c.next_ready();
         assert_eq!(c.item(a).attempts, 2);
         assert_eq!(
-            c.on_item_failed(a, "fail 2".into()),
+            c.on_item_failed(a, "fail 2".into(), std::time::Duration::ZERO),
             FailureAction::RetryNow
         );
         c.next_ready();
@@ -1092,7 +1275,7 @@ mod tests {
         c.next_ready();
         // delay = backoff * attempt: 0.2 * 1 after the first failure.
         assert_eq!(
-            c.on_item_failed(a, "fail 1".into()),
+            c.on_item_failed(a, "fail 1".into(), std::time::Duration::ZERO),
             FailureAction::RetryAfter(std::time::Duration::from_secs_f64(0.2)),
         );
         // Parked: not ready, not finished, until the caller requeues.
@@ -1103,14 +1286,17 @@ mod tests {
 
         // Second failure: delay = 0.2 * 2.
         assert_eq!(
-            c.on_item_failed(a, "fail 2".into()),
+            c.on_item_failed(a, "fail 2".into(), std::time::Duration::ZERO),
             FailureAction::RetryAfter(std::time::Duration::from_secs_f64(0.4)),
         );
         c.requeue(a);
         assert_eq!(c.next_ready(), Some(a));
 
         // Third failure exhausts the budget regardless of backoff.
-        assert_eq!(c.on_item_failed(a, "fail 3".into()), FailureAction::Failed);
+        assert_eq!(
+            c.on_item_failed(a, "fail 3".into(), std::time::Duration::ZERO),
+            FailureAction::Failed
+        );
         assert!(c.is_finished());
     }
 
@@ -1282,6 +1468,148 @@ mod tests {
             }
         }
         assert_eq!(count, 10_000);
+    }
+
+    /// One stream of partitioned steps over `keys`; each `(name, upstream)` step reads
+    /// `upstream`'s aligned key when it has one.
+    fn partition_stream(keys: &[String], steps: &[(&str, Option<&str>)]) -> crate::planner::Phase {
+        use crate::planner::{Phase, PhaseReason, StreamStep, WorkerStream};
+        use crate::{PartitionKey, StepId};
+        let pks: Vec<PartitionKey> = keys
+            .iter()
+            .map(|k| PartitionKey::from(HashMap::from([("k".to_string(), k.clone())])))
+            .collect();
+        let steps = steps
+            .iter()
+            .map(|&(name, upstream)| StreamStep {
+                step_id: StepId::unpartitioned(name),
+                kind: crate::NodeKind::Asset,
+                function_name: std::sync::Arc::from(name.rsplit(':').next().unwrap()),
+                source_file: std::sync::Arc::from("f"),
+                inputs: upstream
+                    .map(|u| HashMap::from([("data".to_string(), u.to_string())]))
+                    .unwrap_or_default(),
+                pending_partitions: HashMap::new(),
+                serializer: None,
+                sinks: vec![],
+                run_hashes: HashMap::new(),
+                timeout_seconds: 300,
+                retries: 0,
+                retry_backoff_seconds: 0.0,
+                partition_keys: pks.clone(),
+                param_types: HashMap::new(),
+                return_type: None,
+            })
+            .collect();
+        Phase {
+            reason: PhaseReason::Initial,
+            streams: vec![WorkerStream {
+                stream_id: "w0".to_string(),
+                steps,
+            }],
+        }
+    }
+
+    fn keys(n: usize) -> Vec<String> {
+        (0..n).map(|i| format!("{i:05}")).collect()
+    }
+
+    fn id_of(c: &Coordinator, display: &str) -> ItemId {
+        c.items
+            .values()
+            .find(|it| it.step_id.display() == display)
+            .unwrap_or_else(|| panic!("{display} not loaded"))
+            .id
+    }
+
+    /// #345: each key of a step used to wait on every key of the step before it in its stream
+    /// through its own edge, K × K edges per pair of steps, which made a cold 20,000-key chain
+    /// take minutes and gigabytes before the first step ran. The edges must grow with K.
+    #[test]
+    fn partition_chain_edges_grow_linearly_with_keys() {
+        let chain = [
+            ("f:fetch", None),
+            ("f:normalize", Some("f:fetch")),
+            ("f:score", Some("f:normalize")),
+        ];
+        let edges = |n: usize| {
+            let mut c = Coordinator::new();
+            assert_eq!(
+                c.load_phase(&partition_stream(&keys(n), &chain), &HashMap::new()),
+                3 * n
+            );
+            c.edge_count()
+        };
+        let (small, large) = (edges(500), edges(5_000));
+        assert!(large <= 8 * 5_000, "{large} edges for 5,000 keys");
+        assert!(
+            large <= 11 * small,
+            "edges grew from {small} to {large} for ten times the keys"
+        );
+    }
+
+    /// The gate keeps the stream's chain ordering: a key of the next step starts only once
+    /// every key of the previous step has finished one way or another, and a failed key still
+    /// skips only the keys that read it.
+    #[test]
+    fn partitions_wait_for_the_whole_previous_step_in_their_stream() {
+        let phase = partition_stream(
+            &keys(3),
+            &[("f:a", None), ("f:b", Some("f:a")), ("f:c", None)],
+        );
+        let mut c = Coordinator::new();
+        c.load_phase(&phase, &HashMap::new());
+        let a = |k: usize| id_of(&c, &format!("f:a[k={k:05}]"));
+        let b = |k: usize| id_of(&c, &format!("f:b[k={k:05}]"));
+        let (a0, a1, a2, b0, b1, b2) = (a(0), a(1), a(2), b(0), b(1), b(2));
+        assert_eq!(c.ready_count(), 3);
+        for _ in 0..3 {
+            c.next_ready().unwrap();
+        }
+
+        c.on_item_completed(a0);
+        c.on_item_completed(a1);
+        assert_eq!(c.ready_count(), 0, "b waits for every key of a");
+        assert_eq!(
+            c.on_item_failed(a2, "boom".into(), std::time::Duration::ZERO),
+            FailureAction::Failed
+        );
+        let mut ready: Vec<ItemId> = std::iter::from_fn(|| c.next_ready()).collect();
+        ready.sort_by_key(|id| id.0);
+        assert_eq!(ready, vec![b0, b1]);
+        assert!(c.skipped_items().contains(&b2));
+
+        c.on_item_completed(b0);
+        assert_eq!(
+            c.ready_count(),
+            0,
+            "c waits for b[1] although it reads nothing"
+        );
+        c.on_item_completed(b1);
+        assert_eq!(c.ready_count(), 3);
+        while let Some(id) = c.next_ready() {
+            c.on_item_completed(id);
+        }
+        assert!(c.is_finished());
+    }
+
+    #[test]
+    fn a_recorded_output_is_found_by_its_display_id() {
+        let mut c = Coordinator::new();
+        c.load_phase(
+            &partition_stream(&keys(2), &[("f:a", None)]),
+            &HashMap::new(),
+        );
+        let a1 = id_of(&c, "f:a[k=00001]");
+        c.next_ready();
+        c.next_ready();
+        c.on_item_completed(a1);
+        c.record_output(a1, serde_json::json!({"path": "/x"}));
+        assert_eq!(
+            c.output_for_display("f:a[k=00001]"),
+            Some(&serde_json::json!({"path": "/x"}))
+        );
+        assert_eq!(c.output_for_display("f:a[k=00000]"), None);
     }
 
     #[test]

@@ -510,7 +510,9 @@ pub(crate) fn canonical_job(target_ids: &[&str]) -> String {
 
 /// The run as telemetry integrations see it: every step that ran, was served from cache, or
 /// failed. A step that ran is placed by the worker's own clock; a cached step is a zero-length
-/// mark at the start of the run and a failed one at its end, since neither reports a time.
+/// mark at the start of the run. A failed step spans from its first attempt to its permanent
+/// failure, retries included; one whose failure was not timed (an upload that failed after the
+/// step ran) is placed by the worker's clock, or as a zero-length mark at the end of the run.
 pub(crate) fn telemetry_report(
     l: &RunLedger<'_>,
     dag: &Dag,
@@ -579,12 +581,21 @@ pub(crate) fn telemetry_report(
     }
     for failure in l.all_failures {
         let (error_type, error_message, error_traceback) = exception_of(&failure.error);
+        let (step_start, step_duration) = match (
+            failure.error.started_unix_ns,
+            failure.error.elapsed_seconds,
+            clocks.get(&failure.node_id),
+        ) {
+            (Some(started), Some(wall), _) => (started, ns(wall)),
+            (_, _, Some((finished, wall))) => (ns(finished - wall), ns(*wall)),
+            _ => (start_unix_ns + duration_ns, 0),
+        };
         steps.push(StepReport {
             node_id: failure.node_id.clone(),
             kind: kind(&failure.node_id),
             outcome: StepOutcome::Failed,
-            start_unix_ns: start_unix_ns + duration_ns,
-            duration_ns: 0,
+            start_unix_ns: step_start,
+            duration_ns: step_duration,
             attempts: Some(failure.error.attempts),
             run_hash: l.run_hashes.get(&failure.node_id).cloned(),
             size_bytes: None,
@@ -603,6 +614,8 @@ pub(crate) fn telemetry_report(
         target: l.target.map(str::to_string),
         job: job.to_string(),
         status: l.status.to_string(),
+        reason: None,
+        in_flight_run: None,
         start_unix_ns,
         duration_ns,
         steps_total: l.steps_total,
@@ -816,6 +829,8 @@ mod persist_tests {
                         message: "boom".to_string(),
                         traceback: String::new(),
                         attempts: 1,
+                        started_unix_ns: None,
+                        elapsed_seconds: None,
                     },
                 }],
                 cached: HashSet::from(["f.py:cached".to_string()]),
@@ -1872,6 +1887,55 @@ sys.exit(_state.main())
         persist_run(&db_path, &fx.ledger("r1")).await.unwrap();
         assert_eq!(rows(&db_path).await, complete("r1"));
     }
+
+    #[test]
+    fn a_failed_step_span_lasts_its_recorded_elapsed_time() {
+        let mut fx = Fixture::new();
+        let started = 1_700_000_000_000_000_000u64;
+        fx.failures[0].error.started_unix_ns = Some(started);
+        fx.failures[0].error.elapsed_seconds = Some(270.25);
+        fx.failures[0].error.attempts = 3;
+        let dag = crate::Dag::build(&[]).unwrap();
+        let run_started = std::time::UNIX_EPOCH + std::time::Duration::from_nanos(started);
+        let report = telemetry_report(&fx.ledger("r1"), &dag, run_started, &HashMap::new(), "all");
+        let bad = report
+            .steps
+            .iter()
+            .find(|s| s.node_id == "f.py:bad")
+            .unwrap();
+        assert_eq!(bad.outcome, crate::telemetry::StepOutcome::Failed);
+        assert_eq!(bad.start_unix_ns, started);
+        assert_eq!(bad.duration_ns, 270_250_000_000);
+        assert_eq!(bad.attempts, Some(3));
+
+        // A failure with no time of its own (an upload) is still a mark at the end of the run.
+        fx.failures[0].error.started_unix_ns = None;
+        fx.failures[0].error.elapsed_seconds = None;
+        let report = telemetry_report(&fx.ledger("r1"), &dag, run_started, &HashMap::new(), "all");
+        let bad = report
+            .steps
+            .iter()
+            .find(|s| s.node_id == "f.py:bad")
+            .unwrap();
+        assert_eq!(bad.start_unix_ns, started + 1_500_000_000);
+        assert_eq!(bad.duration_ns, 0);
+
+        // ... unless its worker reported a clock: the function ran, and its upload failed.
+        let finished = started as f64 / 1e9 + 1.0;
+        let clocks = HashMap::from([("f.py:bad".to_string(), (finished, 0.25))]);
+        let report = telemetry_report(&fx.ledger("r1"), &dag, run_started, &clocks, "all");
+        let bad = report
+            .steps
+            .iter()
+            .find(|s| s.node_id == "f.py:bad")
+            .unwrap();
+        assert_eq!(bad.duration_ns, 250_000_000);
+        assert!(
+            bad.start_unix_ns.abs_diff(started + 750_000_000) < 1_000,
+            "{}",
+            bad.start_unix_ns
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1884,6 +1948,8 @@ mod telemetry_report_tests {
             message: message.to_string(),
             traceback: String::new(),
             attempts: 1,
+            started_unix_ns: None,
+            elapsed_seconds: None,
         }
     }
 

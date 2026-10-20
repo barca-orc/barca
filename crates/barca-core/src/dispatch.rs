@@ -33,6 +33,14 @@ pub struct StepError {
     pub traceback: String,
     /// Number of attempts made before this failure became permanent.
     pub attempts: u32,
+    /// When the first attempt started, as Unix nanoseconds. `None` when the failure was not
+    /// timed (an artifact upload that failed after the step itself succeeded).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_unix_ns: Option<u64>,
+    /// Wall seconds from the first attempt's start to the permanent failure, retries and
+    /// backoff included. A step that timed out reports about its timeout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elapsed_seconds: Option<f64>,
 }
 
 /// A permanently-failed step (retry budget exhausted), for the metadata DB.

@@ -240,6 +240,12 @@ conditional and transitive stars are included without executing imports during p
 unrelated export edit may recompute consumers. Decorator discovery still requires the
 existing literal-export provenance.
 
+A module reached through another module's `import` is followed: with `wrapper.py` doing
+`import helpers`, both `from wrapper import helpers` and `wrapper.helpers.compute()` hash what
+is read from `helpers.py`, so editing `helpers.compute` invalidates the consumer. Import
+chains are followed at any depth, and modules that import each other are followed once each.
+Consumers may recompute once after upgrading to this dependency-tracking correction.
+
 ## 5. Tasks, and `get` versus `run`
 
 A task is a step that does something: deploy, notify, upload. It is never cached.

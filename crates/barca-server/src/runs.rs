@@ -298,6 +298,7 @@ mod tests {
             db_run_id: None,
             command: "get".into(),
             target: Some("first".into()),
+            node: None,
             status: RunStatus::Pending,
             result: None,
             error: None,

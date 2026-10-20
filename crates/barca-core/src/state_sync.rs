@@ -578,6 +578,7 @@ error: RefreshError: Reauthentication is needed.\n";
         ResolvedConfig {
             remote_off: false,
             env: "default".into(),
+            env_source: crate::config::EnvSource::BuiltIn,
             db_path: dir.join("local.db").to_string_lossy().into(),
             artifact_root: dir.join("artifacts").to_string_lossy().into(),
             local_artifact_dir: dir.join("artifacts").to_string_lossy().into(),

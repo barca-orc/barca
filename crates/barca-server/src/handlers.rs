@@ -308,7 +308,7 @@ pub async fn run(State(state): State<AppState>) -> Result<Json<Value>, ApiError>
             "no loaded assets or sensors to run; inspect /health load_errors".into(),
         ));
     }
-    let handle = start_run(state, None);
+    let handle = start_run(state, None, None);
     Ok(Json(json!({ "run_id": handle })))
 }
 
@@ -316,12 +316,12 @@ pub async fn run(State(state): State<AppState>) -> Result<Json<Value>, ApiError>
 /// and `barca run` use (`barca_core::targets::resolve_target_among`), so the server refuses what the
 /// command line refuses, in the same words: an unknown name is `404`, a name that matches
 /// several nodes `409`, the wrong verb for the node's kind `400`. So is source that does not
-/// parse or a DAG that cannot be built.
-async fn check_target(state: &AppState, name: &str, verb: &str) -> Result<(), ApiError> {
+/// parse or a DAG that cannot be built. Returns the full node id the name resolved to.
+async fn check_target(state: &AppState, name: &str, verb: &str) -> Result<String, ApiError> {
     let nodes = target_nodes(state).await?;
     let nodes = nodes.iter().map(|(id, kind)| (id.as_str(), *kind));
     match barca_core::targets::resolve_target_among(nodes, name, verb) {
-        Ok(_) => Ok(()),
+        Ok(node) => Ok(node),
         Err(e @ barca_core::targets::TargetError::NotFound { .. }) => {
             Err(ApiError::NotFound(e.to_string()))
         }
@@ -367,8 +367,8 @@ pub async fn run_target(
     Path(target): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     refuse_if_read_only(&state)?;
-    check_target(&state, &target, "run").await?;
-    let handle = start_run_task(state, target);
+    let node = check_target(&state, &target, "run").await?;
+    let handle = start_run_task(state, target, node);
     Ok(Json(json!({ "run_id": handle })))
 }
 
@@ -379,8 +379,8 @@ pub async fn get_target(
     Path(target): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     refuse_if_read_only(&state)?;
-    check_target(&state, &target, "get").await?;
-    let handle = start_run(state, Some(target));
+    let node = check_target(&state, &target, "get").await?;
+    let handle = start_run(state, Some(target), Some(node));
     Ok(Json(json!({ "run_id": handle })))
 }
 
@@ -441,6 +441,8 @@ pub(crate) fn schedule_at(state: &AppState, now: chrono::DateTime<chrono::Utc>) 
                 "last_fired": j.last_fired,
                 "last_run": j.last_handle,
                 "last_status": last_status,
+                "last_skipped": j.last_skipped,
+                "skipped_for": j.skipped_for,
             })
         })
         .collect();
@@ -550,24 +552,32 @@ enum RunKind {
 
 /// Insert a `Pending` run, spawn the background execution task, and return the
 /// server-side handle. The real DB run id is surfaced in the completed payload.
-pub(crate) fn start_run(state: AppState, target: Option<String>) -> String {
-    spawn_run(state, RunKind::Get(target))
+/// `target` is the name as given and `node` the full id it resolved to; both are
+/// `None` for a run of every asset and sensor.
+pub(crate) fn start_run(state: AppState, target: Option<String>, node: Option<String>) -> String {
+    spawn_run(state, RunKind::Get(target), node)
 }
 
 /// Insert a `Pending` run for a task, spawn the background execution via
-/// `commands::run`, and return the server-side handle.
-pub(crate) fn start_run_task(state: AppState, target: String) -> String {
-    spawn_run(state, RunKind::Task(target, CachePolicy::RefreshAll))
+/// `commands::run`, and return the server-side handle. `node` is the full id
+/// `target` resolved to.
+pub(crate) fn start_run_task(state: AppState, target: String, node: String) -> String {
+    spawn_run(
+        state,
+        RunKind::Task(target, CachePolicy::RefreshAll),
+        Some(node),
+    )
 }
 
 /// A cron tick for a scheduled task: the task runs, as a task always does, and each upstream
 /// asset is recomputed only if something on its input side changed (what `barca run <task>`
 /// does). A scheduled asset already goes through the cache-aware [`start_run`].
 pub(crate) fn start_scheduled_task(state: AppState, target: String) -> String {
-    spawn_run(state, RunKind::Task(target, CachePolicy::CacheAware))
+    let node = Some(target.clone());
+    spawn_run(state, RunKind::Task(target, CachePolicy::CacheAware), node)
 }
 
-fn spawn_run(state: AppState, kind: RunKind) -> String {
+fn spawn_run(state: AppState, kind: RunKind, node: Option<String>) -> String {
     let handle = db::generate_run_id();
     // Child of the server-wide shutdown token: DELETE /run/{id} cancels just
     // this run; graceful shutdown cancels all of them.
@@ -586,6 +596,7 @@ fn spawn_run(state: AppState, kind: RunKind) -> String {
                 RunKind::Get(target) => target.clone(),
                 RunKind::Task(target, _) => Some(target.clone()),
             },
+            node,
             status: RunStatus::Pending,
             result: None,
             error: None,
@@ -845,7 +856,7 @@ mod duration_tests {
         state.run_slots = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
         assert!(check_target(&state, "target", "get").await.is_ok());
         let held = state.run_slots.acquire().await.unwrap();
-        let handle = start_run(state.clone(), Some("target".into()));
+        let handle = start_run(state.clone(), Some("target".into()), None);
         assert_eq!(state.runs.get(&handle).unwrap().status, RunStatus::Pending);
         std::fs::write(&file, "from barca import asset\ndef broken(: pass\n").unwrap();
         drop(held);

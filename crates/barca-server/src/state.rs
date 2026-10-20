@@ -79,6 +79,11 @@ pub struct RunState {
     pub command: String,
     #[serde(skip)]
     pub target: Option<String>,
+    /// The full node id `target` resolved to when the run was accepted, or `None` for a run
+    /// of every asset and sensor (`POST /run`). The scheduler matches a due job against it,
+    /// so a run counts as in flight for its node however the target was spelled.
+    #[serde(skip)]
+    pub node: Option<String>,
     pub status: RunStatus,
     /// Populated when `status == Complete`. Carries the DB run id, timing, output.
     pub result: Option<GetResult>,
@@ -291,6 +296,11 @@ pub struct JobStatus {
     pub last_fired: Option<i64>,
     /// Handle of the most recent run the scheduler triggered for this job.
     pub last_handle: Option<String>,
+    /// Last time a due tick of this job was skipped (unix epoch seconds) because a run of
+    /// its node was already in flight. Kept in memory only; a restart clears it.
+    pub last_skipped: Option<i64>,
+    /// Handle of the in-flight run that caused `last_skipped`.
+    pub skipped_for: Option<String>,
 }
 
 /// Cloneable application state shared across all axum handlers.
