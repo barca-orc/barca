@@ -1,0 +1,116 @@
+asset dim_item_catalog() -> R
+task  validate_dim_item_catalog(df:R=dim_item_catalog) -> -
+asset dim_group() -> R
+task  validate_dim_group(df:R=dim_group) -> -
+asset dim_group_pack_sizes() -> R
+task  validate_dim_group_pack_sizes(df:R=dim_group_pack_sizes) -> -
+asset dim_account() -> R
+task  validate_dim_account(df:R=dim_account) -> -
+asset ledger_source() -> R
+asset ledger(source:R=ledger_source) -> R
+asset ledger_prior_year(source:R=ledger_source) -> R
+task  validate_ledger(df:R=ledger) -> -
+asset forecast_source() -> R
+asset forecast(source:R=forecast_source) -> R
+task  validate_forecast(df:R=forecast) -> -
+asset dim_item(catalog:R=dim_item_catalog, forecast:R=forecast) -> R
+task  validate_dim_item(df:R=dim_item) -> -
+asset forecast_group_level(forecast:R=forecast, catalog:R=dim_item_catalog) -> R
+task  validate_forecast_group_level(df:R=forecast_group_level) -> -
+asset ledger_forecast_joined(ledger:R=ledger, forecast_group:R=forecast_group_level) -> R
+asset forecast_reconciled(forecast:R=forecast, ledger:R=ledger, catalog:R=dim_item_catalog) -> R
+asset forecast_group_reconciled(forecast_item:R=forecast_reconciled, ledger:R=ledger) -> R
+asset ledger_reconciled(ledger:R=ledger, forecast_group:R=forecast_group_reconciled) -> R
+asset ledger_item_baseline(ledger:R=ledger_reconciled, item_shares:R=dim_item) -> R
+task  validate_ledger_item_baseline(df:R=ledger_item_baseline, ledger:R=ledger_reconciled, item_shares:R=dim_item) -> -
+asset unit_normalization_policy_group(ledger:R=ledger_reconciled, pack_sizes:R=dim_group_pack_sizes) -> R
+asset ledger_base_units(ledger:R=ledger_reconciled, policy:R=unit_normalization_policy_group) -> R
+asset forecast_group_reconciled_base_units(forecast_group:R=forecast_group_reconciled, policy:R=unit_normalization_policy_group) -> R
+asset forecast_reconciled_base_units(forecast_item:R=forecast_reconciled, policy:R=unit_normalization_policy_group) -> R
+task  validate_base_units_normalization(policy:R=unit_normalization_policy_group, ledger_raw:R=ledger_reconciled, ledger_norm:R=ledger_base_units, forecast_raw:R=forecast_group_reconciled, forecast_norm:R=forecast_group_reconciled_base_units) -> -
+asset conversion_factors_group(ledger:R=ledger_reconciled) -> R
+asset conversion_factors_item(catalog:R=dim_item_catalog, ledger:R=ledger_reconciled, group_factors:R=conversion_factors_group) -> R
+asset conversion_factors_item_week(forecast_item:R=forecast_reconciled) -> R
+asset campaign() -> R
+task  validate_campaign(df:R=campaign) -> -
+asset channel() -> R
+task  validate_channel(df:R=channel) -> -
+asset app_dim_group() -> R
+asset app_dim_account() -> R
+asset channel_account_group(channel:R=channel, ledger:R=ledger_reconciled, group:R=app_dim_group, accounts:R=app_dim_account) -> R
+asset channel_account(channel_account_group:R=channel_account_group, channel:R=channel) -> R
+task  validate_channel_account_group(df:R=channel_account_group, channel:R=channel) -> -
+asset driver_channel_item(channel_account_group:R=channel_account_group, ledger:R=ledger_reconciled, conversion:R=conversion_factors_group, item_shares:R=dim_item, forecast_item:R=forecast_reconciled) -> R
+task  validate_driver_channel_item(df:R=driver_channel_item, forecast_item:R=forecast_reconciled) -> -
+asset campaign_account_group(campaign:R=campaign, ledger:R=ledger_reconciled, group:R=app_dim_group) -> R
+task  validate_campaign_account_group(df:R=campaign_account_group, campaign:R=campaign) -> -
+asset account_exit_registry() -> R
+task  validate_account_exit_registry(registry:R=account_exit_registry) -> -
+asset exited_accounts(registry:R=account_exit_registry) -> R
+asset carryover_registry(ledger_prior:R=ledger_prior_year) -> R
+task  validate_carryover_registry(registry:R=carryover_registry) -> -
+asset carryover_opt_out_registry(registry:R=carryover_registry) -> R
+asset carryover_account_group(ledger_prior:R=ledger_prior_year, opt_out_registry:R=carryover_opt_out_registry) -> R [polars]
+asset carryover_period_deltas(carryover_tbl:R=carryover_account_group) -> R [polars]
+asset driver_carryover_item(period_deltas:R=carryover_period_deltas, ledger_plan:R=ledger_reconciled, item_shares:R=dim_item, forecast_item:R=forecast_reconciled) -> R [polars]
+task  validate_carryover_pipeline(carryover:R=carryover_account_group, df:R=driver_carryover_item, forecast_item:R=forecast_reconciled) -> - [polars]
+asset retirement_registry() -> R
+task  validate_retirement_registry(registry:R=retirement_registry, forecast_item:R=forecast_reconciled) -> -
+asset driver_retirement_item(registry:R=retirement_registry, forecast_item:R=forecast_reconciled) -> R [polars]
+task  validate_retirement_pipeline(item_driver:R=driver_retirement_item, forecast_item:R=forecast_reconciled) -> -
+asset launch_registry() -> R
+task  validate_launch_registry(registry:R=launch_registry, forecast_item:R=forecast_reconciled) -> -
+asset rollout_registry() -> R
+task  validate_rollout_registry(registry:R=rollout_registry, forecast_item:R=forecast_reconciled) -> -
+asset driver_rollout_item(registry:R=rollout_registry, forecast_item:R=forecast_reconciled, item_shares:R=dim_item) -> R [polars]
+task  validate_driver_rollout_item(item_driver:R=driver_rollout_item, forecast_item:R=forecast_reconciled) -> -
+asset driver_launch_item(registry:R=launch_registry, forecast_item:R=forecast_reconciled) -> R [polars]
+task  validate_driver_launch_item(item_driver:R=driver_launch_item, forecast_item:R=forecast_reconciled) -> -
+asset driver_displacement_group_week(registry:R=launch_registry, forecast_item:R=forecast_reconciled) -> R [polars]
+asset driver_displacement_item(group_driver:R=driver_displacement_group_week, item_shares:R=dim_item, forecast_item:R=forecast_reconciled) -> R
+task  validate_driver_displacement_item(df:R=driver_displacement_item, forecast_item:R=forecast_reconciled) -> -
+asset trend_driver_item(forecast:R=forecast_group_reconciled_base_units, item_shares:R=dim_item, forecast_item:R=forecast_reconciled) -> R
+task  validate_trend_driver_item(df:R=trend_driver_item, forecast_item:R=forecast_reconciled) -> -
+asset driver_campaign_item(campaign_account_group:R=campaign_account_group, ledger:R=ledger_reconciled, conversion:R=conversion_factors_group, item_shares:R=dim_item, forecast_item:R=forecast_reconciled) -> R
+task  validate_driver_campaign_item(df:R=driver_campaign_item, forecast_item:R=forecast_reconciled) -> -
+asset driver_account_exit_item(forecast_item:R=forecast_reconciled, exited:R=exited_accounts, carryover:R=driver_carryover_item, campaign:R=driver_campaign_item, channel:R=driver_channel_item, trend:R=trend_driver_item) -> R
+task  validate_driver_account_exit_item(item_driver:R=driver_account_exit_item) -> -
+asset driver_floor_patch_item(forecast_item:R=forecast_reconciled, rollout:R=driver_rollout_item, launch:R=driver_launch_item, displacement:R=driver_displacement_item, retirement:R=driver_retirement_item, carryover:R=driver_carryover_item, campaign:R=driver_campaign_item, channel:R=driver_channel_item, trend:R=trend_driver_item, account_exit:R=driver_account_exit_item, exited:R=exited_accounts) -> R
+task  validate_driver_floor_patch_item(item_driver:R=driver_floor_patch_item) -> -
+asset plan_drivers_long_item(rollout:R=driver_rollout_item, launch:R=driver_launch_item, displacement:R=driver_displacement_item, retirement:R=driver_retirement_item, carryover:R=driver_carryover_item, campaign:R=driver_campaign_item, channel:R=driver_channel_item, trend:R=trend_driver_item, account_exit:R=driver_account_exit_item, floor_patch:R=driver_floor_patch_item, exited:R=exited_accounts) -> R
+asset launch_item_week_rate_override(registry:R=launch_registry) -> R [polars]
+asset rollout_group_week_rate_override(registry:R=rollout_registry, forecast_item:R=forecast_reconciled) -> R [polars]
+asset plan_drivers_monetized_item(drivers_long:R=plan_drivers_long_item, conversion:R=conversion_factors_item_week, launch_rate_override_week:R=launch_item_week_rate_override, rollout_rate_override_group_week:R=rollout_group_week_rate_override, forecast_item:R=forecast_reconciled) -> R
+asset plan_driver_toplines_year(monetized:R=plan_drivers_monetized_item) -> R
+asset projected_item_week(forecast_item:R=forecast_reconciled, rollout:R=driver_rollout_item, launch:R=driver_launch_item, displacement:R=driver_displacement_item, retirement:R=driver_retirement_item, carryover:R=driver_carryover_item, campaign:R=driver_campaign_item, channel:R=driver_channel_item, trend:R=trend_driver_item, account_exit:R=driver_account_exit_item, floor_patch:R=driver_floor_patch_item, exited:R=exited_accounts) -> R
+asset projected_item_year(projected_week:R=projected_item_week, monetized:R=plan_drivers_monetized_item) -> R
+asset plan_year_summary(forecast_item:R=forecast_reconciled, toplines:R=plan_driver_toplines_year) -> R
+task  validate_plan_driver_toplines(summary:R=plan_year_summary) -> -
+task  validate_plan_projection(long:R=plan_drivers_long_item, week:R=projected_item_week, year:R=projected_item_year, toplines:R=plan_driver_toplines_year, forecast_item:R=forecast_reconciled) -> -
+task  validate_conversion_factors_group(df:R=conversion_factors_group, ledger:R=ledger_reconciled) -> -
+task  validate_conversion_factors_item(item_df:R=conversion_factors_item, group_df:R=conversion_factors_group, catalog:R=dim_item_catalog, ledger:R=ledger_reconciled) -> -
+task  validate_conversion_factors_item_week(df:R=conversion_factors_item_week, forecast_item:R=forecast_reconciled) -> -
+asset revenue_ratios_group(ledger:R=ledger_reconciled) -> R
+task  validate_plan_grid(ledger:D=ledger_reconciled, forecast_group:D=forecast_group_reconciled, forecast_item:D=forecast_reconciled, group_factors:D=conversion_factors_group, item_factors:D=conversion_factors_item, group_ratios:D=revenue_ratios_group) -> -
+task  validate_revenue_ratios_group(df:R=revenue_ratios_group, ledger:R=ledger_reconciled) -> -
+asset reconciled_model_metrics(ledger:R=ledger_reconciled, forecast_group:R=forecast_group_reconciled) -> R
+task  validate_reconciled_model_metrics(metrics:R=reconciled_model_metrics) -> -
+task  validate_forecast_reconciled(forecast_item:R=forecast_reconciled, forecast:R=forecast, ledger:R=ledger, catalog:R=dim_item_catalog) -> -
+task  validate_forecast_group_reconciled(forecast_group:R=forecast_group_reconciled, forecast_item:R=forecast_reconciled, ledger_reconciled:R=ledger_reconciled, ledger:R=ledger, forecast:R=forecast, catalog:R=dim_item_catalog) -> -
+task  validate_ledger_reconciled(ledger:R=ledger_reconciled, forecast_group:R=forecast_group_reconciled, ledger_raw:R=ledger, forecast:R=forecast, catalog:R=dim_item_catalog) -> -
+task  validate_ledger_forecast_joined(df:R=ledger_forecast_joined) -> -
+asset qa_ledger_group_not_in_dim_group(ledger:D=ledger, dim_group_df:D=dim_group) -> D
+asset qa_forecast_item_not_in_dim_item(forecast:D=forecast, items:D=dim_item_catalog) -> D
+asset qa_dim_item_not_in_forecast(items:D=dim_item_catalog, forecast:D=forecast) -> D
+asset qa_dim_group_not_in_forecast(items:D=dim_item_catalog, forecast:D=forecast) -> D
+asset qa_ledger_account_not_in_dim_account(ledger:D=ledger, accounts:D=dim_account) -> D
+asset qa_forecast_account_not_in_dim_account(forecast:D=forecast, accounts:D=dim_account) -> D
+asset qa_dim_account_not_in_ledger(accounts:D=dim_account, ledger:D=ledger) -> D
+asset qa_dim_account_not_in_forecast(accounts:D=dim_account, forecast:D=forecast) -> D
+asset qa_account_in_forecast_not_in_ledger(forecast:D=forecast, ledger:D=ledger) -> D
+asset qa_account_in_ledger_not_in_forecast(forecast:D=forecast, ledger:D=ledger) -> D
+asset qa_group_account_in_forecast_not_in_ledger(forecast:D=forecast, ledger:D=ledger, items:D=dim_item_catalog) -> D
+asset qa_group_account_in_ledger_not_in_forecast(forecast:D=forecast, ledger:D=ledger, items:D=dim_item_catalog) -> D
+asset qa_ledger_group_not_in_dim_item(ledger:D=ledger, items:D=dim_item_catalog) -> D
+asset qa_ledger_rows_null_group_id(ledger:D=ledger) -> D
+task  summarize_qa(ledger_group_not_dim_group:D=qa_ledger_group_not_in_dim_group, ledger_group_not_dim_item:D=qa_ledger_group_not_in_dim_item, ledger_null_group:D=qa_ledger_rows_null_group_id, forecast_item_not_dim_item:D=qa_forecast_item_not_in_dim_item, dim_item_not_forecast:D=qa_dim_item_not_in_forecast, dim_group_not_forecast:D=qa_dim_group_not_in_forecast, ledger_account_not_dim_account:D=qa_ledger_account_not_in_dim_account, forecast_account_not_dim_account:D=qa_forecast_account_not_in_dim_account, dim_account_not_ledger:D=qa_dim_account_not_in_ledger, dim_account_not_forecast:D=qa_dim_account_not_in_forecast, account_forecast_not_ledger:D=qa_account_in_forecast_not_in_ledger, account_ledger_not_forecast:D=qa_account_in_ledger_not_in_forecast, group_account_forecast_not_ledger:D=qa_group_account_in_forecast_not_in_ledger, group_account_ledger_not_forecast:D=qa_group_account_in_ledger_not_in_forecast) **kwargs -> -
