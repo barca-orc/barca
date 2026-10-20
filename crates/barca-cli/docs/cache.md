@@ -254,9 +254,16 @@ Project star imports in ordinary helper modules are tracked conservatively. Cons
 functions, classes, captured constants and forwarded exports include the contributing module
 sources and their static dependencies, including multiple and transitive star imports.
 Conditional star imports are included without selecting a branch. An edit to another export
-in those modules may recompute a consumer. Installed packages and the import-depth limit
-remain separate limitations; this does not extend decorator discovery beyond its existing
-literal-export rules.
+in those modules may recompute a consumer. Installed packages remain a separate limitation;
+this does not extend decorator discovery beyond its existing literal-export rules.
+
+A module reached through another module's `import` is followed: `from wrapper import helpers`
+or `wrapper.helpers.compute()`, where `wrapper.py` does `import helpers` (or `import helpers
+as h`, or re-exports it with `from inner import helpers`), hashes what is read from
+`helpers.py`, so editing `helpers.compute` invalidates the consumer. Import chains are
+followed however many project modules deep they go, and modules that import each other are
+followed once each. Existing affected consumers may recompute once after this
+dependency-tracking correction.
 
 #### Not followed
 
@@ -267,10 +274,7 @@ An edit in one of these does not change the hash; recompute with `--refresh-all`
 - imports built at run time: `importlib.import_module(name)`, `__import__(name)`, and
   `getattr` on anything but a module barca can see imported. Static analysis cannot follow
   these, and barca does not run your code to plan;
-- names defined dynamically through runtime namespace mutation;
-- a module reached through another module's `import` (`from helpers import other` where
-  `helpers.py` does `import other`): import it directly;
-- helpers more than six project modules away along an import chain.
+- names defined dynamically through runtime namespace mutation.
 
 Conflicting ordinary project imports are rejected before user code runs. If two pipeline
 directories each have `helpers.py`, qualify the imports (`from east.helpers import value`,

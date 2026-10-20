@@ -39,6 +39,12 @@ and these tags are available on the same releases page.
   and `except*`. Editing those helpers invalidates their consumers. Existing affected
   consumers may recompute once after upgrading.
 
+- Follow a project module reached through another module's `import` (`from wrapper import
+  helpers` or `wrapper.helpers.f()` where `wrapper.py` does `import helpers`), and follow
+  import chains at any depth instead of stopping six project modules deep; modules that
+  import each other terminate. Editing such a helper now invalidates its consumers. Existing
+  affected consumers may recompute once after upgrading.
+
 - Follow project helper references inside set literals. Editing those helpers now invalidates
   their cached consumers. Existing affected consumers may recompute once after upgrading.
 
