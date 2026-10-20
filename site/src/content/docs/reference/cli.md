@@ -630,6 +630,24 @@ read the outcome without parsing stderr: `{"status": "failed", "failed_node": ..
 `"status": "success"`. After the error, stderr ends with one greppable line:
 `[barca] run failed: step 'pipeline.py:clean' failed: ZeroDivisionError: division by zero; 0 downstream steps skipped (exit 1)`.
 
+### A worker that dies
+
+A worker process that dies while it runs a step (the kernel's out-of-memory killer, a segfault
+in a C extension, `os._exit()` in your code) fails the step with exit 1, and the error names
+how the process ended, in the result JSON, the envelope and the `run failed:` line:
+
+```
+worker for pipeline.py:train exited with SIGKILL (possibly the OOM killer)
+worker for pipeline.py:train exited with SIGSEGV
+worker for pipeline.py:train exited with code 3
+```
+
+SIGKILL is what the out-of-memory killer sends: check the container's or host's memory limit.
+Several heavy steps running at once in separate workers add up. A worker frozen waiting for
+its `parallel()` branches adds `while it waited for its parallel() branches`. When the exit
+status is not available within a few hundred milliseconds, the error is the plain
+`worker disconnected`.
+
 ## version
 
 ```
@@ -644,7 +662,9 @@ barca 0.18.0
 `get`, `run`, `status`, `sql`, `history`, `stats` and `serve` accept `--env <name>` (default:
 `BARCA_ENV`, then `default_env` in `barca.toml`, then `default`). `plan` and `list` read no
 state and reject it. Each environment has its own cache, artifacts, history and remote
-location. See [Configuration](/reference/config/#environments---env).
+location. `get`, `run` and `serve` print the environment and artifact store once at startup
+on stderr when `default_env` or an artifact store is in effect. See
+[Configuration](/reference/config/#environments---env).
 
 ## Behavior changes from earlier versions
 

@@ -100,6 +100,25 @@ A failed step looks like this (one line; wrapped here):
  "traceback":"  File \"/abs/path/pipeline.py\", line 11, in clean\n    return x / 0\n           ~~^~~"}
 ```
 
+A worker process that dies while it runs a step (killed by the kernel's out-of-memory killer,
+a segfault in a C extension, `os._exit()` in your code) fails that step with `kind`
+`step_failed` and exit 1, and the error names how the process ended, in the result JSON, the
+envelope, the `step:` line and the final `run failed:` line:
+
+```
+worker for pipeline.py:train exited with SIGKILL (possibly the OOM killer)
+worker for pipeline.py:train exited with SIGSEGV
+worker for pipeline.py:train exited with code 3
+```
+
+SIGKILL is what the out-of-memory killer sends, so check the container's or host's memory
+limit (`dmesg`, `docker inspect`, the pod's `OOMKilled` status) when you see it; several heavy
+steps running at once in separate workers add up. A worker that was frozen waiting for its
+`parallel()` branches adds `while it waited for its parallel() branches`. When the exit
+status is not available within a few hundred milliseconds of the connection closing, the
+error is the plain `worker disconnected`. There is no traceback, since the process could not
+write one; retries (`retries=`) apply as for any failed step.
+
 Read the last JSON object on stderr with `kind` and `error`; other lines are progress,
 your steps' own output and the final run summary.
 In human mode (a terminal, `--pretty`, `-o pretty` or `-o value`) the same error is plain prose with the

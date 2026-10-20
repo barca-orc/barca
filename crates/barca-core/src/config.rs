@@ -62,6 +62,26 @@ pub enum StateMode {
     Off,
 }
 
+/// Where the environment name came from (`--env` > `BARCA_ENV` > `default_env` > built-in).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnvSource {
+    Flag,
+    EnvVar,
+    DefaultEnv,
+    BuiltIn,
+}
+
+impl EnvSource {
+    fn describe(self) -> &'static str {
+        match self {
+            EnvSource::Flag => "--env",
+            EnvSource::EnvVar => "BARCA_ENV",
+            EnvSource::DefaultEnv => "default_env in barca.toml",
+            EnvSource::BuiltIn => "built-in default",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ResolvedConfig {
     /// Explicit process-wide remote-off override; historical remote results stay
@@ -69,6 +89,8 @@ pub struct ResolvedConfig {
     pub remote_off: bool,
     /// Validated environment name (path/URI segment).
     pub env: String,
+    /// Which setting chose [`Self::env`].
+    pub env_source: EnvSource,
     /// Local metadata DB path for this env (state sync overwrites this file).
     pub db_path: String,
     /// Artifact store root: the local artifact dir, or a remote URI / shared
@@ -103,6 +125,26 @@ impl ResolvedConfig {
             p.trim_start_matches("./").trim_end_matches('/')
         }
         norm(&self.artifact_root) != norm(&self.local_artifact_dir)
+    }
+
+    /// The line `get`, `run` and `serve` print on stderr at startup, when the environment
+    /// comes from `default_env` in barca.toml or a separate artifact store is configured:
+    /// either can point a one-off command at another environment's data without a flag
+    /// on the command line saying so (#433). `None` otherwise.
+    pub fn startup_line(&self) -> Option<String> {
+        if self.env_source != EnvSource::DefaultEnv && !self.remote_artifacts() {
+            return None;
+        }
+        let store = if self.remote_artifacts() {
+            crate::transfer::diagnostic_uri(&self.artifact_root)
+        } else {
+            format!("local ({})", self.local_artifact_dir)
+        };
+        Some(format!(
+            "[barca] env {} ({}); artifact store {store}",
+            self.env,
+            self.env_source.describe()
+        ))
     }
 }
 
@@ -219,11 +261,12 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
     let remote = file.remote.unwrap_or_default();
 
     // env name: CLI > BARCA_ENV > default_env in toml > "default"
-    let env = cli_env
-        .map(str::to_string)
-        .or_else(|| env_var("BARCA_ENV"))
-        .or(file.default_env)
-        .unwrap_or_else(|| DEFAULT_ENV.to_string());
+    let (env, env_source) = match (cli_env, env_var("BARCA_ENV"), file.default_env) {
+        (Some(flag), _, _) => (flag.to_string(), EnvSource::Flag),
+        (None, Some(var), _) => (var, EnvSource::EnvVar),
+        (None, None, Some(toml)) => (toml, EnvSource::DefaultEnv),
+        (None, None, None) => (DEFAULT_ENV.to_string(), EnvSource::BuiltIn),
+    };
     if !valid_env_name(&env) {
         return Err(BarcaError::Usage(format!(
             "invalid environment name '{env}' — allowed characters: A-Z a-z 0-9 . _ -"
@@ -236,6 +279,7 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
             return Ok(ResolvedConfig {
                 remote_off: true,
                 env,
+                env_source,
                 db_path: local.db_path,
                 artifact_root: local.artifact_dir.clone(),
                 local_artifact_dir: local.artifact_dir,
@@ -353,6 +397,7 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
     Ok(ResolvedConfig {
         remote_off: false,
         env,
+        env_source,
         db_path: local.db_path,
         artifact_root,
         local_artifact_dir: local.artifact_dir,
@@ -641,6 +686,41 @@ uri = "abfss://cont@acct.dfs.core.windows.net/proj"
 
         let cfg = resolve_in(Some("from-cli"), dir.path()).unwrap();
         assert_eq!(cfg.env, "from-cli");
+    }
+
+    #[test]
+    fn the_startup_line_names_an_env_from_barca_toml_or_a_store() {
+        let _e = clean_env();
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = resolve_in(None, dir.path()).unwrap();
+        assert_eq!(
+            cfg.startup_line(),
+            None,
+            "nothing configured: nothing to say"
+        );
+        let cfg = resolve_in(Some("prod"), dir.path()).unwrap();
+        assert_eq!(
+            cfg.startup_line(),
+            None,
+            "--env on the command line is visible"
+        );
+
+        write_toml(dir.path(), "default_env = \"prod\"\n");
+        let cfg = resolve_in(None, dir.path()).unwrap();
+        assert_eq!(
+            cfg.startup_line().unwrap(),
+            "[barca] env prod (default_env in barca.toml); artifact store local (.barca/envs/prod/artifacts)"
+        );
+
+        write_toml(
+            dir.path(),
+            "[remote]\nuri = \"s3://user:secret@bucket/proj\"\nstate = \"off\"\n",
+        );
+        let cfg = resolve_in(Some("dev"), dir.path()).unwrap();
+        assert_eq!(
+            cfg.startup_line().unwrap(),
+            "[barca] env dev (--env); artifact store s3://<redacted>@bucket/proj/dev/artifacts"
+        );
     }
 
     #[test]
