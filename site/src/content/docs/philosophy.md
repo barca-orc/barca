@@ -23,8 +23,8 @@ and does not wait for your packages to load. (The exception: a non-literal
 `partitions(<expression>)` is evaluated by Python at plan time.)
 
 Cost: decorators, `inputs=` and `freshness=` must be written literally. `inputs` built in a
-loop is not seen. Some code changes are not seen by the cache either, a star import for
-example; `barca docs cache` lists them.
+loop is not seen. Some code changes are not seen by the cache either, a module loaded with
+`importlib.import_module(name)` for example; `barca docs cache` lists them.
 
 ## No server and no configuration by default
 
