@@ -953,7 +953,11 @@ fetched) is still exit 3.
 | Key | Type | Present |
 |---|---|---|
 | `elapsed_seconds` | number | always |
-| `final_output` | `<user value>` | always |
+| `final_output` | object | always |
+| `final_output._barca_artifact` | object | always |
+| `final_output._barca_artifact.format` | string | always |
+| `final_output._barca_artifact.path` | string | always |
+| `final_output._barca_artifact.size_bytes` | integer | always |
 | `phases` | integer | always |
 | `run_id` | string | always |
 | `status` | string | always |

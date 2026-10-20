@@ -101,8 +101,9 @@ final_output holds (-o path is the default). -o json|pretty are older spellings 
 -o url (experimental) prints a signed HTTPS URL per result instead of its path: anyone with the
 link can download the artifact from the store until it expires (--expires, default 1h, at most
 7d; it cannot be revoked sooner). With --json each _barca_artifact pointer gains url and
-url_expires_at. It needs a cloud store (s3://, gs://, abfs://; a local store is exit 2); a result
-that is not in the store, or credentials that cannot sign, is exit 3 (barca docs remote).
+url_expires_at. It needs a cloud store (s3://, gs://, abfs://; a local store is exit 2). A result
+whose upload is pending (`local only`) is uploaded first; one that still is not in the store, or
+credentials that cannot sign, is exit 3 (barca docs remote).
 A partitioned target returns every key, sorted: final_output is an object keyed by partition key
 ("region=emea") and -o path prints one path per key. --partition region=emea,amer (or a JSON
 object for compound keys) selects keys of the target: only they run, are returned and are
