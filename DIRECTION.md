@@ -1,6 +1,6 @@
 # Direction
 
-Last reset: 2026-10-10, at v0.22.0. The pinned [Direction issue](https://github.com/barca-orc/barca/issues/395) mirrors this file; it replaced the roadmap issue (#344) and the adoption tracker (#108).
+Last reset: 2026-10-10, at v0.22.0; re-triaged 2026-10-20, at v0.24.1. The pinned [Direction issue](https://github.com/barca-orc/barca/issues/395) mirrors this file; it replaced the roadmap issue (#344) and the adoption tracker (#108).
 
 ## What barca is
 
@@ -20,10 +20,26 @@ An embedded orchestrator. You mark Python functions with `@asset`, `@sensor`, `@
 
 ## Now, in order
 
-1. **Correctness and recovery.** Wrong cache results and lost history come first: upload receipts (#381), hash holes that serve stale results (#295), a corrupt shared-history blob destroying every machine's copy (#243), a killed run that stays `running` (#290), a partitioned target that returns one key (#287).
-2. **Everyday use.** What the two real users asked for: per-step timings in the run output (#386), task output you can use (#387), `barca doctor` and one documented local profile (#388), a one-line failure summary (#389), a remote store that fails soft after the work is done (#390), sane `barca list` defaults (#391), a warning when a recompute produces different bytes (#392), paths by default in `barca get` output (#404), and a metadata backup with a restore command in place of the shared-history blob (RFC-0009, #403).
-3. **Server mode.** The server is the ledger (RFC-0007): one run contract over HTTP (#393), `--server` on the CLI with a parity suite (#394), and local runs that read the server's ledger and write back to it (#402).
-4. **Freshness under serve.** `Always` and `Manual` get their run-time meaning (RFC-0008, #253): a tick reconciles the `Always` nodes below it, `Manual` pins itself, failures retry up to `max_failures`.
+The milestone an issue sits in is its item below; the release it ships in is in the sequence that follows.
+
+1. **Correctness and recovery.** Shipped at 0.24.1: upload receipts (#381), a killed run that stays `running` (#290). Left: the last two hash holes, re-exports and deep import chains (#295); a partitioned target that returns one key (#287); a worker killed by the kernel reported as a bare `worker disconnected` (#433); failed steps that report no duration in telemetry (#437); superlinear cold partition scaling, reproduced before it is fixed (#345); the realistic fixture, small size first (#250). The corrupt shared-history blob (#243) closes when the pull is removed (#403).
+2. **Everyday use.** Shipped at 0.24.1: per-step timings (#386), usable task output (#387), `barca doctor` (#388), the one-line failure summary (#389), sane `barca list` defaults (#391), the changed-bytes warning (#392). Left: paths by default in `barca get` output (#404), a remote store that fails soft after the work is done (#390), a metadata backup with a restore command in place of the shared-history blob (RFC-0009, #403), logs you can join to a trace under `serve` (#434), current numbers on the comparison pages (#65). Later: a limit on how many heavy workers run at once (#436).
+3. **Server mode.** The server is the ledger (RFC-0007): drain on shutdown (#190), one run contract over HTTP (#393) with pause and resume for a schedule (#435), `--server` on the CLI with a parity suite (#394), and local runs that read the server's ledger and write back to it (#402).
+4. **Freshness under serve.** A tick that starts a duplicate of a run the API started (#432), then `Always` and `Manual` get their run-time meaning (RFC-0008, #253): a tick reconciles the `Always` nodes below it, `Manual` pins itself, failures retry up to `max_failures`.
+
+### Release sequence
+
+Each minor release carries one breaking theme.
+
+| Release | Theme | Issues, in order |
+|---|---|---|
+| 0.24.2 | Patch: the three production reports | #437, #432, #433 |
+| 0.25.0 | Breaking: output shape | #287 with #404 in one PR, then #295, then reproduce #345 |
+| 0.26.0 | Breaking: the store is a backup, `optimistic` is gone | #390, then #403 (closes #243) |
+| 0.27.0 | The server is the ledger | #190, #393 with #435, #394, #402 |
+| 0.28.0 | Breaking: freshness propagation | #253 |
+
+Alongside, gating nothing: the small #250 fixture before #394; the #65 numbers; #434.
 
 ## Decided, October 2026
 
@@ -34,6 +50,8 @@ The design decisions behind items 2 to 4, settled on 2026-10-14. The RFCs carry 
 **Output.** `barca get` prints artifact paths by default; `-o value` prints the value and `-o path` the path, with a small human preview and no size flag. Agents are expected to compose `barca sql` and the paths. Partitions are selected with `--partition key=value,value`, or a JSON object for compound keys; a partitioned target returns every selected key. A step's prints go to stderr prefixed with the node id, never to stdout under `--json`; `barca logs <run_id>` shows the captured lines. Partial failure of a partitioned target has no new surface yet: failed keys have no artifact and are recomputed by the next request.
 
 **Store and backup.** A store without a server is this machine's backup and read-through cache. The metadata database is backed up on the minute checkpoint and at run end, from `serve` too, five copies rotating in the store and in `.barca/backups/`. `barca state restore [--from N]` is explicit, never automatic, and moves the current database aside first. `optimistic` mode and pull-before-run are removed with a Breaking line. `cached` with a store means local exists, the store object exists and the content hashes agree; anything else is `unsynced` with a reason, and `get` repairs it from the owner's copy without recomputing.
+
+**Logs under serve.** Structured logs are a `serve`-only opt-in, `BARCA_LOG=json`: one JSON object per line with `level`, `run_id`, `node` and the trace and span ids when telemetry is on, on stdout. The CLI contract for `get` and `run`, progress and errors on stderr, is unchanged. Settled 2026-10-20 (#434).
 
 **Server mode.** Sharing state means a server. The server owns the ledger (run hashes, artifact paths, run history, schedules), holds the deployed code and runs schedules from it, and is the only writer of metadata. `barca get` runs locally by default: it asks the server's ledger, fetches hits from the store, computes misses locally, uploads them to the store and then posts the rows; the server checks the object and its checksum before accepting a row. `--server` runs the job on the server. A configured server that cannot be reached is exit 3 naming it; `--local` runs against the local ledger with nothing pushed. A connection dropped mid-run is an infra error naming the run id. Otherwise local and server runs print the same thing.
 
