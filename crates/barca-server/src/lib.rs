@@ -93,8 +93,22 @@ pub async fn serve(config: ServeConfig) -> Result<(), ServeError> {
     let schedule = config.schedule && !config.read_only;
     let read_only = config.read_only;
 
+    // `barca state restore` refuses to replace the database under a running server.
+    let _serve_lock =
+        barca_core::backup::ServeLock::acquire(&config.resolved, &format!("http://{addr}"));
+    let backups = (!read_only && config.resolved.backup_uri.is_some())
+        .then(|| (config.python.clone(), config.resolved.clone()));
+
     let state = AppState::new(config);
     state.loaded_dag().await?;
+
+    // With a store, back the metadata DB up every minute it changed (RFC-0009). Runs back up
+    // at their end too.
+    // The last one is taken after the runs have stopped and recorded themselves.
+    let backup_stop = barca_core::CancellationToken::new();
+    let backup_task = backups.map(|(python, resolved)| {
+        tokio::spawn(backup_every_minute(python, resolved, backup_stop.clone()))
+    });
 
     // Evict completed/failed runs older than 1 hour, checking every 5 minutes.
     tokio::spawn(handlers::evict_finished_runs(
@@ -169,6 +183,10 @@ pub async fn serve(config: ServeConfig) -> Result<(), ServeError> {
         } => {}
     }
     runs_stopped.await;
+    backup_stop.cancel();
+    if let Some(task) = backup_task {
+        let _ = tokio::time::timeout(BACKUP_BUDGET + CONNECTION_GRACE, task).await;
+    }
     if let Some(telemetry) = telemetry.as_mut() {
         telemetry.finish().await;
     }
@@ -186,6 +204,69 @@ async fn cache_checkpoint(state: AppState) {
             _ = state.shutdown.cancelled() => return,
         }
         barca_core::gc::checkpoint(&state.config.resolved).await;
+    }
+}
+
+/// How often `barca serve` backs its metadata DB up, when it changed (RFC-0009).
+const BACKUP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// How long one of those backups may take, upload included.
+const BACKUP_BUDGET: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Back the database up every [`BACKUP_INTERVAL`] until `stopping`, then once more.
+/// A copy identical to the newest one is not taken. Three failures in a row are reported once,
+/// until a backup succeeds again.
+async fn backup_every_minute(
+    python: std::path::PathBuf,
+    cfg: barca_core::config::ResolvedConfig,
+    stopping: barca_core::CancellationToken,
+) {
+    let mut tick = tokio::time::interval_at(
+        tokio::time::Instant::now() + BACKUP_INTERVAL,
+        BACKUP_INTERVAL,
+    );
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut failures = 0u32;
+    loop {
+        let last = tokio::select! {
+            _ = tick.tick() => false,
+            _ = stopping.cancelled() => true,
+        };
+        let until = barca_core::state_sync::Until {
+            cancel: None,
+            deadline: Some(std::time::Instant::now() + BACKUP_BUDGET),
+        };
+        let failed = match barca_core::backup::take(&python, &cfg, None, until).await {
+            Ok(taken) => match taken.upload {
+                Some(Err(why)) => Some(why),
+                Some(Ok(at)) if taken.name.is_some() => {
+                    barca_core::errln!("[barca] backed up the metadata DB to {at}");
+                    None
+                }
+                _ => None,
+            },
+            Err(e) => Some(e.to_string()),
+        };
+        match failed {
+            None => failures = 0,
+            Some(why) => {
+                failures += 1;
+                if failures == 3 || last {
+                    barca_core::errln!(
+                        "[barca] warning: the metadata backup failed{} ({why}); the next one \
+                         tries again",
+                        if failures > 1 {
+                            format!(" {failures} times in a row")
+                        } else {
+                            String::new()
+                        }
+                    );
+                }
+            }
+        }
+        if last {
+            return;
+        }
     }
 }
 

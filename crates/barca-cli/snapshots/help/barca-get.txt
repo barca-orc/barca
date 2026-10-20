@@ -39,7 +39,7 @@ Options:
           Force re-materialize EVERY asset in the target's cone (nothing comes from cache)
 
       --dry-run
-          Show what this command would do (each step cached or will-run, and why) without executing steps or recording a run (shared history may synchronize)
+          Show what this command would do (each step cached or will-run, and why) without executing steps or recording a run
 
       --agent
           Agent-friendly output: plain structured progress lines instead of visual progress bar
@@ -121,8 +121,10 @@ Completed steps are recorded during the run; remote results require confirmed up
 With an artifact store, an upload that fails after every step succeeded is a warning, not a
 failure: exit 0, JSON `uploads` {pending, error, nodes}, the result is kept on this machine
 (`unsynced` in barca status) and the next get or run uploads it first (barca docs remote).
-Use `barca status pipeline.py` in another terminal to inspect recorded progress. Shared history
-is published when the run ends (barca docs remote).
+Use `barca status pipeline.py` in another terminal to inspect recorded progress. With a store
+([remote] uri), the metadata DB is backed up there every minute and when the run ends; a failed
+backup upload is a warning (barca docs remote). A cached target that is missing from the store, or
+different there, is uploaded from this machine without a step running.
 Targets must be assets; use `barca run` for tasks. With no target, get materializes every asset and
 sensor and skips tasks (previously it ran tasks too); stderr names the skipped tasks and the
 `barca run` command. A file with only tasks gets nothing: exit 0, empty `steps`.

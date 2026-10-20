@@ -345,8 +345,7 @@ invisible to barca (`barca docs assets`).
 ## Inspect before you run
 
 Preview any `get`/`run` with `--dry-run`: it says which steps would run, which come from cache,
-and why, without executing steps or recording a run. Optimistic shared history may
-synchronize locally (`barca docs cache`):
+and why, without executing steps or recording a run (`barca docs cache`):
 
 ```bash
 barca run report pipeline.py --dry-run --refresh src

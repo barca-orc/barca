@@ -267,7 +267,9 @@ def test_a_directory_barca_may_not_move_is_an_infrastructure_error_not_a_failed_
         path.parent.chmod(0o755)
 
     assert proc.returncode == 3, proc.stderr
-    envelope = json.loads(next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{")))
+    envelope = json.loads(
+        next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{"))
+    )
     assert envelope["kind"] == "infra" and envelope["code"] == 3, envelope
     text = envelope["error"] + " " + (envelope["remediation"] or "")
     assert "pipeline.py:numbers" in text and str(path.name) in text, envelope
@@ -402,7 +404,9 @@ def test_a_directory_in_the_store_is_an_infra_error_and_is_left_alone(shared):
     proc = cli(reader, "get", "numbers", "-o", "value", "--json", store=store)
 
     assert proc.returncode == 3, proc.stderr
-    envelope = json.loads(next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{")))
+    envelope = json.loads(
+        next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{"))
+    )
     assert envelope["kind"] == "infra"
     assert "could not fetch 1 cached artifact" in envelope["error"], envelope
     assert str(stored) in json.dumps(envelope), envelope
@@ -441,8 +445,9 @@ def test_a_directory_in_the_store_fails_the_upload_the_same_way(shared, tmp_path
     assert json.loads(stored.read_text()) == [3, 4]
 
 
-def test_a_directory_where_the_shared_history_belongs_says_so(tmp_path):
-    """Not "fix the connection or credentials": the object is a directory."""
+def test_the_old_shared_history_object_is_ignored(tmp_path):
+    """Releases before 0.26.0 kept a shared history at `state/metadata.db`. Nothing reads it any
+    more (RFC-0009): a directory or a file there changes nothing, and is left as it is."""
     store = tmp_path / "store"
     state = store / "default" / "state" / "metadata.db"
     (state / "theirs").mkdir(parents=True)
@@ -452,12 +457,7 @@ def test_a_directory_where_the_shared_history_belongs_says_so(tmp_path):
 
     proc = cli(root, "get", "numbers", "-o", "value", "--json", store=store)
 
-    assert proc.returncode == 3, proc.stderr
-    envelope = json.loads(next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{")))
-    assert envelope["kind"] == "infra"
-    assert f"{state} is a directory, not the shared history file" in envelope["error"], envelope
-    assert "Remove or rename that directory in the store" in envelope["remediation"], envelope
-    assert "credentials" not in json.dumps(envelope), envelope
+    assert proc.returncode == 0, proc.stderr
     assert (state / "theirs").is_dir()
 
 
@@ -473,7 +473,9 @@ def test_a_local_directory_barca_may_not_move_fails_the_fetch_with_the_same_advi
         path.parent.chmod(0o755)
 
     assert proc.returncode == 3, proc.stderr
-    envelope = json.loads(next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{")))
+    envelope = json.loads(
+        next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{"))
+    )
     text = envelope["error"] + " " + (envelope["remediation"] or "")
     assert envelope["kind"] == "infra" and str(path) in text, envelope
     assert "could not be moved aside (PermissionError" in text, envelope

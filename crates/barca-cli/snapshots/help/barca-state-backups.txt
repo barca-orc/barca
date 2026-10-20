@@ -1,0 +1,20 @@
+List the metadata backups, local and in the store, newest first
+
+Usage: barca state backups [OPTIONS]
+
+Options:
+      --json       Emit JSON on stdout (the default when stdout is not a terminal)
+      --pretty     Emit human-readable output (the default when stdout is a terminal)
+      --env <ENV>  Environment name (separates cache/state per environment)
+  -h, --help       Print help
+
+Examples:
+  barca state backups                  # table in a terminal, JSON when piped
+  barca state backups --json           # {backups, local_dir, store, store_error?}
+  barca state backups --pretty         # the table, even when piped
+  barca state backups --env dev        # another environment's backups
+
+Newest first. `where` is local, store or both; `agree` says whether the two copies of a backup
+match (null with one copy). A store that cannot be listed is a warning on stderr and
+`store_error` in JSON; the local copies are still listed.
+More: barca docs remote

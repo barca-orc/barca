@@ -63,7 +63,7 @@ serialisation.
 
 ## What barca does not do
 
-- Distribute a run across machines. A remote store shares results between machines only.
+- Distribute a run across machines. A remote store backs up one machine's results and history; sharing state is a server's job (RFC-0007).
 - General workflows: approval gates, or workflows that wait on external events.
 - Act on `Always` or `Manual` freshness. Only `Schedule` has an effect today
   ([Core constraints](/core-constraints/#freshness-declarations)).

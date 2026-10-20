@@ -30,31 +30,34 @@ commit it leaves version 1. An already-current schema is checked without writing
 to it. Inspection of an unversioned database does not migrate the source.
 
 These additive changes need no new backup file: the transaction preserves the
-original data on failure, while existing shared-state replacement keeps the
-previous local copy. A future destructive migration must separately define and
+original data on failure, and `barca state restore` keeps the database it
+replaces as `metadata.db.pre-restore`. A future destructive migration must separately define and
 test a recoverable backup before it is accepted; this policy does not authorize
 one. Unsupported versions are refused in place and are never automatically
 restored, downgraded or reset. Upgrade to a compatible Barca release to open them.
 
-## Shared history and older binaries
+## Backups, restore and older binaries
 
-Downloaded state is checked before migration or replacement. Both the local and
-downloaded database must be compatible before their rows are merged. A refused
-download leaves the local history intact. Compatible unknown nullable/defaulted
-columns remain untouched; incompatible required columns are still rejected.
+The shared history (download, merge, replace) was removed in 0.26.0 (RFC-0009).
+A backup restored by `barca state restore` is checked before migration or
+replacement: a staged copy must pass the same validation, its schema version must
+be supported, and only the staged copy is migrated. A refused copy leaves the
+local history intact. Each backup's sidecar records its `db_format` (the
+`PRAGMA user_version` of the copy). Compatible unknown nullable/defaulted columns
+remain untouched; incompatible required columns are still rejected.
 
 Version checks cannot make an already-published older binary enforce a marker it
 does not understand. Version 1 therefore remains additive and compatible with
-the previous release's schema. Later format changes must account for older
-shared-state writers and may need a deployment upgrade boundary.
+the previous release's schema. Later format changes must account for backups
+written by older binaries and may need a deployment upgrade boundary.
 
 ## Verification and remaining scope
 
 Regression tests cover legacy run/log/schedule/materialization preservation,
 transaction rollback and reopening after an interrupted migration, negative and
-future versions, refusal through inspection and cache readers, and refusal of
-download/local merges without losing either history. Existing remote-state,
-snapshot and older-schema migration tests remain part of the acceptance suite.
+future versions, refusal through inspection and cache readers, and refusal of an invalid backup
+by `barca state restore` without touching the local history. Snapshot and
+older-schema migration tests remain part of the acceptance suite.
 
 Process protocol handshakes, plan JSON versioning and wire/batch conformance are
 separate slices of issue #82. This change does not complete that entire issue or

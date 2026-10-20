@@ -17,6 +17,9 @@ reply carries the request id.
   → {"type": "probe", "id", "root"}             is the store holding `root` there and listable?
        Replies "done" only when its bucket, container or root directory positively answers a
        listing; anything else is an "error". Nothing is ever created by a probe.
+  → {"type": "stat", "id", "remote"}            is the object at `remote` in the store?
+       Replies "done" with its "size_bytes" (and, for a store that is a plain directory, its
+       "sha256"); an "error" with "missing" when it is not there. Moves no bytes.
   → {"type": "shutdown"}                        finish in-flight work, exit
   ← {"type": "done", "id", "size_bytes", "sha256", "fetched", "mismatch"}
        "sha256" identifies the exact uploaded snapshot for a put and the local copy for a get; "fetched" is false when a get left the local file as it
@@ -134,6 +137,18 @@ def _transfer(msg: dict) -> dict:
     if msg["type"] == "probe":
         _storage.check_store(msg["root"])
         return {"size_bytes": 0, "fetched": False, "mismatch": False}
+    if msg["type"] == "stat":
+        from barca import _state
+
+        (found,) = _state.stat([msg["remote"]])["objects"]
+        if not found["exists"]:
+            raise FileNotFoundError(msg["remote"])
+        return {
+            "size_bytes": found["size_bytes"],
+            "sha256": found["sha256"],
+            "fetched": False,
+            "mismatch": False,
+        }
     local = msg["local"]
     if msg["type"] == "put":
         # SDKs reopen filenames. Give both the SDK and receipt calculation the
@@ -319,7 +334,7 @@ def serve(
                 # attempt may still be stuck, and must not hold up exit.
                 requests.wait_idle()
                 return
-            if kind in ("put", "get", "probe"):
+            if kind in ("put", "get", "probe", "stat"):
                 requests.accept(msg["id"])
                 pool.submit(_handle, msg, requests, retries, backoff)
     finally:

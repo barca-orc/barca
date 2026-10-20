@@ -1,4 +1,4 @@
-"""Real one-minute shared progress and cross-machine recovery (#214)."""
+"""The real one-minute backup checkpoint, and recovery of a wiped machine from it (RFC-0009)."""
 
 import json
 import os
@@ -13,7 +13,7 @@ from .test_incremental_persist import PIPELINE
 from .test_serve_robustness import _env, wait_for
 
 
-def remote_rows(path):
+def backup_rows(path):
     conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     try:
         return (
@@ -24,81 +24,97 @@ def remote_rows(path):
         conn.close()
 
 
-def test_real_minute_checkpoint_survives_sigkill_and_skips_clean_ticks(tmp_path):
-    shared = tmp_path / "shared"
+def store_backups(store):
+    return sorted((store / "default/state/backups").glob("*Z.db"))
+
+
+def test_real_minute_checkpoint_backs_up_progress_and_restores_a_wiped_machine(tmp_path):
+    store = tmp_path / "store"
     source = PIPELINE.replace("deadline = time.time() + 60", "deadline = time.time() + 240")
-    machine_a = tmp_path / "a"
-    machine_b = tmp_path / "b"
-    for machine in (machine_a, machine_b):
-        machine.mkdir()
-        (machine / "pipeline.py").write_text(source)
-        (machine / "barca.toml").write_text("")
+    machine = tmp_path / "machine"
+    machine.mkdir()
+    (machine / "pipeline.py").write_text(source)
+    (machine / "barca.toml").write_text("")
     env = _env()
-    env.update(BARCA_REMOTE_URI=str(shared), BARCA_STATE="optimistic", BARCA_POOL_SIZE="2")
-    log = machine_a / "stderr"
+    env.update(BARCA_REMOTE_URI=str(store), BARCA_POOL_SIZE="2")
+    log = machine / "stderr"
     started = time.monotonic()
     with log.open("w") as stderr:
         proc = subprocess.Popen(
             [_find_binary(), "get", "pipeline.py", "--agent"],
-            cwd=machine_a,
+            cwd=machine,
             env=env,
             stdout=subprocess.DEVNULL,
             stderr=stderr,
             start_new_session=True,
         )
-    remote = shared / "default/state/metadata.db"
     try:
-        wait_for(lambda: (machine_a / "slow.started").exists(), "held computation")
+        wait_for(lambda: (machine / "slow.started").exists(), "held computation")
         assert proc.poll() is None
-        assert not remote.exists(), log.read_text()
-        # Publication must happen during the held step, on the real fixed minute timer.
+        assert not store_backups(store), log.read_text()
+        # The backup must happen during the held step, on the real fixed minute timer.
         deadline = started + 85
-        while not remote.exists():
+        while not store_backups(store):
             assert proc.poll() is None, log.read_text()
             assert time.monotonic() < deadline, log.read_text()
             time.sleep(0.1)
         assert time.monotonic() - started >= 55
-        runs, rows = remote_rows(remote)
+        (backup,) = store_backups(store)
+        runs, rows = backup_rows(backup)
         assert runs == [("running", 2, None)]
         assert {node for node, _ in rows} == {"pipeline.py:first", "pipeline.py:second"}
-        for _, path in rows:
-            assert os.path.isfile(path)
-        identity = (remote.stat().st_ino, remote.stat().st_mtime_ns, remote.stat().st_size)
-        # Cross a second real timer tick with no newly committed results. An identical
-        # replacement would change inode/mtime too, so this verifies no extra publication.
+        sidecar = json.loads(backup.with_suffix(".json").read_text())
+        assert sidecar["rows"] == 3 and sidecar["run_id"]
+        assert (machine / ".barca/backups" / backup.name).is_file()
+        # Cross a second real timer tick with no newly recorded results: no second copy.
         while time.monotonic() - started < 125:
             assert proc.poll() is None, log.read_text()
-            assert (
-                remote.stat().st_ino,
-                remote.stat().st_mtime_ns,
-                remote.stat().st_size,
-            ) == identity
+            assert store_backups(store) == [backup]
             time.sleep(0.2)
-        print(
-            f"one shared checkpoint, {identity[2]} bytes, no unchanged-progress upload at second tick"
-        )
         proc.kill()
         assert proc.wait(timeout=15) == -signal.SIGKILL
-        (machine_b / "release").touch()
-        resumed = subprocess.run(
-            [_find_binary(), "get", "pipeline.py", "--agent", "-o", "value", "--json"],
-            cwd=machine_b,
+
+        # The machine is wiped. Nothing comes back by itself: the next command starts empty,
+        # and only `barca state restore` brings the history down from the store.
+        subprocess.run(["rm", "-rf", str(machine / ".barca")], check=True)
+        listed = subprocess.run(
+            [_find_binary(), "state", "backups", "--json"],
+            cwd=machine,
             env=env,
             text=True,
             capture_output=True,
-            timeout=30,
+            timeout=60,
+        )
+        assert listed.returncode == 0, listed.stderr
+        (entry,) = json.loads(listed.stdout)["backups"]
+        assert (entry["name"], entry["where"], entry["index"]) == (backup.name, "store", 1)
+        restored = subprocess.run(
+            [_find_binary(), "state", "restore", "--json"],
+            cwd=machine,
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=60,
+        )
+        assert restored.returncode == 0, restored.stderr
+        assert json.loads(restored.stdout)["from"] == "store"
+        assert f"restored {backup.name} from the store copy" in restored.stderr
+
+        (machine / "release").touch()
+        resumed = subprocess.run(
+            [_find_binary(), "get", "pipeline.py", "--agent"],
+            cwd=machine,
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=60,
         )
         assert resumed.returncode == 0, resumed.stderr
         result = json.loads(resumed.stdout.splitlines()[-1])
+        # The two finished steps come from the store, through the restored history.
         assert (result["steps_executed"], result["final_output"]) == (1, 3)
-        assert not (machine_b / "first.ran").exists()
-        assert not (machine_b / "second.ran").exists()
-        runs, rows = remote_rows(remote)
-        assert len(runs) == 2
-        assert any(status == "success" and count == 1 for status, count, _ in runs)
-        assert len(rows) == 3
     finally:
-        (machine_a / "release").touch()
+        (machine / "release").touch()
         if proc.poll() is None:
             proc.kill()
         proc.wait(timeout=15)

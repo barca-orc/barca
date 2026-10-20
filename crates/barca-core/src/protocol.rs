@@ -219,6 +219,10 @@ pub enum TransferRequest {
     /// Is the store holding `root` there and listable? Answered `Done` only when its bucket,
     /// container or root directory positively answers a listing. Creates nothing.
     Probe { id: u64, root: String },
+    /// Is the object at `remote` in the store? `Done` with its size (and, for a store that is
+    /// a plain directory, its SHA-256 in `sha256`); an `Error` with `missing` when it is not
+    /// there. Moves no bytes (RFC-0009: `get` repairs an `unsynced` target).
+    Stat { id: u64, remote: String },
     /// Finish in-flight transfers, then exit.
     Shutdown,
 }
@@ -960,6 +964,15 @@ mod tests {
         assert_eq!(
             probe,
             serde_json::json!({"type": "probe", "id": 9, "root": "s3://b/p/default/artifacts"})
+        );
+        let stat = serde_json::to_value(TransferRequest::Stat {
+            id: 10,
+            remote: "s3://b/p/default/artifacts/n/h.json".to_string(),
+        })
+        .unwrap();
+        assert_eq!(
+            stat,
+            serde_json::json!({"type": "stat", "id": 10, "remote": "s3://b/p/default/artifacts/n/h.json"})
         );
         // A reply without attempts (older helper) counts as one attempt.
         let bare: TransferReply =

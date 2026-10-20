@@ -551,9 +551,10 @@ def _artifact_mismatch_run(binary: str, tmp: Path, env: dict) -> subprocess.Comp
     """`MISMATCH_ARGV` where the store's copy of `numbers` is not the one that was recorded.
 
     One machine fills a plain-directory store, the object of `numbers` is then overwritten
-    (as a refresh on another machine would), and a second machine recomputes `total`, which
-    reads it. `numbers` (the owner) and `total` (which read it) carry the marker; `side` and
-    `summary` do not, so the key is seen to be optional.
+    (as a refresh elsewhere would), and a second machine that restored the history from the
+    store's backup (RFC-0009) recomputes `total`, which reads it. `numbers` (the owner) and
+    `total` (which read it) carry the marker; `side` and `summary` do not, so the key is seen
+    to be optional.
     """
     store = tmp / "store"
     env = {**env, "BARCA_REMOTE_URI": str(store)}
@@ -571,6 +572,7 @@ def _artifact_mismatch_run(binary: str, tmp: Path, env: dict) -> subprocess.Comp
     barca("producer", ["get", "summary", "pipeline.py", "--json"])
     (stored,) = store.glob("default/artifacts/*--numbers/*.json")
     stored.write_text("[5, 5]")
+    barca("reader", ["state", "restore", "--json"])
     return barca("reader", MISMATCH_ARGV)
 
 

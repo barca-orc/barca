@@ -274,7 +274,6 @@ pub async fn explain(
         &dag,
         cfg,
         target_names,
-        python,
         policy,
         command_label,
         partition,

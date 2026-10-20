@@ -40,7 +40,6 @@ Options:
           Print help (see a summary with '-h')
 
 Examples:
-  BARCA_STATE=off barca serve pipeline.py    # local history; keep configured artifact sharing
   BARCA_REMOTE=off barca serve pipeline.py   # local artifacts and history
   barca serve                                # every file in the project; files added later need a restart
   barca serve pipeline.py                    # HTTP API on 127.0.0.1:8274 plus the scheduler
@@ -59,5 +58,6 @@ continue. Startup logs, /health load_errors and the UI show unloaded files and a
 --watch restores repaired configured sources; one-shot commands remain strict.
 Trigger deployed runs through HTTP or barca.Client. Ordinary get/run commands execute locally;
 CLI --server, server URL configuration and the shared-ledger design are not implemented yet.
-With a remote artifact store, set BARCA_STATE=off to retain local metadata.
+With a store ([remote] uri), the metadata DB is backed up there every minute it changed
+(barca docs remote); barca state restore refuses to run while the server is up.
 More: barca docs scheduling

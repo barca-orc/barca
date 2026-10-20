@@ -200,6 +200,10 @@ pub(crate) fn json_output(cli: &Cli) -> bool {
         | Cli::Logs { format, .. }
         | Cli::Doctor { format, .. }
         | Cli::Gc { format, .. } => is_json(*format),
+        Cli::State { command } => match command {
+            crate::StateCommand::Backups { format, .. }
+            | crate::StateCommand::Restore { format, .. } => is_json(*format),
+        },
         Cli::Serve { .. } | Cli::Version => false,
     }
 }
@@ -220,6 +224,7 @@ pub(crate) fn context(cli: &Cli) -> Context {
         Cli::History { .. } => ("history", Vec::new()),
         Cli::Gc { .. } => ("gc", Vec::new()),
         Cli::Logs { .. } => ("logs", Vec::new()),
+        Cli::State { .. } => ("state", Vec::new()),
         Cli::Docs { .. } => ("docs", Vec::new()),
         Cli::Version => ("version", Vec::new()),
     };
@@ -419,6 +424,7 @@ pub(crate) fn enter_project_root(cli: &mut Cli) -> Result<(), barca_core::BarcaE
         Cli::History { .. }
         | Cli::Gc { .. }
         | Cli::Logs { .. }
+        | Cli::State { .. }
         | Cli::Docs { .. }
         | Cli::Version => {}
     }

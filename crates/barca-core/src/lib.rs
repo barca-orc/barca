@@ -1,6 +1,8 @@
 // Everything barca prints goes through `term` (`outln!` / `errln!`), which cannot panic.
 #![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]
 
+#[doc(hidden)]
+pub mod backup;
 pub mod cache;
 pub mod commands;
 pub mod cone;
@@ -22,7 +24,6 @@ pub(crate) mod execution;
 pub mod gc;
 pub mod groups;
 pub mod hash;
-#[doc(hidden)]
 pub mod helper_proc;
 pub mod interrupt;
 pub mod io_loop;
@@ -44,9 +45,6 @@ mod run_owner;
 pub mod schedule;
 pub mod selection;
 pub mod sql;
-pub(crate) mod state_base;
-pub mod state_carry;
-pub(crate) mod state_prev;
 pub mod state_sync;
 pub(crate) mod state_validate;
 pub mod status;

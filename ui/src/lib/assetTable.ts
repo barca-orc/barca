@@ -92,6 +92,8 @@ function staleReason(reason: CacheStatus['reason']): string {
     .with('artifact_missing', () => 'artifact missing')
     .with('evicted', () => 'evicted')
     .with('local_only', () => 'local only')
+    .with('store_only', () => 'store only')
+    .with('mismatch', () => 'store copy differs')
     .with(
       'materialized',
       'no_record',

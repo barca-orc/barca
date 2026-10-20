@@ -38,7 +38,8 @@ TOTAL = sum(range(1000))
 
 @pytest.fixture
 def machine(tmp_path):
-    """Factory for working directories that share one bucket; `big` is already in it."""
+    """Factory for working directories that share one bucket; `big` is already in it, and each
+    new directory starts from the producer's history restored from the bucket."""
     pytest.importorskip("pandas")
     pytest.importorskip("duckdb")
     pytest.importorskip("s3fs")
@@ -50,7 +51,7 @@ def machine(tmp_path):
         "s3", key=S3_KEY, secret=S3_SECRET, endpoint_url=S3_ENDPOINT, skip_instance_cache=True
     ).mkdir(bucket)
 
-    def make(name: str) -> Path:
+    def make(name: str, restore: bool = True) -> Path:
         root = tmp_path / name
         root.mkdir()
         (root / "pipeline.py").write_text(PIPELINE)
@@ -58,9 +59,12 @@ def machine(tmp_path):
             f'[remote]\nuri = "s3://{bucket}/proj"\n\n'
             f'[remote.storage_options.s3]\nendpoint_url = "{S3_ENDPOINT}"\n'
         )
+        if restore:
+            # The history from the store's backup (RFC-0009), none of the artifacts.
+            ok(cli(root, "state", "restore", "--json"))
         return root
 
-    ok(cli(make("producer"), "get", "big", "--json"))
+    ok(cli(make("producer", restore=False), "get", "big", "--json"))
     return make
 
 

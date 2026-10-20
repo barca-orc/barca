@@ -614,7 +614,7 @@ pub(crate) fn failed_step_line(node_id: &str, error: &str) -> String {
     format!("[barca] step:{node_id} failed: {first}")
 }
 
-pub(crate) fn fmt_bytes(n: u64) -> String {
+pub fn fmt_bytes(n: u64) -> String {
     const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
     let mut v = n as f64;
     let mut unit = 0;

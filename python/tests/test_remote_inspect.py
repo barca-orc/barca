@@ -470,7 +470,9 @@ def ok(proc: subprocess.CompletedProcess) -> dict:
 
 
 def envelope(proc: subprocess.CompletedProcess) -> dict:
-    return json.loads(next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{")))
+    return json.loads(
+        next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{"))
+    )
 
 
 @pytest.fixture(scope="module")
@@ -478,8 +480,8 @@ def remote_project(tmp_path_factory) -> Path:
     """A project whose results exist only in the bucket: locally there is just the metadata DB.
 
     The endpoint is set in barca.toml alone, so the status and sql helpers reach the bucket only
-    if barca hands them the storage options it hands the workers. State stays local
-    (`state = "off"`): these tests are about artifacts."""
+    if barca hands them the storage options it hands the workers. The history stays local (it
+    is only backed up to the bucket): these tests are about artifacts."""
     pytest.importorskip("pandas")
     pytest.importorskip("s3fs")
     emulators.require("s3", _reachable(S3_ENDPOINT), S3_ENDPOINT)
@@ -493,7 +495,7 @@ def remote_project(tmp_path_factory) -> Path:
     root = tmp_path_factory.mktemp("remote_project")
     (root / "pipeline.py").write_text(PIPELINE)
     (root / "barca.toml").write_text(
-        f'[remote]\nuri = "s3://{bucket}/proj"\nstate = "off"\n\n'
+        f'[remote]\nuri = "s3://{bucket}/proj"\n\n'
         f'[remote.storage_options.s3]\nendpoint_url = "{S3_ENDPOINT}"\n'
     )
     for target in ("orders", "keys", "blob", "weekly"):
@@ -610,8 +612,8 @@ def test_sql_that_cannot_fetch_says_why(remote_project, tmp_path):
 @pytest.mark.parametrize("backend", ["s3", "gcs", "azure"])
 def test_status_and_sql_read_from_each_cloud(backend, tmp_path):
     """The same reads through s3fs, gcsfs and adlfs, configured by environment variables, from a
-    second machine: a fresh directory that has neither the artifacts nor (until barca pulls the
-    shared history) the metadata."""
+    second machine: a fresh directory that has none of the artifacts, and the history only once
+    `barca state restore` has fetched its backup from the bucket (RFC-0009)."""
     pytest.importorskip("pandas")
     from .test_remote_env_config import CASES
     from .test_remote_env_config import _reachable as reachable
@@ -627,6 +629,7 @@ def test_status_and_sql_read_from_each_cloud(backend, tmp_path):
     for target in ("orders", "keys", "blob"):
         ok(cli(machine_a, "get", target, "--json", env=env))
     tmp_path = machine_b
+    assert ok(cli(tmp_path, "state", "restore", "--json", env=env))["from"] == "store"
 
     status = ok(cli(tmp_path, "status", "--json", "--sample", "1", env=env))
     shapes = {n["name"]: n["shape"] for n in status["nodes"]}

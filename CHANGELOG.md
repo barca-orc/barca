@@ -26,11 +26,22 @@ and these tags are available on the same releases page.
   `--partition region=emea,amer` (or a JSON object for compound keys) selects keys, computes only
   those and scopes `--refresh` of the target; `barca.get(..., partition=...)` does the same.
 - **Breaking:** a remote store fails soft once the steps are done (#390). When every step
-  succeeded and only an artifact upload or the end-of-run history push failed, `get` and `run`
+  succeeded and only an artifact upload (or a metadata backup) failed, `get` and `run`
   exit 0 (was 3) with one warning, add `uploads: {pending, error, nodes}` to the run JSON and
   `--dry-run`, and record the results; `barca status` shows them `unsynced` / `local_only`
   (`summary.unsynced`) until the next command that opens the store uploads them first. Read
   `uploads` instead of exit 3 to detect unpublished results.
+
+### Removed
+
+- **Breaking:** the shared history (`optimistic` mode) is removed (RFC-0009, #403; closes
+  #243): `[remote] state`, `[remote] state_uri`, `[remote] push_retries`, `BARCA_STATE`,
+  `BARCA_STATE_URI`, `BARCA_PUSH_RETRIES`, the pull before each run, the conditional push after
+  it and the `metadata.db.prev` copy. A `barca.toml` or environment that still sets one is a
+  usage error (exit 2) naming it and barca 0.26.0, even under `BARCA_REMOTE=off`: remove it. A
+  single machine gets backups of its history with no setting (below); teams that shared history
+  through a bucket move to a server (RFC-0007), and a wiped machine gets its history back
+  with `barca state restore`. The old `state/metadata.db` object is ignored.
 
 ### Features
 
@@ -49,6 +60,18 @@ and these tags are available on the same releases page.
   the `cache` key on `get`/`run` results, the `cache_size` check of `barca doctor`, and `cache`
   in `GET /health`. `materializations` gains `evicted_at` and `last_read_at` (additive, metadata
   format 1); rows are never deleted (RFC-0012, #457).
+- With a remote store (`[remote] uri`), the metadata DB is backed up on the minute checkpoint
+  and at the end of every `get` and `run`, and every minute it changed under `barca serve`, to
+  `.barca/backups/` and `{uri}/{env}/state/backups/` (five copies each, with a `<UTC>.json`
+  sidecar). New `barca state backups` lists them and `barca state restore [--from N|NAME]` puts
+  one back after validating it, keeping the replaced database as `metadata.db.pre-restore`.
+  A backup that fails to upload is a warning and `uploads.error`, never a failed run (#403).
+- `barca status` with a store reports `unsynced` with `cache.reason` `store_only` and
+  `mismatch` besides `local_only`, by comparing this machine's copy, the store object and the
+  recorded digest; `barca get` repairs an `unsynced` target without running a step (upload,
+  fetch, or re-upload with the changed-bytes warning and `steps[].bytes_changed`) (#403).
+- `barca serve` runs with a remote store (it used to require `BARCA_STATE=off`) and backs its
+  history up.
 
 ## 0.24.3 (2026-10-20)
 

@@ -252,7 +252,8 @@ a replacement for each.
 
 A run uses the processes of one machine. Running steps on several machines would need a
 network transport in place of the Unix socket and a way to hand work between machines. A
-remote store shares results between machines today; it does not split one run across them.
+remote store keeps one machine's results and history backups; sharing between machines is the
+server's job (RFC-0007), and neither splits one run across machines.
 
 ### What changed since this page was first written
 

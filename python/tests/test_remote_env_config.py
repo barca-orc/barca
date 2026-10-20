@@ -92,8 +92,8 @@ def gcs_case() -> tuple[str, dict]:
         client_options={"api_endpoint": GCS_ENDPOINT},
     )
     client.create_bucket(bucket)
-    # No STORAGE_EMULATOR_HOST: the fsspec variables alone must reach both the artifact store
-    # (gcsfs) and the shared state (google-cloud-storage).
+    # No STORAGE_EMULATOR_HOST: the fsspec variables alone must reach the store (gcsfs) for
+    # artifacts and metadata backups.
     return f"gs://{bucket}/proj", {
         "FSSPEC_GCS_ENDPOINT_URL": GCS_ENDPOINT,
         "FSSPEC_GCS_TOKEN": "anon",
@@ -154,109 +154,45 @@ def machines(tmp_path: Path) -> tuple[Path, Path]:
     return dirs[0], dirs[1]
 
 
+def fetched_back(root: Path, env: dict) -> None:
+    """This machine's artifact copies are gone; the next get serves every step from the store,
+    and the history was backed up there."""
+    import shutil
+
+    shutil.rmtree(root / ".barca" / "artifacts")
+    again = barca(root, env, "get", "total")
+    assert again["steps_executed"] == 0, "the cache hits must be fetched from the store"
+    listed = barca(root, env, "state", "backups")
+    assert listed["backups"] and listed["backups"][0]["where"] == "both", listed
+
+
 @pytest.mark.parametrize("backend", sorted(CASES))
-def test_env_vars_alone_share_one_cache_across_machines(backend, tmp_path):
+def test_env_vars_alone_reach_the_store_for_artifacts_and_backups(backend, tmp_path):
     endpoint, make = CASES[backend]
     emulators.require(backend, _reachable(endpoint), endpoint)
     uri, env = make()
     env = {**env, "BARCA_REMOTE_URI": uri}
-    a, b = machines(tmp_path)
+    a, _ = machines(tmp_path)
 
     first = barca(a, env, "get", "total")
     assert first["steps_executed"] == 2
     status = barca(a, env, "status", "total")
     artifacts = [n["cache"]["artifact"] for n in status["nodes"]]
     assert all(p.startswith(f"{uri}/default/artifacts/") for p in artifacts), artifacts
+    assert {n["cache"]["state"] for n in status["nodes"]} == {"cached"}, status
+    fetched_back(a, env)
 
-    second = barca(b, env, "get", "total")
-    assert second["steps_executed"] == 0, "machine B must hit the cache machine A filled"
 
-
-def test_gcs_storage_options_in_barca_toml_reach_the_shared_state(tmp_path):
+def test_gcs_storage_options_in_barca_toml_reach_the_store(tmp_path):
     """The same settings as a barca.toml table instead of FSSPEC_GCS_* variables."""
     emulators.require("gcs", _reachable(GCS_ENDPOINT), GCS_ENDPOINT)
     uri, _ = gcs_case()
-    a, b = machines(tmp_path)
+    a, _ = machines(tmp_path)
     toml = (
         f'[remote]\nuri = "{uri}"\n\n[remote.storage_options.gcs]\n'
         f'endpoint_url = "{GCS_ENDPOINT}"\ntoken = "anon"\nproject = "test"\n'
     )
-    for d in (a, b):
-        (d / "barca.toml").write_text(toml)
+    (a / "barca.toml").write_text(toml)
     env = {"GCSFS_EXPERIMENTAL_ZB_HNS_SUPPORT": "false"}
     assert barca(a, env, "get", "total")["steps_executed"] == 2
-    assert barca(b, env, "get", "total")["steps_executed"] == 0
-
-
-# ─── The GCS state client takes gcsfs's options (no network) ─────────────────
-
-
-def _service_account_info() -> dict:
-    from cryptography.hazmat.primitives import serialization
-    from cryptography.hazmat.primitives.asymmetric import rsa
-
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    pem = key.private_bytes(
-        serialization.Encoding.PEM,
-        serialization.PrivateFormat.PKCS8,
-        serialization.NoEncryption(),
-    ).decode()
-    return {
-        "type": "service_account",
-        "project_id": "from-key-file",
-        "private_key_id": "x",
-        "private_key": pem,
-        "client_email": "barca@from-key-file.iam.gserviceaccount.com",
-        "client_id": "1",
-        "token_uri": "https://oauth2.googleapis.com/token",
-    }
-
-
-@pytest.fixture
-def gcs_state(monkeypatch):
-    pytest.importorskip("google.cloud.storage")
-    import fsspec.config
-
-    from barca import _state
-
-    for k in list(os.environ):
-        if k.startswith(SCRUB):
-            monkeypatch.delenv(k)
-    monkeypatch.setattr(fsspec.config, "conf", {})
-    _state._gcs_clients.clear()
-    yield _state
-    _state._gcs_clients.clear()
-
-
-def test_gcs_state_client_reads_fsspec_config(gcs_state, monkeypatch):
-    import fsspec.config
-    from google.auth.credentials import AnonymousCredentials
-
-    monkeypatch.setattr(
-        fsspec.config,
-        "conf",
-        {"gcs": {"token": "anon", "project": "p1", "endpoint_url": "http://example:1"}},
-    )
-    client = gcs_state._gcs_client()
-    assert isinstance(client._credentials, AnonymousCredentials)
-    assert client.project == "p1"
-    assert client._connection.API_BASE_URL == "http://example:1"
-
-
-def test_barca_storage_options_override_fsspec_config(gcs_state, monkeypatch):
-    import fsspec.config
-
-    monkeypatch.setattr(fsspec.config, "conf", {"gcs": {"token": "anon", "project": "from-fsspec"}})
-    monkeypatch.setenv("BARCA_STORAGE_OPTIONS", json.dumps({"gcs": {"project": "from-barca"}}))
-    assert gcs_state._gcs_client().project == "from-barca"
-
-
-def test_gcs_state_client_uses_a_service_account_key_file(gcs_state, monkeypatch, tmp_path):
-    from google.oauth2 import service_account
-
-    key = tmp_path / "key.json"
-    key.write_text(json.dumps(_service_account_info()))
-    monkeypatch.setenv("BARCA_STORAGE_OPTIONS", json.dumps({"gcs": {"token": str(key)}}))
-    client = gcs_state._gcs_client()
-    assert isinstance(client._credentials, service_account.Credentials)
-    assert client.project == "from-key-file"
+    fetched_back(a, env)

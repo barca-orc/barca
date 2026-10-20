@@ -91,14 +91,16 @@ install SQL support with `uv add 'barca[sql]'`.
   it and nothing needs adding to your own.
 - Results are cached by run hash, which covers the function's code and its inputs, not
   the bytes of the output.
-- Results are always written locally first. A remote store is an optional shared copy:
-  set `BARCA_REMOTE_URI=s3://my-bucket/barca/my-project` (or `gs://`, `abfs://`) and other
-  machines using the same location get cache hits for what this one computed.
+- Results are always written locally first. A remote store is this machine's backup and
+  read-through cache: set `BARCA_REMOTE_URI=s3://my-bucket/barca/my-project` (or `gs://`,
+  `abfs://`) and results are uploaded there and the history is backed up there (five copies);
+  `barca state restore` puts a backup back on a new machine. Sharing state between machines
+  means a server (RFC-0007).
 - Required history writes commit terminal status and step outcomes together. A write failure
   reports an infrastructure error and preserves earlier history and recorded progress.
 - Completed results are recorded locally during a run, after confirmed upload when using a
-  remote store. A killed run can reuse recorded results; new shared progress is published every
-  minute in healthy operation, then the final outcome at run end.
+  remote store. A killed run can reuse recorded results; with a store, new progress is backed
+  up every minute in healthy operation, then once more at run end.
 - `--env <name>` (or `BARCA_ENV`) keeps a separate cache and history, so dev and prod do
   not share results.
 
@@ -110,9 +112,7 @@ barca status pipeline.py --env prod
 More: `barca docs cache`, `barca docs remote`.
 
 For one process, `BARCA_REMOTE=off barca get total pipeline.py` uses local artifacts
-and history. `BARCA_STATE=off barca serve pipeline.py` keeps metadata local while
-retaining configured artifact sharing; optimistic shared metadata remains refused
-by `serve`.
+and history and takes no backup.
 
 ## Seeing what barca sees
 
@@ -316,6 +316,8 @@ error (exit 2) that names the right one. `barca pipeline.py` is short for
 | `barca history` | Every run in JSON, 10 in a human table. `--limit N`, `--all`, `--json`, `--pretty`, `--fields`, `--env`; `--reconcile RUN_ID` explicitly records a verified-stopped run as interrupted |
 | `barca stats <target> [files...]` | Timing and cache statistics for one asset. `--json`, `--pretty`, `--fields`, `--env` |
 | `barca serve [files...]` | HTTP API, cron scheduler and web UI. `--port N`, `--host IP`, `--watch`, `--no-schedule`, `--timezone`, `--read-only`, `--env` |
+| `barca state backups` | The metadata backups, local and in the store, newest first. `--json`, `--pretty`, `--env` |
+| `barca state restore` | Put a backup in place of the metadata DB; the current one is kept as `metadata.db.pre-restore`. `--from N\|NAME`, `--json`, `--env` |
 | `barca docs [topic]` | The manual, compiled into the binary. `--all`, `--json`, `--fields` |
 | `barca version` | Print the version (also `barca --version`). |
 

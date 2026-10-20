@@ -144,7 +144,7 @@ tracebacks, SQL and HTTP metadata; the Rust exporter's error truncation does not
 ## Limits
 
 - A run that fails before it starts sends nothing: a syntax error in the pipeline, an unknown
-  target, or a shared-state pull that fails. Under `barca serve` a pipeline broken that way
+  target, or an artifact store that cannot be reached. Under `barca serve` a pipeline broken that way
   produces no error trace, so alert on missing runs as well as on errors.
 - A run that is killed sends nothing. A cancelled run is sent, without a span for the step that
   was in flight.
@@ -156,7 +156,7 @@ tracebacks, SQL and HTTP metadata; the Rust exporter's error truncation does not
 - The traceback of a chained exception (`raise ... from e`) does not include its cause.
 - A failed upload to a remote store is not in the trace: the step shows as succeeded, and
   the upload is retried by the next command (`barca docs remote`).
-- The run is reported before the shared history is pushed. A push that then fails is not
+- The run is reported before the history is backed up. A backup that then fails is not
   reflected in the trace.
 - Uploads to a remote store, and the time spent waiting for them, are not spans.
 - Sending happens at the end of the run and can add up to 3 seconds to it when the Agent does

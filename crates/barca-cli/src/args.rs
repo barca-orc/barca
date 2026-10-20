@@ -141,8 +141,10 @@ Completed steps are recorded during the run; remote results require confirmed up
 With an artifact store, an upload that fails after every step succeeded is a warning, not a
 failure: exit 0, JSON `uploads` {pending, error, nodes}, the result is kept on this machine
 (`unsynced` in barca status) and the next get or run uploads it first (barca docs remote).
-Use `barca status pipeline.py` in another terminal to inspect recorded progress. Shared history
-is published when the run ends (barca docs remote).
+Use `barca status pipeline.py` in another terminal to inspect recorded progress. With a store
+([remote] uri), the metadata DB is backed up there every minute and when the run ends; a failed
+backup upload is a warning (barca docs remote). A cached target that is missing from the store, or
+different there, is uploaded from this machine without a step running.
 Targets must be assets; use `barca run` for tasks. With no target, get materializes every asset and
 sensor and skips tasks (previously it ran tasks too); stderr names the skipped tasks and the
 `barca run` command. A file with only tasks gets nothing: exit 0, empty `steps`.
@@ -223,7 +225,7 @@ Examples:
   barca doctor pipeline.py --json    # structured checks, no steps executed
   barca doctor src/ --env local --pretty   # selected sources and environment
 
-Checks project root, Python, config, state mode, cache writability, metadata integrity,
+Checks project root, Python, config, backups, cache writability, metadata integrity,
 static source parsing, and configured stores. Never imports pipeline modules or evaluates
 dynamic partition expressions. Prints the report on stdout; exit 0 when all checks pass,
 3 when a prerequisite fails. Store probes list but never create buckets or objects.
@@ -292,7 +294,6 @@ More: barca docs cache";
 
 const SERVE_HELP: &str = "\
 Examples:
-  BARCA_STATE=off barca serve pipeline.py    # local history; keep configured artifact sharing
   BARCA_REMOTE=off barca serve pipeline.py   # local artifacts and history
   barca serve                                # every file in the project; files added later need a restart
   barca serve pipeline.py                    # HTTP API on 127.0.0.1:8274 plus the scheduler
@@ -311,7 +312,8 @@ continue. Startup logs, /health load_errors and the UI show unloaded files and a
 --watch restores repaired configured sources; one-shot commands remain strict.
 Trigger deployed runs through HTTP or barca.Client. Ordinary get/run commands execute locally;
 CLI --server, server URL configuration and the shared-ledger design are not implemented yet.
-With a remote artifact store, set BARCA_STATE=off to retain local metadata.
+With a store ([remote] uri), the metadata DB is backed up there every minute it changed
+(barca docs remote); barca state restore refuses to run while the server is up.
 More: barca docs scheduling";
 
 const LIST_HELP: &str = "\
@@ -363,8 +365,9 @@ deleted it), never_run, partial
 (some partition keys cached), unknown (dynamic partitions not yet known) or always_runs (tasks,
 sensors), with a reason. JSON spells the states in snake_case, the same as the `summary` keys
 (the table prints never-run, always-runs). It is the same decision `--dry-run` makes.
-No steps execute. Optimistic shared history may synchronize locally; partitions(<expression>)
-may import the source to resolve keys. Shape (rows, columns, type) is read from the
+No steps execute; nothing is written. partitions(<expression>) may import the source to resolve
+keys. With a store, a cached node is `unsynced` unless this machine's copy, the store's object and
+the recorded digest agree: reason `local_only`, `store_only` or `mismatch` (barca docs remote). Shape (rows, columns, type) is read from the
 artifact file only. With remote storage it is read from the bucket: a parquet footer by ranged
 requests, json and pickle by a download of up to 16 MB (larger ones get a `note`). A store that
 cannot be reached is a `note` on each shape, not a failed command.
@@ -393,12 +396,56 @@ partitions(<expression>) may evaluate Python while loading its keys.
 Partitioned views include current known keys only; removed keys stay in history. Unknown derived
 keys require their source to materialize first. Zero current keys have no result view.
 With remote storage, the artifacts of the views a query names are downloaded into
-.barca/sql-cache/ (stderr says so) and reused while the objects are unchanged. Optimistic shared
-history synchronizes locally; explicit SQL COPY ... TO writes the requested output file.
+.barca/sql-cache/ (stderr says so) and reused while the objects are unchanged. Explicit SQL
+COPY ... TO writes the requested output file.
 Errors exit 2: a node with no result yet names the `barca get` to run first; an unknown view lists
 the views; a SQL error carries DuckDB's message. A remote artifact that cannot be fetched exits 3.
 Experimental: barca docs contract.
 More: barca docs sql";
+
+const STATE_HELP: &str = "\
+Examples:
+  barca state backups                  # the metadata backups, local and in the store, newest first
+  barca state backups --json           # {backups: [{index, name, where, size_bytes, run_id, rows, ...}], local_dir, store}
+  barca state restore                  # put the newest backup back in place of .barca/metadata.db
+  barca state restore --from 3         # the third newest (the index in barca state backups)
+  barca state restore --from 2026-10-14T18-02-11Z.db   # one backup, by name
+  barca state backups --env dev        # another environment's backups
+
+With a remote store ([remote] uri), the metadata DB is backed up every minute of a run, when the
+run ends, and every minute from barca serve: to .barca/backups/ and to
+{uri}/{env}/state/backups/, five copies kept in each. Nothing is ever downloaded before a run.
+restore never runs by itself: it validates the copy, moves the current database to
+metadata.db.pre-restore and puts the copy in its place. No backup: exit 2. Refused while
+barca serve is using the environment: exit 3.
+More: barca docs remote";
+
+const STATE_BACKUPS_HELP: &str = "\
+Examples:
+  barca state backups                  # table in a terminal, JSON when piped
+  barca state backups --json           # {backups, local_dir, store, store_error?}
+  barca state backups --pretty         # the table, even when piped
+  barca state backups --env dev        # another environment's backups
+
+Newest first. `where` is local, store or both; `agree` says whether the two copies of a backup
+match (null with one copy). A store that cannot be listed is a warning on stderr and
+`store_error` in JSON; the local copies are still listed.
+More: barca docs remote";
+
+const STATE_RESTORE_HELP: &str = "\
+Examples:
+  barca state restore                  # the newest backup
+  barca state restore --from 2         # the second newest
+  barca state restore --from 2026-10-14T18-02-11Z     # by name, .db optional
+  barca state restore --json           # {restored, from, source, pre_restore, rows, run_id}
+
+The copy is checked first (a whole SQLite file, integrity, barca's tables, a format this barca
+can use): the local copy when there is one, else the store's. A copy that fails is a usage error
+naming the next newest, and nothing changes. Then the current database moves to
+metadata.db.pre-restore (replacing an older one) and the copy takes its place; one line on
+stderr says what was restored and from where. Stop barca get/run in this project first.
+Exit 2: no backup, unknown --from, a copy that is not valid. Exit 3: barca serve is running.
+More: barca docs remote";
 
 const DOCS_HELP: &str = "\
 Examples:
@@ -468,7 +515,7 @@ pub(crate) enum Cli {
         #[arg(long)]
         refresh_all: bool,
         /// Show what this command would do (each step cached or will-run, and why) without
-        /// executing steps or recording a run (shared history may synchronize)
+        /// executing steps or recording a run
         #[arg(long)]
         dry_run: bool,
         /// Agent-friendly output: plain structured progress lines instead of visual progress bar
@@ -507,7 +554,7 @@ pub(crate) enum Cli {
         #[arg(long)]
         refresh_all: bool,
         /// Show what this command would do (each step cached or will-run, and why) without
-        /// executing steps or recording a run (shared history may synchronize)
+        /// executing steps or recording a run
         #[arg(long)]
         dry_run: bool,
         /// Output format (kept for compatibility; --json / --pretty are the canonical spelling)
@@ -703,8 +750,8 @@ pub(crate) enum Cli {
     },
     /// Query cached results with SQL (DuckDB) — each asset is a named view
     ///
-    /// No pipeline step executes or new run is recorded. Shared history may synchronize;
-    /// partition expressions may evaluate Python; explicit SQL COPY can write files.
+    /// No pipeline step executes or new run is recorded. Partition expressions may evaluate
+    /// Python; explicit SQL COPY can write files.
     #[command(after_help = SQL_HELP)]
     Sql {
         /// The SQL query (DuckDB dialect); quote it as one argument
@@ -723,6 +770,16 @@ pub(crate) enum Cli {
         /// Environment name (separates cache/state per environment)
         #[arg(long)]
         env: Option<String>,
+    },
+    /// Metadata backups: list them, or put one back in place of the local database
+    ///
+    /// With a remote store, the metadata DB is backed up on the minute checkpoint and at the
+    /// end of each run, five copies kept locally and in the store. Nothing is restored unless
+    /// you ask.
+    #[command(after_help = STATE_HELP, subcommand_required = true)]
+    State {
+        #[command(subcommand)]
+        command: StateCommand,
     },
     /// Show the built-in manual: concepts, output formats, examples, agent conventions
     ///
@@ -745,6 +802,33 @@ pub(crate) enum Cli {
     },
     /// Print version information
     Version,
+}
+
+/// `barca state ...`.
+#[derive(clap::Subcommand)]
+pub(crate) enum StateCommand {
+    /// List the metadata backups, local and in the store, newest first
+    #[command(after_help = STATE_BACKUPS_HELP)]
+    Backups {
+        #[command(flatten)]
+        format: FormatFlags,
+        /// Environment name (separates cache/state per environment)
+        #[arg(long)]
+        env: Option<String>,
+    },
+    /// Put a metadata backup in place of the local database (the current one is kept aside)
+    #[command(after_help = STATE_RESTORE_HELP)]
+    Restore {
+        /// Which backup: its index in `barca state backups` (1 = newest) or its name; default
+        /// the newest
+        #[arg(long, value_name = "N|NAME")]
+        from: Option<String>,
+        #[command(flatten)]
+        format: FormatFlags,
+        /// Environment name (separates cache/state per environment)
+        #[arg(long)]
+        env: Option<String>,
+    },
 }
 
 fn parse_timezone(value: &str) -> Result<String, String> {

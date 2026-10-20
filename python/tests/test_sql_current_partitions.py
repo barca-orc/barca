@@ -166,7 +166,7 @@ def test_removed_remote_partitions_never_reach_actual_sql_downloads(tmp_path):
             db.execute("update materializations set artifact_path=? where id=?", (uri, ident))
         db.commit()
     pipeline(tmp_path, ["a", "c", "e"])
-    (tmp_path / "barca.toml").write_text('[remote]\nuri="memory://bucket/proj"\nstate="off"\n')
+    (tmp_path / "barca.toml").write_text('[remote]\nuri="memory://bucket/proj"\n')
     before = records(tmp_path)
     (tmp_path / "sources.json").write_text(json.dumps(sources))
     shim = tmp_path / "python-startup"

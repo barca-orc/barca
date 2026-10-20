@@ -9,12 +9,10 @@
 //! database that has never had one has no table, and every reader treats that as empty. It is
 //! an additive table of metadata format 1 (`specs/metadata-schema.md`). Rows carry the host
 //! that wrote them; only this host's rows are read, retried or shown, because the local file
-//! they upload from exists only on that machine. With shared history, a pull keeps this host's
-//! rows ([`carry`]).
+//! they upload from exists only on that machine.
 
 use crate::BarcaError;
 use crate::db;
-use std::collections::HashSet;
 use turso::{Connection, Value};
 
 const CREATE: &str = "CREATE TABLE IF NOT EXISTS pending_uploads (
@@ -29,9 +27,6 @@ const CREATE: &str = "CREATE TABLE IF NOT EXISTS pending_uploads (
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
 )";
-
-const COLUMNS: &str =
-    "store_path, node_id, run_hash, run_id, local_path, host, error, attempts, created_at";
 
 /// One result whose upload has not succeeded.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -214,70 +209,6 @@ pub(crate) async fn settle(
     Ok(())
 }
 
-/// The store locations of this host's pending uploads in `conn`, for a pull deciding which
-/// local rows still have an artifact to offer.
-pub(crate) async fn store_paths(conn: &Connection) -> Result<HashSet<String>, BarcaError> {
-    Ok(read(conn, &db::local_host())
-        .await?
-        .into_iter()
-        .map(|u| u.store_path)
-        .collect())
-}
-
-/// A pull replaces the local database with the shared one. This host's pending uploads are
-/// this host's to keep: the pulled database gets exactly the local set for this host (rows
-/// another host left are kept as they came).
-pub(crate) async fn carry(local: &Connection, pulled: &Connection) -> Result<(), BarcaError> {
-    let host = db::local_host();
-    let local_has = has_table(local).await?;
-    if !local_has && !has_table(pulled).await? {
-        return Ok(());
-    }
-    pulled
-        .execute(CREATE, ())
-        .await
-        .map_err(failed("creating the table"))?;
-    pulled
-        .execute(
-            "DELETE FROM pending_uploads WHERE host = ?1",
-            [host.clone()],
-        )
-        .await
-        .map_err(failed("carrying"))?;
-    if !local_has {
-        return Ok(());
-    }
-    let mut rows = local
-        .query(
-            &format!("SELECT {COLUMNS} FROM pending_uploads WHERE host = ?1"),
-            [host],
-        )
-        .await
-        .map_err(failed("reading"))?;
-    let mut keep = Vec::new();
-    while let Some(row) = rows.next().await.map_err(failed("reading"))? {
-        keep.push(
-            (0..9)
-                .map(|i| row.get_value(i).unwrap_or(Value::Null))
-                .collect::<Vec<_>>(),
-        );
-    }
-    drop(rows);
-    for values in keep {
-        pulled
-            .execute(
-                &format!(
-                    "INSERT OR REPLACE INTO pending_uploads ({COLUMNS}) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"
-                ),
-                values,
-            )
-            .await
-            .map_err(failed("carrying"))?;
-    }
-    Ok(())
-}
-
 /// The run JSON's `uploads` object (and the dry run's): this host's pending uploads after the
 /// run, the error that left them pending, and the nodes they belong to. `None` when nothing is
 /// pending and nothing failed.
@@ -376,48 +307,5 @@ mod tests {
             .await
             .unwrap();
         assert!(list(&path).await.unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn a_pull_keeps_this_hosts_set_and_other_hosts_rows() {
-        let dir = tempfile::tempdir().unwrap();
-        let local = fresh(&dir, "local.db").await;
-        let pulled = fresh(&dir, "pulled.db").await;
-        record(&local, &[upload("s/a/h.json", "p.py:a")])
-            .await
-            .unwrap();
-        // The pulled copy holds an older row of this host (since uploaded here) and another
-        // host's row.
-        record(&pulled, &[upload("s/old/h.json", "p.py:old")])
-            .await
-            .unwrap();
-        {
-            let (_db, conn) = db::open_conn(&pulled).await.unwrap();
-            conn.execute(
-                "INSERT INTO pending_uploads (store_path, node_id, local_path, host) \
-                 VALUES ('s/x/h.json', 'p.py:x', '/elsewhere', 'another-host')",
-                (),
-            )
-            .await
-            .unwrap();
-        }
-        {
-            let (_l, l) = db::open_conn(&local).await.unwrap();
-            let (_p, p) = db::open_conn(&pulled).await.unwrap();
-            carry(&l, &p).await.unwrap();
-            assert_eq!(
-                store_paths(&p).await.unwrap(),
-                HashSet::from(["s/a/h.json".to_string()])
-            );
-            let mut rows = p
-                .query(
-                    "SELECT COUNT(*) FROM pending_uploads WHERE host = 'another-host'",
-                    (),
-                )
-                .await
-                .unwrap();
-            let n = rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap();
-            assert_eq!(n, 1);
-        }
     }
 }

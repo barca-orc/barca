@@ -130,20 +130,24 @@ def _overwrite(uri: str, body: bytes, env: dict, tmp: Path) -> None:
 @pytest.mark.parametrize("backend", ["s3", "gcs", "azure"])
 def test_an_overwritten_object_is_used_and_flagged_in_the_json_result(backend, tmp_path):
     """What a refresh killed after its upload leaves in a bucket: the object has new bytes,
-    the shared history still has the old hash. A second machine uses the object and says so,
-    on stderr and under `steps[].artifact_mismatch` (#247)."""
+    the history still has the old hash. A machine without a local copy fetches the object,
+    uses it and says so, on stderr and under `steps[].artifact_mismatch` (#247)."""
+    import shutil
+
     endpoint, make = CASES[backend]
     emulators.require(backend, _reachable(endpoint), endpoint)
     uri, env = make()
     env = {**env, "BARCA_REMOTE_URI": uri}
-    a, b = machines(tmp_path)
+    a, _ = machines(tmp_path)
     assert barca(a, env, "get", "total")["final_output"] == {"total": 3}
     (node,) = barca(a, env, "status", "numbers")["nodes"]
     stored = node["cache"]["artifact"]
     assert stored.startswith(f"{uri}/default/artifacts/"), stored
     _overwrite(stored, b'[{"n": 5}]', env, tmp_path)
+    # This machine's copies are gone (a new container with the restored history).
+    shutil.rmtree(a / ".barca" / "artifacts")
 
-    out = barca(b, env, "get", "total", "--refresh", "total")
+    out = barca(a, env, "get", "total", "--refresh", "total")
 
     assert out["final_output"] == {"total": 5}
     steps = {st["id"].rsplit(":", 1)[1]: st for st in out["steps"]}
@@ -153,14 +157,11 @@ def test_an_overwritten_object_is_used_and_flagged_in_the_json_result(backend, t
     assert steps["total"]["status"] == "ran"
     assert steps["total"]["artifact_mismatch"] is True
 
-    # The refresh of `total` did not touch `numbers`: a third look still reports it, and a
-    # refresh of `numbers` itself clears it for everyone.
-    assert barca(b, env, "get", "numbers", "--refresh", "numbers")["final_output"] == [
+    # A refresh of `numbers` itself clears it: the next fetch finds what was recorded.
+    assert barca(a, env, "get", "numbers", "--refresh", "numbers")["final_output"] == [
         {"n": 1},
         {"n": 2},
     ]
-    c = tmp_path / "machine_c"
-    c.mkdir()
-    (c / "pipeline.py").write_text((a / "pipeline.py").read_text())
-    clean = barca(c, env, "get", "numbers")
+    shutil.rmtree(a / ".barca" / "artifacts")
+    clean = barca(a, env, "get", "numbers")
     assert all("artifact_mismatch" not in st for st in clean["steps"])

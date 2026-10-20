@@ -15,13 +15,6 @@ pub(crate) async fn serve_cmd(
     python: &std::path::Path,
 ) -> Result<(), barca_core::BarcaError> {
     let resolved = barca_core::config::resolve(env)?;
-    if resolved.state == barca_core::config::StateMode::Optimistic && resolved.state_uri.is_some() {
-        return Err(barca_core::BarcaError::Usage(
-            "barca serve does not support shared remote state yet — set state = \"off\" \
-             in barca.toml (or BARCA_STATE=off) to serve with a local metadata DB"
-                .to_string(),
-        ));
-    }
     if let Some(line) = resolved.startup_line() {
         barca_core::errln!("{line}");
     }
