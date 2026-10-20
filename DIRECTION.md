@@ -66,6 +66,7 @@ Design questions nobody has answered yet, the issue each blocks, and the release
 - **Pause persistence** (#435): whether a paused schedule stays paused across a server restart. Proposed yes. By 0.27.0.
 - **Route aliases and resume** (#393): how long the old routes stay as aliases, and when `Last-Event-ID` resume replaces the drop-is-infra-error rule. By 0.27.0.
 - **Fixture home** (#250): `examples/planning_pipeline/` or `benchmarks/planning_pipeline/`. By 0.27.0.
+- **Signed URLs** ([RFC-0011](https://barca.sh/rfcs/0011-signed-urls/)): accept or reject `barca.signed_url` and `barca get -o url`, the expiry limits, and the release (0.26.0 proposed). By 2026-10-27, the one-week rule for design PRs.
 - **Heavy-worker limit** (#436): a per-node weight, a concurrency group, or a memory budget from recorded RSS. Unscheduled; decided when scheduled.
 
 ## Decided, October 2026
