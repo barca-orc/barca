@@ -12,9 +12,10 @@
 //!   line as barca would have printed it, without its `[barca] ` prefix.
 //! - `run_id` is the run's id (the one `barca.run` spans and `barca get --json` carry), present
 //!   on lines written while a run is going ([`in_run`]). `node` is the step the line is about.
-//! - `dd.trace_id` and `dd.span_id` are the ids of the run's trace and of the step's span (the
-//!   run span when there is no node) when the Datadog integration is on, so Datadog joins the
-//!   line to its trace.
+//! - `dd.trace_id` and `dd.span_id` are the ids of the run's trace (its lower 64 bits) and of
+//!   the step's span (a partition key's own span when it has one, else its node's; the run span
+//!   when there is no node) when the Datadog integration is on, so Datadog joins the line to
+//!   its trace.
 //!
 //! A step's captured output (its `print()`) is written as `info` lines with the run and node.
 //! What a step writes to its stderr is not barca's: it stays on stderr as it is.
@@ -157,15 +158,12 @@ fn object(
         quoted(&mut out, node);
     }
     if trace_ids && let Some(run_id) = run_id {
-        use crate::telemetry::datadog::span_id;
-        let span = match node {
-            Some(node) => span_id(&["step", run_id, node]),
-            None => span_id(&["run", run_id]),
-        };
+        use crate::telemetry::datadog::{log_span_id, trace_id};
         let _ = write!(
             out,
-            ",\"dd.trace_id\":\"{}\",\"dd.span_id\":\"{span}\"",
-            span_id(&["trace", run_id])
+            ",\"dd.trace_id\":\"{}\",\"dd.span_id\":\"{}\"",
+            trace_id(run_id),
+            log_span_id(run_id, node)
         );
     }
     out.push('}');
@@ -310,6 +308,20 @@ mod tests {
         assert_eq!(
             run["dd.span_id"],
             span_id(&["run", "r1"]).to_string().as_str()
+        );
+        // A partition key without a span of its own (past the cap) joins its node's step span.
+        let key: serde_json::Value = serde_json::from_str(&object(
+            ts(),
+            Level::Info,
+            "x",
+            Some("r1"),
+            Some("p.py:a[k=1]"),
+            true,
+        ))
+        .unwrap();
+        assert_eq!(
+            key["dd.span_id"],
+            span_id(&["step", "r1", "p.py:a"]).to_string().as_str()
         );
     }
 

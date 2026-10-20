@@ -166,6 +166,8 @@ fn skip_report(job: &ScheduledJob, handle: &str, epoch: i64) -> barca_core::tele
         .to_string(),
         target: Some(job.id.clone()),
         job: job.id.clone(),
+        targets: vec![barca_core::telemetry::short_name(&job.id).to_string()],
+        files: Vec::new(),
         status: "skipped".to_string(),
         reason: Some("in_flight".to_string()),
         in_flight_run: Some(handle.to_string()),

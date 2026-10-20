@@ -1,0 +1,17 @@
+barca.run [run publish,report] service=barca type=worker error=1 {"barca.failed_asset": "regional", "barca.status": "failed", "component": "barca", "error.message": "regional[region=apac]: no data for apac", "error.type": "ValueError"}
+  barca.step [daily_revenue] service=barca type=worker error=0 {"barca.group": "Company/Sales", "barca.outcome": "ran", "component": "barca"}
+    barca.execute [daily_revenue] service=barca type=worker error=0 {"barca.group": "Company/Sales", "barca.outcome": "ran", "component": "python"}
+  barca.step [orders] service=barca type=worker error=0 {"barca.group": "Company/Sales", "barca.outcome": "ran", "component": "barca"}
+    barca.execute [orders] service=barca type=worker error=0 {"barca.group": "Company/Sales", "barca.outcome": "ran", "component": "python"}
+  barca.step [publish] service=barca type=worker error=0 {"barca.group": "Company/Sales", "barca.outcome": "ran", "component": "barca"}
+    barca.execute [publish] service=barca type=worker error=0 {"barca.group": "Company/Sales", "barca.outcome": "ran", "component": "python"}
+  barca.step [regional] service=barca type=worker error=1 {"barca.outcome": "failed", "barca.partitions.cached": 0, "barca.partitions.executed": 2, "barca.partitions.failed": 1, "barca.partitions.total": 3, "component": "barca", "error.message": "[region=apac] no data for apac", "error.type": "ValueError"}
+    barca.partition [regional] service=barca type=worker error=0 {"barca.outcome": "ran", "barca.partition": "region=amer", "component": "barca"}
+      barca.execute [regional] service=barca type=worker error=0 {"barca.outcome": "ran", "barca.partition": "region=amer", "component": "python"}
+        sqlite.query [select 1] service=barca type=sql error=0 {"component": "sqlite"}
+    barca.partition [regional] service=barca type=worker error=1 {"barca.outcome": "failed", "barca.partition": "region=apac", "component": "barca", "error.message": "no data for apac", "error.type": "ValueError"}
+      barca.execute [regional] service=barca type=worker error=1 {"barca.outcome": "failed", "barca.partition": "region=apac", "component": "python", "error.message": "no data for apac", "error.type": "builtins.ValueError"}
+    barca.partition [regional] service=barca type=worker error=0 {"barca.outcome": "ran", "barca.partition": "region=emea", "component": "barca"}
+      barca.execute [regional] service=barca type=worker error=0 {"barca.outcome": "ran", "barca.partition": "region=emea", "component": "python"}
+        sqlite.query [select 1] service=barca type=sql error=0 {"component": "sqlite"}
+  barca.step [report] service=barca type=worker error=0 {"barca.outcome": "skipped", "component": "barca"}

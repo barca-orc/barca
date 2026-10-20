@@ -421,11 +421,14 @@ unit tested as ordinary Python.
 
 ## Datadog job traces
 
-Set `BARCA_TELEMETRY=datadog` to report job runs and steps to a Datadog Agent.
-Install `barca[datadog]` in your job environment to add named Python executions and
-nested library traces in the same job trace. In the `<DD_SERVICE>-python` service,
-select `barca.execute` to see jobs by their canonical names. See `barca docs telemetry`
-for setup, tags, and delivery limits. Under `barca serve`, `BARCA_LOG=json` writes each log
+Set `BARCA_TELEMETRY=datadog` to report each run to a Datadog Agent as one trace of the
+pipeline: a `barca.run` span named by the command and its targets, a `barca.step` span per node
+named by the node, carrying its file, group, partition counts, outcome and cost, and the first
+failed asset on the run. Everything reports as one service, `DD_SERVICE`. Install
+`barca[datadog]` in your job environment to add each step's Python call (`barca.execute`) and,
+opted in with `DD_PATCH_MODULES` or `BARCA_TRACE_LIBRARIES=1`, library spans. `barca serve`
+reports itself as DogStatsD metrics (`barca.serve.up`). See `barca docs telemetry` for setup,
+tags, and delivery limits. Under `barca serve`, `BARCA_LOG=json` writes each log
 line as a JSON object on stdout with its level, `run_id`, `node` and the run's trace and span
 ids, so Datadog joins a run's logs to its trace.
 

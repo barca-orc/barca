@@ -696,10 +696,15 @@ async fn start_workers(
         python: python.to_path_buf(),
         pool_size,
         run_id: run_id.clone(),
-        datadog_job: telemetry
+        datadog: telemetry
             .iter()
             .any(|(name, _)| name == "datadog")
-            .then(|| job_name.clone()),
+            .then(|| {
+                std::sync::Arc::new(crate::telemetry::datadog::Dispatch::new(
+                    &prepared.dag,
+                    job_name,
+                ))
+            }),
         artifact_root: worker_artifact_root,
         storage_options_json: cfg.storage_options_json.clone(),
     };
@@ -1501,6 +1506,7 @@ async fn record_and_publish(session: &mut RunSession<'_, '_>) -> Result<f64, Bar
             dag: &session.prepared.dag,
             run_started: session.started.run_started,
             step_clocks: &session.state.step_clocks,
+            skipped_bases: &session.state.skipped_bases,
             job_name: &session.prepared.job_name,
             state_sync_on: session.started.state_sync_on,
             python: session.request.python,
@@ -2614,6 +2620,7 @@ struct FinalizeRun<'a> {
     dag: &'a Dag,
     run_started: std::time::SystemTime,
     step_clocks: &'a HashMap<String, (f64, f64)>,
+    skipped_bases: &'a std::collections::HashSet<String>,
     job_name: &'a str,
     state_sync_on: bool,
     python: &'a std::path::Path,
@@ -2659,6 +2666,7 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
         dag,
         run_started,
         step_clocks,
+        skipped_bases,
         job_name,
         state_sync_on,
         python,
@@ -2755,7 +2763,17 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
     trace_point!("persist_run_done");
 
     if !telemetry.is_empty() {
-        let report = telemetry_report(&ledger, dag, run_started, step_clocks, job_name);
+        let report = telemetry_report(
+            &ledger,
+            dag,
+            crate::persist::TelemetryRun {
+                started: run_started,
+                clocks: step_clocks,
+                skipped: skipped_bases,
+                job: job_name,
+                files: file_args,
+            },
+        );
         crate::telemetry::export(telemetry, &report).await;
         trace_point!("telemetry_exported");
     }
