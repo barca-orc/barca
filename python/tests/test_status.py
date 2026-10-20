@@ -266,13 +266,38 @@ def test_partitioned_assets_summarize_per_key_state(project):
     assert cached["partitioned"] is True
     assert cached["cache"]["state"] == "cached"
     assert cached["partitions"] == {"total": 2, "cached": 2, "missing": 0, "missing_keys": []}
-    assert cached["last_materialization"]["partition"] in ("k=a", "k=b")
+    assert cached["last_materialization"]["partition"] == "k=a"
     grown = nodes(status(project, "parts.py", env={"BARCA_TEST_KEYS": "a,b,c"}))
     part = grown["part"]
     assert part["cache"]["state"] == "partial"
     assert part["partitions"] == {"total": 3, "cached": 2, "missing": 1, "missing_keys": ["k=c"]}
     assert grown["summary"]["cache"]["state"] == "stale"
     assert grown["summary"]["cache"]["reason"] == "upstream_stale"
+
+
+SLOW_FIRST_KEY = """
+import time
+from barca import asset, partitions
+
+
+@asset(partitions={"k": partitions(["a", "b", "c"])})
+def part(k: str) -> dict:
+    if k != "a":
+        time.sleep(0.5)  # the first key in sort order finishes first, not last
+    return {"k": k}
+"""
+
+
+def test_a_partitioned_node_reports_the_same_last_key_every_time(project):
+    """#475: the keys of one run finish in any order; status reports the latest run's first key
+    in sort order, so it does not change from one invocation (or one identical run) to the next."""
+    (project / "slow.py").write_text(SLOW_FIRST_KEY)
+    ok(barca(project, "get", "part", "slow.py", "--json"))
+    first = barca(project, "status", "slow.py", "--json")
+    again = barca(project, "status", "slow.py", "--json")
+    assert first.returncode == 0, first.stderr
+    assert first.stdout == again.stdout
+    assert nodes(json.loads(first.stdout))["part"]["last_materialization"]["partition"] == "k=a"
 
 
 def test_a_failed_last_attempt_is_reported(project):

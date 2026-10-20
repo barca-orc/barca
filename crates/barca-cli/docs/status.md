@@ -113,6 +113,9 @@ two cannot disagree. In JSON the states are snake_case, spelled exactly like the
 failed: `status`, `created_at` (UTC), `elapsed_seconds`, `run_hash`, `artifact`, `format`,
 `size_bytes`, and `error` for a failure. A cache hit is not an execution, so serving from cache
 does not change it. It is `null` when the node never ran.
+For a partitioned node it is one key's row from the latest run, the first key in sort order
+(`partition` names it), so two identical runs report the same key whatever order the keys
+finished in.
 
 ## Artifact shape
 

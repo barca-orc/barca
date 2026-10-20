@@ -424,7 +424,7 @@ It returns `NodeStatus[]`. Each node's `shape` contains `type`, `rows` and
 `columns: [{name, type}]` when the artifact supports them. JSON objects report
 field names and types, JSON lists also report `item_types`; pickle reports its top-level type without unpickling. Reader failures
 appear in `shape.note`. No artifact or a failed latest attempt gives `shape: null`.
-For partitioned nodes this describes the latest materialized key, named in
+For partitioned nodes this describes the key `barca status` reports (the latest run's first key in sort order), named in
 `last_materialization.partition`, rather than a union of every key's schema.
 No sample values are returned. Nested JSON fields report their container type (`dict` or `list`); this is not a recursive schema. Pickle types or constructors are identified from opcodes without executing them, and pickle column schemas are unavailable. This endpoint is available in read-only mode;
 unknown and ambiguous names return 404 and 409 respectively.
