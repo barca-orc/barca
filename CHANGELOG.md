@@ -12,6 +12,14 @@ reconciliation, and verified shared DuckDB worker lifetime. See
 upgrade and breaking-change notes. Releases between the historical entries below
 and these tags are available on the same releases page.
 
+## Pending
+
+### Bug Fixes
+
+- The release workflow's `verify-published-linux` jobs wait for the PyPI simple index to serve a
+  new version before installing it, retrying every 15 s for up to 5 minutes, so a release no
+  longer needs a manual rerun for index lag (#480).
+
 ## 0.25.0 (2026-10-20)
 
 ### Breaking
