@@ -24,7 +24,7 @@ Options:
       --fields <FIELDS>
           Output JSON with only these keys (comma-separated) on each entry of `nodes`. Implies --json. An unknown key is a usage error listing the valid ones
 
-          [possible values: id, name, kind, inputs, partitioned, cache, partitions, last_materialization, last_bytes_change, shape, env]
+          [possible values: id, name, kind, inputs, partitioned, cache, partitions, last_materialization, last_bytes_change, shape, env, local]
 
       --sample <N>
           Include up to N sample rows from each json/parquet/CSV artifact (off by default; pickles are never sampled)
@@ -33,10 +33,10 @@ Options:
           Environment name (separates cache/state per environment)
 
       --server [<URL>]
-          Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, the command runs on this machine
+          Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger) and status, history and stats are answered by a configured server
 
       --local
-          Ignore any configured server for this command: nothing is read from or sent to it
+          Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server
 
   -h, --help
           Print help (see a summary with '-h')
@@ -53,12 +53,17 @@ Examples:
   barca status total pipeline.py --json --sample 5   # add up to 5 sample rows per json/parquet/CSV artifact
   barca status pipeline.py --env dev       # state recorded in another environment
   barca status total --server              # cache state on the configured barca server
+  barca status total --json                # with a server configured: its ledger, plus `local` per node
+  barca status total --local               # this machine's own state, even with a server configured
 
 Cache state per node: cached, stale (ran before; code or inputs changed, or its artifact file is
 gone and a run would read it: reason `artifact_missing`), never_run, partial
 (some partition keys cached), unknown (dynamic partitions not yet known) or always_runs (tasks,
 sensors), with a reason. JSON spells the states in snake_case, the same as the `summary` keys
 (the table prints never-run, always-runs). It is the same decision `--dry-run` makes.
+With a server configured (BARCA_SERVER, [server] url) and no --local, the server answers, each
+node gets `local` (a copy is here), and a result computed here whose ledger post is pending is
+unsynced: reason `not_in_ledger` (barca docs server-mode).
 No steps execute. Optimistic shared history may synchronize locally; partitions(<expression>)
 may import the source to resolve keys. Shape (rows, columns, type) is read from the
 artifact file only. With remote storage it is read from the bucket: a parquet footer by ranged

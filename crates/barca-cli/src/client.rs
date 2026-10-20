@@ -5,17 +5,22 @@
 //! same stdout, the same stderr lines and the same exit code, rendered by the same
 //! `barca_core::report` functions. `--local` ignores a configured server.
 //!
-//! The module is laid out by layer, so the ledger calls of a local run against a configured
-//! server (#402: `/ledger/lookup`, `/ledger/runs`) go beside the run section on the same
-//! [`Server`]:
+//! Without `--server`, a configured server (`BARCA_SERVER`, else `[server] url`) is still the
+//! ledger: `get` and `run` run here and read and post through it ([`Server`] implements
+//! `barca_core::ledger::LedgerTransport`), and `status`, `history` and `stats` answer from it.
+//! `--local` leaves the configured server untouched.
 //!
-//! 1. **Choosing the server** ([`choose`]): the flags, `BARCA_SERVER` and `[server] url`.
+//! The module is laid out by layer:
+//!
+//! 1. **Choosing the server** ([`choose`], [`configured`]): the flags, `BARCA_SERVER` and
+//!    `[server] url`.
 //! 2. **Transport** ([`Server`]): one HTTP client, JSON requests, and the errors every call can
 //!    end with: a server that cannot be reached or answers unexpectedly is `infra` (exit 3)
 //!    naming it; an error the server answers with is its envelope, printed as a local error.
 //! 3. **Checks** ([`Server::health`], [`Server::deployed_files`]): the API version, `--env`, and
 //!    the files named on the command line against the deployment.
-//! 4. **Runs** ([`run`]): `POST /runs`, the event stream, Ctrl-C, the outcome.
+//! 4. **Runs** ([`run`]): `POST /runs`, the event stream, Ctrl-C, the outcome; and the ledger
+//!    of a local run (`GET /health`, `POST /ledger/lookup`, `POST /ledger/runs`).
 //! 5. **Inspection** ([`list`], [`status`], [`history`], [`stats`]): the CLI's `--json` bodies,
 //!    rendered here with this command's own `--limit`, `--fields` and output mode.
 
@@ -26,7 +31,7 @@
 use crate::args::{OutputMode, ServerFlags};
 use crate::error::{CliError, Context, ErrorKind, list_hint};
 use barca_core::BarcaError;
-use barca_core::config::{check_server_url, configured_server};
+use barca_core::config::{ServerSource, check_server_url, configured_server};
 use barca_core::envelope::ErrorEnvelope;
 use barca_core::outcome::{API_VERSION, Outcome, RunCommand, RunRequest};
 use barca_core::{RunEvent, lines::LineWhen};
@@ -36,6 +41,10 @@ use std::time::Duration;
 
 /// How long one ordinary request (not the event stream) may take, connection included.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long one ledger request may take: a post waits for the server to check every object in
+/// the store.
+const LEDGER_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// How long the event stream may stay silent. The server sends a keep-alive comment every 15s,
 /// so a longer silence means the connection is gone.
@@ -51,8 +60,7 @@ pub(crate) const SERVER_COMMANDS: &[&str] = &["get", "run", "status", "list", "h
 
 /// Where `--server` sends this command, or `None` to run it here. Bare `--server` uses the
 /// configured server (`BARCA_SERVER`, then `[server] url`) and is a usage error when none is
-/// configured. Without `--server` the command runs here, whatever is configured (a local run
-/// against the configured server's ledger is #402).
+/// configured. Without `--server`, see [`configured`].
 pub(crate) fn choose(flags: &ServerFlags) -> Result<Option<Server>, CliError> {
     let usage = |e: BarcaError| CliError::from_barca(e, &Context::default());
     let Some(given) = flags.server.as_deref() else {
@@ -78,12 +86,26 @@ pub(crate) fn choose(flags: &ServerFlags) -> Result<Option<Server>, CliError> {
     } else {
         (check_server_url(given, "--server").map_err(usage)?, None)
     };
-    let http = barca_core::http::client(REQUEST_TIMEOUT)
-        .map_err(|e| CliError::from_prose(ErrorKind::Infra, e))?;
-    if let Some(source) = source {
-        barca_core::errln!("[barca] server {url} ({})", source.describe());
+    let server = Server::new(url, source, false)?;
+    server.announce();
+    Ok(Some(server))
+}
+
+/// The configured server a command uses without `--server`: `None` with `--local` or when
+/// none is configured. `get` and `run` use it as their ledger; `status`, `history` and `stats`
+/// answer from it. Nothing is printed or sent here.
+pub(crate) fn configured(flags: &ServerFlags) -> Result<Option<Server>, CliError> {
+    if flags.local || flags.server.is_some() {
+        return Ok(None);
     }
-    Ok(Some(Server { url, http }))
+    let usage = |e: BarcaError| CliError::from_barca(e, &Context::default());
+    let cwd = std::env::current_dir()
+        .map_err(|e| usage(BarcaError::Other(format!("cannot determine cwd: {e}"))))?;
+    let Some((url, source)) = configured_server(&cwd).map_err(usage)? else {
+        return Ok(None);
+    };
+    let url = check_server_url(&url, source.describe()).map_err(usage)?;
+    Server::new(url, Some(source), true).map(Some)
 }
 
 /// Rewrite argv so that `--server` followed by something that is not a URL (a target, a file,
@@ -137,6 +159,10 @@ pub(crate) struct Server {
     /// The base URL, with any proxy prefix and without a trailing `/`.
     url: String,
     http: reqwest::Client,
+    /// Where the URL came from when it was not typed on the command line.
+    source: Option<ServerSource>,
+    /// Used because it is configured, without `--server`: errors point at `--local`.
+    implicit: bool,
 }
 
 /// Why a request got no answer, in a few words (the URL is named by the caller).
@@ -158,6 +184,40 @@ fn transport_reason(e: &reqwest::Error) -> String {
 }
 
 impl Server {
+    fn new(url: String, source: Option<ServerSource>, implicit: bool) -> Result<Self, CliError> {
+        let http = barca_core::http::client(REQUEST_TIMEOUT)
+            .map_err(|e| CliError::from_prose(ErrorKind::Infra, e))?;
+        Ok(Self {
+            url,
+            http,
+            source,
+            implicit,
+        })
+    }
+
+    /// `[barca] server <url> (<source>)`, once per command, for a server the command line did
+    /// not name.
+    pub(crate) fn announce(&self) {
+        if let Some(source) = self.source {
+            barca_core::errln!("[barca] server {} ({})", self.url, source.describe());
+        }
+    }
+
+    /// This server as the ledger of a local `get` / `run`.
+    pub(crate) fn into_ledger(self) -> barca_core::ledger::Ledger {
+        let source = self.source.map(ServerSource::describe);
+        barca_core::ledger::Ledger::with_source(self, source)
+    }
+
+    /// The remediation of an error that leaves the server unused.
+    fn instead(&self) -> &'static str {
+        if self.implicit {
+            "To use this machine's own records instead, pass --local."
+        } else {
+            "To run on this machine instead, pass --local instead of --server."
+        }
+    }
+
     fn endpoint(&self, path: &str) -> String {
         format!("{}{path}", self.url)
     }
@@ -169,9 +229,10 @@ impl Server {
             format!(
                 "error: cannot reach the barca server at {}: {}\n\
                  Check that `barca serve` is running at that URL and reachable from this \
-                 machine. To run on this machine instead, leave out --server.",
+                 machine. {}",
                 self.url,
-                transport_reason(e)
+                transport_reason(e),
+                self.instead()
             ),
         )
     }
@@ -664,6 +725,112 @@ impl SseParser {
     }
 }
 
+// ─── the ledger of a local run ──────────────────────────────────────────────
+
+/// The ledger requests of a local `get` / `run`: the JSON body of a 2xx, or why there is none.
+/// What the answers mean is `barca_core::ledger`'s; this is only the transport.
+impl Server {
+    async fn ledger_call<T: serde::de::DeserializeOwned>(
+        &self,
+        request: reqwest::RequestBuilder,
+        route: &str,
+    ) -> Result<T, barca_core::ledger::LedgerError> {
+        use barca_core::ledger::LedgerError;
+        let response = request
+            .timeout(LEDGER_TIMEOUT)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .send()
+            .await
+            .map_err(|e| LedgerError::Unreachable(transport_reason(&e)))?;
+        let status = response.status();
+        let body = response
+            .bytes()
+            .await
+            .map_err(|e| LedgerError::Unreachable(transport_reason(&e)))?;
+        if status.is_success() {
+            return serde_json::from_slice(&body).map_err(|e| {
+                LedgerError::Unreachable(format!(
+                    "{route} answered {status} with an unexpected body: {e}"
+                ))
+            });
+        }
+        match serde_json::from_slice::<ErrorEnvelope>(&body) {
+            Ok(envelope) if status == reqwest::StatusCode::CONFLICT => {
+                Err(LedgerError::Rejected(Box::new(envelope)))
+            }
+            Ok(envelope) => Err(LedgerError::Refused {
+                status: status.as_u16(),
+                envelope: Box::new(envelope),
+            }),
+            Err(_) => {
+                let text = String::from_utf8_lossy(&body);
+                let text: String = text
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .chars()
+                    .take(200)
+                    .collect();
+                Err(LedgerError::Unreachable(format!(
+                    "{route} answered {status}: {text}"
+                )))
+            }
+        }
+    }
+
+    fn ledger_post<'a, B: serde::Serialize + Sync, T: serde::de::DeserializeOwned + 'a>(
+        &'a self,
+        path: &'static str,
+        body: &'a B,
+    ) -> barca_core::ledger::BoxFuture<'a, Result<T, barca_core::ledger::LedgerError>> {
+        Box::pin(async move {
+            let body = serde_json::to_vec(body)
+                .map_err(|e| barca_core::ledger::LedgerError::Unreachable(e.to_string()))?;
+            let request = self
+                .http
+                .post(self.endpoint(path))
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .body(body);
+            self.ledger_call(request, &format!("POST {path}")).await
+        })
+    }
+}
+
+impl barca_core::ledger::LedgerTransport for Server {
+    fn url(&self) -> &str {
+        &self.url
+    }
+
+    fn health(
+        &self,
+    ) -> barca_core::ledger::BoxFuture<
+        '_,
+        Result<barca_core::ledger::ServerHealth, barca_core::ledger::LedgerError>,
+    > {
+        Box::pin(self.ledger_call(self.http.get(self.endpoint("/health")), "GET /health"))
+    }
+
+    fn lookup<'a>(
+        &'a self,
+        request: &'a barca_core::ledger::LookupRequest,
+    ) -> barca_core::ledger::BoxFuture<
+        'a,
+        Result<barca_core::ledger::LookupResponse, barca_core::ledger::LedgerError>,
+    > {
+        self.ledger_post("/ledger/lookup", request)
+    }
+
+    fn post_run<'a>(
+        &'a self,
+        post: &'a barca_core::ledger::LedgerPost,
+    ) -> barca_core::ledger::BoxFuture<
+        'a,
+        Result<barca_core::ledger::PostAccepted, barca_core::ledger::LedgerError>,
+    > {
+        self.ledger_post("/ledger/runs", post)
+    }
+}
+
 // ─── 5. inspection ──────────────────────────────────────────────────────────
 
 /// Whether `id` (a node id, `file.py:name` or `file.py:name[key]`) is defined in one of `files`.
@@ -752,18 +919,10 @@ pub(crate) async fn status(
         .map_err(|e| server.unexpected("GET /nodes", &e.to_string()))?;
     if !files.is_empty() {
         result.nodes.retain(|n| in_files(&n.id, &files));
-        let mut summary = barca_core::status::StatusSummary::default();
-        for node in &result.nodes {
-            match node.cache.state.as_str() {
-                "cached" => summary.cached += 1,
-                "stale" => summary.stale += 1,
-                "never_run" => summary.never_run += 1,
-                "partial" => summary.partial += 1,
-                "unknown" => summary.unknown += 1,
-                _ => summary.always_runs += 1,
-            }
-        }
-        result.summary = summary;
+        result.summary = barca_core::status::StatusSummary::of(&result.nodes);
+    }
+    if server.implicit {
+        server.annotate_here(&mut result, env).await?;
     }
     crate::commands::emit(barca_core::report::render_status(
         result,
@@ -773,6 +932,54 @@ pub(crate) async fn status(
         body["root"].as_str(),
     ));
     Ok(())
+}
+
+impl Server {
+    /// `barca status` with a configured server: mark each node with whether this machine has a
+    /// copy of its result (`local`), and show a result whose ledger post is pending as
+    /// `unsynced` (`not_in_ledger`).
+    async fn annotate_here(
+        &self,
+        result: &mut barca_core::status::StatusResult,
+        env: Option<&str>,
+    ) -> Result<(), CliError> {
+        let here = |e: BarcaError| CliError::from_barca(e, &Context::default());
+        let cfg = barca_core::config::resolve(env).map_err(here)?;
+        let layout = barca_core::transfer::ArtifactLayout::new(
+            cfg.local_artifact_dir.clone(),
+            &cfg.artifact_root,
+        );
+        let pending: Vec<barca_core::status::PendingPost> = if Path::new(&cfg.db_path).exists() {
+            barca_core::ledger::posts::unsynced(&cfg.db_path, &self.url)
+                .await
+                .map_err(here)?
+                .into_iter()
+                .flat_map(|post| post.steps)
+                .map(|step| barca_core::status::PendingPost {
+                    node_id: step.node_id,
+                    run_hash: step.run_hash,
+                    error: None,
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        for node in &mut result.nodes {
+            node.local = Some(has_copy(&layout, node.cache.artifact.as_deref()));
+            barca_core::status::not_in_ledger(node, &pending);
+        }
+        result.summary = barca_core::status::StatusSummary::of(&result.nodes);
+        Ok(())
+    }
+}
+
+/// Whether this machine holds the artifact the server recorded at `artifact`: its mirror of
+/// that store path exists under this machine's artifact directory. A path outside this
+/// project's store (a server without one) is never here.
+fn has_copy(layout: &barca_core::transfer::ArtifactLayout, artifact: Option<&str>) -> bool {
+    artifact
+        .and_then(|a| layout.local_for(a))
+        .is_some_and(|p| p.is_file())
 }
 
 /// `barca history --server`: `GET /history`.

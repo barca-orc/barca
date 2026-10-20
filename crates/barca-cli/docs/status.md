@@ -77,6 +77,7 @@ two cannot disagree. In JSON the states are snake_case, spelled exactly like the
 | state | meaning | `reason` |
 |---|---|---|
 | `cached` | a successful result matches this code and these inputs; `get` serves it | `materialized` |
+| `unsynced` | with a configured server: the server has no result, but this machine computed one and its post to the server's ledger is pending | `not_in_ledger` (the table prints `not in ledger`) |
 | `stale` | it ran before, but `get` would run it again | `changed`, `upstream_stale`, `failed`, `artifact_missing` |
 | `never_run` | no successful materialization is recorded | `no_record`, `failed` |
 | `partial` | a partitioned asset with some keys cached | `partitions_missing` |
@@ -104,6 +105,18 @@ two cannot disagree. In JSON the states are snake_case, spelled exactly like the
 
 `cache.run_hash` is the cache key for the current code and inputs; `cache.artifact` is the file a
 `get` would serve (only when `cached`).
+
+### With a server configured
+
+With `BARCA_SERVER` or `[server] url` set, `barca status` (without `--server` or `--local`) is
+answered by the server's ledger for its deployed code, after `[barca] server <url> (<source>)`
+on stderr (`barca docs server-mode`). Each node gets `local`: `true` when this machine has a copy
+of the result the server would serve, which is what `barca sql` can query here. A node the
+server has no result for, but whose result this machine computed and has not posted yet (the
+post was refused or the server could not be reached), is `unsynced` with reason `not_in_ledger`
+and `local: true`; the next `get` or `run` against the server posts it. `summary.unsynced`
+counts unsynced nodes. A partitioned node's `local` is `false` (it has no single artifact).
+`barca status --local` shows this machine's own state.
 
 ## Last materialization
 

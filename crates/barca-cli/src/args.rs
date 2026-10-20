@@ -44,7 +44,8 @@ impl OutputMode {
 pub(crate) struct ServerFlags {
     /// Run this command on a barca server (`barca serve`) and print its result here: the URL
     /// given, or with no URL the configured one (BARCA_SERVER, else [server] url in
-    /// barca.toml). Without it, the command runs on this machine
+    /// barca.toml). Without it, get and run run on this machine (against a configured server's
+    /// ledger) and status, history and stats are answered by a configured server
     #[arg(
         long,
         value_name = "URL",
@@ -53,7 +54,8 @@ pub(crate) struct ServerFlags {
         conflicts_with = "local"
     )]
     pub(crate) server: Option<String>,
-    /// Ignore any configured server for this command: nothing is read from or sent to it
+    /// Ignore any configured server for this command: run against this machine's own ledger and
+    /// records; nothing is read from or sent to the server
     #[arg(long)]
     pub(crate) local: bool,
 }
@@ -105,7 +107,7 @@ Examples:
   barca get total pipeline.py --fields id,status   # JSON with each entry of `steps` trimmed to these keys
   barca get total --server                 # run it on the configured barca server; prints here as a local run
   barca get total --server https://barca.example.com --json   # on that server (barca docs server-mode)
-  barca get total --local                  # this machine only, whatever server is configured
+  barca get total --local                  # this machine's ledger only; nothing is sent to a configured server
 
 Output format: --json / --pretty / -o, else BARCA_OUTPUT=json|pretty, else the terminal decides
 (TTY -> pretty, piped -> JSON). JSON is one line on stdout with status (\"success\"), run_id,
@@ -159,6 +161,7 @@ Examples:
   barca run check_a,check_b pipeline.py                # several tasks in one run; shared upstream runs once
   barca run check_a,check_b pipeline.py --dry-run      # preview the union of both cones
   barca run deploy --server --agent                    # run it on the configured barca server (barca docs server-mode)
+  barca run deploy pipeline.py --local                 # run here and post nothing to a configured server
   barca list pipeline.py                               # not sure of the name? list assets and tasks first
 
 Several targets: comma-separated, no spaces. Every target runs even if another fails (a failure
@@ -241,6 +244,7 @@ Examples:
   barca history --fields run_id,triggered_by,scheduled_at   # what started each run (manual, api, schedule, client)
   barca history --env dev      # runs recorded in another environment
   barca history --server -l 20 # the runs of the configured barca server (barca docs server-mode)
+  barca history --local        # this machine's runs, even with a server configured
 
 --reconcile is an explicit write: first verify the run stopped. It refuses a proven live
 owner and terminal rows. It prints only that run, preserving progress and cached results;
@@ -260,6 +264,7 @@ Examples:
   barca stats total pipeline.py --pretty    # the text report, even when piped
   barca stats total pipeline.py --fields status,error_message   # JSON; trims recent_runs entries
   barca stats total --server                # timings recorded on the configured barca server
+  barca stats total --local                 # timings recorded on this machine, even with a server configured
 
 More: barca docs cache";
 
@@ -331,12 +336,17 @@ Examples:
   barca status total pipeline.py --json --sample 5   # add up to 5 sample rows per json/parquet/CSV artifact
   barca status pipeline.py --env dev       # state recorded in another environment
   barca status total --server              # cache state on the configured barca server
+  barca status total --json                # with a server configured: its ledger, plus `local` per node
+  barca status total --local               # this machine's own state, even with a server configured
 
 Cache state per node: cached, stale (ran before; code or inputs changed, or its artifact file is
 gone and a run would read it: reason `artifact_missing`), never_run, partial
 (some partition keys cached), unknown (dynamic partitions not yet known) or always_runs (tasks,
 sensors), with a reason. JSON spells the states in snake_case, the same as the `summary` keys
 (the table prints never-run, always-runs). It is the same decision `--dry-run` makes.
+With a server configured (BARCA_SERVER, [server] url) and no --local, the server answers, each
+node gets `local` (a copy is here), and a result computed here whose ledger post is pending is
+unsynced: reason `not_in_ledger` (barca docs server-mode).
 No steps execute. Optimistic shared history may synchronize locally; partitions(<expression>)
 may import the source to resolve keys. Shape (rows, columns, type) is read from the
 artifact file only. With remote storage it is read from the bucket: a parquet footer by ranged

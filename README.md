@@ -385,19 +385,24 @@ has to come in through a sensor. A scheduled sensor's tick runs the sensor and d
 trigger the assets that read it. The other freshness values, `Always` (the default) and
 `Manual`, are recorded and shown by `barca list` and have no effect at run time today.
 
-Run a command on the server from another machine with `--server`: it prints what the same
-command prints locally, and Ctrl-C cancels the run on the server.
+Server mode (RFC-0007, experimental) makes the server the team's ledger. With
+`[server] url` (or `BARCA_SERVER`) and the server's `[remote]` store in `barca.toml`, `barca get`
+on a laptop still runs locally but reads cache hits from the server's ledger and posts what it
+computes; `barca status`, `history` and `stats` answer from the server. `--server` runs a command
+on the server and prints what the same command prints locally; Ctrl-C cancels it there.
+`--local` leaves the server untouched.
 
 ```bash
+barca get summary                                       # here, against the server's ledger
 barca get summary --server https://barca.example.com    # runs there, prints here
 export BARCA_SERVER=https://barca.example.com           # or [server] url in barca.toml
 barca run publish --server --agent                      # the configured server
-barca history --server -l 5                             # its runs
+barca history -l 5                                      # its runs
+barca get summary --local                               # this machine only
 ```
 
-In Python, `barca.get("summary", server=True)`. Without `--server`, `barca get` and
-`barca.get()` run on this machine; laptop runs against the server's shared ledger are the part
-of server mode (RFC-0007) still pending. `barca.Client` is deprecated in favour of `barca.api`.
+In Python, `barca.get("summary", server=True)`. `barca.Client` is deprecated in favour of
+`barca.api` (`barca docs server-mode`).
 
 Runs started over HTTP are asynchronous: `POST /runs` returns the run's database id at once,
 its events stream as they happen, and `GET /runs/<run_id>` answers with its outcome, also after

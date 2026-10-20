@@ -77,7 +77,7 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
     ),
     (
         "get --local",
-        "server mode is new (RFC-0007): it will also keep a local run off the configured server's ledger",
+        "server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history and stats)",
     ),
     (
         "run --server",
@@ -85,7 +85,7 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
     ),
     (
         "run --local",
-        "server mode is new (RFC-0007): it will also keep a local run off the configured server's ledger",
+        "server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history and stats)",
     ),
     (
         "status --server",
@@ -93,7 +93,7 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
     ),
     (
         "status --local",
-        "server mode is new (RFC-0007): it will also keep a local run off the configured server's ledger",
+        "server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history and stats)",
     ),
     (
         "list --server",
@@ -101,7 +101,7 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
     ),
     (
         "list --local",
-        "server mode is new (RFC-0007): it will also keep a local run off the configured server's ledger",
+        "server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history and stats)",
     ),
     (
         "history --server",
@@ -109,7 +109,7 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
     ),
     (
         "history --local",
-        "server mode is new (RFC-0007): it will also keep a local run off the configured server's ledger",
+        "server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history and stats)",
     ),
     (
         "stats --server",
@@ -117,7 +117,7 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
     ),
     (
         "stats --local",
-        "server mode is new (RFC-0007): it will also keep a local run off the configured server's ledger",
+        "server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history and stats)",
     ),
 ];
 

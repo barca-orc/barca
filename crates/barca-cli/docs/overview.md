@@ -72,7 +72,7 @@ that; see `barca docs agents`.
 - `barca docs partitions` — fan-out over keys, fan-in with `collect`
 - `barca docs sinks` — export outputs to local or remote paths
 - `barca docs scheduling` — freshness, cron schedules, `barca serve`, HTTP/Python client setup
-- `barca docs server-mode` — run `get`, `run`, `status`, `list`, `history`, `stats` on a barca server with `--server`
+- `barca docs server-mode` — one `barca serve` as the team's ledger: local runs read cache hits from it and post what they compute; `--server` runs `get`, `run`, `status`, `list`, `history`, `stats` there; `--local` leaves it out
 - `barca docs telemetry` — report runs and steps to Datadog (`BARCA_TELEMETRY=datadog`)
 - `barca docs status` — one view of cache state, last run and artifact shape per node
 - `barca docs sql` — query cached results with DuckDB while debugging, without writing a step

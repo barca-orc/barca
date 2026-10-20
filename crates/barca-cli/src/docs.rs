@@ -38,7 +38,7 @@ pub const TOPICS: &[Topic] = &[
     topic!("logs", "Read a run's recorded step stdout", "logs.md"),
     topic!(
         "server-mode",
-        "Run a command on a barca server with --server; [server] url, BARCA_SERVER, --local",
+        "One server as the team's ledger; --server runs a command there; [server] url, BARCA_SERVER, --local",
         "server-mode.md"
     ),
     topic!(

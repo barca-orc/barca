@@ -13,6 +13,7 @@ barca-core = { path = "../barca-core" }
 barca-server = { path = "../barca-server" }
 chrono = "0.4.45"
 clap = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 reqwest = { workspace = true }
 sha2 = "0.10"

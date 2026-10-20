@@ -59,7 +59,7 @@ stderr lines, the same exit codes. Ctrl-C cancels the run on the server. It is e
 barca get daily_report --server https://barca.internal.example.com
 export BARCA_SERVER=https://barca.internal.example.com   # or [server] url in barca.toml
 barca run publish --server --agent       # the configured server; agent progress lines
-barca history --server -l 20             # the server's runs
+barca history -l 20                      # the server's runs (configured server)
 ```
 
 ```python
@@ -80,12 +80,16 @@ rules, and the few declared differences from a local run (the server's paths, `t
 The client sends no credentials. Reach the server over a private network (a VPN, Tailscale,
 an internal load balancer), or through a proxy that admits the client's network.
 
-The [server-ledger design (RFC-0007)](/rfcs/0007-server-mode/) is accepted. Its run contract
-over HTTP (#393) and the CLI's `--server` (#394) are implemented; laptop runs that read the
-server's ledger and post their results to it (#402) are pending. Without `--server`, `barca
-get` and `barca.get()` run locally. A remote artifact store does not give another machine
-access to this server's cache/history; use `BARCA_STATE=off` when serving with a remote store,
-as described below. `barca.Client` is deprecated in favour of `barca.get(..., server=True)`.
+## The server as the team's ledger
+
+The [server-ledger design (RFC-0007)](/rfcs/0007-server-mode/) is accepted and implemented:
+the run contract over HTTP (#393), the CLI's `--server` (#394) and the ledger (#402). A laptop
+with `[server] url` (or `BARCA_SERVER`) pointing at this server and `[remote]` pointing at its
+store runs `barca get` locally, reads cache hits from the server's ledger and posts what it
+computes ([Remote Storage](/reference/remote-storage/#a-server-as-the-ledger)); `barca status`,
+`history` and `stats` answer from the server. `--local` runs against the laptop's own ledger
+and sends nothing. Serve with a remote store with `BARCA_STATE=off`, as described below.
+`barca.Client` is deprecated in favour of `barca.get(..., server=True)`.
 
 ## Listen on another interface
 

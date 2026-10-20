@@ -47,10 +47,10 @@ Options:
           Environment name (separates cache/state per environment)
 
       --server [<URL>]
-          Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, the command runs on this machine
+          Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger) and status, history and stats are answered by a configured server
 
       --local
-          Ignore any configured server for this command: nothing is read from or sent to it
+          Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server
 
   -h, --help
           Print help (see a summary with '-h')
@@ -70,6 +70,7 @@ Examples:
   barca run check_a,check_b pipeline.py                # several tasks in one run; shared upstream runs once
   barca run check_a,check_b pipeline.py --dry-run      # preview the union of both cones
   barca run deploy --server --agent                    # run it on the configured barca server (barca docs server-mode)
+  barca run deploy pipeline.py --local                 # run here and post nothing to a configured server
   barca list pipeline.py                               # not sure of the name? list assets and tasks first
 
 Several targets: comma-separated, no spaces. Every target runs even if another fails (a failure

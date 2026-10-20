@@ -4,8 +4,8 @@
 web UI and cron scheduler. From another machine, `barca get daily_report --server <url>` (and
 `run`, `status`, `list`, `history`, `stats`) runs a command there and prints it here as a local
 run would (`barca docs server-mode`); the HTTP API (`POST /runs`) is underneath. Without
-`--server`, `barca get` and `barca.get()` run locally. Laptop runs against the server's ledger
-(RFC-0007, #402) are not implemented yet.
+`--server`, `barca get` and `barca.get()` run locally, and with a server configured they read
+and post to its ledger (`--local` leaves it untouched).
 Deployment instructions: https://barca.sh/deploying/.
 
 Freshness is recorded on every node. Only `Schedule(...)` starts automatic runs:
@@ -186,9 +186,9 @@ With a remote artifact store configured, serving requires local metadata:
 BARCA_STATE=off barca serve pipeline.py  # local ledger; artifact uploads still enabled
 ```
 
-Other machines do not get cache/history sharing from that artifact store: local runs posting
-results to the server's ledger belong to the part of RFC-0007 not implemented yet (#402).
-`--server` runs the command on the server instead (`barca docs server-mode`).
+Other machines share the server's results by pointing `[server] url` (or `BARCA_SERVER`) at
+it: their local runs read cache hits from the server's ledger and post what they compute, and
+`--server` runs a command on the server instead (`barca docs server-mode`).
 
 ## Stopping the server
 

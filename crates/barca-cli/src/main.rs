@@ -113,8 +113,35 @@ fn main() {
         }
     }
 
+    // A configured server without `--server` (and without `--local`): `get` and `run` run here
+    // against its ledger; `status`, `history` and `stats` answer from it (RFC-0007 §4.1).
+    let configured = match server_flags(&cli).map_or(Ok(None), client::configured) {
+        Ok(configured) => configured,
+        Err(e) => e.emit(json),
+    };
+    let mut ledger = None;
+    match (configured, &cli) {
+        (Some(server), Cli::Get { .. } | Cli::Run { .. }) => ledger = Some(server.into_ledger()),
+        (Some(server), Cli::Status { .. } | Cli::Stats { .. })
+        | (
+            Some(server),
+            Cli::History {
+                reconcile: None, ..
+            },
+        ) => {
+            server.announce();
+            let rt = runtime(json);
+            if let Err(e) = rt.block_on(run_on_server(cli, &server, &ctx)) {
+                e.emit(json);
+            }
+            drop(rt);
+            finish(json);
+        }
+        _ => {}
+    }
+
     let rt = runtime(json);
-    if let Err(e) = rt.block_on(run_cli(cli, &ctx)) {
+    if let Err(e) = rt.block_on(run_cli(cli, &ctx, ledger)) {
         e.emit(json);
     }
     drop(rt);
@@ -313,7 +340,11 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
 }
 
 #[allow(clippy::result_large_err)] // cold path: one CliError per process, right before exiting
-async fn run_cli(cli: Cli, ctx: &Context) -> Result<(), CliError> {
+async fn run_cli(
+    cli: Cli,
+    ctx: &Context,
+    ledger: Option<barca_core::ledger::Ledger>,
+) -> Result<(), CliError> {
     let python = barca_core::commands::find_python();
     let engine = |e: barca_core::BarcaError| CliError::from_barca(e, ctx);
 
@@ -359,6 +390,7 @@ async fn run_cli(cli: Cli, ctx: &Context) -> Result<(), CliError> {
                 dry_run,
                 agent,
                 fields.as_deref(),
+                ledger,
             )
             .await
             .map_err(|e| get_run_error(e, ctx, &hint_files))
@@ -405,6 +437,7 @@ async fn run_cli(cli: Cli, ctx: &Context) -> Result<(), CliError> {
                 output,
                 agent,
                 fields.as_deref(),
+                ledger,
             )
             .await
             .map_err(|e| get_run_error(e, ctx, &hint_files))

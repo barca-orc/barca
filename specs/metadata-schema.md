@@ -81,4 +81,12 @@ in `FORMAT_1_ADDITIONS` (`db_schema.rs`). A format-1 database that lacks one is 
 date by the same transactional additive migration as a legacy database and stays format 1, so
 a previous release still opens it; a current one is still checked without being written. Rows
 written before have `NULL` there (`triggered_by: null`). Shared-history carry copies the new
-`runs` columns like the others.
+`runs` columns like the others. `runs.client_run_id` (also in `FORMAT_1_ADDITIONS`) is, on a
+server, the run id a laptop gave a run it posted to the ledger (`triggered_by: client`); a
+repeated post of that run is recognised by it.
+
+`ledger_posts` is an additive format-1 table on a machine that runs against a server's ledger
+(RFC-0007): one row per run it posted or has yet to post (`client_run_id` primary key, `server`,
+the post `body` as JSON, `state` `unsynced` or `shared`, `server_run_id`, the last `error`,
+`attempts`, `created_at`, `updated_at`). It is created the first time a run is posted, never by a
+reader; a database without it has posted nothing, and readers treat that as empty.

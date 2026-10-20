@@ -275,8 +275,13 @@ def test_a_configured_server_is_announced_once_and_bare_server_uses_it(tmp_path,
     assert out.stderr.count("[barca] server ") == 1
     # `--server` before the target is still bare, not a URL named `total`.
     assert _run(here, ["get", "--server", "total", "--json"]).returncode == 0
-    # Without --server the command runs here, whatever is configured.
-    local = _run(here, ["get", "total", "--json"])
+    # Without --server the command runs here, against the configured server's ledger, which
+    # needs the server's store: this project has none, a usage error that names --local.
+    ledger = _run(here, ["get", "total", "--json"])
+    assert ledger.returncode == 2, ledger.stderr
+    assert "--local" in ledger.stderr and "[remote]" in ledger.stderr
+    # --local runs here and touches nothing on the server.
+    local = _run(here, ["get", "total", "--local", "--json"])
     assert local.returncode == 0 and "[barca] server" not in local.stderr
     assert (here / ".barca").exists()
     # --local with --server is a usage error.

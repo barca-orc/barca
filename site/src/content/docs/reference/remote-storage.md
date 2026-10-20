@@ -720,9 +720,52 @@ directory, startup exits 3 before importing user code and explains the object-pa
 setting. Barca leaves that directory and its contents unchanged; choose a file/object
 path or set `BARCA_STATE=off` to use local history.
 
+## A server as the ledger
+
+Experimental. Instead of every machine pulling and pushing the history file, one `barca serve`
+can own the record of what exists, and every other machine asks it. Point each laptop at the
+server and at the store the server uses:
+
+```toml
+[server]
+url = "http://barca.internal:8274"
+
+[remote]
+uri = "s3://my-bucket/barca/my-project"   # the server's store
+```
+
+`barca get` and `barca run` still run on the laptop, with its code. With `[server] url` (or
+`BARCA_SERVER`) set, and without `--local`, they:
+
+1. check the server (`GET /health`): it must write to this project's store, else the command is
+   a usage error naming both; a server that cannot be reached is exit 3 naming its URL, with no
+   fallback to local history;
+2. post again any run that could not be posted before;
+3. ask the server's ledger about every run hash of the plan in one request
+   (`POST /ledger/lookup`). Hits are fetched from the store when a step reads them; a local copy
+   whose SHA-256 differs from the server's digest is replaced by the store's copy. Misses run
+   here;
+4. after the uploads are confirmed, post the run and its step rows (`POST /ledger/runs`). The
+   server checks every object (a directory store by SHA-256, an object store by size) before it
+   records anything, and records the run as `triggered_by: client` with the laptop's run id as
+   `client_run_id`.
+
+A post the server refuses (`409`, the error names the node) or that does not arrive leaves the
+run a success: a warning names the run, the post is kept in the local database as `unsynced`,
+and the next command against the server sends it again. When the ledger already holds a run hash
+with other bytes it keeps its row, and the laptop prints the non-determinism warning once.
+
+The shared history file is not used with a server: `[remote].state` defaults to `off`, and
+`optimistic` is a usage error. `barca status`, `history` and `stats` answer from the server;
+`status` marks each node `local: true` when this machine has a copy, and a result whose post is
+still pending as `unsynced` with `cache.reason: "not_in_ledger"`. `--local` runs a command
+against this machine's own ledger and sends nothing; `--server` runs it on the server. Only
+successful runs are posted. See `barca docs server-mode`.
+
 ## Limitations
 
-- `barca serve` does not share history yet; set `BARCA_STATE=off` for it.
+- `barca serve` does not share history through the history file; set `BARCA_STATE=off` for it.
+  Laptops share a server's results through its ledger ([above](#a-server-as-the-ledger)).
 - During `barca get` and `barca run`, newly recorded progress is published every minute
   in healthy operation, and the final outcome is published when the run ends. A shared
   checkpoint keeps the run `running`, with its recorded step count and no finish timestamp.
@@ -818,6 +861,8 @@ Paths and exit codes are unchanged.
 exposes `last_bytes_change: {node_id, run_hash, content_hash, created_at}` and the latest
 materialization's `content_hash`. Partition keys are checked individually. Progress
 checkpoints, terminal writes and carried history retain the finding without duplicating it.
-The separate RFC-0009 store repair and RFC-0007 ledger acceptance paths remain proposed.
+The RFC-0009 store repair path remains proposed. A run posted to a server's ledger with a run
+hash the ledger already holds with other bytes prints the same warning
+([above](#a-server-as-the-ledger)).
 
 See [Doctor and local debugging](/reference/doctor/) for prerequisite checks and a local-only debugging profile.

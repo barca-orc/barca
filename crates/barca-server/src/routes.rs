@@ -3,7 +3,7 @@
 //! routes rather than in front of them, so API paths stay what the contract says.
 
 use crate::state::AppState;
-use crate::{handlers, inspect, pause, runs, ui};
+use crate::{handlers, inspect, ledger, pause, runs, ui};
 use axum::Router;
 use axum::routing::{get, post};
 
@@ -22,6 +22,9 @@ pub fn router(state: AppState) -> Router {
         .route("/assets", get(handlers::assets))
         .route("/assets/{name}", get(handlers::asset_detail))
         .route("/assets/{name}/schema", get(handlers::asset_schema))
+        // The ledger: what a local run on another machine asks and posts (RFC-0007).
+        .route("/ledger/lookup", post(ledger::lookup))
+        .route("/ledger/runs", post(ledger::post_run))
         // The run contract.
         .route("/runs", get(runs::list).post(runs::create))
         .route("/runs/{run_id}", get(runs::detail).delete(runs::cancel))

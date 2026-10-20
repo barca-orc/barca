@@ -17,6 +17,11 @@ Every backend implements the same contract:
                         object must not exist). Raises ConflictError when
                         the precondition fails (someone else pushed first).
 
+A third verb serves the server's ledger (RFC-0007): ``python -m barca._state stat`` reads
+``{"paths": [uri, ...]}`` on stdin and prints, for each, whether the object exists, its size
+and, for a store that is a plain directory, its SHA-256 (an object store has no content
+checksum this can compare): ``{"objects": [{"exists", "size_bytes", "sha256"}]}``.
+
 Backends:
   abfs/abfss  adlfs — etag If-Match via pipe_file kwargs
   s3/s3a      s3fs — IfMatch via pipe_file kwargs (multipart guard)
@@ -334,8 +339,33 @@ def push(state_uri: str, local_path: "Path | str", token: "str | None") -> str:
 # ─── CLI (invoked by the Rust coordinator) ───────────────────────────────────
 
 
+def stat(paths: "list[str]") -> dict:
+    objects = []
+    for uri in paths:
+        local = _storage.local_path_of(uri)
+        if local is not None:
+            if local.is_file():
+                objects.append(
+                    {"exists": True, "size_bytes": local.stat().st_size, "sha256": _sha256(local)}
+                )
+            else:
+                objects.append({"exists": False, "size_bytes": None, "sha256": None})
+            continue
+        fs = _storage.get_fs(uri)
+        try:
+            info = fs.info(uri)
+        except FileNotFoundError:
+            objects.append({"exists": False, "size_bytes": None, "sha256": None})
+            continue
+        objects.append({"exists": True, "size_bytes": int(info.get("size") or 0), "sha256": None})
+    return {"objects": objects}
+
+
 def main(argv: "list[str] | None" = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
+    if len(argv) == 1 and argv[0] == "stat":
+        print(json.dumps(stat(json.load(sys.stdin)["paths"])))
+        return 0
     if len(argv) >= 3 and argv[0] == "pull":
         uri, local = argv[1], argv[2]
         token = pull(uri, local)
@@ -355,7 +385,8 @@ def main(argv: "list[str] | None" = None) -> int:
         return 0
     print(
         "usage: python -m barca._state pull <uri> <local>\n"
-        "       python -m barca._state push <uri> <local> [--token T]",
+        "       python -m barca._state push <uri> <local> [--token T]\n"
+        '       python -m barca._state stat < {"paths": [...]}',
         file=sys.stderr,
     )
     return 1
