@@ -170,8 +170,8 @@ not one per node.
 
 A partitioned asset is one node with a `partitions` summary: `total`, `cached`, `missing` and up
 to 20 `missing_keys`. Its state is `cached` when every key is, `partial` when some are, and
-`stale`/`never_run` when none are. `last_materialization` is the most recent key that ran, named
-in its `partition` field (for example `k=a`), and `shape` describes that one key's artifact.
+`stale`/`never_run` when none are. `last_materialization` is one key of the latest run (the first in
+sort order), named in its `partition` field (for example `k=a`), and `shape` describes that one key's artifact.
 
 ## JSON
 

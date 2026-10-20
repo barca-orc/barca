@@ -60,7 +60,7 @@ Run 51fa8fe09d90 | all assets in 0.005s (0 steps, 1 phase)
 ```
 
 The second run executes 0 steps: both results come from the cache. Output shown in this
-file is from barca 0.18.0.
+file is from barca 0.25.0.
 
 ## Install
 
@@ -349,8 +349,8 @@ def total(all_sales: list[dict]) -> dict:
 `barca get total pipeline.py` runs 4 steps, then 0 on a second run. After `"latam"` is
 added to `REGIONS` it runs 2: `sales` for `latam`, then `total`. The same holds when the keys
 are a literal list written inside the decorator (up to 0.18 that form ran every key again).
-No single key can be targeted or refreshed, and
-`barca get sales` returns one key's value. In `barca sql` a partitioned asset is one view
+`barca get sales pipeline.py` returns every key's artifact path;
+`--partition region=emea` selects keys, and with `--refresh sales` recomputes only them. In `barca sql` a partitioned asset is one view
 with a `partition` column (`region=emea`).
 
 More: `barca docs partitions`.

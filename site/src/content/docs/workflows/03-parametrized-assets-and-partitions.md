@@ -321,9 +321,10 @@ region=latam  latam   50
 (`{'regions': 3, 'total': 130}`). To query only current keys, filter on `partition` yourself
 or query an asset built with `collect`.
 
-## Targets and `--refresh` work on the whole asset
+## Selecting keys with `--partition`
 
-A key cannot be named on the command line:
+A key cannot be named as a target or in `--refresh`; select keys of the target with
+`--partition` instead:
 
 ```
 $ barca get 'sales[region=emea]' pipeline.py
@@ -334,7 +335,8 @@ $ barca get summary pipeline.py --refresh 'sales[region=emea]'
 ```
 
 - `barca get sales pipeline.py` brings every key up to date.
-- `--refresh sales` recomputes every key, and everything downstream.
+- `--refresh sales` recomputes every key, and everything downstream; with
+  `--partition region=emea` on a `sales` target, only that key.
 - `barca get sales pipeline.py` returns every key: one artifact path per key, and in JSON a
   `final_output` object keyed by `region=...`. The Python call `barca.get("sales", "pipeline.py")`
   returns a dict of key to value. `--partition region=emea` (or `partition="region=emea"` in
@@ -386,14 +388,16 @@ per key, not what your functions cost.
 
 ## Limits
 
-- **No single-key target or refresh** (above). `get` and `--refresh` address the whole asset.
+- **A key is selected with `--partition`, never named** (above): `sales[region=emea]` is not a
+  target, and `--refresh` of an upstream asset addresses all its keys.
 - **Up to 0.18, editing a literal key list re-ran every key** (above). From 0.19 a new key
   runs alone wherever the keys are written, and editing `description=`, `tags=` or `retries=`
   on a partitioned asset re-runs nothing. Changing `serializer=`, `inputs=`, a `@sink` or the
   dimension name re-runs every key.
 - **Any change to the function's code, or to an unpartitioned input or sensor it reads,
   re-runs every key.**
-- **A removed key's results remain** on disk and in the `barca sql` view.
+- **A removed key's results remain** on disk (until the cache size limit evicts them) and in the
+  `barca sql` view.
 - **`partitions_from(upstream)` on a partitioned upstream** must be the asset's only dimension
   and must keep the upstream's dimension name; anything else is a usage error (exit 2).
 - **A partitioned asset in a plain `inputs=`** of an unpartitioned asset, without `collect()`,

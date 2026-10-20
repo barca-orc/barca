@@ -187,7 +187,8 @@ usage error (exit 2). The keys of a `partitions_from` target are known only once
 run; a selection that matches none of them returns `{}` with a warning on stderr.
 
 If some keys fail, the run is a failed step as before (exit 1): the result line has
-`"status": "failed"` and `failed_node` names the first failed key. The keys that succeeded are
+`"status": "failed"` and `failed_node` names the first key to fail (when several keys fail, which
+one that is can differ between identical runs). The keys that succeeded are
 in `final_output`; the failed ones are absent and have no artifact, so the next `barca get`
 computes them again. (Whether a partial failure should get its own exit code or list the
 failed keys is not decided yet.)
