@@ -429,6 +429,12 @@ nested library traces in the same job trace. In the `<DD_SERVICE>-python` servic
 select `barca.execute` to see jobs by their canonical names. See `barca docs telemetry`
 for setup, tags, and delivery limits.
 
+## Slack notifications
+
+Set `BARCA_SLACK_WEBHOOK_URL` to a Slack incoming webhook and barca posts when a job starts
+failing, when it recovers, and once a day while it keeps failing. `BARCA_SLACK_NOTIFY=failures`
+or `all` posts more; `BARCA_UI_URL` links each post to the run. See `barca docs telemetry`.
+
 `barca logs RUN_ID --pretty` reads recorded step stdout without progress messages.
 Use `--step report` for one function or exact node id, or `--json` for `[{node_id, line}]`.
 JSON get/run output suppresses step prints; other modes prefix them with the node id on stderr.

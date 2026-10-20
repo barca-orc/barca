@@ -25,6 +25,8 @@ futures = "0.3"
 indicatif = "0.18.4"
 libc = "0.2"
 toml = { workspace = true }
+reqwest = { workspace = true }
+rustls = { workspace = true }
 # Optional: TypeScript binding generation (enable with --features ts). Kept out
 # of the production binary; used only to regenerate ui/src/lib/generated/.
 ts-rs = { version = "12", optional = true }

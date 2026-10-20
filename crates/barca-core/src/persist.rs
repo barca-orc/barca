@@ -34,6 +34,8 @@ pub(crate) struct RunLedger<'a> {
     pub(crate) command: &'a str,
     pub(crate) files: String,
     pub(crate) target: Option<&'a str>,
+    /// Canonical resolved job ids (`RunReport.job`), recorded with the outcome.
+    pub(crate) job: &'a str,
     pub(crate) steps_total: usize,
     pub(crate) steps_executed: usize,
     pub(crate) steps_cached: usize,
@@ -433,7 +435,7 @@ pub(crate) fn telemetry_report(
     dag: &Dag,
     started: std::time::SystemTime,
     clocks: &HashMap<String, (f64, f64)>,
-    job: &str,
+    env: Option<&str>,
 ) -> crate::telemetry::RunReport {
     use crate::telemetry::{RunReport, StepOutcome, StepReport};
 
@@ -527,7 +529,8 @@ pub(crate) fn telemetry_report(
         run_id: l.run_id.to_string(),
         command: l.command.to_string(),
         target: l.target.map(str::to_string),
-        job: job.to_string(),
+        job: l.job.to_string(),
+        env: env.map(str::to_string),
         status: l.status.to_string(),
         reason: None,
         in_flight_run: None,
@@ -694,13 +697,14 @@ async fn write_terminal_ledger(
             .map_err(|e| BarcaError::Db(format!("failed to record failed step: {e}")))?;
     }
     let updated = conn.execute(
-            "UPDATE runs SET status = ?1, steps_executed = ?2, steps_cached = ?3, elapsed_seconds = ?4, finished_at = datetime('now') WHERE run_id = ?5",
+            "UPDATE runs SET status = ?1, steps_executed = ?2, steps_cached = ?3, elapsed_seconds = ?4, finished_at = datetime('now'), job = NULLIF(?6, '') WHERE run_id = ?5",
             [
                 l.status.to_string(),
                 l.steps_executed.to_string(),
                 l.steps_cached.to_string(),
                 l.elapsed.to_string(),
                 l.run_id.to_string(),
+                l.job.to_string(),
             ],
         )
         .await
@@ -782,6 +786,7 @@ mod persist_tests {
                 command: "get",
                 files: db::encode_files(&["f.py".to_string()]),
                 target: None,
+                job: "f.py:a",
                 steps_total: 5,
                 steps_executed: 4,
                 steps_cached: 1,
@@ -1508,7 +1513,7 @@ sys.exit(_state.main())
         fx.failures[0].error.attempts = 3;
         let dag = crate::Dag::build(&[]).unwrap();
         let run_started = std::time::UNIX_EPOCH + std::time::Duration::from_nanos(started);
-        let report = telemetry_report(&fx.ledger("r1"), &dag, run_started, &HashMap::new(), "all");
+        let report = telemetry_report(&fx.ledger("r1"), &dag, run_started, &HashMap::new(), None);
         let bad = report
             .steps
             .iter()
@@ -1522,7 +1527,7 @@ sys.exit(_state.main())
         // A failure with no time of its own (an upload) is still a mark at the end of the run.
         fx.failures[0].error.started_unix_ns = None;
         fx.failures[0].error.elapsed_seconds = None;
-        let report = telemetry_report(&fx.ledger("r1"), &dag, run_started, &HashMap::new(), "all");
+        let report = telemetry_report(&fx.ledger("r1"), &dag, run_started, &HashMap::new(), None);
         let bad = report
             .steps
             .iter()
@@ -1534,7 +1539,7 @@ sys.exit(_state.main())
         // ... unless its worker reported a clock: the function ran, and its upload failed.
         let finished = started as f64 / 1e9 + 1.0;
         let clocks = HashMap::from([("f.py:bad".to_string(), (finished, 0.25))]);
-        let report = telemetry_report(&fx.ledger("r1"), &dag, run_started, &clocks, "all");
+        let report = telemetry_report(&fx.ledger("r1"), &dag, run_started, &clocks, None);
         let bad = report
             .steps
             .iter()

@@ -76,28 +76,42 @@ column. It records a byte mismatch when inserting a recompute with the same node
 hash; legacy rows default to 0. Shared-history carry preserves both `output_hash` and
 `bytes_changed` rather than recomputing the event. See [materialization-digests.md](materialization-digests.md).
 
-`pending_uploads` (#390) is an additive format-1 table: one row per artifact-store object whose
-upload failed after its step succeeded (`store_path` primary key, `node_id`, `run_hash`,
-`run_id`, `local_path`, `host`, `error`, `attempts`, timestamps). It is created by the first
-write that needs it, never by a reader: a database without it reads as having no pending
-uploads, and an existing format-1 database is not migrated. Only rows of this host are read,
-retried or shown. A shared-history pull replaces the pulled copy's rows of this host with the
-local ones and leaves other hosts' rows as they came; a local step row whose store object is
-pending is carried like one whose artifact is reachable. Older binaries ignore the table.
 ### Additions within format 1
 
 Format 1 is additive: a release may add a nullable column or a table to it without a new
 version number. A format-1 database written by an earlier release that lacks one gets the
 same additive migration as a legacy database, in one transaction, keeping every row; an older
-release keeps reading the result, because it leaves unknown nullable columns alone. Downloaded
-shared state is accepted on the same terms before it is migrated. `barca status`, which reads
-the newer columns, completes the schema first.
+release keeps reading the result, because it leaves unknown nullable columns and unknown
+tables alone. A backup being restored is accepted on the same terms before it is migrated.
+`barca status`, which reads the newer columns, completes the schema first.
 
-`materializations.bytes_changed` (0.24.0) is the first such addition; 0.24.0 to 0.24.2 refused
-format-1 databases without it.
+What format 1 gained since it first shipped, all listed in `db_schema.rs`
+(`MATERIALIZATION_COLUMNS`, `RUN_COLUMNS`, `INDEXES`, `ADDED_TABLES`), which both `init_db` and the
+additive migration (`additions_missing` / `add_to_current_schema`) read:
 
-Conformance: `a_format_1_database_from_before_bytes_changed_gains_it_in_place` in
-`db_schema.rs` and `python/tests/test_upgrade_format1_columns.py`.
+- `materializations.bytes_changed` (0.24.0), the first such addition; 0.24.0 to 0.24.2 refused
+  format-1 databases without it.
+- `materializations.evicted_at`, `materializations.last_read_at` and the index `idx_mat_path`
+  (0.25.0, the cache size limit; see below).
+- `runs.job` (TEXT, nullable, 0.26.0): the canonical resolved job ids of a finished run, written
+  with its outcome, and the index `idx_runs_job (job, id)`. Rows from earlier releases, and runs
+  that never finished, keep `NULL`.
+- `notifications (job, integration, posted_at, state, message_ref)` (0.26.0), primary key
+  `(job, integration)`: the last post a notification integration (Slack, RFC-0010) made about
+  a job. `posted_at` is UTC text in SQLite's `datetime('now')` format; `state` is `failing`,
+  `still_failing`, `recovered` or `succeeded`; `message_ref` is empty for a webhook post and
+  reserved for an integration whose posts have ids.
+- `pending_uploads` (0.26.0, #390): one row per artifact-store object whose upload failed after
+  its step succeeded (`store_path` primary key, `node_id`, `run_hash`, `run_id`, `local_path`,
+  `host`, `error`, `attempts`, timestamps). A database without it (opened read-only, or a copy
+  being validated) reads as having no pending uploads. Only rows of this host are read, retried
+  or shown. Older binaries ignore the table.
+
+Conformance: `a_format_1_database_from_before_bytes_changed_gains_it_in_place` and
+`a_format_1_database_from_0_24_3_gains_everything_added_since` in `db_schema.rs`,
+`the_table_list_is_exactly_the_schema_init_db_creates` in `state_validate.rs`, the job history
+tests in `crates/barca-core/src/telemetry/history.rs`, and
+`python/tests/test_upgrade_format1_columns.py`.
 
 ## Cache size limit columns (RFC-0012)
 
@@ -105,7 +119,7 @@ Materializations carry `evicted_at TEXT` and `last_read_at TEXT`, additive forma
 the index `idx_mat_path` on `artifact_path`. `evicted_at` records when this machine deleted the
 artifact file to stay under `[cache] max_size` (NULL while the file is kept); `last_read_at`
 records when a step, `barca get` or `barca sql` last read the result. Both describe this
-machine's disk: shared-history carry does not copy them (they are not in `STEP_COLUMNS`), and
+machine's disk: they are not in `STEP_COLUMNS` (a backup need not have them), and
 schema validation treats them as nullable columns an older barca may lack. Rows are never deleted
 by eviction.
 

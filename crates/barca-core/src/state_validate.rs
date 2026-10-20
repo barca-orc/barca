@@ -50,6 +50,7 @@ pub(crate) const RUN_COLUMNS: &[&str] = &[
     "pid",
     "host",
     "owner",
+    "job",
 ];
 
 /// Every column of `materializations` except its row id.
@@ -97,6 +98,10 @@ pub(crate) const TABLES: &[(&str, &[&str])] = &[
         ],
     ),
     ("schedule_state", &["node_id", "last_fired_at"]),
+    (
+        "notifications",
+        &["job", "integration", "posted_at", "state", "message_ref"],
+    ),
 ];
 
 /// The tables whose rows are identified by an `id` row id column.

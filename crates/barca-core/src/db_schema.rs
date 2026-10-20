@@ -13,6 +13,10 @@ pub(crate) const RUN_COLUMNS: &[&str] = &[
     // and the marker it holds. It lets a reader tell a dead process from a live one
     // where pid and host cannot, in a container. NULL on rows from older versions.
     "owner TEXT",
+    // The canonical resolved job ids of a finished run (`RunReport.job`), set with its outcome.
+    // How a notification integration finds the job's previous run. NULL on rows from older
+    // versions and on runs that never finished.
+    "job TEXT",
 ];
 
 pub(crate) const MATERIALIZATION_COLUMNS: &[&str] = &[
@@ -53,7 +57,38 @@ pub(crate) const LOCAL_MATERIALIZATION_COLUMNS: &[&str] = &["evicted_at", "last_
 pub(crate) const INDEXES: &[&str] = &[
     // Eviction and `last_read_at` address results by artifact path.
     "CREATE INDEX IF NOT EXISTS idx_mat_path ON materializations(artifact_path)",
+    // A notification integration finds a job's previous finished run through this index.
+    "CREATE INDEX IF NOT EXISTS idx_runs_job ON runs(job, id)",
 ];
+
+/// Tables added after version 1 was introduced: (name, its `CREATE TABLE IF NOT EXISTS`).
+/// Created by `init_db`, and by the additive migration in a version-1 database that lacks one.
+pub(crate) const ADDED_TABLES: &[(&str, &str)] = &[
+    // The last post a notification integration (Slack) made about a job, so a job that keeps
+    // failing is announced once and reminded once a day, across processes and restarts.
+    // `message_ref` is reserved for an integration whose posts have ids (empty for a webhook).
+    (
+        "notifications",
+        "CREATE TABLE IF NOT EXISTS notifications (
+            job TEXT NOT NULL,
+            integration TEXT NOT NULL,
+            posted_at TEXT NOT NULL,
+            state TEXT NOT NULL,
+            message_ref TEXT,
+            PRIMARY KEY (job, integration)
+        )",
+    ),
+];
+
+/// Create every table of [`ADDED_TABLES`] that is missing.
+pub(crate) async fn add_tables(conn: &Connection) -> Result<(), BarcaError> {
+    for (name, create) in ADDED_TABLES {
+        conn.execute(create, ())
+            .await
+            .map_err(|e| BarcaError::Db(format!("failed to create the {name} table: {e}")))?;
+    }
+    Ok(())
+}
 
 /// Read SQLite's built-in format marker without mutating the database. Operational
 /// failures stay separate from an unsupported version.
@@ -91,7 +126,7 @@ pub(crate) async fn check(conn: &Connection) -> Result<i64, BarcaError> {
     compatible_version(read_version(conn).await?).map_err(BarcaError::Db)
 }
 
-/// Whether a version-1 database lacks an additive column or index of this release, so that
+/// Whether a version-1 database lacks an additive column, table or index of this release, so that
 /// [`crate::db::init_schema`] adds them (in one transaction) before using it. Read-only.
 pub(crate) async fn additions_missing(conn: &Connection) -> Result<bool, BarcaError> {
     let failed = |e| BarcaError::Db(format!("failed to read the metadata schema: {e}"));
@@ -116,15 +151,19 @@ pub(crate) async fn additions_missing(conn: &Connection) -> Result<bool, BarcaEr
             return Ok(true);
         }
     }
-    for index in INDEXES {
+    let tables = ADDED_TABLES.iter().map(|(name, _)| ("table", *name));
+    let indexes = INDEXES.iter().map(|index| {
         let name = index
             .split_whitespace()
             .nth(5)
             .expect("CREATE INDEX IF NOT EXISTS <name> ...");
+        ("index", name)
+    });
+    for (kind, name) in tables.chain(indexes) {
         let mut rows = conn
             .query(
-                "SELECT 1 FROM sqlite_schema WHERE type = 'index' AND name = ?1",
-                [name],
+                "SELECT 1 FROM sqlite_schema WHERE type = ?1 AND name = ?2",
+                [kind, name],
             )
             .await
             .map_err(failed)?;
@@ -278,6 +317,83 @@ mod tests {
             .await,
             1
         );
+    }
+
+    /// Every table, column and index of a fresh database, to compare schemas.
+    async fn schema_of(path: &str) -> Vec<String> {
+        let (_db, conn) = raw(path).await;
+        let mut out = Vec::new();
+        let mut rows = conn
+            .query(
+                "SELECT type, name FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY name",
+                (),
+            )
+            .await
+            .unwrap();
+        let mut tables = Vec::new();
+        while let Some(row) = rows.next().await.unwrap() {
+            let (kind, name) = (row.get::<String>(0).unwrap(), row.get::<String>(1).unwrap());
+            if kind == "table" {
+                tables.push(name.clone());
+            }
+            out.push(format!("{kind} {name}"));
+        }
+        drop(rows);
+        for table in tables {
+            let mut rows = conn
+                .query(&format!("PRAGMA table_info({table})"), ())
+                .await
+                .unwrap();
+            while let Some(row) = rows.next().await.unwrap() {
+                out.push(format!("column {table}.{}", row.get::<String>(1).unwrap()));
+            }
+        }
+        out.sort();
+        out
+    }
+
+    /// A format-1 database last written by 0.24.3 lacks everything format 1 gained since: the
+    /// cache size limit's columns and index (0.25.0), and `runs.job`, `idx_runs_job`,
+    /// and `notifications` (0.26.0). Opening it adds all of them in place,
+    /// keeps its rows, and leaves exactly the schema a new database gets.
+    #[tokio::test]
+    async fn a_format_1_database_from_0_24_3_gains_everything_added_since() {
+        let dir = tempfile::tempdir().unwrap();
+        let fresh = dir.path().join("fresh.db").display().to_string();
+        db::init_db(&fresh).await.unwrap();
+        let path = dir.path().join("format1.db").display().to_string();
+        populated(&path, "saved").await;
+        {
+            let (_db, conn) = raw(&path).await;
+            for statement in [
+                "DROP TABLE notifications",
+                "DROP INDEX idx_runs_job",
+                "DROP INDEX idx_mat_path",
+                "ALTER TABLE runs DROP COLUMN job",
+                "ALTER TABLE materializations DROP COLUMN evicted_at",
+                "ALTER TABLE materializations DROP COLUMN last_read_at",
+            ] {
+                conn.execute(statement, ()).await.unwrap();
+            }
+            assert_eq!(scalar(&conn, "PRAGMA user_version").await, VERSION);
+            assert!(additions_missing(&conn).await.unwrap());
+            db::checkpoint(&conn).await.unwrap();
+        }
+        db::init_db(&path).await.unwrap();
+        db::init_db(&path).await.unwrap();
+        assert_eq!(schema_of(&path).await, schema_of(&fresh).await);
+        assert_eq!(
+            db::get_run(&path, "saved").await.unwrap().unwrap().status,
+            "success"
+        );
+        let (_db, conn) = raw(&path).await;
+        assert_eq!(scalar(&conn, "PRAGMA user_version").await, VERSION);
+        assert!(!additions_missing(&conn).await.unwrap());
+        assert_eq!(
+            scalar(&conn, "SELECT COUNT(*) FROM runs WHERE job IS NULL").await,
+            1
+        );
+        assert_eq!(scalar(&conn, "SELECT COUNT(*) FROM notifications").await, 0);
     }
 
     #[tokio::test]

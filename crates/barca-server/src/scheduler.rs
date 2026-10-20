@@ -144,7 +144,9 @@ fn record_skip(book: &mut Bookkeeping, job: &ScheduledJob, handle: &str, epoch: 
     tokio::spawn(async move {
         let integrations = barca_core::telemetry::configured();
         if !integrations.is_empty() {
-            barca_core::telemetry::export(&integrations, &report).await;
+            // A skipped tick is not an outcome of the job: no history to read.
+            let history = barca_core::telemetry::JobHistory::none();
+            barca_core::telemetry::export(&integrations, &report, &history).await;
         }
     });
 }
@@ -162,6 +164,7 @@ fn skip_report(job: &ScheduledJob, handle: &str, epoch: i64) -> barca_core::tele
         .to_string(),
         target: Some(job.id.clone()),
         job: job.id.clone(),
+        env: None,
         status: "skipped".to_string(),
         reason: Some("in_flight".to_string()),
         in_flight_run: Some(handle.to_string()),

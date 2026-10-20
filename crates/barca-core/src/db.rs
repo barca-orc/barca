@@ -522,9 +522,10 @@ pub async fn init_db(db_path: &str) -> Result<(), BarcaError> {
 /// are refused before any write; complete current databases are left unchanged.
 ///
 /// Format 1 is additive: a format-1 database written by an earlier release may lack a
-/// nullable column added since (`materializations.bytes_changed` in 0.24.0). It gets the
-/// same additive migration as a legacy database, in one transaction, and an older release
-/// still reads the result.
+/// nullable column, a table or an index added since (`materializations.bytes_changed` in
+/// 0.24.0; see `db_schema::ADDED_TABLES` and `db_schema::INDEXES`). It gets the same additive
+/// migration as a legacy database, in one transaction, and an older release still reads the
+/// result.
 pub(crate) async fn init_schema(conn: &turso::Connection) -> Result<(), BarcaError> {
     let version = crate::db_schema::check(conn).await?;
     if version == crate::db_schema::VERSION {
@@ -582,6 +583,7 @@ async fn add_to_current_schema(conn: &turso::Connection) -> Result<(), BarcaErro
         )
         .await?;
         crate::db_schema::add_columns(conn, "runs", crate::db_schema::RUN_COLUMNS).await?;
+        crate::db_schema::add_tables(conn).await?;
         for index in crate::db_schema::INDEXES {
             conn.execute(index, ())
                 .await
@@ -647,11 +649,6 @@ async fn migrate_legacy_schema(conn: &turso::Connection) -> Result<(), BarcaErro
     )
     .await
     .map_err(|e| BarcaError::Db(format!("failed to create index: {e}")))?;
-    for index in crate::db_schema::INDEXES {
-        conn.execute(index, ())
-            .await
-            .map_err(|e| BarcaError::Db(format!("failed to create index: {e}")))?;
-    }
 
     // Per-node cost estimates: the persisted EWMA that seeds the next run's
     // batch sizing, so the 30s cold-start probe is paid once ever per stable
@@ -695,6 +692,13 @@ async fn migrate_legacy_schema(conn: &turso::Connection) -> Result<(), BarcaErro
     // Who is executing a `running` run (#214): the coordinator's pid and host, so a run whose
     // process died without recording an outcome can be told from one still in progress.
     crate::db_schema::add_columns(conn, "runs", crate::db_schema::RUN_COLUMNS).await?;
+    // Indexes and tables added within format 1 (`db_schema::INDEXES`, `ADDED_TABLES`).
+    for index in crate::db_schema::INDEXES {
+        conn.execute(index, ())
+            .await
+            .map_err(|e| BarcaError::Db(format!("failed to create index: {e}")))?;
+    }
+    crate::db_schema::add_tables(conn).await?;
 
     // Unfinished runs are looked up by status (`interrupted_runs`): through this index that
     // costs the number of such runs, not the length of the history.
