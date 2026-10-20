@@ -159,13 +159,25 @@ SETUP_CASES: list[tuple[str, list[str], str, int]] = [
     ),
     ("status_bytes_changed", ["status", "pipeline.py", "--json"], "stdout", 0),
 ]
+# A project whose artifact store refuses uploads (a read-only directory) after every step
+# succeeded (#390): the run, the status and the dry run that report the pending uploads.
+UPLOAD_CASES: list[tuple[str, list[str], str, int]] = [
+    ("get_uploads_pending", ["get", "summary", "pipeline.py", "--json"], "stdout", 0),
+    ("status_unsynced", ["status", "pipeline.py", "--json"], "stdout", 0),
+    (
+        "get_dry_run_uploads_pending",
+        ["get", "summary", "pipeline.py", "--dry-run", "--json"],
+        "stdout",
+        0,
+    ),
+]
 TIMING_CASE = (
     "get_timing_retry",
     ["get", "value", "pipeline.py", "--json", "--agent"],
     "stdout",
     0,
 )
-ALL_CASES = CASES + SETUP_CASES + [TIMING_CASE]
+ALL_CASES = CASES + SETUP_CASES + UPLOAD_CASES + [TIMING_CASE]
 
 # Values that are user data, not barca's schema: recorded as `<user value>`.
 USER_VALUES = {"final_output", "targets.<name>.final_output", "nodes[].shape.sample", "rows"}
@@ -393,6 +405,12 @@ def runs(tmp_path_factory) -> dict:
     s = command_schema(json.loads(proc.stdout))
     out["get_artifact_mismatch"] = (s, render_snapshot(MISMATCH_ARGV, "stdout", 0, s), proc)
 
+    upload_case = tmp_path_factory.mktemp("contract_uploads")
+    upload_procs, retried = _pending_upload_runs(binary, upload_case, env)
+    for (case, argv, stream, code), upload_proc in zip(UPLOAD_CASES, upload_procs):
+        s = command_schema(json.loads(upload_proc.stdout))
+        out[case] = (s, render_snapshot(argv, stream, code, s), upload_proc)
+
     timing_case = tmp_path_factory.mktemp("contract_timing")
     (timing_case / "pipeline.py").write_text(
         "import time\nfrom pathlib import Path\nfrom barca import asset\n"
@@ -419,6 +437,11 @@ def runs(tmp_path_factory) -> dict:
             agent.add(normalize_agent_line(line))
     for line in timing.stderr.splitlines():
         if line.startswith("[barca] "):
+            agent.add(normalize_agent_line(line))
+    for line in retried.stderr.splitlines():
+        if line.startswith(("[barca] uploading ", "[barca] uploaded ")) and "pending" in line:
+            line = line.replace(str(upload_case / "store"), "<store>")
+            line = re.sub(r"(uploading|uploaded) \d+ pending", r"\1 <n> pending", line)
             agent.add(normalize_agent_line(line))
     for argv in AGENT_RUNS:
         proc = barca(argv)
@@ -454,6 +477,33 @@ def _artifact_mismatch_run(binary: str, tmp: Path, env: dict) -> subprocess.Comp
     (stored,) = store.glob("default/artifacts/*--numbers/*.json")
     stored.write_text("[5, 5]")
     return barca("reader", MISMATCH_ARGV)
+
+
+def _pending_upload_runs(
+    binary: str, tmp: Path, env: dict
+) -> tuple[list[subprocess.CompletedProcess], subprocess.CompletedProcess]:
+    """`UPLOAD_CASES` with uploads refused, then the run that uploads them once they are not."""
+    store = tmp / "store"
+    artifacts = store / "default" / "artifacts"
+    artifacts.mkdir(parents=True)
+    cwd = tmp / "project"
+    cwd.mkdir()
+    (cwd / "pipeline.py").write_text(STORE_PIPELINE)
+    env = {**env, "BARCA_REMOTE_URI": str(store)}
+
+    def barca(argv: list[str]) -> subprocess.CompletedProcess:
+        proc = subprocess.run(
+            [binary, *argv], cwd=cwd, env=env, capture_output=True, text=True, timeout=300
+        )
+        assert proc.returncode == 0, f"barca {' '.join(argv)}\n{proc.stderr}"
+        return proc
+
+    artifacts.chmod(0o500)
+    try:
+        procs = [barca(argv) for _, argv, _, _ in UPLOAD_CASES]
+    finally:
+        artifacts.chmod(0o700)
+    return procs, barca(["get", "summary", "pipeline.py", "--json"])
 
 
 @pytest.mark.parametrize("case", [c[0] for c in ALL_CASES])

@@ -45,7 +45,16 @@ retained. The existing dead-PID staging cleanup removes it on a later worker sta
 The transfer helper removes its run's snapshots on SIGTERM, socket closure and coordinator
 lifeline EOF. Its existing staged-file registry cleans SDK stages on shutdown. If both
 coordinator and helper are killed outright, the next worker's dead-PID cleanup is the crash
-backstop. Unconfirmed, failed and abandoned requests never produce success rows.
+backstop. Unconfirmed and abandoned (cancelled) requests never produce success rows and never
+supply a receipt digest.
+
+A request that failed after its step succeeded (#390) does not fail the step. The terminal
+ledger records the success row at the store location with the worker's producer digest, and the
+upload is kept in the `pending_uploads` table (see [metadata-schema.md](metadata-schema.md)).
+The next command that opens the store re-uploads the reusable local artifact path, before its own
+work; a confirmed retry removes the pending row and fills a missing `output_hash` from its
+receipt. A retry has no producer snapshot: a later refresh of the same path between the failure
+and the retry is uploaded instead, the same read-isolation limit described below.
 
 Checkpoint and terminal materializations preserve the sensor's worker-reported semantic
 content hash. Ordinary asset rows use the confirmed upload digest as their output-hash

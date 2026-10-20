@@ -414,7 +414,11 @@ def test_a_directory_in_the_store_is_an_infra_error_and_is_left_alone(shared):
 
 
 def test_a_directory_in_the_store_fails_the_upload_the_same_way(shared, tmp_path):
-    """The upload side: the object of a result that is about to be stored is a directory."""
+    """The upload side: the object of a result that is about to be stored is a directory.
+
+    The step succeeded, so the run does too (#390): a warning names the path and what works,
+    and the result stays pending until the directory is gone.
+    """
     store, reader = shared
     (stored,) = store.glob("default/artifacts/*--numbers/*.json")
     stored.unlink()
@@ -422,18 +426,18 @@ def test_a_directory_in_the_store_fails_the_upload_the_same_way(shared, tmp_path
 
     proc = cli(reader, "get", "numbers", "--refresh", "numbers", "--json", store=store)
 
-    assert proc.returncode == 3, proc.stderr
-    envelope = json.loads(next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{")))
-    assert envelope["kind"] == "infra"
-    text = json.dumps(envelope)
-    assert "1 artifact upload(s) failed" in text and str(stored) in text, envelope
-    assert "IsADirectoryError" in text and "Remove or rename it there" in text, envelope
+    doc = ok(proc)
+    assert doc["uploads"]["pending"] == 1, doc
+    text = proc.stderr
+    assert "[barca] warning: 1 result not uploaded" in text and str(stored) in text, text
+    assert "IsADirectoryError" in text and "Remove or rename it there" in text, text
     assert (stored / "theirs").is_dir()
     assert sorted(p.name for p in stored.parent.iterdir()) == [stored.name]
-    # Removed there, the same command stores the result.
+    # Removed there, the next command stores the result before its own work.
     (stored / "theirs").rmdir()
     stored.rmdir()
-    ok(cli(reader, "get", "numbers", "--refresh", "numbers", "--json", store=store))
+    doc = ok(cli(reader, "get", "numbers", "--json", store=store))
+    assert "uploads" not in doc, doc
     assert json.loads(stored.read_text()) == [3, 4]
 
 

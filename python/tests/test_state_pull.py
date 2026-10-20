@@ -466,8 +466,10 @@ def test_a_run_whose_upload_failed_is_uploaded_by_the_next_run(machines, state_u
     finally:
         state_uri.parent.chmod(0o755)
         state_uri.chmod(0o644)
-    assert out.returncode == 3, out.stderr
-    assert "shared state push" in out.stderr
+    # The step succeeded: a warning, not a failed run (#390).
+    assert out.returncode == 0, out.stderr
+    assert "[barca] warning: the run's history was not published" in out.stderr
+    assert "shared state push" in json.loads(out.stdout)["uploads"]["error"]
     (not_uploaded,) = a.local_runs() - {a_first}
     assert set(shared_runs(state_uri)) == {a_first}
 

@@ -498,6 +498,7 @@ spells it in snake_case, exactly like the `summary` keys; the table prints `neve
 | state | meaning | reasons |
 |---|---|---|
 | `cached` | a successful result matches this code and these inputs | `materialized` |
+| `unsynced` | cached and computed here, but its upload to the artifact store failed after the step succeeded; the next `get` or `run` uploads it ([remote storage](/reference/remote-storage/)) | `local_only` (table: `local only`) |
 | `stale` | ran before, but would run again | `changed`, `upstream_stale`, `failed`, `artifact_missing` |
 | `never_run` | no successful materialization recorded | `no_record`, `failed` |
 | `partial` | partitioned, some keys cached | `partitions_missing` |

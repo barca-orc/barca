@@ -75,6 +75,7 @@ Examples:
   barca get total pipeline.py --refresh clean      # recompute clean and everything downstream of it
   barca get total pipeline.py --refresh clean --no-cascade   # recompute only clean
   barca get total pipeline.py --dry-run    # what would run vs come from cache; no steps execute
+  barca get total pipeline.py --dry-run --json   # also `uploads`: results still waiting for the store
   barca get total pipeline.py --json       # JSON even in a terminal (the default when piped)
   barca get total pipeline.py --pretty     # summary and value for humans (the default in a terminal)
   barca get total pipeline.py -o value     # just the value, pretty-printed
@@ -105,6 +106,9 @@ A cached step whose artifact file is gone is computed again when something needs
 step that runs takes it as an input, or it is a target), with reason `artifact_missing` and a
 warning on stderr. A missing artifact that nothing reads is left alone (barca docs cache).
 Completed steps are recorded during the run; remote results require confirmed upload.
+With an artifact store, an upload that fails after every step succeeded is a warning, not a
+failure: exit 0, JSON `uploads` {pending, error, nodes}, the result is kept on this machine
+(`unsynced` in barca status) and the next get or run uploads it first (barca docs remote).
 Use `barca status pipeline.py` in another terminal to inspect recorded progress. Shared history
 is published when the run ends (barca docs remote).
 Targets must be assets; use `barca run` for tasks. With no target, get materializes every asset and
@@ -302,7 +306,8 @@ Examples:
   barca status total pipeline.py --json --sample 5   # add up to 5 sample rows per json/parquet/CSV artifact
   barca status pipeline.py --env dev       # state recorded in another environment
 
-Cache state per node: cached, stale (ran before; code or inputs changed, or its artifact file is
+Cache state per node: cached, unsynced (cached here, its upload to the artifact store still
+pending: reason `local_only`), stale (ran before; code or inputs changed, or its artifact file is
 gone and a run would read it: reason `artifact_missing`), never_run, partial
 (some partition keys cached), unknown (dynamic partitions not yet known) or always_runs (tasks,
 sensors), with a reason. JSON spells the states in snake_case, the same as the `summary` keys

@@ -77,6 +77,7 @@ two cannot disagree. In JSON the states are snake_case, spelled exactly like the
 | state | meaning | `reason` |
 |---|---|---|
 | `cached` | a successful result matches this code and these inputs; `get` serves it | `materialized` |
+| `unsynced` | cached, and computed on this machine, but not in the artifact store yet: its upload failed after the step succeeded (`barca docs remote`, "When an upload fails after the steps succeeded"). `get` serves it from here; the next `get` or `run` that opens the store uploads it | `local_only` (the table prints `local only`) |
 | `stale` | it ran before, but `get` would run it again | `changed`, `upstream_stale`, `failed`, `artifact_missing` |
 | `never_run` | no successful materialization is recorded | `no_record`, `failed` |
 | `partial` | a partitioned asset with some keys cached | `partitions_missing` |
@@ -102,8 +103,13 @@ two cannot disagree. In JSON the states are snake_case, spelled exactly like the
   `cache.artifact` then names a file that is not there (`barca docs cache`, "A cached result
   whose artifact is missing").
 
+- `local_only`: only with an artifact store. `detail` carries the upload's last error. A
+  partitioned asset is `unsynced` when any of its keys is. The summary line counts these nodes
+  (`1 cached, 1 unsynced, 0 stale, ...`) and `summary.unsynced` is always present. RFC-0009 also
+  names `store only` and `mismatch` for `unsynced`; those are not implemented yet.
+
 `cache.run_hash` is the cache key for the current code and inputs; `cache.artifact` is the file a
-`get` would serve (only when `cached`).
+`get` would serve (only when `cached` or `unsynced`).
 
 ## Last materialization
 
@@ -186,7 +192,7 @@ in its `partition` field (for example `k=a`), and `shape` describes that one key
       "shape": {"type": "table", "rows": 3, "columns": [{"name": "id", "type": "int64"}, {"name": "amount", "type": "double"}]}
     }
   ],
-  "summary": {"cached": 2, "stale": 0, "never_run": 0, "partial": 0, "unknown": 0, "always_runs": 0}
+  "summary": {"cached": 2, "unsynced": 0, "stale": 0, "never_run": 0, "partial": 0, "unknown": 0, "always_runs": 0}
 }
 ```
 
@@ -222,7 +228,7 @@ visible under `--json`; task prints remain accessible through `barca logs`.
 `--agent` completion and final failure lines append `attempts=N` when N exceeds one.
 Completion lines retain their existing final-attempt duration. `history --json` adds
 `attempts`, the total attempts in recorded materialization rows (zero for an all-cached
-run; upload-failure rows retain their existing transfer-attempt counts). `stats` shows
+run; upload-failure rows from earlier versions retain their transfer-attempt counts). `stats` shows
 attempts per recorded materialization and its stored final-attempt duration.
 Timeout errors name the step id, including its partition key.
 

@@ -72,3 +72,12 @@ Materializations also carry `bytes_changed INTEGER DEFAULT 0`, an additive forma
 column. It records a byte mismatch when inserting a recompute with the same node/run
 hash; legacy rows default to 0. Shared-history carry preserves both `output_hash` and
 `bytes_changed` rather than recomputing the event. See [materialization-digests.md](materialization-digests.md).
+
+`pending_uploads` (#390) is an additive format-1 table: one row per artifact-store object whose
+upload failed after its step succeeded (`store_path` primary key, `node_id`, `run_hash`,
+`run_id`, `local_path`, `host`, `error`, `attempts`, timestamps). It is created by the first
+write that needs it, never by a reader: a database without it reads as having no pending
+uploads, and an existing format-1 database is not migrated. Only rows of this host are read,
+retried or shown. A shared-history pull replaces the pulled copy's rows of this host with the
+local ones and leaves other hosts' rows as they came; a local step row whose store object is
+pending is carried like one whose artifact is reachable. Older binaries ignore the table.

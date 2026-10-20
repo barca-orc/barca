@@ -49,6 +49,12 @@ and these tags are available on the same releases page.
 - **Breaking:** agent completion and permanent failure lines append `attempts=N` after
   retries. Allow this optional suffix when parsing those lines, or read the structured
   `steps[].attempts` field instead.
+- **Breaking:** a remote store fails soft once the steps are done (#390). When every step
+  succeeded and only an artifact upload or the end-of-run history push failed, `get` and `run`
+  exit 0 (was 3) with one warning, add `uploads: {pending, error, nodes}` to the run JSON and
+  `--dry-run`, and record the results; `barca status` shows them `unsynced` / `local_only`
+  (`summary.unsynced`) until the next command that opens the store uploads them first. Read
+  `uploads` instead of exit 3 to detect unpublished results.
 
 ### Removed
 

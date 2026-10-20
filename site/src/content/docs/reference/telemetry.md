@@ -151,8 +151,8 @@ tracebacks, SQL and HTTP metadata; the Rust exporter's error truncation does not
 - Calls made through `parallel()` are not in `barca.steps.total` and have no synthetic
   `barca.step` span; the optional Python SDK reports their executions as described above.
 - The traceback of a chained exception (`raise ... from e`) does not include its cause.
-- A failed upload to a remote store shows the step as failed (`error.type` `UploadError`),
-  although its function ran.
+- A failed upload to a remote store is not in the trace: the step shows as succeeded, and
+  the upload is retried by the next command (`barca docs remote`).
 - The run is reported before the shared history is pushed. A push that then fails is not
   reflected in the trace.
 - Uploads to a remote store, and the time spent waiting for them, are not spans.

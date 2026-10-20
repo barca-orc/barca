@@ -123,10 +123,12 @@ def test_upload_wait_and_failure_attempts_are_reported(project):
     root, env = project
     env["UPLOAD_FAIL"] = "1"
     out = run(root, env)
-    assert out.returncode == 3, out.stderr
+    # The step succeeded; only its upload failed: a warning, not a failed run (#390).
+    assert out.returncode == 0, out.stderr
     assert "[barca] uploading 1 artifacts to s3://bucket/project" in out.stderr
     assert "timeout 1s per attempt" in out.stderr
-    assert "1 attempt(s)" in out.stderr
+    assert "[barca] warning: 1 result not uploaded to s3://bucket/project" in out.stderr
+    assert "(1 attempt)" in out.stderr
     assert "upload denied" in out.stderr
     assert (root / "user.started").exists()
 

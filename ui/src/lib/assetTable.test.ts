@@ -68,6 +68,7 @@ describe('severityOf', () => {
       'unknown',
     )
     expect(severityOf(node({ id: 'a', cache: cache('always_runs', 'task') }))).toBe('always_runs')
+    expect(severityOf(node({ id: 'a', cache: cache('unsynced', 'local_only') }))).toBe('unsynced')
   })
 
   it('a failed latest attempt wins over any cache state', () => {
@@ -218,6 +219,7 @@ describe('summarize', () => {
       partial: 0,
       unknown: 0,
       always_runs: 0,
+      unsynced: 0,
       cached: 2,
     })
   })

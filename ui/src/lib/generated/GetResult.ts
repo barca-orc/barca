@@ -2,6 +2,7 @@
 import type { OutputRef } from "./OutputRef";
 import type { PlanWarning } from "./PlanWarning";
 import type { StepReport } from "./StepReport";
+import type { UploadsReport } from "./UploadsReport";
 
 export type GetResult = { run_id: string, elapsed_seconds: number, steps_executed: number, phases: number, final_output: OutputRef | null,
 /**
@@ -11,4 +12,9 @@ steps: Array<StepReport>,
 /**
  * Plan-time warnings for the steps this run planned (`[]` when there are none).
  */
-warnings: Array<PlanWarning>, };
+warnings: Array<PlanWarning>,
+/**
+ * Results computed here and not yet in the artifact store (#390). Absent when nothing is
+ * pending and nothing failed to publish.
+ */
+uploads?: UploadsReport, };

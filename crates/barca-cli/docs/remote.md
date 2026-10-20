@@ -449,8 +449,10 @@ A final output another machine produced is downloaded first.
 - A cache hit recorded by another machine is downloaded just before the first step that
   reads it eagerly. Cached intermediates nothing reads are never downloaded, and neither are
   parquet results that are only read lazily (below).
-- Before results are recorded, barca waits for every upload. The shared state never points
-  at an artifact that is missing from the store.
+- Before results are recorded, barca waits for every upload. A result whose upload failed is
+  still recorded, and kept on this machine as a pending upload (see "When an upload fails
+  after the steps succeeded"); every other row of the shared state points at an object that
+  is in the store.
 
 stderr reports each part, so remote cost is visible:
 
@@ -460,6 +462,43 @@ stderr reports each part, so remote cost is visible:
 [barca] uploaded 2 artifacts (672.8 KB); waited 0.0s at end of run
 [barca] pushed state (48.0 KB) in 0.03s
 ```
+
+## When an upload fails after the steps succeeded
+
+The work is done when the steps are. If every step succeeded and only an upload to the store
+failed (permission denied, an expired token, a store that went away mid-run), or only the push
+of the shared history did, the run is a success:
+
+- it exits 0 with the usual result, and stderr has one warning naming what was not published
+  and why:
+  `[barca] warning: 2 results not uploaded to s3://my-bucket/barca/my-project/default/artifacts
+  (pipeline.py:numbers, pipeline.py:total): upload to ... failed (1 attempt): PermissionError: ...;
+  every step succeeded, the results are kept on this machine (`unsynced`, local only) and the
+  next command that uses the store uploads them`.
+  A failed history push prints `[barca] warning: the run's history was not published to ...`;
+  the next run on this machine pushes it, as after any run whose push did not happen;
+- the JSON result gains `"uploads": {"pending": 2, "error": "...", "nodes": [...]}` (absent
+  when nothing is pending);
+- the results are recorded, with their store locations, and are cache hits on this machine,
+  served from `.barca/artifacts/`. `barca status` shows them `unsynced` with WHY `local only`
+  (`"state": "unsynced", "reason": "local_only"` in JSON), and `barca get --dry-run` lists them;
+- the next `barca get` or `barca run` that opens the store uploads them before its own work:
+  `[barca] uploading 2 pending results to <store> from an earlier run`, then
+  `[barca] uploaded 2 pending results`. If they fail again the run goes on, still exits 0 if
+  its steps succeed, and reports them again. Afterwards `barca status` shows them `cached`.
+
+Pending uploads are kept in the metadata database, so they survive the process, a reboot and
+a pull of the shared history; only the machine that computed them retries them, from its own
+`.barca/artifacts/`. There is no flag to give up on one. A pending result whose local file was
+deleted is dropped with a warning (nothing is left to upload); its result is then missing like
+any deleted artifact and is computed again when something needs it. With shared history, other
+machines see the recorded result before its object is in the store: a machine that needs it
+before the upload succeeds finds no object and computes it again (`reason:
+"artifact_missing"`).
+
+A store that fails before any step runs is still an error, exit 3: the startup check
+(`[barca] checking artifact store`), a shared history that cannot be pulled, a cached artifact
+that cannot be fetched. Nothing has been computed then, so there is nothing to keep.
 
 ## How steps read inputs from the store
 
@@ -629,9 +668,10 @@ dropped connections, timeouts, 5xx, 408 and 429. Missing objects, permission and
 authentication errors, and other 4xx responses fail on the first attempt. An attempt that
 exceeds `transfer_timeout` fails as stalled and is not retried.
 
-- **Upload failed**: the run exits 3 and names the step. The step gets a `failed` row with
-  `error_type = 'UploadError'`, no artifact path, and the attempt count; it recomputes on
-  the next run. `barca stats target pipeline.py` shows the failure.
+- **Upload failed** after the step succeeded: a warning, not a failed run (exit 0). The result
+  is recorded and kept here as a pending upload, and the next command that opens the store
+  uploads it (see "When an upload fails after the steps succeeded"). Versions before this
+  one recorded a `failed` row with `error_type = 'UploadError'` and exited 3.
 - **Cached artifact missing from the store** (the object was deleted, and there is no copy in
   `.barca/artifacts/` either): if something needs to read it, its step is computed again and
   uploaded, with `reason: "artifact_missing"` and a warning on stderr; the run does not fail.
@@ -668,11 +708,13 @@ exceeds `transfer_timeout` fails as stalled and is not retried.
   directory at an artifact's path"). If barca may not rename it (no write permission on the
   directory that holds it), the run exits 3 and says so, naming the path.
 - **A directory at an object's path in the store** (a store that is a shared directory): barca
-  changes nothing in a store but its own objects, so the fetch or the upload fails with exit
-  3 (`IsADirectoryError`, naming the path) and the error says what works: remove or rename the
-  directory there. Recomputing with `--refresh-all` does not help; the upload meets the same
-  directory. The same goes for a directory at `state/metadata.db`: the pull fails with
-  `<uri> is a directory, not the shared history file`.
+  changes nothing in a store but its own objects, so the transfer fails with
+  `IsADirectoryError`, naming the path, and the message says what works: remove or rename the
+  directory there. A fetch that meets one exits 3. An upload that meets one is a pending
+  upload like any other (exit 0, a warning with the same advice), uploaded by the next command
+  once the directory is gone. Recomputing with `--refresh-all` does not help; the upload meets
+  the same directory. The same goes for a directory at `state/metadata.db`: the pull fails
+  with `<uri> is a directory, not the shared history file`.
 
 `.barca/artifacts/` doubles as a local cache of the store and is never pruned automatically;
 deleting it is safe (anything needed later is downloaded again, or computed again if it is no
