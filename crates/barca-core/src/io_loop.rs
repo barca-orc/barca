@@ -1438,14 +1438,10 @@ fn build_step_json(item: &crate::coordinator::Item, coord: &Coordinator) -> serd
         if inputs.get(param).is_some_and(|v| v.as_str() != Some("")) {
             continue;
         }
-        for (&uid, artifact) in coord.outputs() {
-            let upstream_item = coord.item(uid);
-            if upstream_item.step_id.display() == *upstream_node_id {
-                let path = artifact.get("path").and_then(|v| v.as_str()).unwrap_or("");
-                if !path.is_empty() {
-                    inputs.insert(param.clone(), serde_json::Value::String(path.to_string()));
-                }
-                break;
+        if let Some(artifact) = coord.output_for_display(upstream_node_id) {
+            let path = artifact.get("path").and_then(|v| v.as_str()).unwrap_or("");
+            if !path.is_empty() {
+                inputs.insert(param.clone(), serde_json::Value::String(path.to_string()));
             }
         }
     }

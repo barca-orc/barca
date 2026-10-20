@@ -12,6 +12,17 @@ reconciliation, and verified shared DuckDB worker lifetime. See
 upgrade and breaking-change notes. Releases between the historical entries below
 and these tags are available on the same releases page.
 
+## Pending
+
+### Performance
+
+- Cold runs of large partitioned pipelines scale linearly with the number of keys again: a
+  three-level chain of 20,000 keys runs cold in about 9.5 s instead of about 245 s, with a
+  0.55 GB coordinator instead of 5.3 GB (#345). Each key of a step used to wait on every key of
+  the previous step in its stream through its own edge; one shared gate per step now keeps the
+  same ordering. Dispatch also finds an upstream's output by id instead of scanning every
+  output, and the end-of-run check no longer scans every item on each event.
+
 ## 0.24.2 (2026-10-20)
 
 ### Bug Fixes
