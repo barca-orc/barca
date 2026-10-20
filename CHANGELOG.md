@@ -12,7 +12,7 @@ reconciliation, and verified shared DuckDB worker lifetime. See
 upgrade and breaking-change notes. Releases between the historical entries below
 and these tags are available on the same releases page.
 
-## Pending
+## 0.25.0 (2026-10-20)
 
 ### Breaking
 
