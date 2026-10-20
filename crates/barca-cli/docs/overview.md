@@ -69,6 +69,7 @@ that; see `barca docs agents`.
 - `barca docs tasks` — tasks and `barca run`
 - `barca docs cache` — what is cached, artifacts, `--refresh` / `--refresh-all`, environments
 - `barca docs remote` — share one cache across machines (S3, GCS, Azure) with a few environment variables
+- `barca docs server-mode` — one `barca serve` as the team's ledger: local runs read cache hits from it and post what they compute
 - `barca docs partitions` — fan-out over keys, fan-in with `collect`
 - `barca docs sinks` — export outputs to local or remote paths
 - `barca docs scheduling` — freshness, cron schedules, `barca serve`, HTTP/Python client setup and current server-mode limits

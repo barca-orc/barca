@@ -18,7 +18,8 @@ pub(crate) async fn run_cmd(
     agent: bool,
     fields: Option<&[String]>,
 ) -> Result<(), barca_core::BarcaError> {
-    let cfg = barca_core::config::resolve(env)?;
+    let mut cfg = barca_core::config::resolve(env)?;
+    crate::ledger_http::attach(&mut cfg);
     if let Some(line) = cfg.startup_line() {
         barca_core::errln!("{line}");
     }

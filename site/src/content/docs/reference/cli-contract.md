@@ -187,7 +187,7 @@ default, and any aliases.
 | `--all` | - | default `false` | stable | Show every recorded run (no limit) |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
-| `--fields` | comma-separated: `run_id`, `command`, `files`, `target`, `status`, `steps_total`, `steps_executed`, `steps_cached`, `attempts`, `started_at`, `finished_at`, `elapsed_seconds`, `triggered_by`, `scheduled_at`, `schedule_id` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `runs`. Implies --json. An unknown key is a usage error listing the valid ones |
+| `--fields` | comma-separated: `run_id`, `command`, `files`, `target`, `status`, `steps_total`, `steps_executed`, `steps_cached`, `attempts`, `started_at`, `finished_at`, `elapsed_seconds`, `triggered_by`, `scheduled_at`, `schedule_id`, `client_run_id` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `runs`. Implies --json. An unknown key is a usage error listing the valid ones |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
 
 #### barca stats
@@ -306,6 +306,13 @@ follow the same rule: in JSON mode they are the envelope on stderr (see Errors).
 | `BARCA_COMM_COST_SECONDS` | the scheduler's per-dispatch cost estimate | experimental |
 | `BARCA_TRACE_TIMING` | when set, prints a timing waterfall on stderr | experimental |
 | `BARCA_TELEMETRY` | comma-separated telemetry integrations to send finished runs to; `datadog` is the only one (`barca docs telemetry`) | experimental |
+
+`[server] url` in `barca.toml` (experimental) points `get` and `run` at a server's ledger
+(`barca docs server-mode`): they still run here, read cache hits from the server and post what
+they compute. A server that cannot be reached, answers unexpectedly or speaks another API version
+is exit 3 naming its URL; a server whose store is not this project's `[remote]` (or a project with
+no `[remote]`) is exit 2 naming both. With it set, `[remote] state` defaults to `off`, and
+`optimistic` is a usage error.
 
 barca sets `BARCA_SOCKET`, `BARCA_WORKER`, `BARCA_WORKER_ID` (and passes `BARCA_ARTIFACT_URI`,
 `BARCA_STORAGE_OPTIONS`) for its own worker processes; these are internal, not part of the
@@ -1044,7 +1051,9 @@ preserved, and an unknown end time/duration is not invented. Ordinary history st
 (an HTTP request to `barca serve`), `schedule` (a cron tick) or `client` (a run a laptop posted
 to a server's ledger); `null` for runs recorded before barca recorded it. A scheduled run also
 has `scheduled_at` (the tick, RFC 3339 in UTC) and `schedule_id` (the scheduled node); both are
-`null` on every other run. The three keys are additive.
+`null` on every other run. The three keys are additive. `runs[].client_run_id` is the run id
+a `client` run had on the laptop that posted it (`barca docs server-mode`), `null` on every other
+run; additive and experimental.
 
 
 <!-- BEGIN GENERATED schema history -->
@@ -1054,6 +1063,7 @@ has `scheduled_at` (the tick, RFC 3339 in UTC) and `schedule_id` (the scheduled 
 | `runs` | array | always |
 | `runs[]` | object | always |
 | `runs[].attempts` | integer | always |
+| `runs[].client_run_id` | null | always |
 | `runs[].command` | string | always |
 | `runs[].elapsed_seconds` | number | always |
 | `runs[].files` | array | always |
@@ -1095,6 +1105,7 @@ Reconciled history (same envelope; unknown end timestamp and duration remain nul
 | `runs` | array | always |
 | `runs[]` | object | always |
 | `runs[].attempts` | integer | always |
+| `runs[].client_run_id` | null | always |
 | `runs[].command` | string | always |
 | `runs[].elapsed_seconds` | null | always |
 | `runs[].files` | array | always |
@@ -1313,6 +1324,9 @@ placeholders:
 | `[barca] progress checkpoint failed; recorded results remain local: <cause>` | a mid-run shared-state publication failed; committed local results are retained and retried at the next minute tick, without changing successful user work into a failed step | experimental |
 | `[barca] still running (<n>s): <id>` | a step in flight for `BARCA_PROGRESS_SECS` (every mode) | experimental |
 | `[barca] <n> more: <first line of a warning>` | before the end-of-run line (every mode): a `logging` WARNING printed because logging is unconfigured, or a `warnings` warning, from a step's process was printed once and suppressed `<n>` more times in this run; beyond ten texts, one `[barca] <n> more: <k> other repeated warnings` (`barca docs agents`) | experimental |
+| `[barca] server <url>` | once at startup of `get` and `run` (every mode) when `[server] url` is set: the command reads and posts to that server's ledger (`barca docs server-mode`) | experimental |
+| `[barca] recorded run <id> on the server (run <server id>)` | a run this machine could not post before was accepted by the server's ledger, before the command's own lookup | experimental |
+| `[barca] warning: run <id> was not recorded on the server <url>: <why>; it stays on this machine (unsynced) and ...`, `[barca] warning: run <id> is still not recorded on the server <url>: <why>` | the server refused a run's post (`409`) or could not be reached after the run; the run's result and exit code are unchanged | experimental |
 | `[barca] skipped N task(s) ...`, `[barca] nothing to get ...` | `get` with no target skipped tasks | experimental |
 | `[barca] warning: ...`, `[barca] SINK FAILED: ...` | warnings (always this lowercase prefix; the text after it may change) and failed sinks. A plan warning (see "Plan warnings") is printed before the first `step:` line, once per run, with or without `--agent`; read it from the JSON `warnings` array rather than from this line | experimental |
 

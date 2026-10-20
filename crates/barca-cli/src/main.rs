@@ -14,6 +14,7 @@ use commands::*;
 mod contract;
 mod docs;
 mod error;
+mod ledger_http;
 mod output;
 
 use error::{CliError, CliErrorExt, Context, ErrorKind};

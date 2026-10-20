@@ -3,6 +3,7 @@ hint : string
 runs : array
 runs[] : object
 runs[].attempts : integer
+runs[].client_run_id : null
 runs[].command : string
 runs[].elapsed_seconds : number
 runs[].files : array

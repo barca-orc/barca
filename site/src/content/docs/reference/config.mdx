@@ -107,6 +107,12 @@ transfer_timeout = 600      # seconds one transfer attempt may run (at least 1)
 # Passed to fsspec.filesystem(protocol, ...), one table per protocol: s3, gcs, abfs.
 [remote.storage_options.s3]
 endpoint_url = "https://<account-id>.r2.cloudflarestorage.com"
+
+[server]
+# A barca serve that is the team's ledger (experimental). get and run still run here, read
+# cache hits from its ledger and post what they compute. Needs [remote] with the server's
+# store. http:// only for now.
+url = "http://barca.internal:8274"
 ```
 
 | Key | Default | Meaning |
@@ -122,13 +128,14 @@ endpoint_url = "https://<account-id>.r2.cloudflarestorage.com"
 | `[remote].transfer_concurrency` | 4 | Transfers in flight at once. |
 | `[remote].transfer_timeout` | 600 | Seconds one transfer attempt may run. |
 | `[remote.storage_options.<protocol>]` | none | Options for the fsspec filesystem of that protocol. |
+| `[server].url` | none | A `barca serve` whose ledger `get` and `run` use: cache hits come from it, results computed here are posted to it. Requires `[remote]` pointing at the server's store; makes `[remote].state` default to `off` (`optimistic` is then a usage error). Experimental; `http://` only. See [Remote Storage](/reference/remote-storage/#a-server-as-the-ledger). |
 
 An unknown key or a malformed file is a usage error (exit 2) that names the key and lists the
 valid ones:
 
 ```
 invalid ./barca.toml: TOML parse error at line 1, column 1
-unknown field `defualt_env`, expected one of `default_env`, `remote`, `discovery`
+unknown field `defualt_env`, expected one of `default_env`, `remote`, `discovery`, `server`
 ```
 
 Keep credentials out of `barca.toml`; they come from the environment.

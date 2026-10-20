@@ -17,6 +17,7 @@
 mod error;
 mod handlers;
 mod inspect;
+mod ledger;
 mod pause;
 mod routes;
 mod runs;

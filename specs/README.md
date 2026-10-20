@@ -8,7 +8,7 @@ behavior.
 
 | Boundary | Native specification | Status / version | Executable conformance |
 | --- | --- | --- | --- |
-| HTTP routes and wire bodies | [server-api.openapi.yaml](server-api.openapi.yaml) (OpenAPI 3.1 / JSON Schema 2020-12) | Current implemented surface, including the RFC-0007 §3.4 run contract and inspection routes (ledger routes proposed); specification 3 | [Rust router conformance](../crates/barca-server/tests/openapi.rs), [real Python Client conformance](../python/tests/test_http_openapi_client.py) |
+| HTTP routes and wire bodies | [server-api.openapi.yaml](server-api.openapi.yaml) (OpenAPI 3.1 / JSON Schema 2020-12) | Current implemented surface, including the RFC-0007 §3.4 run contract and inspection routes and the ledger routes; specification 4 | [Rust router conformance](../crates/barca-server/tests/openapi.rs), [real Python Client conformance](../python/tests/test_http_openapi_client.py) |
 | Python decorator grammar and execution model | [user-api.allium](user-api.allium), [decisions](user-api-decisions.md) | Mixed implemented grammar and design rules; specification 1. Ignored grammar cases and unresolved decisions are aspirations. | [grammar_spec.rs](../crates/barca-core/tests/grammar_spec.rs), [project star-import provenance](../python/tests/test_static_barca_bindings.py); runtime acceptance remains in core and Python integration suites |
 | Materialization digests and recompute checks | [materialization-digests.md](materialization-digests.md) | Implemented producer/recompute scope; specification 1. Server acceptance and store repair remain proposed. | [CLI digest conformance](../python/tests/test_materialization_digests.py), persistence/state-carry Rust tests |
 

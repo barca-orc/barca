@@ -24,6 +24,16 @@ pub struct BarcaToml {
     pub default_env: Option<String>,
     pub remote: Option<RemoteToml>,
     pub discovery: Option<DiscoveryToml>,
+    pub server: Option<ServerToml>,
+}
+
+/// `[server]`: the `barca serve` whose ledger this project's runs read and post to
+/// (RFC-0007 section 4.1).
+#[derive(Debug, Deserialize, Default, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct ServerToml {
+    /// The server's base URL, `http://host:port`.
+    pub url: Option<String>,
 }
 
 /// `[discovery]`: which files a walk of the project finds (see `discover`).
@@ -110,6 +120,12 @@ pub struct ResolvedConfig {
     /// Merged storage options (toml ⊕ env, env keys win), serialized as the
     /// JSON that `BARCA_STORAGE_OPTIONS` carries to child processes.
     pub storage_options_json: Option<String>,
+    /// `[server] url`: the server whose ledger `get` and `run` use (RFC-0007 section 4.1).
+    /// `None` when none is configured.
+    pub server_url: Option<String>,
+    /// The ledger this command runs against: attached by the command (`get`, `run`) from
+    /// [`Self::server_url`], never by `barca serve`, which is the ledger.
+    pub ledger: Option<crate::ledger::Ledger>,
 }
 
 impl ResolvedConfig {
@@ -289,6 +305,8 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
                 state: StateMode::Off,
                 push_retries: 5,
                 storage_options_json: None,
+                server_url: file.server.and_then(|s| s.url).filter(|u| !u.is_empty()),
+                ledger: None,
             });
         }
         Some(other) => {
@@ -330,8 +348,18 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
             .map(|u| join_uri(u, &format!("{env}/state/metadata.db")))
     });
 
-    // state mode: BARCA_STATE > [remote].state > optimistic-if-state-uri-else-off
+    let server_url = file.server.and_then(|s| s.url).filter(|u| !u.is_empty());
+
+    // state mode: BARCA_STATE > [remote].state > optimistic-if-state-uri-else-off. With a
+    // server, the server is the ledger: no shared database blob is pulled or pushed.
     let mode_str = env_var("BARCA_STATE").or(remote.state);
+    if server_url.is_some() && mode_str.as_deref() == Some("optimistic") {
+        return Err(BarcaError::Usage(
+            "[remote] state = \"optimistic\" cannot be used with [server] url: the server is \
+             the ledger\nRemove `state` from [remote] (or unset BARCA_STATE)."
+                .to_string(),
+        ));
+    }
     let state = match mode_str.as_deref() {
         Some("optimistic") => StateMode::Optimistic,
         Some("off") => StateMode::Off,
@@ -341,7 +369,7 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
             )));
         }
         None => {
-            if state_uri.is_some() {
+            if state_uri.is_some() && server_url.is_none() {
                 StateMode::Optimistic
             } else {
                 StateMode::Off
@@ -407,6 +435,8 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
         state,
         push_retries,
         storage_options_json,
+        server_url,
+        ledger: None,
     })
 }
 

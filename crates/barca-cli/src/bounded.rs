@@ -55,6 +55,7 @@ pub const HISTORY_FIELDS: &[&str] = &[
     "triggered_by",
     "scheduled_at",
     "schedule_id",
+    "client_run_id",
 ];
 
 /// Item fields of `steps[]` in `get`/`run` JSON (real and `--dry-run`). Optional fields only
@@ -184,6 +185,7 @@ mod tests {
             triggered_by: None,
             scheduled_at: None,
             schedule_id: None,
+            client_run_id: None,
         };
         assert_eq!(
             keys(&serde_json::to_value(run).unwrap()),

@@ -423,7 +423,7 @@ fn not_a_file(uri: &str, cause: &str) -> Option<String> {
 /// The reason a state helper failed: its last `error: ...` line (what `python -m barca._state`
 /// prints), else its last non-empty line. Library warnings printed before it (google-auth's
 /// quota-project notice, deprecation warnings) are dropped so they never reach the error.
-fn helper_cause(stderr: &[u8]) -> String {
+pub(crate) fn helper_cause(stderr: &[u8]) -> String {
     let text = String::from_utf8_lossy(stderr);
     let lines: Vec<&str> = text
         .lines()
@@ -588,6 +588,8 @@ error: RefreshError: Reauthentication is needed.\n";
             state: crate::config::StateMode::Optimistic,
             push_retries: 2,
             storage_options_json: None,
+            server_url: None,
+            ledger: None,
         }
     }
 

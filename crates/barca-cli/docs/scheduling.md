@@ -191,10 +191,11 @@ With a remote artifact store configured, serving requires local metadata:
 BARCA_STATE=off barca serve pipeline.py  # local ledger; artifact uploads still enabled
 ```
 
-Other machines do not get cache/history sharing from that artifact store. CLI `--server`,
-`[server] url`, `BARCA_SERVER` and local runs posting results to the server's ledger belong
-to the part of RFC-0007 not implemented yet. `barca.get()` starts a local CLI process; use
-`Client.get()` for an HTTP request.
+Other machines share the server's results by pointing `[server] url` at it: their local runs
+read cache hits from the server's ledger and post what they compute (`barca docs server-mode`).
+CLI `--server` (running a command on the server) and `BARCA_SERVER` belong to the part of
+RFC-0007 not implemented yet. `barca.get()` starts a local CLI process; use `Client.get()` for
+an HTTP request.
 
 ## Stopping the server
 

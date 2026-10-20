@@ -21,6 +21,10 @@ pub(crate) const RUN_COLUMNS: &[&str] = &[
     // A run `barca serve` started: its full result, so `GET /runs/{id}` answers after a
     // restart (#393). NULL for every other run.
     "outcome_json TEXT",
+    // On a server: the run id a laptop gave the run it posted to the ledger
+    // (`triggered_by: client`, RFC-0007 section 4.1). A repeated post of the same run is
+    // recognised by it. NULL for every other run.
+    "client_run_id TEXT",
 ];
 
 /// A schedule held back by `POST /schedule/{id}/pause` (#435): since when and until when
@@ -38,6 +42,7 @@ pub(crate) const FORMAT_1_ADDITIONS: &[(&str, &[&str])] = &[
             "scheduled_at TEXT",
             "schedule_id TEXT",
             "outcome_json TEXT",
+            "client_run_id TEXT",
         ],
     ),
     ("schedule_state", SCHEDULE_STATE_COLUMNS),

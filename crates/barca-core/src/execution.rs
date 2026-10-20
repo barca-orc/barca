@@ -334,6 +334,19 @@ async fn execute_run(mut request: ExecuteRequest<'_>) -> Result<Executed, BarcaE
         |point| trace_point!(started.trace, "{point}"),
     )
     .await?;
+    // With a server, its ledger answers the cache lookups (RFC-0007 section 4.1): check the
+    // server, post what this machine could not post before, then ask once for every run hash
+    // known before anything runs.
+    if let Some(ledger) = &request.cfg.ledger {
+        ledger.prepare(request.cfg, true).await?;
+        ledger
+            .prefetch(crate::cache::cone_keys(
+                &prepared.dag,
+                &prepared.exec_plan.phases,
+            ))
+            .await?;
+        trace_point!(started.trace, "ledger_lookup");
+    }
     let mut session = open_run(&request, &prepared, started).await?;
     drive_phases(&mut session).await?;
     let elapsed = record_and_publish(&mut session).await?;
@@ -1395,13 +1408,26 @@ async fn return_outputs(
         }
     }
 
-    let changed =
+    let mut changed =
         db::changed_bytes_in_run(&session.request.cfg.db_path, &session.started.run_id).await?;
+    // With a server, the run is posted to its ledger now that its uploads are confirmed. A
+    // step the ledger already held with other bytes gets the same warning.
+    if let Some(ledger) = &session.request.cfg.ledger {
+        for node in ledger
+            .record_run(
+                session.request.cfg,
+                &session.started.run_id,
+                &session.prepared.dag,
+            )
+            .await
+        {
+            if !changed.contains(&node) {
+                changed.push(node);
+            }
+        }
+    }
     for node in &changed {
-        crate::run_line!(
-            Always,
-            "[barca] warning: {node} produced different bytes for the same code and inputs; the function is not deterministic"
-        );
+        crate::run_line!(Always, "{}", crate::ledger::bytes_changed_warning(node));
         let base = crate::StepId::parse(node).base_id().to_string();
         if let Some(report) = step_reports.iter_mut().find(|report| report.id == base) {
             report.bytes_changed = Some(true);
@@ -1657,6 +1683,17 @@ pub(crate) async fn explain_dag_with_membership(
         }
     }
 
+    // With a server, the dry run is decided against its ledger: check the server (a dry run
+    // posts nothing) and ask once for every run hash known before anything runs. The ledger's
+    // answers are read through a cache reader, so the database is created if there is none.
+    if let Some(ledger) = &cfg.ledger {
+        ledger.prepare(cfg, false).await?;
+        ledger
+            .prefetch(crate::cache::cone_keys(dag, &exec_plan.phases))
+            .await?;
+        db::ensure_env_dirs(&cfg.env)?;
+        db::init_db(&cfg.db_path).await?;
+    }
     // No metadata DB yet means nothing is cached. Do not create one just to look.
     let cache = if std::path::Path::new(&cfg.db_path).exists() {
         Some(db::CacheReader::for_config(cfg).await?)
@@ -1841,6 +1878,11 @@ async fn predict_steps(
     phase_ref: &Phase,
 ) -> Result<Vec<crate::planner::StreamStep>, BarcaError> {
     ctx.state.register_phase(phase_ref);
+    if let Some(ledger) = ctx.cache.and_then(|c| c.ledger()) {
+        ledger
+            .prefetch(crate::cache::phase_keys(ctx.dag, phase_ref, ctx.state))
+            .await?;
+    }
     let mut to_run = Vec::new();
     for (_, step) in in_dependency_order(ctx.dag, phase_ref) {
         let base = step.step_id.base_id();
@@ -2024,6 +2066,13 @@ async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaError> {
     decide_state.register_phase(phase_ref);
     let mut uncached_streams: Vec<crate::planner::WorkerStream> = Vec::new();
 
+    // With a server, ask its ledger about this phase's run hashes the first lookup could not
+    // know (below a sensor, or dynamic partitions), before the database is opened.
+    if let Some(ledger) = &cfg.ledger {
+        ledger
+            .prefetch(crate::cache::phase_keys(dag, phase_ref, decide_state))
+            .await?;
+    }
     // Open the DB only for this phase's cache lookups and release it before any
     // step runs, so other barca processes can use the metadata DB while Python
     // executes.

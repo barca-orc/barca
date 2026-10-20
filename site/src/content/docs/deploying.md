@@ -50,11 +50,12 @@ same API through the authenticating proxy described below. See the
 [Python client](/reference/server-api/#python-client) for the equivalent SDK calls.
 
 The [server-ledger design (RFC-0007)](/rfcs/0007-server-mode/) is accepted; its run contract
-over HTTP is implemented (#393). `[server] url`, `BARCA_SERVER`, the CLI `--server`/`--local`
-flags and laptop runs sharing the server's ledger are pending #394 and #402.
-Ordinary `barca get` and `barca.get()` still run locally. A remote artifact store does
-not give another machine access to this server's cache/history; use `BARCA_STATE=off`
-when serving with a remote store, as described below.
+over HTTP is implemented (#393), and so is its ledger (#402): a laptop with `[server] url`
+pointing at this server and `[remote]` pointing at its store runs `barca get` locally, reads
+cache hits from the server's ledger and posts what it computes
+([Remote Storage](/reference/remote-storage/#a-server-as-the-ledger)). `BARCA_SERVER` and the
+CLI `--server`/`--local` flags are pending #394. Ordinary `barca get` and `barca.get()` still
+run locally. Serve with a remote store with `BARCA_STATE=off`, as described below.
 
 ## Listen on another interface
 

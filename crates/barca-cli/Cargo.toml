@@ -13,5 +13,11 @@ barca-core = { path = "../barca-core" }
 barca-server = { path = "../barca-server" }
 chrono = "0.4.45"
 clap = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
+# The ledger client of a local run against a server (RFC-0007 section 4.1): plain HTTP/1.1 on
+# the hyper already linked for `barca serve`. The `--server` client (#394) replaces it.
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"

@@ -11,9 +11,9 @@ start and cancel runs. To reach it from another machine, put a reverse proxy tha
 in front of it (see [Deploying](/deploying/)).
 
 **Scope:** this is the implemented `barca serve` API, including the run contract and
-inspection routes of the [server-mode RFC](/rfcs/0007-server-mode/) (section 3.4). The rest of
-that RFC is still awaiting implementation: CLI `--server` (#394) and local runs against the
-server's ledger, with its `/ledger/*` routes (#402). Until then, use this API, or
+inspection routes of the [server-mode RFC](/rfcs/0007-server-mode/) (section 3.4), and its
+[ledger](#the-ledger) (#402), which a laptop's `barca get` reads and posts to when `[server] url`
+is set. CLI `--server` (#394) is still awaiting implementation; until then, use this API, or
 `barca.Client`, to run deployed code remotely.
 
 Runs execute inside the server process, in the background. `POST /runs` answers at once with the
@@ -74,6 +74,13 @@ return the corresponding headers without a body.
 | `GET`  | `/runs/{run_id}/output` | The final artifact's bytes of a successful single-target run. |
 | `GET`  | `/runs?limit=100` | Recent durable runs, joined with queued and live server runs. |
 | `GET`  | `/logs/{run_id}` | A run's captured output lines, persisted after it finishes. |
+
+<a id="the-ledger"></a>**The ledger.** What a local `barca get` on another machine talks to (`barca docs server-mode`).
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/ledger/lookup` | Body `{"hashes": [{"node_id", "run_hash"}]}`. Answer `{"results": [...]}`, one per pair in order: `{"node_id", "run_hash", "exists": true, "path", "format", "size_bytes", "digest"}` for the latest successful result the ledger holds, or `exists: false`. By run hash only. |
+| `POST` | `/ledger/runs` | Body: one finished run, `{"run": {run_id, command, files, target, status, steps_*, started_at, finished_at, elapsed_seconds, host}, "steps": [{node_id, run_hash, status, path, format, size_bytes, digest, ...}]}`. Every successful step must name an object in this server's store with its SHA-256 `digest`; the server checks each (a directory store by digest, an object store by size), then records the run as `triggered_by: client` with `client_run_id` and answers `201 {"run_id", "bytes_changed"}`. A missing, foreign or mismatched object is `409` with the envelope naming the node, and nothing is recorded. A run hash the ledger already holds with the same digest adds nothing; with another digest the ledger keeps its row and lists the step in `bytes_changed`. A repeated post of the same `run.run_id` answers with the run already recorded. `400` without a store, `403` read-only, `503` while shutting down. |
 
 **Inspection.** The body is the CLI command's `--json` output, built by the same function, so a
 client prints it as it would print the local command's.

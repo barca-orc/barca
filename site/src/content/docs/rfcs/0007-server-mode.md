@@ -15,8 +15,10 @@ description: 'One deployed barca serve owns the record of what exists. Laptops r
 > routes of section 3.4 are implemented (#393): `POST /runs`, `GET /runs/{run_id}` and its
 > events, output and cancel, `/list`, `/nodes`, `/history`, `/stats/{name}`, `/project`, and
 > `/health` with `api_version`. `triggered_by` is `manual` for a command typed on a machine
-> (this RFC's `cli`). The server URL settings, CLI `--server`/`--local` flags (#394), the
-> ledger routes and local runs against them (#402) are pending. For a working setup today,
+> (this RFC's `cli`). The ledger (#402) is implemented: `POST /ledger/lookup`,
+> `POST /ledger/runs`, `[server] url` in `barca.toml` and local `get`/`run` against it (over
+> `http://` only). `BARCA_SERVER`, the CLI `--server`/`--local` flags, and `status`/`history`
+> answered by the server (#394) are pending. For a working setup today,
 > follow [Deploying barca serve](/deploying/) and the [current HTTP API](/reference/server-api/).
 
 ## 1. Summary

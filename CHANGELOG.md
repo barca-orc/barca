@@ -25,6 +25,20 @@ and these tags are available on the same releases page.
 
 ### Features
 
+- Server mode's ledger (RFC-0007 §3.4 and §4.1, #402), experimental. With `[server] url` in
+  `barca.toml` (and `[remote]` pointing at the server's store), `barca get` and `barca run`
+  still run on this machine but ask the server's ledger which run hashes exist
+  (`POST /ledger/lookup`, one request for the plan), fetch the hits from the store, compute the
+  misses here and, once their uploads are confirmed, post the run (`POST /ledger/runs`). The
+  server checks every object in its store (a directory store by SHA-256, an object store by
+  size) before it records the run as `triggered_by: client` with the laptop's run id in the new
+  `client_run_id` (also in `barca history --json`); a missing or mismatched object is `409`
+  naming the node and records nothing. A refused or undelivered post leaves the run a success:
+  a warning names it, it stays `unsynced` in the new `ledger_posts` table and the next command
+  against the server sends it again. A run hash the ledger holds with other bytes prints the
+  non-determinism warning once. A server that cannot be reached is exit 3; a different or
+  missing store is exit 2. `http://` only for now; `--server`, `--local` and `BARCA_SERVER`
+  come with #394. New manual topic: `barca docs server-mode`.
 - `barca serve` runs the server half of the `--server` run contract (RFC-0007 §3.4, #393).
   `POST /runs` takes the flags of `barca get` / `barca run` as JSON and answers with the run's
   database id at once (`dry_run` answers with the `--dry-run` JSON); targets are checked first,

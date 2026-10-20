@@ -78,6 +78,11 @@ pub const TOPICS: &[Topic] = &[
         "remote.md"
     ),
     topic!(
+        "server-mode",
+        "One server as the team's ledger: local runs read cache hits from it and post results",
+        "server-mode.md"
+    ),
+    topic!(
         "telemetry",
         "Report runs and steps to Datadog: one trace per run, a span per step",
         "telemetry.md"
