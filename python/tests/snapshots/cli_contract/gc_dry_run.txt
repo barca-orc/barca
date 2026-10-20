@@ -1,0 +1,21 @@
+# barca gc --max-size 1 --dry-run --json  (stdout, exit 0)
+after_bytes : integer
+dry_run : boolean
+evicted : array
+evicted[] : object
+evicted[].bytes : integer
+evicted[].node : string  (optional)
+evicted[].path : string
+evicted[].tier : string
+evicted_bytes : integer
+evicted_files : integer
+failed : array
+limit_bytes : integer
+restricted : null
+size_bytes : integer
+target_bytes : integer
+tiers : array
+tiers[] : object
+tiers[].bytes : integer
+tiers[].files : integer
+tiers[].tier : string

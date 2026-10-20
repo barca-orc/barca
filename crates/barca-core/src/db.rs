@@ -1005,10 +1005,13 @@ pub async fn init_db(db_path: &str) -> Result<(), BarcaError> {
 /// still reads the result.
 pub(crate) async fn init_schema(conn: &turso::Connection) -> Result<(), BarcaError> {
     let version = crate::db_schema::check(conn).await?;
-    if version == crate::db_schema::VERSION
-        && crate::state_validate::usable_schema(conn).await?.is_ok()
-    {
-        return Ok(());
+    if version == crate::db_schema::VERSION {
+        if crate::db_schema::additions_missing(conn).await? {
+            return add_to_current_schema(conn).await;
+        }
+        return crate::state_validate::usable_schema(conn)
+            .await?
+            .map_err(BarcaError::Db);
     }
     crate::state_validate::legacy_schema(conn)
         .await?
@@ -1034,6 +1037,44 @@ pub(crate) async fn init_schema(conn: &turso::Connection) -> Result<(), BarcaErr
     }
     .await;
     if let Err(error) = migrated {
+        conn.execute("ROLLBACK", ()).await.map_err(|e| {
+            BarcaError::Db(format!("{error}; schema migration rollback failed: {e}"))
+        })?;
+        return Err(error);
+    }
+    Ok(())
+}
+
+/// Add this release's additive columns and indexes to a version-1 database written by an
+/// earlier release, in one transaction: rows are untouched, and an error leaves the schema as it
+/// was. The format stays version 1 (see `specs/metadata-schema.md`).
+async fn add_to_current_schema(conn: &turso::Connection) -> Result<(), BarcaError> {
+    conn.execute("BEGIN IMMEDIATE", ())
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to begin schema migration: {e}")))?;
+    let added = async {
+        crate::db_schema::add_columns(
+            conn,
+            "materializations",
+            crate::db_schema::MATERIALIZATION_COLUMNS,
+        )
+        .await?;
+        crate::db_schema::add_columns(conn, "runs", crate::db_schema::RUN_COLUMNS).await?;
+        for index in crate::db_schema::INDEXES {
+            conn.execute(index, ())
+                .await
+                .map_err(|e| BarcaError::Db(format!("failed to create index: {e}")))?;
+        }
+        crate::state_validate::usable_schema(conn)
+            .await?
+            .map_err(BarcaError::Db)?;
+        conn.execute("COMMIT", ())
+            .await
+            .map_err(|e| BarcaError::Db(format!("failed to commit schema migration: {e}")))?;
+        Ok(())
+    }
+    .await;
+    if let Err(error) = added {
         conn.execute("ROLLBACK", ()).await.map_err(|e| {
             BarcaError::Db(format!("{error}; schema migration rollback failed: {e}"))
         })?;
@@ -1084,6 +1125,11 @@ async fn migrate_legacy_schema(conn: &turso::Connection) -> Result<(), BarcaErro
     )
     .await
     .map_err(|e| BarcaError::Db(format!("failed to create index: {e}")))?;
+    for index in crate::db_schema::INDEXES {
+        conn.execute(index, ())
+            .await
+            .map_err(|e| BarcaError::Db(format!("failed to create index: {e}")))?;
+    }
 
     // Per-node cost estimates: the persisted EWMA that seeds the next run's
     // batch sizing, so the 30s cold-start probe is paid once ever per stable
@@ -1712,6 +1758,117 @@ async fn mark_interrupted_runs(conn: &turso::Connection, db_path: &str) {
         .filter_map(|run| crate::run_owner::token_of(&run.owner))
         .collect();
     crate::run_owner::sweep(db_path, &named, SystemTime::now());
+}
+
+/// The `running` runs whose owner is not known to be gone: in progress, here or elsewhere, or
+/// unknowable (see [`interrupted_runs`]). Best effort: empty when nothing can be read.
+pub(crate) async fn live_runs(conn: &turso::Connection, db_path: &str) -> Vec<String> {
+    let running = running_runs(conn).await;
+    let gone: std::collections::HashSet<String> = interrupted_among(
+        &running,
+        &crate::run_owner::System::for_db(db_path),
+        pid_alive,
+    )
+    .into_iter()
+    .collect();
+    running
+        .into_iter()
+        .map(|run| run.run_id)
+        .filter(|id| !gone.contains(id))
+        .collect()
+}
+
+// ─── Cache size limit (RFC-0012) ─────────────────────────────────────────────
+
+/// Record that the results at `paths` (recorded artifact paths) were read now: by a step that
+/// took them as inputs, by `barca get` returning them, or by `barca sql`. A result that is read
+/// is on disk again, so an eviction recorded for it no longer holds. Best effort: a database
+/// that cannot be written is left as it is.
+pub(crate) async fn touch_read(db_path: &str, paths: &[String]) {
+    if paths.is_empty() || !Path::new(db_path).exists() {
+        return;
+    }
+    let _g = db_guard().await;
+    let Ok((_db, conn)) = open_conn(db_path).await else {
+        return;
+    };
+    if conn.execute("BEGIN IMMEDIATE", ()).await.is_err() {
+        return;
+    }
+    let mut ok = true;
+    for path in paths {
+        ok &= conn
+            .execute(
+                "UPDATE materializations SET last_read_at = datetime('now'), evicted_at = NULL \
+                 WHERE artifact_path = ?1 AND status = 'success'",
+                [path.as_str()],
+            )
+            .await
+            .is_ok();
+        if !ok {
+            break;
+        }
+    }
+    let end = if ok { "COMMIT" } else { "ROLLBACK" };
+    let _ = conn.execute(end, ()).await;
+}
+
+/// Of `paths` (recorded artifact paths), those whose latest successful row was evicted to stay
+/// under the cache limit: their missing file is an eviction, not a deletion behind barca's back.
+pub(crate) async fn evicted_among(
+    db_path: &str,
+    paths: &[&str],
+) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    if paths.is_empty() || !Path::new(db_path).exists() {
+        return out;
+    }
+    let _g = db_guard().await;
+    let Ok((_db, conn)) = open_conn(db_path).await else {
+        return out;
+    };
+    for path in paths {
+        let Ok(mut rows) = conn
+            .query(
+                "SELECT evicted_at IS NOT NULL FROM materializations WHERE artifact_path = ?1 \
+                 AND status = 'success' ORDER BY id DESC LIMIT 1",
+                [*path],
+            )
+            .await
+        else {
+            return out;
+        };
+        if let Ok(Some(row)) = rows.next().await
+            && row.get::<i64>(0).unwrap_or(0) != 0
+        {
+            out.insert(path.to_string());
+        }
+    }
+    out
+}
+
+/// Every recorded artifact path whose latest successful row is evicted (`barca status`,
+/// `--dry-run`). Empty when the database predates the column.
+pub(crate) async fn evicted_paths(cache: &CacheReader) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    let Ok(mut rows) = cache
+        .conn()
+        .query(
+            "SELECT m.artifact_path FROM materializations m WHERE m.evicted_at IS NOT NULL \
+             AND m.status = 'success' AND m.id = (SELECT MAX(id) FROM materializations n \
+             WHERE n.artifact_path = m.artifact_path AND n.status = 'success')",
+            (),
+        )
+        .await
+    else {
+        return out;
+    };
+    while let Ok(Some(row)) = rows.next().await {
+        if let Ok(path) = row.get::<String>(0) {
+            out.insert(path);
+        }
+    }
+    out
 }
 
 /// Finalize a run record with status and stats.

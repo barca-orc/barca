@@ -114,6 +114,9 @@ CASES: list[tuple[str, list[str], str, int]] = [
     ("history", ["history", "--json", "--limit", "1"], "stdout", 0),
     ("stats", ["stats", "total", "pipeline.py", "--json"], "stdout", 0),
     ("doctor", ["doctor", "pipeline.py", "--json"], "stdout", 0),
+    # A dry run deletes nothing, so the cases after it see the same project. A moved-aside
+    # directory is put in place first so every tier of the list has an entry.
+    ("gc_dry_run", ["gc", "--max-size", "1", "--dry-run", "--json"], "stdout", 0),
     ("docs_index", ["docs", "--json"], "stdout", 0),
     ("docs_topic", ["docs", "cache", "--json"], "stdout", 0),
     ("error_usage", ["get", "nope", "pipeline.py", "--json"], "stderr", 2),
@@ -165,7 +168,10 @@ TIMING_CASE = (
     "stdout",
     0,
 )
-ALL_CASES = CASES + SETUP_CASES + [TIMING_CASE]
+# `get` on a project over a 1-byte cache limit: the result gains `cache`, after a recompute
+# made a superseded result to evict (see `_cache_limit_run`).
+CACHE_CASE = ("get_cache_evicted", ["get", "total", "pipeline.py", "--json"], "stdout", 0)
+ALL_CASES = CASES + SETUP_CASES + [TIMING_CASE, CACHE_CASE]
 
 # Values that are user data, not barca's schema: recorded as `<user value>`.
 USER_VALUES = {"final_output", "targets.<name>.final_output", "nodes[].shape.sample", "rows"}
@@ -333,6 +339,10 @@ def runs(tmp_path_factory) -> dict:
 
     out: dict = {}
     for case, argv, stream, code in CASES:
+        if case == "gc_dry_run":
+            aside = cwd / ".barca/artifacts/pipeline.py--numbers/old.json.moved-aside"
+            aside.mkdir(parents=True)
+            (aside / "junk").write_text("x")
         if case == "history_reconciled":
             with closing(sqlite3.connect(cwd / ".barca/metadata.db")) as conn:
                 conn.execute(
@@ -411,6 +421,11 @@ def runs(tmp_path_factory) -> dict:
     s = command_schema(timing_doc, slow_import=True)
     out[TIMING_CASE[0]] = (s, render_snapshot(argv, stream, code, s), timing)
 
+    cache_case = tmp_path_factory.mktemp("contract_cache")
+    proc_cache = _cache_limit_run(binary, cache_case, env)
+    s = command_schema(json.loads(proc_cache.stdout))
+    out[CACHE_CASE[0]] = (s, render_snapshot(CACHE_CASE[1], "stdout", 0, s), proc_cache)
+
     agent: set[str] = set()
     for line in proc.stderr.splitlines():
         if line.startswith(
@@ -429,6 +444,35 @@ def runs(tmp_path_factory) -> dict:
                 agent.add(normalize_agent_line(line))
     out["agent_lines"] = sorted(agent)
     return out
+
+
+def _cache_limit_run(binary: str, cwd: Path, env: dict) -> subprocess.CompletedProcess:
+    """`CACHE_CASE` after `numbers` changed once, with `BARCA_CACHE_MAX_SIZE=1`: the run evicts
+    the superseded `numbers` result and everything else it does not hold."""
+
+    def barca(argv: list[str], **extra: str) -> subprocess.CompletedProcess:
+        proc = subprocess.run(
+            [binary, *argv],
+            cwd=cwd,
+            env={**env, **extra},
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        assert proc.returncode == 0, f"barca {' '.join(argv)}\n{proc.stderr}"
+        return proc
+
+    pipeline = (
+        "from barca import asset\n\n@asset()\ndef numbers() -> list:\n    return [1, 2, 3]\n\n"
+        "@asset()\ndef other() -> int:\n    return 7\n\n"
+        "@asset(inputs={'n': numbers})\ndef total(n: list) -> int:\n    return sum(n)\n"
+    )
+    (cwd / "pipeline.py").write_text(pipeline)
+    barca(["get", "pipeline.py", "--json"])
+    (cwd / "pipeline.py").write_text(pipeline.replace("[1, 2, 3]", "[1, 2, 3, 4]"))
+    proc = barca(CACHE_CASE[1], BARCA_CACHE_MAX_SIZE="1")
+    assert "[barca] cache " in proc.stderr and "evicted" in proc.stderr, proc.stderr
+    return proc
 
 
 def _artifact_mismatch_run(binary: str, tmp: Path, env: dict) -> subprocess.CompletedProcess:

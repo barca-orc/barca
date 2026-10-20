@@ -36,6 +36,23 @@ pub(crate) const MATERIALIZATION_COLUMNS: &[&str] = &[
     // later writes recognise what is already there. NULL on rows from older versions.
     "run_id TEXT",
     "error_type TEXT",
+    // The cache size limit (RFC-0012). When this machine deleted the artifact file to stay under
+    // `[cache] max_size` (NULL while the file is kept), and when a step, `barca get` or
+    // `barca sql` last read the result. Both describe this machine's disk: shared-history carry
+    // does not copy them (they are not in `state_carry::STEP_COLUMNS`).
+    "evicted_at TEXT",
+    "last_read_at TEXT",
+];
+
+/// Columns of `materializations` that describe this machine's disk, not the result: shared
+/// history does not carry them, so `state_carry::STEP_COLUMNS` leaves them out.
+#[cfg(test)]
+pub(crate) const LOCAL_MATERIALIZATION_COLUMNS: &[&str] = &["evicted_at", "last_read_at"];
+
+/// Indexes added after version 1 was introduced; created with the additive columns.
+pub(crate) const INDEXES: &[&str] = &[
+    // Eviction and `last_read_at` address results by artifact path.
+    "CREATE INDEX IF NOT EXISTS idx_mat_path ON materializations(artifact_path)",
 ];
 
 /// Read SQLite's built-in format marker without mutating the database. Operational
@@ -72,6 +89,52 @@ pub(crate) fn compatible_version(version: i64) -> Result<i64, String> {
 
 pub(crate) async fn check(conn: &Connection) -> Result<i64, BarcaError> {
     compatible_version(read_version(conn).await?).map_err(BarcaError::Db)
+}
+
+/// Whether a version-1 database lacks an additive column or index of this release, so that
+/// [`crate::db::init_schema`] adds them (in one transaction) before using it. Read-only.
+pub(crate) async fn additions_missing(conn: &Connection) -> Result<bool, BarcaError> {
+    let failed = |e| BarcaError::Db(format!("failed to read the metadata schema: {e}"));
+    for (table, definitions) in [
+        ("materializations", MATERIALIZATION_COLUMNS),
+        ("runs", RUN_COLUMNS),
+    ] {
+        let mut rows = conn
+            .query(&format!("PRAGMA table_info({table})"), ())
+            .await
+            .map_err(failed)?;
+        let mut columns = Vec::new();
+        while let Some(row) = rows.next().await.map_err(failed)? {
+            columns.push(row.get::<String>(1).map_err(failed)?);
+        }
+        drop(rows);
+        let missing = definitions.iter().any(|definition| {
+            let name = definition.split_whitespace().next().unwrap_or_default();
+            !columns.iter().any(|column| column == name)
+        });
+        if missing {
+            return Ok(true);
+        }
+    }
+    for index in INDEXES {
+        let name = index
+            .split_whitespace()
+            .nth(5)
+            .expect("CREATE INDEX IF NOT EXISTS <name> ...");
+        let mut rows = conn
+            .query(
+                "SELECT 1 FROM sqlite_schema WHERE type = 'index' AND name = ?1",
+                [name],
+            )
+            .await
+            .map_err(failed)?;
+        let found = rows.next().await.map_err(failed)?.is_some();
+        drop(rows);
+        if !found {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Apply only missing additive columns. Existing columns are not a reason to swallow errors.

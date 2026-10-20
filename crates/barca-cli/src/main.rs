@@ -238,6 +238,20 @@ async fn run_cli(cli: Cli, ctx: &Context) -> Result<(), CliError> {
             .await
             .map_err(engine)
         }
+        Cli::Gc {
+            max_size,
+            dry_run,
+            format,
+            env,
+        } => {
+            gc_cmd(
+                env.as_deref(),
+                max_size.as_deref(),
+                dry_run,
+                is_json(format),
+            )
+            .await
+        }
         Cli::Stats {
             target,
             files,

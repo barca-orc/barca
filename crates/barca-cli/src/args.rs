@@ -103,7 +103,11 @@ the cone (the target itself may be named) and also re-runs everything downstream
 --no-cascade re-runs only the named ones. --refresh-all re-runs every asset in the cone.
 A cached step whose artifact file is gone is computed again when something needs to read it (a
 step that runs takes it as an input, or it is a target), with reason `artifact_missing` and a
-warning on stderr. A missing artifact that nothing reads is left alone (barca docs cache).
+warning on stderr (reason `evicted` when the cache size limit deleted it). A missing artifact that
+nothing reads is left alone (barca docs cache).
+After the run, if .barca/ is over [cache] max_size (default 10% of the filesystem;
+BARCA_CACHE_MAX_SIZE), barca evicts what is least needed down to 80% of it, never this command's
+own results; stderr says what, and JSON gains `cache` (barca gc, barca docs cache \"Disk use\").
 Completed steps are recorded during the run; remote results require confirmed upload.
 Use `barca status pipeline.py` in another terminal to inspect recorded progress. Shared history
 is published when the run ends (barca docs remote).
@@ -149,8 +153,9 @@ so fresh data reaches the task. --no-cascade re-runs only the named assets; cach
 downstream of them then do not reflect the refresh, and barca warns. A name that is not an
 upstream asset is an error.
 An upstream asset that is cached but whose artifact file is gone is computed again before the task
-reads it (reason `artifact_missing`, a warning on stderr), so a deleted artifact does not fail the
-run (barca docs cache).
+reads it (reason `artifact_missing`, a warning on stderr; `evicted` when the cache size limit
+deleted it), so a deleted artifact does not fail the run (barca docs cache). Afterwards .barca/ is
+kept under [cache] max_size, as after `barca get` (barca gc).
 The target must be a task; use `barca get` for assets. The target comes before the files:
 `barca run pipeline.py deploy` exits 2 and prints `barca run deploy pipeline.py`. Every usage
 error exits 2 and ends by pointing at `barca list` (with the files you gave, if any).
@@ -225,6 +230,23 @@ Newest first. When more runs exist than are shown, JSON says `\"truncated\": tru
 files the run was given.
 JSON returns every item unless --limit is given; human tables keep their default bound.
 More: barca docs agents, barca docs cache";
+
+const GC_HELP: &str = "\
+Examples:
+  barca gc --dry-run              # what would be evicted, per tier, and what it leaves
+  barca gc                        # evict now, down to 80% of [cache] max_size
+  barca gc --max-size 5GB         # a one-off tighter budget
+  barca gc --max-size off         # only leftovers and superseded results, all of them
+  barca gc --json                 # {size_bytes, limit_bytes, after_bytes, tiers, evicted, ...}
+  barca gc --env dev              # only the dev environment's results (leftovers are shared)
+
+Order: leftovers (dead processes' staging, *.moved-aside* directories, sql-cache copies), then
+superseded results, then local copies the artifact store holds, then the least recently read
+results. Never: the metadata DBs, a storeless Manual node's current result, or (while another
+run is in progress on this .barca/) anything but leftovers and superseded results. An evicted
+result is fetched or computed again when something needs it. The store is never touched.
+Exit 3 only when a metadata DB cannot be read; a file that cannot be deleted is skipped.
+More: barca docs cache (\"Disk use\")";
 
 const STATS_HELP: &str = "\
 Examples:
@@ -303,7 +325,8 @@ Examples:
   barca status pipeline.py --env dev       # state recorded in another environment
 
 Cache state per node: cached, stale (ran before; code or inputs changed, or its artifact file is
-gone and a run would read it: reason `artifact_missing`), never_run, partial
+gone and a run would read it: reason `artifact_missing`, or `evicted` when the cache size limit
+deleted it), never_run, partial
 (some partition keys cached), unknown (dynamic partitions not yet known) or always_runs (tasks,
 sensors), with a reason. JSON spells the states in snake_case, the same as the `summary` keys
 (the table prints never-run, always-runs). It is the same decision `--dry-run` makes.
@@ -513,6 +536,25 @@ pub(crate) enum Cli {
         #[arg(long, value_delimiter = ',', value_parser = PossibleValuesParser::new(bounded::HISTORY_FIELDS))]
         fields: Option<Vec<String>>,
         /// Environment name (separates cache/state per environment)
+        #[arg(long)]
+        env: Option<String>,
+    },
+    /// Evict cached results to keep .barca/ under its size limit
+    ///
+    /// The same eviction barca runs after every get and run once .barca/ is over
+    /// `[cache] max_size` (default 10% of the filesystem), on demand.
+    #[command(after_help = GC_HELP)]
+    Gc {
+        /// A limit for this run in place of the configured one: 20GB, 500MB, 20GiB, bytes,
+        /// 10% (of the filesystem) or off (only leftovers and superseded results)
+        #[arg(long, value_name = "SIZE")]
+        max_size: Option<String>,
+        /// Print what would be evicted without deleting anything
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        format: FormatFlags,
+        /// Evict only this environment's results (leftovers are shared by all)
         #[arg(long)]
         env: Option<String>,
     },

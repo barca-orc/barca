@@ -165,14 +165,15 @@ def branch_results(root: Path) -> list[str]:
 
 def files(root: Path) -> list[str]:
     """Every file under `.barca` except the database (its side files come and go), barca's
-    own `.gitignore` and the workers' staging directories (swept by the next worker)."""
+    own `.gitignore` and `gc-state.json` (the cache size limit's last measurement), and the
+    workers' staging directories (swept by the next worker)."""
     barca = root / ".barca"
     return sorted(
         str(p.relative_to(barca))
         for p in barca.rglob("*")
         if p.is_file()
         and not p.name.startswith("metadata.db")
-        and p.name != ".gitignore"
+        and p.name not in (".gitignore", "gc-state.json")
         and "staging" not in p.parts
     )
 

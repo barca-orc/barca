@@ -51,8 +51,11 @@ def part(k): return [{{'k': k, 'value': {value}}}]
 
 
 def records(root):
+    """Every materialization row, less `last_read_at`, which a query moves (RFC-0012)."""
     with closing(sqlite3.connect(root / ".barca/metadata.db")) as db:
-        return db.execute("select * from materializations order by id").fetchall()
+        cursor = db.execute("select * from materializations order by id")
+        keep = [i for i, c in enumerate(cursor.description) if c[0] != "last_read_at"]
+        return [tuple(row[i] for i in keep) for row in cursor.fetchall()]
 
 
 @pytest.mark.parametrize("pool", [1, 2, None])

@@ -111,6 +111,18 @@ fn format_of(path: &str) -> String {
     .to_string()
 }
 
+/// Whether `query` names the view `name`: the name as a whole word, in any case (the same rule
+/// `barca._sql` uses to decide which remote views to fetch).
+fn names(query: &str, name: &str) -> bool {
+    let word = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let (query, name) = (query.to_lowercase(), name.to_lowercase());
+    query.match_indices(&name).any(|(at, _)| {
+        let before = query[..at].chars().next_back();
+        let after = query[at + name.len()..].chars().next();
+        !before.is_some_and(word) && !after.is_some_and(word)
+    })
+}
+
 /// Run `query` over the views of every node in the project (or in `file_args`).
 pub async fn sql(
     cfg: &ResolvedConfig,
@@ -250,6 +262,14 @@ pub async fn sql(
         ));
     }
     let Some(err) = out.error else {
+        // The results the query read: `last_read_at` moves, so the cache size limit evicts them
+        // after results nobody reads (RFC-0012).
+        let read: Vec<String> = views
+            .iter()
+            .filter(|v| names(query, &v.name))
+            .flat_map(|v| v.files.iter().map(|f| f.path.clone()))
+            .collect();
+        crate::db::touch_read(&cfg.db_path, &read).await;
         return Ok(SqlResult {
             columns: out.columns,
             rows: out.rows,
@@ -390,5 +410,17 @@ mod tests {
         assert_eq!(human_size(40), "40 bytes");
         assert_eq!(human_size(2048), "2.0 KB");
         assert_eq!(human_size(3 * 1024 * 1024), "3.0 MB");
+    }
+}
+
+#[cfg(test)]
+mod names_tests {
+    #[test]
+    fn a_view_is_named_as_a_whole_word() {
+        assert!(super::names("select * from total", "total"));
+        assert!(super::names("SELECT * FROM Total t", "total"));
+        assert!(!super::names("select * from totals", "total"));
+        assert!(!super::names("select subtotal from x", "total"));
+        assert!(super::names("select * from \"p.py:total\"", "p.py:total"));
     }
 }

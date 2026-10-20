@@ -79,6 +79,8 @@ pub(crate) enum RunReason {
     /// It has a cached result, but the artifact is gone and something needs to read it
     /// (see [`crate::recover`]).
     ArtifactMissing,
+    /// The same, because the cache size limit deleted the file (RFC-0012, see [`crate::gc`]).
+    Evicted,
 }
 
 impl RunReason {
@@ -91,6 +93,7 @@ impl RunReason {
             RunReason::RefreshAll => "refresh_all",
             RunReason::NotMaterialized => "not_materialized",
             RunReason::ArtifactMissing => "artifact_missing",
+            RunReason::Evicted => "evicted",
         }
     }
 
@@ -109,6 +112,11 @@ impl RunReason {
             RunReason::ArtifactMissing => {
                 "its cached result is still valid, but the artifact file is missing and \
                  something needs to read it"
+                    .to_string()
+            }
+            RunReason::Evicted => {
+                "its cached result was evicted to stay under the cache limit, and something \
+                 needs to read it"
                     .to_string()
             }
         }

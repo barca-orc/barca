@@ -406,6 +406,15 @@ mod tests {
             if WITH_ROW_ID.contains(table) {
                 want.push("id".to_string());
             }
+            // This machine's own columns: read and written by the cache size limit, never
+            // carried or required of another machine's history.
+            if *table == "materializations" {
+                want.extend(
+                    crate::db_schema::LOCAL_MATERIALIZATION_COLUMNS
+                        .iter()
+                        .map(|c| c.to_string()),
+                );
+            }
             have.sort();
             want.sort();
             assert_eq!(have, want, "table {table}");

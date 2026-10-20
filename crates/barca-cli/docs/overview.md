@@ -49,6 +49,7 @@ barca get total pipeline.py      # second time: everything is a cache hit
 | `barca sql "<query>" [files...]` | Query cached results with DuckDB; each asset is a view (`barca docs sql`). Experimental. |
 | `barca doctor [files...]` | Check project, Python, cache, metadata and stores without running steps (`barca docs doctor`). |
 | `barca plan [files...]` | Emit the tiered execution plan as JSON. |
+| `barca gc [--dry-run] [--max-size SIZE]` | Evict cached results to keep `.barca/` under `[cache] max_size` (default 10% of the filesystem; barca also does this after every `get` and `run`) (`barca docs cache`, "Disk use"). |
 | `barca history` / `barca stats` | Past runs; timing and cache statistics (`--json`, `--fields`; history takes `--limit`/`--all`). |
 | `barca serve [files...]` | HTTP API, cron scheduler and the web UI (`/ui/`). |
 | `barca docs [topic]` | This manual. |

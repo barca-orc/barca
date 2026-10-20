@@ -21,6 +21,10 @@ pub struct GetResult {
     /// Plan-time warnings for the steps this run planned (`[]` when there are none).
     #[serde(default)]
     pub warnings: Vec<PlanWarning>,
+    /// Present when the check after the run found `.barca/` over its size limit (RFC-0012):
+    /// what it evicted, and the size after.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache: Option<crate::gc::CacheReport>,
 }
 
 /// The result of `barca get|run a,b` (several targets): one run over the union of the targets'
@@ -41,6 +45,9 @@ pub struct MultiResult {
         deserialize_with = "deserialize_targets"
     )]
     pub targets: Vec<(String, TargetOutcome)>,
+    /// Present when the check after the run found `.barca/` over its size limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache: Option<crate::gc::CacheReport>,
 }
 
 fn serialize_targets<S: serde::Serializer>(
@@ -120,7 +127,8 @@ pub struct StepReport {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
     /// Why the step runs: `task`, `sensor`, `refresh`, `refresh_cascade`, `refresh_all`,
-    /// `not_materialized`, `artifact_missing`, `partitions_unknown` or `sensor_output_unknown`.
+    /// `not_materialized`, `artifact_missing`, `evicted`, `partitions_unknown` or
+    /// `sensor_output_unknown`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     /// The reason in words.

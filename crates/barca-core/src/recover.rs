@@ -372,31 +372,43 @@ pub(crate) async fn lost(
 }
 
 /// The stderr lines that say which cached results are computed again because their artifact
-/// is missing: one per node, naming one path.
-pub(crate) fn recompute_warnings(lost: &[(String, String)]) -> Vec<String> {
-    let mut nodes: Vec<(&str, &str, usize)> = Vec::new();
-    let mut slot: HashMap<&str, usize> = HashMap::new();
+/// is missing: one per node, naming one path. A result the cache size limit evicted (its path
+/// is in `evicted`) says so instead (RFC-0012).
+pub(crate) fn recompute_warnings(
+    lost: &[(String, String)],
+    evicted: &HashSet<String>,
+) -> Vec<String> {
+    let mut nodes: Vec<(&str, &str, usize, bool)> = Vec::new();
+    let mut slot: HashMap<(&str, bool), usize> = HashMap::new();
     for (id, path) in lost {
         let base = base_of(id);
-        match slot.get(base) {
+        let was_evicted = evicted.contains(path);
+        match slot.get(&(base, was_evicted)) {
             Some(&i) => nodes[i].2 += 1,
             None => {
-                slot.insert(base, nodes.len());
-                nodes.push((base, path, 1));
+                slot.insert((base, was_evicted), nodes.len());
+                nodes.push((base, path, 1, was_evicted));
             }
         }
     }
     nodes
         .into_iter()
-        .map(|(base, path, count)| {
+        .map(|(base, path, count, was_evicted)| {
             let others = match count - 1 {
                 0 => String::new(),
                 n => format!(" (and {n} more of its partitions)"),
             };
-            format!(
-                "[barca] warning: {base}: the artifact of its cached result is missing: \
-                 {path}{others}. Computing it again."
-            )
+            if was_evicted {
+                format!(
+                    "[barca] {base}: its cached result{others} was evicted to stay under the \
+                     cache limit; computing it again"
+                )
+            } else {
+                format!(
+                    "[barca] warning: {base}: the artifact of its cached result is missing: \
+                     {path}{others}. Computing it again."
+                )
+            }
         })
         .collect()
 }
@@ -428,12 +440,18 @@ pub(crate) fn predict_recomputes(
     cached_steps: &mut CachedSteps,
     all_outputs: &mut HashMap<String, OutputRef>,
     layout: Option<&ArtifactLayout>,
+    evicted: &HashSet<String>,
     steps: &mut [StepReport],
     summary: &mut ExplainSummary,
 ) {
     let gone = |oref: &&OutputRef| predicted_gone(oref, layout);
+    let paths: HashMap<String, String> = all_outputs
+        .iter()
+        .map(|(id, o)| (id.clone(), o.path.clone()))
+        .collect();
     for id in predict_lost(cached_steps, all_outputs, &needed, gone) {
-        if mark_recomputed(steps, &id, true) {
+        let was_evicted = paths.get(&id).is_some_and(|p| evicted.contains(p));
+        if mark_recomputed(steps, &id, true, was_evicted) {
             summary.cached = summary.cached.saturating_sub(1);
             summary.will_run += 1;
         }
@@ -484,9 +502,15 @@ pub(crate) fn predict_lost(
 }
 
 /// Change the report line of the step that produced cached output `id` to say that it is run
-/// again because its artifact is missing. `dry` selects the vocabulary, as in a report: a dry
-/// run says `run`, a real run says `ran`. Returns false when no cached line matches.
-pub(crate) fn mark_recomputed(reports: &mut [StepReport], id: &str, dry: bool) -> bool {
+/// again because its artifact is missing (`evicted`: because the cache size limit deleted it).
+/// `dry` selects the vocabulary, as in a report: a dry run says `run`, a real run says `ran`.
+/// Returns false when no cached line matches.
+pub(crate) fn mark_recomputed(
+    reports: &mut [StepReport],
+    id: &str,
+    dry: bool,
+    evicted: bool,
+) -> bool {
     let base = base_of(id);
     let key = id
         .split_once('[')
@@ -499,7 +523,11 @@ pub(crate) fn mark_recomputed(reports: &mut [StepReport], id: &str, dry: bool) -
             r.status = Some(word.to_string());
         }
     };
-    let reason = RunReason::ArtifactMissing;
+    let reason = if evicted {
+        RunReason::Evicted
+    } else {
+        RunReason::ArtifactMissing
+    };
 
     // A node expanded by partition key is one line with counts.
     let by_key =
@@ -793,7 +821,7 @@ mod tests {
             ("p.py:part[k=b]".to_string(), "/a/part/3.json".to_string()),
         ];
         assert_eq!(
-            recompute_warnings(&lost),
+            recompute_warnings(&lost, &HashSet::new()),
             [
                 "[barca] warning: p.py:part: the artifact of its cached result is missing: \
                  /a/part/1.json (and 1 more of its partitions). Computing it again.",
@@ -887,9 +915,9 @@ mod tests {
         let lost = predict_lost(&mut cached, &mut outputs, &needed, |_| true);
         assert_eq!(lost.len(), KEYS);
         for id in &lost {
-            assert!(mark_recomputed(&mut reports, id, true));
+            assert!(mark_recomputed(&mut reports, id, true, false));
         }
-        assert_eq!(recompute_warnings(&[]).len(), 0);
+        assert_eq!(recompute_warnings(&[], &HashSet::new()).len(), 0);
         let took = started.elapsed();
         assert!(
             took < std::time::Duration::from_secs(5),
@@ -1020,7 +1048,7 @@ mod tests {
                 cached_line("p.py:model", dry),
             ];
             reports[1].warning = Some("stale".to_string());
-            assert!(mark_recomputed(&mut reports, "p.py:model", dry));
+            assert!(mark_recomputed(&mut reports, "p.py:model", dry, false));
             let r = &reports[1];
             let said = if dry { &r.action } else { &r.status };
             assert_eq!(said.as_deref(), Some(if dry { "run" } else { "ran" }));
@@ -1029,7 +1057,7 @@ mod tests {
             assert!(r.artifact.is_none() && r.warning.is_none());
             // The other line is untouched, and a line is changed once.
             assert_eq!(reports[0].artifact.as_deref(), Some("/a/x.json"));
-            assert!(!mark_recomputed(&mut reports, "p.py:model", dry));
+            assert!(!mark_recomputed(&mut reports, "p.py:model", dry, false));
         }
     }
 
@@ -1047,16 +1075,21 @@ mod tests {
             }),
             ..Default::default()
         }];
-        assert!(mark_recomputed(&mut reports, "p.py:part[k=a]", true));
+        assert!(mark_recomputed(&mut reports, "p.py:part[k=a]", true, false));
         let p = reports[0].partitions.as_ref().unwrap();
         assert_eq!((p.cached, p.will_run), (1, 1));
         assert_eq!(p.will_run_keys, ["k=a"]);
         assert_eq!(reports[0].action.as_deref(), Some("partial"));
         assert_eq!(reports[0].reason.as_deref(), Some("artifact_missing"));
 
-        assert!(mark_recomputed(&mut reports, "p.py:part[k=b]", true));
+        assert!(mark_recomputed(&mut reports, "p.py:part[k=b]", true, false));
         assert_eq!(reports[0].action.as_deref(), Some("run"));
-        assert!(!mark_recomputed(&mut reports, "p.py:part[k=c]", true));
+        assert!(!mark_recomputed(
+            &mut reports,
+            "p.py:part[k=c]",
+            true,
+            false
+        ));
     }
 
     #[test]
@@ -1075,7 +1108,12 @@ mod tests {
             }),
             ..Default::default()
         }];
-        assert!(mark_recomputed(&mut reports, "p.py:part[k=a]", false));
+        assert!(mark_recomputed(
+            &mut reports,
+            "p.py:part[k=a]",
+            false,
+            false
+        ));
         assert_eq!(reports[0].reason.as_deref(), Some("not_materialized"));
         assert_eq!(reports[0].status.as_deref(), Some("ran"));
     }

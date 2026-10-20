@@ -56,6 +56,52 @@ struct StoreProbe {
 }
 
 /// Inspect a rooted project. This never loads user Python or synchronizes remote state.
+/// `.barca/` against its size limit (RFC-0012), and free space on its filesystem. Informational:
+/// over the limit is what eviction is for, not a failed check.
+fn cache_size(report: &mut DoctorReport, cfg: &config::ResolvedConfig) {
+    use crate::gc::size::human;
+    match crate::gc::usage(cfg) {
+        Ok(usage) => {
+            let limit = match usage.limit_bytes {
+                Some(limit) => format!(
+                    "{} of its {} limit ({}, {})",
+                    human(usage.size_bytes),
+                    human(limit),
+                    usage.max_size,
+                    usage.source
+                ),
+                None => format!(
+                    "{}, no limit ([cache] max_size is off; {})",
+                    human(usage.size_bytes),
+                    usage.source
+                ),
+            };
+            let free = match (usage.available_bytes, usage.filesystem_bytes) {
+                (Some(free), Some(total)) => {
+                    format!(
+                        "; {} free of {} on its filesystem",
+                        human(free),
+                        human(total)
+                    )
+                }
+                _ => String::new(),
+            };
+            report.add(
+                "cache_size",
+                true,
+                format!("{limit}{free}"),
+                serde_json::to_value(&usage).unwrap_or(Value::Null),
+            );
+        }
+        Err(e) => report.add(
+            "cache_size",
+            true,
+            format!("not measured: {e}"),
+            Value::Null,
+        ),
+    }
+}
+
 pub async fn doctor(files: &[PathBuf], env: Option<&str>, python: &Path) -> DoctorReport {
     let mut report = DoctorReport::default();
     let root = match std::env::current_dir() {
@@ -142,6 +188,7 @@ pub async fn doctor(files: &[PathBuf], env: Option<&str>, python: &Path) -> Doct
                 health.unwrap_or_else(|e| e),
                 json!({"path":cfg.db_path}),
             );
+            cache_size(&mut report, &cfg);
             Some(cfg)
         }
         Err(error) => {

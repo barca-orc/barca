@@ -739,6 +739,7 @@ def lone() -> int:
                 ("zeta".to_string(), outcome("success")),
                 ("alpha".to_string(), outcome("failed")),
             ],
+            cache: None,
         };
         let s = serde_json::to_string(&r).unwrap();
         assert!(

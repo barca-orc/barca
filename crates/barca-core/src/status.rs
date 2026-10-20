@@ -72,12 +72,12 @@ pub struct CacheStatus {
     )]
     pub state: String,
     /// Machine-readable reason: `materialized`, `changed`, `upstream_stale`, `failed`,
-    /// `artifact_missing`, `no_record`, `partitions_missing`, `partitions_unknown`,
+    /// `artifact_missing`, `evicted`, `no_record`, `partitions_missing`, `partitions_unknown`,
     /// `sensor_output_unknown`, `task` or `sensor`.
     #[cfg_attr(
         feature = "ts",
         ts(
-            type = "\"materialized\" | \"changed\" | \"upstream_stale\" | \"failed\" | \"artifact_missing\" | \"no_record\" | \"partitions_missing\" | \"partitions_unknown\" | \"sensor_output_unknown\" | \"task\" | \"sensor\""
+            type = "\"materialized\" | \"changed\" | \"upstream_stale\" | \"failed\" | \"artifact_missing\" | \"evicted\" | \"no_record\" | \"partitions_missing\" | \"partitions_unknown\" | \"sensor_output_unknown\" | \"task\" | \"sensor\""
         )
     )]
     pub reason: String,
@@ -352,6 +352,8 @@ fn cache_status(
             "artifact_missing",
             r.detail.clone().unwrap_or_default(),
         ),
+        // The same, because the cache size limit deleted the file (RFC-0012).
+        ("run", Some("evicted")) => cache("stale", "evicted", r.detail.clone().unwrap_or_default()),
         ("partial", _) => {
             let (cached, total) = r
                 .partitions
