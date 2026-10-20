@@ -177,9 +177,18 @@ impl<'de> Deserialize<'de> for ErrorEnvelope {
                 "step details require kind 'step_failed'",
             ));
         }
+        // A failed step reads as a local run prints it: `Worker failed: <summary>` and the
+        // traceback (the envelope's `error` names the node instead).
+        let head = match (&wire.kind, &wire.node) {
+            (ErrorKind::StepFailed, Some(node)) => wire
+                .error
+                .strip_prefix(&format!("step '{node}' failed: "))
+                .map_or_else(|| wire.error.clone(), |s| format!("Worker failed: {s}")),
+            _ => wire.error.clone(),
+        };
         let prose = match &wire.traceback {
-            Some(traceback) => format!("{}\n{traceback}", wire.error),
-            None => wire.error.clone(),
+            Some(traceback) => format!("{head}\n{traceback}"),
+            None => head,
         };
         Ok(Self {
             kind: wire.kind,
@@ -360,6 +369,22 @@ impl ErrorEnvelope {
         self.run_failure_line.as_deref()
     }
 
+    /// For a `step_failed` envelope read back from the wire (which does not carry it): the
+    /// one-line run summary a local run prints after the error, given how many downstream
+    /// steps were skipped. Any other kind is returned unchanged.
+    pub fn with_failed_run_summary(mut self, skipped: usize) -> Self {
+        if self.kind == ErrorKind::StepFailed {
+            let node = self.node.clone().unwrap_or_default();
+            let prefix = format!("step '{node}' failed: ");
+            let summary = self.error.strip_prefix(&prefix).unwrap_or(&self.error);
+            self.run_failure_line = Some(format!(
+                "[barca] run failed: step '{node}' failed: {}; {skipped} downstream steps skipped (exit 1)",
+                summary.lines().next().unwrap_or("unknown error"),
+            ));
+        }
+        self
+    }
+
     /// The human-mode text: the prose, then the remediation unless the prose already has it.
     pub fn to_human(&self) -> String {
         match (&self.remediation, self.prose_has_remediation) {
@@ -422,6 +447,16 @@ mod wire_tests {
             if restored.kind == ErrorKind::StepFailed {
                 assert_eq!(restored.node.as_deref(), Some("p.py:a"));
                 assert!(restored.to_human().contains("line 4"));
+                // The text a local run prints, rebuilt from the wire fields.
+                assert_eq!(restored.to_human(), original.to_human());
+                let summary = restored.clone().with_failed_run_summary(2);
+                assert_eq!(
+                    summary.run_failure_line(),
+                    Some(
+                        "[barca] run failed: step 'p.py:a' failed: ValueError: bad; 2 downstream \
+                         steps skipped (exit 1)"
+                    )
+                );
             }
         }
     }

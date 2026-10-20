@@ -32,6 +32,12 @@ Options:
       --env <ENV>
           Environment name (separates cache/state per environment)
 
+      --server [<URL>]
+          Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, the command runs on this machine
+
+      --local
+          Ignore any configured server for this command: nothing is read from or sent to it
+
   -h, --help
           Print help (see a summary with '-h')
 
@@ -46,6 +52,7 @@ Examples:
   barca status big.py --limit 20           # first 20 nodes; the summary counts all
   barca status total pipeline.py --json --sample 5   # add up to 5 sample rows per json/parquet/CSV artifact
   barca status pipeline.py --env dev       # state recorded in another environment
+  barca status total --server              # cache state on the configured barca server
 
 Cache state per node: cached, stale (ran before; code or inputs changed, or its artifact file is
 gone and a run would read it: reason `artifact_missing`), never_run, partial

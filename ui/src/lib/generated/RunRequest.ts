@@ -10,7 +10,8 @@ export type RunRequest = { command: RunCommand,
  */
 targets?: Array<string>,
 /**
- * As typed, relative to the server's project root; `[]` means the deployed set.
+ * As typed, relative to the server's project root: the run reads only these deployed
+ * files. `[]` means the deployed set.
  */
 files?: Array<string>,
 /**

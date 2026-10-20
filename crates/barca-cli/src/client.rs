@@ -1,0 +1,923 @@
+//! The CLI's client of a barca server (RFC-0007 §3.1, §4.1, §4.2).
+//!
+//! `--server [<URL>]` runs `get`, `run`, `status`, `list`, `history` or `stats` on a
+//! `barca serve` and prints its answer here exactly as the command would print it locally: the
+//! same stdout, the same stderr lines and the same exit code, rendered by the same
+//! `barca_core::report` functions. `--local` ignores a configured server.
+//!
+//! The module is laid out by layer, so the ledger calls of a local run against a configured
+//! server (#402: `/ledger/lookup`, `/ledger/runs`) go beside the run section on the same
+//! [`Server`]:
+//!
+//! 1. **Choosing the server** ([`choose`]): the flags, `BARCA_SERVER` and `[server] url`.
+//! 2. **Transport** ([`Server`]): one HTTP client, JSON requests, and the errors every call can
+//!    end with: a server that cannot be reached or answers unexpectedly is `infra` (exit 3)
+//!    naming it; an error the server answers with is its envelope, printed as a local error.
+//! 3. **Checks** ([`Server::health`], [`Server::deployed_files`]): the API version, `--env`, and
+//!    the files named on the command line against the deployment.
+//! 4. **Runs** ([`run`]): `POST /runs`, the event stream, Ctrl-C, the outcome.
+//! 5. **Inspection** ([`list`], [`status`], [`history`], [`stats`]): the CLI's `--json` bodies,
+//!    rendered here with this command's own `--limit`, `--fields` and output mode.
+
+// Every call here ends the command with at most one `CliError` (the envelope), on a path that
+// is waiting on the network anyway: its size does not matter.
+#![allow(clippy::result_large_err)]
+
+use crate::args::{OutputMode, ServerFlags};
+use crate::error::{CliError, Context, ErrorKind, list_hint};
+use barca_core::BarcaError;
+use barca_core::config::{check_server_url, configured_server};
+use barca_core::envelope::ErrorEnvelope;
+use barca_core::outcome::{API_VERSION, Outcome, RunCommand, RunRequest};
+use barca_core::{RunEvent, lines::LineWhen};
+use serde_json::{Value, json};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+/// How long one ordinary request (not the event stream) may take, connection included.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long the event stream may stay silent. The server sends a keep-alive comment every 15s,
+/// so a longer silence means the connection is gone.
+const STREAM_IDLE: Duration = Duration::from_secs(60);
+
+/// The whole event stream's limit; the server stops a run after 10 minutes.
+const STREAM_LIMIT: Duration = Duration::from_secs(24 * 3600);
+
+// ─── 1. choosing the server ─────────────────────────────────────────────────
+
+/// The commands that take `--server` and `--local`.
+pub(crate) const SERVER_COMMANDS: &[&str] = &["get", "run", "status", "list", "history", "stats"];
+
+/// Where `--server` sends this command, or `None` to run it here. Bare `--server` uses the
+/// configured server (`BARCA_SERVER`, then `[server] url`) and is a usage error when none is
+/// configured. Without `--server` the command runs here, whatever is configured (a local run
+/// against the configured server's ledger is #402).
+pub(crate) fn choose(flags: &ServerFlags) -> Result<Option<Server>, CliError> {
+    let usage = |e: BarcaError| CliError::from_barca(e, &Context::default());
+    let Some(given) = flags.server.as_deref() else {
+        return Ok(None);
+    };
+    let (url, source) = if given.is_empty() {
+        let cwd = std::env::current_dir()
+            .map_err(|e| usage(BarcaError::Other(format!("cannot determine cwd: {e}"))))?;
+        match configured_server(&cwd).map_err(usage)? {
+            Some((url, source)) => (
+                check_server_url(&url, source.describe()).map_err(usage)?,
+                Some(source),
+            ),
+            None => {
+                return Err(CliError::from_prose(
+                    ErrorKind::Usage,
+                    "error: --server has no URL and no server is configured\n\
+                     Pass one (`--server https://barca.example.com`), set BARCA_SERVER, or add \
+                     `[server] url = \"...\"` to barca.toml (barca docs server-mode).",
+                ));
+            }
+        }
+    } else {
+        (check_server_url(given, "--server").map_err(usage)?, None)
+    };
+    let http = barca_core::http::client(REQUEST_TIMEOUT)
+        .map_err(|e| CliError::from_prose(ErrorKind::Infra, e))?;
+    if let Some(source) = source {
+        barca_core::errln!("[barca] server {url} ({})", source.describe());
+    }
+    Ok(Some(Server { url, http }))
+}
+
+/// Rewrite argv so that `--server` followed by something that is not a URL (a target, a file,
+/// another flag) is bare `--server`: `barca get --server total` means the configured server and
+/// the target `total`, not a server named `total`. A word with `://` is taken as a URL, so a
+/// mistyped scheme is reported as one.
+pub(crate) fn bare_server_flags(args: Vec<String>) -> Vec<String> {
+    let mut out = Vec::with_capacity(args.len());
+    let mut it = args.into_iter().peekable();
+    while let Some(arg) = it.next() {
+        if arg == "--" {
+            out.push(arg);
+            out.extend(it);
+            break;
+        }
+        if arg == "--server" && !it.peek().is_some_and(|next| next.contains("://")) {
+            out.push("--server=".to_string());
+            continue;
+        }
+        out.push(arg);
+    }
+    out
+}
+
+/// `--server` or `--local` on a command that always runs on this machine: a usage error that
+/// says so, instead of clap's "unexpected argument".
+pub(crate) fn refuse_on_local_commands(args: &[String]) -> Option<CliError> {
+    let sub = args.iter().skip(1).find(|a| !a.starts_with('-'))?;
+    if SERVER_COMMANDS.contains(&sub.as_str()) || sub.ends_with(".py") {
+        return None;
+    }
+    let flag = args
+        .iter()
+        .take_while(|a| *a != "--")
+        .find(|a| *a == "--local" || *a == "--server" || a.starts_with("--server="))?;
+    let flag = flag.split('=').next().unwrap_or(flag);
+    Some(CliError::from_prose(
+        ErrorKind::Usage,
+        format!(
+            "error: `barca {sub}` always runs on this machine; it does not take {flag}\n\
+             --server and --local apply to get, run, status, list, history and stats \
+             (barca docs server-mode)."
+        ),
+    ))
+}
+
+// ─── 2. transport ───────────────────────────────────────────────────────────
+
+/// A barca server and the one HTTP client used to reach it.
+pub(crate) struct Server {
+    /// The base URL, with any proxy prefix and without a trailing `/`.
+    url: String,
+    http: reqwest::Client,
+}
+
+/// Why a request got no answer, in a few words (the URL is named by the caller).
+fn transport_reason(e: &reqwest::Error) -> String {
+    if e.is_timeout() {
+        return "the request timed out".to_string();
+    }
+    // reqwest's own message names the URL; the innermost cause says what happened.
+    let mut cause: &dyn std::error::Error = e;
+    while let Some(next) = cause.source() {
+        cause = next;
+    }
+    let text = cause.to_string();
+    if e.is_connect() {
+        format!("could not connect ({text})")
+    } else {
+        text
+    }
+}
+
+impl Server {
+    fn endpoint(&self, path: &str) -> String {
+        format!("{}{path}", self.url)
+    }
+
+    /// The server cannot be reached, or the connection broke.
+    fn unreachable(&self, e: &reqwest::Error) -> CliError {
+        CliError::from_prose(
+            ErrorKind::Infra,
+            format!(
+                "error: cannot reach the barca server at {}: {}\n\
+                 Check that `barca serve` is running at that URL and reachable from this \
+                 machine. To run on this machine instead, leave out --server.",
+                self.url,
+                transport_reason(e)
+            ),
+        )
+    }
+
+    /// The server answered, but not with what barca expects.
+    fn unexpected(&self, what: &str, detail: &str) -> CliError {
+        CliError::from_prose(
+            ErrorKind::Infra,
+            format!(
+                "error: the barca server at {} answered {what} unexpectedly: {detail}\n\
+                 Check that the URL points at `barca serve` (including any proxy prefix) and \
+                 that the server runs the same barca version as this machine.",
+                self.url
+            ),
+        )
+    }
+
+    /// Send a request and read the whole answer. A non-2xx answer is the server's error
+    /// envelope; one that is not an envelope is [`Server::unexpected`].
+    async fn send(
+        &self,
+        request: reqwest::RequestBuilder,
+        what: &str,
+    ) -> Result<(reqwest::StatusCode, Vec<u8>), CliError> {
+        let response = request.send().await.map_err(|e| self.unreachable(&e))?;
+        let status = response.status();
+        let body = response
+            .bytes()
+            .await
+            .map_err(|e| self.unreachable(&e))?
+            .to_vec();
+        if status.is_success() {
+            return Ok((status, body));
+        }
+        Err(self.refusal(status, &body, what))
+    }
+
+    /// A non-2xx answer: the server's envelope, or an unexpected answer.
+    fn refusal(&self, status: reqwest::StatusCode, body: &[u8], what: &str) -> CliError {
+        match serde_json::from_slice::<ErrorEnvelope>(body) {
+            Ok(envelope) => envelope,
+            Err(_) => {
+                let text = String::from_utf8_lossy(body);
+                let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+                let text: String = text.chars().take(200).collect();
+                self.unexpected(what, &format!("HTTP {status}: {text}"))
+            }
+        }
+    }
+
+    async fn get_text(&self, path: &str) -> Result<String, CliError> {
+        let what = format!("GET {path}");
+        let (_, body) = self.send(self.http.get(self.endpoint(path)), &what).await?;
+        String::from_utf8(body).map_err(|_| self.unexpected(&what, "the body is not UTF-8"))
+    }
+
+    async fn get_json(&self, path: &str) -> Result<Value, CliError> {
+        let text = self.get_text(path).await?;
+        serde_json::from_str(&text)
+            .map_err(|e| self.unexpected(&format!("GET {path}"), &format!("not JSON: {e}")))
+    }
+
+    async fn post_json(&self, path: &str, body: &Value) -> Result<String, CliError> {
+        let what = format!("POST {path}");
+        let request = self
+            .http
+            .post(self.endpoint(path))
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(body.to_string());
+        let (_, body) = self.send(request, &what).await?;
+        String::from_utf8(body).map_err(|_| self.unexpected(&what, "the body is not UTF-8"))
+    }
+
+    // ─── 3. checks ──────────────────────────────────────────────────────────
+
+    /// `GET /health`: the server speaks this API version, and `--env`, when given, is the
+    /// server's environment.
+    pub(crate) async fn health(&self, env: Option<&str>) -> Result<Value, CliError> {
+        let health = self.get_json("/health").await?;
+        match health["api_version"].as_u64() {
+            Some(v) if v == u64::from(API_VERSION) => {}
+            Some(v) => {
+                return Err(CliError::from_prose(
+                    ErrorKind::Infra,
+                    format!(
+                        "error: the barca server at {} speaks API version {v}; this barca \
+                         ({}) speaks version {API_VERSION}\n\
+                         Install the same barca version here and on the server.",
+                        self.url,
+                        env!("CARGO_PKG_VERSION")
+                    ),
+                ));
+            }
+            None => {
+                let version = health["version"].as_str().unwrap_or("unknown");
+                return Err(self.unexpected(
+                    "GET /health",
+                    &format!("it reports no api_version (barca {version} predates --server)"),
+                ));
+            }
+        }
+        if let (Some(env), Some(server_env)) = (env, health["env"].as_str())
+            && env != server_env
+        {
+            return Err(CliError::from_prose(
+                ErrorKind::Usage,
+                format!(
+                    "error: --env {env}: the server at {} runs environment '{server_env}'\n\
+                     A server serves one environment. Leave out --env, or pass --env {server_env}.",
+                    self.url
+                ),
+            ));
+        }
+        Ok(health)
+    }
+
+    /// Every deployed file (`GET /project`), root-relative.
+    async fn deployed(&self) -> Result<Vec<String>, CliError> {
+        let project = self.get_json("/project").await?;
+        Ok(project["files"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|f| f["path"].as_str().map(str::to_string))
+            .collect())
+    }
+
+    /// The files a command named, as the deployment spells them (`GET /project`): a `.py` file
+    /// is one of the deployed files, a directory selects the deployed files under it. A file the
+    /// deployment does not have is a usage error listing the deployed files. A named file that
+    /// differs from the deployed one prints a note; the server runs its own.
+    pub(crate) async fn deployed_files(&self, named: &[PathBuf]) -> Result<Vec<String>, CliError> {
+        if named.is_empty() {
+            return Ok(Vec::new());
+        }
+        let project = self.get_json("/project").await?;
+        let deployed: Vec<(String, String)> = project["files"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|f| {
+                Some((
+                    f["path"].as_str()?.to_string(),
+                    f["sha256"].as_str()?.to_string(),
+                ))
+            })
+            .collect();
+        let root = project_root();
+        let mut chosen: Vec<String> = Vec::new();
+        for name in named {
+            let rel = relative_to_root(name, root.as_deref());
+            let text = rel.to_string_lossy().to_string();
+            let matches: Vec<&(String, String)> = if text.ends_with(".py") {
+                deployed.iter().filter(|(p, _)| *p == text).collect()
+            } else {
+                let dir = text.trim_end_matches('/');
+                deployed
+                    .iter()
+                    .filter(|(p, _)| {
+                        dir == "." || dir.is_empty() || p.starts_with(&format!("{dir}/"))
+                    })
+                    .collect()
+            };
+            if matches.is_empty() {
+                let list: Vec<&str> = deployed.iter().map(|(p, _)| p.as_str()).collect();
+                return Err(CliError::from_prose(
+                    ErrorKind::Usage,
+                    format!(
+                        "error: '{}' is not one of the files deployed on the server at {}\n\
+                         The server runs its deployed files: {}. Name one of them, or leave out \
+                         the files to use all of them.",
+                        name.display(),
+                        self.url,
+                        list.join(", ")
+                    ),
+                ));
+            }
+            for (path, sha) in matches {
+                if let Some(local) = local_sha256(path, root.as_deref())
+                    && &local != sha
+                {
+                    barca_core::errln!(
+                        "[barca] note: {path} differs from the deployment; the server runs the deployed version"
+                    );
+                }
+                if !chosen.contains(path) {
+                    chosen.push(path.clone());
+                }
+            }
+        }
+        Ok(chosen)
+    }
+}
+
+/// This machine's project root: the nearest barca.toml at or above the cwd, else the cwd.
+fn project_root() -> Option<PathBuf> {
+    let cwd = std::env::current_dir().ok()?;
+    Some(barca_core::config::find_root(&cwd).unwrap_or(cwd))
+}
+
+/// A path typed in the cwd, relative to the project root (as the deployment's paths are).
+fn relative_to_root(path: &Path, root: Option<&Path>) -> PathBuf {
+    match (std::env::current_dir().ok(), root) {
+        (Some(cwd), Some(root)) => barca_core::config::rebase_onto_root(path, &cwd, root),
+        _ => path.to_path_buf(),
+    }
+}
+
+/// The sha256 of a root-relative file on this machine; `None` when it is not here.
+fn local_sha256(path: &str, root: Option<&Path>) -> Option<String> {
+    use sha2::Digest;
+    let bytes = std::fs::read(root?.join(path)).ok()?;
+    Some(
+        sha2::Sha256::digest(&bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect(),
+    )
+}
+
+// ─── 4. runs ────────────────────────────────────────────────────────────────
+
+/// A `get` or `run` to start on the server, with how this machine prints it.
+pub(crate) struct RunArgs {
+    pub(crate) command: RunCommand,
+    pub(crate) targets: Vec<String>,
+    /// The files as typed (rebased onto the root by [`Server::deployed_files`]).
+    pub(crate) files: Vec<PathBuf>,
+    pub(crate) refresh: Option<Vec<String>>,
+    pub(crate) no_cascade: bool,
+    pub(crate) refresh_all: bool,
+    pub(crate) dry_run: bool,
+    pub(crate) agent: bool,
+    pub(crate) mode: OutputMode,
+    pub(crate) fields: Option<Vec<String>>,
+    pub(crate) env: Option<String>,
+}
+
+/// `barca get|run ... --server`: start the run on the server, print its lines as they come,
+/// then its outcome, and end as a local run of the same command ends.
+pub(crate) async fn run(server: &Server, args: RunArgs, ctx: &Context) -> Result<(), CliError> {
+    server.health(args.env.as_deref()).await?;
+    let files = server.deployed_files(&args.files).await?;
+    let request = RunRequest {
+        command: args.command,
+        targets: args.targets.clone(),
+        files,
+        refresh: args.refresh.clone().unwrap_or_default(),
+        refresh_all: args.refresh_all,
+        cascade: !args.no_cascade,
+        dry_run: args.dry_run,
+        agent: args.agent,
+    };
+    let body = serde_json::to_value(&request).expect("a run request is JSON");
+    let answer = server
+        .post_json("/runs", &body)
+        .await
+        .map_err(|e| with_typed_files(e, ctx))?;
+    if args.dry_run {
+        return print_dry_run(server, &answer, &args, &request.files).await;
+    }
+    let run_id = serde_json::from_str::<Value>(&answer)
+        .ok()
+        .and_then(|v| v["run_id"].as_str().map(str::to_string))
+        .ok_or_else(|| server.unexpected("POST /runs", "no run_id in the answer"))?;
+    let outcome = stream(server, &run_id, &args).await?;
+    let (rendered, error) = outcome
+        .render(
+            args.command,
+            &args.targets,
+            args.mode.into(),
+            args.fields.as_deref(),
+        )
+        .map_err(|e| server.unexpected("the run's outcome", &e))?;
+    crate::commands::emit(rendered);
+    match error {
+        Some(envelope) => Err(with_typed_files(envelope, ctx)),
+        None => Ok(()),
+    }
+}
+
+/// A usage error of a run ends with the `barca list` pointer naming the files the user typed, as
+/// a local `get`/`run` ends it (`get_run_error`): the server names its own files, or none.
+fn with_typed_files(mut error: CliError, ctx: &Context) -> CliError {
+    if error.kind != ErrorKind::Usage {
+        return error;
+    }
+    let hint = list_hint(&ctx.files);
+    error.remediation = Some(match error.remediation.take() {
+        None => hint,
+        Some(r) if r.contains(&hint) => r,
+        Some(r) if r.starts_with("Run `barca list") => hint,
+        Some(r) => format!("{r}\n{hint}"),
+    });
+    error
+}
+
+/// `--dry-run`: the server answers with the `--dry-run --json` body at once. The stderr lines a
+/// local dry run prints before it are rebuilt here: the tasks a `get` without a target skips
+/// (from the server's `/list`) and the plan warnings (from the body).
+async fn print_dry_run(
+    server: &Server,
+    answer: &str,
+    args: &RunArgs,
+    files: &[String],
+) -> Result<(), CliError> {
+    let result: barca_core::results::ExplainResult = serde_json::from_str(answer)
+        .map_err(|e| server.unexpected("POST /runs (dry run)", &e.to_string()))?;
+    if args.command == RunCommand::Get && args.targets.is_empty() {
+        let list = server.get_json("/list").await?;
+        let nodes: Vec<barca_core::report::ListNode> =
+            serde_json::from_value(list["nodes"].clone())
+                .map_err(|e| server.unexpected("GET /list", &e.to_string()))?;
+        let kinds: Vec<(&str, barca_core::NodeKind)> = nodes
+            .iter()
+            .filter(|n| in_files(&n.id, files))
+            .map(|n| (n.id.as_str(), n.kind))
+            .collect();
+        let file_args = if files.is_empty() {
+            server.deployed().await?
+        } else {
+            files.to_vec()
+        };
+        if let Some(note) = barca_core::targets::skipped_tasks_note_among(&kinds, &file_args) {
+            barca_core::errln!("{note}");
+        }
+    }
+    barca_core::warnings::print(&result.warnings);
+    crate::commands::emit(barca_core::report::render_explain(
+        &result,
+        args.command.as_str(),
+        args.mode.into(),
+        args.fields.as_deref(),
+    ));
+    Ok(())
+}
+
+/// Stop signals during a streamed run: the first cancels the run on the server and keeps
+/// streaming until it ends; the second ends this command at once (exit 130).
+fn stop_signals() -> tokio::sync::mpsc::UnboundedReceiver<()> {
+    use tokio::signal::unix::{SignalKind, signal};
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    for kind in [SignalKind::interrupt(), SignalKind::terminate()] {
+        let Ok(mut stream) = signal(kind) else {
+            continue;
+        };
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            while stream.recv().await.is_some() {
+                if tx.send(()).is_err() {
+                    break;
+                }
+            }
+        });
+    }
+    rx
+}
+
+/// The stream broke before the run ended: the run goes on on the server.
+fn dropped(server: &Server, run_id: &str, why: &str) -> CliError {
+    CliError::from_prose(
+        ErrorKind::Infra,
+        format!(
+            "error: lost the event stream of run {run_id} on the barca server at {}: {why}\n\
+             The run continues on the server. See how it ended with `barca history --server {}` \
+             (run {run_id}), or GET {}/runs/{run_id}.",
+            server.url, server.url, server.url
+        ),
+    )
+}
+
+/// Read `GET /runs/{run_id}/events` to its `run_finished`, printing `line` and `log` events as
+/// a local run prints them in this mode. Returns the run's outcome.
+async fn stream(server: &Server, run_id: &str, args: &RunArgs) -> Result<Outcome, CliError> {
+    let path = format!("/runs/{run_id}/events");
+    let mut signals = stop_signals();
+    let response = server
+        .http
+        .get(server.endpoint(&path))
+        .header(reqwest::header::ACCEPT, "text/event-stream")
+        .timeout(STREAM_LIMIT)
+        .send()
+        .await
+        .map_err(|e| server.unreachable(&e))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.bytes().await.unwrap_or_default();
+        return Err(server.refusal(status, &body, &format!("GET {path}")));
+    }
+    let mut response = response;
+    let mut events = SseParser::default();
+    let mut cancelled = false;
+    loop {
+        let chunk = tokio::select! {
+            chunk = tokio::time::timeout(STREAM_IDLE, response.chunk()) => chunk,
+            Some(()) = signals.recv() => {
+                if cancelled {
+                    return Err(CliError::from_barca(BarcaError::Cancelled, &Context::default()));
+                }
+                cancelled = true;
+                cancel(server, run_id).await;
+                continue;
+            }
+        };
+        let bytes = match chunk {
+            Err(_) => {
+                return Err(dropped(
+                    server,
+                    run_id,
+                    &format!("nothing received for {}s", STREAM_IDLE.as_secs()),
+                ));
+            }
+            Ok(Err(e)) => return Err(dropped(server, run_id, &transport_reason(&e))),
+            Ok(Ok(None)) => {
+                return Err(dropped(server, run_id, "the server closed the stream"));
+            }
+            Ok(Ok(Some(bytes))) => bytes,
+        };
+        for data in events.push(&bytes) {
+            let event = RunEvent::parse(&data)
+                .map_err(|e| server.unexpected(&format!("GET {path}"), &e.to_string()))?;
+            match event {
+                RunEvent::Line { line, when } => {
+                    if when == LineWhen::Always || args.agent {
+                        barca_core::errln!("{line}");
+                    }
+                }
+                RunEvent::Log { node_id, line } => {
+                    if !matches!(args.mode, OutputMode::Json) {
+                        barca_core::errln!("[{node_id}] {line}");
+                    }
+                }
+                RunEvent::RunFinished { outcome, .. } => {
+                    let outcome = outcome.ok_or_else(|| {
+                        server.unexpected(&format!("GET {path}"), "run_finished has no outcome")
+                    })?;
+                    return Outcome::from_text(outcome.get().to_string())
+                        .map_err(|e| server.unexpected(&format!("GET {path}"), &e));
+                }
+                RunEvent::RunStarted { .. } | RunEvent::StepFinished { .. } => {}
+            }
+        }
+    }
+}
+
+/// `DELETE /runs/{run_id}`. A failure is reported, not fatal: the stream still says how the
+/// run ended.
+async fn cancel(server: &Server, run_id: &str) {
+    let path = format!("/runs/{run_id}");
+    let request = server.http.delete(server.endpoint(&path));
+    if let Err(e) = server.send(request, &format!("DELETE {path}")).await {
+        barca_core::errln!(
+            "[barca] warning: could not cancel run {run_id} on the server: {}",
+            e.error
+        );
+    }
+}
+
+/// Server-sent events, split from the bytes as they arrive: each complete event's `data`.
+#[derive(Default)]
+struct SseParser {
+    buffer: String,
+    pending: Vec<u8>,
+}
+
+impl SseParser {
+    fn push(&mut self, bytes: &[u8]) -> Vec<String> {
+        // A chunk may end inside a UTF-8 sequence: keep the incomplete tail for the next one.
+        self.pending.extend_from_slice(bytes);
+        let valid = match std::str::from_utf8(&self.pending) {
+            Ok(text) => text.len(),
+            Err(e) => e.valid_up_to(),
+        };
+        let text = String::from_utf8_lossy(&self.pending[..valid]).replace("\r\n", "\n");
+        self.pending.drain(..valid);
+        self.buffer.push_str(&text);
+        let mut out = Vec::new();
+        while let Some(end) = self.buffer.find("\n\n") {
+            let block: String = self.buffer.drain(..end + 2).collect();
+            let data: Vec<&str> = block
+                .lines()
+                .filter_map(|l| l.strip_prefix("data:"))
+                .map(|d| d.strip_prefix(' ').unwrap_or(d))
+                .collect();
+            if !data.is_empty() {
+                out.push(data.join("\n"));
+            }
+        }
+        out
+    }
+}
+
+// ─── 5. inspection ──────────────────────────────────────────────────────────
+
+/// Whether `id` (a node id, `file.py:name` or `file.py:name[key]`) is defined in one of `files`.
+fn in_files(id: &str, files: &[String]) -> bool {
+    files.is_empty()
+        || id
+            .split_once(':')
+            .is_some_and(|(file, _)| files.iter().any(|f| f == file))
+}
+
+/// `barca list --server`: `GET /list` (or `/groups`), with this command's files, limit, fields
+/// and output mode.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn list(
+    server: &Server,
+    files: &[PathBuf],
+    groups: bool,
+    json: bool,
+    limit: Option<usize>,
+    fields: Option<&[String]>,
+) -> Result<(), CliError> {
+    server.health(None).await?;
+    let files = server.deployed_files(files).await?;
+    if groups {
+        let body = server.get_json("/groups").await?;
+        let groups: Vec<barca_core::groups::NodeGroup> = serde_json::from_value(body)
+            .map_err(|e| server.unexpected("GET /groups", &e.to_string()))?;
+        crate::commands::print_groups(&groups, json);
+        return Ok(());
+    }
+    let body = server.get_json("/list").await?;
+    let bad = |e: String| server.unexpected("GET /list", &e);
+    let nodes: Vec<barca_core::report::ListNode> =
+        serde_json::from_value(body["nodes"].clone()).map_err(|e| bad(e.to_string()))?;
+    let mut assets = Vec::new();
+    let mut next_fires = std::collections::HashMap::new();
+    for node in nodes.into_iter().filter(|n| in_files(&n.id, &files)) {
+        let freshness: barca_core::Freshness = match &node.schedule {
+            Some(cron) => serde_json::from_value(json!({"type": "Schedule", "value": cron})),
+            None => serde_json::from_value(json!({"type": match node.freshness {
+                barca_core::report::ListFreshness::Manual => "Manual",
+                _ => "Always",
+            }})),
+        }
+        .map_err(|e| bad(e.to_string()))?;
+        if let Some(next) = node.next_fire {
+            next_fires.insert(node.id.clone(), next);
+        }
+        assets.push(barca_core::results::AssetSummary {
+            id: node.id,
+            kind: node.kind,
+            freshness,
+            inputs: node.inputs,
+            env: node.env,
+        });
+    }
+    let total = assets.len();
+    assets.truncate(limit.unwrap_or(total));
+    crate::commands::emit(barca_core::report::render_list(
+        &assets,
+        total,
+        &next_fires,
+        json,
+        fields,
+        body["root"].as_str(),
+    ));
+    Ok(())
+}
+
+/// `barca status --server`: `GET /nodes`, with this command's files, limit, fields and mode.
+pub(crate) async fn status(
+    server: &Server,
+    targets: &[String],
+    files: &[PathBuf],
+    opts: crate::commands::StatusOpts<'_>,
+    env: Option<&str>,
+) -> Result<(), CliError> {
+    server.health(env).await?;
+    let files = server.deployed_files(files).await?;
+    let mut path = format!("/nodes?sample={}", opts.sample);
+    if !targets.is_empty() {
+        path.push_str(&format!("&targets={}", encode(&targets.join(","))));
+    }
+    let body = server.get_json(&path).await?;
+    let mut result: barca_core::status::StatusResult = serde_json::from_value(body.clone())
+        .map_err(|e| server.unexpected("GET /nodes", &e.to_string()))?;
+    if !files.is_empty() {
+        result.nodes.retain(|n| in_files(&n.id, &files));
+        let mut summary = barca_core::status::StatusSummary::default();
+        for node in &result.nodes {
+            match node.cache.state.as_str() {
+                "cached" => summary.cached += 1,
+                "stale" => summary.stale += 1,
+                "never_run" => summary.never_run += 1,
+                "partial" => summary.partial += 1,
+                "unknown" => summary.unknown += 1,
+                _ => summary.always_runs += 1,
+            }
+        }
+        result.summary = summary;
+    }
+    crate::commands::emit(barca_core::report::render_status(
+        result,
+        opts.json,
+        opts.limit,
+        opts.fields,
+        body["root"].as_str(),
+    ));
+    Ok(())
+}
+
+/// `barca history --server`: `GET /history`.
+pub(crate) async fn history(
+    server: &Server,
+    limit: Option<usize>,
+    json: bool,
+    fields: Option<&[String]>,
+    env: Option<&str>,
+) -> Result<(), CliError> {
+    server.health(env).await?;
+    let path = match limit {
+        Some(n) => format!("/history?limit={n}"),
+        None => "/history?all=1".to_string(),
+    };
+    let body = server.get_json(&path).await?;
+    let bad = |e: serde_json::Error| server.unexpected("GET /history", &e.to_string());
+    let runs: Vec<barca_core::db::RunRecord> =
+        serde_json::from_value(body["runs"].clone()).map_err(bad)?;
+    let total = body["total"].as_u64().map_or(runs.len(), |t| t as usize);
+    crate::commands::emit(barca_core::report::render_history(
+        &runs, total, json, fields,
+    ));
+    Ok(())
+}
+
+/// `barca stats --server`: `GET /stats/{name}`.
+pub(crate) async fn stats(
+    server: &Server,
+    target: &str,
+    files: &[PathBuf],
+    json: bool,
+    fields: Option<&[String]>,
+    env: Option<&str>,
+) -> Result<(), CliError> {
+    server.health(env).await?;
+    server.deployed_files(files).await?;
+    let mut body = server
+        .get_json(&format!("/stats/{}", encode(target)))
+        .await?;
+    // The body is `barca stats --json`, which names the node `id`.
+    if let Some(obj) = body.as_object_mut()
+        && let Some(id) = obj.remove("id")
+    {
+        obj.insert("node_id".into(), id);
+    }
+    let stats: barca_core::db::AssetStats = serde_json::from_value(body)
+        .map_err(|e| server.unexpected("GET /stats", &e.to_string()))?;
+    crate::commands::emit(barca_core::report::render_stats(&stats, json, fields));
+    Ok(())
+}
+
+/// Percent-encode a query value or path segment (node ids may hold `/`, `:` and `[`).
+fn encode(text: &str) -> String {
+    text.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b',' | b':' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn argv(s: &str) -> Vec<String> {
+        s.split_whitespace().map(String::from).collect()
+    }
+
+    #[test]
+    fn bare_server_before_a_positional_is_the_configured_server() {
+        assert_eq!(
+            bare_server_flags(argv("barca get --server total p.py")),
+            argv("barca get --server= total p.py")
+        );
+        assert_eq!(
+            bare_server_flags(argv("barca get total --server")),
+            argv("barca get total --server=")
+        );
+        assert_eq!(
+            bare_server_flags(argv("barca get total --server https://h/x --json")),
+            argv("barca get total --server https://h/x --json")
+        );
+        assert_eq!(
+            bare_server_flags(argv("barca get total --server --json")),
+            argv("barca get total --server= --json")
+        );
+        assert_eq!(
+            bare_server_flags(argv("barca get total --server ftp://x")),
+            argv("barca get total --server ftp://x")
+        );
+        assert_eq!(
+            bare_server_flags(argv("barca get -- --server")),
+            argv("barca get -- --server")
+        );
+    }
+
+    #[test]
+    fn local_commands_refuse_server_and_local() {
+        for line in [
+            "barca serve p.py --server",
+            "barca plan --server=http://h",
+            "barca sql q --local",
+            "barca docs --server",
+            "barca version --server",
+        ] {
+            let err = refuse_on_local_commands(&argv(line)).expect(line);
+            assert_eq!(err.kind, ErrorKind::Usage, "{line}");
+            assert!(err.error.contains("always runs on this machine"), "{line}");
+        }
+        for line in [
+            "barca get x --server",
+            "barca status --local",
+            "barca p.py --server",
+            "barca serve p.py",
+        ] {
+            assert!(refuse_on_local_commands(&argv(line)).is_none(), "{line}");
+        }
+    }
+
+    #[test]
+    fn events_are_split_across_chunks_and_comments_are_skipped() {
+        let mut sse = SseParser::default();
+        assert!(
+            sse.push(b": keep-alive\n\nid: 0\ndata: {\"type\":")
+                .is_empty()
+        );
+        let got = sse.push("\"line\",\"line\":\"é\"}\n\nid: 1\r\ndata: {}\r\n\r\n".as_bytes());
+        assert_eq!(got, vec![r#"{"type":"line","line":"é"}"#, "{}"]);
+        // A multibyte character split between chunks.
+        let bytes = "data: \u{e9}\n\n".as_bytes();
+        assert!(sse.push(&bytes[..7]).is_empty());
+        assert_eq!(sse.push(&bytes[7..]), vec!["\u{e9}"]);
+    }
+
+    #[test]
+    fn node_ids_are_filtered_by_file_and_encoded() {
+        let files = vec!["a.py".to_string()];
+        assert!(in_files("a.py:x", &files));
+        assert!(in_files("a.py:x[k=1]", &files));
+        assert!(!in_files("b.py:x", &files));
+        assert!(in_files("b.py:x", &[]));
+        assert_eq!(encode("sub/a.py:x y"), "sub%2Fa.py:x%20y");
+    }
+}

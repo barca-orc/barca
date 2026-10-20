@@ -107,6 +107,10 @@ transfer_timeout = 600      # seconds one transfer attempt may run (at least 1)
 # Passed to fsspec.filesystem(protocol, ...), one table per protocol: s3, gcs, abfs.
 [remote.storage_options.s3]
 endpoint_url = "https://<account-id>.r2.cloudflarestorage.com"
+
+[server]
+# The barca serve that `--server` with no URL runs commands on (experimental).
+url = "https://barca.internal.example.com"
 ```
 
 | Key | Default | Meaning |
@@ -122,13 +126,14 @@ endpoint_url = "https://<account-id>.r2.cloudflarestorage.com"
 | `[remote].transfer_concurrency` | 4 | Transfers in flight at once. |
 | `[remote].transfer_timeout` | 600 | Seconds one transfer attempt may run. |
 | `[remote.storage_options.<protocol>]` | none | Options for the fsspec filesystem of that protocol. |
+| `[server].url` | none | The server a bare `--server` uses: `http://` or `https://`, with any proxy path prefix. A command without `--server` still runs on this machine. See [Server mode](#server-mode). |
 
 An unknown key or a malformed file is a usage error (exit 2) that names the key and lists the
 valid ones:
 
 ```
 invalid ./barca.toml: TOML parse error at line 1, column 1
-unknown field `defualt_env`, expected one of `default_env`, `remote`, `discovery`
+unknown field `defualt_env`, expected one of `default_env`, `remote`, `discovery`, `server`
 ```
 
 Keep credentials out of `barca.toml`; they come from the environment.
@@ -149,6 +154,7 @@ Variables that override `barca.toml`:
 | `BARCA_TRANSFER_TIMEOUT` | `[remote].transfer_timeout` | Positive integer seconds, per attempt. In 0.18.0 an invalid value exits 3, not 2. |
 | `BARCA_STORAGE_OPTIONS` | `[remote.storage_options.*]` | JSON keyed by protocol, merged over the toml tables key by key. |
 | `FSSPEC_<PROTOCOL>_<OPTION>` | one storage option | fsspec's own convention (`FSSPEC_S3_ENDPOINT_URL`, `FSSPEC_GCS_PROJECT`). Overridden by both of the above. |
+| `BARCA_SERVER` | `[server].url` | The server a bare `--server` uses. Overridden by `--server <url>`. |
 | `BARCA_ARTIFACT_URI` | the artifact location | Used as written, with no environment name added, and history stays local. Kept from 0.4.0. Warns when combined with a non-default environment. Prefer `BARCA_REMOTE_URI` with `BARCA_STATE=off`. |
 
 An empty value counts as unset. `BARCA_REMOTE=off` overrides the URI, state,
@@ -175,6 +181,28 @@ worker processes; do not set them.
 Credentials are read by the storage libraries from their usual variables (`AWS_*`,
 `GOOGLE_APPLICATION_CREDENTIALS`, `AZURE_STORAGE_*`). `BARCA_REMOTE_URI` plus those is a
 complete remote setup with no `barca.toml`. See [Remote Storage](/reference/remote-storage/).
+
+## Server mode
+
+`--server` on `get`, `run`, `status`, `list`, `history` and `stats` runs the command on a
+`barca serve` and prints the answer here as the local command would (experimental; `barca docs
+server-mode`, [Deploying](/deploying/)). Where it goes:
+
+**`--server <url>` > `BARCA_SERVER` > `[server].url` in `barca.toml`**
+
+```bash
+barca get total --server https://barca.internal.example.com   # that server, for this command
+export BARCA_SERVER=https://barca.internal.example.com
+barca get total --server                                       # the configured server
+barca get total --local                                        # this machine, whatever is configured
+```
+
+A bare `--server` with no server configured is a usage error (exit 2). When the URL came from
+`BARCA_SERVER` or `barca.toml`, barca prints `[barca] server <url> (<source>)` once on stderr.
+`--local` ignores the configured server and is a usage error with `--server`. A configured
+server changes nothing for a command without `--server` yet: local runs that read and write the
+server's ledger are [RFC-0007](/rfcs/0007-server-mode/)'s next step. `--env` with `--server`
+must name the server's environment.
 
 ## Environments (`--env`)
 

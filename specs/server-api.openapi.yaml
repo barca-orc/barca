@@ -2801,7 +2801,7 @@ components:
         files:
           type: array
           items: *id005
-          description: Deployed files, as typed relative to the root; [] means the deployed set.
+          description: Deployed files, as typed relative to the root; the run reads only these, as `barca get <target> <files>` does. [] means the deployed set.
         refresh:
           type: array
           items: *id005

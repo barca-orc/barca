@@ -41,6 +41,20 @@ and these tags are available on the same releases page.
   for scheduled runs, `scheduled_at` and `schedule_id`, in `barca history --json`, `GET /runs`
   and the `barca.run` span (`barca.trigger`, `barca.scheduled_at`, `barca.schedule_id`, #434).
   The web UI uses the new routes and shows what started each run.
+- `--server [<url>]` runs `get`, `run`, `status`, `list`, `history` and `stats` on a
+  `barca serve` and prints the answer as the local command prints it: the same stdout JSON, the
+  same stderr lines, the same exit codes, rendered by the same functions (#394, experimental).
+  With no URL it uses `BARCA_SERVER`, then `[server] url` in `barca.toml`, and says so once on
+  stderr; nothing configured is a usage error. `--local` ignores a configured server (and is a
+  usage error with `--server`); `--server` on `serve`, `plan`, `sql`, `doctor`, `logs`, `docs`
+  and `version` is a usage error. A run streams its progress and step output, and Ctrl-C cancels
+  it on the server (a second Ctrl-C exits 130 at once). A server that cannot be reached, is not
+  barca or speaks another API version is exit 3 naming its URL; a stream that drops mid-run is
+  exit 3 naming the run id. A named file that differs from the deployed one prints a note.
+  `barca.get(..., server=True)` and `barca.run(..., server=True)` do the same from Python.
+  `barca.Client` is deprecated in favour of them and warns when constructed. The binary now
+  carries an HTTPS client (`reqwest` with `rustls`); `POST /runs` with `files` now reads only
+  those files, as the CLI does. See `barca docs server-mode`.
 - `POST /schedule/{id}/pause` (optionally `?until=<RFC 3339>`) and `POST /schedule/{id}/resume`
   hold one schedule back without `--no-schedule` (#435). `GET /schedule` reports `paused`,
   `paused_until` and `skip_reason`; a paused job's ticks are skipped with reason `paused` (also

@@ -130,7 +130,8 @@ pub struct RunRequest {
     #[serde(default)]
     #[cfg_attr(feature = "ts", ts(optional, as = "Option<Vec<String>>"))]
     pub targets: Vec<String>,
-    /// As typed, relative to the server's project root; `[]` means the deployed set.
+    /// As typed, relative to the server's project root: the run reads only these deployed
+    /// files. `[]` means the deployed set.
     #[serde(default)]
     #[cfg_attr(feature = "ts", ts(optional, as = "Option<Vec<String>>"))]
     pub files: Vec<String>,
@@ -349,7 +350,8 @@ impl Outcome {
         }
     }
 
-    /// What a local run that ended this way prints on stdout, and the error it ends with.
+    /// What a local run that ended this way prints on stdout, and the error it ends with
+    /// (with the one-line run summary a failed step ends with, as a local run prints it).
     /// `command` and `targets` are those of the request; `mode` and `fields` are the client's.
     pub fn render(
         &self,
@@ -359,8 +361,18 @@ impl Outcome {
         fields: Option<&[String]>,
     ) -> Result<(RenderedOutput, Option<ErrorEnvelope>), String> {
         let mut value = self.parsed()?;
+        let skipped = value["steps"].as_array().map_or(0, |steps| {
+            steps
+                .iter()
+                .filter(|s| s["status"].as_str() == Some("skipped"))
+                .count()
+        });
         let envelope = match value.as_object_mut().and_then(|o| o.remove("envelope")) {
-            Some(e) => Some(serde_json::from_value::<ErrorEnvelope>(e).map_err(|e| e.to_string())?),
+            Some(e) => Some(
+                serde_json::from_value::<ErrorEnvelope>(e)
+                    .map_err(|e| e.to_string())?
+                    .with_failed_run_summary(skipped),
+            ),
             None => None,
         };
         let status = self.status();

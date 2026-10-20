@@ -27,8 +27,8 @@ Three facts shape every deployment:
 ## What ships today
 
 The working deployment is one `barca serve` with its pipeline code, Python dependencies
-and persistent `.barca/` directory on the server. Users trigger runs through the web UI,
-HTTP API or `barca.Client`; the work executes on that server's machine.
+and persistent `.barca/` directory on the server. Users trigger runs through the web UI, the
+HTTP API or the CLI's `--server` flag; the work executes on that server's machine.
 
 ```bash
 # On the server, from the project directory; install the pipeline's dependencies too.
@@ -46,15 +46,46 @@ curl http://127.0.0.1:8274/runs/RETURNED_RUN_ID             # the run and its ou
 ```
 
 Replace `daily_report` with an asset in the deployed pipeline. Remote users reach the
-same API through the authenticating proxy described below. See the
-[Python client](/reference/server-api/#python-client) for the equivalent SDK calls.
+same API through the proxy described below.
 
-The [server-ledger design (RFC-0007)](/rfcs/0007-server-mode/) is accepted; its run contract
-over HTTP is implemented (#393). `[server] url`, `BARCA_SERVER`, the CLI `--server`/`--local`
-flags and laptop runs sharing the server's ledger are pending #394 and #402.
-Ordinary `barca get` and `barca.get()` still run locally. A remote artifact store does
-not give another machine access to this server's cache/history; use `BARCA_STATE=off`
-when serving with a remote store, as described below.
+## Running commands on the server from another machine
+
+The CLI runs `get`, `run`, `status`, `list`, `history` and `stats` on the server with
+`--server`, and prints what the same command prints locally: the same stdout JSON, the same
+stderr lines, the same exit codes. Ctrl-C cancels the run on the server. It is experimental.
+
+```bash
+# On a laptop, in a checkout of the same project (or anywhere: files are optional).
+barca get daily_report --server https://barca.internal.example.com
+export BARCA_SERVER=https://barca.internal.example.com   # or [server] url in barca.toml
+barca run publish --server --agent       # the configured server; agent progress lines
+barca history --server -l 20             # the server's runs
+```
+
+```python
+import barca
+
+barca.get("daily_report", server=True)   # runs on the configured server, returns the value
+```
+
+The server runs its deployed files, never yours. When a file you name differs from the
+deployed one, barca prints `[barca] note: <file> differs from the deployment; the server runs
+the deployed version` and continues; deploy the change to run it there. Use the proxy's URL,
+path prefix included (`https://example.com/barca`). A server that cannot be reached, or one
+that is not barca or runs another API version, is exit 3 naming the URL; nothing runs locally
+instead. If the connection drops during a run, the client exits 3 naming the run id, and the
+run continues on the server (`barca history --server`). `barca docs server-mode` has the full
+rules, and the few declared differences from a local run (the server's paths, `triggered_by`).
+
+The client sends no credentials. Reach the server over a private network (a VPN, Tailscale,
+an internal load balancer), or through a proxy that admits the client's network.
+
+The [server-ledger design (RFC-0007)](/rfcs/0007-server-mode/) is accepted. Its run contract
+over HTTP (#393) and the CLI's `--server` (#394) are implemented; laptop runs that read the
+server's ledger and post their results to it (#402) are pending. Without `--server`, `barca
+get` and `barca.get()` run locally. A remote artifact store does not give another machine
+access to this server's cache/history; use `BARCA_STATE=off` when serving with a remote store,
+as described below. `barca.Client` is deprecated in favour of `barca.get(..., server=True)`.
 
 ## Listen on another interface
 

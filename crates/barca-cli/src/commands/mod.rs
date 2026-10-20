@@ -23,7 +23,7 @@ mod run;
 pub(crate) use run::*;
 
 /// Emit ordered rendering writes directly, preserving result/error order.
-fn emit(rendered: barca_core::report::RenderedOutput) {
+pub(crate) fn emit(rendered: barca_core::report::RenderedOutput) {
     use barca_core::report::OutputChunk;
     for chunk in rendered.chunks {
         match chunk {

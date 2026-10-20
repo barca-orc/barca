@@ -315,6 +315,7 @@ error (exit 2) that names the right one. `barca pipeline.py` is short for
 | `barca history` | Every run in JSON, 10 in a human table. `--limit N`, `--all`, `--json`, `--pretty`, `--fields`, `--env`; `--reconcile RUN_ID` explicitly records a verified-stopped run as interrupted |
 | `barca stats <target> [files...]` | Timing and cache statistics for one asset. `--json`, `--pretty`, `--fields`, `--env` |
 | `barca serve [files...]` | HTTP API, cron scheduler and web UI. `--port N`, `--host IP`, `--watch`, `--no-schedule`, `--timezone`, `--read-only`, `--env` |
+| &nbsp;&nbsp;`--server [<url>]`, `--local` | On `get`, `run`, `status`, `list`, `history`, `stats` (experimental): `--server` runs the command on a `barca serve` and prints it here as a local run would; with no URL it uses `BARCA_SERVER` or `[server] url` in `barca.toml`. `--local` ignores a configured server. See `barca docs server-mode` |
 | `barca docs [topic]` | The manual, compiled into the binary. `--all`, `--json`, `--fields` |
 | `barca version` | Print the version (also `barca --version`). |
 
@@ -384,10 +385,19 @@ has to come in through a sensor. A scheduled sensor's tick runs the sensor and d
 trigger the assets that read it. The other freshness values, `Always` (the default) and
 `Manual`, are recorded and shown by `barca list` and have no effect at run time today.
 
-The server half of the server-mode RFC (RFC-0007) is implemented: the run contract over HTTP.
-CLI `--server`, server URL configuration and laptop runs against the shared ledger are
-still pending. Use HTTP or `barca.Client` to run deployed code on the server;
-ordinary `barca get` and `barca.get()` execute locally.
+Run a command on the server from another machine with `--server`: it prints what the same
+command prints locally, and Ctrl-C cancels the run on the server.
+
+```bash
+barca get summary --server https://barca.example.com    # runs there, prints here
+export BARCA_SERVER=https://barca.example.com           # or [server] url in barca.toml
+barca run publish --server --agent                      # the configured server
+barca history --server -l 5                             # its runs
+```
+
+In Python, `barca.get("summary", server=True)`. Without `--server`, `barca get` and
+`barca.get()` run on this machine; laptop runs against the server's shared ledger are the part
+of server mode (RFC-0007) still pending. `barca.Client` is deprecated in favour of `barca.api`.
 
 Runs started over HTTP are asynchronous: `POST /runs` returns the run's database id at once,
 its events stream as they happen, and `GET /runs/<run_id>` answers with its outcome, also after

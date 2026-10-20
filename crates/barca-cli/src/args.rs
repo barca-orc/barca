@@ -38,6 +38,26 @@ impl OutputMode {
     }
 }
 
+/// `--server [<URL>]` and `--local`: where a command runs (RFC-0007 §3.1). On `get`, `run`,
+/// `status`, `list`, `history` and `stats` only; the other commands always run here.
+#[derive(clap::Args, Clone, Debug, Default)]
+pub(crate) struct ServerFlags {
+    /// Run this command on a barca server (`barca serve`) and print its result here: the URL
+    /// given, or with no URL the configured one (BARCA_SERVER, else [server] url in
+    /// barca.toml). Without it, the command runs on this machine
+    #[arg(
+        long,
+        value_name = "URL",
+        num_args = 0..=1,
+        default_missing_value = "",
+        conflicts_with = "local"
+    )]
+    pub(crate) server: Option<String>,
+    /// Ignore any configured server for this command: nothing is read from or sent to it
+    #[arg(long)]
+    pub(crate) local: bool,
+}
+
 // ─── Help text ────────────────────────────────────────────────────────────────
 //
 // Every command carries runnable examples. The tests in tests.rs parse each
@@ -83,6 +103,9 @@ Examples:
   barca list pipeline.py                   # not sure of the name? list assets and tasks first
   BARCA_OUTPUT=json barca get total pipeline.py   # env override for CI; a flag still wins
   barca get total pipeline.py --fields id,status   # JSON with each entry of `steps` trimmed to these keys
+  barca get total --server                 # run it on the configured barca server; prints here as a local run
+  barca get total --server https://barca.example.com --json   # on that server (barca docs server-mode)
+  barca get total --local                  # this machine only, whatever server is configured
 
 Output format: --json / --pretty / -o, else BARCA_OUTPUT=json|pretty, else the terminal decides
 (TTY -> pretty, piped -> JSON). JSON is one line on stdout with status (\"success\"), run_id,
@@ -135,6 +158,7 @@ Examples:
   barca run deploy pipeline.py --fields id,status,reason   # JSON with each entry of `steps` trimmed
   barca run check_a,check_b pipeline.py                # several tasks in one run; shared upstream runs once
   barca run check_a,check_b pipeline.py --dry-run      # preview the union of both cones
+  barca run deploy --server --agent                    # run it on the configured barca server (barca docs server-mode)
   barca list pipeline.py                               # not sure of the name? list assets and tasks first
 
 Several targets: comma-separated, no spaces. Every target runs even if another fails (a failure
@@ -216,6 +240,7 @@ Examples:
   barca history --fields run_id,status,elapsed_seconds,attempts   # JSON with only these keys per run
   barca history --fields run_id,triggered_by,scheduled_at   # what started each run (manual, api, schedule, client)
   barca history --env dev      # runs recorded in another environment
+  barca history --server -l 20 # the runs of the configured barca server (barca docs server-mode)
 
 --reconcile is an explicit write: first verify the run stopped. It refuses a proven live
 owner and terminal rows. It prints only that run, preserving progress and cached results;
@@ -234,6 +259,7 @@ Examples:
   barca stats total pipeline.py --json      # {id, total_runs, cache_hit_rate, ..., recent_runs}, even in a terminal
   barca stats total pipeline.py --pretty    # the text report, even when piped
   barca stats total pipeline.py --fields status,error_message   # JSON; trims recent_runs entries
+  barca stats total --server                # timings recorded on the configured barca server
 
 More: barca docs cache";
 
@@ -256,8 +282,9 @@ can reach the port can trigger runs, so keep it on a private network or behind a
 Invalid sources and their graph dependents are excluded; healthy definitions and schedules
 continue. Startup logs, /health load_errors and the UI show unloaded files and affected nodes.
 --watch restores repaired configured sources; one-shot commands remain strict.
-Trigger deployed runs through HTTP or barca.Client. Ordinary get/run commands execute locally;
-CLI --server, server URL configuration and the shared-ledger design are not implemented yet.
+From another machine, `--server <url>` on get, run, status, list, history and stats runs the
+command on this server and prints it there as a local run would (barca docs server-mode).
+`serve` itself always runs here: --server on it is a usage error.
 With a remote artifact store, set BARCA_STATE=off to retain local metadata.
 More: barca docs scheduling";
 
@@ -274,6 +301,7 @@ Examples:
   barca list big.py --limit 20       # first 20 nodes (topological order)
   barca list big.py --all            # every node in the human table (default: at most 100)
   barca list a.py b.py               # several files form one DAG
+  barca list --server --json         # the nodes deployed on the configured barca server
 
 An ENV column (and `env` in JSON) lists the environment variables each node declares with
 @asset(env=[...]); their values are part of the run hash. `freshness` is `always`, `manual` or
@@ -302,6 +330,7 @@ Examples:
   barca status big.py --limit 20           # first 20 nodes; the summary counts all
   barca status total pipeline.py --json --sample 5   # add up to 5 sample rows per json/parquet/CSV artifact
   barca status pipeline.py --env dev       # state recorded in another environment
+  barca status total --server              # cache state on the configured barca server
 
 Cache state per node: cached, stale (ran before; code or inputs changed, or its artifact file is
 gone and a run would read it: reason `artifact_missing`), never_run, partial
@@ -420,6 +449,8 @@ pub(crate) enum Cli {
         /// Environment name (separates cache/state per environment)
         #[arg(long)]
         env: Option<String>,
+        #[command(flatten)]
+        server: ServerFlags,
     },
     /// Run a task and its dependency cone — the task always re-runs
     ///
@@ -463,6 +494,8 @@ pub(crate) enum Cli {
         /// Environment name (separates cache/state per environment)
         #[arg(long)]
         env: Option<String>,
+        #[command(flatten)]
+        server: ServerFlags,
     },
     /// Parse source files and emit the execution plan as JSON
     #[command(after_help = PLAN_HELP)]
@@ -516,6 +549,8 @@ pub(crate) enum Cli {
         /// Environment name (separates cache/state per environment)
         #[arg(long)]
         env: Option<String>,
+        #[command(flatten)]
+        server: ServerFlags,
     },
     /// Show execution statistics for an asset
     #[command(after_help = STATS_HELP)]
@@ -533,6 +568,8 @@ pub(crate) enum Cli {
         /// Environment name (separates cache/state per environment)
         #[arg(long)]
         env: Option<String>,
+        #[command(flatten)]
+        server: ServerFlags,
     },
     /// Run a long-running HTTP server exposing the orchestrator as a JSON API
     ///
@@ -588,6 +625,8 @@ pub(crate) enum Cli {
         /// Implies --json. An unknown key is a usage error listing the valid ones
         #[arg(long, value_delimiter = ',', value_parser = PossibleValuesParser::new(bounded::LIST_FIELDS))]
         fields: Option<Vec<String>>,
+        #[command(flatten)]
+        server: ServerFlags,
     },
     /// Show every node's cache state, last materialization and artifact shape (read-only)
     ///
@@ -619,6 +658,8 @@ pub(crate) enum Cli {
         /// Environment name (separates cache/state per environment)
         #[arg(long)]
         env: Option<String>,
+        #[command(flatten)]
+        server: ServerFlags,
     },
     /// Query cached results with SQL (DuckDB) — each asset is a named view
     ///

@@ -5,9 +5,13 @@ Python objects. Artifact files are deserialized automatically.
 """
 
 import json
+import os
 import shutil
 import subprocess
 import sys
+import tomllib
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -138,16 +142,63 @@ def _exec(args: list[str]) -> Any:
         return json.loads(last_line)
 
 
-def _read_output(output_ref: Any) -> Any:
+def _read_output(output_ref: Any, server: "bool | str" = False, run_id: str | None = None) -> Any:
     """Deserialize a final_output value.
 
     If it's already a plain value (dict, list, int, etc.), return as-is.
-    If it's a sentinel-wrapped artifact reference, read from disk.
+    If it's a sentinel-wrapped artifact reference, read from disk. For a run on a server, the
+    path is the server's, so the bytes come from ``GET /runs/{run_id}/output``.
     """
     if isinstance(output_ref, dict) and "_barca_artifact" in output_ref:
         meta = output_ref["_barca_artifact"]
+        if server and run_id:
+            return _server_output(_server_url(server), run_id, meta["format"])
         return deserialize(meta["path"], meta["format"])
     return output_ref
+
+
+def _server_args(server: "bool | str") -> list[str]:
+    """The CLI flag for ``server=``: ``True`` is the configured server, a string its URL."""
+    if server is True:
+        return ["--server"]
+    if isinstance(server, str) and server:
+        return ["--server", server]
+    return []
+
+
+def _server_url(server: "bool | str") -> str:
+    """The server URL as the CLI resolves it: the one given, else ``BARCA_SERVER``, else
+    ``[server] url`` in the nearest barca.toml at or above the cwd."""
+    if isinstance(server, str) and server:
+        return server.rstrip("/")
+    url = os.environ.get("BARCA_SERVER", "")
+    if not url:
+        cwd = Path.cwd()
+        for directory in (cwd, *cwd.parents):
+            toml = directory / "barca.toml"
+            if toml.is_file():
+                with toml.open("rb") as f:
+                    url = tomllib.load(f).get("server", {}).get("url", "") or ""
+                break
+    if not url:
+        raise BarcaError("server=True but no server is configured (BARCA_SERVER or [server] url)")
+    return url.rstrip("/")
+
+
+def _server_output(url: str, run_id: str, fmt: str) -> Any:
+    """A served run's final artifact, read from ``GET /runs/{run_id}/output``."""
+    import tempfile
+
+    try:
+        with urllib.request.urlopen(f"{url}/runs/{run_id}/output", timeout=300) as resp:
+            body = resp.read()
+    except (urllib.error.URLError, OSError) as e:
+        raise BarcaError(f"cannot read the output of run {run_id} from {url}: {e}") from e
+    suffix = {"parquet": ".parquet", "pickle": ".pkl", "csv": ".csv", "json": ".json"}.get(fmt, "")
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / f"output{suffix}"
+        path.write_bytes(body)
+        return deserialize(str(path), fmt)
 
 
 def _refresh_args(refresh: list[str] | None, refresh_all: bool, cascade: bool) -> list[str]:
@@ -168,6 +219,7 @@ def get(
     refresh: list[str] | None = None,
     refresh_all: bool = False,
     cascade: bool = True,
+    server: bool | str = False,
 ) -> Any:
     """Get asset value(s).
 
@@ -181,14 +233,19 @@ def get(
     them; ``cascade=False`` (``--no-cascade``) re-materializes only the named
     ones. ``refresh_all=True`` re-materializes every asset in the cone.
 
+    ``server=True`` runs it on the configured barca server (``BARCA_SERVER`` or
+    ``[server] url``), ``server="https://..."`` on that one (``barca get --server``); files
+    are then optional. The value is the same as a local run's.
+
     Returns the deserialized value of the target asset directly.
     """
     args: list[str] = ["get", target_or_file, *extra_files, "--json"]
     args += _refresh_args(refresh, refresh_all, cascade)
+    args += _server_args(server)
     result = _exec(args)
     output = result.get("final_output")
     if output is not None:
-        return _read_output(output)
+        return _read_output(output, server, result.get("run_id"))
     return output
 
 
@@ -198,6 +255,7 @@ def run(
     refresh: list[str] | None = None,
     refresh_all: bool = False,
     cascade: bool = True,
+    server: bool | str = False,
 ) -> Any:
     """Run a task (and its cone). The task always re-runs.
 
@@ -205,16 +263,18 @@ def run(
     ``refresh=["asset_name", ...]`` to force re-materialize those assets and every
     asset downstream of them in the task's cone; add ``cascade=False``
     (``--no-cascade``) to re-materialize only the named assets. Pass
-    ``refresh_all=True`` to refresh every upstream asset.
+    ``refresh_all=True`` to refresh every upstream asset. ``server=`` runs it on a barca
+    server, as for :func:`get`.
 
     Returns the deserialized value of the target task directly (or ``None``).
     """
     args: list[str] = ["run", target, *files, "--json"]
     args += _refresh_args(refresh, refresh_all, cascade)
+    args += _server_args(server)
     result = _exec(args)
     output = result.get("final_output")
     if output is not None:
-        return _read_output(output)
+        return _read_output(output, server, result.get("run_id"))
     return output
 
 

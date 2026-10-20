@@ -1,10 +1,11 @@
 # Scheduling and `barca serve`
 
 `barca serve` currently runs deployed code on one machine and exposes the HTTP API,
-web UI and cron scheduler. Use the HTTP API (`POST /runs`) or `barca.Client` to trigger remote
-work. Ordinary `barca get` and `barca.get()` run locally. The server half of RFC-0007's run
-contract is implemented (#393); CLI `--server`/`--local`, server URL configuration (#394) and
-laptop runs against the server's ledger (#402) are not yet.
+web UI and cron scheduler. From another machine, `barca get daily_report --server <url>` (and
+`run`, `status`, `list`, `history`, `stats`) runs a command there and prints it here as a local
+run would (`barca docs server-mode`); the HTTP API (`POST /runs`) is underneath. Without
+`--server`, `barca get` and `barca.get()` run locally. Laptop runs against the server's ledger
+(RFC-0007, #402) are not implemented yet.
 Deployment instructions: https://barca.sh/deploying/.
 
 Freshness is recorded on every node. Only `Schedule(...)` starts automatic runs:
@@ -174,16 +175,10 @@ first event. Remote clients use the URL of the private server or its authenticat
 place of the loopback address above. The older `POST /get/<target>`, `POST /run/<target>`,
 `POST /run`, `GET /status/<id>` and `GET /events/<id>` routes stay for one more minor release.
 
-The standard-library Python client wraps the same API:
-
-```python
-from barca import Client
-
-client = Client("http://127.0.0.1:8274")
-run = client.get("daily_report")
-result = run.wait(timeout=600)
-print(result["status"])
-```
+From Python, `barca.get("daily_report", server="http://127.0.0.1:8274")` (or `server=True`
+with `BARCA_SERVER` or `[server] url` set) runs it on the server and returns its value.
+`barca.Client`, the older standard-library HTTP client, is deprecated: it warns when
+constructed and will be removed in a later minor release.
 
 With a remote artifact store configured, serving requires local metadata:
 
@@ -191,10 +186,9 @@ With a remote artifact store configured, serving requires local metadata:
 BARCA_STATE=off barca serve pipeline.py  # local ledger; artifact uploads still enabled
 ```
 
-Other machines do not get cache/history sharing from that artifact store. CLI `--server`,
-`[server] url`, `BARCA_SERVER` and local runs posting results to the server's ledger belong
-to the part of RFC-0007 not implemented yet. `barca.get()` starts a local CLI process; use
-`Client.get()` for an HTTP request.
+Other machines do not get cache/history sharing from that artifact store: local runs posting
+results to the server's ledger belong to the part of RFC-0007 not implemented yet (#402).
+`--server` runs the command on the server instead (`barca docs server-mode`).
 
 ## Stopping the server
 

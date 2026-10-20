@@ -71,6 +71,54 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
         "status --sample",
         "sample rows come from a Python helper whose output may grow",
     ),
+    (
+        "get --server",
+        "server mode is new (RFC-0007): how the server is chosen and the client's messages may change",
+    ),
+    (
+        "get --local",
+        "server mode is new (RFC-0007): it will also keep a local run off the configured server's ledger",
+    ),
+    (
+        "run --server",
+        "server mode is new (RFC-0007): how the server is chosen and the client's messages may change",
+    ),
+    (
+        "run --local",
+        "server mode is new (RFC-0007): it will also keep a local run off the configured server's ledger",
+    ),
+    (
+        "status --server",
+        "server mode is new (RFC-0007): how the server is chosen and the client's messages may change",
+    ),
+    (
+        "status --local",
+        "server mode is new (RFC-0007): it will also keep a local run off the configured server's ledger",
+    ),
+    (
+        "list --server",
+        "server mode is new (RFC-0007): how the server is chosen and the client's messages may change",
+    ),
+    (
+        "list --local",
+        "server mode is new (RFC-0007): it will also keep a local run off the configured server's ledger",
+    ),
+    (
+        "history --server",
+        "server mode is new (RFC-0007): how the server is chosen and the client's messages may change",
+    ),
+    (
+        "history --local",
+        "server mode is new (RFC-0007): it will also keep a local run off the configured server's ledger",
+    ),
+    (
+        "stats --server",
+        "server mode is new (RFC-0007): how the server is chosen and the client's messages may change",
+    ),
+    (
+        "stats --local",
+        "server mode is new (RFC-0007): it will also keep a local run off the configured server's ledger",
+    ),
 ];
 
 fn updating() -> bool {

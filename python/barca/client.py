@@ -1,5 +1,11 @@
 """Barca server client — a thin HTTP wrapper over a running ``barca serve``.
 
+.. deprecated::
+    ``barca.Client`` is deprecated in favour of :mod:`barca.api`, which runs a command on a
+    server with ``server=True`` (``barca.get("daily_report", server=True)``) and returns the
+    same values as a local run. ``Client`` warns when constructed and will be removed in a
+    later minor release (RFC-0007 §3.2).
+
 Unlike :mod:`barca.api` (which shells out to the ``barca`` binary for one-shot
 commands), this talks to a long-running server: trigger runs, poll their status,
 and inspect the cron schedule. Standard-library only (``urllib``) — no
@@ -18,6 +24,7 @@ from __future__ import annotations
 
 import json
 import time
+import warnings
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -74,6 +81,13 @@ class Client:
     """Client for the ``barca serve`` JSON API."""
 
     def __init__(self, base_url: str = DEFAULT_URL, timeout: float = 30.0) -> None:
+        warnings.warn(
+            "barca.Client is deprecated and will be removed in a later minor release; use "
+            "barca.api with server=True instead, e.g. barca.get('daily_report', server=True) "
+            "(barca docs server-mode)",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
 

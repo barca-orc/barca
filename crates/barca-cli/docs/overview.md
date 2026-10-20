@@ -50,7 +50,7 @@ barca get total pipeline.py      # second time: everything is a cache hit
 | `barca doctor [files...]` | Check project, Python, cache, metadata and stores without running steps (`barca docs doctor`). |
 | `barca plan [files...]` | Emit the tiered execution plan as JSON. |
 | `barca history` / `barca stats` | Past runs; timing and cache statistics (`--json`, `--fields`; history takes `--limit`/`--all`). |
-| `barca serve [files...]` | HTTP API, cron scheduler and the web UI (`/ui/`). |
+| `barca serve [files...]` | HTTP API, cron scheduler and the web UI (`/ui/`). `--server` on get/run/status/list/history/stats runs them there (`barca docs server-mode`). |
 | `barca docs [topic]` | This manual. |
 
 `files...` are optional everywhere: without them barca reads every file in the project that
@@ -71,7 +71,8 @@ that; see `barca docs agents`.
 - `barca docs remote` — share one cache across machines (S3, GCS, Azure) with a few environment variables
 - `barca docs partitions` — fan-out over keys, fan-in with `collect`
 - `barca docs sinks` — export outputs to local or remote paths
-- `barca docs scheduling` — freshness, cron schedules, `barca serve`, HTTP/Python client setup and current server-mode limits
+- `barca docs scheduling` — freshness, cron schedules, `barca serve`, HTTP/Python client setup
+- `barca docs server-mode` — run `get`, `run`, `status`, `list`, `history`, `stats` on a barca server with `--server`
 - `barca docs telemetry` — report runs and steps to Datadog (`BARCA_TELEMETRY=datadog`)
 - `barca docs status` — one view of cache state, last run and artifact shape per node
 - `barca docs sql` — query cached results with DuckDB while debugging, without writing a step

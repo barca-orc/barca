@@ -155,25 +155,36 @@ pub(crate) async fn check_any_asset(state: &AppState) -> Result<(), ApiError> {
     Ok(())
 }
 
-/// The request's files, each one of the deployed files; a usage error listing the deployed
-/// files otherwise.
-fn check_files(state: &AppState, files: &[String]) -> Result<(), ApiError> {
+/// The request's files, each one of the deployed files, spelled as the deployment spells it (so
+/// node ids are the deployment's); a usage error listing the deployed files otherwise.
+fn check_files(state: &AppState, files: &[String]) -> Result<Vec<String>, ApiError> {
     let canonical = |f: &str| std::fs::canonicalize(f).ok();
-    let deployed: Vec<_> = state
+    let deployed: Vec<(std::path::PathBuf, &String)> = state
         .config
         .files
         .iter()
-        .filter_map(|f| canonical(f))
+        .filter_map(|f| canonical(f).map(|c| (c, f)))
         .collect();
+    let mut chosen = Vec::new();
     for file in files {
-        if !canonical(file).is_some_and(|f| deployed.contains(&f)) {
-            return Err(ApiError::BadRequest(format!(
-                "'{file}' is not one of the deployed files\nThe server runs its deployed files: {}. Leave `files` empty to use all of them.",
-                state.config.files.join(", ")
-            )));
+        let found = canonical(file).and_then(|c| {
+            deployed
+                .iter()
+                .find(|(d, _)| *d == c)
+                .map(|(_, f)| (*f).clone())
+        });
+        match found {
+            Some(f) if !chosen.contains(&f) => chosen.push(f),
+            Some(_) => {}
+            None => {
+                return Err(ApiError::BadRequest(format!(
+                    "'{file}' is not one of the deployed files\nThe server runs its deployed files: {}. Leave `files` empty to use all of them.",
+                    state.config.files.join(", ")
+                )));
+            }
         }
     }
-    Ok(())
+    Ok(chosen)
 }
 
 /// `POST /runs` — start a run on this server: `202 {"run_id"}`, or `200` with the `--dry-run`
@@ -192,14 +203,14 @@ async fn create_run(state: AppState, body: &[u8]) -> Result<Response, ApiError> 
             "the request body is not a run request: {e}\nSend JSON such as {{\"command\": \"get\", \"targets\": [\"daily_report\"]}}."
         ))
     })?;
-    check_files(&state, &request.files)?;
+    let files = check_files(&state, &request.files)?;
     if request.command == RunCommand::Run && request.targets.is_empty() {
         return Err(ApiError::BadRequest(
             "a target task is required\n`run` needs the task to run in `targets`.".into(),
         ));
     }
     if request.dry_run {
-        return dry_run(&state, &request).await;
+        return dry_run(&state, &request, &files).await;
     }
     refuse_if_read_only(&state)?;
     let verb = request.command.as_str();
@@ -217,7 +228,7 @@ async fn create_run(state: AppState, body: &[u8]) -> Result<Response, ApiError> 
             policy: request.policy(),
             targets: request.targets,
             nodes,
-            files: request.files,
+            files,
             trigger: Trigger::api(),
         },
     );
@@ -225,20 +236,25 @@ async fn create_run(state: AppState, body: &[u8]) -> Result<Response, ApiError> 
 }
 
 /// `dry_run`: the `--dry-run --json` body, decided against a private copy of the metadata DB.
-async fn dry_run(state: &AppState, request: &RunRequest) -> Result<Response, ApiError> {
+/// `files` are the request's files as deployed (`[]`: every deployed file).
+async fn dry_run(
+    state: &AppState,
+    request: &RunRequest,
+    files: &[String],
+) -> Result<Response, ApiError> {
     let snapshot = snapshot_db(state).await?;
     let mut cfg = state.config.resolved.clone();
     cfg.db_path = snapshot.path.clone();
     let result = barca_core::queries::explain(
         &cfg,
         &request.targets,
-        &state.config.files,
+        run_files(state, files),
         &state.config.python,
         request.policy(),
         request.command.as_str(),
     )
     .await
-    .map_err(|e| ApiError::run(e, context(request.command, &request.files)))?;
+    .map_err(|e| ApiError::run(e, context(request.command, files)))?;
     let rendered = barca_core::report::render_explain(
         &result,
         request.command.as_str(),
@@ -246,6 +262,15 @@ async fn dry_run(state: &AppState, request: &RunRequest) -> Result<Response, Api
         None,
     );
     Ok(json_text(StatusCode::OK, stdout_of(rendered)))
+}
+
+/// The files a run reads: those the request named, or every deployed file.
+fn run_files<'a>(state: &'a AppState, files: &'a [String]) -> &'a [String] {
+    if files.is_empty() {
+        &state.config.files
+    } else {
+        files
+    }
 }
 
 /// The stdout text of a rendering, without its final newline.
@@ -364,13 +389,19 @@ async fn execute(
     let mut timed_out = false;
     let result: Result<RunResult, BarcaError> = {
         let fut = async {
-            let dag = state.current_dag().await?;
+            // A request that names files reads only those, as `barca get x a.py` does.
+            let files = run_files(&state, &spec.files);
+            let dag = if spec.files.is_empty() {
+                (*state.current_dag().await?).clone()
+            } else {
+                barca_core::load::build_dag(files, &state.config.python).await?
+            };
             serve_run(ServedRun {
-                dag: (*dag).clone(),
+                dag,
                 cfg: &state.config.resolved,
                 command: spec.command,
                 targets: &spec.targets,
-                files: &state.config.files,
+                files,
                 python: &state.config.python,
                 policy: spec.policy.clone(),
                 cancel: cancel.clone(),
@@ -480,7 +511,7 @@ async fn persist_outcome(
         db::NewRun {
             run_id,
             command: spec.command.as_str(),
-            files: &db::encode_files(&state.config.files),
+            files: &db::encode_files(run_files(state, &spec.files)),
             target: target.as_deref(),
             steps_total: None,
             trigger: &spec.trigger,

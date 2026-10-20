@@ -11,6 +11,8 @@ Options:
       --pretty           Emit human-readable output (the default when stdout is a terminal)
       --fields <FIELDS>  Output JSON with only these keys (comma-separated) on each entry of `recent_runs`. Implies --json. An unknown key is a usage error listing the valid ones [possible values: elapsed_seconds, status, created_at, error_message, attempts]
       --env <ENV>        Environment name (separates cache/state per environment)
+      --server [<URL>]   Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, the command runs on this machine
+      --local            Ignore any configured server for this command: nothing is read from or sent to it
   -h, --help             Print help
 
 Examples:
@@ -19,5 +21,6 @@ Examples:
   barca stats total pipeline.py --json      # {id, total_runs, cache_hit_rate, ..., recent_runs}, even in a terminal
   barca stats total pipeline.py --pretty    # the text report, even when piped
   barca stats total pipeline.py --fields status,error_message   # JSON; trims recent_runs entries
+  barca stats total --server                # timings recorded on the configured barca server
 
 More: barca docs cache
