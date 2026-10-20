@@ -94,6 +94,13 @@ and these tags are available on the same releases page.
 - A cached result whose upload is pending is never evicted by the cache size limit, and
   `.barca/backups/` counts toward it but is never evicted. `barca get -o url` uploads a
   `local only` result before signing it.
+- `barca serve`: `BARCA_LOG=json` writes every line as one JSON object on stdout, with `ts`, a
+  real `level` (`info`, `warning`, `error`), `msg`, the `run_id` and `node` it is about, and
+  `dd.trace_id`/`dd.span_id` when the Datadog integration is on, so a container's logs join the
+  run's trace and are no longer all filed as errors. A step's printed output becomes `info` lines
+  of its run. Experimental; without it nothing changes, and `get`/`run` keep progress and errors
+  on stderr (`BARCA_LOG` on another command prints a warning). `barca.step` spans gain
+  `barca.upstream` (direct upstream ids) and, on a step that ran, `barca.digest` (#434).
 
 ## 0.25.1 (2026-10-20)
 

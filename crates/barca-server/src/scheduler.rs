@@ -151,19 +151,20 @@ fn record_skip(
     epoch: i64,
     what: &str,
 ) {
-    let reason = match handle {
-        Some(handle) => {
-            barca_core::errln!(
+    let (reason, line) = match handle {
+        Some(handle) => (
+            "in_flight",
+            format!(
                 "[barca] {what} {} skipped — run {handle} of the same node still in flight",
                 job.id
-            );
-            "in_flight"
-        }
-        None => {
-            barca_core::errln!("[barca] {what} {} skipped — the schedule is paused", job.id);
-            "paused"
-        }
+            ),
+        ),
+        None => (
+            "paused",
+            format!("[barca] {what} {} skipped — the schedule is paused", job.id),
+        ),
     };
+    barca_core::jsonlog::line(barca_core::jsonlog::Level::Warning, Some(&job.id), &line);
     book.last_skip
         .insert(job.id.clone(), (epoch, reason, handle.map(str::to_string)));
     let report = skip_report(job, reason, handle, epoch);
@@ -298,7 +299,11 @@ async fn catch_up(
                         );
                     } else {
                         let handle = trigger(state, job, now.timestamp());
-                        barca_core::errln!("[barca] catch-up run {} → {handle}", job.id);
+                        barca_core::jsonlog::line(
+                            barca_core::jsonlog::Level::Info,
+                            Some(&job.id),
+                            &format!("[barca] catch-up run {} → {handle}", job.id),
+                        );
                         book.last_handle.insert(job.id.clone(), handle);
                     }
                     book.last_fired.insert(job.id.clone(), now.timestamp());
@@ -510,7 +515,11 @@ pub async fn run_scheduler(state: AppState) {
                 }
                 TickAction::Fire(job) => {
                     let handle = trigger(&state, job, epoch);
-                    barca_core::errln!("[barca] scheduled run {} → {handle}", job.id);
+                    barca_core::jsonlog::line(
+                        barca_core::jsonlog::Level::Info,
+                        Some(&job.id),
+                        &format!("[barca] scheduled run {} → {handle}", job.id),
+                    );
                     book.last_handle.insert(job.id.clone(), handle);
                     book.last_fired.insert(job.id.clone(), now.timestamp());
                     if let Some(dbp) = &db_path {

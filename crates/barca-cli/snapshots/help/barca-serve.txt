@@ -44,6 +44,7 @@ Options:
 
 Examples:
   BARCA_REMOTE=off barca serve pipeline.py   # local artifacts and history
+  BARCA_LOG=json barca serve pipeline.py     # each line a JSON object on stdout, with run_id and node
   barca serve                                # every file in the project; files added later need a restart
   barca serve pipeline.py                    # HTTP API on 127.0.0.1:8274 plus the scheduler
   barca serve pipeline.py --port 8400        # custom port
@@ -68,4 +69,5 @@ SIGTERM or SIGINT drains: new runs get 503 with Retry-After, the scheduler stops
 says draining, and runs in flight finish (uploads included) for up to --drain-timeout seconds
 (default 30, [server] drain_timeout in barca.toml). Exit 0 when they all finished. The deadline
 or a second signal cancels the rest with reason "server shutdown": exit 1.
+Lines go to stderr as text; BARCA_LOG=json writes them to stdout as JSON (barca docs telemetry).
 More: barca docs scheduling

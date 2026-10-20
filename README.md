@@ -315,7 +315,7 @@ error (exit 2) that names the right one. `barca pipeline.py` is short for
 | `barca gc` | Evict cached results to keep `.barca/` under its size limit (`[cache] max_size` or `BARCA_CACHE_MAX_SIZE`, default 10% of the filesystem; barca also does it after every `get` and `run`). `--dry-run`, `--max-size SIZE`, `--json`, `--pretty`, `--env` |
 | `barca history` | Every run in JSON, 10 in a human table. `--limit N`, `--all`, `--json`, `--pretty`, `--fields`, `--env`; `--reconcile RUN_ID` explicitly records a verified-stopped run as interrupted |
 | `barca stats <target> [files...]` | Timing and cache statistics for one asset. `--json`, `--pretty`, `--fields`, `--env` |
-| `barca serve [files...]` | HTTP API, cron scheduler and web UI. `--port N`, `--host IP`, `--watch`, `--no-schedule`, `--timezone`, `--read-only`, `--drain-timeout`, `--env`. SIGTERM drains runs in flight |
+| `barca serve [files...]` | HTTP API, cron scheduler and web UI. `--port N`, `--host IP`, `--watch`, `--no-schedule`, `--timezone`, `--read-only`, `--drain-timeout`, `--env`. SIGTERM drains runs in flight; `BARCA_LOG=json` writes its lines as JSON on stdout |
 | `barca state backups` | The metadata backups, local and in the store, newest first. `--json`, `--pretty`, `--env` |
 | `barca state restore` | Put a backup in place of the metadata DB; the current one is kept as `metadata.db.pre-restore`. `--from N\|NAME`, `--json`, `--env` |
 | `barca docs [topic]` | The manual, compiled into the binary. `--all`, `--json`, `--fields` |
@@ -430,7 +430,9 @@ Set `BARCA_TELEMETRY=datadog` to report job runs and steps to a Datadog Agent.
 Install `barca[datadog]` in your job environment to add named Python executions and
 nested library traces in the same job trace. In the `<DD_SERVICE>-python` service,
 select `barca.execute` to see jobs by their canonical names. See `barca docs telemetry`
-for setup, tags, and delivery limits.
+for setup, tags, and delivery limits. Under `barca serve`, `BARCA_LOG=json` writes each log
+line as a JSON object on stdout with its level, `run_id`, `node` and the run's trace and span
+ids, so Datadog joins a run's logs to its trace.
 
 ## Slack notifications
 

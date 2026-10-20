@@ -596,6 +596,8 @@ mod tests {
                 duration_ns: 252_000_000_000,
                 attempts: Some(3),
                 run_hash: None,
+                upstream: vec![],
+                digest: None,
                 size_bytes: None,
                 cpu_seconds: None,
                 max_rss_bytes: None,

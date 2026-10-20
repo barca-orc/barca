@@ -28,6 +28,7 @@ pub mod helper_proc;
 pub mod http;
 pub mod interrupt;
 pub mod io_loop;
+pub mod jsonlog;
 pub mod lines;
 pub mod load;
 mod mismatch;

@@ -217,6 +217,29 @@ Pin `barca==0.21.0` in that image. Without a compatible wheel, pip can fall back
 source build requiring Rust; `--only-binary=:all:` makes an unavailable wheel explicit.
 The legacy override is unnecessary for the verified v0.24.0 Linux targets above.
 
+### Logs
+
+`barca serve` writes its lines as text on stderr. A container log collector that files stderr as
+errors (Datadog's does) tags all of them, `step:... completed` included, as errors. Set
+`BARCA_LOG=json` and each line is one JSON object on stdout, with a real `level` (`info`,
+`warning` or `error`), the `run_id` and `node` it is about, and a step's printed output as
+`info` lines of its run:
+
+```yaml
+    environment:
+      BARCA_LOG: json
+      BARCA_TELEMETRY: datadog   # optional: adds dd.trace_id and dd.span_id to each run's lines
+```
+
+```
+{"ts":"2026-10-20T19:45:44.067Z","level":"info","msg":"step:pipeline.py:orders completed 0.0s (1/2)","run_id":"2b585c3e0785","node":"pipeline.py:orders","dd.trace_id":"8371769010332850555","dd.span_id":"1894635935906895539"}
+```
+
+With the Datadog integration on, the `dd.trace_id` and `dd.span_id` of a run's lines are its
+trace's ids, so a failing `barca.run` span leads to that run's lines and back. What a step writes
+to its own stderr (Python's `logging`, by default) stays on stderr. The fields and their
+limits are in [Telemetry](/reference/telemetry/#logs-under-barca-serve).
+
 ### What happens on restart
 
 - **Stopped with SIGINT or SIGTERM** (`docker compose stop`, `docker stop`, `systemctl stop`,

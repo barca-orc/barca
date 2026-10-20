@@ -56,7 +56,11 @@ pub struct StepReport {
     /// partitioned step: attempts are counted per step, not per key.
     pub attempts: Option<u32>,
     pub run_hash: Option<String>,
+    /// The node's direct upstream node ids, sorted.
+    pub upstream: Vec<String>,
     pub size_bytes: Option<u64>,
+    /// SHA-256 of the result's bytes, for a step that ran.
+    pub digest: Option<String>,
     pub cpu_seconds: Option<f64>,
     pub max_rss_bytes: Option<u64>,
     pub error_type: Option<String>,
@@ -210,6 +214,14 @@ pub fn configured() -> Vec<(String, Box<dyn Integration>)> {
         }
     }
     out
+}
+
+/// Whether `BARCA_TELEMETRY` switches integration `name` on and its settings let it run.
+/// Says nothing: [`configured`] warns about a misconfiguration when a run starts.
+pub fn is_on(name: &str) -> bool {
+    std::env::var("BARCA_TELEMETRY").is_ok_and(|raw| {
+        parse_names(&raw).iter().any(|n| n == name) && matches!(build(name), Some(Ok(Some(_))))
+    })
 }
 
 /// Send `run` to every integration, each bounded by [`EXPORT_TIMEOUT`].

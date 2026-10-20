@@ -57,6 +57,7 @@ outside the `GENERATED` blocks is written by hand.
 | `BARCA_PROGRESS_SECS`, `BARCA_POOL_SIZE`, `BARCA_COMM_COST_SECONDS`, `BARCA_TRACE_TIMING` | tuning and benchmarking knobs |
 | `BARCA_TELEMETRY` and the spans it sends | new: span names, tags and metrics may change |
 | `BARCA_SLACK_WEBHOOK_URL`, `BARCA_SLACK_NOTIFY`, `BARCA_UI_URL` and the Slack posts | new: the message text and layout are not a contract and may change in any release |
+| `BARCA_LOG` and the JSON lines of `barca serve` | new: the fields and how a line's `level` is chosen may change |
 | the `[barca] <n> more: ...` line | collapsing repeated library warnings is new; which output counts as a warning may change |
 | `BARCA_ARTIFACT_URI` | 0.4.0 back-compat override, superseded by `BARCA_REMOTE_URI` / `[remote].artifacts_uri` |
 | `barca gc` and its JSON, `[cache] max_size`, `BARCA_CACHE_MAX_SIZE`, the `cache` key of `get`/`run` results, the step and status reason `evicted`, the `cache_size` doctor check | new in 0.25 (RFC-0012): the low watermark, the eviction order and the JSON shapes may change after field use |
@@ -381,6 +382,7 @@ value of its first key only.
 | `BARCA_SLACK_WEBHOOK_URL` | a Slack incoming webhook (`https://`); set and non-empty, barca posts when a job starts failing, recovers, or is still failing a day later (`barca docs telemetry`). Never printed. `SLACK_WEBHOOK_URL` is ignored | experimental |
 | `BARCA_SLACK_NOTIFY` | `changes` (default), `failures` or `all`: which finished runs post to Slack; any other value is a warning and `changes` applies | experimental |
 | `BARCA_UI_URL` | base URL of the web UI; Slack posts link the run id to it | experimental |
+| `BARCA_LOG` | `json`: `barca serve` writes every line as one JSON object on stdout instead of text on stderr (`barca docs telemetry`, "Logs under barca serve"); `text` or unset: the default. Under `serve` any other value is a usage error (exit 2). On every other command it changes nothing and prints `[barca] warning: BARCA_LOG applies to barca serve only; this command writes its usual lines` | experimental |
 
 barca sets `BARCA_SOCKET`, `BARCA_WORKER`, `BARCA_WORKER_ID` (and passes `BARCA_ARTIFACT_URI`,
 `BARCA_STORAGE_OPTIONS`) for its own worker processes; these are internal, not part of the
@@ -438,6 +440,10 @@ the deadline passes or a second signal arrives first, it cancels the runs left (
 were cancelled, so deploy tooling can tell a forced stop from a clean drain (`barca docs
 scheduling`, "Stopping the server"). Exit 1 from `serve` means a forced stop, not a failed step
 of yours.
+
+With `BARCA_LOG=json`, `barca serve` writes its lines, an error that stops it included, as JSON
+objects on stdout instead of text on stderr. Exit codes do not change. `get`, `run` and every
+other command keep progress and errors on stderr whatever `BARCA_LOG` says.
 
 An error in a pipeline file (a syntax error, a decorator argument barca does not define, an
 invalid `env=` or cron) fails every command that reads that file, whatever the target: `list`,
