@@ -241,7 +241,7 @@ jobs:
   verify-published-linux:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [release, publish-pypi]
-    timeout-minutes: 14
+    timeout-minutes: 34
     strategy:
       fail-fast: false
       matrix:
@@ -276,7 +276,7 @@ jobs:
             --pattern "$BARCA_NATIVE.tar.gz" --dir published
           tar xzf "published/$BARCA_NATIVE.tar.gz" -C published
       - name: Verify official PyPI and GitHub artifacts in a compiler-free runtime
-        timeout-minutes: 11
+        timeout-minutes: 30
         env:
           BARCA_NATIVE: barca-linux-${{ matrix.libc.prefix }}${{ matrix.architecture.name }}
           BARCA_MACHINE: ${{ matrix.architecture.machine }}
@@ -295,20 +295,22 @@ jobs:
               cp "/io/published/$BARCA_NATIVE" /tmp/native/barca
               uv init --bare /tmp/project
               cd /tmp/project
-              # The simple index uv reads can lag the JSON API and the simple index the wait
-              # script polls (#480): retry the resolution itself every 15 s for up to 5 minutes,
-              # and only while uv says the version does not exist yet.
+              # PyPI serves https://pypi.org/simple/barca/ with cache-control: max-age=600, so for up
+              # to 10 minutes after publish the CDN can keep answering with an index that lacks the
+              # new version (#480; v0.24.3 and v0.25.0 both hit it). uv and pip read that normal URL,
+              # never a cache-busted one, so retry the real install on it: every 20 s for up to
+              # 12 minutes, and only while uv says the version does not exist yet.
               attempt=1
               until uv --no-cache add --index https://pypi.org/simple --no-build "barca==$BARCA_VERSION" 2>/tmp/uv-add.err; do
                 cat /tmp/uv-add.err >&2
                 grep -q "no version of barca==$BARCA_VERSION" /tmp/uv-add.err || exit 1
-                if [ "$attempt" -ge 20 ]; then
-                  echo "barca==$BARCA_VERSION is still not resolvable from https://pypi.org/simple after 5 minutes" >&2
+                if [ "$attempt" -ge 36 ]; then
+                  echo "barca==$BARCA_VERSION is still not resolvable from https://pypi.org/simple after 12 minutes" >&2
                   exit 1
                 fi
-                echo "barca==$BARCA_VERSION not on the simple index yet (attempt $attempt/20); retrying in 15 s" >&2
+                echo "barca==$BARCA_VERSION not on the simple index yet (attempt $attempt/36); retrying in 20 s" >&2
                 attempt=$((attempt + 1))
-                sleep 15
+                sleep 20
               done
               uv run --no-sync python /io/scripts/smoke-release-package.py \
                 --version "$BARCA_VERSION" --native /tmp/native/barca

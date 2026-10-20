@@ -20,8 +20,8 @@ and these tags are available on the same releases page.
   run (by row id), and within it the first key in sort order. Before, it was whichever key
   finished last, so two identical runs could report different keys (#475).
 - The release workflow's `verify-published-linux` jobs wait for the PyPI simple index to serve a
-  new version before installing it, retrying every 15 s for up to 5 minutes, so a release no
-  longer needs a manual rerun for index lag (#480).
+  new version before installing it, retrying every 20 s for up to 12 minutes (PyPI's CDN caches
+  the index with `max-age=600`), so a release no longer needs a manual rerun for index lag (#480).
 
 ## 0.25.0 (2026-10-20)
 
