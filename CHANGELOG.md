@@ -16,6 +16,12 @@ and these tags are available on the same releases page.
 
 ### Bug Fixes
 
+- `barca serve`: a cron tick is skipped while any run of the same node is pending or running,
+  including one started by `POST /get`, `POST /run/{task}` or `POST /run`, not only one the
+  scheduler started (#432). The skip is logged with the run in flight, reported as
+  `last_skipped` and `skipped_for` in `GET /schedule`, and sent to telemetry as a `barca.run`
+  span with status `skipped` and `barca.reason: in_flight`.
+
 - Follow project helper references in exception handler types, including exception tuples
   and `except*`. Editing those helpers invalidates their consumers. Existing affected
   consumers may recompute once after upgrading.

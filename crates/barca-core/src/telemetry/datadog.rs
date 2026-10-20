@@ -219,6 +219,12 @@ impl Datadog {
         if let Some(target) = &run.target {
             meta.insert("barca.target".to_string(), json!(target));
         }
+        if let Some(reason) = &run.reason {
+            meta.insert("barca.reason".to_string(), json!(reason));
+        }
+        if let Some(handle) = &run.in_flight_run {
+            meta.insert("barca.in_flight_run".to_string(), json!(handle));
+        }
         let mut spans = vec![json!({
             "trace_id": trace_id,
             "span_id": root_id,
@@ -228,7 +234,8 @@ impl Datadog {
             "type": "custom",
             "start": run.start_unix_ns,
             "duration": run.duration_ns,
-            "error": i32::from(run.status != "success"),
+            // A skipped tick is not an error: the run in flight brings the node up to date.
+            "error": i32::from(!matches!(run.status.as_str(), "success" | "skipped")),
             "meta": meta,
             "metrics": {
                 // Keep every run: these are jobs, not sampled requests.
@@ -495,6 +502,8 @@ mod tests {
             target: Some("p.py:publish".to_string()),
             job: "p.py:publish".to_string(),
             status: status.to_string(),
+            reason: None,
+            in_flight_run: None,
             start_unix_ns: 900,
             duration_ns: 2_000,
             steps_total: steps.len(),
@@ -574,6 +583,24 @@ mod tests {
                 ("tier".to_string(), "1".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn a_skipped_tick_is_a_root_span_with_its_reason_and_no_error() {
+        let mut skipped = run("skipped", Vec::new());
+        skipped.reason = Some("in_flight".to_string());
+        skipped.in_flight_run = Some("abc123".to_string());
+        let payload = datadog().trace(&skipped);
+        let spans = payload[0].as_array().unwrap();
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0]["name"], "barca.run");
+        assert_eq!(spans[0]["error"], 0);
+        assert_eq!(spans[0]["meta"]["barca.status"], "skipped");
+        assert_eq!(spans[0]["meta"]["barca.reason"], "in_flight");
+        assert_eq!(spans[0]["meta"]["barca.in_flight_run"], "abc123");
+        // A run that finished carries neither tag.
+        let done = datadog().trace(&run("success", Vec::new()));
+        assert!(done[0][0]["meta"].get("barca.reason").is_none());
     }
 
     #[test]

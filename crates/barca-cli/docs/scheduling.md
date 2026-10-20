@@ -61,8 +61,18 @@ something that identifies the version of the data, such as an etag or a last-mod
 
 `POST /run/<task>` is different from a tick: it recomputes every upstream asset.
 
-A tick is skipped while the previous run of the same scheduled node is still going. Two
-scheduled nodes that share an upstream run separately, and both may compute it.
+A tick is skipped, not queued, while a run of the same node is pending or running, whoever
+started it: an earlier tick, `POST /get/<node>`, `POST /run/<task>`, or `POST /run` (every asset
+and sensor; it does not hold back a scheduled task). The skip is a line on stderr naming the run
+in flight, `last_skipped` and `skipped_for` in `GET /schedule` (kept in memory: a restart clears
+them), and, with telemetry on, a `barca.run` span with status `skipped` (`barca docs telemetry`).
+The next tick after the run ends fires as usual. Only a run of the node itself counts: a run of
+a node downstream of it does not hold the tick back, though it computes the same upstream cone.
+Two scheduled nodes that share an upstream run separately, and both may compute it.
+
+```text
+[barca] scheduled run pipeline.py:orders skipped — run 1b942bb33182 of the same node still in flight
+```
 
 Cron is evaluated in one timezone for the whole server, set with `--timezone`: `local` (the
 default: the zone of the machine or container), `utc`, or an IANA name such as
@@ -75,7 +85,7 @@ in the local time of the machine `list` runs on. For a server started with anoth
 server: `GET /schedule` returns `next_fire` as unix epoch seconds, computed in the server's zone.
 
 ```bash
-curl -s http://127.0.0.1:8274/schedule         # [{"id": ..., "cron": ..., "next_fire": 1791522000, ...}]
+curl -s http://127.0.0.1:8274/schedule         # [{"id": ..., "cron": ..., "next_fire": 1791522000, "last_skipped": null, ...}]
 ```
 
 ```bash

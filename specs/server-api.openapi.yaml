@@ -1789,6 +1789,8 @@ components:
       - last_fired
       - last_run
       - last_status
+      - last_skipped
+      - skipped_for
       properties:
         id: *id002
         cron: *id002
@@ -1813,6 +1815,17 @@ components:
         last_status:
           anyOf:
           - $ref: '#/components/schemas/RunStatus'
+          - type: 'null'
+        last_skipped:
+          description: Last time a due tick was skipped because a run of the node was
+            in flight (unix epoch seconds); in memory only, null after a restart
+          anyOf:
+          - *id037
+          - type: 'null'
+        skipped_for:
+          description: Handle of the in-flight run that caused last_skipped
+          anyOf:
+          - *id002
           - type: 'null'
     Log:
       type: object

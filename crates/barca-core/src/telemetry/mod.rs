@@ -68,8 +68,13 @@ pub struct RunReport {
     pub target: Option<String>,
     /// Canonical resolved job ids, independent of how a target was entered.
     pub job: String,
-    /// `success`, `failed` or `cancelled`.
+    /// `success`, `failed` or `cancelled`; `skipped` for a `barca serve` tick that did not
+    /// start a run.
     pub status: String,
+    /// Why a run was skipped: `in_flight` when a run of the same node was still going.
+    pub reason: Option<String>,
+    /// The handle of the run in flight that caused a skip.
+    pub in_flight_run: Option<String>,
     pub start_unix_ns: u64,
     pub duration_ns: u64,
     pub steps_total: usize,

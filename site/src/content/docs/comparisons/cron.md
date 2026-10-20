@@ -74,7 +74,7 @@ job.py:refresh  task  cron: */10 * * * *  2026-10-07 14:20:00     -
 | **Finest schedule** | one minute | `OnCalendar` accepts seconds; `AccuracySec` defaults to 1 minute and has to be lowered | one second (6-field cron) |
 | **Retries** | none | `Restart=` on the service unit | `retries=N, retry_backoff=...` on the decorator; the delay grows linearly |
 | **Catch-up after downtime** | none | `Persistent=true`: the unit is triggered once if a trigger was missed while the timer was inactive | fires once on restart if a tick was missed while `barca serve` was down |
-| **Overlapping runs** | not prevented | a unit that is still active when the timer elapses is not started again | a tick is skipped while the previous run of the same node is still going |
+| **Overlapping runs** | not prevented | a unit that is still active when the timer elapses is not started again | a tick is skipped while a run of the same node is still going, whether a tick or an API request started it |
 | **Timezone** | system time zone, or `CRON_TZ` per crontab | set in the calendar expression | `--timezone` on `barca serve`: local (default), `utc`, or an IANA name |
 | **Run history** | whatever the job logs | the journal (`journalctl`) | rows in `.barca/metadata.db`, shown by `barca history` |
 | **Schedule status** | none | `systemctl list-timers` | `barca list`, and `GET /schedule` while the server runs |
