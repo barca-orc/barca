@@ -7,7 +7,10 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-MAX_WAIT = 120
+# PyPI's CDN caches the simple index for up to max-age=600 seconds after a publish (#480): wait
+# past that, polling every POLL seconds.
+MAX_WAIT = 780
+POLL = 20
 MAX_BYTES = 4 * 1024 * 1024
 
 
@@ -90,7 +93,7 @@ def wait_for_wheel(version, architecture, libc):
             last = f"PyPI availability request failed: {error}"
         remaining = deadline - monotonic()
         if remaining > 0:
-            sleep(min(2, remaining))
+            sleep(min(POLL, remaining))
     raise TimeoutError(f"PyPI wheel availability exceeded {MAX_WAIT}s: {last}")
 
 

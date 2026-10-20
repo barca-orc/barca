@@ -64,9 +64,6 @@ After every minor, a `0.x.1 cleanup` milestone: one week, no features. The check
 Design questions nobody has answered yet, the issue each blocks, and the release it must be decided by. Proposals in issue status lines are proposals until they appear under "Decided".
 
 - **Partial failure of a partitioned target** (#287, #447): whether partial success gets its own exit code, and whether the JSON lists the failed keys. 0.25.0 ships exit 1 with the successful keys only, marked experimental. By 0.26.0.
-- **Cache low watermark** (RFC-0012, #457): fixed at 80% or configurable. By 0.25.0.
-- **Slack notifications** (RFC-0010, #449): the variable name, default mode, reminder interval, a post on an unclean `serve` restart, and a job filter. By 2026-10-27, the one-week rule for design PRs.
-- **Signed URLs** (RFC-0011, #451): the expiry limits, a download filename, and whether `barca.get` also returns URLs. By 2026-10-27.
 - **Drain defaults** (#190): the default grace, the config key (`[server] drain_timeout` is proposed), and the exit code after a forced stop. By 0.27.0.
 - **Pause persistence** (#435): whether a paused schedule stays paused across a server restart. Proposed yes. By 0.27.0.
 - **Route aliases and resume** (#393): how long the old routes stay as aliases, and when `Last-Event-ID` resume replaces the drop-is-infra-error rule. By 0.27.0.
@@ -85,7 +82,11 @@ The design decisions behind items 2 to 4, settled on 2026-10-14. The RFCs carry 
 
 **Logs under serve.** Structured logs are a `serve`-only opt-in, `BARCA_LOG=json`: one JSON object per line with `level`, `run_id`, `node` and the trace and span ids when telemetry is on, on stdout. The CLI contract for `get` and `run`, progress and errors on stderr, is unchanged. Settled 2026-10-20 (#434).
 
-**Cache size.** `.barca/` has a budget, `[cache] max_size` or `BARCA_CACHE_MAX_SIZE`, defaulting to 10% of its filesystem; `"off"` removes it. Past it barca evicts leftovers, superseded results, local copies the store holds, then the least recently read results, down to 80%, and never the command's own outputs, in-flight inputs, a storeless `Manual` result or a pending upload. No free-space floor. Settled 2026-10-20 (RFC-0012).
+**Cache size.** `.barca/` has a budget, `[cache] max_size` or `BARCA_CACHE_MAX_SIZE`, defaulting to 10% of its filesystem; `"off"` removes it. Past it barca evicts leftovers, superseded results, local copies the store holds, then the least recently read results, down to 80% of the limit (a fixed low watermark, not configurable), and never the command's own outputs, in-flight inputs, a storeless `Manual` result or a pending upload. No free-space floor. Settled 2026-10-20 (RFC-0012).
+
+**Slack.** `BARCA_SLACK_WEBHOOK_URL` turns on posts to a Slack incoming webhook; the default mode is `changes` (a job starts failing, or recovers); a job that keeps failing is reminded every 24 hours, fixed; no post on an unclean `serve` restart; no job filter in v1. Ships in 0.26.0. Settled 2026-10-20 (RFC-0010).
+
+**Signed URLs.** `barca.signed_url(uri)` returns a link that expires after 1 hour by default and at most 7 days, with `Content-Disposition: attachment; filename=<node>.<ext>`; `barca.get` keeps returning values. Ships in 0.26.0. Settled 2026-10-20 (RFC-0011).
 
 **Store reasons and partial keys.** A result only on this machine is `unsynced` with `cache.reason: "local_only"` in status JSON (RFC-0009's `why` wording is amended to match). A partitioned target with failed keys exits 1 and returns only the keys that succeeded, experimentally. Settled 2026-10-20.
 

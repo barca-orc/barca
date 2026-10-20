@@ -1812,15 +1812,44 @@ pub async fn node_histories(
         let prefix = format!("{base}[");
         let filter = "(node_id = ?1 OR substr(node_id, 1, length(?2)) = ?2)";
         let mut h = NodeHistory::default();
+        // The last materialization is the latest run's (by row id). A partitioned node writes
+        // one row per key in completion order, so within that run the first key in sort order
+        // is reported, not whichever finished last (#475). Rows without a run id (an older
+        // barca's) keep the latest row.
         let mut rows = conn
             .query(
                 &format!(
-                    "SELECT node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, \
-                     elapsed_seconds, status, error_message, created_at, output_hash FROM materializations \
-                     WHERE {filter} ORDER BY id DESC LIMIT 1"
+                    "SELECT run_id FROM materializations WHERE {filter} ORDER BY id DESC LIMIT 1"
                 ),
                 [base.clone(), prefix.clone()],
             )
+            .await
+            .map_err(|e| BarcaError::Db(format!("failed to query materializations: {e}")))?;
+        let latest_run = match rows
+            .next()
+            .await
+            .map_err(|e| BarcaError::Db(format!("failed to read row: {e}")))?
+        {
+            Some(row) => row.get::<String>(0).ok().filter(|s| !s.is_empty()),
+            None => None,
+        };
+        drop(rows);
+        let columns = "SELECT node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, \
+                       elapsed_seconds, status, error_message, created_at, output_hash FROM materializations";
+        let (sql, params) = match latest_run {
+            Some(run) => (
+                format!(
+                    "{columns} WHERE {filter} AND run_id = ?3 ORDER BY node_id ASC, id DESC LIMIT 1"
+                ),
+                vec![base.clone(), prefix.clone(), run],
+            ),
+            None => (
+                format!("{columns} WHERE {filter} ORDER BY id DESC LIMIT 1"),
+                vec![base.clone(), prefix.clone()],
+            ),
+        };
+        let mut rows = conn
+            .query(&sql, params)
             .await
             .map_err(|e| BarcaError::Db(format!("failed to query materializations: {e}")))?;
         if let Some(row) = rows
@@ -2060,6 +2089,66 @@ mod tests {
         assert!(matches!(work.await, Err(crate::BarcaError::Cancelled)));
         assert_eq!(std::fs::metadata(&source).unwrap().len(), 4 * 1024 * 1024);
     }
+    /// #475: the keys of one run finish in any order, so the row id alone picks an arbitrary key
+    /// as a partitioned node's last materialization. The rule: the latest run (by row id), and
+    /// within it the first key in sort order; rows without a run id fall back to the row id.
+    #[tokio::test]
+    async fn last_materialization_of_a_partitioned_node_does_not_depend_on_completion_order() {
+        let mut picked = Vec::new();
+        for order in [["b", "a"], ["a", "b"]] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("metadata.db").display().to_string();
+            super::init_db(&path).await.unwrap();
+            {
+                let _guard = super::db_guard().await;
+                let (_db, conn) = super::open_conn(&path).await.unwrap();
+                let mut rows = vec![("r0", "p.py:t[region=0]".to_string())];
+                rows.extend(order.iter().map(|k| ("r1", format!("p.py:t[region={k}]"))));
+                for (run, node) in rows {
+                    conn.execute(
+                        "INSERT INTO materializations (run_id, node_id, run_hash, status) VALUES (?1, ?2, 'h', 'success')",
+                        [run, node.as_str()],
+                    )
+                    .await
+                    .unwrap();
+                }
+            }
+            let ids = vec!["p.py:t".to_string()];
+            let first = super::node_histories(&path, &ids).await.unwrap();
+            let again = super::node_histories(&path, &ids).await.unwrap();
+            let node = |h: &HashMap<String, super::NodeHistory>| {
+                h["p.py:t"].latest.as_ref().unwrap().node_id.clone()
+            };
+            assert_eq!(node(&first), node(&again));
+            picked.push(node(&first));
+        }
+        assert_eq!(picked, ["p.py:t[region=a]", "p.py:t[region=a]"]);
+
+        // Rows an older barca wrote without a run id: the latest row, as before.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metadata.db").display().to_string();
+        super::init_db(&path).await.unwrap();
+        {
+            let _guard = super::db_guard().await;
+            let (_db, conn) = super::open_conn(&path).await.unwrap();
+            for node in ["p.py:t[region=a]", "p.py:t[region=b]"] {
+                conn.execute(
+                    "INSERT INTO materializations (node_id, run_hash) VALUES (?1, 'h')",
+                    [node],
+                )
+                .await
+                .unwrap();
+            }
+        }
+        let h = super::node_histories(&path, &["p.py:t".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(
+            h["p.py:t"].latest.as_ref().unwrap().node_id,
+            "p.py:t[region=b]"
+        );
+    }
+
     #[tokio::test]
     async fn run_inspection_selects_its_recorded_steps_and_failure_details() {
         let dir = tempfile::tempdir().unwrap();

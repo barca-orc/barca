@@ -188,14 +188,14 @@ def test_end_to_end_run_via_server(tmp_path):
     try:
         client = Client(f"http://127.0.0.1:{port}")
         # Wait for the server to bind.
-        for _ in range(50):
+        for _ in range(150):
             try:
                 if client.health().get("status") == "ok":
                     break
             except BarcaError:
                 time.sleep(0.2)
         else:
-            pytest.skip("server did not come up")
+            pytest.fail("barca serve did not answer /health within 30 s")
 
         result = client.get("hello").wait(timeout=30)
         assert result["status"] == "complete"

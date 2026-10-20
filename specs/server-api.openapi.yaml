@@ -1507,7 +1507,9 @@ components:
           - $ref: '#/components/schemas/ArtifactReference'
           - type: 'null'
           description: Null or an artifact reference, not the CLI inline JSON rendering.
-            This endpoint does not define a partition retrieval API.
+            For a partitioned target it is the first returned key's reference, in key order;
+            the CLI returns every key. This endpoint does not define a partition retrieval
+            API.
         steps:
           type: array
           items:

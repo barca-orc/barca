@@ -567,7 +567,8 @@ have to read it, so it would be computed again; a missing artifact that nothing 
 node `cached` (`barca docs cache`, "A cached result whose artifact is missing").
 
 **Last materialization** is the most recent execution recorded in the metadata DB, success or
-failure. Cache hits do not change it.
+failure. Cache hits do not change it. For a partitioned node it is the latest run's first key in
+sort order, so identical runs report the same key.
 
 **Shape** is read from the artifact file only, by a small Python helper; your code is never
 imported. Parquet gives `rows` and `columns` from the file footer (needs pyarrow), json gives

@@ -245,9 +245,8 @@ Decided by the maintainer on 2026-10-20:
 - **No free-space floor:** barca evicts against its own budget only.
 - **Release:** 0.25.0, with the output change (#447).
 
-Unresolved:
-
-1. **Low watermark:** fixed at 80% (proposed) or configurable.
+Unresolved: none. The low watermark was the last question (fixed at 80%, or configurable); it is
+fixed at 80%.
 
 ## 11. Future Possibilities
 
