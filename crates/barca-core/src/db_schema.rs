@@ -64,6 +64,8 @@ pub(crate) const INDEXES: &[&str] = &[
 /// Tables added after version 1 was introduced: (name, its `CREATE TABLE IF NOT EXISTS`).
 /// Created by `init_db`, and by the additive migration in a version-1 database that lacks one.
 pub(crate) const ADDED_TABLES: &[(&str, &str)] = &[
+    // Results whose upload failed after their step succeeded (#390).
+    ("pending_uploads", crate::pending_uploads::CREATE),
     // The last post a notification integration (Slack) made about a job, so a job that keeps
     // failing is announced once and reminded once a day, across processes and restarts.
     // `message_ref` is reserved for an integration whose posts have ids (empty for a webhook).
@@ -354,7 +356,7 @@ mod tests {
 
     /// A format-1 database last written by 0.24.3 lacks everything format 1 gained since: the
     /// cache size limit's columns and index (0.25.0), and `runs.job`, `idx_runs_job`,
-    /// and `notifications` (0.26.0). Opening it adds all of them in place,
+    /// `notifications` and `pending_uploads` (0.26.0). Opening it adds all of them in place,
     /// keeps its rows, and leaves exactly the schema a new database gets.
     #[tokio::test]
     async fn a_format_1_database_from_0_24_3_gains_everything_added_since() {
@@ -366,6 +368,7 @@ mod tests {
         {
             let (_db, conn) = raw(&path).await;
             for statement in [
+                "DROP TABLE pending_uploads",
                 "DROP TABLE notifications",
                 "DROP INDEX idx_runs_job",
                 "DROP INDEX idx_mat_path",
@@ -394,6 +397,7 @@ mod tests {
             1
         );
         assert_eq!(scalar(&conn, "SELECT COUNT(*) FROM notifications").await, 0);
+        assert_eq!(scalar(&conn, "SELECT COUNT(*) FROM pending_uploads").await, 0);
     }
 
     #[tokio::test]

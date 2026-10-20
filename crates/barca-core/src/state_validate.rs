@@ -102,6 +102,21 @@ pub(crate) const TABLES: &[(&str, &[&str])] = &[
         "notifications",
         &["job", "integration", "posted_at", "state", "message_ref"],
     ),
+    (
+        "pending_uploads",
+        &[
+            "store_path",
+            "node_id",
+            "run_hash",
+            "run_id",
+            "local_path",
+            "host",
+            "error",
+            "attempts",
+            "created_at",
+            "updated_at",
+        ],
+    ),
 ];
 
 /// The tables whose rows are identified by an `id` row id column.

@@ -5,9 +5,9 @@
 //! the store is kept here. `barca status` shows those nodes `unsynced` (`local_only`), and the
 //! next command that opens the artifact store uploads them before its own work.
 //!
-//! The table is created the first time an upload is left pending, never by a reader: a
-//! database that has never had one has no table, and every reader treats that as empty. It is
-//! an additive table of metadata format 1 (`specs/metadata-schema.md`). Rows carry the host
+//! It is an additive table of metadata format 1 (`specs/metadata-schema.md`): `init_db` creates
+//! it, a format-1 database from an earlier release gains it in the additive migration, and a
+//! database without it (opened read-only, or a copy being validated) reads as having none. Rows carry the host
 //! that wrote them; only this host's rows are read, retried or shown, because the local file
 //! they upload from exists only on that machine.
 
@@ -15,7 +15,7 @@ use crate::BarcaError;
 use crate::db;
 use turso::{Connection, Value};
 
-const CREATE: &str = "CREATE TABLE IF NOT EXISTS pending_uploads (
+pub(crate) const CREATE: &str = "CREATE TABLE IF NOT EXISTS pending_uploads (
     store_path TEXT PRIMARY KEY,
     node_id TEXT NOT NULL,
     run_hash TEXT,
@@ -229,6 +229,18 @@ pub(crate) fn report(
     })
 }
 
+/// Upload this host's pending results among `store_paths` now (see
+/// [`crate::execution::upload_pending`]): `barca get -o url` calls it before signing, so a
+/// `local only` result is uploaded and then signed rather than reported missing.
+pub async fn upload_now(
+    python: &std::path::Path,
+    cfg: &crate::config::ResolvedConfig,
+    store_paths: &[String],
+    cancel: &tokio_util::sync::CancellationToken,
+) -> Result<(), BarcaError> {
+    crate::execution::upload_pending(python, cfg, store_paths, cancel).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -260,6 +272,10 @@ mod tests {
                 .is_empty()
         );
         let path = fresh(&dir, "m.db").await;
+        {
+            let (_db, conn) = db::open_conn(&path).await.unwrap();
+            conn.execute("DROP TABLE pending_uploads", ()).await.unwrap();
+        }
         assert!(list(&path).await.unwrap().is_empty());
         let (_db, conn) = db::open_conn(&path).await.unwrap();
         assert!(!has_table(&conn).await.unwrap());
@@ -310,14 +326,3 @@ mod tests {
     }
 }
 
-/// Upload this host's pending results among `store_paths` now (see
-/// [`crate::execution::upload_pending`]): `barca get -o url` calls it before signing, so a
-/// `local only` result is uploaded and then signed rather than reported missing.
-pub async fn upload_now(
-    python: &std::path::Path,
-    cfg: &crate::config::ResolvedConfig,
-    store_paths: &[String],
-    cancel: &tokio_util::sync::CancellationToken,
-) -> Result<(), BarcaError> {
-    crate::execution::upload_pending(python, cfg, store_paths, cancel).await
-}

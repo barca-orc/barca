@@ -73,3 +73,48 @@ def test_a_database_from_before_bytes_changed_opens(tmp_path, first):
 
     history = _barca(tmp_path, "history", "--json")
     assert history.returncode == 0, history.stderr
+
+
+def _as_written_by_0_24_3(project: Path) -> None:
+    """Remove what format 1 gained in 0.25.0 and 0.26.0, as a database last written by 0.24.3
+    lacks it."""
+    with closing(sqlite3.connect(project / ".barca/metadata.db")) as db:
+        for statement in [
+            "DROP TABLE pending_uploads",
+            "DROP TABLE notifications",
+            "DROP INDEX idx_runs_job",
+            "DROP INDEX idx_mat_path",
+            "ALTER TABLE runs DROP COLUMN job",
+            "ALTER TABLE materializations DROP COLUMN evicted_at",
+            "ALTER TABLE materializations DROP COLUMN last_read_at",
+        ]:
+            db.execute(statement)
+        db.commit()
+
+
+def _schema(project: Path) -> set[str]:
+    with closing(sqlite3.connect(project / ".barca/metadata.db")) as db:
+        names = {f"{kind} {name}" for kind, name in db.execute("SELECT type, name FROM sqlite_schema")}
+        for table in ("runs", "materializations"):
+            names |= {f"column {table}.{row[1]}" for row in db.execute(f"PRAGMA table_info({table})")}
+        return names
+
+
+@pytest.mark.parametrize(
+    "first",
+    [["status", "p.py", "--json"], ["history", "--json"], ["get", "one", "p.py", "--json"]],
+    ids=lambda args: args[0],
+)
+def test_a_database_from_0_24_3_opens_and_gains_what_format_1_added_since(tmp_path, first):
+    (tmp_path / "p.py").write_text(PIPELINE)
+    assert _barca(tmp_path, "get", "one", "p.py", "--json").returncode == 0
+    complete = _schema(tmp_path)
+    _as_written_by_0_24_3(tmp_path)
+    assert "table notifications" not in _schema(tmp_path)
+
+    result = _barca(tmp_path, *first)
+    assert result.returncode == 0, result.stderr
+    again = _barca(tmp_path, "get", "one", "p.py", "--json")
+    assert again.returncode == 0, again.stderr
+    assert json.loads(again.stdout)["steps_executed"] == 0, "the cached result was kept"
+    assert _schema(tmp_path) == complete
