@@ -553,9 +553,11 @@ impl WorkerPool {
                                 import_seconds,
                             });
                         }
-                        if let FailureAction::RetryAfter(delay) =
-                            coord.on_item_failed(item_id, error)
-                        {
+                        if let FailureAction::RetryAfter(delay) = coord.on_item_failed(
+                            item_id,
+                            error,
+                            Duration::from_secs_f64(elapsed.max(0.0)),
+                        ) {
                             schedule_retry(&self.event_tx, item_id, delay);
                         }
                         self.drop_branch_results(item_id);
@@ -579,6 +581,10 @@ impl WorkerPool {
                         ref node_id,
                         reason,
                     } => {
+                        let ran_for = self
+                            .workers
+                            .get(&worker_id)
+                            .map_or(Duration::ZERO, |h| h.front_since.elapsed());
                         let Some(item_id) = self.take_lease(worker_id, node_id, coord) else {
                             crate::errln!(
                                 "[barca] Blocked for '{node_id}' from worker {worker_id} \
@@ -588,7 +594,7 @@ impl WorkerPool {
                         };
 
                         if let FailureAction::RetryAfter(delay) =
-                            coord.on_item_failed(item_id, format!("blocked: {reason}"))
+                            coord.on_item_failed(item_id, format!("blocked: {reason}"), ran_for)
                         {
                             schedule_retry(&self.event_tx, item_id, delay);
                         }
@@ -740,20 +746,21 @@ impl WorkerPool {
                     // leases return to the queue for another worker.
                     if let Some(mut handle) = self.workers.remove(&worker_id) {
                         if let Some(in_flight) = handle.leases.pop_front() {
+                            let ran_for = handle.front_since.elapsed();
                             if let Some(ref mut ev) = on_event {
                                 ev(RunEvent::StepFinished {
                                     node_id: coord.item(in_flight).step_id.display(),
                                     ok: false,
-                                    elapsed_seconds: Some(
-                                        handle.front_since.elapsed().as_secs_f64(),
-                                    ),
+                                    elapsed_seconds: Some(ran_for.as_secs_f64()),
                                     error: Some("worker disconnected".to_string()),
                                     import_seconds: None,
                                 });
                             }
-                            if let FailureAction::RetryAfter(delay) =
-                                coord.on_item_failed(in_flight, "worker disconnected".to_string())
-                            {
+                            if let FailureAction::RetryAfter(delay) = coord.on_item_failed(
+                                in_flight,
+                                "worker disconnected".to_string(),
+                                ran_for,
+                            ) {
                                 schedule_retry(&self.event_tx, in_flight, delay);
                             }
                             self.drop_branch_results(in_flight);
@@ -774,11 +781,12 @@ impl WorkerPool {
                         // and when its branches finished there was nobody to resume: the run
                         // never ended (#333).
                         let mut fw = self.frozen.swap_remove(at);
+                        let ran_for = fw.front_since.elapsed();
                         if let Some(ref mut ev) = on_event {
                             ev(RunEvent::StepFinished {
                                 node_id: coord.item(fw.parent_item).step_id.display(),
                                 ok: false,
-                                elapsed_seconds: Some(fw.front_since.elapsed().as_secs_f64()),
+                                elapsed_seconds: Some(ran_for.as_secs_f64()),
                                 error: Some(
                                     "worker disconnected while waiting for parallel() branches"
                                         .to_string(),
@@ -791,6 +799,7 @@ impl WorkerPool {
                             fw.parent_item,
                             "worker disconnected while it waited for its parallel() branches"
                                 .to_string(),
+                            ran_for,
                         ) {
                             schedule_retry(&self.event_tx, fw.parent_item, delay);
                         }

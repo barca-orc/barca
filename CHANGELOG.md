@@ -24,6 +24,10 @@ and these tags are available on the same releases page.
 
 - Refresh dependency lockfiles (`uv.lock`, `ui/`, `site/`, the dagster benchmark) to clear the open critical and high Dependabot alerts: PyJWT 2.15.1, aiohttp 3.14.5, cryptography 50.0.2, urllib3 2.8.0, oauthlib 4.0.0, astro 7.4.1, wrangler 4.151.3, react-router 7.18.4 and vitest 4.1.12, plus patched transitives.
 
+- Failed `barca.step` telemetry spans now report their duration, from the first attempt to the
+  permanent failure (retries included; a timeout reports about its timeout), instead of a
+  zero-length span at the end of the run.
+
 - Follow project helper references in exception handler types, including exception tuples
   and `except*`. Editing those helpers invalidates their consumers. Existing affected
   consumers may recompute once after upgrading.
