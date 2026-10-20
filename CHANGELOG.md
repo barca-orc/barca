@@ -14,6 +14,23 @@ and these tags are available on the same releases page.
 
 ## Pending
 
+### Features
+
+- `barca serve` gives `Always` and `Manual` their run-time meaning (RFC-0008, #253). A tick of a
+  scheduled node is one run that brings it and every `Always` node below it up to date: an asset
+  is computed when it has no result for its current code and inputs, a task fires when its last
+  successful run used other inputs (or a task it reads ran since, or it never ran). `Manual` is
+  refreshed by hand only. A failing scheduled node retries at every tick up to the new
+  `Schedule(cron, max_failures=N)` (default 5), then is skipped and reported `failing`
+  (`failures`, `max_failures`, `failing` in `GET /schedule`) until an explicit request or an
+  input change. **Breaking:** unscheduled `Always` nodes below a scheduled node, tasks included,
+  now run at its ticks; to keep a node out of them, make it `Manual` or give it its own
+  `Schedule`. **Breaking:** `barca get` and `barca run` (and ticks) no longer recompute a stale
+  `Manual` upstream: they read its latest result and print
+  `[barca] note: <name> is Manual and stale; ...`; name it in `--refresh` (or use
+  `--refresh-all`) to recompute it. A `Manual` upstream that has never been computed is a usage
+  error (exit 2) naming that command.
+
 ### Bug Fixes
 
 - Open a metadata database last written by barca 0.21 to 0.23. Since 0.24.0, every command

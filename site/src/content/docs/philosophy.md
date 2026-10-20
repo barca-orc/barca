@@ -65,5 +65,3 @@ serialisation.
 
 - Distribute a run across machines. A remote store shares results between machines only.
 - General workflows: approval gates, or workflows that wait on external events.
-- Act on `Always` or `Manual` freshness. Only `Schedule` has an effect today
-  ([Core constraints](/core-constraints/#freshness-declarations)).

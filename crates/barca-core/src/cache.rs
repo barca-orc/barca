@@ -115,12 +115,37 @@ impl RunReason {
     }
 }
 
+/// Why a step that is not cached for its run hash is served from an earlier result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Held {
+    /// A `Manual` node read as it is (RFC-0008): its latest result, `stale` when its inputs'
+    /// latest results or its code differ from the ones it was computed with.
+    Manual { stale: bool },
+    /// Under a tick, a task whose last successful run used the current versions of its inputs.
+    UpToDate,
+}
+
+impl Held {
+    pub(crate) fn detail(self) -> &'static str {
+        match self {
+            Held::Manual { stale: false } => "Manual: its last result is read as it is",
+            Held::Manual { stale: true } => {
+                "Manual and stale: its last result is read as it is; name it in --refresh to \
+                 recompute it"
+            }
+            Held::UpToDate => "up to date: its last successful run used these inputs",
+        }
+    }
+}
+
 pub(crate) enum Decision {
     Run(RunReason),
     Cached {
         oref: OutputRef,
         /// The refreshed asset this cached step depends on, if any.
         stale_root: Option<String>,
+        /// Set when the result is not the cache hit for this step's run hash.
+        held: Option<Held>,
     },
     Partitioned {
         cached: Vec<(String, OutputRef)>,
@@ -145,6 +170,12 @@ pub(crate) struct DecideState {
     /// hash (#183). A real run fills it as sensors finish (they run in an earlier phase than
     /// their consumers); a dry run seeds it from each sensor's last recorded output.
     pub(crate) sensor_outputs: HashMap<String, String>,
+    /// `Manual` nodes read as they are in this run (RFC-0008), by base id.
+    pub(crate) pinned: HashMap<String, crate::freshness::Pin>,
+    /// Under a tick: the scheduled node. Every other task fires only when it is out of date.
+    pub(crate) tick: Option<String>,
+    /// Under a tick: the tasks decided to run in this run (base ids). A task reading one fires.
+    pub(crate) firing_tasks: HashSet<String>,
 }
 
 pub(crate) type ExpandedMembership = BTreeMap<String, BTreeSet<String>>;
@@ -299,6 +330,24 @@ pub(crate) async fn decide_step(
     state: &mut DecideState,
     step: &crate::planner::StreamStep,
 ) -> Result<(crate::planner::StreamStep, Decision), crate::BarcaError> {
+    // A `Manual` node read as it is: its latest result, under that result's run hash, so what
+    // reads it is hashed against the version it reads. Its inputs are not planned.
+    if step.partition_keys.is_empty()
+        && let Some(pin) = state.pinned.get(step.step_id.base_id())
+    {
+        let display_id = step.step_id.display();
+        let mut step = step.clone();
+        state
+            .run_hashes
+            .insert(display_id.clone(), pin.run_hash.clone());
+        step.run_hashes.insert(display_id, pin.run_hash.clone());
+        let decision = Decision::Cached {
+            oref: pin.output.clone(),
+            stale_root: None,
+            held: Some(Held::Manual { stale: pin.stale }),
+        };
+        return Ok((step, decision));
+    }
     state.require_upstream_hashes(step)?;
     let base_id = step.step_id.base_id();
     let display_id = step.step_id.display();
@@ -345,9 +394,23 @@ pub(crate) async fn decide_step(
     }
 
     let kind = base_node.map(|n| n.kind());
-    // Sensors and tasks always re-run — never cached.
+    // Sensors and tasks always re-run — never cached. Under a tick, a task other than the
+    // scheduled one runs only when it is out of date.
     match kind {
-        Some(crate::NodeKind::Task) => return Ok((step, Decision::Run(RunReason::Task))),
+        Some(crate::NodeKind::Task) => {
+            if let Some(oref) = task_up_to_date(dag, cache, state, &step).await {
+                let decision = Decision::Cached {
+                    oref,
+                    stale_root: None,
+                    held: Some(Held::UpToDate),
+                };
+                return Ok((step, decision));
+            }
+            if state.tick.is_some() {
+                state.firing_tasks.insert(base_id.to_string());
+            }
+            return Ok((step, Decision::Run(RunReason::Task)));
+        }
         Some(crate::NodeKind::Sensor) => return Ok((step, Decision::Run(RunReason::Sensor))),
         _ => {}
     }
@@ -437,9 +500,57 @@ pub(crate) async fn decide_step(
             if let Some(root) = &stale_root {
                 state.stale_cached.insert(base_id.to_string(), root.clone());
             }
-            (step, Decision::Cached { oref, stale_root })
+            let held = None;
+            (
+                step,
+                Decision::Cached {
+                    oref,
+                    stale_root,
+                    held,
+                },
+            )
         }
     })
+}
+
+/// Under a tick (RFC-0008 rule 3), the result of a task that need not fire: not the scheduled
+/// task, with a successful run under its current run hash (so the same code and the same
+/// versions of its asset and sensor inputs), and no task it reads has fired in this run or run
+/// successfully since. `None` means it fires (also outside a tick, and for a partitioned task).
+async fn task_up_to_date(
+    dag: &Dag,
+    cache: Option<&db::CacheReader>,
+    state: &DecideState,
+    step: &crate::planner::StreamStep,
+) -> Option<OutputRef> {
+    let scheduled = state.tick.as_deref()?;
+    let base_id = step.step_id.base_id();
+    if base_id == scheduled || !step.partition_keys.is_empty() || !step.step_id.partition.is_empty()
+    {
+        return None;
+    }
+    let cache = cache?;
+    let display_id = step.step_id.display();
+    let last = db::latest_success(cache, &display_id).await?;
+    if step.run_hashes.get(&display_id) != Some(&last.run_hash) {
+        return None;
+    }
+    for up in step.inputs.values() {
+        let up_base = up.split('[').next().unwrap_or(up);
+        if dag.get_node(up_base).map(|n| n.kind()) != Some(crate::NodeKind::Task) {
+            continue;
+        }
+        if state.firing_tasks.contains(up_base) {
+            return None;
+        }
+        if db::latest_success_id(cache, up)
+            .await
+            .is_some_and(|id| id > last.id)
+        {
+            return None;
+        }
+    }
+    Some(last.output)
 }
 
 /// The most recent successful materialization of `node_id` with this run hash, if any. The row
@@ -547,9 +658,14 @@ pub(crate) fn localize_decision(
     store: &mut Option<StoreSync>,
 ) -> Decision {
     match decision {
-        Decision::Cached { oref, stale_root } => Decision::Cached {
+        Decision::Cached {
+            oref,
+            stale_root,
+            held,
+        } => Decision::Cached {
             oref: accept_cache_hit(store, &step.step_id.display(), oref),
             stale_root,
+            held,
         },
         Decision::Partitioned { cached, missing } => Decision::Partitioned {
             cached: cached

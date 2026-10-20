@@ -380,9 +380,11 @@ barca serve job.py --host 0.0.0.0         # every interface; authenticate at the
 Schedules fire only while `barca serve` is running; `barca get` and `barca run` do not
 look at the clock. A scheduled task runs on every tick. A scheduled asset is brought up to
 date on every tick, which means it runs only if it is not cached: data from outside still
-has to come in through a sensor. A scheduled sensor's tick runs the sensor and does not
-trigger the assets that read it. The other freshness values, `Always` (the default) and
-`Manual`, are recorded and shown by `barca list` and have no effect at run time today.
+has to come in through a sensor. The same tick brings up to date every `Always` node (the
+default) below the scheduled one, so a scheduled sensor keeps the assets and tasks that read
+it current. A `Manual` node is refreshed by hand only: ticks skip it, and `barca get` of
+something below it reads its last result. `Schedule(cron, max_failures=N)` (default 5) stops
+a node's ticks after N consecutive failed ones.
 
 The server-ledger design in RFC-0007 is accepted but not implemented in v0.24.0:
 CLI `--server`, server URL configuration and laptop runs against the shared ledger are

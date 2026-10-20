@@ -199,6 +199,8 @@ async fn status_from_dag_with_membership(
         python,
         CachePolicy::CacheAware,
         "status",
+        &crate::freshness::RunRules::default(),
+        &[],
     )
     .await?;
     let reports: HashMap<&str, &StepReport> =

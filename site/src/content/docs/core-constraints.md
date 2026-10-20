@@ -89,18 +89,25 @@ to read costs nothing. Deleting all of `.barca/` removes the cache and the histo
 `Always` (the default for assets and tasks), `Manual` (the default for sensors) or
 `Schedule("<cron>")`.
 
-**Status.** Only `Schedule` has an effect at run time.
+**Status.** All three act under `barca serve` (RFC-0008).
 
-- `Schedule("<cron>")` makes `barca serve` run the node on each cron tick. See
-  [Scheduling](/scheduling/).
-- `Always` and `Manual` are parsed, recorded and shown by `barca list` and in the plan JSON.
-  Nothing acts on them. A `Manual` asset is computed by `barca get` like any other asset, a
-  `Manual` upstream does not hold back anything downstream, and `barca serve` does not run an
-  `Always` node on its own. Barca accepts `Always` on a sensor.
+- `Schedule("<cron>")` makes `barca serve` start a run on each cron tick. The run's targets are
+  the scheduled node and every `Always` node below it.
+- `Always` nodes are brought up to date at each tick of a scheduled node above them: an asset
+  when it has no cached result for its current run hash, a task when its inputs changed since
+  its last successful run. The walk down stops at a node with its own `Schedule`. A node with
+  no scheduled node above it is never run by a tick.
+- `Manual` assets and tasks pin themselves. A tick never runs one, and `barca get` or
+  `barca run` of something below it reads its latest successful result, even when stale, and
+  says so on stderr. Only naming it (`--refresh <name>`, `--refresh-all`, or getting it as the
+  target) recomputes it. A never-computed `Manual` upstream makes `barca get` exit 2; under a
+  tick, the nodes that read it are skipped as `blocked`.
+- Sensors are polled whenever a run needs them, whatever their freshness.
+- A partitioned `Manual` node is not pinned yet: it is computed like an `Always` node.
+- `POST /get`, `POST /run/{task}` and `POST /run` compute `Manual` upstreams as before.
 
-What `Always` and `Manual` should do in `barca serve` is proposed in RFC-0008
-([PR #276](https://github.com/barca-orc/barca/pull/276)). Until then, whether a function runs
-is decided by the cache alone (next section), and by `--refresh`.
+Freshness is not part of the definition hash. Within a run, whether a function runs is decided
+by the cache (next section) and by `--refresh`. See [Scheduling](/scheduling/).
 
 ## Caching follows provenance, not recency
 

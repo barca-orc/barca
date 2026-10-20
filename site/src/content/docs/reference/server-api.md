@@ -306,17 +306,29 @@ there are none (the same items as `result.warnings` above).
 ## Scheduling
 
 `barca serve` runs a cron scheduler for nodes declared with `freshness=Schedule("...")`. It is
-on by default; pass `--no-schedule` to turn it off. `Schedule` is the only freshness value the
-server acts on. `Always` and `Manual` are recorded and shown (`barca list`, `/assets`) and
-cause no runs.
+on by default; pass `--no-schedule` to turn it off.
 
 Each second, every job whose cron matches triggers a run through the same run pool as the
-`POST` endpoints:
+`POST` endpoints. The run's targets are the scheduled node and every `Always` node below it; the
+walk down goes past a `Manual` node, which is not updated, and stops at a node with its own
+`Schedule`. Each target is brought up to date, not forced:
 
-- **Assets and sensors** go through the `get` path, cache-aware. A sensor's tick runs the
-  sensor and does not trigger the assets that read it.
-- **Tasks** go through the `run` path. A tick reuses cached upstream assets, as
-  `barca run <task>` does; `POST /run/{task}` recomputes every upstream asset.
+- **The scheduled node.** A sensor is polled; an asset and its upstream cone are checked
+  against the cache; a task runs, reusing cached upstream assets as `barca run <task>` does
+  (`POST /run/{task}` recomputes every upstream asset).
+- **`Always` assets below** are computed when they have no cached result for their current run
+  hash.
+- **`Always` tasks below** run when their inputs changed since their last successful run (code,
+  an asset input's result, a sensor input's value), when a task they read ran successfully
+  since, or when they never ran.
+- **`Manual` nodes** are read as they are, never run by a tick. When one has never been
+  computed, the nodes that read it are reported as `skipped` steps with reason `blocked`, and
+  the tick is not an error on that account.
+
+The run's `result.steps` include the `Always` nodes below the scheduled node. A failing node
+stops only what depends on it; the other targets still run, and the run's `status` is then
+`failed`, with `error` naming the nodes that failed. `POST /get/{node}`, `POST /run/{task}` and
+`POST /run` compute `Manual` upstreams as before.
 
 Each scheduled run gets a `run_id`, is visible via `GET /status/{run_id}`, and is written to
 `.barca/metadata.db` (`barca history`), like a run requested over HTTP. Independent runs
@@ -342,7 +354,10 @@ Each `ScheduleEntry` is:
   "last_run": "1b942bb33182",
   "last_status": "complete",
   "last_skipped": 1780657200,
-  "skipped_for": "7c0d5e2a91f4"
+  "skipped_for": "7c0d5e2a91f4",
+  "failures": 0,
+  "max_failures": 5,
+  "failing": false
 }
 ```
 
@@ -359,6 +374,15 @@ an HTTP request started it (`POST /run` counts for scheduled assets and sensors,
 `last_skipped` is the time of the last skipped tick (unix epoch seconds) and `skipped_for` the
 `run_id` of the run that was in flight; both are `null` until a tick is skipped, and a restart
 clears them.
+
+`failures` (integer) is the number of consecutive failed ticks of the node, `max_failures`
+(integer) its cap from `Schedule(cron, max_failures=N)` (default 5), and `failing` (boolean)
+whether the count has reached the cap. While `failing` is `true` the node's ticks are skipped,
+and the server logs `[barca] pipeline.py:inbox failing: 3 consecutive failed ticks
+(max_failures=3); skipped until an explicit request or a change in its inputs`. The count is
+kept in the metadata DB and survives a restart. It resets on a successful tick, and when the
+scheduled node, a node that failed, or a direct input of a failed node succeeds in another run
+(an explicit request or a change in its inputs).
 
 ## Python client
 

@@ -895,6 +895,7 @@ mod tests {
             function_name: name.to_string(),
             explicit_name: None,
             freshness: crate::model::Freshness::Always,
+            max_failures: None,
             inputs: smallvec::SmallVec::new(),
             partitions: HashMap::new(),
             sinks: smallvec::SmallVec::new(),

@@ -1791,6 +1791,9 @@ components:
       - last_status
       - last_skipped
       - skipped_for
+      - failures
+      - max_failures
+      - failing
       properties:
         id: *id002
         cron: *id002
@@ -1827,6 +1830,18 @@ components:
           anyOf:
           - *id002
           - type: 'null'
+        failures:
+          description: Consecutive failed ticks (RFC-0008); persisted across restarts
+          type: integer
+          minimum: 0
+        max_failures:
+          description: Schedule(..., max_failures=N), default 5
+          type: integer
+          minimum: 1
+        failing:
+          description: failures >= max_failures; ticks are skipped until an explicit request
+            or an input change
+          type: boolean
     Log:
       type: object
       additionalProperties: false

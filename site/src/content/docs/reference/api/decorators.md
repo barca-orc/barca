@@ -55,7 +55,7 @@ check in the binary equal), so a type checker and an IDE know them too.
 | `partitions_from()` | one | none |
 | `collect()` | one | none |
 | `asset_ref()` | one | none |
-| `Schedule()` | one | none |
+| `Schedule()` | one | `max_failures` |
 
 Any other argument is an error when barca reads the file, before anything runs (exit 2, `kind`
 `usage`). Up to 0.18.1 it was ignored without a message: `@asset(after=other)`,
@@ -146,7 +146,7 @@ from barca import asset, Always, Manual, Schedule
 def my_asset() -> dict:
     return {"x": 1}
 
-@asset(freshness=Manual)                    # recorded; no effect on a run today
+@asset(freshness=Manual)                    # refreshed by hand only; readers get its last result
 def pinned_data() -> dict:
     return {"x": 1}
 
@@ -157,12 +157,20 @@ def daily_report() -> dict:
 
 ### Freshness
 
-`freshness=` takes `Always` (the default), `Manual` or `Schedule("<cron>")`. `Schedule` is the
-only value with an effect at run time: `barca serve` runs the node on each cron tick (see
-[Schedule](#schedule)). `Always` and `Manual` are recorded and shown (`barca list`, the
-`freshness` key in its JSON) and do nothing else today: `barca get` and `barca run` treat an
-`Always` asset and a `Manual` asset the same way. What they should do under `barca serve` is
-proposed in RFC-0008 ([PR #276](https://github.com/barca-orc/barca/pull/276)).
+`freshness=` takes `Always` (the default), `Manual` or `Schedule("<cron>")`. `barca list`
+shows it (the `freshness` key in its JSON). Freshness is not part of the definition hash.
+
+- `Schedule("<cron>")`: `barca serve` starts a run on each cron tick (see [Schedule](#schedule)).
+- `Always`: brought up to date at each tick of a scheduled node above it, in that tick's run.
+  A node with no scheduled node above it is never run by a tick.
+- `Manual`: refreshed by hand only. A tick never runs it, and `barca get` or `barca run` of
+  something below it reads its latest successful result, even when stale, with a note on
+  stderr. `--refresh <name>`, `--refresh-all` or getting it as the target recomputes it. A
+  `Manual` node that was never computed makes `barca get` of what reads it exit 2. A partitioned
+  `Manual` node is not pinned yet, and requests to `barca serve` (`POST /get`, `POST /run`)
+  compute `Manual` upstreams as before.
+
+See [Scheduling](/scheduling/#always-and-manual).
 
 ### Type annotations
 
@@ -438,9 +446,11 @@ last recorded value and say so in `detail`; before the sensor has ever run, its 
 **Running one.** `barca get inbox_files pipeline.py` runs one sensor and prints its value.
 `barca get pipeline.py` with no target runs every sensor, including one nothing depends on.
 
-**Freshness.** The default is `Manual`. `Schedule("<cron>")` makes `barca serve` run the
-sensor on that cron; the tick records the sensor's value and does not trigger the assets that
-read it. 0.18.0 accepts `@sensor(freshness=Always)` without an error.
+**Freshness.** The default is `Manual`. A sensor is never pinned: it is polled whenever a run
+needs it, whatever its freshness. `Schedule("<cron>")` makes `barca serve` poll it on that cron;
+the same tick brings up to date the `Always` assets and tasks below it, so when its value
+changes they are recomputed or fired in that run. `@sensor(freshness=Always)` is accepted
+without an error.
 
 See [Sensors and External Observations](/workflows/06-sensors-and-external-observations/) for
 a walk-through, and `barca docs assets` ("Sensors").
@@ -561,13 +571,20 @@ still served from cache while its run hash matches.
 ## Schedule
 
 ```python
-Schedule("0 5 * * *")       # 5-field cron: daily at 05:00
-Schedule("*/15 * * * * *")  # 6-field cron: every 15 seconds
+Schedule("0 5 * * *")                   # 5-field cron: daily at 05:00
+Schedule("*/15 * * * * *")              # 6-field cron: every 15 seconds
+Schedule("*/5 * * * *", max_failures=3) # skip ticks after 3 consecutive failed ones
 ```
 
 A freshness value for `freshness=` on `@asset`, `@sensor` or `@task`. It has an effect only
 while `barca serve` is running; `barca get` and `barca run` ignore it. `barca list` shows the
 cron and the next fire time.
+
+The cron is passed by position. `max_failures=` is keyword-only and must be a positive integer
+literal; the default is 5. It caps the consecutive failed ticks of the node: past it, its ticks
+are skipped until an explicit request for it or for a node that failed, or a new result of one
+of a failed node's inputs, succeeds. `GET /schedule` reports `failures`, `max_failures` and
+`failing`. Any other keyword, `cron=` included, is an error when the file is read (exit 2).
 
 The cron has 5 fields (`minute hour day-of-month month day-of-week`) or 6 with a leading
 seconds field. There is no year field. See [Scheduling](/scheduling/) for what a tick does.

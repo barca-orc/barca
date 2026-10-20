@@ -631,6 +631,30 @@ For external data that changes in place (a blob overwritten at the same path), t
 answer is a sensor (see "External data that changes in place" above). Without one, `--refresh`
 the asset that reads it, and everything built from it re-runs.
 
+### A `Manual` upstream is read as it is
+
+A `Manual` asset or task (`@asset(freshness=Manual)`) is refreshed by hand only. When
+`barca get` or `barca run` reads one on the way to the target, it is not recomputed, even when
+its inputs or code changed: the run reads its latest successful result, and does not plan
+anything above it. Its step is `cached` with a `detail` saying so (`Manual: its last result is
+read as it is`, or `Manual and stale: ...`). Nodes below it are hashed against that result, so
+they are served from cache until it changes. When it is stale, stderr says how to recompute it:
+
+```text
+[barca] note: baseline is Manual and stale; barca get baseline pipeline.py --refresh baseline to recompute
+```
+
+- Naming it recomputes it: `--refresh baseline` (with the cascade, everything below it in the
+  cone too), `--refresh-all`, or `barca get baseline` itself (a target is never read as it is).
+- `--refresh` cannot name an asset behind it: the run does not plan it, so the name is a usage
+  error that lists the assets you can refresh.
+- A `Manual` node that has never been computed cannot be read: the command exits 2 and the
+  remediation is the command that computes it. `--dry-run` predicts the same.
+- Sensors are polled whenever a run needs them, whatever their freshness. A partitioned `Manual`
+  node is not pinned yet: it is checked like any other asset.
+- Requests to `barca serve` (`POST /get`, `POST /run`) compute `Manual` upstreams as before;
+  ticks read them as they are (`barca docs scheduling`).
+
 ## Seeing what will happen: `--dry-run`
 
 `barca get` and `barca run` take `--dry-run`. It reports, for exactly that command and flags, which

@@ -26,7 +26,7 @@ def run(root: Path, *args: str, env=None):
     return json.loads(proc.stdout)
 
 
-def test_manual_is_not_a_barrier_and_always_sensor_is_accepted(tmp_path):
+def test_manual_pins_itself_and_always_sensor_is_accepted(tmp_path):
     (tmp_path / "barca.toml").write_text("")
     source = """from barca import asset, sensor, Always, Manual
 
@@ -40,10 +40,22 @@ def downstream(value): return value + 1
 def observed(): return True, "version"
 """
     (tmp_path / "pipeline.py").write_text(source)
-    assert run(tmp_path, "get", "downstream")["steps_executed"] == 2
+    # A Manual upstream that was never computed cannot be read (RFC-0008).
+    never = subprocess.run(
+        [_find_binary(), "get", "downstream", "--json"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+    )
+    assert never.returncode == 2, never.stderr
+    assert run(tmp_path, "get", "source")["steps_executed"] == 1
+    assert run(tmp_path, "get", "downstream")["steps_executed"] == 1
     assert run(tmp_path, "get", "downstream")["steps_executed"] == 0
+    # An edit of the Manual node does not recompute it on the way to downstream.
     (tmp_path / "pipeline.py").write_text(source.replace("return 1", "return 4"))
-    changed = run(tmp_path, "get", "downstream")
+    pinned = run(tmp_path, "get", "downstream")
+    assert pinned["steps_executed"] == 0 and pinned["final_output"] == 2
+    changed = run(tmp_path, "get", "downstream", "--refresh", "source")
     assert changed["steps_executed"] == 2 and changed["final_output"] == 5
     for _ in range(2):
         observed = run(tmp_path, "get", "observed")
@@ -120,7 +132,7 @@ def test_invalid_transfer_settings_are_infrastructure_errors(tmp_path):
         assert not (tmp_path / ".barca").exists()
 
 
-def test_scheduled_sensor_ticks_without_triggering_its_consumer(tmp_path):
+def test_a_scheduled_sensor_tick_updates_its_always_consumer(tmp_path):
     (tmp_path / "barca.toml").write_text("")
     (tmp_path / "pipeline.py").write_text("""from pathlib import Path
 from barca import asset, sensor, Schedule
@@ -154,11 +166,13 @@ def consumer(value):
             time.sleep(0.05)
         client = Client(f"http://127.0.0.1:{port}")
         assert client.health()["status"] == "ok"
-        assert not (tmp_path / "consumer-ran").exists()
+        # RFC-0008: the tick's run also brings the Always consumer up to date.
+        while not (tmp_path / "consumer-ran").exists():
+            assert time.monotonic() < deadline, (tmp_path / "server.log").read_text()
+            time.sleep(0.05)
     finally:
         proc.send_signal(signal.SIGTERM)
         proc.wait(timeout=15)
-    assert not (tmp_path / "consumer-ran").exists()
 
 
 def test_parallel_from_an_asset_runs_once_then_is_cached(tmp_path):

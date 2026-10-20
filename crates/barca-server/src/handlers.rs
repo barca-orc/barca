@@ -443,6 +443,9 @@ pub(crate) fn schedule_at(state: &AppState, now: chrono::DateTime<chrono::Utc>) 
                 "last_status": last_status,
                 "last_skipped": j.last_skipped,
                 "skipped_for": j.skipped_for,
+                "failures": j.failures,
+                "max_failures": j.max_failures,
+                "failing": j.failures >= j.max_failures,
             })
         })
         .collect();
@@ -548,6 +551,13 @@ enum RunKind {
     Get(Option<String>),
     /// `commands::run` for a task target, with how its upstream assets are treated.
     Task(String, CachePolicy),
+    /// A scheduled tick (RFC-0008): the scheduled node and the `Always` nodes below it, in
+    /// one run. `command` is `run` when the scheduled node is a task, else `get`.
+    Tick {
+        scheduled: String,
+        followers: Vec<String>,
+        command: &'static str,
+    },
 }
 
 /// Insert a `Pending` run, spawn the background execution task, and return the
@@ -569,12 +579,80 @@ pub(crate) fn start_run_task(state: AppState, target: String, node: String) -> S
     )
 }
 
-/// A cron tick for a scheduled task: the task runs, as a task always does, and each upstream
-/// asset is recomputed only if something on its input side changed (what `barca run <task>`
-/// does). A scheduled asset already goes through the cache-aware [`start_run`].
-pub(crate) fn start_scheduled_task(state: AppState, target: String) -> String {
-    let node = Some(target.clone());
-    spawn_run(state, RunKind::Task(target, CachePolicy::CacheAware), node)
+/// A cron tick (RFC-0008): one run that brings `scheduled` up to date (a sensor is polled, an
+/// asset's cone is checked, a task runs) and then each node in `followers`, the `Always` nodes
+/// below it. `kind` is the scheduled node's kind. Returns the handle.
+pub(crate) fn start_tick(
+    state: AppState,
+    scheduled: String,
+    kind: barca_core::NodeKind,
+    followers: Vec<String>,
+) -> String {
+    let node = Some(scheduled.clone());
+    let command = match kind {
+        barca_core::NodeKind::Task => "run",
+        barca_core::NodeKind::Asset | barca_core::NodeKind::Sensor => "get",
+    };
+    spawn_run(
+        state,
+        RunKind::Tick {
+            scheduled,
+            followers,
+            command,
+        },
+        node,
+    )
+}
+
+/// A tick's multi-target result in the shape a run's `result` has: every step, the scheduled
+/// node's output as `final_output`, and each target blocked on a `Manual` node that has never
+/// been computed as a `skipped` step with reason `blocked`. With the error to report when a
+/// target failed.
+fn tick_result(
+    multi: barca_core::results::MultiResult,
+    scheduled: &str,
+) -> (GetResult, Option<String>) {
+    let mut steps = multi.steps;
+    let mut failed: Vec<String> = Vec::new();
+    let mut final_output = None;
+    for (name, outcome) in &multi.targets {
+        if name == scheduled {
+            final_output = outcome.final_output.clone();
+        }
+        match outcome.status.as_str() {
+            "blocked" => steps.push(barca_core::results::StepReport {
+                id: name.clone(),
+                status: Some("skipped".to_string()),
+                reason: Some("blocked".to_string()),
+                detail: outcome.error.clone(),
+                ..Default::default()
+            }),
+            "failed" => failed.push(format!(
+                "{}: {}",
+                outcome.failed_node.as_deref().unwrap_or(name),
+                outcome.error.as_deref().unwrap_or("failed")
+            )),
+            _ => {}
+        }
+    }
+    let error = (!failed.is_empty()).then(|| {
+        format!(
+            "{} of {} targets failed: {}",
+            failed.len(),
+            multi.targets.len(),
+            failed.join("; ")
+        )
+    });
+    let result = GetResult {
+        run_id: multi.run_id,
+        elapsed_seconds: multi.elapsed_seconds,
+        steps_executed: multi.steps_executed,
+        phases: multi.phases,
+        final_output,
+        steps,
+        warnings: multi.warnings,
+    };
+    (result, error)
 }
 
 fn spawn_run(state: AppState, kind: RunKind, node: Option<String>) -> String {
@@ -590,11 +668,13 @@ fn spawn_run(state: AppState, kind: RunKind, node: Option<String>) -> String {
             command: match &kind {
                 RunKind::Get(_) => "get",
                 RunKind::Task(_, _) => "run",
+                RunKind::Tick { command, .. } => command,
             }
             .into(),
             target: match &kind {
                 RunKind::Get(target) => target.clone(),
                 RunKind::Task(target, _) => Some(target.clone()),
+                RunKind::Tick { scheduled, .. } => Some(scheduled.clone()),
             },
             node,
             status: RunStatus::Pending,
@@ -658,6 +738,8 @@ fn spawn_run(state: AppState, kind: RunKind, node: Option<String>) -> String {
         let cfg = st.config.resolved.clone();
 
         let mut timed_out = false;
+        // A tick's run fails when one of its targets failed; the others still ran.
+        let mut tick_failure: Option<String> = None;
         let outcome: Result<GetResult, BarcaError> = {
             let fut = async {
                 let dag = st.current_dag().await?;
@@ -690,6 +772,26 @@ fn spawn_run(state: AppState, kind: RunKind, node: Option<String>) -> String {
                         )
                         .await
                     }
+                    RunKind::Tick {
+                        scheduled,
+                        followers,
+                        ..
+                    } => commands::tick_streaming_from_dag(
+                        (*dag).clone(),
+                        &cfg,
+                        scheduled,
+                        followers,
+                        &files,
+                        &python,
+                        cancel.clone(),
+                        Some(event_tx),
+                    )
+                    .await
+                    .map(|multi| {
+                        let (result, failure) = tick_result(multi, scheduled);
+                        tick_failure = failure;
+                        result
+                    }),
                 }
             };
             tokio::pin!(fut);
@@ -713,13 +815,17 @@ fn spawn_run(state: AppState, kind: RunKind, node: Option<String>) -> String {
         // The run has returned and its event sender is gone — await the drain
         // so trailing logs land before RunFinished.
         drain.await.ok();
-        let ok = outcome.is_ok();
+        let ok = outcome.is_ok() && tick_failure.is_none();
 
         if let Some(mut r) = st.runs.get_mut(&h) {
             r.finished_at = Some(now_ts());
             match outcome {
                 Ok(result) => {
-                    r.status = RunStatus::Complete;
+                    r.status = match &tick_failure {
+                        Some(_) => RunStatus::Failed,
+                        None => RunStatus::Complete,
+                    };
+                    r.error = tick_failure.clone();
                     r.result = Some(result);
                 }
                 Err(BarcaError::Cancelled) if timed_out => {

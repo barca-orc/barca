@@ -301,6 +301,11 @@ pub struct JobStatus {
     pub last_skipped: Option<i64>,
     /// Handle of the in-flight run that caused `last_skipped`.
     pub skipped_for: Option<String>,
+    /// Consecutive failed ticks (RFC-0008 rule 9); persisted in `schedule_failures`.
+    pub failures: u32,
+    /// `Schedule(..., max_failures=N)`: at this many consecutive failed ticks the job is
+    /// skipped and reported `failing`.
+    pub max_failures: u32,
 }
 
 /// Cloneable application state shared across all axum handlers.

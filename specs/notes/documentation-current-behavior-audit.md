@@ -9,7 +9,8 @@ Those changes are excluded from this patch.
 ## Bounded corrections and verification
 
 - Correct the freshness table and Manual example comment; sensors accept Always,
-  and a scheduled sensor does not trigger its consumers. Verify Manual cold/warm,
+  and a scheduled sensor does not trigger its consumers (superseded: since RFC-0008, #253, a
+  tick updates the `Always` nodes below it and `Manual` pins itself). Verify Manual cold/warm,
   code edits, Always sensor execution and a real scheduled sensor with a downstream
   asset that remains unmaterialized.
 - Correct partition final_output wording: the first key's value is returned, while

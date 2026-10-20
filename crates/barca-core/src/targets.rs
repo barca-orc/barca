@@ -304,17 +304,20 @@ pub(crate) fn short_name(node_id: &str) -> &str {
 
 /// Fail before running anything when `--refresh` names something that is not an upstream
 /// asset of the target: a typo must not be a silent no-op. `get` targets are assets, so with
-/// `include_targets` a target may name itself; `run` targets are tasks and never can.
+/// `include_targets` a target may name itself; `run` targets are tasks and never can. `planned`
+/// is the cone the run plans when it is not the targets' whole cone (it does not walk past a
+/// `Manual` node read as it is, so nothing behind one can be refreshed).
 pub(crate) fn validate_refresh_names(
     dag: &Dag,
     target_ids: &[&str],
     names: &[String],
     include_targets: bool,
+    planned: Option<&[&str]>,
 ) -> Result<(), BarcaError> {
-    let cone: Vec<&str> = if target_ids.is_empty() {
-        dag.topo_order()
-    } else {
-        dag.subgraph_many(target_ids)
+    let cone: Vec<&str> = match planned {
+        Some(cone) => cone.to_vec(),
+        None if target_ids.is_empty() => dag.topo_order(),
+        None => dag.subgraph_many(target_ids),
     };
     let assets: Vec<&str> = cone
         .into_iter()
@@ -576,8 +579,8 @@ def lone() -> int:
     fn refresh_names_may_come_from_any_targets_cone() {
         let dag = dag();
         let both = ["p.py:check_a", "p.py:check_b"];
-        validate_refresh_names(&dag, &both, &names(&["src", "deeper"]), false).unwrap();
-        let msg = validate_refresh_names(&dag, &both, &names(&["lone"]), false)
+        validate_refresh_names(&dag, &both, &names(&["src", "deeper"]), false, None).unwrap();
+        let msg = validate_refresh_names(&dag, &both, &names(&["lone"]), false, None)
             .unwrap_err()
             .to_string();
         assert!(
@@ -585,7 +588,8 @@ def lone() -> int:
             "{msg}"
         );
         assert!(
-            validate_refresh_names(&dag, &["p.py:check_a"], &names(&["deeper"]), false).is_err()
+            validate_refresh_names(&dag, &["p.py:check_a"], &names(&["deeper"]), false, None)
+                .is_err()
         );
     }
 

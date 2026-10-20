@@ -19,6 +19,7 @@ pub mod envdeps;
 pub mod envelope;
 pub mod events;
 pub(crate) mod execution;
+pub mod freshness;
 pub mod groups;
 pub mod hash;
 #[doc(hidden)]

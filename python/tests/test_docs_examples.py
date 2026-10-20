@@ -400,11 +400,39 @@ def test_site_ordering_only_pattern_example_runs(binary, tmp_path):
 def test_scheduling_topic_example(binary, topics, tmp_path):
     write_example(topics, "scheduling", tmp_path)
     nodes = result(barca(binary, tmp_path, "list", "pipeline.py", "--json"))["nodes"]
-    assert {n["id"] for n in nodes} == {"pipeline.py:daily_report", "pipeline.py:heartbeat"}
+    assert {n["id"].split(":")[1] for n in nodes} == {
+        "inbox",
+        "orders",
+        "hourly_summary",
+        "send_report",
+        "daily_report",
+        "heartbeat",
+    }
+    (tmp_path / "inbox.txt").write_text("a")
+    sent = result(barca(binary, tmp_path, "run", "send_report", "pipeline.py"))
+    assert sent["status"] == "success"
     report = result(barca(binary, tmp_path, "get", "daily_report", "pipeline.py"))
     assert report["final_output"] == {"rows": 1}
     beat = barca(binary, tmp_path, "run", "heartbeat", "pipeline.py")
     assert result(beat)["status"] == "success"
+
+
+def test_scheduling_topic_manual_example(binary, topics, tmp_path):
+    """`Manual` pins itself in `barca get`: the note and the never-computed error it shows."""
+    code = blocks(topics["scheduling"], "python")[1]
+    assert "freshness=Manual" in code
+    (tmp_path / "pipeline.py").write_text(code)
+    (tmp_path / "prices.txt").write_text("p1")
+    never = barca(binary, tmp_path, "get", "report", "pipeline.py")
+    assert never.returncode == 2, never.stderr
+    assert "barca get baseline pipeline.py --refresh baseline" in never.stderr
+    fixed = barca(binary, tmp_path, "get", "baseline", "pipeline.py", "--refresh", "baseline")
+    assert result(fixed)["final_output"] == {"baseline": "p1"}
+    (tmp_path / "prices.txt").write_text("p2")
+    pinned = barca(binary, tmp_path, "get", "report", "pipeline.py")
+    assert result(pinned)["final_output"] == {"baseline": "p1", "etag": "p2"}
+    note = re.search(r"^\[barca\] note: baseline is Manual and stale.*$", pinned.stderr, re.M)
+    assert note and note.group(0) in topics["scheduling"], pinned.stderr
 
 
 def test_example_deploy_task(binary, topics, tmp_path):

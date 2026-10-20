@@ -61,6 +61,7 @@ pub async fn get(
         command_label: "get",
         interrupt: cancel.into(),
         event_tx: None,
+        rules: crate::freshness::RunRules::request(),
     })
     .await?
     .into_single()
@@ -88,6 +89,7 @@ pub async fn run(
         command_label: "run",
         interrupt: cancel.into(),
         event_tx: None,
+        rules: crate::freshness::RunRules::request(),
     })
     .await?
     .into_single()
@@ -118,6 +120,7 @@ pub async fn get_streaming(
         command_label: "get",
         interrupt: cancel.into(),
         event_tx,
+        rules: crate::freshness::RunRules::request(),
     })
     .await?
     .into_single()
@@ -146,6 +149,7 @@ pub async fn run_streaming(
         command_label: "run",
         interrupt: cancel.into(),
         event_tx,
+        rules: crate::freshness::RunRules::request(),
     })
     .await?
     .into_single()
@@ -199,6 +203,7 @@ pub async fn get_many_streaming(
         command_label: "get",
         interrupt: cancel.into(),
         event_tx,
+        rules: crate::freshness::RunRules::request(),
     })
     .await
     .map(Executed::into_multi)
@@ -251,6 +256,44 @@ pub async fn run_many_streaming(
         command_label: "run",
         interrupt: cancel.into(),
         event_tx,
+        rules: crate::freshness::RunRules::request(),
+    })
+    .await
+    .map(Executed::into_multi)
+}
+
+/// A scheduled tick under `barca serve` (RFC-0008): one run that brings `scheduled` up to date
+/// and then every `Always` node in `followers` ([`crate::freshness::followers`]). A `Manual`
+/// node is read as it is; a target that reads one that has never been computed is reported
+/// `blocked` and not run. A task other than `scheduled` fires only when it is out of date. Every
+/// target is attempted, as in [`get_many`].
+#[allow(clippy::too_many_arguments)]
+pub async fn tick_streaming_from_dag(
+    dag: crate::dag::Dag,
+    cfg: &crate::config::ResolvedConfig,
+    scheduled: &str,
+    followers: &[String],
+    file_args: &[String],
+    python: &std::path::Path,
+    cancel: CancellationToken,
+    event_tx: Option<UnboundedSender<crate::RunEvent>>,
+) -> Result<MultiResult, BarcaError> {
+    let targets: Vec<String> = std::iter::once(scheduled.to_string())
+        .chain(followers.iter().cloned())
+        .collect();
+    let has_task = targets.iter().any(|id| crate::targets::is_task(&dag, id));
+    execute(ExecuteRequest {
+        dag: Some(dag),
+        cfg,
+        target_names: &targets,
+        file_args,
+        python,
+        agent_mode: true,
+        policy: CachePolicy::CacheAware,
+        command_label: if has_task { "run" } else { "get" },
+        interrupt: cancel.into(),
+        event_tx,
+        rules: crate::freshness::RunRules::tick(scheduled),
     })
     .await
     .map(Executed::into_multi)
@@ -281,6 +324,7 @@ pub async fn get_streaming_from_dag(
         command_label: "get",
         interrupt: cancel.into(),
         event_tx,
+        rules: crate::freshness::RunRules::default(),
     })
     .await?
     .into_single()
@@ -310,6 +354,7 @@ pub async fn run_streaming_from_dag(
         command_label: "run",
         interrupt: cancel.into(),
         event_tx,
+        rules: crate::freshness::RunRules::default(),
     })
     .await?
     .into_single()

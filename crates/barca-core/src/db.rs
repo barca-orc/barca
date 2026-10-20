@@ -1150,6 +1150,22 @@ async fn migrate_legacy_schema(conn: &turso::Connection) -> Result<(), BarcaErro
     .await
     .map_err(|e| BarcaError::Db(format!("failed to create schedule_state table: {e}")))?;
 
+    // Consecutive failed ticks per scheduled node (RFC-0008 rule 9): how many, which nodes
+    // failed in the last one, and the highest materialization id when it was counted. A
+    // success recorded after `mark` for one of those nodes, for one of their direct inputs or
+    // for the scheduled node itself (an explicit request, or an input change) resets it.
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS schedule_failures (
+            node_id TEXT PRIMARY KEY,
+            failures INTEGER NOT NULL,
+            failed_nodes TEXT NOT NULL,
+            mark INTEGER NOT NULL
+        )",
+        (),
+    )
+    .await
+    .map_err(|e| BarcaError::Db(format!("failed to create schedule_failures table: {e}")))?;
+
     // Captured user stdout, one row per line. Rust owns persistence; workers
     // stream lines over the socket and the coordinator writes them here.
     conn.execute(
@@ -1396,6 +1412,187 @@ pub async fn upsert_schedule_state(
     .await
     .map_err(|e| BarcaError::Db(format!("failed to upsert schedule_state: {e}")))?;
     Ok(())
+}
+
+/// Consecutive failed ticks of one scheduled node (`schedule_failures`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ScheduleFailures {
+    /// Consecutive ticks whose run failed.
+    pub failures: u32,
+    /// The nodes that failed in the last counted tick.
+    pub failed_nodes: Vec<String>,
+    /// The highest materialization id when the last failure was counted.
+    pub mark: i64,
+}
+
+/// Consecutive failed ticks for every scheduled node that has any.
+pub async fn get_schedule_failures(
+    db_path: &str,
+) -> Result<HashMap<String, ScheduleFailures>, BarcaError> {
+    let _g = db_guard().await;
+    let (_db, conn) = open_conn(db_path).await?;
+    let mut rows = conn
+        .query(
+            "SELECT node_id, failures, failed_nodes, mark FROM schedule_failures",
+            (),
+        )
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to query schedule_failures: {e}")))?;
+    let mut out = HashMap::new();
+    while let Ok(Some(row)) = rows.next().await {
+        let node_id = row.get::<String>(0).unwrap_or_default();
+        if node_id.is_empty() {
+            continue;
+        }
+        out.insert(
+            node_id,
+            ScheduleFailures {
+                failures: u32::try_from(row.get::<i64>(1).unwrap_or_default()).unwrap_or(0),
+                failed_nodes: row
+                    .get::<String>(2)
+                    .ok()
+                    .and_then(|j| serde_json::from_str(&j).ok())
+                    .unwrap_or_default(),
+                mark: row.get::<i64>(3).unwrap_or_default(),
+            },
+        );
+    }
+    Ok(out)
+}
+
+/// Record `node_id`'s consecutive failed ticks; zero failures removes its row.
+pub async fn set_schedule_failures(
+    db_path: &str,
+    node_id: &str,
+    state: &ScheduleFailures,
+) -> Result<(), BarcaError> {
+    let _g = db_guard().await;
+    let (_db, conn) = open_conn(db_path).await?;
+    let failed = |e| BarcaError::Db(format!("failed to write schedule_failures: {e}"));
+    if state.failures == 0 {
+        conn.execute(
+            "DELETE FROM schedule_failures WHERE node_id = ?1",
+            [node_id.to_string()],
+        )
+        .await
+        .map_err(failed)?;
+        return Ok(());
+    }
+    conn.execute(
+        "INSERT INTO schedule_failures (node_id, failures, failed_nodes, mark)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(node_id) DO UPDATE SET failures = ?2, failed_nodes = ?3, mark = ?4",
+        [
+            node_id.to_string(),
+            state.failures.to_string(),
+            serde_json::to_string(&state.failed_nodes).unwrap_or_else(|_| "[]".into()),
+            state.mark.to_string(),
+        ],
+    )
+    .await
+    .map_err(failed)?;
+    Ok(())
+}
+
+/// The highest materialization id recorded so far (0 when there is none).
+pub async fn max_materialization_id(db_path: &str) -> Result<i64, BarcaError> {
+    let _g = db_guard().await;
+    let (_db, conn) = open_conn(db_path).await?;
+    let mut rows = conn
+        .query("SELECT COALESCE(MAX(id), 0) FROM materializations", ())
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to query materializations: {e}")))?;
+    Ok(match rows.next().await {
+        Ok(Some(row)) => row.get::<i64>(0).unwrap_or(0),
+        _ => 0,
+    })
+}
+
+/// Whether a successful materialization of one of `nodes` (or of one of their partitions) was
+/// recorded after materialization id `mark`.
+pub async fn succeeded_since(
+    db_path: &str,
+    mark: i64,
+    nodes: &[String],
+) -> Result<bool, BarcaError> {
+    if nodes.is_empty() {
+        return Ok(false);
+    }
+    let _g = db_guard().await;
+    let (_db, conn) = open_conn(db_path).await?;
+    let mut rows = conn
+        .query(
+            "SELECT DISTINCT node_id FROM materializations WHERE id > ?1 AND status = 'success'",
+            [mark.to_string()],
+        )
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to query materializations: {e}")))?;
+    while let Ok(Some(row)) = rows.next().await {
+        let id = row.get::<String>(0).unwrap_or_default();
+        let base = id.split('[').next().unwrap_or(&id);
+        if nodes.iter().any(|n| n == base) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// The latest successful materialization of one step (a display id) that has an artifact.
+#[derive(Debug, Clone)]
+pub(crate) struct LatestSuccess {
+    /// Its row id: a later success of another step has a higher one.
+    pub(crate) id: i64,
+    pub(crate) run_hash: String,
+    pub(crate) output: OutputRef,
+}
+
+/// The latest successful materialization of `node_id` (a display id) whose artifact this run may
+/// read; `None` when it never succeeded.
+pub(crate) async fn latest_success(cache: &CacheReader, node_id: &str) -> Option<LatestSuccess> {
+    let mut rows = cache
+        .conn()
+        .query(
+            "SELECT id, run_hash, artifact_path, artifact_format, artifact_size_bytes, \
+             output_hash FROM materializations WHERE node_id = ?1 AND status = 'success' \
+             AND artifact_path IS NOT NULL ORDER BY id DESC",
+            [node_id.to_string()],
+        )
+        .await
+        .ok()?;
+    while let Ok(Some(row)) = rows.next().await {
+        let Ok(path) = row.get::<String>(2) else {
+            continue;
+        };
+        if !cache.allows_artifact(&path) {
+            continue;
+        }
+        return Some(LatestSuccess {
+            id: row.get::<i64>(0).ok()?,
+            run_hash: row.get::<String>(1).ok().unwrap_or_default(),
+            output: OutputRef {
+                path,
+                format: row.get::<String>(3).ok()?,
+                size_bytes: row.get::<i64>(4).ok()? as u64,
+                elapsed_seconds: None,
+                content_hash: row.get::<String>(5).ok().filter(|h| !h.is_empty()),
+            },
+        });
+    }
+    None
+}
+
+/// The id of the latest successful materialization of `node_id` (a display id), artifact or
+/// not; `None` when it never succeeded.
+pub(crate) async fn latest_success_id(cache: &CacheReader, node_id: &str) -> Option<i64> {
+    let mut rows = cache
+        .conn()
+        .query(
+            "SELECT MAX(id) FROM materializations WHERE node_id = ?1 AND status = 'success'",
+            [node_id.to_string()],
+        )
+        .await
+        .ok()?;
+    rows.next().await.ok()??.get::<i64>(0).ok()
 }
 
 /// The output hash of the latest successful materialization of each step of `base_ids` (the

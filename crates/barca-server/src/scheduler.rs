@@ -8,6 +8,11 @@
 //! runs are bounded the same way and land in the `runs` history table for free.
 //! A scheduled task reuses cached upstream assets; `POST /run/{task}` does not.
 //!
+//! A tick is one run (RFC-0008): the scheduled node and every `Always` node below it
+//! ([`barca_core::freshness::followers`]), a `Manual` node read as it is. A job whose ticks
+//! failed `max_failures` times in a row is skipped and reported `failing` until a node it
+//! failed on (or an input of one, or the scheduled node) succeeds in another run.
+//!
 //! Semantics: cron is evaluated in the configured timezone (`--timezone`, local
 //! by default). On startup a job fires once if a tick elapsed while the daemon
 //! was down (catch-up), then fires on each live cron match. Last-fired times are
@@ -28,7 +33,7 @@ use barca_core::{NodeKind, db};
 use chrono::{DateTime, FixedOffset, TimeZone, Timelike};
 #[cfg(test)]
 use croner::Cron;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
@@ -77,22 +82,29 @@ enum TickAction<'a> {
         job: &'a ScheduledJob,
         handle: String,
     },
+    /// Skip because the job's last `failures` ticks failed, at least its `max_failures`.
+    Failing {
+        job: &'a ScheduledJob,
+        failures: u32,
+    },
 }
 
 /// Decide, for a tick at `now`, which due jobs to fire and which to skip. Pure:
 /// takes a lookup returning the handle of a run of the job's node still in
-/// flight, if any, so the overlap-skip logic is testable without a live server
-/// or wall clock.
+/// flight, if any, and one returning a job's consecutive failed ticks, so the skip
+/// logic is testable without a live server or wall clock.
 fn plan_tick<'a, Tz: TimeZone>(
     now: &DateTime<Tz>,
     jobs: &'a [ScheduledJob],
     in_flight: impl Fn(&ScheduledJob) -> Option<String>,
+    failures: impl Fn(&ScheduledJob) -> u32,
 ) -> Vec<TickAction<'a>> {
     due_jobs(now, jobs)
         .into_iter()
-        .map(|job| match in_flight(job) {
-            Some(handle) => TickAction::Skip { job, handle },
-            None => TickAction::Fire(job),
+        .map(|job| match (failures(job), in_flight(job)) {
+            (failures, _) if failures >= job.max_failures => TickAction::Failing { job, failures },
+            (_, Some(handle)) => TickAction::Skip { job, handle },
+            (_, None) => TickAction::Fire(job),
         })
         .collect()
 }
@@ -129,6 +141,149 @@ struct Bookkeeping {
     last_fired: HashMap<String, i64>,
     /// Last skipped tick per job: its epoch and the handle of the run that caused it.
     last_skip: HashMap<String, (i64, String)>,
+    /// Consecutive failed ticks per job (RFC-0008 rule 9); persisted for restarts.
+    failures: HashMap<String, db::ScheduleFailures>,
+    /// Handles of tick runs whose outcome has been counted.
+    counted: HashSet<String>,
+}
+
+impl Bookkeeping {
+    fn failures(&self, job: &ScheduledJob) -> u32 {
+        self.failures.get(&job.id).map_or(0, |f| f.failures)
+    }
+}
+
+/// How a finished tick run ended: `None` while it is pending or running, or when it was
+/// cancelled (which is not a failure of the job); otherwise the nodes that failed, empty on
+/// success. A failed run with no failed step (it could not start) failed on the scheduled node.
+fn tick_outcome(run: &crate::state::RunState, job: &ScheduledJob) -> Option<Vec<String>> {
+    match run.status {
+        RunStatus::Pending | RunStatus::Running | RunStatus::Cancelled => None,
+        RunStatus::Complete => Some(Vec::new()),
+        RunStatus::Failed => {
+            let mut nodes: Vec<String> = run
+                .result
+                .iter()
+                .flat_map(|r| &r.steps)
+                .filter(|s| s.status.as_deref() == Some("failed"))
+                .map(|s| s.id.clone())
+                .collect();
+            nodes.dedup();
+            if nodes.is_empty() {
+                nodes.push(job.id.clone());
+            }
+            Some(nodes)
+        }
+    }
+}
+
+/// Count the outcome of each job's last tick run that has finished since the last call: a
+/// failure adds one to the job's consecutive failures, a success clears them.
+async fn count_outcomes(
+    state: &AppState,
+    jobs: &[ScheduledJob],
+    book: &mut Bookkeeping,
+    db_path: Option<&str>,
+) -> bool {
+    let mut changed = false;
+    for job in jobs {
+        let Some(handle) = book.last_handle.get(&job.id).cloned() else {
+            continue;
+        };
+        if book.counted.contains(&handle) {
+            continue;
+        }
+        let Some(failed) = state.runs.get(&handle).and_then(|r| tick_outcome(&r, job)) else {
+            continue;
+        };
+        book.counted.insert(handle);
+        let before = book.failures(job);
+        let next = if failed.is_empty() {
+            db::ScheduleFailures::default()
+        } else {
+            let mark = match db_path {
+                Some(dbp) => db::max_materialization_id(dbp).await.unwrap_or(0),
+                None => 0,
+            };
+            db::ScheduleFailures {
+                failures: before + 1,
+                failed_nodes: failed,
+                mark,
+            }
+        };
+        if next.failures == before && before == 0 {
+            continue;
+        }
+        if next.failures >= job.max_failures && before < job.max_failures {
+            barca_core::errln!(
+                "[barca] {} failing: {} consecutive failed ticks (max_failures={}); skipped until \
+                 an explicit request or a change in its inputs",
+                job.id,
+                next.failures,
+                job.max_failures
+            );
+        }
+        if let Some(dbp) = db_path {
+            persist_failures(dbp, job, &next).await;
+        }
+        book.failures.insert(job.id.clone(), next);
+        changed = true;
+    }
+    changed
+}
+
+/// Whether a failing job may fire again: a success recorded after its last counted failure for
+/// the scheduled node (an explicit request), a node it failed on, or a direct input of one (an
+/// input change).
+async fn failing_reset(
+    state: &AppState,
+    job: &ScheduledJob,
+    failures: &db::ScheduleFailures,
+    db_path: &str,
+) -> bool {
+    let mut watch: Vec<String> = vec![job.id.clone()];
+    watch.extend(failures.failed_nodes.iter().cloned());
+    if let Ok(dag) = state.loaded_dag().await {
+        for node in &failures.failed_nodes {
+            watch.extend(dag.upstream(node).into_iter().map(str::to_string));
+        }
+    }
+    db::succeeded_since(db_path, failures.mark, &watch)
+        .await
+        .unwrap_or(false)
+}
+
+/// Clear the failures of each due failing job that may fire again ([`failing_reset`]).
+async fn reset_failing<Tz: TimeZone>(
+    state: &AppState,
+    now: &DateTime<Tz>,
+    jobs: &[ScheduledJob],
+    book: &mut Bookkeeping,
+    db_path: &str,
+) {
+    for job in due_jobs(now, jobs) {
+        let Some(failures) = book.failures.get(&job.id) else {
+            continue;
+        };
+        if failures.failures < job.max_failures
+            || !failing_reset(state, job, failures, db_path).await
+        {
+            continue;
+        }
+        barca_core::errln!(
+            "[barca] {} no longer failing: something it failed on succeeded since",
+            job.id
+        );
+        book.failures.remove(&job.id);
+        persist_failures(db_path, job, &db::ScheduleFailures::default()).await;
+    }
+}
+
+/// Record a job's consecutive failed ticks. Best-effort durability, like [`persist_fired`].
+async fn persist_failures(db_path: &str, job: &ScheduledJob, failures: &db::ScheduleFailures) {
+    if let Err(e) = db::set_schedule_failures(db_path, &job.id, failures).await {
+        barca_core::errln!("[barca] schedule_failures write failed for {}: {e}", job.id);
+    }
 }
 
 /// Note a skipped tick of `job` at `epoch`: the line on stderr, the `/schedule` entry, and a
@@ -176,19 +331,20 @@ fn skip_report(job: &ScheduledJob, handle: &str, epoch: i64) -> barca_core::tele
     }
 }
 
-/// Trigger a run for a due job, routed by node kind: assets and sensors go
-/// through the `get` path, tasks through the `run` path. Returns the handle.
+/// Trigger the run for a due job: its node and the `Always` nodes below it, in one run.
+/// Returns the handle.
 ///
-/// A tick brings the node up to date, it does not force it: sensors upstream
-/// are polled, anything whose inputs changed is recomputed, and an asset whose
-/// inputs did not change is served from cache. A task itself always runs.
+/// A tick brings the nodes up to date, it does not force them: sensors upstream are polled,
+/// anything whose inputs changed is recomputed, and an asset whose inputs did not change is
+/// served from cache. The scheduled task itself always runs; a task below it fires only when
+/// it is out of date.
 fn trigger(state: &AppState, job: &ScheduledJob) -> String {
-    match job.kind {
-        NodeKind::Task => handlers::start_scheduled_task(state.clone(), job.id.clone()),
-        NodeKind::Asset | NodeKind::Sensor => {
-            handlers::start_run(state.clone(), Some(job.id.clone()), Some(job.id.clone()))
-        }
-    }
+    handlers::start_tick(
+        state.clone(),
+        job.id.clone(),
+        job.kind,
+        job.followers.clone(),
+    )
 }
 
 /// Whether a scheduled tick elapsed between `last_fired` and `now` — i.e. the
@@ -220,6 +376,7 @@ async fn catch_up(
     let saved = db::get_schedule_state(db_path).await?;
     let mut book = Bookkeeping {
         last_fired: saved.clone(),
+        failures: db::get_schedule_failures(db_path).await?,
         ..Bookkeeping::default()
     };
     for job in jobs {
@@ -233,7 +390,20 @@ async fn catch_up(
                 )
                 .is_some_and(|next| next <= *now)
                 {
-                    if let Some(handle) = run_in_flight_for(state, job) {
+                    if book.failures(job) >= job.max_failures {
+                        let failures = book.failures.get(&job.id).cloned().unwrap_or_default();
+                        if failing_reset(state, job, &failures, db_path).await {
+                            book.failures.remove(&job.id);
+                            persist_failures(db_path, job, &db::ScheduleFailures::default()).await;
+                        }
+                    }
+                    if book.failures(job) >= job.max_failures {
+                        barca_core::errln!(
+                            "[barca] catch-up run {} skipped — failing ({} consecutive failed ticks)",
+                            job.id,
+                            book.failures(job)
+                        );
+                    } else if let Some(handle) = run_in_flight_for(state, job) {
                         record_skip(&mut book, job, &handle, now.timestamp(), "catch-up run");
                     } else {
                         let handle = trigger(state, job);
@@ -275,6 +445,8 @@ fn publish_registry(state: &AppState, jobs: &[ScheduledJob], book: &Bookkeeping)
                 last_handle: book.last_handle.get(&j.id).cloned(),
                 last_skipped: skip.map(|(at, _)| *at),
                 skipped_for: skip.map(|(_, handle)| handle.clone()),
+                failures: book.failures(j),
+                max_failures: j.max_failures,
             }
         })
         .collect();
@@ -287,9 +459,7 @@ fn publish_registry(state: &AppState, jobs: &[ScheduledJob], book: &Bookkeeping)
 /// on the blocking pool inside `barca_core::queries::list_assets`.
 async fn reload_jobs(state: &AppState) -> Vec<ScheduledJob> {
     match state.loaded_dag().await {
-        Ok(dag) => barca_core::schedule::jobs_from_summaries(
-            barca_core::queries::list_assets_from_dag(&dag),
-        ),
+        Ok(dag) => barca_core::schedule::jobs_from_dag(&dag),
         Err(error) => {
             barca_core::errln!("[barca] scheduler load failed: {error}");
             Vec::new()
@@ -410,14 +580,31 @@ pub async fn run_scheduler(state: AppState) {
         }
 
         let now = zone.now();
-        let mut changed = false;
+        let mut changed = count_outcomes(&state, &jobs, &mut book, db_path.as_deref()).await;
+        if let Some(dbp) = &db_path {
+            reset_failing(&state, &now, &jobs, &mut book, dbp).await;
+        }
         // NOTE: benchmarks/scheduler_overhead/barca/run.sh's CI smoke greps stderr for
         // "scheduled run.*:probe" to count ticks independent of worker execution — keep
         // that substring ("scheduled run", plus the job id) if this wording changes.
-        for action in plan_tick(&now, &jobs, |job| run_in_flight_for(&state, job)) {
+        let actions = plan_tick(
+            &now,
+            &jobs,
+            |job| run_in_flight_for(&state, job),
+            |job| book.failures(job),
+        );
+        for action in actions {
             match action {
                 TickAction::Skip { job, handle } => {
                     record_skip(&mut book, job, &handle, now.timestamp(), "scheduled run");
+                }
+                TickAction::Failing { job, failures } => {
+                    barca_core::errln!(
+                        "[barca] scheduled run {} skipped — failing ({failures} consecutive \
+                         failed ticks, max_failures={})",
+                        job.id,
+                        job.max_failures
+                    );
                 }
                 TickAction::Fire(job) => {
                     let handle = trigger(&state, job);
@@ -1008,18 +1195,112 @@ mod tests {
     }
 
     #[test]
+    fn plan_tick_skips_a_job_at_its_max_failures_and_fires_it_below() {
+        let mut j = job("f.py:daily", NodeKind::Asset, "0 5 * * *");
+        assert_eq!(j.max_failures, 5, "the default");
+        j.max_failures = 3;
+        let jobs = vec![j];
+        let plan = plan_tick(&at(5, 0), &jobs, |_| None, |_| 2);
+        assert_eq!(fired_ids(&plan), vec!["f.py:daily"]);
+        // Failing wins over an in-flight run: nothing would fire either way.
+        let plan = plan_tick(&at(5, 0), &jobs, |_| Some("h".into()), |_| 3);
+        match plan.as_slice() {
+            [TickAction::Failing { job, failures: 3 }] => assert_eq!(job.id, "f.py:daily"),
+            _ => panic!("expected failing"),
+        }
+    }
+
+    fn finished(state: &AppState, handle: &str, status: RunStatus, failed: &[&str]) {
+        insert_run(state, handle, status, "get", None, Some("f.py:s"), 1.0);
+        let steps = failed
+            .iter()
+            .map(|id| barca_core::results::StepReport {
+                id: id.to_string(),
+                status: Some("failed".into()),
+                ..Default::default()
+            })
+            .collect();
+        state.runs.get_mut(handle).unwrap().result = Some(barca_core::results::GetResult {
+            run_id: "r".into(),
+            elapsed_seconds: 0.0,
+            steps_executed: 0,
+            phases: 0,
+            final_output: None,
+            steps,
+            warnings: Vec::new(),
+        });
+    }
+
+    #[test]
+    fn a_tick_run_counts_once_it_finished_and_not_when_cancelled() {
+        let st = app_state();
+        let j = job("f.py:s", NodeKind::Sensor, "* * * * *");
+        insert_run(
+            &st,
+            "p",
+            RunStatus::Running,
+            "get",
+            None,
+            Some("f.py:s"),
+            1.0,
+        );
+        assert_eq!(tick_outcome(&st.runs.get("p").unwrap(), &j), None);
+        finished(&st, "c", RunStatus::Cancelled, &[]);
+        assert_eq!(tick_outcome(&st.runs.get("c").unwrap(), &j), None);
+        finished(&st, "ok", RunStatus::Complete, &[]);
+        assert_eq!(tick_outcome(&st.runs.get("ok").unwrap(), &j), Some(vec![]));
+        finished(&st, "f", RunStatus::Failed, &["f.py:report"]);
+        assert_eq!(
+            tick_outcome(&st.runs.get("f").unwrap(), &j),
+            Some(vec!["f.py:report".to_string()])
+        );
+        // A failed run with no failed step (it could not start) failed on the scheduled node.
+        finished(&st, "x", RunStatus::Failed, &[]);
+        assert_eq!(
+            tick_outcome(&st.runs.get("x").unwrap(), &j),
+            Some(vec!["f.py:s".to_string()])
+        );
+    }
+
+    #[tokio::test]
+    async fn consecutive_failed_ticks_add_up_and_a_success_clears_them() {
+        let st = app_state();
+        let jobs = vec![job("f.py:s", NodeKind::Sensor, "* * * * *")];
+        let mut book = Bookkeeping::default();
+        for (n, handle) in ["a", "b"].into_iter().enumerate() {
+            finished(&st, handle, RunStatus::Failed, &["f.py:report"]);
+            book.last_handle.insert("f.py:s".into(), handle.into());
+            assert!(count_outcomes(&st, &jobs, &mut book, None).await);
+            assert_eq!(book.failures(&jobs[0]), n as u32 + 1);
+            // Counted once, however many ticks look at it.
+            assert!(!count_outcomes(&st, &jobs, &mut book, None).await);
+        }
+        assert_eq!(
+            book.failures["f.py:s"].failed_nodes,
+            vec!["f.py:report".to_string()]
+        );
+        finished(&st, "c", RunStatus::Complete, &[]);
+        book.last_handle.insert("f.py:s".into(), "c".into());
+        assert!(count_outcomes(&st, &jobs, &mut book, None).await);
+        assert_eq!(book.failures(&jobs[0]), 0);
+    }
+
+    #[test]
     fn plan_tick_fires_when_nothing_is_in_flight() {
         let jobs = vec![job("f.py:daily", NodeKind::Asset, "0 5 * * *")];
-        let plan = plan_tick(&at(5, 0), &jobs, |_| None);
+        let plan = plan_tick(&at(5, 0), &jobs, |_| None, |_| 0);
         assert_eq!(fired_ids(&plan), vec!["f.py:daily"]);
     }
 
     #[test]
     fn plan_tick_skips_when_a_run_of_the_node_is_in_flight() {
         let jobs = vec![job("f.py:daily", NodeKind::Asset, "0 5 * * *")];
-        let plan = plan_tick(&at(5, 0), &jobs, |j| {
-            (j.id == "f.py:daily").then(|| "h1".to_string())
-        });
+        let plan = plan_tick(
+            &at(5, 0),
+            &jobs,
+            |j| (j.id == "f.py:daily").then(|| "h1".to_string()),
+            |_| 0,
+        );
         assert!(fired_ids(&plan).is_empty());
         assert_eq!(skipped_ids(&plan), vec!["f.py:daily"]);
         // The skip carries the offending handle for the log line.
@@ -1043,19 +1324,19 @@ mod tests {
             1.0,
         );
         let jobs = vec![job("f.py:daily", NodeKind::Asset, "0 5 * * *")];
-        let plan = plan_tick(&at(5, 0), &jobs, |j| run_in_flight_for(&st, j));
+        let plan = plan_tick(&at(5, 0), &jobs, |j| run_in_flight_for(&st, j), |_| 0);
         assert_eq!(skipped_ids(&plan), vec!["f.py:daily"]);
 
         // Once it finishes, the next due tick fires.
         st.runs.get_mut("api").unwrap().status = RunStatus::Complete;
-        let plan = plan_tick(&at(5, 0), &jobs, |j| run_in_flight_for(&st, j));
+        let plan = plan_tick(&at(5, 0), &jobs, |j| run_in_flight_for(&st, j), |_| 0);
         assert_eq!(fired_ids(&plan), vec!["f.py:daily"]);
     }
 
     #[test]
     fn plan_tick_ignores_jobs_not_due_this_minute() {
         let jobs = vec![job("f.py:daily", NodeKind::Asset, "0 5 * * *")];
-        let plan = plan_tick(&at(6, 0), &jobs, |_| Some("h".into()));
+        let plan = plan_tick(&at(6, 0), &jobs, |_| Some("h".into()), |_| 0);
         assert!(plan.is_empty(), "06:00 is not the job's minute");
     }
 
@@ -1066,9 +1347,12 @@ mod tests {
             job("f.py:b", NodeKind::Task, "0 5 * * *"),
         ];
         // `a` has a run still going; `b` has none.
-        let plan = plan_tick(&at(5, 0), &jobs, |j| {
-            (j.id == "f.py:a").then(|| "ha".into())
-        });
+        let plan = plan_tick(
+            &at(5, 0),
+            &jobs,
+            |j| (j.id == "f.py:a").then(|| "ha".into()),
+            |_| 0,
+        );
         assert_eq!(skipped_ids(&plan), vec!["f.py:a"]);
         assert_eq!(fired_ids(&plan), vec!["f.py:b"]);
     }
