@@ -22,6 +22,8 @@ and these tags are available on the same releases page.
   `last_skipped` and `skipped_for` in `GET /schedule`, and sent to telemetry as a `barca.run`
   span with status `skipped` and `barca.reason: in_flight`.
 
+- Refresh dependency lockfiles (`uv.lock`, `ui/`, `site/`, the dagster benchmark) to clear the open critical and high Dependabot alerts: PyJWT 2.15.1, aiohttp 3.14.5, cryptography 50.0.2, urllib3 2.8.0, oauthlib 4.0.0, astro 7.4.1, wrangler 4.151.3, react-router 7.18.4 and vitest 4.1.12, plus patched transitives.
+
 - Follow project helper references in exception handler types, including exception tuples
   and `except*`. Editing those helpers invalidates their consumers. Existing affected
   consumers may recompute once after upgrading.
