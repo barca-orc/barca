@@ -215,6 +215,16 @@ fn spec_matches_router_paths_and_methods_and_all_schemas_compile() {
     assert!(step.is_valid(&json!({"id":"p.py:a", "kind":"asset", "bytes_changed":true})));
     assert!(!step.is_valid(&json!({"id":"p.py:a", "kind":"asset", "bytes_changed":false})));
     assert!(!step.is_valid(&json!({"id":"p.py:a", "kind":"asset", "bytes_changed":"true"})));
+    let uploads = validator(&json!({"$ref":"#/components/schemas/Uploads"}));
+    let pending = barca_core::results::UploadsReport {
+        pending: 1,
+        error: Some("denied".into()),
+        nodes: vec!["p.py:a".into()],
+    };
+    assert!(uploads.is_valid(&serde_json::to_value(&pending).unwrap()));
+    assert!(!uploads.is_valid(&json!({"pending":1})));
+    let cache = validator(&json!({"$ref":"#/components/schemas/Cache"}));
+    assert!(cache.is_valid(&json!({"state":"unsynced","reason":"local_only","detail":"d"})));
     let event = validator(&json!({"$ref":"#/components/schemas/BytesChange"}));
     assert!(event.is_valid(&json!({"node_id":"p.py:a", "run_hash":"h", "content_hash":"digest", "created_at":"2026-10-15 00:00:00"})));
     assert!(!event.is_valid(

@@ -42,6 +42,15 @@ fn root_field(out: &mut Value, root: Option<&str>) {
         obj.insert("root".into(), root.into());
     }
 }
+/// `uploads` on a run's JSON, when something is left unpublished (#390).
+fn uploads_field(out: &mut Value, uploads: Option<&crate::results::UploadsReport>) {
+    if let (Value::Object(obj), Some(uploads)) = (out, uploads) {
+        obj.insert(
+            "uploads".into(),
+            serde_json::to_value(uploads).unwrap_or(Value::Null),
+        );
+    }
+}
 /// How `barca get` prints its result on stdout.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GetShape {
@@ -115,6 +124,7 @@ pub fn render_get(
             if let (Value::Object(obj), Some(cache)) = (&mut out, &result.cache) {
                 obj.insert("cache".into(), serde_json::json!(cache));
             }
+            uploads_field(&mut out, result.uploads.as_ref());
             project_key(&mut out, "steps", fields);
             line!(rendered, "{out}");
         }
@@ -345,6 +355,7 @@ pub fn render_run(
             if let (Value::Object(obj), Some(cache)) = (&mut out, &result.cache) {
                 obj.insert("cache".into(), serde_json::json!(cache));
             }
+            uploads_field(&mut out, result.uploads.as_ref());
             project_key(&mut out, "steps", fields);
             line!(rendered, "{out}");
         }
@@ -779,6 +790,20 @@ pub fn render_explain(
                 result.summary.cached,
                 result.summary.unknown
             );
+            if let Some(uploads) = &result.uploads {
+                line!(
+                    rendered,
+                    "{} pending upload{} from an earlier run, uploaded first: {}{}",
+                    uploads.pending,
+                    if uploads.pending == 1 { "" } else { "s" },
+                    uploads.nodes.join(", "),
+                    uploads
+                        .error
+                        .as_deref()
+                        .map(|e| format!(" (last error: {e})"))
+                        .unwrap_or_default()
+                );
+            }
         }
     }
     rendered
@@ -856,6 +881,7 @@ pub fn render_multi(
             if let (Value::Object(obj), Some(cache)) = (&mut run, &result.cache) {
                 obj.insert("cache".into(), serde_json::json!(cache));
             }
+            uploads_field(&mut run, result.uploads.as_ref());
             project_key(&mut run, "steps", fields);
             let run = run.to_string();
             line!(

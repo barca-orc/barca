@@ -19,6 +19,7 @@ export type Severity =
   | 'partial'
   | 'unknown'
   | 'always_runs'
+  | 'unsynced'
   | 'cached'
 
 export const SEVERITIES: readonly Severity[] = [
@@ -28,6 +29,7 @@ export const SEVERITIES: readonly Severity[] = [
   'partial',
   'unknown',
   'always_runs',
+  'unsynced',
   'cached',
 ]
 
@@ -60,6 +62,7 @@ export function severityOf(node: NodeState): Severity {
   if (node.last_materialization?.status === 'failed') return 'failed'
   return match(node.cache.state)
     .with('cached', (): Severity => 'cached')
+    .with('unsynced', (): Severity => 'unsynced')
     .with('stale', (): Severity => 'stale')
     .with('never_run', (): Severity => 'never_run')
     .with('partial', (): Severity => 'partial')
@@ -72,7 +75,7 @@ export function severityOf(node: NodeState): Severity {
 export function severityStatus(severity: Severity): StatusKind {
   return match(severity)
     .with('failed', (): StatusKind => 'failed')
-    .with('stale', 'partial', (): StatusKind => 'warning')
+    .with('stale', 'partial', 'unsynced', (): StatusKind => 'warning')
     .with('never_run', (): StatusKind => 'queued')
     .with('unknown', 'always_runs', (): StatusKind => 'skipped')
     .with('cached', (): StatusKind => 'success')
@@ -88,6 +91,7 @@ function staleReason(reason: CacheStatus['reason']): string {
     .with('failed', () => 'last run failed')
     .with('artifact_missing', () => 'artifact missing')
     .with('evicted', () => 'evicted')
+    .with('local_only', () => 'local only')
     .with(
       'materialized',
       'no_record',
@@ -103,6 +107,7 @@ function staleReason(reason: CacheStatus['reason']): string {
 function cacheLabel(node: NodeState): string {
   return match(node.cache.state)
     .with('cached', () => 'cached')
+    .with('unsynced', () => `unsynced · ${staleReason(node.cache.reason)}`)
     .with('stale', () => `stale · ${staleReason(node.cache.reason)}`)
     .with('never_run', () => 'never run')
     .with('partial', () =>

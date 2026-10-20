@@ -280,6 +280,9 @@ pub(crate) async fn carry_unpushed(
     pulled: &Connection,
 ) -> Result<Carried, BarcaError> {
     let mut carried = Carried::default();
+    // A result whose upload is still pending (#390) has no object in the store yet; its local
+    // file is what the next command uploads, so its row is carried like a reachable one.
+    let pending = crate::pending_uploads::store_paths(local).await?;
     let this_host = crate::db::local_host();
     let ours = |host: &str| !this_host.is_empty() && host == this_host;
 
@@ -408,7 +411,7 @@ pub(crate) async fn carry_unpushed(
     }
 
     pulled.execute("BEGIN", ()).await.map_err(db_err("begin"))?;
-    let copied = copy_runs(local, pulled, &open, &mut carried).await;
+    let copied = copy_runs(local, pulled, &open, &pending, &mut carried).await;
     if let Err(e) = copied {
         pulled.execute("ROLLBACK", ()).await.ok();
         return Err(e);
@@ -435,6 +438,7 @@ async fn copy_runs(
     local: &Connection,
     pulled: &Connection,
     open: &[OpenRun],
+    pending: &HashSet<String>,
     carried: &mut Carried,
 ) -> Result<(), BarcaError> {
     let run_select = format!(
@@ -515,6 +519,7 @@ async fn copy_runs(
             if run.ours
                 && text(&row[step_status]) == Some("success")
                 && !artifact_reachable(text(&row[step_path]).unwrap_or(""))
+                && !pending.contains(text(&row[step_path]).unwrap_or(""))
             {
                 carried.steps_without_artifact += 1;
                 continue;

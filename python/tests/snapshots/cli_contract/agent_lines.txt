@@ -13,5 +13,7 @@
 [barca] step:pipeline.py:report completed <secs>s (<n>/<total>)
 [barca] step:pipeline.py:total cached env CONTRACT_API_TOKEN=<unset> CONTRACT_REGION=eu
 [barca] step:pipeline.py:value completed <secs>s (<n>/<total>) attempts=2
+[barca] uploaded <n> pending results
 [barca] uploading <n> artifacts to <store>/default/artifacts (timeout <secs>s per attempt); waiting for confirmation
+[barca] uploading <n> pending results to <store>/default/artifacts from an earlier run
 [barca] warning: pipeline.py:report never uses its input `rows`. It is still loaded in full each time the step runs, and it counts toward the step's cache key. Use it, remove it from inputs=, or rename the parameter `_rows` if it is there for ordering only (a `_` input is not loaded and never flagged)

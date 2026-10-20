@@ -570,8 +570,9 @@ renames and replaces nothing anywhere else:
   and a symlink is written through (the file it points to is written, the link stays). The
   asset itself succeeds either way (`barca docs sinks`);
 - a directory at an object's path in an artifact store that is a shared directory fails the
-  fetch or the upload with exit 3, naming the path, and is left as it is. The error says to
-  remove or rename it there; `--refresh-all` does not help (`barca docs remote`).
+  fetch (exit 3) or the upload (a warning; the result stays a pending upload), naming the
+  path, and is left as it is. The message says to remove or rename it there; `--refresh-all`
+  does not help (`barca docs remote`).
 
 Known limits:
 
@@ -870,8 +871,10 @@ Known limits:
   work whatever other machines upload in the meantime. Newly committed progress is shared
   every minute in healthy operation, without ending the run; the final outcome is shared
   when it ends. Other machines can reuse confirmed results already checkpointed after a kill.
-- With a remote artifact store, a failed or unfinished upload is never recorded as reusable
-  progress. Confirmed uploads are recorded locally while other steps are still running;
+- With a remote artifact store, an unfinished upload is never recorded as reusable progress.
+  A failed upload is recorded at the end of the run as a pending upload, `unsynced` in
+  `barca status` and uploaded by the next command (`barca docs remote`, "When an upload fails
+  after the steps succeeded"). Confirmed uploads are recorded locally while other steps are still running;
   shared history publishes new committed progress every minute. Database and storage failures
   can delay that cadence; a failed checkpoint retains local history for a later retry. Clean
   ticks do not upload another snapshot.
@@ -990,8 +993,9 @@ invalidate the node; this preserves cache safety when discovery proves its liter
 An upload pins the serializing run's bytes before publishing the reusable local artifact
 path. Its confirmed hash and byte count describe those uploaded bytes, even when another
 run replaces that path before the transfer starts. Sensor content hashes keep their existing
-meaning; ordinary asset rows use the confirmed upload hash. Failed or cancelled uploads do
-not record a successful remote materialization. Staging is removed at confirmation or run
+meaning; ordinary asset rows use the confirmed upload hash. Cancelled uploads do not record
+a successful remote materialization; a failed upload records the result with the worker's
+digest and keeps the upload pending (`barca docs remote`). Staging is removed at confirmation or run
 shutdown, with dead-process cleanup as the crash backstop.
 
 Paths still identify code and inputs, so a later refresh can replace local and remote bytes.

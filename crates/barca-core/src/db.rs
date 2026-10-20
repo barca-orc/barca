@@ -810,6 +810,9 @@ async fn carry_and_fold(
     let mut carried = crate::state_carry::carry_unpushed(&local, &pulled)
         .await
         .map_err(kept_local)?;
+    crate::pending_uploads::carry(&local, &pulled)
+        .await
+        .map_err(kept_local)?;
     carried.compared = true;
     checkpoint(&local).await.map_err(kept_local)?;
     drop(local);

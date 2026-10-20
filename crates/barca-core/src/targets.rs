@@ -705,6 +705,7 @@ def lone() -> int:
             steps: Vec::new(),
             summary: ExplainSummary::default(),
             warnings: Vec::new(),
+            uploads: None,
         };
         let one = serde_json::to_value(&r).unwrap();
         assert_eq!(one["target"], "a");
@@ -750,6 +751,7 @@ def lone() -> int:
                 ("alpha".to_string(), outcome("failed")),
             ],
             cache: None,
+            uploads: None,
         };
         let s = serde_json::to_string(&r).unwrap();
         assert!(

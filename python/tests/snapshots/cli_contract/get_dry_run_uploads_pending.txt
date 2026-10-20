@@ -1,0 +1,21 @@
+# barca get summary pipeline.py --dry-run --json  (stdout, exit 0)
+command : string
+dry_run : boolean
+steps : array
+steps[] : object
+steps[].action : string
+steps[].artifact : string
+steps[].id : string
+steps[].kind : string
+steps[].run_hash : string
+summary : object
+summary.cached : integer
+summary.unknown : integer
+summary.will_run : integer
+target : string
+uploads : object
+uploads.error : string
+uploads.nodes : array
+uploads.nodes[] : string
+uploads.pending : integer
+warnings : array

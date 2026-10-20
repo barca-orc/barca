@@ -25,6 +25,12 @@ and these tags are available on the same releases page.
   keyed by partition key (`"region=emea"`), and `barca.get()` returns a dict of key to value.
   `--partition region=emea,amer` (or a JSON object for compound keys) selects keys, computes only
   those and scopes `--refresh` of the target; `barca.get(..., partition=...)` does the same.
+- **Breaking:** a remote store fails soft once the steps are done (#390). When every step
+  succeeded and only an artifact upload or the end-of-run history push failed, `get` and `run`
+  exit 0 (was 3) with one warning, add `uploads: {pending, error, nodes}` to the run JSON and
+  `--dry-run`, and record the results; `barca status` shows them `unsynced` / `local_only`
+  (`summary.unsynced`) until the next command that opens the store uploads them first. Read
+  `uploads` instead of exit 3 to detect unpublished results.
 
 ### Features
 

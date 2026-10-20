@@ -50,6 +50,7 @@ const SEVERITY_LABEL: Record<Severity, string> = {
   partial: 'partial',
   unknown: 'unknown',
   always_runs: 'always runs',
+  unsynced: 'unsynced',
   cached: 'cached',
 }
 

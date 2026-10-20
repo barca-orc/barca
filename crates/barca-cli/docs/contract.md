@@ -379,6 +379,11 @@ or pushed. The exit code is 130 whatever the store does: a cancelled run spends 
 seconds sharing its record, a second Ctrl-C or SIGTERM ends that at once, and a push that fails
 then is a line on stderr, not exit 3 (`barca docs remote`, "Ctrl-C").
 
+An artifact upload or shared-history push that fails after every step succeeded is not exit 3
+either: the run exits 0 with a warning and an `uploads` object, and the results are uploaded
+by the next command that opens the store (see "get and run: results the store did not
+receive").
+
 The exit code is 130 for SIGTERM as well as for SIGINT. Barca handles both signals the same way
 (it stops the workers, records the run as `cancelled` and exits), and the exit code follows the
 error `kind`, which has one code. 143, which a shell reports for a process that SIGTERM killed,
@@ -894,6 +899,132 @@ In the fixture run above, the store's copy of one asset was overwritten after it
 that asset and the step recomputed from it carry the key, and the two other steps do not.
 Stability: stable.
 
+### get and run: results the store did not receive
+
+With an artifact store, a run whose steps all succeeded and whose only failure is an upload of
+an artifact (or the end-of-run push of the shared history) is a success: exit 0, the usual
+result, one `[barca] warning: <n> result(s) not uploaded to <store> (<ids>): <why>; ...` line
+on stderr, and an `uploads` object (#390). The results are recorded and kept on this machine;
+the next `get` or `run` that opens the store uploads them before its own work and says so on
+stderr (`[barca] uploading <n> pending results ...`). There is no flag to give up on them.
+A store that fails before any step runs (the startup check, an unreadable shared history, a
+cached artifact that cannot be fetched) is still exit 3.
+
+<!-- BEGIN GENERATED schema get_uploads_pending -->
+| Key | Type | Present |
+|---|---|---|
+| `elapsed_seconds` | number | always |
+| `final_output` | `<user value>` | always |
+| `phases` | integer | always |
+| `run_id` | string | always |
+| `status` | string | always |
+| `steps` | array | always |
+| `steps[]` | object | always |
+| `steps[].attempts` | integer | always |
+| `steps[].detail` | string | always |
+| `steps[].elapsed_seconds` | number | always |
+| `steps[].id` | string | always |
+| `steps[].kind` | string | always |
+| `steps[].reason` | string | always |
+| `steps[].run_hash` | string | always |
+| `steps[].status` | string | always |
+| `steps_executed` | integer | always |
+| `uploads` | object | always |
+| `uploads.error` | string | always |
+| `uploads.nodes` | array | always |
+| `uploads.nodes[]` | string | always |
+| `uploads.pending` | integer | always |
+| `warnings` | array | always |
+<!-- END GENERATED schema get_uploads_pending -->
+
+- `uploads.pending` counts this machine's results not yet in the store after the run,
+  including earlier runs' that failed again; `uploads.nodes` names them (step ids, partition
+  keys included, sorted); `uploads.error` is why, in words (`null` only when nothing says).
+  A failed history push alone gives `pending: 0` and its error. The key is absent when nothing
+  is pending: test for the key. It is on `get` and `run`, with one target or several, and on
+  `result` of `barca serve`'s run status.
+- `barca status` shows each such node with `cache.state` `unsynced` and `cache.reason`
+  `local_only` (the table prints `unsynced  local only`, and the summary line counts them),
+  and `summary.unsynced` counts them:
+
+<!-- BEGIN GENERATED schema status_unsynced -->
+| Key | Type | Present |
+|---|---|---|
+| `nodes` | array | always |
+| `nodes[]` | object | always |
+| `nodes[].cache` | object | always |
+| `nodes[].cache.artifact` | string | always |
+| `nodes[].cache.detail` | string | always |
+| `nodes[].cache.reason` | string | always |
+| `nodes[].cache.run_hash` | string | always |
+| `nodes[].cache.state` | string | always |
+| `nodes[].env` | array | always |
+| `nodes[].id` | string | always |
+| `nodes[].inputs` | array | always |
+| `nodes[].inputs[]` | string | always |
+| `nodes[].kind` | string | always |
+| `nodes[].last_materialization` | object | always |
+| `nodes[].last_materialization.artifact` | string | always |
+| `nodes[].last_materialization.content_hash` | string | always |
+| `nodes[].last_materialization.created_at` | string | always |
+| `nodes[].last_materialization.elapsed_seconds` | number | always |
+| `nodes[].last_materialization.format` | string | always |
+| `nodes[].last_materialization.run_hash` | string | always |
+| `nodes[].last_materialization.size_bytes` | integer | always |
+| `nodes[].last_materialization.status` | string | always |
+| `nodes[].name` | string | always |
+| `nodes[].partitioned` | boolean | always |
+| `nodes[].shape` | object | always |
+| `nodes[].shape.keys` | array | sometimes |
+| `nodes[].shape.keys[]` | string | always |
+| `nodes[].shape.rows` | integer | sometimes |
+| `nodes[].shape.type` | string | always |
+| `root` | string | always |
+| `summary` | object | always |
+| `summary.always_runs` | integer | always |
+| `summary.cached` | integer | always |
+| `summary.never_run` | integer | always |
+| `summary.partial` | integer | always |
+| `summary.stale` | integer | always |
+| `summary.unknown` | integer | always |
+| `summary.unsynced` | integer | always |
+| `target` | null | always |
+| `targets` | array | always |
+| `total` | integer | always |
+| `truncated` | boolean | always |
+<!-- END GENERATED schema status_unsynced -->
+
+- `--dry-run` has the same `uploads` object when results are pending, and predicts them
+  `cached`; the human dry run adds a line naming them:
+
+<!-- BEGIN GENERATED schema get_dry_run_uploads_pending -->
+| Key | Type | Present |
+|---|---|---|
+| `command` | string | always |
+| `dry_run` | boolean | always |
+| `steps` | array | always |
+| `steps[]` | object | always |
+| `steps[].action` | string | always |
+| `steps[].artifact` | string | always |
+| `steps[].id` | string | always |
+| `steps[].kind` | string | always |
+| `steps[].run_hash` | string | always |
+| `summary` | object | always |
+| `summary.cached` | integer | always |
+| `summary.unknown` | integer | always |
+| `summary.will_run` | integer | always |
+| `target` | string | always |
+| `uploads` | object | always |
+| `uploads.error` | string | always |
+| `uploads.nodes` | array | always |
+| `uploads.nodes[]` | string | always |
+| `uploads.pending` | integer | always |
+| `warnings` | array | always |
+<!-- END GENERATED schema get_dry_run_uploads_pending -->
+
+`unsynced` and `local_only` are the first state and reason of RFC-0009 section 4.1; `store only`
+and `mismatch` are not implemented yet. Stability: stable.
+
 ### get and run: several targets
 
 With `a,b`, `final_output` is replaced by `targets`, keyed by target name in the order given.
@@ -1191,15 +1322,17 @@ counts every node even when `nodes` is truncated.
 | `summary.partial` | integer | always |
 | `summary.stale` | integer | always |
 | `summary.unknown` | integer | always |
+| `summary.unsynced` | integer | always |
 | `target` | null | always |
 | `targets` | array | always |
 | `total` | integer | always |
 | `truncated` | boolean | always |
 <!-- END GENERATED schema status -->
 
-- `cache.state` is `cached`, `stale`, `never_run`, `partial`, `unknown` or `always_runs`: the
-  same snake_case spelling as the `summary` keys (the human table prints `never-run`);
-  `cache.reason` is `materialized`, `changed`, `upstream_stale`, `failed`, `artifact_missing`,
+- `cache.state` is `cached`, `unsynced`, `stale`, `never_run`, `partial`, `unknown` or
+  `always_runs`: the same snake_case spelling as the `summary` keys (the human table prints
+  `never-run`; `summary.unsynced` is always present);
+  `cache.reason` is `materialized`, `local_only`, `changed`, `upstream_stale`, `failed`, `artifact_missing`,
   `evicted` (experimental), `no_record`, `partitions_missing`, `partitions_unknown`,
   `sensor_output_unknown`, `task` or `sensor`.
   `cache.run_hash` and `cache.artifact` appear when known (`artifact` only when cached).
@@ -1212,8 +1345,8 @@ counts every node even when `nodes` is truncated.
 ### history
 
 `runs[].attempts` is the sum of attempts in its recorded materialization rows, including
-executed partition keys; an all-cached run has zero. Upload-failure rows retain their
-existing transfer-attempt counts. `stats.recent_runs[].attempts` continues to report
+executed partition keys; an all-cached run has zero. Upload-failure rows recorded by
+earlier versions (a failed upload no longer fails its step) retain their transfer-attempt counts. `stats.recent_runs[].attempts` continues to report
 attempts per materialization, with the stored final-attempt duration.
 
 Experimental `--reconcile RUN_ID` is an explicit write after the operator verifies the run
@@ -1539,7 +1672,9 @@ placeholders:
 [barca] step:pipeline.py:report completed <secs>s (<n>/<total>)
 [barca] step:pipeline.py:total cached env CONTRACT_API_TOKEN=<unset> CONTRACT_REGION=eu
 [barca] step:pipeline.py:value completed <secs>s (<n>/<total>) attempts=2
+[barca] uploaded <n> pending results
 [barca] uploading <n> artifacts to <store>/default/artifacts (timeout <secs>s per attempt); waiting for confirmation
+[barca] uploading <n> pending results to <store>/default/artifacts from an earlier run
 [barca] warning: pipeline.py:report never uses its input `rows`. It is still loaded in full each time the step runs, and it counts toward the step's cache key. Use it, remove it from inputs=, or rename the parameter `_rows` if it is there for ordering only (a `_` input is not loaded and never flagged)
 ```
 <!-- END GENERATED agent-lines -->
@@ -1554,6 +1689,7 @@ placeholders:
 | `[barca] env <env> (<source>); artifact store <store>` | once at startup of `get`, `run` and `serve` (every mode) when the environment comes from `default_env` in `barca.toml` or a separate artifact store is configured. `<source>` is `--env`, `BARCA_ENV`, `default_env in barca.toml` or `built-in default`; `<store>` is the store URI with credentials redacted, or `local (<dir>)` | experimental |
 | `[barca] checking artifact store <store> (timeout <secs>s)` | before workers start whenever a separate artifact store is configured, including state-off runs; requires bucket/container-root listing and backend existence access, verifies reachability rather than write permission | experimental |
 | `[barca] uploading <n> artifacts to <store> (timeout <secs>s per attempt); waiting for confirmation` | before awaiting queued artifact uploads (every mode) | experimental |
+| `[barca] uploading <n> pending results to <store> from an earlier run` | before workers start, when results an earlier run could not upload are retried (every mode); followed by `[barca] uploaded <n> pending results` or `[barca] <n> pending results still not uploaded (<k> uploaded): <why>` | experimental |
 | `[barca] still waiting for artifact uploads to <store> (<secs>s)` | every 10 seconds while the upload drain waits (every mode); destinations omit URI passwords and signed query parameters | experimental |
 | `[barca] progress checkpoint failed; recorded results remain local: <cause>` | a mid-run shared-state publication failed; committed local results are retained and retried at the next minute tick, without changing successful user work into a failed step | experimental |
 | `[barca] still running (<n>s): <id>` | a step in flight for `BARCA_PROGRESS_SECS` (every mode) | experimental |
@@ -1691,6 +1827,7 @@ when known. These additive keys are stable. See `barca docs cache` and
 | `summary.partial` | integer | always |
 | `summary.stale` | integer | always |
 | `summary.unknown` | integer | always |
+| `summary.unsynced` | integer | always |
 | `target` | null | always |
 | `targets` | array | always |
 | `total` | integer | always |

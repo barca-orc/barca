@@ -262,7 +262,7 @@ GET /state             → [NodeState, ...]   (dependency order)
 Each `NodeState` is a `barca status --json` node (`id`, `name`, `kind`, `inputs`, `partitioned`,
 `cache`, `partitions`, `last_materialization`, `shape`, `env`) plus `durations` — `{ median_seconds,
 p95_seconds, samples }` over the last 20 successful runs, or `null` — and `next_run`, the next cron
-fire time in unix seconds for scheduled nodes. `cache` is the `barca status` cache entry: `state` is `cached`, `stale`, `never_run`, `partial`,
+fire time in unix seconds for scheduled nodes. `cache` is the `barca status` cache entry: `state` is `cached`, `unsynced`, `stale`, `never_run`, `partial`,
 `unknown` or `always_runs`, with a machine-readable `reason` and a `detail` in words (see
 [`barca status`](/reference/cli/#status)). `shape` is always `null` here:
 reading artifact shapes starts a reader process, too slow for an endpoint the UI polls. The cache

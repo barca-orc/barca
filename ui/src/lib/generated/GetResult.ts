@@ -3,6 +3,7 @@ import type { CacheReport } from "./CacheReport";
 import type { OutputRef } from "./OutputRef";
 import type { PlanWarning } from "./PlanWarning";
 import type { StepReport } from "./StepReport";
+import type { UploadsReport } from "./UploadsReport";
 
 export type GetResult = { run_id: string, elapsed_seconds: number, steps_executed: number, phases: number, final_output: OutputRef | null,
 /**
@@ -17,4 +18,9 @@ warnings: Array<PlanWarning>,
  * Present when the check after the run found `.barca/` over its size limit and evicted
  * (RFC-0012).
  */
-cache?: CacheReport | null, };
+cache?: CacheReport | null,
+/**
+ * Results computed here and not yet in the artifact store (#390). Absent when nothing is
+ * pending and nothing failed to publish.
+ */
+uploads?: UploadsReport, };

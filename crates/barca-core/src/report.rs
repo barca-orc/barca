@@ -131,6 +131,8 @@ pub fn render_status_table(result: &crate::status::StatusResult) -> String {
                         p.cached, p.total, n.cache.reason
                     )
                 }
+                // Human form of an `unsynced` reason (RFC-0009): `local only`.
+                _ if n.cache.state == "unsynced" => n.cache.reason.replace('_', " "),
                 _ => n.cache.reason.clone(),
             };
             let last = n
@@ -206,8 +208,17 @@ pub fn render_status_table(result: &crate::status::StatusResult) -> String {
     let s = &result.summary;
     writeln!(
         &mut rendered,
-        "\n{} cached, {} stale, {} never run, {} partial, {} unknown, {} always run",
-        s.cached, s.stale, s.never_run, s.partial, s.unknown, s.always_runs
+        "\n{} cached, {}{} stale, {} never run, {} partial, {} unknown, {} always run",
+        s.cached,
+        match s.unsynced {
+            0 => String::new(),
+            n => format!("{n} unsynced, "),
+        },
+        s.stale,
+        s.never_run,
+        s.partial,
+        s.unknown,
+        s.always_runs
     )
     .unwrap();
     rendered

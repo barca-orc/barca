@@ -177,6 +177,7 @@ impl Executed {
             warnings: r.warnings,
             targets: self.targets,
             cache: r.cache,
+            uploads: r.uploads,
         }
     }
 }
@@ -334,6 +335,8 @@ struct RunState {
     completed_steps: usize,
     store_paths: HashMap<String, String>,
     transfer_error: Option<String>,
+    /// What this run left unpublished in the artifact store (#390), for the run JSON.
+    uploads: Option<crate::results::UploadsReport>,
     cached_steps: recover::CachedSteps,
     held_cached_lines: Vec<String>,
     /// The results this run holds while it is in flight (the cache size limit leaves them).
@@ -658,6 +661,11 @@ async fn start_workers(
             client.abort().await;
             return Err(error);
         }
+        // Results an earlier command computed here and could not upload go first (#390).
+        if let Err(error) = retry_pending_uploads(&mut client, db_path, cancel, &location).await {
+            client.abort().await;
+            return Err(error);
+        }
         Some(StoreSync::new(client, cancel.clone()))
     } else {
         None
@@ -721,6 +729,91 @@ async fn start_workers(
     trace_point!(started.trace, "pool_started");
 
     Ok((store, pool, recorder))
+}
+/// Upload what earlier commands on this machine left pending (#390), before this command's own
+/// work, and wait for it. One that fails again stays pending with its new error; the run goes
+/// on either way, and reports what is still pending when it ends. A pending result whose local
+/// file is gone has nothing left to upload and is dropped.
+async fn retry_pending_uploads(
+    client: &mut TransferClient,
+    db_path: &str,
+    cancel: &CancellationToken,
+    location: &str,
+) -> Result<(), BarcaError> {
+    use crate::pending_uploads::Settled;
+    let pending = crate::pending_uploads::list(db_path).await?;
+    if pending.is_empty() {
+        return Ok(());
+    }
+    let mut settled = Vec::new();
+    let mut queued: Vec<&str> = Vec::new();
+    for p in &pending {
+        let here = std::path::Path::new(&p.local_path).is_file();
+        // The store moved (another `[remote] uri`): this object no longer belongs anywhere.
+        let same_store = client.layout().store_for(&p.local_path).as_deref() == Some(&p.store_path);
+        if !here || !same_store {
+            crate::errln!(
+                "[barca] warning: dropped the pending upload of {}: {}",
+                p.node_id,
+                if !here {
+                    format!("its local file {} is gone", p.local_path)
+                } else {
+                    format!(
+                        "it belongs to another store ({})",
+                        crate::transfer::diagnostic_uri(&p.store_path)
+                    )
+                }
+            );
+            settled.push((p.store_path.clone(), Settled::Dropped));
+            continue;
+        }
+        if client.upload(&p.store_path, &p.local_path).is_some() {
+            queued.push(&p.store_path);
+        }
+    }
+    if !queued.is_empty() {
+        crate::errln!(
+            "[barca] uploading {} pending result{} to {location} from an earlier run",
+            queued.len(),
+            if queued.len() == 1 { "" } else { "s" }
+        );
+        let report = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Err(BarcaError::Cancelled),
+            report = client.drain() => report,
+        };
+        let failed = report.failures.len();
+        for store_path in &queued {
+            if !report.failures.iter().any(|f| f.key == *store_path) {
+                let sha256 = report.hashes.get(*store_path).cloned();
+                settled.push((store_path.to_string(), Settled::Uploaded(sha256)));
+            }
+        }
+        let mut first_error = None;
+        for f in report.failures {
+            let error = format!(
+                "upload to {} failed ({} attempt{}): {}",
+                crate::transfer::diagnostic_uri(&f.store),
+                f.attempts,
+                if f.attempts == 1 { "" } else { "s" },
+                f.message
+            );
+            first_error.get_or_insert_with(|| f.message.clone());
+            settled.push((f.key, Settled::Failed(error)));
+        }
+        let uploaded = queued.len() - failed;
+        match first_error {
+            None => crate::errln!(
+                "[barca] uploaded {uploaded} pending result{}",
+                if uploaded == 1 { "" } else { "s" }
+            ),
+            Some(why) => crate::errln!(
+                "[barca] {failed} pending result{} still not uploaded ({uploaded} uploaded): {why}",
+                if failed == 1 { "" } else { "s" }
+            ),
+        }
+    }
+    crate::pending_uploads::settle(db_path, &settled).await
 }
 async fn open_run<'a, 'r>(
     request: &'a ExecuteRequest<'r>,
@@ -1469,9 +1562,9 @@ async fn record_and_publish(session: &mut RunSession<'_, '_>) -> Result<f64, Bar
             store: &mut session.store,
             all_outputs: &mut session.state.all_outputs,
             store_paths: &mut session.state.store_paths,
-            failed_bases: &mut session.state.failed_bases,
             all_failures: &mut session.state.all_failures,
             transfer_error: &mut session.state.transfer_error,
+            uploads: &mut session.state.uploads,
             cached_node_ids: &session.state.cached_node_ids,
             t0: session.started.trace.start,
             cost_model: &session.cost_model,
@@ -1566,6 +1659,7 @@ async fn return_outputs(
             warnings: session.prepared.plan_warnings.clone(),
             partitions,
             cache: None,
+            uploads: session.state.uploads.take(),
         },
         targets: outcomes,
         step_failure: session
@@ -1943,6 +2037,12 @@ pub(crate) async fn explain_dag_with_membership(
     );
 
     let steps = merge_partition_reports(steps);
+    // Results of an earlier run still waiting for the store: the real run uploads them first.
+    let uploads = if cfg.remote_artifacts() {
+        crate::pending_uploads::report(&crate::pending_uploads::list(&cfg.db_path).await?, None)
+    } else {
+        None
+    };
     // Per-target predictions: the same step lines, counted over each target's cone.
     let per_target = if targets.len() > 1 {
         targets
@@ -1971,6 +2071,7 @@ pub(crate) async fn explain_dag_with_membership(
             steps,
             summary,
             warnings,
+            uploads,
         },
         state.into_membership(),
     ))
@@ -2581,9 +2682,9 @@ struct FinalizeRun<'a> {
     store: &'a mut Option<StoreSync>,
     all_outputs: &'a mut HashMap<String, OutputRef>,
     store_paths: &'a mut HashMap<String, String>,
-    failed_bases: &'a mut std::collections::HashSet<String>,
     all_failures: &'a mut Vec<dispatch::StepFailure>,
     transfer_error: &'a mut Option<String>,
+    uploads: &'a mut Option<crate::results::UploadsReport>,
     cached_node_ids: &'a std::collections::HashSet<String>,
     t0: Instant,
     cost_model: &'a crate::cost::CostModel,
@@ -2626,9 +2727,9 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
         store,
         all_outputs,
         store_paths,
-        failed_bases,
         all_failures,
         transfer_error,
+        uploads,
         cached_node_ids,
         t0,
         cost_model,
@@ -2673,6 +2774,11 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
         &trace,
     )
     .await;
+    let mut pending = Vec::new();
+    let mut upload_error = None;
+    let store_location = store
+        .as_ref()
+        .map(|s| crate::transfer::diagnostic_uri(s.layout.store_root()));
     let mut was_cancelled = drain_store(
         DrainStore {
             store,
@@ -2680,13 +2786,20 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
             cancel,
             all_outputs,
             store_paths,
-            failed_bases,
-            all_failures,
-            transfer_error,
+            pending: &mut pending,
+            upload_error: &mut upload_error,
         },
         &trace,
     )
     .await;
+    // Before the rows: a result recorded with a store location whose upload failed is always
+    // known to be pending. (A crash in between leaves a pending upload with no row, which the
+    // next command uploads harmlessly.)
+    for p in &mut pending {
+        p.run_hash = decide_state.run_hashes().get(&p.node_id).cloned();
+        p.run_id = Some(run_id.to_string());
+    }
+    crate::pending_uploads::record(db_path, &pending).await?;
 
     let steps_cached = cached_node_ids.len();
     let elapsed = t0.elapsed().as_secs_f64();
@@ -2750,6 +2863,7 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
 
     // Shared remote state: upload the local history (`push_state` folds the WAL in and copies
     // it under the database lock). See `SharedPush::run` for conflicts.
+    let mut publish_error = None;
     if state_sync_on {
         let push = SharedPush {
             python,
@@ -2759,7 +2873,58 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
             logs: logs_buffer,
             token: state_token.take().expect("pulled when state sync is on"),
         };
-        publish_history(push, &mut ledger, interrupt, &mut was_cancelled, &trace).await?;
+        match publish_history(push, &mut ledger, interrupt, &mut was_cancelled, &trace).await {
+            Ok(()) => {}
+            // The run's work is done and recorded here; only sharing it failed (#390). A
+            // database error is this machine's own and stays an error.
+            Err(e @ (BarcaError::Cancelled | BarcaError::Db(_))) => return Err(e),
+            Err(e) => {
+                // The first line: the cause. The rest is the remedy for a failed command.
+                let e = e.to_string();
+                let e = e.lines().next().unwrap_or_default();
+                let location = cfg
+                    .state_uri
+                    .as_deref()
+                    .map(crate::transfer::diagnostic_uri)
+                    .unwrap_or_default();
+                crate::errln!(
+                    "[barca] warning: the run's history was not published to {location}: {e}; \
+                     the run is recorded on this machine and the next run here publishes it"
+                );
+                publish_error = Some(format!("history push to {location} failed: {e}"));
+            }
+        }
+    }
+    if store_location.is_some() || publish_error.is_some() {
+        let left = crate::pending_uploads::list(db_path).await?;
+        if !pending.is_empty() {
+            let mut nodes: Vec<&str> = pending.iter().map(|p| p.node_id.as_str()).collect();
+            nodes.sort_unstable();
+            let shown = nodes
+                .iter()
+                .take(10)
+                .copied()
+                .collect::<Vec<_>>()
+                .join(", ");
+            let more = match nodes.len().saturating_sub(10) {
+                0 => String::new(),
+                n => format!(" and {n} more"),
+            };
+            crate::errln!(
+                "[barca] warning: {} result{} not uploaded to {} ({shown}{more}): {}; every step \
+                 succeeded, the results are kept on this machine (`unsynced`, local only) and the \
+                 next command that uses the store uploads them",
+                pending.len(),
+                if pending.len() == 1 { "" } else { "s" },
+                store_location.as_deref().unwrap_or_default(),
+                upload_error.as_deref().unwrap_or("upload failed"),
+            );
+        }
+        let error = match (upload_error, publish_error) {
+            (Some(u), Some(p)) => Some(format!("{u}; {p}")),
+            (u, p) => u.or(p),
+        };
+        *uploads = crate::pending_uploads::report(&left, error);
     }
 
     // Propagate cancellation/worker error after persisting partial results.
@@ -2848,9 +3013,10 @@ struct DrainStore<'a> {
     cancel: &'a CancellationToken,
     all_outputs: &'a mut HashMap<String, OutputRef>,
     store_paths: &'a mut HashMap<String, String>,
-    failed_bases: &'a mut std::collections::HashSet<String>,
-    all_failures: &'a mut Vec<dispatch::StepFailure>,
-    transfer_error: &'a mut Option<String>,
+    /// Uploads that failed: kept pending, their steps recorded (#390).
+    pending: &'a mut Vec<crate::pending_uploads::PendingUpload>,
+    /// The first upload failure's message, for the run's warning and `uploads.error`.
+    upload_error: &'a mut Option<String>,
 }
 async fn drain_store(ctx: DrainStore<'_>, trace: &impl Fn(&str)) -> bool {
     let DrainStore {
@@ -2859,9 +3025,8 @@ async fn drain_store(ctx: DrainStore<'_>, trace: &impl Fn(&str)) -> bool {
         cancel,
         all_outputs,
         store_paths,
-        failed_bases,
-        all_failures,
-        transfer_error,
+        pending,
+        upload_error,
     } = ctx;
     macro_rules! trace_point { ($($arg:tt)*) => { trace(&format!($($arg)*)); }; }
     let mut was_cancelled = cancel.is_cancelled();
@@ -2935,46 +3100,38 @@ async fn drain_store(ctx: DrainStore<'_>, trace: &impl Fn(&str)) -> bool {
                 t_drain.elapsed().as_secs_f64()
             );
         }
+        // Every step that reached here succeeded; a failed upload does not undo that (#390).
+        // The row is recorded with its store location like any other, and the upload is kept
+        // pending: the next command that opens the store uploads it before its own work.
         if !report.failures.is_empty() {
-            let mut detail = Vec::new();
+            let messages: Vec<&str> = report.failures.iter().map(|f| f.message.as_str()).collect();
+            let remedy = transfer_remedy(&messages, "");
             for f in &report.failures {
-                all_outputs.remove(&f.key);
-                store_paths.remove(&f.key);
-                failed_bases.insert(crate::StepId::parse(&f.key).base_id().to_string());
-                all_failures.push(dispatch::StepFailure {
-                    node_id: f.key.clone(),
-                    error: dispatch::StepError {
-                        error_type: "UploadError".to_string(),
-                        message: format!(
-                            "upload to {} failed: {}",
-                            crate::transfer::diagnostic_uri(&f.store),
-                            f.message
-                        ),
-                        traceback: String::new(),
-                        attempts: f.attempts,
-                        started_unix_ns: None,
-                        elapsed_seconds: None,
-                    },
-                });
-                detail.push(format!(
-                    "  {} ({}; {} attempt(s)): {}",
-                    f.key,
+                let error = format!(
+                    "upload to {} failed ({} attempt{}): {}",
                     crate::transfer::diagnostic_uri(&f.store),
                     f.attempts,
+                    if f.attempts == 1 { "" } else { "s" },
                     f.message
-                ));
-            }
-            let messages: Vec<&str> = report.failures.iter().map(|f| f.message.as_str()).collect();
-            transfer_error.get_or_insert(format!(
-                "{} artifact upload(s) failed — those steps were not recorded and \
-                 will recompute next run:\n{}{}",
-                report.failures.len(),
-                detail.join("\n"),
-                match transfer_remedy(&messages, "") {
-                    remedy if remedy.is_empty() => remedy,
-                    remedy => format!("\n{remedy}"),
+                );
+                if upload_error.is_none() {
+                    *upload_error = Some(match remedy.as_str() {
+                        "" => error.clone(),
+                        remedy => format!("{error} {remedy}"),
+                    });
                 }
-            ));
+                let Some(oref) = all_outputs.get(&f.key) else {
+                    continue;
+                };
+                pending.push(crate::pending_uploads::PendingUpload {
+                    store_path: f.store.clone(),
+                    node_id: f.key.clone(),
+                    run_hash: None,
+                    run_id: None,
+                    local_path: oref.path.clone(),
+                    error: Some(error),
+                });
+            }
         }
     }
 

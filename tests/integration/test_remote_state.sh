@@ -181,7 +181,7 @@ grep -q '\[0,1,4,9\]\|\[0, 1, 4, 9\]' "$TMP/machine-e/fan-e.json" \
     || { echo "FAIL: parallel() results lost"; cat "$TMP/machine-e/fan-e.json" "$TMP/machine-e/fan-e.log"; exit 1; }
 
 if [ "$(id -u)" != "0" ]; then
-    echo "── upload failure fails the run and records nothing for the step"
+    echo "── upload failure after the step succeeded: exit 0, a warning, the result kept pending"
     make_machine "$TMP/machine-g"
     cat >> "$TMP/machine-g/pipeline.py" << 'PYEOF'
 
@@ -189,59 +189,46 @@ if [ "$(id -u)" != "0" ]; then
 def unshippable() -> int:
     return 42
 PYEOF
-    BEFORE=$(python3 -c "
-import sqlite3
-print(sqlite3.connect('$STATE_BLOB').execute(\"SELECT COUNT(*) FROM materializations WHERE node_id LIKE '%unshippable%' AND status='success'\").fetchone()[0])
-")
     chmod 555 "$SHARED/default/artifacts"
     set +e
-    (cd "$TMP/machine-g" && $BARCA get unshippable pipeline.py --agent -o value --json > result-g.json 2> stderr-g.log)
+    (cd "$TMP/machine-g" && $BARCA get unshippable pipeline.py --agent --json > result-g.json 2> stderr-g.log)
     STATUS=$?
     set -e
     chmod 755 "$SHARED/default/artifacts"
-    [ "$STATUS" != "0" ] || { echo "FAIL: run with a failed upload exited 0"; cat "$TMP/machine-g/stderr-g.log"; exit 1; }
-    grep -q "upload" "$TMP/machine-g/stderr-g.log" \
-        || { echo "FAIL: failure does not mention the upload"; cat "$TMP/machine-g/stderr-g.log"; exit 1; }
-    AFTER=$(python3 -c "
-import sqlite3
-print(sqlite3.connect('$STATE_BLOB').execute(\"SELECT COUNT(*) FROM materializations WHERE node_id LIKE '%unshippable%' AND status='success'\").fetchone()[0])
-")
-    [ "$BEFORE" = "$AFTER" ] || { echo "FAIL: success row recorded for an artifact missing from the store"; exit 1; }
-
-    echo "── the failure is recorded in shared state: type, no path, attempts, failed run"
-    python3 - "$STATE_BLOB" << 'PYEOF' || exit 1
-import sqlite3, sys
-conn = sqlite3.connect(sys.argv[1])
-row = conn.execute(
-    "SELECT status, error_type, artifact_path, attempts, error_message FROM materializations "
-    "WHERE node_id LIKE '%unshippable%' ORDER BY id DESC LIMIT 1"
+    [ "$STATUS" = "0" ] || { echo "FAIL: run with a failed upload exited $STATUS"; cat "$TMP/machine-g/stderr-g.log"; exit 1; }
+    grep -q "warning: 1 result not uploaded" "$TMP/machine-g/stderr-g.log" \
+        || { echo "FAIL: no warning names the upload"; cat "$TMP/machine-g/stderr-g.log"; exit 1; }
+    python3 - "$TMP/machine-g/result-g.json" "$STATE_BLOB" "$TMP/machine-g/.barca/metadata.db" << 'PYEOF' || exit 1
+import json, sqlite3, sys
+result = json.load(open(sys.argv[1]))
+assert result["uploads"]["pending"] == 1, result
+assert result["uploads"]["nodes"] == ["pipeline.py:unshippable"], result
+assert "PermissionError" in result["uploads"]["error"], result
+# Recorded as a success at its store location, the run a success, the upload pending.
+shared = sqlite3.connect(sys.argv[2])
+status, path = shared.execute(
+    "SELECT status, artifact_path FROM materializations WHERE node_id LIKE '%unshippable%' "
+    "ORDER BY id DESC LIMIT 1"
 ).fetchone()
-status, error_type, path, attempts, message = row
-problems = []
-if status != "failed": problems.append(f"status={status}")
-if error_type != "UploadError": problems.append(f"error_type={error_type}")
-if path is not None: problems.append(f"artifact_path={path}")
-# Permission denied is permanent: one attempt, no wasted retries.
-if attempts != 1: problems.append(f"attempts={attempts}")
-if not message.startswith("upload to ") or "PermissionError" not in message:
-    problems.append(f"message={message!r}")
-run_status = conn.execute("SELECT status FROM runs ORDER BY rowid DESC LIMIT 1").fetchone()[0]
-if run_status != "failed": problems.append(f"run status={run_status}")
-if problems:
-    print("FAIL: upload failure row:", ", ".join(problems))
-    sys.exit(1)
+assert status == "success" and path.endswith(".json"), (status, path)
+assert shared.execute("SELECT status FROM runs ORDER BY rowid DESC LIMIT 1").fetchone()[0] == "success"
+local = sqlite3.connect(sys.argv[3])
+assert local.execute("SELECT COUNT(*) FROM pending_uploads").fetchone()[0] == 1
 PYEOF
 
-    echo "── once the store is writable again, the step recomputes and is recorded"
-    (cd "$TMP/machine-g" && $BARCA get unshippable pipeline.py --agent -o value --json > rerun-g.json 2> rerun-g.log) \
+    echo "── once the store is writable again, the next run uploads it without recomputing"
+    (cd "$TMP/machine-g" && $BARCA get unshippable pipeline.py --agent --json > rerun-g.json 2> rerun-g.log) \
         || { echo "FAIL: rerun after fixing the store failed"; cat "$TMP/machine-g/rerun-g.log"; exit 1; }
+    grep -q "uploaded 1 pending result" "$TMP/machine-g/rerun-g.log" \
+        || { echo "FAIL: rerun did not retry the pending upload"; cat "$TMP/machine-g/rerun-g.log"; exit 1; }
     ls "$SHARED"/default/artifacts/*unshippable*/*.json > /dev/null 2>&1 \
         || { echo "FAIL: rerun did not upload the artifact"; exit 1; }
-    OK=$(python3 -c "
-import sqlite3
-print(sqlite3.connect('$STATE_BLOB').execute(\"SELECT COUNT(*) FROM materializations WHERE node_id LIKE '%unshippable%' AND status='success' AND artifact_path IS NOT NULL\").fetchone()[0])
-")
-    [ "$OK" = "1" ] || { echo "FAIL: expected one success row after rerun, got $OK"; exit 1; }
+    python3 -c "
+import json, sqlite3
+r = json.load(open('$TMP/machine-g/rerun-g.json'))
+assert r['steps_executed'] == 0 and 'uploads' not in r, r
+assert sqlite3.connect('$TMP/machine-g/.barca/metadata.db').execute('SELECT COUNT(*) FROM pending_uploads').fetchone()[0] == 0
+" || { echo "FAIL: pending upload not cleared"; exit 1; }
 fi
 
 echo "── conflict replay: remote modified between B's pull and push survives"

@@ -31,6 +31,26 @@ pub struct GetResult {
     /// what it evicted, and the size after.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache: Option<crate::gc::CacheReport>,
+    /// Results computed here and not yet in the artifact store (#390). Absent when nothing is
+    /// pending and nothing failed to publish.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub uploads: Option<UploadsReport>,
+}
+
+/// What a run did not publish to the artifact store: the run JSON's `uploads` object, and the
+/// dry run's. Every step succeeded; these results are recorded and kept on this machine, and
+/// the next command that opens the store uploads them before its own work.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct UploadsReport {
+    /// How many results of this machine are waiting to be uploaded.
+    pub pending: usize,
+    /// Why: the last upload (or shared-history push) error, `null` when there is none.
+    pub error: Option<String>,
+    /// The nodes (partition keys included) whose results are pending, sorted.
+    #[serde(default)]
+    pub nodes: Vec<String>,
 }
 
 /// The result of `barca get|run a,b` (several targets): one run over the union of the targets'
@@ -54,6 +74,9 @@ pub struct MultiResult {
     /// Present when the check after the run found `.barca/` over its size limit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache: Option<crate::gc::CacheReport>,
+    /// See [`GetResult::uploads`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uploads: Option<UploadsReport>,
 }
 
 fn serialize_targets<S: serde::Serializer>(
@@ -204,6 +227,9 @@ pub struct ExplainResult {
     pub summary: ExplainSummary,
     /// Plan-time warnings for the steps the command would plan: the list the real run reports.
     pub warnings: Vec<PlanWarning>,
+    /// Results of an earlier run still waiting to be uploaded; the real run uploads them
+    /// before its own work. Absent when there are none.
+    pub uploads: Option<UploadsReport>,
 }
 
 /// One target of a multi-target dry run.
@@ -245,6 +271,9 @@ impl Serialize for ExplainResult {
         s.serialize_field("steps", &self.steps)?;
         s.serialize_field("summary", &self.summary)?;
         s.serialize_field("warnings", &self.warnings)?;
+        if let Some(uploads) = &self.uploads {
+            s.serialize_field("uploads", uploads)?;
+        }
         s.end()
     }
 }
@@ -263,6 +292,8 @@ impl<'de> Deserialize<'de> for ExplainResult {
             summary: ExplainSummary,
             #[serde(default)]
             warnings: Vec<PlanWarning>,
+            #[serde(default)]
+            uploads: Option<UploadsReport>,
         }
         let wire = WireExplain::deserialize(deserializer)?;
         if !wire.targets.is_empty() && (wire.targets.len() < 2 || wire.target.is_some()) {
@@ -278,6 +309,7 @@ impl<'de> Deserialize<'de> for ExplainResult {
             steps: wire.steps,
             summary: wire.summary,
             warnings: wire.warnings,
+            uploads: wire.uploads,
         })
     }
 }

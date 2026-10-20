@@ -63,21 +63,21 @@ pub struct NodeStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct CacheStatus {
-    /// `cached`, `stale`, `never_run`, `partial`, `unknown` or `always_runs`.
+    /// `cached`, `unsynced`, `stale`, `never_run`, `partial`, `unknown` or `always_runs`.
     #[cfg_attr(
         feature = "ts",
         ts(
-            type = "\"cached\" | \"stale\" | \"never_run\" | \"partial\" | \"unknown\" | \"always_runs\""
+            type = "\"cached\" | \"unsynced\" | \"stale\" | \"never_run\" | \"partial\" | \"unknown\" | \"always_runs\""
         )
     )]
     pub state: String,
-    /// Machine-readable reason: `materialized`, `changed`, `upstream_stale`, `failed`,
+    /// Machine-readable reason: `materialized`, `local_only`, `changed`, `upstream_stale`, `failed`,
     /// `artifact_missing`, `evicted`, `no_record`, `partitions_missing`, `partitions_unknown`,
     /// `sensor_output_unknown`, `task` or `sensor`.
     #[cfg_attr(
         feature = "ts",
         ts(
-            type = "\"materialized\" | \"changed\" | \"upstream_stale\" | \"failed\" | \"artifact_missing\" | \"evicted\" | \"no_record\" | \"partitions_missing\" | \"partitions_unknown\" | \"sensor_output_unknown\" | \"task\" | \"sensor\""
+            type = "\"materialized\" | \"local_only\" | \"changed\" | \"upstream_stale\" | \"failed\" | \"artifact_missing\" | \"evicted\" | \"no_record\" | \"partitions_missing\" | \"partitions_unknown\" | \"sensor_output_unknown\" | \"task\" | \"sensor\""
         )
     )]
     pub reason: String,
@@ -134,6 +134,9 @@ pub struct StatusSummary {
     pub partial: usize,
     pub unknown: usize,
     pub always_runs: usize,
+    /// Cached here, not (yet) in the artifact store.
+    #[serde(default)]
+    pub unsynced: usize,
 }
 
 /// Gather status for every node in scope (the targets' upstream cones, or the whole DAG when
@@ -224,6 +227,13 @@ async fn status_from_dag_with_membership(
         HashMap::new()
     };
 
+    // Results computed here whose upload to the store is still pending (#390).
+    let pending = if cfg.remote_artifacts() {
+        crate::pending_uploads::list(&cfg.db_path).await?
+    } else {
+        Vec::new()
+    };
+
     let mut nodes: Vec<NodeStatus> = Vec::new();
     let mut states: HashMap<String, String> = HashMap::new();
     for id in ids {
@@ -248,7 +258,13 @@ async fn status_from_dag_with_membership(
                 missing: p.will_run,
                 missing_keys: p.will_run_keys.clone(),
             });
-        let cache = cache_status(report, &inputs, &states, &history);
+        let mut cache = cache_status(report, &inputs, &states, &history);
+        local_only(
+            &mut cache,
+            id,
+            !node.extracted.partitions.is_empty(),
+            &pending,
+        );
         states.insert(id.to_string(), cache.state.clone());
 
         let last_materialization = history.latest.map(|m| LastMaterialization {
@@ -298,6 +314,7 @@ async fn status_from_dag_with_membership(
             "never_run" => summary.never_run += 1,
             "partial" => summary.partial += 1,
             "always_runs" => summary.always_runs += 1,
+            "unsynced" => summary.unsynced += 1,
             _ => summary.unknown += 1,
         }
     }
@@ -310,6 +327,34 @@ async fn status_from_dag_with_membership(
         },
         membership,
     ))
+}
+
+/// A cached node whose result was computed here and whose upload is still pending is
+/// `unsynced`, `local_only` (RFC-0009 section 4.1). A `get` serves it from this machine; the
+/// next command that opens the store uploads it. A partitioned node is unsynced when any of
+/// its keys is pending.
+fn local_only(
+    cache: &mut CacheStatus,
+    id: &str,
+    partitioned: bool,
+    pending: &[crate::pending_uploads::PendingUpload],
+) {
+    if cache.state != "cached" {
+        return;
+    }
+    let mine = pending.iter().find(|p| {
+        let base = p.node_id.split('[').next().unwrap_or(&p.node_id);
+        base == id && (partitioned || cache.run_hash.is_none() || p.run_hash == cache.run_hash)
+    });
+    let Some(p) = mine else {
+        return;
+    };
+    cache.state = "unsynced".to_string();
+    cache.reason = "local_only".to_string();
+    cache.detail = format!(
+        "computed here and not in the artifact store yet: {}; the next get or run uploads it",
+        p.error.as_deref().unwrap_or("its upload is pending")
+    );
 }
 
 fn cache(state: &str, reason: &str, detail: impl Into<String>) -> CacheStatus {
@@ -519,6 +564,14 @@ async fn read_shapes_inner(
             if selected.path == *path {
                 wanted.push((i, selected.path, selected.format));
             }
+        } else if n.cache.state == "unsynced" {
+            // Not in the store yet (#390): read this machine's copy.
+            let layout =
+                crate::transfer::ArtifactLayout::new(&cfg.local_artifact_dir, &cfg.artifact_root);
+            let local = layout
+                .local_for(path)
+                .map_or_else(|| path.clone(), |p| p.to_string_lossy().into_owned());
+            wanted.push((i, local, m.format.clone().unwrap_or_default()));
         } else {
             wanted.push((i, path.clone(), m.format.clone().unwrap_or_default()));
         }
