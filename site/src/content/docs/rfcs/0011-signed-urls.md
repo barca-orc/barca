@@ -3,8 +3,8 @@ title: 'RFC-0011: Signed URLs'
 description: 'barca.signed_url(uri) returns a time-limited HTTPS link to any object in S3, GCS or Azure using the credentials barca already uses, and barca get -o url returns one for a result.'
 ---
 
-- **Status:** Draft
-- **Date:** 2026-10-20
+- **Status:** Accepted
+- **Date:** 2026-10-20 (accepted 2026-10-20)
 - **Touches:** python/barca | barca-cli
 - **Supersedes / Related:** Builds on the output modes of #404/#287 (`-o path`, `-o value`) and the store states of #390/#403 (`unsynced`, `local only`). [RFC-0009](/rfcs/0009-store-backup-and-restore/) for the store layout.
 
@@ -198,6 +198,8 @@ under `-o url`. Azure fetches one delegation key per command.
 --as-user --auth-mode login`. Dagster and Prefect leave this to user code.
 
 ## 10. Unresolved Questions
+
+Decided 2026-10-20 (maintainer, taking each proposal): expiry defaults to 1 hour with a 7-day maximum; links set `Content-Disposition: attachment; filename=<node>.<ext>`; only `barca.signed_url` is added, `barca.get` keeps returning values; it ships in 0.26.0.
 
 1. **Default and maximum expiry:** 1 hour and 7 days (proposed).
 2. **Content-Disposition:** set `attachment; filename=<node>.<ext>` so a browser downloads with
