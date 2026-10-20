@@ -14,6 +14,13 @@ and these tags are available on the same releases page.
 
 ## Pending
 
+### Bug Fixes
+
+- Open a metadata database last written by barca 0.21 to 0.23. Since 0.24.0, every command
+  refused one with exit 3 ("its `materializations` table has no `bytes_changed` column"), and
+  `barca status` failed with "no such column: bytes_changed". barca now adds the missing column
+  in place, in one transaction, keeping every row; the older release still reads the result.
+
 ### Performance
 
 - Cold runs of large partitioned pipelines scale linearly with the number of keys again: a

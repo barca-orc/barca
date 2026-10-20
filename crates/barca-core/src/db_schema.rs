@@ -185,6 +185,39 @@ mod tests {
         );
     }
 
+    /// A format-1 database written by 0.21-0.23, before `bytes_changed` existed, opens: it gains
+    /// the column in place and keeps its rows. 0.24.0-0.24.2 refused it.
+    #[tokio::test]
+    async fn a_format_1_database_from_before_bytes_changed_gains_it_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("format1.db").display().to_string();
+        populated(&path, "saved").await;
+        {
+            let (_db, conn) = raw(&path).await;
+            conn.execute("ALTER TABLE materializations DROP COLUMN bytes_changed", ())
+                .await
+                .unwrap();
+            assert_eq!(scalar(&conn, "PRAGMA user_version").await, VERSION);
+            db::checkpoint(&conn).await.unwrap();
+        }
+        db::init_db(&path).await.unwrap();
+        db::init_db(&path).await.unwrap();
+        assert_eq!(
+            db::get_run(&path, "saved").await.unwrap().unwrap().status,
+            "success"
+        );
+        let (_db, conn) = raw(&path).await;
+        assert_eq!(scalar(&conn, "PRAGMA user_version").await, VERSION);
+        assert_eq!(
+            scalar(
+                &conn,
+                "SELECT COUNT(*) FROM pragma_table_info('materializations') WHERE name = 'bytes_changed'"
+            )
+            .await,
+            1
+        );
+    }
+
     #[tokio::test]
     async fn failed_migration_rolls_back_all_ddl_and_preserves_rows() {
         let dir = tempfile::tempdir().unwrap();

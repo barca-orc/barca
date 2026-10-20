@@ -214,6 +214,9 @@ async fn status_from_dag_with_membership(
 
     // History, without creating a DB that does not exist yet.
     let histories = if Path::new(&cfg.db_path).exists() {
+        // A database from an earlier release may lack a column format 1 added since; complete
+        // it (a complete one is left untouched) before querying those columns.
+        db::init_db(&cfg.db_path).await?;
         let owned: Vec<String> = ids.iter().map(|s| s.to_string()).collect();
         db::node_histories(&cfg.db_path, &owned).await?
     } else {

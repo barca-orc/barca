@@ -72,3 +72,18 @@ Materializations also carry `bytes_changed INTEGER DEFAULT 0`, an additive forma
 column. It records a byte mismatch when inserting a recompute with the same node/run
 hash; legacy rows default to 0. Shared-history carry preserves both `output_hash` and
 `bytes_changed` rather than recomputing the event. See [materialization-digests.md](materialization-digests.md).
+
+### Additions within format 1
+
+Format 1 is additive: a release may add a nullable column or a table to it without a new
+version number. A format-1 database written by an earlier release that lacks one gets the
+same additive migration as a legacy database, in one transaction, keeping every row; an older
+release keeps reading the result, because it leaves unknown nullable columns alone. Downloaded
+shared state is accepted on the same terms before it is migrated. `barca status`, which reads
+the newer columns, completes the schema first.
+
+`materializations.bytes_changed` (0.24.0) is the first such addition; 0.24.0 to 0.24.2 refused
+format-1 databases without it.
+
+Conformance: `a_format_1_database_from_before_bytes_changed_gains_it_in_place` in
+`db_schema.rs` and `python/tests/test_upgrade_format1_columns.py`.
