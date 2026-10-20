@@ -1,10 +1,10 @@
 ---
 title: "Workflow: Single Asset, No Inputs"
-description: One asset with no inputs, run with barca 0.18.0. What is written to disk, when it is served from cache, and how to look at the result.
+description: One asset with no inputs, run with barca 0.25.0. What is written to disk, when it is served from cache, and how to look at the result.
 ---
 
 One asset with no inputs: what `barca get` does with it, what ends up on disk, and when the
-function runs again. Output on this page is from barca 0.18.0.
+function runs again. Output on this page is from barca 0.25.0.
 
 This page used to be a design specification (a `.barcafiles/` directory with `code.txt` and
 `metadata.json`, an indexing step that imports modules, a hash that covers `uv.lock` and the
@@ -55,7 +55,7 @@ In a terminal:
 [barca] 1/1 steps | done in 0.0s
 Run 52255d4e3e20 | got 'a' in 0.138s (1 step, 1 phase)
 
-.barca/artifacts/pipeline.py--a/380bca24....json
+.barca/artifacts/pipeline.py--a/62c8cf9a....json
   "yellow banana"
 ```
 
@@ -65,7 +65,7 @@ Piped or captured, stdout is one JSON object instead (`--json` forces it, `--pre
 table). Progress stays on stderr:
 
 ```json
-{"elapsed_seconds":0.887860791,"final_output":{"_barca_artifact":{"format":"json","path":".barca/artifacts/pipeline.py--a/380bca24....json","size_bytes":15}},"phases":1,"run_id":"522b0b6dc4d0","status":"success","steps":[{"detail":"no cached result for this code and these inputs","id":"pipeline.py:a","kind":"asset","reason":"not_materialized","run_hash":"380bca24...","status":"ran"}],"steps_executed":1,"warnings":[]}
+{"elapsed_seconds":0.056936559,"final_output":{"_barca_artifact":{"format":"json","path":".barca/artifacts/pipeline.py--a/62c8cf9a....json","size_bytes":15}},"phases":1,"run_id":"212ddeb7e631","status":"success","steps":[{"attempts":1,"detail":"no cached result for this code and these inputs","elapsed_seconds":0.0014823181554675102,"id":"pipeline.py:a","kind":"asset","reason":"not_materialized","run_hash":"62c8cf9a...","status":"ran"}],"steps_executed":1,"warnings":[]}
 ```
 
 Run the same command again and the function does not run:
@@ -86,7 +86,9 @@ The run created `.barca/` in the project root:
 ```
 .barca/.gitignore
 .barca/metadata.db            (plus metadata.db-wal and metadata.db.lock)
-.barca/artifacts/pipeline.py--a/380bca24....json
+.barca/artifacts/pipeline.py--a/62c8cf9a....json
+.barca/gc-state.json          (the last measurement of .barca/ against its size limit)
+.barca/run-owners/            (markers for runs in flight; empty once the run ends)
 ```
 
 - `metadata.db` holds run history and the record of each result.

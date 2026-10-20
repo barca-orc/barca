@@ -113,6 +113,9 @@ two cannot disagree. In JSON the states are snake_case, spelled exactly like the
 failed: `status`, `created_at` (UTC), `elapsed_seconds`, `run_hash`, `artifact`, `format`,
 `size_bytes`, and `error` for a failure. A cache hit is not an execution, so serving from cache
 does not change it. It is `null` when the node never ran.
+For a partitioned node it is one key's row from the latest run, the first key in sort order
+(`partition` names it), so two identical runs report the same key whatever order the keys
+finished in.
 
 ## Artifact shape
 
@@ -167,8 +170,8 @@ not one per node.
 
 A partitioned asset is one node with a `partitions` summary: `total`, `cached`, `missing` and up
 to 20 `missing_keys`. Its state is `cached` when every key is, `partial` when some are, and
-`stale`/`never_run` when none are. `last_materialization` is the most recent key that ran, named
-in its `partition` field (for example `k=a`), and `shape` describes that one key's artifact.
+`stale`/`never_run` when none are. `last_materialization` is one key of the latest run (the first in
+sort order), named in its `partition` field (for example `k=a`), and `shape` describes that one key's artifact.
 
 ## JSON
 

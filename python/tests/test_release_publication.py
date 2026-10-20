@@ -20,7 +20,14 @@ def clock(monkeypatch):
     monkeypatch.setattr(HELPER, "monotonic", lambda: now[0])
     monkeypatch.setattr(HELPER, "sleep", lambda duration: now.__setitem__(0, now[0] + duration))
     monkeypatch.setattr(HELPER, "MAX_WAIT", 4)
+    monkeypatch.setattr(HELPER, "POLL", 2)
     return now
+
+
+def test_the_wait_outlasts_the_simple_index_cdn_cache():
+    """PyPI serves the simple index with cache-control: max-age=600 (#480)."""
+    assert HELPER.MAX_WAIT >= 12 * 60
+    assert HELPER.POLL <= 30
 
 
 def release(filename=WHEEL, yanked=False, version="0.21.0"):
