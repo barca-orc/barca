@@ -238,14 +238,14 @@ def test_server_full_run_skips_tasks(project):
     )
     try:
         client = Client(f"http://127.0.0.1:{port}")
-        for _ in range(50):
+        for _ in range(150):
             try:
                 if client.health().get("status") == "ok":
                     break
             except BarcaError:
                 time.sleep(0.2)
         else:
-            pytest.skip("server did not come up")
+            pytest.fail("barca serve did not answer /health within 30 s")
 
         state = client.get().wait(timeout=60)  # no target: POST /run
         assert state["status"] == "complete", state
