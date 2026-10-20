@@ -1225,6 +1225,12 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/LoadError'
+        cache:
+          description: Null until the server has measured .barca/, and when [cache] max_size
+            is off or the server is read-only.
+          anyOf:
+          - $ref: '#/components/schemas/CacheSize'
+          - type: 'null'
     LoadError:
       type: object
       additionalProperties: false
@@ -1510,6 +1516,34 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PlanWarning'
+        cache:
+          $ref: '#/components/schemas/CacheReport'
+    CacheReport:
+      type: object
+      additionalProperties: false
+      description: Present on a run result when the check after the run found .barca/ over
+        its size limit (RFC-0012).
+      required:
+      - size_bytes
+      - limit_bytes
+      - evicted_files
+      - evicted_bytes
+      properties:
+        size_bytes: *id027
+        limit_bytes: *id027
+        evicted_files: *id027
+        evicted_bytes: *id027
+    CacheSize:
+      type: object
+      additionalProperties: false
+      description: .barca/ size and limit as last measured by this server (after a run or on
+        its minute checkpoint).
+      required:
+      - size_bytes
+      - limit_bytes
+      properties:
+        size_bytes: *id027
+        limit_bytes: *id027
     RunState:
       type: object
       additionalProperties: false
@@ -1562,6 +1596,7 @@ components:
           - upstream_stale
           - failed
           - artifact_missing
+          - evicted
           - no_record
           - partitions_missing
           - partitions_unknown

@@ -373,6 +373,16 @@ barca stats total pipeline.py --json  # timings and cache hit rate for one asset
 Source parsing is static and planning executes no pipeline step. `partitions(<expression>)`
 can evaluate Python and import its module while resolving keys.
 
+`.barca/` is kept under a size limit (`[cache] max_size` or `BARCA_CACHE_MAX_SIZE`, default 10%
+of the filesystem): after a `get` or `run` it may evict results the command did not produce,
+read or return, and stderr says so. An evicted result is fetched or computed again when needed
+(reason `evicted`). To see or free space on demand:
+
+```bash
+barca gc --dry-run --json           # {size_bytes, limit_bytes, after_bytes, tiers, evicted, ...}: nothing is deleted
+barca gc --json                     # evict now, down to 80% of the limit
+```
+
 For an old or container-owned run that still reads `running` after you verified it stopped,
 use `barca history --reconcile RUN_ID --json`. It records `interrupted`, prints just that
 run using the normal history envelope, preserves successful results, and refuses a proven

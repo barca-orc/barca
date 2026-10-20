@@ -40,6 +40,10 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
         "new prerequisite report; check names and provider-specific data may evolve",
     ),
     (
+        "gc",
+        "new in 0.25 (RFC-0012): the eviction order, the low watermark and the JSON shape may change after field use",
+    ),
+    (
         "history --reconcile",
         "explicit operator recovery for stopped runs whose owner cannot be verified",
     ),

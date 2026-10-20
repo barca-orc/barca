@@ -15,7 +15,9 @@ pass. A failure exits 3 with the usual stderr error envelope; success exits 0. I
 arguments exit 2. Human output has one line per check.
 
 Checks cover root, configuration, environment, state mode, local cache writability,
-metadata snapshot integrity, source discovery/static extraction, actual Python executable
+metadata snapshot integrity, the size of `.barca/` against its limit and the free space on its
+filesystem (`cache_size`, informational: always `ok`; `data` has `size_bytes`, `limit_bytes`,
+`max_size`, `source`, `filesystem_bytes`, `available_bytes`; RFC-0012), source discovery/static extraction, actual Python executable
 and matching package version, and configured artifact/shared-state store reachability.
 Remote-off skips provider probes. The finite Python probe is stopped and reaped after
 30 seconds; malformed output, missing or duplicate store results cannot report success.

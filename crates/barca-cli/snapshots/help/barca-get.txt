@@ -111,7 +111,11 @@ the cone (the target itself may be named) and also re-runs everything downstream
 --no-cascade re-runs only the named ones. --refresh-all re-runs every asset in the cone.
 A cached step whose artifact file is gone is computed again when something needs to read it (a
 step that runs takes it as an input, or it is a target), with reason `artifact_missing` and a
-warning on stderr. A missing artifact that nothing reads is left alone (barca docs cache).
+warning on stderr (reason `evicted` when the cache size limit deleted it). A missing artifact that
+nothing reads is left alone (barca docs cache).
+After the run, if .barca/ is over [cache] max_size (default 10% of the filesystem;
+BARCA_CACHE_MAX_SIZE), barca evicts what is least needed down to 80% of it, never this command's
+own results; stderr says what, and JSON gains `cache` (barca gc, barca docs cache "Disk use").
 Completed steps are recorded during the run; remote results require confirmed upload.
 Use `barca status pipeline.py` in another terminal to inspect recorded progress. Shared history
 is published when the run ends (barca docs remote).

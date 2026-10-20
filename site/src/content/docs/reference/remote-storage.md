@@ -689,9 +689,13 @@ exceeds `transfer_timeout` fails as stalled and is not retried.
 - **Stalled store**: lower `transfer_timeout` to fail faster; raise it if single artifacts
   legitimately take longer than 10 minutes to move.
 
-`.barca/artifacts/` doubles as a local cache of the store and is never pruned automatically;
-deleting it is safe (anything needed later is downloaded again, or computed again if it is no
-longer in the store).
+`.barca/artifacts/` doubles as a local cache of the store, bounded by the cache size limit
+(`[cache].max_size`, default 10% of the filesystem; see
+[Cache size](/reference/config/#cache-size)). Past the limit, local copies of results the store
+holds are evicted before any result that would have to be computed again, and are downloaded
+again when something reads them. Deleting the directory by hand is safe too (anything needed
+later is downloaded again, or computed again if it is no longer in the store). barca never
+prunes the store itself: bound it with your bucket's lifecycle rules.
 
 Using a GCS emulator (e.g. fake-gcs-server) with gcsfs 2026.10 or later: set
 `GCSFS_EXPERIMENTAL_ZB_HNS_SUPPORT=false`. gcsfs's experimental mode calls a gRPC API the

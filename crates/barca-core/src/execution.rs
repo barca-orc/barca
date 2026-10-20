@@ -176,6 +176,7 @@ impl Executed {
             steps: r.steps,
             warnings: r.warnings,
             targets: self.targets,
+            cache: r.cache,
         }
     }
 }
@@ -335,6 +336,10 @@ struct RunState {
     transfer_error: Option<String>,
     cached_steps: recover::CachedSteps,
     held_cached_lines: Vec<String>,
+    /// The results this run holds while it is in flight (the cache size limit leaves them).
+    pin: Option<crate::gc::Pin>,
+    /// Artifact paths (as recorded) handed to steps as inputs: `last_read_at` moves for them.
+    read_paths: std::collections::HashSet<String>,
 }
 // Fields drop in the same order as the original run locals: recorder, workers, store.
 struct RunSession<'a, 'r> {
@@ -352,6 +357,9 @@ struct RunSession<'a, 'r> {
 
 pub(crate) async fn execute(mut request: ExecuteRequest<'_>) -> Result<Executed, BarcaError> {
     let started = RunStart::begin(&request)?;
+    // Held from before anything is decided: until the plan is known, eviction in this process
+    // keeps to leftovers and superseded results.
+    let pin = crate::gc::pin(&started.run_id);
     let prepared = prepare_run(
         request.dag.take(),
         request.target_names,
@@ -363,10 +371,93 @@ pub(crate) async fn execute(mut request: ExecuteRequest<'_>) -> Result<Executed,
         |point| trace_point!(started.trace, "{point}"),
     )
     .await?;
+    pin.nodes(
+        prepared
+            .exec_plan
+            .phases
+            .iter()
+            .flat_map(|p| &p.streams)
+            .flat_map(|s| &s.steps)
+            .map(|st| st.step_id.base_id().to_string()),
+    );
     let mut session = open_run(&request, &prepared, started).await?;
+    session.state.pin = Some(pin);
     drive_phases(&mut session).await?;
+    // What the run read (its inputs, and the outputs it returns) gets its `last_read_at` before
+    // the run is recorded, so that with shared history the upload carries it and nothing is
+    // written locally after it (RFC-0012).
+    let returned: Vec<String> = {
+        let ids: Vec<&str> = prepared.targets.iter().map(|(_, id)| id.as_str()).collect();
+        let requested = recover::requested(&prepared.exec_plan, &ids);
+        session
+            .state
+            .all_outputs
+            .iter()
+            .filter(|(id, _)| requested.contains(recover::base_of(id)))
+            .map(|(_, o)| o.path.clone())
+            .collect()
+    };
+    session.state.read_paths.extend(returned);
+    let mut read: Vec<String> = session.state.read_paths.iter().cloned().collect();
+    read.sort();
+    db::touch_read(&request.cfg.db_path, &read).await;
     let elapsed = record_and_publish(&mut session).await?;
-    return_outputs(&mut session, elapsed).await
+    let mut executed = return_outputs(&mut session, elapsed).await?;
+    let own = cache_check_inputs(&session, &executed);
+    let pin = session.state.pin.take();
+    let cfg = request.cfg;
+    drop(session);
+    // The cache size limit after a run: evict if `.barca/` is over its limit. What the run
+    // produced, read or returns is never evicted.
+    executed.result.cache = crate::gc::after_command(cfg, &own, pin.as_ref()).await;
+    Ok(executed)
+}
+
+/// What a run protects from the cache size limit: everything it produced, read or returns (as
+/// recorded paths), its run hashes, and the `Manual` nodes of its DAG.
+fn cache_check_inputs(session: &RunSession<'_, '_>, executed: &Executed) -> crate::gc::Own {
+    let returned = executed
+        .result
+        .final_output
+        .iter()
+        .chain(
+            executed
+                .targets
+                .iter()
+                .filter_map(|(_, t)| t.final_output.as_ref()),
+        )
+        .map(|o| o.path.clone());
+    let mut read: Vec<String> = session
+        .state
+        .read_paths
+        .iter()
+        .cloned()
+        .chain(returned)
+        .collect();
+    read.sort();
+    read.dedup();
+    crate::gc::Own {
+        recorded: read
+            .into_iter()
+            .chain(session.state.all_outputs.values().map(|o| o.path.clone()))
+            .chain(session.state.store_paths.values().cloned())
+            .collect(),
+        run_hashes: session
+            .state
+            .decide_state
+            .run_hashes()
+            .values()
+            .cloned()
+            .collect(),
+        manual: session
+            .prepared
+            .dag
+            .graph
+            .node_weights()
+            .filter(|n| n.extracted.freshness == crate::model::Freshness::Manual)
+            .map(|n| n.id.clone())
+            .collect(),
+    }
 }
 async fn open_state(
     request: &ExecuteRequest<'_>,
@@ -898,6 +989,9 @@ async fn expand_and_decide(
     })
     .await?;
     trace_point!(session.started.trace, "phase{phase_idx}_cache_check_done");
+    if let Some(pin) = &session.state.pin {
+        pin.run_hashes(session.state.decide_state.run_hashes().values());
+    }
     if decided.streams.is_empty() {
         return Ok(None);
     }
@@ -925,7 +1019,12 @@ async fn recover_phase_inputs<'p>(
                     // Its artifact is still missing and it cannot be computed: it is no
                     // longer an output of this run.
                     for id in recover::output_ids(st) {
-                        recover::mark_recomputed(&mut session.state.step_reports, &id, false);
+                        recover::mark_recomputed(
+                            &mut session.state.step_reports,
+                            &id,
+                            false,
+                            false,
+                        );
                         session.state.cached_node_ids.remove(&id);
                         session.state.all_outputs.remove(&id);
                     }
@@ -987,21 +1086,36 @@ async fn recover_phase_inputs<'p>(
 
     if recompute {
         // These are no longer served from cache: they run, and are recorded, like any
-        // other step of this run.
+        // other step of this run. A result whose file the cache size limit deleted says so.
+        let ids: Vec<String> = filtered_phase
+            .streams
+            .iter()
+            .flat_map(|s| &s.steps)
+            .flat_map(recover::output_ids)
+            .collect();
+        let paths: Vec<&str> = ids
+            .iter()
+            .filter_map(|id| session.state.all_outputs.get(id).map(|o| o.path.as_str()))
+            .collect();
+        let evicted = db::evicted_among(&session.request.cfg.db_path, &paths).await;
         let mut lost: Vec<(String, String)> = Vec::new();
-        for step in filtered_phase.streams.iter().flat_map(|s| &s.steps) {
-            for id in recover::output_ids(step) {
-                recover::mark_recomputed(&mut session.state.step_reports, &id, false);
-                session.state.cached_node_ids.remove(&id);
-                if let Some(oref) = session.state.all_outputs.remove(&id) {
-                    lost.push((id, oref.path));
-                }
+        for id in ids {
+            let was_evicted = session
+                .state
+                .all_outputs
+                .get(&id)
+                .is_some_and(|o| evicted.contains(&o.path));
+            recover::mark_recomputed(&mut session.state.step_reports, &id, false, was_evicted);
+            session.state.cached_node_ids.remove(&id);
+            if let Some(oref) = session.state.all_outputs.remove(&id) {
+                lost.push((id, oref.path));
             }
         }
-        for line in recover::recompute_warnings(&lost) {
+        for line in recover::recompute_warnings(&lost, &evicted) {
             note(&session.pb, &line);
         }
     }
+    session.state.read_paths.extend(check);
 
     Ok(Some((filtered_phase, provided)))
 }
@@ -1450,6 +1564,7 @@ async fn return_outputs(
             steps: step_reports,
             warnings: session.prepared.plan_warnings.clone(),
             partitions,
+            cache: None,
         },
         targets: outcomes,
         step_failure: session
@@ -1769,6 +1884,11 @@ pub(crate) async fn explain_dag_with_membership(
         state.sensor_outputs = db::last_output_hashes(cache, &sensors).await?;
     }
     let mut all_outputs: HashMap<String, OutputRef> = HashMap::new();
+    // Results the cache size limit evicted: predicted as `evicted` rather than missing.
+    let evicted = match &cache {
+        Some(cache) => db::evicted_paths(cache).await,
+        None => std::collections::HashSet::new(),
+    };
     // What a run would compute again because an artifact it needs is missing (#252): the same
     // rule as `execute`, predicted from what is on this disk.
     let layout = cfg
@@ -1789,6 +1909,7 @@ pub(crate) async fn explain_dag_with_membership(
         policy: &policy,
         cache: cache.as_ref(),
         layout: layout.as_ref(),
+        evicted: &evicted,
         pool_size,
         state: &mut state,
         all_outputs: &mut all_outputs,
@@ -1815,6 +1936,7 @@ pub(crate) async fn explain_dag_with_membership(
         &mut cached_steps,
         &mut all_outputs,
         layout.as_ref(),
+        &evicted,
         &mut steps,
         &mut summary,
     );
@@ -1858,6 +1980,7 @@ struct Prediction<'a> {
     policy: &'a CachePolicy,
     cache: Option<&'a db::CacheReader>,
     layout: Option<&'a ArtifactLayout>,
+    evicted: &'a std::collections::HashSet<String>,
     pool_size: usize,
     state: &'a mut DecideState,
     all_outputs: &'a mut HashMap<String, OutputRef>,
@@ -1893,6 +2016,7 @@ fn expand_prediction(ctx: &mut Prediction<'_>, phase: &Phase) -> Phase {
         ctx.cached_steps,
         ctx.all_outputs,
         ctx.layout,
+        ctx.evicted,
         ctx.steps,
         ctx.summary,
     );
@@ -2082,6 +2206,7 @@ async fn predict_phase(ctx: &mut Prediction<'_>, phase: &Phase) -> Result<(), Ba
         ctx.cached_steps,
         ctx.all_outputs,
         ctx.layout,
+        ctx.evicted,
         ctx.steps,
         ctx.summary,
     );

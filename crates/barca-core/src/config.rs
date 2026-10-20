@@ -24,6 +24,15 @@ pub struct BarcaToml {
     pub default_env: Option<String>,
     pub remote: Option<RemoteToml>,
     pub discovery: Option<DiscoveryToml>,
+    pub cache: Option<CacheToml>,
+}
+
+/// `[cache]`: how much disk `.barca/` may use (RFC-0012, see `gc`).
+#[derive(Debug, Deserialize, Default, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct CacheToml {
+    /// `"20GB"`, `"500MB"`, `"20GiB"`, a number of bytes, `"10%"` of the filesystem, or `"off"`.
+    pub max_size: Option<toml::Value>,
 }
 
 /// `[discovery]`: which files a walk of the project finds (see `discover`).
@@ -110,6 +119,11 @@ pub struct ResolvedConfig {
     /// Merged storage options (toml ⊕ env, env keys win), serialized as the
     /// JSON that `BARCA_STORAGE_OPTIONS` carries to child processes.
     pub storage_options_json: Option<String>,
+    /// How much disk `.barca/` may use: `BARCA_CACHE_MAX_SIZE` > `[cache] max_size` > 10% of
+    /// the filesystem.
+    pub cache_max_size: crate::gc::MaxSize,
+    /// Where [`Self::cache_max_size`] came from, for messages.
+    pub cache_max_size_source: &'static str,
 }
 
 impl ResolvedConfig {
@@ -273,6 +287,8 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
         )));
     }
 
+    let (cache_max_size, cache_max_size_source) = cache_max_size(file.cache.as_ref())?;
+
     match env_var("BARCA_REMOTE").as_deref() {
         Some("off") => {
             let local = crate::db::env_local_paths(&env);
@@ -289,6 +305,8 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
                 state: StateMode::Off,
                 push_retries: 5,
                 storage_options_json: None,
+                cache_max_size,
+                cache_max_size_source,
             });
         }
         Some(other) => {
@@ -407,7 +425,33 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
         state,
         push_retries,
         storage_options_json,
+        cache_max_size,
+        cache_max_size_source,
     })
+}
+
+/// `BARCA_CACHE_MAX_SIZE` > `[cache] max_size` > [`crate::gc::size::DEFAULT`], and which one it
+/// was. An invalid value is a usage error naming where it came from.
+fn cache_max_size(
+    file: Option<&CacheToml>,
+) -> Result<(crate::gc::MaxSize, &'static str), BarcaError> {
+    let parse = |raw: &str, source: &'static str| {
+        crate::gc::size::parse(raw)
+            .map(|size| (size, source))
+            .map_err(|e| BarcaError::Usage(format!("{source}: {e}")))
+    };
+    if let Some(raw) = env_var("BARCA_CACHE_MAX_SIZE") {
+        return parse(&raw, "BARCA_CACHE_MAX_SIZE");
+    }
+    match file.and_then(|c| c.max_size.as_ref()) {
+        None => Ok((crate::gc::size::DEFAULT, "default")),
+        Some(toml::Value::String(raw)) => parse(raw, "[cache] max_size"),
+        Some(toml::Value::Integer(n)) => parse(&n.to_string(), "[cache] max_size"),
+        Some(other) => Err(BarcaError::Usage(format!(
+            "[cache] max_size: expected a string such as \"20GB\", \"10%\" or \"off\", or a \
+             number of bytes, got {other}"
+        ))),
+    }
 }
 
 /// Merge `[remote.storage_options.*]` with `BARCA_STORAGE_OPTIONS` (env keys
@@ -526,6 +570,7 @@ mod tests {
         "BARCA_STORAGE_OPTIONS",
         "BARCA_TRANSFER_CONCURRENCY",
         "BARCA_TRANSFER_TIMEOUT",
+        "BARCA_CACHE_MAX_SIZE",
     ];
 
     fn clean_env() -> EnvGuard {

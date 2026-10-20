@@ -112,6 +112,9 @@ pub fn render_get(
                 "steps": &result.steps,
                 "warnings": &result.warnings,
             });
+            if let (Value::Object(obj), Some(cache)) = (&mut out, &result.cache) {
+                obj.insert("cache".into(), serde_json::json!(cache));
+            }
             project_key(&mut out, "steps", fields);
             line!(rendered, "{out}");
         }
@@ -339,6 +342,9 @@ pub fn render_run(
                 "steps": &result.steps,
                 "warnings": &result.warnings,
             });
+            if let (Value::Object(obj), Some(cache)) = (&mut out, &result.cache) {
+                obj.insert("cache".into(), serde_json::json!(cache));
+            }
             project_key(&mut out, "steps", fields);
             line!(rendered, "{out}");
         }
@@ -847,6 +853,9 @@ pub fn render_multi(
                 "steps": &result.steps,
                 "warnings": &result.warnings,
             });
+            if let (Value::Object(obj), Some(cache)) = (&mut run, &result.cache) {
+                obj.insert("cache".into(), serde_json::json!(cache));
+            }
             project_key(&mut run, "steps", fields);
             let run = run.to_string();
             line!(
