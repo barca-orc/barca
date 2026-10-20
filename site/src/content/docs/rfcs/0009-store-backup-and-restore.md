@@ -4,6 +4,9 @@ description: 'A remote store with no server is this machine''s backup and read-t
 ---
 
 - **Status:** Accepted
+- **Amended:** 2026-10-20: the `unsynced` reason is spelled `cache.reason` with snake_case values
+  (`local_only`, `store_only`, `mismatch`), replacing the `why` wording below; see
+  "Implementation notes" at the end for how #403 shipped it.
 - **Date:** 2026-10-14
 - **Touches:** barca-core | barca-cli | python/barca
 - **Prerequisites:** minute checkpoints of the shared history ([#376](https://github.com/barca-orc/barca/pull/376)) and upload receipts ([#381](https://github.com/barca-orc/barca/issues/381)), the content digest per artifact ([#392](https://github.com/barca-orc/barca/issues/392)).
@@ -89,6 +92,10 @@ report    asset  unsynced  store only    # local artifact missing; get fetches i
 prices    asset  unsynced  mismatch      # bytes differ; get keeps this machine's copy and re-uploads
 ```
 
+The table prints the reason in words; JSON spells it `cache.reason` in snake_case
+(`"state": "unsynced"`, `"reason": "local_only"`), like every other status reason (amended
+2026-10-20).
+
 `barca get` on an `unsynced` node does not recompute. It serves this machine's copy when there is
 one and repairs the store, or fetches the store's copy when there is not. A `mismatch` also
 prints the non-determinism warning from #392, because that is what a mismatch means.
@@ -137,7 +144,9 @@ The UI's status view shows `unsynced` and its reason where it shows `cached` tod
 - **`cached` and `unsynced`:** with a store configured, a node's STATE is `cached` only when the
   local artifact exists, the store object exists at `{node}/{run_hash}{ext}`, and the digest
   recorded in `materializations` equals both. Otherwise STATE is `unsynced` and WHY is
-  `local only`, `store only` or `mismatch`. In JSON: `"state": "unsynced", "why": "local only"`.
+  `local only`, `store only` or `mismatch`. In JSON: `"cache": {"state": "unsynced", "reason":
+  "local_only"}`, with `store_only` and `mismatch` for the others (amended 2026-10-20: the
+  reason is `cache.reason`, snake_case, not a separate `why` key).
   Without a store, STATE is `cached` when the local artifact exists, as today.
 - **Repair on `get`:** `local only` uploads; `store only` fetches; `mismatch` re-uploads this
   machine's copy, prints `[barca] warning: <node> produced different bytes for the same code and
@@ -249,3 +258,24 @@ None at acceptance.
 - A retention knob (`[remote] backups = N`).
 - `barca gc` for store objects no row references (parked).
 - Showing, in the UI, the last backup time and whether it is behind.
+
+## Implementation notes (#403, 2026-10-20)
+
+How the implementation differs from the text above, deliberately:
+
+- The store side is `python -m barca._state` (one helper process per backup, listing, fetch or
+  status check: verbs `backup`, `list`, `fetch`, `stat`), not new `backup`/`fetch` verbs on the
+  per-run transfer helper, so `barca serve` and `barca state` can use it with no run going. The
+  transfer helper gained one verb, `stat`, which `get` uses to repair its targets.
+- The copy is the database's main file, taken under the database's lock right after the
+  write-ahead log is folded in; the engine has no online backup API. The guarantee is the same:
+  a write in progress never produces a torn copy.
+- Backups are taken only when the store is configured with `[remote] uri` (or
+  `BARCA_REMOTE_URI`); `BARCA_ARTIFACT_URI` / `[remote] artifacts_uri` alone take none.
+  `[remote] state_uri` and `push_retries` are removed with `state`, the same way.
+- `barca status` compares the store object's size (and its SHA-256 only for a store that is a
+  plain directory): object stores give no per-object content checksum and no receipt sidecar is
+  written yet, so a same-size object with other bytes is not detected there.
+- Partitioned nodes get only the pending-upload `local_only` check.
+- `barca get` repairs its targets, not their whole upstream cone. A `mismatch` whose local copy
+  is not the recorded one is left to the existing fetch, which takes the store's copy (#247).

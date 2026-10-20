@@ -3,14 +3,13 @@
 The rule (`barca docs remote`, "Ctrl-C"):
 
 - The first Ctrl-C cancels the run. Transfers in flight are abandoned, what finished is
-  recorded, and the run wraps up: it pushes its record to the shared history, for at most ten
-  seconds.
+  recorded, and the run wraps up: it backs its history up to the store (RFC-0009), for at most
+  ten seconds.
 - A second Ctrl-C abandons the wrap-up at once.
 - Whatever the moment, the count and the target of the signals (the whole job, as a terminal
   sends it, or barca alone), and whether the store answers: exit 130 with the `cancelled`
   envelope, no traceback, no helper process left, a step recorded only if its artifact is in
-  the store, no half-written file, and a next run that succeeds and shares what the cancelled
-  one had recorded.
+  the store, no half-written file, and a next run that succeeds.
 - If barca itself is killed, its helpers notice and exit on their own.
 
 Each test stops one of barca's helper processes at a point the test controls (the shim in
@@ -59,7 +58,7 @@ def slow(numbers: list) -> int:
 """
 
 DEADLINE = 60
-# `barca_core::interrupt::WRAP_UP_LIMIT`: how long a cancelled run may spend pushing.
+# `barca_core::interrupt::WRAP_UP_LIMIT`: how long a cancelled run may spend on its backup.
 WRAP_UP_LIMIT = 10
 
 
@@ -203,15 +202,15 @@ def recorded(root: Path) -> dict[str, str]:
 
 
 def temp_files(*roots: Path) -> list[str]:
-    """Files a transfer in flight leaves if it is not cleaned up: staged artifacts (`*.tmp`)
-    and the staged copies of the metadata DB (`metadata.db.pull-*`, `metadata.db.push-*`)."""
-    patterns = ("*.tmp", "metadata.db.pull-*", "metadata.db.push-*")
+    """Files a transfer in flight leaves if it is not cleaned up: staged artifacts and staged
+    backup copies (`*.tmp`)."""
+    patterns = ("*.tmp",)
     return sorted(str(p) for root in roots for pat in patterns for p in root.rglob(pat))
 
 
 def cancelled_cleanly(run: Run, ran: bool = True) -> None:
     """What holds after every cancelled command. `ran` is false when it was cancelled before
-    its run existed (during the first pull)."""
+    its run existed."""
     err, root, store = run.stderr, run.root, run.store
     assert run.proc.returncode == 130, err
     assert run.stdout == "", run.stdout  # no result document for a cancelled run
@@ -232,20 +231,14 @@ def cancelled_cleanly(run: Run, ran: bool = True) -> None:
 
 
 def recovers(run: Run, target: str, expected) -> subprocess.CompletedProcess:
-    """The next run on the machine succeeds, and afterwards another machine has its results."""
+    """The next run on the machine succeeds, and its history reaches the store."""
     run.release()
     (run.root / "release-slow").write_text("")
     again = cli(run.root, run.store, "get", target, "--json")
     assert again.returncode == 0, again.stderr
     assert json.loads(again.stdout)["final_output"] == expected
-    other = run.root.parent / f"other-{run.root.name}"
-    other.mkdir()
-    (other / "pipeline.py").write_text(PIPELINE)
-    (other / "release-slow").write_text("")
-    shared = cli(other, run.store, "get", target, "--json")
-    assert shared.returncode == 0, shared.stderr
-    doc = json.loads(shared.stdout)
-    assert doc["final_output"] == expected and doc["steps_executed"] == 0, doc
+    assert "backed up the metadata DB" in again.stderr, again.stderr
+    assert not list((run.root / ".barca" / "backups").glob("*.unsent"))
     return again
 
 
@@ -257,11 +250,17 @@ def project(tmp_path):
         (root / "pipeline.py").write_text(PIPELINE)
         return root
 
+    # The store is a directory that is there (a mounted share): backups go nowhere else.
+    (tmp_path / "store").mkdir()
     return tmp_path / "store", make
 
 
-def produced(store: Path, make) -> None:
-    assert cli(make("producer"), store, "get", "total", "--json").returncode == 0
+def produced(root: Path, store: Path) -> None:
+    """`total` computed on this machine and in the store, its local copies gone: the next get
+    fetches it."""
+    assert cli(root, store, "get", "total", "--json").returncode == 0
+    for path in (root / ".barca" / "artifacts").rglob("*.json"):
+        path.unlink()
 
 
 GROUP = pytest.mark.parametrize("whole_group", [True, False], ids=["job", "barca-only"])
@@ -282,17 +281,18 @@ def test_ctrl_c_during_the_end_of_run_upload_wait(project, whole_group):
     # The upload never finished, so the step is not recorded and its object does not exist.
     assert recorded(run.root) == {}
     assert list(store.glob("default/artifacts/*/*")) == []
-    # The wrap-up shared the run's record all the same.
-    assert "pushed state" in run.stderr, run.stderr
-    assert "was not updated" not in run.stderr, run.stderr
+    # The wrap-up backed the run's record up all the same.
+    assert "backed up the metadata DB" in run.stderr, run.stderr
+    assert "did not finish" not in run.stderr, run.stderr
     recovers(run, "numbers", [1, 2, 3])
 
 
 @GROUP
 def test_ctrl_c_during_a_fetch(project, whole_group):
     store, make = project
-    produced(store, make)
-    run = Run(make("m"), store, "get", "get", "total", "--json", "--agent").held_at("get")
+    root = make("m")
+    produced(root, store)
+    run = Run(root, store, "get", "get", "total", "--json", "--agent").held_at("get")
     # The download is under way: its temp file is there.
     assert len(temp_files(run.root)) == 1
     run.sigint(whole_group)
@@ -305,33 +305,20 @@ def test_ctrl_c_during_a_fetch(project, whole_group):
 
 
 @GROUP
-def test_ctrl_c_during_the_state_push(project, whole_group):
-    """The steps finished and their artifacts are in the store; the push of the record is cut.
-    The run is `cancelled`, and its wrap-up shares that record."""
+def test_ctrl_c_during_the_end_of_run_backup(project, whole_group):
+    """The steps finished and their artifacts are in the store; the backup's upload is cut.
+    The run is `cancelled`; its copy waits here, and the next backup uploads it."""
     store, make = project
-    run = Run(make("m"), store, "push", "get", "total", "--json", "--agent").held_at("push")
+    run = Run(make("m"), store, "backup", "get", "total", "--json", "--agent").held_at("backup")
     run.sigint(whole_group)
     run.end()
 
     cancelled_cleanly(run)
     assert sorted(recorded(run.root)) == ["numbers", "total"]
-    # Two pushes: the one that was cut, and the wrap-up, which landed.
-    assert len(run.arrivals("push")) == 2
-    assert "pushed state" in run.stderr, run.stderr
-    assert (store / "default" / "state" / "metadata.db").is_file()
-    recovers(run, "total", {"sum": 6})
-
-
-@GROUP
-def test_ctrl_c_while_the_shared_history_is_pulled(project, whole_group):
-    store, make = project
-    produced(store, make)
-    run = Run(make("m"), store, "pull", "get", "total", "--json", "--agent").held_at("pull")
-    run.sigint(whole_group)
-    run.end()
-
-    # Nothing ran and no run was created: there is no local history at all yet.
-    cancelled_cleanly(run, ran=False)
+    assert len(run.arrivals("backup")) == 1
+    assert "the metadata backup was stopped" in run.stderr, run.stderr
+    assert not list((store / "default" / "state" / "backups").glob("*Z.db"))
+    assert len(list((run.root / ".barca" / "backups").glob("*.unsent"))) == 1
     recovers(run, "total", {"sum": 6})
 
 
@@ -355,7 +342,7 @@ def test_ctrl_c_during_a_step_with_an_upload_in_flight(project, whole_group):
 
 def test_a_stalled_store_holds_a_cancelled_run_for_the_wrap_up_limit_and_no_longer(project):
     store, make = project
-    points = "put,push"
+    points = "put,backup"
     run = Run(make("m"), store, points, "get", "numbers", "--json", "--agent", stall=True)
     run.held_at("put").printed("1/1 steps | done")
     started = time.monotonic()
@@ -364,14 +351,13 @@ def test_a_stalled_store_holds_a_cancelled_run_for_the_wrap_up_limit_and_no_long
     took = time.monotonic() - started
 
     cancelled_cleanly(run)
-    assert took >= WRAP_UP_LIMIT, f"the wrap-up push was not given its {WRAP_UP_LIMIT}s: {took}"
+    assert took >= WRAP_UP_LIMIT, f"the wrap-up backup was not given its {WRAP_UP_LIMIT}s: {took}"
     assert (
-        f"[barca] the shared history was not updated (the upload did not finish within "
-        f"{WRAP_UP_LIMIT}s). This run is recorded on this machine; the next barca get or "
-        "barca run here uploads it." in run.stderr
+        f"[barca] the metadata backup did not finish (not within {WRAP_UP_LIMIT}s); the run is "
+        "recorded on this machine and the next backup takes it" in run.stderr
     ), run.stderr
-    assert not (store / "default" / "state" / "metadata.db").exists()
-    # The store answers again: the next run uploads the cancelled run's record with its own.
+    assert not list((store / "default" / "state" / "backups").glob("*Z.db"))
+    # The store answers again: the next run backs the cancelled run's record up with its own.
     recovers(run, "numbers", [1, 2, 3])
     assert [r["status"] for r in history(run.root, store)] == ["success", "cancelled"]
 
@@ -379,229 +365,51 @@ def test_a_stalled_store_holds_a_cancelled_run_for_the_wrap_up_limit_and_no_long
 @GROUP
 def test_a_second_ctrl_c_abandons_the_wrap_up_at_once(project, whole_group):
     store, make = project
-    run = Run(make("m"), store, "push", "get", "total", "--json", "--agent", stall=True)
-    run.held_at("push")
+    run = Run(make("m"), store, "put,backup", "get", "numbers", "--json", "--agent", stall=True)
+    run.held_at("put").printed("1/1 steps | done")
     run.sigint(whole_group)
-    # The first Ctrl-C cut the push and the wrap-up started another, which stalls too.
-    wait_until(lambda: len(run.arrivals("push")) == 2, "the wrap-up push", run.proc)
+    # The first Ctrl-C cut the upload and the wrap-up started a backup, which stalls too.
+    run.held_at("backup")
     assert run.proc.poll() is None
     run.sigint(whole_group)
     run.end()
 
     cancelled_cleanly(run)
-    assert "the shared history was not updated (stopped by a second interrupt)" in run.stderr
-    assert sorted(recorded(run.root)) == ["numbers", "total"]
-    assert not (store / "default" / "state" / "metadata.db").exists()
-    recovers(run, "total", {"sum": 6})
+    assert "the metadata backup did not finish (stopped by a second interrupt)" in run.stderr
+    assert not list((store / "default" / "state" / "backups").glob("*Z.db"))
+    recovers(run, "numbers", [1, 2, 3])
 
 
 def test_a_third_ctrl_c_changes_nothing(project):
     store, make = project
-    run = Run(make("m"), store, "push", "get", "total", "--json", "--agent", stall=True)
-    run.held_at("push")
+    run = Run(make("m"), store, "put,backup", "get", "numbers", "--json", "--agent", stall=True)
+    run.held_at("put").printed("1/1 steps | done")
     run.sigint()
-    wait_until(lambda: len(run.arrivals("push")) == 2, "the wrap-up push", run.proc)
+    run.held_at("backup")
     run.sigint()
     run.sigint()
     run.end()
     cancelled_cleanly(run)
-    recovers(run, "total", {"sum": 6})
+    recovers(run, "numbers", [1, 2, 3])
 
 
-def test_a_cancelled_push_changes_nothing_shared_until_the_wrap_up_lands(project):
-    """With a shared history in place and a store that stalls, the cut push and the
-    abandoned wrap-up leave the shared history byte for byte as it was."""
-    store, make = project
-    root = make("m")
-    assert cli(root, store, "get", "numbers", "--json").returncode == 0
-    shared = (store / "default" / "state" / "metadata.db").read_bytes()
-
-    run = Run(root, store, "push", "get", "total", "--json", "--agent", stall=True)
-    run.held_at("push")
-    run.sigint()
-    wait_until(lambda: len(run.arrivals("push")) == 2, "the wrap-up push", run.proc)
-    run.sigint()
-    run.end()
-
-    cancelled_cleanly(run)
-    assert (store / "default" / "state" / "metadata.db").read_bytes() == shared
-    again = recovers(run, "total", {"sum": 6})
-    # A pull keeps what was recorded only here: both steps are cache hits, then shared.
-    assert json.loads(again.stdout)["steps_executed"] == 0
-    assert "recorded only on this machine" in again.stderr, again.stderr
-
-
-def test_a_wrap_up_push_that_fails_is_a_note_and_the_exit_code_stays_130(project):
+def test_a_wrap_up_backup_that_fails_is_a_note_and_the_exit_code_stays_130(project):
     store, make = project
     run = Run(make("m"), store, "put", "get", "slow", "--json", "--agent").held_at("put")
     wait_until((run.root / "slow.started").exists, "the second step to start", run.proc)
-    # Something the push cannot get past, put there after the run's pull.
-    (store / "default" / "state" / "metadata.db" / "theirs").mkdir(parents=True)
+    # Something the backup cannot get past: a file where its directory belongs.
+    (store / "default" / "state").mkdir(parents=True)
+    (store / "default" / "state" / "backups").write_text("in the way")
     run.sigint()
     run.end()
 
     assert run.proc.returncode == 130, run.stderr
-    envelope = json.loads(next(line for line in reversed(run.stderr.splitlines()) if line.startswith("{")))
+    envelope = json.loads(
+        next(line for line in reversed(run.stderr.splitlines()) if line.startswith("{"))
+    )
     assert envelope["kind"] == "cancelled", envelope
-    assert "[barca] the shared history was not updated (shared state push to " in run.stderr
-    assert "is a directory, not the shared history file" in run.stderr, run.stderr
+    assert "[barca] the metadata backup was not uploaded (backup to " in run.stderr, run.stderr
     assert history(run.root, store)[0]["status"] == "cancelled"
-
-
-# ─── what the run's record says ──────────────────────────────────────────────
-
-
-def shared_history(store: Path, make, name: str) -> list[str]:
-    """The statuses of the runs another machine sees after pulling the shared history."""
-    other = make(name)
-    assert cli(other, store, "status", "--json").returncode == 0
-    return [r["status"] for r in history(other, store)]
-
-
-def test_a_push_that_landed_just_before_the_interrupt_is_followed_by_the_cancelled_record(
-    project,
-):
-    """The narrow case: the history is in the store with the run as `success`, and barca is
-    interrupted before it hears so. The wrap-up pushes again, so every machine sees
-    `cancelled`, like this one."""
-    store, make = project
-    run = Run(make("m"), store, "pushed", "get", "total", "--json", "--agent").held_at("pushed")
-    assert (store / "default" / "state" / "metadata.db").is_file()  # it landed
-    run.sigint()
-    run.end()
-
-    cancelled_cleanly(run)
-    assert "pushed state" in run.stderr and "conflict retry" in run.stderr, run.stderr
-    assert shared_history(store, make, "other") == ["cancelled"]
-
-
-@pytest.mark.parametrize(
-    "corrective_landed", [False, True], ids=["before-correction", "after-correction"]
-)
-def test_abandoned_wrap_up_preserves_cancellation_on_next_pull_and_push(project, corrective_landed):
-    """#303: stop after publication but before acknowledgement, then abandon wrap-up.
-
-    Either the correction is not uploaded, or it lands before its helper exits.
-    An unrelated machine can extend shared history before the owner repairs it.
-    """
-    store, make = project
-    points = "pushed" if corrective_landed else "pushed,repush"
-    run = Run(make("m"), store, points, "get", "total", "--json", "--agent", stall=True)
-    run.held_at("pushed")
-    shared_db = store / "default" / "state" / "metadata.db"
-    run_id = history(run.root, store)[0]["run_id"]
-    run.sigint()
-    if corrective_landed:
-        wait_until(lambda: len(run.arrivals("pushed")) == 2, "corrective publication", run.proc)
-    else:
-        run.held_at("repush")
-    run.sigint()
-    run.end()
-    cancelled_cleanly(run)
-    assert "stopped by a second interrupt" in run.stderr
-    with sqlite3.connect(shared_db) as conn:
-        assert conn.execute("SELECT status FROM runs WHERE run_id = ?", (run_id,)).fetchone() == (
-            "cancelled" if corrective_landed else "success",
-        )
-
-    unrelated = make("unrelated")
-    added = cli(unrelated, store, "get", "numbers", "--json")
-    assert added.returncode == 0, added.stderr
-    unrelated_id = json.loads(added.stdout)["run_id"]
-    # Inspection pulls without uploading: the correction itself must survive the swap.
-    for _ in range(2):
-        pulled = cli(run.root, store, "status", "--json")
-        assert pulled.returncode == 0, pulled.stderr
-        assert {r["run_id"]: r["status"] for r in history(run.root, store)} == {
-            run_id: "cancelled",
-            unrelated_id: "success",
-        }
-    # Force a conflict after the repaired pull. Replay must keep cancellation and
-    # both unrelated runs while retaining completed materializations exactly once.
-    run.hold_dir.rename(run.hold_dir.with_name("completed-hold"))
-    recovery = Run(run.root, store, "push", "get", "total", "--json").held_at("push")
-    concurrent = cli(unrelated, store, "get", "total", "--json")
-    assert concurrent.returncode == 0, concurrent.stderr
-    concurrent_id = json.loads(concurrent.stdout)["run_id"]
-    recovery.release()
-    recovery.end()
-    assert recovery.proc.returncode == 0, recovery.stderr
-    assert "conflict retry" in recovery.stderr, recovery.stderr
-    with sqlite3.connect(shared_db) as conn:
-        rows = dict(conn.execute("SELECT run_id, status FROM runs"))
-        assert rows[run_id] == "cancelled" and rows[unrelated_id] == "success"
-        assert rows[concurrent_id] == "success"
-        assert len(rows) == 4
-        assert conn.execute("PRAGMA integrity_check").fetchall() == [("ok",)]
-        assert conn.execute(
-            "SELECT COUNT(*) FROM materializations WHERE run_id = ?", (run_id,)
-        ).fetchone() == (2,)
-
-
-def test_ctrl_c_after_a_failed_run_was_shared_leaves_its_record_as_it_is(project):
-    """A run with a failed step is recorded and shared as `failed`, then downloads an earlier
-    output to return. Interrupted there, the command is cancelled; the run already ended."""
-    store, make = project
-    assert cli(make("producer"), store, "get", "numbers", "--json").returncode == 0
-    root = make("m")
-    (root / "pipeline.py").write_text(
-        "from barca import asset\n\n\n@asset()\ndef numbers() -> list:\n    return [1, 2, 3]\n"
-        "\n\n@asset()\ndef zz_broken() -> int:\n    raise ValueError('no')\n"
-    )
-    run = Run(root, store, "get", "get", "--json", "--agent").held_at("get")
-    run.printed("pushed state")
-    run.sigint()
-    run.end()
-
-    assert run.proc.returncode == 130, run.stderr
-    assert json.loads(next(line for line in reversed(run.stderr.splitlines()) if line.startswith("{")))["kind"] == "cancelled"
-    assert [pid for pid in run.helpers() if alive(pid)] == []
-    assert temp_files(root, store) == []
-    assert history(root, store)[0]["status"] == "failed"
-    assert shared_history(store, make, "other")[0] == "failed"
-
-
-def test_a_second_ctrl_c_while_a_worker_reports_the_first_prints_no_traceback(tmp_path):
-    """Workers are in the terminal's job and do get Ctrl-C: the step is interrupted and the
-    worker reports that. A second Ctrl-C arriving during the report used to escape as an
-    uncaught KeyboardInterrupt, with a traceback (once in 300 runs of the matrix below).
-
-    Made certain here: the step raises KeyboardInterrupt, and the second signal is sent from
-    inside the report."""
-    import sys
-    import textwrap
-
-    script = textwrap.dedent(
-        """
-        import os, signal, sys
-        from pathlib import Path
-        from barca import _duckdb, _runtime, _worker
-
-        reported = []
-        _runtime.emit_step_error = lambda **kw: reported.append(kw)
-        real = _duckdb.explain_error
-
-        def pressed_again(exc, views):
-            os.kill(os.getpid(), signal.SIGINT)
-            for _ in range(1000):  # give the interpreter every chance to deliver it
-                pass
-            return real(exc, views)
-
-        _duckdb.explain_error = pressed_again
-        source = Path(sys.argv[1]) / "mod.py"
-        source.write_text("def interrupted():\\n    raise KeyboardInterrupt\\n")
-        step = {"node_id": "mod.py:interrupted", "function_name": "interrupted",
-                "source_file": str(source), "kind": "asset", "inputs": {}, "run_hash": "h"}
-        ok = _worker._run_daemon_step(step, {}, str(Path(sys.argv[1]) / "arts"), _worker._ArtifactLRU())
-        print("reported", ok, reported[0]["error_type"])
-        """
-    )
-    proc = subprocess.run(
-        [sys.executable, "-c", script, str(tmp_path)], capture_output=True, text=True, timeout=120
-    )
-    assert proc.stdout.strip() == "reported False KeyboardInterrupt", proc.stderr
-    assert "Traceback" not in proc.stderr, proc.stderr
-    assert proc.returncode == 0
 
 
 # ─── barca itself is killed ──────────────────────────────────────────────────
@@ -609,9 +417,8 @@ def test_a_second_ctrl_c_while_a_worker_reports_the_first_prints_no_traceback(tm
 KILLED = {
     # phase: (points, target, text barca prints before the helper is held, needs a producer)
     "upload": ("copied", "numbers", "1/1 steps | done", False),
-    "push": ("push", "total", "", False),
+    "backup": ("backup", "total", "", False),
     "fetch": ("get", "total", "", True),
-    "pull": ("pull", "total", "", True),
 }
 
 
@@ -621,9 +428,10 @@ def test_helpers_exit_on_their_own_when_barca_is_killed(project, phase):
     stop: they must notice it themselves (the closed socket, the lifeline) and go quietly."""
     points, target, printed, needs_producer = KILLED[phase]
     store, make = project
+    root = make("m")
     if needs_producer:
-        produced(store, make)
-    run = Run(make("m"), store, points, "get", target, "--json", "--agent")
+        produced(root, store)
+    run = Run(root, store, points, "get", target, "--json", "--agent")
     run.held_at(points)
     if printed:
         run.printed(printed)
@@ -639,9 +447,9 @@ def test_helpers_exit_on_their_own_when_barca_is_killed(project, phase):
     assert [pid for pid in helpers if alive(pid)] == [], "a helper outlived barca"
     err = run.err_path.read_text()
     assert "Traceback" not in err, err
-    # No half-written artifact or object. (The staged copy of the metadata DB that a killed
-    # pull or push leaves is removed by the next pull.)
-    assert [p for p in temp_files(run.root, store) if p.endswith(".tmp")] == []
+    # No half-written artifact or object. (The staged copy a killed backup leaves in
+    # .barca/backups is replaced by the next backup's.)
+    assert [p for p in temp_files(run.root, store) if "/.barca/backups/" not in p] == []
     run.proc.stdout.close()
     # Workers of the killed run may still hold the group; end them before the next run.
     try:
@@ -649,18 +457,17 @@ def test_helpers_exit_on_their_own_when_barca_is_killed(project, phase):
     except ProcessLookupError:
         pass
     recovers(run, target, [1, 2, 3] if target == "numbers" else {"sum": 6})
-    assert temp_files(run.root, store) == []
+    assert [p for p in temp_files(run.root, store) if "/.barca/backups/" not in p] == []
 
 
 # ─── every phase, one to three signals, either target, either kind of store ──
 
 PHASES = {
     # phase: (hold points, target, needs a producer)
-    "pull": ("pull", "total", True),
     "step": ("put", "slow", False),
     "fetch": ("get", "total", True),
     "upload": ("put", "numbers", False),
-    "push": ("push", "total", False),
+    "backup": ("backup", "total", False),
 }
 EXPECTED = {"total": {"sum": 6}, "slow": 3, "numbers": [1, 2, 3]}
 # The gaps between signals. BARCA_TEST_SIGNAL_GAPS overrides them ("0.01,0.1,0.5,2").
@@ -688,11 +495,12 @@ def test_any_number_of_ctrl_c_at_any_gap_ends_cancelled(
 ):
     points, target, needs_producer = PHASES[phase]
     store, make = project
+    root = make("m")
     if needs_producer:
-        produced(store, make)
-    if stalled and "push" not in points:
-        points += ",push"  # the wrap-up push stalls as well
-    run = Run(make("m"), store, points, "get", target, "--json", "--agent", stall=stalled)
+        produced(root, store)
+    if stalled and "backup" not in points:
+        points += ",backup"  # the wrap-up backup stalls as well
+    run = Run(root, store, points, "get", target, "--json", "--agent", stall=stalled)
     run.held_at(points.split(",")[0])
     if phase == "step":
         wait_until((run.root / "slow.started").exists, "the slow step to start", run.proc)
@@ -706,5 +514,5 @@ def test_any_number_of_ctrl_c_at_any_gap_ends_cancelled(
     # Never longer than the wrap-up limit plus the time to stop the helpers.
     run.end(timeout=WRAP_UP_LIMIT + 60)
 
-    cancelled_cleanly(run, ran=phase != "pull")
+    cancelled_cleanly(run)
     recovers(run, target, EXPECTED[target])

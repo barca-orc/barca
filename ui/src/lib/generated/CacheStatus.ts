@@ -6,11 +6,11 @@ export type CacheStatus = {
  */
 state: "cached" | "unsynced" | "stale" | "never_run" | "partial" | "unknown" | "always_runs",
 /**
- * Machine-readable reason: `materialized`, `local_only`, `changed`, `upstream_stale`, `failed`,
- * `artifact_missing`, `no_record`, `partitions_missing`, `partitions_unknown`,
- * `sensor_output_unknown`, `task` or `sensor`.
+ * Machine-readable reason: `materialized`, `local_only`, `store_only`, `mismatch`, `changed`,
+ * `upstream_stale`, `failed`, `artifact_missing`, `no_record`, `partitions_missing`,
+ * `partitions_unknown`, `sensor_output_unknown`, `task` or `sensor`.
  */
-reason: "materialized" | "local_only" | "changed" | "upstream_stale" | "failed" | "artifact_missing" | "no_record" | "partitions_missing" | "partitions_unknown" | "sensor_output_unknown" | "task" | "sensor",
+reason: "materialized" | "local_only" | "store_only" | "mismatch" | "changed" | "upstream_stale" | "failed" | "artifact_missing" | "no_record" | "partitions_missing" | "partitions_unknown" | "sensor_output_unknown" | "task" | "sensor",
 /**
  * The reason in words.
  */

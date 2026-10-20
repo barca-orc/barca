@@ -108,7 +108,6 @@ pub(crate) async fn add_columns(
 mod tests {
     use super::*;
     use crate::{db, state_validate};
-    use std::path::Path;
 
     async fn raw(path: &str) -> (turso::Database, Connection) {
         let db = turso::Builder::new_local(path).build().await.unwrap();
@@ -283,10 +282,15 @@ mod tests {
                 .await
                 .unwrap_err(),
             db::CacheReader::open(&path).await.err().unwrap(),
-            db::copy_for_push(&path, dir.path().join("upload.db"))
-                .await
-                .err()
-                .unwrap(),
+            db::copy_for_backup(
+                &path,
+                &dir.path().join("backup.db"),
+                None,
+                crate::state_sync::Until::done(),
+            )
+            .await
+            .err()
+            .unwrap(),
         ];
         for error in errors {
             assert!(error.to_string().contains("schema version 2"), "{error}");
@@ -323,64 +327,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn future_download_and_future_local_history_are_not_replaced() {
+    async fn a_backup_in_a_future_format_is_refused_as_incompatible_and_left_alone() {
         let dir = tempfile::tempdir().unwrap();
-        let local = dir.path().join("local.db").display().to_string();
         let incoming = dir.path().join("incoming.db").display().to_string();
-        populated(&local, "ours").await;
         populated(&incoming, "theirs").await;
         {
             let (_db, conn) = raw(&incoming).await;
             conn.execute("PRAGMA user_version=2", ()).await.unwrap();
             db::checkpoint(&conn).await.unwrap();
         }
-        let before = std::fs::read(&local).unwrap();
-        let downloaded = std::fs::read(&incoming).unwrap();
-        let result = db::replace_db(
-            &local,
-            db::Incoming {
-                staged: Path::new(&incoming),
-                base_at_start: None,
-                version: Some("future"),
-            },
-        )
-        .await
-        .unwrap();
-        assert!(matches!(result, db::Replaced::Invalid(_)));
-        assert_eq!(std::fs::read(&local).unwrap(), before);
-        assert_eq!(std::fs::read(&incoming).unwrap(), downloaded);
-        // Reverse the roles: a compatible download cannot downgrade future local history.
-        let error = db::replace_db(
-            &incoming,
-            db::Incoming {
-                staged: Path::new(&local),
-                base_at_start: None,
-                version: Some("legacy"),
-            },
-        )
-        .await
-        .unwrap_err();
-        let diagnostic = error.to_string();
-        assert!(diagnostic.contains("schema version 2"), "{diagnostic}");
-        assert!(
-            diagnostic.contains("use a compatible Barca release"),
-            "{diagnostic}"
-        );
-        assert!(
-            diagnostic.contains("Keep the local history"),
-            "{diagnostic}"
-        );
-        assert!(!diagnostic.contains("move "), "{diagnostic}");
-        assert!(!diagnostic.contains("out of the way"), "{diagnostic}");
-        assert!(!diagnostic.contains("not carried over"), "{diagnostic}");
-        assert_eq!(std::fs::read(&incoming).unwrap(), downloaded);
-        assert!(
-            state_validate::open(&incoming, state_validate::Pages::Check)
-                .await
-                .unwrap()
-                .is_err()
-        );
+        let before = std::fs::read(&incoming).unwrap();
+        let Err(refused) = state_validate::open(&incoming, state_validate::Pages::Check)
+            .await
+            .unwrap()
+        else {
+            panic!("a future format is not valid here");
+        };
+        assert_eq!(refused.kind, state_validate::InvalidKind::Compatibility);
+        assert!(refused.why.contains("schema version 2"), "{}", refused.why);
+        assert_eq!(std::fs::read(&incoming).unwrap(), before);
     }
+
     #[tokio::test]
     async fn compatible_legacy_migration_failure_remains_an_operational_error() {
         let dir = tempfile::tempdir().unwrap();

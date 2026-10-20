@@ -521,6 +521,24 @@ impl TransferClient {
         self.probe_root(root).await
     }
 
+    /// Whether the object at `store` is in the store: its size and, for a store that is a plain
+    /// directory, its SHA-256. `Ok(None)` when it is not there; `Err` when the store could not
+    /// say (permissions, a store that cannot be reached).
+    pub(crate) async fn stat(
+        &mut self,
+        store: &str,
+    ) -> Result<Option<(u64, Option<String>)>, String> {
+        let rx = self.send(|id| TransferRequest::Stat {
+            id,
+            remote: store.to_string(),
+        });
+        match settle(rx).await {
+            Ok(t) => Ok(Some((t.bytes, t.sha256))),
+            Err(f) if f.missing => Ok(None),
+            Err(f) => Err(f.message),
+        }
+    }
+
     async fn probe_root(&mut self, root: String) -> Result<(), String> {
         let rx = self.send(|id| TransferRequest::Probe { id, root });
         settle(rx).await.map(|_| ()).map_err(|f| f.message)
@@ -641,6 +659,7 @@ async fn io_task(mut stream: tokio::net::UnixStream, mut req_rx: mpsc::Unbounded
                     TransferRequest::Put { id, remote, .. } => Some((*id, format!("put {}", diagnostic_uri(remote)))),
                     TransferRequest::Get { id, remote, .. } => Some((*id, format!("get {}", diagnostic_uri(remote)))),
                     TransferRequest::Probe { id, root } => Some((*id, format!("probe {}", diagnostic_uri(root)))),
+                    TransferRequest::Stat { id, remote } => Some((*id, format!("stat {}", diagnostic_uri(remote)))),
                     TransferRequest::Shutdown => None,
                 };
                 if write_frame(&mut stream, &req).await.is_err() {

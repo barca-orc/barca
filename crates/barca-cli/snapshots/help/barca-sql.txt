@@ -1,6 +1,6 @@
 Query cached results with SQL (DuckDB) — each asset is a named view
 
-No pipeline step executes or new run is recorded. Shared history may synchronize; partition expressions may evaluate Python; explicit SQL COPY can write files.
+No pipeline step executes or new run is recorded. Partition expressions may evaluate Python; explicit SQL COPY can write files.
 
 Usage: barca sql [OPTIONS] <QUERY> [FILES]...
 
@@ -53,8 +53,8 @@ partitions(<expression>) may evaluate Python while loading its keys.
 Partitioned views include current known keys only; removed keys stay in history. Unknown derived
 keys require their source to materialize first. Zero current keys have no result view.
 With remote storage, the artifacts of the views a query names are downloaded into
-.barca/sql-cache/ (stderr says so) and reused while the objects are unchanged. Optimistic shared
-history synchronizes locally; explicit SQL COPY ... TO writes the requested output file.
+.barca/sql-cache/ (stderr says so) and reused while the objects are unchanged. Explicit SQL
+COPY ... TO writes the requested output file.
 Errors exit 2: a node with no result yet names the `barca get` to run first; an unknown view lists
 the views; a SQL error carries DuckDB's message. A remote artifact that cannot be fetched exits 3.
 Experimental: barca docs contract.

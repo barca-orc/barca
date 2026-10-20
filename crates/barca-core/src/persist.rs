@@ -1,100 +1,17 @@
-//! Recording a run: the run row, each step's row as it finishes, the final write, and the push of
-//! shared history. Also the telemetry report a finished run hands to the configured integration.
+//! Recording a run: the run row, each step's row as it finishes, the final write, and the minute
+//! backup of the metadata DB (RFC-0009). Also the telemetry report a finished run hands to the
+//! configured integration.
 
 use crate::BarcaError;
 use crate::dag::Dag;
 use crate::db;
 use crate::dispatch;
 use crate::state_sync;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tokio_util::sync::CancellationToken;
 
-/// The upload of one run's record to the shared history.
-pub(crate) struct SharedPush<'a> {
-    pub(crate) python: &'a std::path::Path,
-    pub(crate) cfg: &'a crate::config::ResolvedConfig,
-    pub(crate) db_path: &'a str,
-    pub(crate) run_id: &'a str,
-    pub(crate) logs: &'a [(String, String)],
-    /// The token of the shared history the local one was last brought up to.
-    pub(crate) token: state_sync::StateToken,
-}
-
-impl SharedPush<'_> {
-    /// Upload the local history. On conflict (another machine pushed first): pull the fresh
-    /// history, replay this run's ledger onto it, and upload again, up to `push_retries`
-    /// times. Returns the number of retries. `Err(BarcaError::Cancelled)` when `until` stopped
-    /// it; the shared history is then the old one or the new one, never part of one.
-    pub(crate) async fn run(
-        &mut self,
-        ledger: &RunLedger<'_>,
-        until: state_sync::Until<'_>,
-    ) -> Result<u32, BarcaError> {
-        self.sync(Some(ledger), until).await
-    }
-
-    async fn checkpoint(&mut self, until: state_sync::Until<'_>) -> Result<u32, BarcaError> {
-        self.sync(None, until).await
-    }
-
-    async fn sync(
-        &mut self,
-        ledger: Option<&RunLedger<'_>>,
-        until: state_sync::Until<'_>,
-    ) -> Result<u32, BarcaError> {
-        let (python, cfg) = (self.python, self.cfg);
-        let mut attempt = 0u32;
-        let mut pushed_again = false;
-        loop {
-            let outcome =
-                state_sync::push_state_tracking(python, cfg, &mut self.token, until).await?;
-            let again = match outcome {
-                // Uploaded, but another process wrote to the local database (or replaced
-                // it) while the upload was on its way. Treated like a conflict, once: pull
-                // what was just uploaded, which keeps those rows, and push again. Only once,
-                // because a run going in the same project writes during every upload, and
-                // chasing it would cost a pull and an upload each time for rows that run
-                // pushes itself when it ends. The upload stands either way; rows written
-                // after it go with the next push from this machine.
-                state_sync::PushOutcome::Pushed {
-                    token,
-                    local_unchanged,
-                } => {
-                    // Keep the acknowledgement even if a subsequent pull/replay fails.
-                    self.token = state_sync::StateToken(Some(token));
-                    !local_unchanged
-                        && !std::mem::replace(&mut pushed_again, true)
-                        && attempt < cfg.push_retries
-                }
-                state_sync::PushOutcome::Conflict => {
-                    if attempt >= cfg.push_retries {
-                        return Err(BarcaError::Other(format!(
-                            "shared state push conflicted {attempt} times — results were \
-                             computed but the shared state was not updated; re-run to retry"
-                        )));
-                    }
-                    true
-                }
-            };
-            if !again {
-                return Ok(attempt);
-            }
-            attempt += 1;
-            // The pull carries this run's rows over with the rest of the local database; the
-            // ledger then adds whatever is still missing (both are idempotent), so the run
-            // is whole however much of it made the trip.
-            self.token = state_sync::pull_state(python, cfg, until).await?.token;
-            if let Some(ledger) = ledger {
-                db::init_db(self.db_path).await?;
-                persist_run(self.db_path, ledger).await?;
-                db::insert_logs(self.db_path, self.run_id, self.logs).await?;
-            }
-        }
-    }
-}
-
 /// Record as `cancelled` a run that was already recorded with its outcome, because Ctrl-C
-/// arrived while its record was being shared. The steps it recorded stay: they finished.
+/// arrived while its history was being backed up. The steps it recorded stay: they finished.
 pub(crate) async fn cancel_recorded_run(
     db_path: &str,
     l: &RunLedger<'_>,
@@ -110,8 +27,7 @@ pub(crate) async fn cancel_recorded_run(
     .await
 }
 
-/// Everything one run wants written to the metadata DB, held in memory so a
-/// state-push conflict can replay it onto a freshly pulled database.
+/// Everything one run wants written to the metadata DB at its end, held in memory until then.
 pub(crate) struct RunLedger<'a> {
     pub(crate) run_id: &'a str,
     pub(crate) status: &'a str,
@@ -231,55 +147,59 @@ const RECORD_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50
 /// It is an optimisation of *when* rows land, never the only writer: the end-of-run
 /// [`persist_run`] writes every row of the run that is not already there (rows carry the run
 /// id). Failed batches are retained and retried at the existing interval. Rows still pending
-/// at [`StepRecorder::finish`] are made good at the end. A pull of shared state by another
-/// process mid-run keeps the written rows (see `state_carry`).
+/// at [`StepRecorder::finish`] are made good at the end.
+///
+/// With a store, the recorder also backs the database up on a minute checkpoint
+/// ([`crate::backup::take`]) when it has recorded something since the last one.
 const CHECKPOINT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 const CHECKPOINT_BUDGET: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// Startup's shared token belongs to this context until the recorder is stopped.
-pub(crate) struct ProgressPublication {
+/// How many checkpoints in a row may fail before the run says so, once (RFC-0009 section 4.5).
+const CHECKPOINT_FAILURES_REPORTED: u32 = 3;
+
+/// What the recorder needs to back the database up on the minute checkpoint.
+pub(crate) struct BackupCheckpoints {
     pub(crate) python: std::path::PathBuf,
     pub(crate) cfg: crate::config::ResolvedConfig,
-    pub(crate) token: state_sync::StateToken,
     pub(crate) cancel: CancellationToken,
 }
 
 pub(crate) struct StepRecorder {
     tx: tokio::sync::mpsc::UnboundedSender<StepRow>,
     stop: CancellationToken,
-    task: Option<tokio::task::JoinHandle<Option<state_sync::StateToken>>>,
+    task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl StepRecorder {
     #[cfg(test)]
     pub(crate) fn start(db_path: String, run_id: String) -> Self {
-        Self::start_with_publication(db_path, run_id, None)
+        Self::start_with_backups(db_path, run_id, None)
     }
 
-    pub(crate) fn start_with_publication(
+    pub(crate) fn start_with_backups(
         db_path: String,
         run_id: String,
-        publication: Option<ProgressPublication>,
+        backups: Option<BackupCheckpoints>,
     ) -> Self {
         Self::start_with_intervals(
             db_path,
             run_id,
-            publication,
+            backups,
             RECORD_INTERVAL,
             CHECKPOINT_INTERVAL,
         )
     }
 
-    // Private timing injection exercises real publication without a public test knob.
+    // Private timing injection exercises real backups without a public test knob.
     fn start_with_intervals(
         db_path: String,
         run_id: String,
-        mut publication: Option<ProgressPublication>,
+        backups: Option<BackupCheckpoints>,
         record_interval: std::time::Duration,
         checkpoint_interval: std::time::Duration,
     ) -> Self {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<StepRow>();
-        let stop = publication
+        let stop = backups
             .as_ref()
             .map_or_else(CancellationToken::new, |p| p.cancel.child_token());
         let stopped = stop.clone();
@@ -287,7 +207,10 @@ impl StepRecorder {
             let mut next_write = tokio::time::Instant::now() + record_interval;
             let mut pending = Vec::new();
             let mut generation = 0u64;
-            let mut published = 0u64;
+            let mut backed_up = 0u64;
+            // Consecutive checkpoints that did not reach the store, and whether that was said.
+            let mut failures = 0u32;
+            let mut warned = false;
             let mut checkpoint = tokio::time::interval_at(
                 tokio::time::Instant::now() + checkpoint_interval,
                 checkpoint_interval,
@@ -309,30 +232,38 @@ impl StepRecorder {
                         }
                         next_write = tokio::time::Instant::now() + record_interval;
                     }
-                    _ = checkpoint.tick(), if publication.is_some() => {
-                        if generation != published {
-                            let snapshot_generation = generation;
-                            let p = publication.as_mut().expect("publication enabled");
-                            let mut push = SharedPush {
-                                python: &p.python, cfg: &p.cfg, db_path: &db_path,
-                                run_id: &run_id, logs: &[], token: p.token.clone(),
-                            };
-                            let outcome = push.checkpoint(state_sync::Until {
-                                cancel: Some(&stopped),
-                                deadline: Some(std::time::Instant::now() + CHECKPOINT_BUDGET),
-                            }).await;
-                            // Acknowledged uploads remain known even if a later retry fails.
-                            p.token = push.token;
-                            match outcome {
-                                Ok(_) => published = snapshot_generation,
-                                Err(error) if !stopped.is_cancelled() => {
-                                    let mut message = error.to_string();
-                                    if let Some(uri) = &p.cfg.state_uri {
-                                        message = message.replace(uri, &crate::transfer::diagnostic_uri(uri));
-                                    }
-                                    crate::errln!("[barca] progress checkpoint failed; recorded results remain local: {message}");
+                    _ = checkpoint.tick(), if backups.is_some() => {
+                        // Only when something was recorded since, or the last copy has not
+                        // reached the store yet.
+                        if generation == backed_up && failures == 0 {
+                            continue;
+                        }
+                        let snapshot_generation = generation;
+                        let b = backups.as_ref().expect("backups enabled");
+                        let outcome = crate::backup::take(&b.python, &b.cfg, Some(&run_id), state_sync::Until {
+                            cancel: Some(&stopped),
+                            deadline: Some(std::time::Instant::now() + CHECKPOINT_BUDGET),
+                        }).await;
+                        let failed = match outcome {
+                            Ok(taken) => {
+                                backed_up = snapshot_generation;
+                                match taken.upload {
+                                    Some(Err(why)) => Some(why),
+                                    _ => None,
                                 }
-                                Err(_) => {}
+                            }
+                            Err(_) if stopped.is_cancelled() => None,
+                            Err(error) => Some(error.to_string()),
+                        };
+                        match failed {
+                            None => failures = 0,
+                            Some(why) => {
+                                failures += 1;
+                                if failures >= CHECKPOINT_FAILURES_REPORTED && !std::mem::replace(&mut warned, true) {
+                                    crate::errln!(
+                                        "[barca] warning: the metadata backup failed {failures} checkpoints in a row ({why}); the run goes on, its results are recorded on this machine, and the next checkpoint tries again"
+                                    );
+                                }
                             }
                         }
                     }
@@ -342,7 +273,6 @@ impl StepRecorder {
                     },
                 }
             }
-            publication.map(|p| p.token)
         });
         Self {
             tx,
@@ -377,34 +307,19 @@ impl StepRecorder {
 
     /// Stop the background task and wait for it, so no connection is left open. Rows it had
     /// not written yet are left to [`persist_run`].
-    #[cfg(test)]
-    pub(crate) async fn finish(self) {
-        self.finish_with_token(&mut None).await.unwrap();
-    }
-
-    pub(crate) async fn finish_with_token(
-        mut self,
-        token: &mut Option<state_sync::StateToken>,
-    ) -> Result<(), BarcaError> {
+    pub(crate) async fn finish(mut self) -> Result<(), BarcaError> {
         self.stop.cancel();
-        let returned = self
-            .task
+        self.task
             .take()
             .expect("recorder task owned")
             .await
-            .map_err(|e| {
-                BarcaError::Other(format!("progress recorder stopped unexpectedly: {e}"))
-            })?;
-        if let Some(returned) = returned {
-            *token = Some(returned);
-        }
-        Ok(())
+            .map_err(|e| BarcaError::Other(format!("progress recorder stopped unexpectedly: {e}")))
     }
 }
 
 impl Drop for StepRecorder {
     fn drop(&mut self) {
-        // Cancellation lets an in-flight state helper clean its staged snapshot.
+        // Cancellation lets an in-flight backup helper clean its staged copy.
         self.stop.cancel();
     }
 }
@@ -613,7 +528,7 @@ pub(crate) fn telemetry_report(
 }
 
 /// Write a run's ledger with a short-lived connection. Idempotent, so it is safe after the
-/// [`StepRecorder`] has written some of the steps and on a replay: the run row is INSERT OR
+/// [`StepRecorder`] has written some of the steps: the run row is INSERT OR
 /// IGNORE + terminal UPDATE, and a step is appended only if this run has no row for it yet
 /// (a step has one outcome per run).
 pub(crate) async fn persist_run(db_path: &str, l: &RunLedger<'_>) -> Result<(), BarcaError> {
@@ -665,6 +580,26 @@ pub(crate) async fn persist_run(db_path: &str, l: &RunLedger<'_>) -> Result<(), 
     Ok(())
 }
 
+/// The steps of `run_id` already recorded, by node id.
+async fn steps_of_run(
+    conn: &turso::Connection,
+    run_id: &str,
+) -> Result<HashSet<String>, BarcaError> {
+    let failed = |e| BarcaError::Db(format!("failed to read recorded steps: {e}"));
+    let mut out = HashSet::new();
+    let mut rows = conn
+        .query(
+            "SELECT node_id FROM materializations WHERE run_id = ?1",
+            [run_id.to_string()],
+        )
+        .await
+        .map_err(failed)?;
+    while let Some(row) = rows.next().await.map_err(failed)? {
+        out.insert(row.get::<String>(0).map_err(failed)?);
+    }
+    Ok(out)
+}
+
 /// Required outcome rows and terminal status, inside the caller's transaction.
 async fn write_terminal_ledger(
     conn: &turso::Connection,
@@ -684,9 +619,8 @@ async fn write_terminal_ledger(
         )
         .await
         .map_err(|e| BarcaError::Db(format!("failed to create terminal run: {e}")))?;
-    // What the [`StepRecorder`] wrote during the run, or, on a replay after a shared-state
-    // conflict, what the pulled database holds of this run.
-    let already = crate::state_carry::steps_of_run(conn, l.run_id).await?;
+    // What the [`StepRecorder`] wrote during the run.
+    let already = steps_of_run(conn, l.run_id).await?;
 
     for (node_id, oref) in l.all_outputs {
         if l.cached_node_ids.contains(node_id) || already.contains(node_id) {
@@ -1089,7 +1023,7 @@ mod persist_tests {
         let recorder = StepRecorder {
             tx,
             stop: CancellationToken::new(),
-            task: Some(tokio::spawn(async { None })),
+            task: Some(tokio::spawn(async {})),
         };
         let fx = Fixture::new();
         let mut sensor = fx.row("f.py:a");
@@ -1107,15 +1041,13 @@ mod persist_tests {
         let saved = rx.recv().await.unwrap();
         assert_eq!(saved.path, "s3://store/asset");
         assert_eq!(saved.output_hash.as_deref(), Some("confirmed-asset-hash"));
-        recorder.finish().await;
+        recorder.finish().await.unwrap();
     }
 
-    /// Exercise the actual stdlib directory backend in a child with its own
-    /// source path. The gate holds a completed upload before acknowledgement.
-    fn state_test_config(
+    /// A configuration whose store is a directory in `dir`, and the real `barca._state`
+    /// helper from this checkout. `outage` makes every backup upload fail while it exists.
+    fn backup_test_config(
         dir: &tempfile::TempDir,
-        gate: bool,
-        lose_ack: bool,
     ) -> (crate::config::ResolvedConfig, std::path::PathBuf) {
         use std::os::unix::fs::PermissionsExt;
         let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1128,51 +1060,26 @@ mod persist_tests {
             &runner,
             format!(
                 r#"
-import os, signal, sys, time
+import signal, sys, time
 from pathlib import Path
 sys.path.insert(0, {source:?})
-from barca import _state
+from barca import _state, _lifeline
 root = Path({root:?})
-original = _state.push
-def push(uri, local, token):
+original = _state.backup
+def backup(*args):
     with (root / 'attempts').open('a') as f:
         f.write(str(time.monotonic()) + '\n')
     if (root / 'outage').exists():
-        raise OSError('test state store unavailable')
-    result = original(uri, local, token)
-    with (root / 'uploads').open('a') as f:
-        f.write(result + '\n')
-    if {gate} and not (root / 'release').exists():
-        (root / 'uploaded').touch()
-        deadline = time.monotonic() + 15
-        while not (root / 'release').exists():
-            if time.monotonic() > deadline:
-                raise TimeoutError('test upload gate expired')
-            time.sleep(.01)
-    if {lose_ack} and not (root / 'ack_lost').exists():
-        (root / 'ack_lost').touch()
-        sys.stdout.write('{{invalid acknowledgement')
-        sys.stdout.flush()
-        os._exit(0)
-    return result
-_state.push = push
-original_pull = _state.pull
-def pull(uri, local):
-    result = original_pull(uri, local)
-    if (root / 'fail_pull').exists():
-        raise OSError('test interruption after real download')
-    return result
-_state.pull = pull
+        raise OSError('test store unavailable')
+    return original(*args)
+_state.backup = backup
 sys.argv = sys.argv[2:]
-from barca import _lifeline
 signal.signal(signal.SIGTERM, _state._stop)
 _lifeline.watch()
 sys.exit(_state.main())
 "#,
                 source = source.to_string_lossy(),
                 root = root.to_string_lossy(),
-                gate = if gate { "True" } else { "False" },
-                lose_ack = if lose_ack { "True" } else { "False" }
             ),
         )
         .unwrap();
@@ -1184,103 +1091,49 @@ sys.exit(_state.main())
         .unwrap();
         std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755)).unwrap();
         let mut cfg = crate::config::resolve_in(None, root).unwrap();
-        cfg.db_path = root.join("local.db").to_string_lossy().into_owned();
-        cfg.state_uri = Some(root.join("shared.db").to_string_lossy().into_owned());
-        cfg.state = crate::config::StateMode::Optimistic;
-        cfg.push_retries = 3;
+        cfg.db_path = root.join("meta/metadata.db").to_string_lossy().into_owned();
+        cfg.backup_uri = Some(root.join("store").to_string_lossy().into_owned());
+        std::fs::create_dir_all(root.join("meta")).unwrap();
+        std::fs::create_dir_all(root.join("store")).unwrap();
         (cfg, python)
     }
 
-    async fn wait_for_state_file(path: &std::path::Path) {
-        tokio::time::timeout(std::time::Duration::from_secs(10), async {
-            while !path.exists() {
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("actual state helper did not reach gate");
+    fn backups_in(dir: &std::path::Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with("Z.db"))
+            .collect();
+        names.sort();
+        names
     }
 
+    /// The minute checkpoint backs the database up when the run recorded something since the
+    /// last one, and only then; a store outage is retried at the next tick (not in a busy
+    /// loop) and the copy reaches the store once it is back.
     #[tokio::test]
-    async fn checkpoint_retries_a_lost_real_upload_ack_and_keeps_unrelated_history() {
+    async fn the_checkpoint_backs_up_new_progress_and_retries_an_outage() {
         let dir = tempfile::tempdir().unwrap();
-        let (cfg, python) = state_test_config(&dir, false, true);
+        let (cfg, python) = backup_test_config(&dir);
         db::init_db(&cfg.db_path).await.unwrap();
         db::create_run(&cfg.db_path, "r1", "get", "[]", None, Some(2))
-            .await
-            .unwrap();
-        let fx = Fixture::new();
-        let mut first = fx.row("f.py:a");
-        first.path = super::super::state_carry::testing::artifact(&dir, "a.json");
-        record_steps(&cfg.db_path, "r1", &[first.clone()])
-            .await
-            .unwrap();
-        let mut push = SharedPush {
-            python: &python,
-            cfg: &cfg,
-            db_path: &cfg.db_path,
-            run_id: "r1",
-            logs: &[],
-            token: state_sync::StateToken(None),
-        };
-        assert!(push.checkpoint(state_sync::Until::done()).await.is_err());
-        assert!(
-            dir.path().join("shared.db").exists(),
-            "bytes really reached the store"
-        );
-        assert!(push.token.0.is_none(), "an unacknowledged write is unknown");
-        let shared = cfg.state_uri.as_ref().unwrap();
-        db::create_run(shared, "other", "get", "[]", None, Some(1))
-            .await
-            .unwrap();
-        record_steps(shared, "other", &[first]).await.unwrap();
-        db::finish_run(shared, "other", "success", 1, 0, 0.5)
-            .await
-            .unwrap();
-        state_sync::checkpoint_truncate(shared).await.unwrap();
-        let mut second = fx.row("f.py:part[k=1]");
-        second.path = super::super::state_carry::testing::artifact(&dir, "b.json");
-        record_steps(&cfg.db_path, "r1", &[second]).await.unwrap();
-        assert!(push.checkpoint(state_sync::Until::done()).await.unwrap() >= 1);
-        assert!(push.token.0.is_some());
-        assert_eq!(rows(shared).await.len(), 3);
-        let active = run_record(shared, "r1").await;
-        assert_eq!(
-            (
-                active.status.as_str(),
-                active.steps_executed,
-                active.finished_at
-            ),
-            ("running", 2, None)
-        );
-        assert_eq!(run_record(shared, "other").await.status, "success");
-        assert_eq!(rows(&cfg.db_path).await, rows(shared).await);
-    }
-
-    #[tokio::test]
-    async fn outage_keeps_committed_progress_dirty_until_a_later_tick_recovers() {
-        let dir = tempfile::tempdir().unwrap();
-        let (cfg, python) = state_test_config(&dir, false, false);
-        db::init_db(&cfg.db_path).await.unwrap();
-        db::create_run(&cfg.db_path, "r1", "get", "[]", None, Some(1))
             .await
             .unwrap();
         std::fs::write(dir.path().join("outage"), b"").unwrap();
         let recorder = StepRecorder::start_with_intervals(
             cfg.db_path.clone(),
             "r1".into(),
-            Some(ProgressPublication {
+            Some(BackupCheckpoints {
                 python,
                 cfg: cfg.clone(),
-                token: state_sync::StateToken(None),
                 cancel: CancellationToken::new(),
             }),
             std::time::Duration::from_millis(20),
-            std::time::Duration::from_millis(100),
+            std::time::Duration::from_millis(150),
         );
-        let mut first = Fixture::new().row("f.py:a");
-        first.path = super::super::state_carry::testing::artifact(&dir, "a.json");
-        recorder.record(first);
+        recorder.record(Fixture::new().row("f.py:a"));
         let attempts = tokio::time::timeout(std::time::Duration::from_secs(10), async {
             loop {
                 let text = std::fs::read_to_string(dir.path().join("attempts")).unwrap_or_default();
@@ -1297,157 +1150,33 @@ sys.exit(_state.main())
             }
         })
         .await
-        .expect("dirty progress did not retry without a new row");
+        .expect("a failed backup was not retried without a new row");
         assert!(
-            attempts.windows(2).all(|pair| pair[1] - pair[0] >= 0.05),
+            attempts.windows(2).all(|pair| pair[1] - pair[0] >= 0.1),
             "failure must not cause busy retries: {attempts:?}"
         );
-        assert!(!dir.path().join("shared.db").exists());
-        assert_eq!(run_record(&cfg.db_path, "r1").await.steps_executed, 1);
+        // The copy was taken here even though the store refused it.
+        let local = cfg.local_backup_dir();
+        assert_eq!(backups_in(&local).len(), 1);
+        assert!(backups_in(&dir.path().join("store")).is_empty());
         std::fs::remove_file(dir.path().join("outage")).unwrap();
-        wait_for_state_file(&dir.path().join("uploads")).await;
-        tokio::time::sleep(std::time::Duration::from_millis(350)).await;
-        let mut token = None;
-        recorder.finish_with_token(&mut token).await.unwrap();
-        assert!(token.unwrap().0.is_some());
-        assert_eq!(
-            std::fs::read_to_string(dir.path().join("uploads"))
-                .unwrap()
-                .lines()
-                .count(),
-            1
-        );
-        let recovered = run_record(cfg.state_uri.as_ref().unwrap(), "r1").await;
-        assert_eq!(
-            (
-                recovered.status.as_str(),
-                recovered.steps_executed,
-                recovered.finished_at
-            ),
-            ("running", 1, None)
-        );
-    }
-
-    #[tokio::test]
-    async fn checkpoint_retains_an_acknowledged_token_when_followup_pull_fails() {
-        let dir = tempfile::tempdir().unwrap();
-        let (cfg, python) = state_test_config(&dir, true, false);
-        db::init_db(&cfg.db_path).await.unwrap();
-        db::create_run(&cfg.db_path, "r1", "get", "[]", None, Some(2))
-            .await
-            .unwrap();
-        let fx = Fixture::new();
-        let mut first = fx.row("f.py:a");
-        first.path = super::super::state_carry::testing::artifact(&dir, "a.json");
-        record_steps(&cfg.db_path, "r1", &[first]).await.unwrap();
-        let mut push = SharedPush {
-            python: &python,
-            cfg: &cfg,
-            db_path: &cfg.db_path,
-            run_id: "r1",
-            logs: &[],
-            token: state_sync::StateToken(None),
-        };
-        let (outcome, ()) = tokio::join!(push.checkpoint(state_sync::Until::done()), async {
-            wait_for_state_file(&dir.path().join("uploaded")).await;
-            let mut second = fx.row("f.py:part[k=1]");
-            second.path = super::super::state_carry::testing::artifact(&dir, "b.json");
-            record_steps(&cfg.db_path, "r1", &[second]).await.unwrap();
-            std::fs::write(dir.path().join("fail_pull"), b"").unwrap();
-            std::fs::write(dir.path().join("release"), b"").unwrap();
-        });
-        assert!(outcome.is_err());
-        let receipts = std::fs::read_to_string(dir.path().join("uploads")).unwrap();
-        assert_eq!(
-            push.token.0.as_deref(),
-            receipts.lines().last(),
-            "keep the acknowledged CAS token despite the later failure"
-        );
-        assert_eq!(
-            rows(&cfg.db_path).await.len(),
-            2,
-            "failed pull preserves local rows"
-        );
-        assert_eq!(run_record(&cfg.db_path, "r1").await.finished_at, None);
-        assert!(
-            std::fs::read_dir(dir.path()).unwrap().all(|entry| {
-                !entry
-                    .unwrap()
-                    .file_name()
-                    .to_string_lossy()
-                    .contains(".pull-")
-            }),
-            "failed real download leaves no coordinator stage"
-        );
-        std::fs::remove_file(dir.path().join("fail_pull")).unwrap();
-        push.checkpoint(state_sync::Until::done()).await.unwrap();
-        let shared = cfg.state_uri.as_ref().unwrap();
-        assert_eq!(run_record(shared, "r1").await.steps_executed, 2);
-        assert_eq!(rows(shared).await.len(), 2);
-    }
-
-    #[tokio::test]
-    async fn queued_progress_is_published_after_one_blocked_upload_without_overlap() {
-        let dir = tempfile::tempdir().unwrap();
-        let (cfg, python) = state_test_config(&dir, true, false);
-        db::init_db(&cfg.db_path).await.unwrap();
-        db::create_run(&cfg.db_path, "r1", "get", "[]", None, Some(2))
-            .await
-            .unwrap();
-        let recorder = StepRecorder::start_with_intervals(
-            cfg.db_path.clone(),
-            "r1".into(),
-            Some(ProgressPublication {
-                python,
-                cfg: cfg.clone(),
-                token: state_sync::StateToken(None),
-                cancel: CancellationToken::new(),
-            }),
-            std::time::Duration::from_millis(20),
-            std::time::Duration::from_millis(100),
-        );
-        let fx = Fixture::new();
-        let mut first = fx.row("f.py:a");
-        first.path = super::super::state_carry::testing::artifact(&dir, "a.json");
-        recorder.record(first);
-        wait_for_state_file(&dir.path().join("uploaded")).await;
-        let mut second = fx.row("f.py:part[k=1]");
-        second.path = super::super::state_carry::testing::artifact(&dir, "b.json");
-        recorder.record(second);
-        tokio::time::sleep(std::time::Duration::from_millis(350)).await;
-        let uploads = dir.path().join("uploads");
-        assert_eq!(
-            std::fs::read_to_string(&uploads).unwrap().lines().count(),
-            1
-        );
-        assert_eq!(
-            rows(&cfg.db_path).await.len(),
-            1,
-            "queued rows are not falsely committed/published"
-        );
-        std::fs::write(dir.path().join("release"), b"").unwrap();
-        let shared = cfg.state_uri.as_ref().unwrap();
         tokio::time::timeout(std::time::Duration::from_secs(10), async {
-            loop {
-                if run_record(shared, "r1").await.steps_executed == 2 {
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            while backups_in(&dir.path().join("store")).is_empty() {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             }
         })
         .await
-        .unwrap();
-        tokio::time::sleep(std::time::Duration::from_millis(350)).await;
+        .expect("the copy never reached the store");
+        // Nothing new recorded: later ticks take nothing.
+        let settled = std::fs::read_to_string(dir.path().join("attempts")).unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(450)).await;
+        recorder.finish().await.unwrap();
         assert_eq!(
-            std::fs::read_to_string(&uploads).unwrap().lines().count(),
-            2,
-            "missed/clean ticks must not cause extra uploads"
+            std::fs::read_to_string(dir.path().join("attempts")).unwrap(),
+            settled
         );
-        let mut token = None;
-        recorder.finish_with_token(&mut token).await.unwrap();
-        assert!(token.unwrap().0.is_some());
-        assert_eq!(rows(shared).await.len(), 2);
-        assert_eq!(run_record(shared, "r1").await.finished_at, None);
+        assert_eq!(backups_in(&local), backups_in(&dir.path().join("store")));
+        assert_eq!(run_record(&cfg.db_path, "r1").await.steps_executed, 1);
     }
 
     #[tokio::test]
@@ -1610,21 +1339,17 @@ sys.exit(_state.main())
             );
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
-        recorder.finish().await;
+        recorder.finish().await.unwrap();
         assert_eq!(rows(&db_path).await.len(), 2); // unrelated blocker remains intact
     }
 
     #[tokio::test]
-    async fn aborted_recorder_keeps_known_token_for_terminal_fallback() {
+    async fn an_aborted_recorder_leaves_the_terminal_ledger_whole() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = fresh_db(&dir, "m.db").await;
         let recorder = StepRecorder::start(db_path.clone(), "r1".into());
         recorder.task.as_ref().unwrap().abort();
-        let mut token = Some(state_sync::StateToken(Some(
-            "known-before-checkpoint".into(),
-        )));
-        assert!(recorder.finish_with_token(&mut token).await.is_err());
-        assert_eq!(token.unwrap().0.as_deref(), Some("known-before-checkpoint"));
+        assert!(recorder.finish().await.is_err());
         // Mid-run failure must not remove the complete terminal writer's fallback.
         let fx = Fixture::new();
         persist_run(&db_path, &fx.ledger("r1")).await.unwrap();
@@ -1647,7 +1372,8 @@ sys.exit(_state.main())
         tokio::time::sleep(RECORD_INTERVAL * 2).await;
         tokio::time::timeout(std::time::Duration::from_secs(1), recorder.finish())
             .await
-            .expect("recorder stop waited for an unrelated DB owner");
+            .expect("recorder stop waited for an unrelated DB owner")
+            .unwrap();
         drop(held);
         assert_eq!(run_record(&db_path, "r1").await.steps_executed, 0);
         persist_run(&db_path, &fx.ledger("r1")).await.unwrap();
@@ -1689,121 +1415,6 @@ sys.exit(_state.main())
         // Writing the ledger again (a replay onto a database that already has it) is a no-op.
         persist_run(&db_path, &fx.ledger("r1")).await.unwrap();
         assert_eq!(rows(&db_path).await, complete("r1"));
-    }
-
-    #[tokio::test]
-    async fn a_replay_onto_a_freshly_pulled_db_carries_the_whole_run() {
-        let dir = tempfile::tempdir().unwrap();
-        let fx = Fixture::new();
-
-        // The local DB, with steps recorded mid-run, is replaced by a pulled one that has
-        // never heard of this run: the replay must not assume the recorder's rows survived.
-        let local = fresh_db(&dir, "local.db").await;
-        db::create_run(&local, "r1", "get", "[\"f.py\"]", None, Some(5))
-            .await
-            .unwrap();
-        record_steps(&local, "r1", &[fx.row("f.py:a")])
-            .await
-            .unwrap();
-        let pulled = fresh_db(&dir, "pulled.db").await;
-        persist_run(&pulled, &fx.ledger("r1")).await.unwrap();
-        assert_eq!(rows(&pulled).await, complete("r1"));
-        let run = run_record(&pulled, "r1").await;
-        assert_eq!((run.status.as_str(), run.steps_executed), ("failed", 4));
-
-        // A pulled DB that already holds part of this run (another process on this machine
-        // pushed the shared local DB mid-run) gets the rest, and keeps another run's rows.
-        let partial = fresh_db(&dir, "partial.db").await;
-        for id in ["other", "r1"] {
-            db::create_run(&partial, id, "get", "[]", None, Some(5))
-                .await
-                .unwrap();
-        }
-        record_steps(&partial, "other", &[fx.row("f.py:a")])
-            .await
-            .unwrap();
-        record_steps(
-            &partial,
-            "r1",
-            &[fx.row("f.py:a"), fx.row("f.py:part[k=2]")],
-        )
-        .await
-        .unwrap();
-        persist_run(&partial, &fx.ledger("r1")).await.unwrap();
-        let mut want = complete("r1");
-        want.push((
-            "other".to_string(),
-            "f.py:a".to_string(),
-            "success".to_string(),
-        ));
-        want.sort();
-        assert_eq!(rows(&partial).await, want);
-    }
-
-    /// A pull, as `state_sync::pull_state` does it once the blob is downloaded: a fresh copy
-    /// of `shared` is swapped in for `local`, which keeps its unpushed rows.
-    async fn pull(dir: &tempfile::TempDir, shared: &str, local: &str) {
-        state_sync::checkpoint_truncate(shared).await.unwrap();
-        let staged = dir.path().join("staged.db");
-        std::fs::copy(shared, &staged).unwrap();
-        db::pull_for_tests(local, &staged).await;
-    }
-
-    #[tokio::test]
-    async fn a_pull_in_the_middle_of_a_run_leaves_the_run_whole_and_nothing_twice() {
-        // Another process in the same project (a second `barca get`, a `barca status`) pulls
-        // while this run is going; later the run's own push conflicts and it pulls again.
-        let dir = tempfile::tempdir().unwrap();
-        let mut fx = Fixture::new();
-        // The pull only carries steps whose artifact is there.
-        for (node, oref) in fx.outputs.iter_mut() {
-            let file = dir.path().join(crate::safe_node_id(node));
-            std::fs::write(&file, b"1").unwrap();
-            oref.path = file.to_string_lossy().to_string();
-        }
-        let shared = fresh_db(&dir, "shared.db").await;
-        db::create_run(&shared, "theirs", "get", "[\"g.py\"]", None, Some(1))
-            .await
-            .unwrap();
-        let local = fresh_db(&dir, "local.db").await;
-        db::create_run(&local, "r1", "get", "[\"f.py\"]", None, Some(5))
-            .await
-            .unwrap();
-        record_steps(&local, "r1", &[fx.row("f.py:a")])
-            .await
-            .unwrap();
-
-        // Mid-run pull: the run row and the recorded step are still there afterwards, so
-        // `barca status` goes on showing the step and `barca history` the run.
-        pull(&dir, &shared, &local).await;
-        let mid = run_record(&local, "r1").await;
-        assert_eq!((mid.status.as_str(), mid.steps_executed), ("running", 1));
-        assert_eq!(rows(&local).await.len(), 1);
-        run_record(&local, "theirs").await;
-
-        // The run goes on recording, ends, and writes its ledger and its log.
-        record_steps(&local, "r1", &[fx.row("f.py:part[k=1]")])
-            .await
-            .unwrap();
-        persist_run(&local, &fx.ledger("r1")).await.unwrap();
-        let log = [("f.py:a".to_string(), "hello".to_string())];
-        db::insert_logs(&local, "r1", &log).await.unwrap();
-        assert_eq!(rows(&local).await, complete("r1"));
-
-        // Its push conflicts: pull again, replay the ledger and the log.
-        db::create_run(&shared, "theirs-2", "get", "[\"g.py\"]", None, Some(1))
-            .await
-            .unwrap();
-        pull(&dir, &shared, &local).await;
-        db::init_db(&local).await.unwrap();
-        persist_run(&local, &fx.ledger("r1")).await.unwrap();
-        db::insert_logs(&local, "r1", &log).await.unwrap();
-
-        assert_eq!(rows(&local).await, complete("r1"));
-        assert_eq!(db::get_logs(&local, "r1").await.unwrap().len(), 1);
-        let end = run_record(&local, "r1").await;
-        assert_eq!((end.status.as_str(), end.steps_executed), ("failed", 4));
-        assert_eq!(db::count_runs(&local).await.unwrap(), 3);
     }
 
     #[tokio::test]
@@ -1866,7 +1477,7 @@ sys.exit(_state.main())
         // Queued just before the run ends: finish() does not wait a full interval to write it.
         recorder.record(fx.row("f.py:part[k=2]"));
         let stopping = Instant::now();
-        recorder.finish().await;
+        recorder.finish().await.unwrap();
         assert!(stopping.elapsed() < RECORD_INTERVAL);
 
         persist_run(&db_path, &fx.ledger("r1")).await.unwrap();

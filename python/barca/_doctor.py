@@ -27,10 +27,6 @@ def probe(store):
     try:
         local = _storage.local_path_of(uri)
         if local is not None:
-            if store["name"] == "state":
-                if local.is_dir():
-                    raise IsADirectoryError("state URI names a directory; select a file path")
-                local = local.parent
             ancestor = local
             while not ancestor.exists() and ancestor.parent != ancestor:
                 ancestor = ancestor.parent

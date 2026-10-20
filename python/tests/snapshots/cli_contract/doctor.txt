@@ -10,6 +10,7 @@ checks[].data.file : string  (optional)
 checks[].data.files : array  (optional)
 checks[].data.files[] : string
 checks[].data.found : boolean  (optional)
+checks[].data.local_backups : string  (optional)
 checks[].data.metadata : string  (optional)
 checks[].data.mode : string  (optional)
 checks[].data.name : string  (optional)

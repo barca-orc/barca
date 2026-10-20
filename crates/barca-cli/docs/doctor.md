@@ -38,12 +38,11 @@ paths inside steps.
 ## Local-only debugging profile
 
 Run this block from your project root. Use local input fixtures in your pipeline/config;
-these overrides disable remote artifact/state synchronization, not application-level I/O.
+these overrides disable remote artifacts and history backups, not application-level I/O.
 The `local` environment uses a separate cache namespace.
 
 ```bash
 export BARCA_REMOTE=off
-export BARCA_STATE=off
 export BARCA_ENV=local
 barca doctor --pretty
 barca get --refresh-all

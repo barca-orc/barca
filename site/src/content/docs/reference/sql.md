@@ -49,9 +49,6 @@ infer a schema from absent current results.
 
 ## Remote storage
 
-With optimistic shared state, SQL first synchronizes metadata into the selected
-environment's local `.barca/` history, just like status. It does not create a new run.
-
 With remote storage (`barca docs remote`) a result that exists only in the bucket is a view like
 any other. When a query names such a view, barca downloads its artifact (for a partitioned asset,
 the current keys' artifacts) into `.barca/sql-cache/` and queries the copy. stderr says what was downloaded:
@@ -103,8 +100,7 @@ no longer in the bucket) exits 3 and carries the store's error.
 
 - It never executes a pipeline step or records a new run. Source parsing is static,
   but `partitions(<expression>)` may evaluate Python and import the pipeline module
-  while loading its key list. With optimistic shared state, local history may change
-  when synchronized; remote artifact copies are written under `.barca/sql-cache/`.
+  while loading its key list. Remote artifact copies are written under `.barca/sql-cache/`.
 - SQL is not restricted to SELECT: an explicit `COPY ... TO 'file.csv'` writes that
   file using DuckDB. Queries run with the process's filesystem permissions.
 - Install SQL support in barca's Python environment: `uv add 'barca[sql]'`.

@@ -1,0 +1,30 @@
+Metadata backups: list them, or put one back in place of the local database
+
+With a remote store, the metadata DB is backed up on the minute checkpoint and at the end of each run, five copies kept locally and in the store. Nothing is restored unless you ask.
+
+Usage: barca state <COMMAND>
+
+Commands:
+  backups  List the metadata backups, local and in the store, newest first
+  restore  Put a metadata backup in place of the local database (the current one is kept aside)
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+Examples:
+  barca state backups                  # the metadata backups, local and in the store, newest first
+  barca state backups --json           # {backups: [{index, name, where, size_bytes, run_id, rows, ...}], local_dir, store}
+  barca state restore                  # put the newest backup back in place of .barca/metadata.db
+  barca state restore --from 3         # the third newest (the index in barca state backups)
+  barca state restore --from 2026-10-14T18-02-11Z.db   # one backup, by name
+  barca state backups --env dev        # another environment's backups
+
+With a remote store ([remote] uri), the metadata DB is backed up every minute of a run, when the
+run ends, and every minute from barca serve: to .barca/backups/ and to
+{uri}/{env}/state/backups/, five copies kept in each. Nothing is ever downloaded before a run.
+restore never runs by itself: it validates the copy, moves the current database to
+metadata.db.pre-restore and puts the copy in its place. No backup: exit 2. Refused while
+barca serve is using the environment: exit 3.
+More: barca docs remote

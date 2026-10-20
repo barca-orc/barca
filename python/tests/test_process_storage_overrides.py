@@ -37,7 +37,7 @@ def project(tmp_path):
     root.mkdir()
     store = tmp_path / "store"
     (root / "pipeline.py").write_text(PIPELINE)
-    (root / "barca.toml").write_text(f'[remote]\nuri = "{store}"\nstate = "optimistic"\n')
+    (root / "barca.toml").write_text(f'[remote]\nuri = "{store}"\n')
     return root, store
 
 
@@ -79,13 +79,13 @@ def observed_environment(root, store, **overrides):
 def test_remote_off_preserves_history_recomputes_locally_and_reuses_local_cache(project):
     root, store = project
     first = succeeded(cli(root, environment(store), "get", "total", "--json"))
-    shared_db = store / "default/state/metadata.db"
-    shared_before = shared_db.read_bytes()
+    backups = store / "default/state/backups"
+    backups_before = sorted(p.name for p in backups.iterdir())
+    assert backups_before
     env, observer = observed_environment(
         root,
         store,
         BARCA_REMOTE="off",
-        BARCA_STATE="optimistic",
         BARCA_ARTIFACT_URI=str(store / "literal"),
         BARCA_STORAGE_OPTIONS="invalid JSON",
         BARCA_TRANSFER_TIMEOUT="invalid",
@@ -100,7 +100,8 @@ def test_remote_off_preserves_history_recomputes_locally_and_reuses_local_cache(
     inspected = succeeded(cli(root, env, "status", "total", "--json"))
     assert all(".barca/artifacts/" in n["cache"]["artifact"] for n in inspected["nodes"])
     assert not list(observer.glob("*.pids")), "remote-off contacted the configured store"
-    assert shared_db.read_bytes() == shared_before
+    # No backup under BARCA_REMOTE=off: the store is not touched.
+    assert sorted(p.name for p in backups.iterdir()) == backups_before
     rows = succeeded(cli(root, env, "history", "--all", "--json"))["runs"]
     assert len(rows) == 3 and first["run_id"] in {r["run_id"] for r in rows}
 
@@ -150,20 +151,18 @@ def test_empty_keeps_remote_configuration_and_invalid_switch_is_usage_error(proj
     result = cli(root, environment(store, BARCA_REMOTE=remote), "get", "total", "--json")
     if remote == "":
         assert succeeded(result)["final_output"] == 3
-        assert (store / "default/state/metadata.db").is_file()
+        assert list((store / "default/state/backups").glob("*Z.db"))
     else:
         assert result.returncode == 2 and "BARCA_REMOTE" in result.stderr
 
 
-@pytest.mark.parametrize("override", ["remote", "state"])
-def test_serve_reuses_explicit_process_overrides_and_never_silently_discards_state(
-    project, override
-):
+@pytest.mark.parametrize("override", ["remote", "store"])
+def test_serve_reuses_explicit_process_overrides_and_backs_up_to_a_store(project, override):
+    """`barca serve` with a store uses it and backs its history up there (RFC-0009);
+    BARCA_REMOTE=off keeps it from the store entirely."""
     root, store = project
-    refused = cli(root, environment(store), "serve", "pipeline.py", "--no-schedule")
-    assert refused.returncode == 2 and "BARCA_STATE=off" in refused.stderr
     env, observer = observed_environment(
-        root, store, **({"BARCA_REMOTE": "off"} if override == "remote" else {"BARCA_STATE": "off"})
+        root, store, **({"BARCA_REMOTE": "off"} if override == "remote" else {})
     )
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -195,6 +194,8 @@ def test_serve_reuses_explicit_process_overrides_and_never_silently_discards_sta
         else:
             assert list(observer.glob("*.pids"))
             assert list((store / "default/artifacts").rglob("*.json"))
+            # The run's end backed the history up to the store.
+            assert list((store / "default/state/backups").glob("*Z.db"))
             assert not (store / "default/state/metadata.db").exists()
     finally:
         proc.send_signal(signal.SIGTERM)

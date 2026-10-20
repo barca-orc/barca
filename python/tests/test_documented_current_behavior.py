@@ -62,12 +62,13 @@ def part(key): return {"key": key}
     assert run(tmp_path, "get", "part")["steps_executed"] == 0
 
 
-def test_state_off_uploads_artifacts_without_cross_machine_cache_discovery(tmp_path):
+def test_a_store_without_a_server_shares_no_history_between_machines(tmp_path):
+    """RFC-0009: a store is each machine's backup; sharing history needs a server."""
     store = tmp_path / "store"
     for name in ("one", "two"):
         root = tmp_path / name
         root.mkdir()
-        (root / "barca.toml").write_text(f'[remote]\nuri = "{store}"\nstate = "off"\n')
+        (root / "barca.toml").write_text(f'[remote]\nuri = "{store}"\n')
         (root / "pipeline.py").write_text("""from barca import asset
 @asset()
 def result(): return {"value": 7}
@@ -76,26 +77,25 @@ def result(): return {"value": 7}
         assert run(root, "get", "result")["steps_executed"] == 0
     assert list((store / "default/artifacts").rglob("*.json"))
     assert not (store / "default/state/metadata.db").exists()
+    assert list((store / "default/state/backups").glob("*Z.db"))
 
 
-def test_sql_scalar_list_copy_and_shared_history_side_effects(tmp_path):
+def test_sql_scalar_list_copy_and_store_side_effects(tmp_path):
     store = tmp_path / "store"
-    source = """from barca import asset
+    root = tmp_path / "one"
+    root.mkdir()
+    (root / "barca.toml").write_text(f'[remote]\nuri = "{store}"\n')
+    (root / "pipeline.py").write_text("""from barca import asset
 @asset()
 def numbers(): return [1, 2]
-"""
-    for name in ("one", "two"):
-        root = tmp_path / name
-        root.mkdir()
-        (root / "barca.toml").write_text(f'[remote]\nuri = "{store}"\n')
-        (root / "pipeline.py").write_text(source)
-    run(tmp_path / "one", "get", "numbers")
-    root = tmp_path / "two"
-    assert not (root / ".barca").exists()
+""")
+    run(root, "get", "numbers")
+    # The local copy is gone: SQL reads the artifact from the store.
+    for path in (root / ".barca/artifacts").rglob("*.json"):
+        path.unlink()
     query = run(root, "sql", "select * from numbers")
     assert query["columns"] == ["json"]
     assert query["rows"] == [{"json": 1}, {"json": 2}]
-    assert (root / ".barca/metadata.db").exists()
     assert run(root, "history", "--all")["total"] == 1
     run(root, "sql", "COPY (select * from numbers) TO 'export.csv' (HEADER)")
     assert (root / "export.csv").read_text().splitlines() == ["json", "1", "2"]
@@ -115,7 +115,9 @@ def test_invalid_transfer_settings_are_infrastructure_errors(tmp_path):
             timeout=10,
         )
         assert proc.returncode == 3
-        envelope = json.loads(next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{")))
+        envelope = json.loads(
+            next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{"))
+        )
         assert envelope["kind"] == "infra" and variable in envelope["error"]
         assert not (tmp_path / ".barca").exists()
 

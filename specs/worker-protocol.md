@@ -99,8 +99,12 @@ error metadata.
 
 Coordinator → worker: `execute`, `execute_batch`, `parallel_response`, `cancel`, `done`.
 Worker → coordinator: `results`, `result_checkpoint`, `log`, `submit`, `heartbeat`,
-`repeated_warnings`. Coordinator → transfer: `put`, `get`, `probe`, `shutdown`.
-Transfer → coordinator: `done`, `error`, correlated by request id.
+`repeated_warnings`. Coordinator → transfer: `put`, `get`, `probe`, `stat`, `shutdown`.
+Transfer → coordinator: `done`, `error`, correlated by request id. `stat` (`{type, id,
+remote}`, added for RFC-0009's `barca get` repair) asks whether an object is in the store and
+moves no bytes: `done` carries its `size_bytes` and, for a store that is a plain directory, its
+`sha256`; a missing object is an `error` with `missing: true`. It is additive: the protocol
+version is unchanged, and a coordinator sends it only to a helper from the same build.
 
 A successful parallel response requires `artifact: {path,format,frame_type?}`. Every
 branch return value, including small JSON, is written to its run/group-owned file.

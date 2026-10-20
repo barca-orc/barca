@@ -85,7 +85,6 @@ def test_concurrent_cli_receipt_belongs_to_serializing_producer(tmp_path, point,
     env = {k: v for k, v in os.environ.items() if not k.startswith("BARCA_")}
     env.update(
         BARCA_REMOTE_URI=str(store),
-        BARCA_STATE="off",
         BARCA_POOL_SIZE="1",
         PYTHONPATH=shim + os.pathsep + env.get("PYTHONPATH", ""),
     )
@@ -128,7 +127,7 @@ def test_concurrent_cli_receipt_belongs_to_serializing_producer(tmp_path, point,
         a_result = json.loads(a_out)
         # B has serialized, but its upload remains held: observe A's store object
         # before allowing the later request to overwrite that shared destination.
-        remote = list(store.rglob("*.json"))
+        remote = list((store / "default" / "artifacts").rglob("*.json"))
         assert len(remote) == 1 and remote[0].read_bytes() == b"11"
         with contextlib.closing(sqlite3.connect(tmp_path / ".barca/metadata.db")) as db:
             rows_a = db.execute(
@@ -210,7 +209,6 @@ def test_cancelled_real_upload_cleans_run_owned_snapshots(tmp_path):
     env = {k: v for k, v in os.environ.items() if not k.startswith("BARCA_")}
     env.update(
         BARCA_REMOTE_URI=str(store),
-        BARCA_STATE="off",
         BARCA_POOL_SIZE="1",
         BARCA_TEST_HOLD=f"upload-open:{hold}",
         PYTHONPATH=str(Path(__file__).parent / "hold") + os.pathsep + env.get("PYTHONPATH", ""),
@@ -280,7 +278,6 @@ def test_confirmed_receipt_is_checkpointed_while_later_step_is_running(tmp_path)
     env = {k: v for k, v in os.environ.items() if not k.startswith("BARCA_")}
     env.update(
         BARCA_REMOTE_URI=str(store),
-        BARCA_STATE="off",
         BARCA_POOL_SIZE="1",
         BARCA_TEST_HOLD=f"uploaded:{hold}",
         PYTHONPATH=str(Path(__file__).parent / "hold") + os.pathsep + env.get("PYTHONPATH", ""),

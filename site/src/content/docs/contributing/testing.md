@@ -58,7 +58,7 @@ upload, in `test_remote_cancel.py`) do not sleep and hope: `python/tests/hold/` 
 
 ## Storage backend tests and emulators
 
-Tests of remote storage and shared history (`test_state_backends.py`, `test_remote_faults.py`,
+Tests of remote storage and metadata backups (`test_state_backends.py`, `test_remote_faults.py`,
 `test_remote_env_config.py`, `test_remote_inspect.py` and others) run against local emulators
 and need no cloud account:
 
@@ -92,8 +92,8 @@ docker run -d --name azurite -p 9210:10000 \
 
 The MinIO version matters. A MinIO build from September 2025
 (`RELEASE.2025-09-06T17-38-46Z`) answers a create-only upload of a new object with "The
-specified key does not exist", which makes barca's first upload of the shared history fail with
-exit 3. Use the pinned image.
+specified key does not exist" (it broke the create-only upload of the shared history that
+barca 0.25 and earlier made). Use the pinned image.
 
 ## Shell integration tests
 
@@ -106,7 +106,7 @@ bash tests/integration/test_cli.sh
 | `test_cli.sh` | Commands, flags and output |
 | `test_cache.sh`, `test_cache_gaps.sh`, `test_cache_fuzz.sh` | Cache hits and misses after code and input changes |
 | `test_env.sh` | `--env` separation |
-| `test_remote_state.sh` | Shared history between two project directories |
+| `test_remote_state.sh` | A store as backup and read-through cache: uploads, the metadata backup, fetches without a local copy, `barca state restore` |
 | `test_partitions.sh` | Partitioned assets |
 | `test_run_refresh.sh` | `barca run` with `--refresh` |
 | `test_benchmark_examples.sh` | The benchmark pipelines run as smoke tests; expects the binary at `.venv/bin/barca` |

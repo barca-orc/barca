@@ -57,7 +57,7 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
     ),
     (
         "serve",
-        "the HTTP API and scheduler are young: no auth, no shared remote state, routes may change",
+        "the HTTP API and scheduler are young: no auth, routes may change",
     ),
     (
         "get --output",
@@ -145,12 +145,34 @@ fn normalize(text: &str) -> String {
     lines.join("\n").trim_end().to_string() + "\n"
 }
 
-/// The top level and every subcommand, as (snapshot name, argv path).
+/// The top level and every subcommand (and theirs: `barca state backups`), as (snapshot name,
+/// argv path).
 fn help_targets() -> Vec<(String, Vec<String>)> {
     let mut out = vec![("barca".to_string(), Vec::new())];
     for sub in Cli::command().get_subcommands() {
         let name = sub.get_name().to_string();
-        out.push((format!("barca-{name}"), vec![name]));
+        out.push((format!("barca-{name}"), vec![name.clone()]));
+        for nested in sub.get_subcommands() {
+            let inner = nested.get_name().to_string();
+            out.push((format!("barca-{name}-{inner}"), vec![name.clone(), inner]));
+        }
+    }
+    out
+}
+
+/// Every command a user types, by its words after `barca` (`get`, `state backups`), with its
+/// definition: the subcommands and theirs.
+fn every_command(root: &clap::Command) -> Vec<(String, &clap::Command)> {
+    let mut out = Vec::new();
+    for sub in root.get_subcommands() {
+        out.push((sub.get_name().to_string(), sub));
+        // clap's generated `help` subcommands are not commands of their own.
+        if sub.get_name() == "help" {
+            continue;
+        }
+        for nested in sub.get_subcommands().filter(|n| n.get_name() != "help") {
+            out.push((format!("{} {}", sub.get_name(), nested.get_name()), nested));
+        }
     }
     out
 }
@@ -331,8 +353,8 @@ fn commands_block() -> String {
     let root = built();
     let mut out =
         String::from("| Command | Arguments | Stability | Purpose |\n|---|---|---|---|\n");
-    for sub in root.get_subcommands() {
-        let name = sub.get_name();
+    for (name, sub) in every_command(&root) {
+        let name = name.as_str();
         let positionals: Vec<String> = sub
             .get_arguments()
             .filter(|a| a.is_positional())
@@ -352,7 +374,7 @@ fn commands_block() -> String {
             } else {
                 format!("`{}`", positionals.join(" "))
             },
-            cell(&stability(name)),
+            cell(&stability(name.split(' ').next().unwrap_or(name))),
             cell(&one_line(sub.get_about())),
         ));
     }
@@ -386,9 +408,8 @@ fn flags_block() -> String {
         out.push('\n');
     };
     table("barca", "barca", &root);
-    for sub in root.get_subcommands() {
-        let name = sub.get_name();
-        table(&format!("barca {name}"), name, sub);
+    for (name, sub) in every_command(&root) {
+        table(&format!("barca {name}"), &name, sub);
     }
     out.trim_end().to_string() + "\n"
 }

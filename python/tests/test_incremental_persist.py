@@ -150,14 +150,13 @@ def test_status_from_a_second_process_shows_steps_a_running_get_has_finished(pro
     assert set(states(project).values()) == {"cached"}
 
 
-def remote_progress(project, monkeypatch, state_mode):
+def remote_progress(project, monkeypatch):
     for key in tuple(os.environ):
         if key.startswith("BARCA_"):
             monkeypatch.delenv(key)
     store = project / "shared"
     store.mkdir()
     monkeypatch.setenv("BARCA_REMOTE_URI", str(store))
-    monkeypatch.setenv("BARCA_STATE", state_mode)
     proc = start_get(project)
     try:
         wait_until_slow_is_running(project)
@@ -178,7 +177,7 @@ def remote_progress(project, monkeypatch, state_mode):
             assert artifact.is_relative_to(store / "default" / "artifacts")
             assert artifact.is_file()
             assert digest == hashlib.sha256(artifact.read_bytes()).hexdigest()
-        # Receipt-only slice: minute publication is the next sequential PR.
+        # No shared history: nothing but backups goes to the store's state prefix (RFC-0009).
         assert not (store / "default" / "state" / "metadata.db").exists()
         return proc, store
     except BaseException:
@@ -189,13 +188,12 @@ def remote_progress(project, monkeypatch, state_mode):
         raise
 
 
-@pytest.mark.parametrize("state_mode", ["off", "optimistic"])
 def test_confirmed_remote_progress_is_visible_and_finalization_does_not_duplicate_it(
-    project, monkeypatch, state_mode
+    project, monkeypatch
 ):
     proc = None
     try:
-        proc, store = remote_progress(project, monkeypatch, state_mode)
+        proc, store = remote_progress(project, monkeypatch)
     finally:
         if proc is not None:
             finish(proc, project)
@@ -207,16 +205,17 @@ def test_confirmed_remote_progress_is_visible_and_finalization_does_not_duplicat
         ).fetchall()
     conn.close()
     assert len(rows) == 3 and all(count == 1 for _, count in rows)
-    assert (store / "default" / "state" / "metadata.db").exists() == (state_mode == "optimistic")
+    assert not (store / "default" / "state" / "metadata.db").exists()
+    # The run ended with a backup of the history, here and in the store.
+    backups = sorted(p.name for p in (store / "default" / "state" / "backups").glob("*Z.db"))
+    assert len(backups) == 1
+    assert (project / ".barca" / "backups" / backups[0]).is_file()
 
 
-@pytest.mark.parametrize("state_mode", ["off", "optimistic"])
-def test_sigkill_reuses_confirmed_remote_results_before_final_publication(
-    project, monkeypatch, state_mode
-):
+def test_sigkill_reuses_confirmed_remote_results_before_final_publication(project, monkeypatch):
     proc = None
     try:
-        proc, _ = remote_progress(project, monkeypatch, state_mode)
+        proc, _ = remote_progress(project, monkeypatch)
         os.kill(proc.pid, signal.SIGKILL)
         assert proc.wait(timeout=WAIT) == -signal.SIGKILL
         for pipe in (proc.stdout, proc.stderr):

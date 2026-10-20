@@ -77,6 +77,14 @@ def machine(tmp_path, name):
     return root
 
 
+def restored(tmp_path, name, options):
+    """Another machine: none of the artifacts, and the history from the store's newest backup
+    (RFC-0009: `barca state restore`, as a new container would)."""
+    root = machine(tmp_path, name)
+    assert barca(root, options, "state", "restore")["from"] == "store"
+    return root
+
+
 def bytes_at(remote, tmp_path):
     local = tmp_path / "inspected-object.json"
     # fsspec reads FSSPEC_* once at import. A fresh real client, like the CLI's
@@ -167,7 +175,7 @@ def test_refresh_killed_before_or_after_real_sdk_upload(remote, tmp_path, point)
         after = bytes_at(artifact, tmp_path)
         assert json.loads(after) == staged_value
         assert (after == old) == (point == "put")
-    reader = machine(tmp_path, "reader")
+    reader = restored(tmp_path, "reader", remote)
     observed = barca(reader, remote, "get", "observe")
     assert observed["final_output"] == {"value": expected, "length": 262144}
     blob = next(s for s in observed["steps"] if s["id"].endswith(":blob"))
@@ -175,7 +183,7 @@ def test_refresh_killed_before_or_after_real_sdk_upload(remote, tmp_path, point)
     assert_history(reader, remote, {unrelated, first})
     repaired = barca(producer, remote, "get", "blob", "--refresh", "blob")
     assert repaired["final_output"]["value"] == "old"
-    final = barca(machine(tmp_path, "final"), remote, "get", "blob")
+    final = barca(restored(tmp_path, "final", remote), remote, "get", "blob")
     assert final["final_output"]["value"] == "old"
     assert all("artifact_mismatch" not in step for step in final["steps"])
 
@@ -184,7 +192,7 @@ def test_killed_sdk_download_preserves_old_destination_until_complete_install(re
     producer = machine(tmp_path, "producer")
     unrelated, first, artifact = baseline(producer, remote)
     complete = bytes_at(artifact, tmp_path)
-    reader = machine(tmp_path, "reader")
+    reader = restored(tmp_path, "reader", remote)
     # A complete stale copy forces verification to download rather than keep local.
     relative = artifact.split("/default/artifacts/", 1)[1]
     local = reader / ".barca" / "artifacts" / relative

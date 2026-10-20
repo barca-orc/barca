@@ -1584,6 +1584,8 @@ components:
           enum:
           - materialized
           - local_only
+          - store_only
+          - mismatch
           - changed
           - upstream_stale
           - failed

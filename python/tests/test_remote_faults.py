@@ -2,8 +2,9 @@
 
 Drives the installed `barca` binary against each emulator the CI `backends` job
 runs — MinIO (S3), Azurite (Azure Blob) and fake-gcs-server (GCS). Artifacts go
-through a local TCP proxy that can reset or stall connections; the shared state
-blob goes to a local file so faults hit artifact transfers only. Assertions are
+through a local TCP proxy that can reset or stall connections. Only artifacts go to the
+store (`artifacts_uri`, no `uri`), so no metadata backup is taken and faults hit artifact
+transfers only. Assertions are
 on outcomes (the run, the store, the recorded rows) — not on which layer retried,
 since the cloud SDKs retry internally too.
 
@@ -314,7 +315,7 @@ def _stored(backend, container: str) -> list[str]:
 
 
 class Project:
-    """One simulated machine: a working dir sharing the container and state file."""
+    """One simulated machine: a working dir using the container for its artifacts."""
 
     def __init__(
         self,
@@ -322,20 +323,17 @@ class Project:
         backend,
         container: str,
         endpoint: str,
-        state: Path,
         bad_auth: bool = False,
         **remote,
     ):
         self.dir = root
         self.dir.mkdir(parents=True, exist_ok=True)
-        self.state = state
         self.env = {**os.environ, **backend.env}
         (self.dir / "pipeline.py").write_text(PIPELINE)
         extra = "".join(f"{k} = {v}\n" for k, v in remote.items())
         (self.dir / "barca.toml").write_text(
             "[remote]\n"
             f'artifacts_uri = "{backend.scheme}://{container}/proj/artifacts"\n'
-            f'state_uri = "{state}"\n'
             f"{extra}\n" + backend.storage_options(endpoint, bad_auth)
         )
 
@@ -397,7 +395,7 @@ class Project:
                     proc.wait(timeout=10)
 
     def rows(self, like: str) -> list[dict]:
-        conn = sqlite3.connect(self.state)
+        conn = sqlite3.connect(self.dir / ".barca" / "metadata.db")
         conn.row_factory = sqlite3.Row
         return [
             dict(r)
@@ -417,7 +415,7 @@ def _explain(proc: subprocess.CompletedProcess) -> str:
 
 
 def test_uploads_survive_connection_resets(tmp_path, backend, container, proxy):
-    a = Project(tmp_path / "a", backend, container, proxy.endpoint, tmp_path / "state.db")
+    a = Project(tmp_path / "a", backend, container, proxy.endpoint)
     proc = a.get_with_transfer_resets(proxy)
     assert proc.returncode == 0, _explain(proc)
     assert proxy.resets_left == 0, "faults were never hit — the test proves nothing"
@@ -430,14 +428,14 @@ def test_uploads_survive_connection_resets(tmp_path, backend, container, proxy):
     assert all(r["artifact_path"].startswith(prefix) for r in rows), rows
 
 
-def test_cross_machine_fetch_survives_connection_resets(tmp_path, backend, container, proxy):
-    state = tmp_path / "state.db"
-    a = Project(tmp_path / "a", backend, container, proxy.endpoint, state)
+def test_a_fetch_from_the_store_survives_connection_resets(tmp_path, backend, container, proxy):
+    a = Project(tmp_path / "a", backend, container, proxy.endpoint)
     proc, _ = a.get()
     assert proc.returncode == 0, _explain(proc)
+    # This machine's copies are gone: the cache hits are fetched from the store.
+    shutil.rmtree(a.dir / ".barca" / "artifacts")
 
-    b = Project(tmp_path / "b", backend, container, proxy.endpoint, state)
-    proc = b.get_with_transfer_resets(proxy)
+    proc = a.get_with_transfer_resets(proxy)
     assert proc.returncode == 0, _explain(proc)
     assert proxy.resets_left == 0, "faults were never hit — the test proves nothing"
     assert json.loads(proc.stdout)["steps_executed"] == 0
@@ -448,9 +446,7 @@ def test_cross_machine_fetch_survives_connection_resets(tmp_path, backend, conta
 def test_bad_credentials_fail_fast_without_retries(tmp_path, backend, container, proxy):
     if not backend.checks_auth:
         pytest.skip(f"{backend.id} emulator does not authenticate")
-    a = Project(
-        tmp_path / "a", backend, container, proxy.endpoint, tmp_path / "state.db", bad_auth=True
-    )
+    a = Project(tmp_path / "a", backend, container, proxy.endpoint, bad_auth=True)
     proc, took = a.get()
     _assert_store_failure(proc, a)
     assert took < 30, f"auth failure took {took:.1f}s — retried a permanent error?"
@@ -465,7 +461,6 @@ def test_stalled_store_times_out_instead_of_hanging(tmp_path, backend, container
         backend,
         container,
         proxy.endpoint,
-        tmp_path / "state.db",
         transfer_timeout=3,
     )
     proc, took = a.get(timeout=90)
@@ -497,7 +492,7 @@ def test_ctrl_c_mid_upload_leaves_no_object_and_no_record(tmp_path, backend, con
     import signal
 
     proxy.cut_after = 128 * 1024
-    a = Project(tmp_path / "a", backend, container, proxy.endpoint, tmp_path / "state.db")
+    a = Project(tmp_path / "a", backend, container, proxy.endpoint)
     (a.dir / "pipeline.py").write_text(BIG_PIPELINE)
     proc = subprocess.Popen(
         [BARCA, "get", "big", "pipeline.py", "--agent", "--json"],
@@ -536,8 +531,7 @@ def test_ctrl_c_mid_upload_leaves_no_object_and_no_record(tmp_path, backend, con
 
 def test_cache_hit_with_missing_object_is_recomputed_fast(tmp_path, backend, container, proxy):
     """A result whose object is gone from the store is computed again, not a failed run (#252)."""
-    state = tmp_path / "state.db"
-    a = Project(tmp_path / "a", backend, container, proxy.endpoint, state)
+    a = Project(tmp_path / "a", backend, container, proxy.endpoint)
     proc, _ = a.get()
     assert proc.returncode == 0, _explain(proc)
     fs = backend.fs()
@@ -545,9 +539,9 @@ def test_cache_hit_with_missing_object_is_recomputed_fast(tmp_path, backend, con
         if "total" in path:
             fs.rm(path)
 
-    # Another machine: nothing on its disk, and `total` is in neither place.
-    b = Project(tmp_path / "b", backend, container, proxy.endpoint, state)
-    proc, took = b.get()
+    # Nothing on this disk any more, and `total` is in neither place.
+    shutil.rmtree(a.dir / ".barca" / "artifacts")
+    proc, took = a.get()
     assert proc.returncode == 0, _explain(proc)
     assert "could not fetch" not in proc.stderr, _explain(proc)
     assert "pipeline.py:total: the artifact of its cached result is missing" in proc.stderr
@@ -590,8 +584,7 @@ def _assert_store_failure(proc: subprocess.CompletedProcess, project: Project) -
 
 def test_a_deleted_bucket_is_a_failed_run_not_a_recompute(tmp_path, backend, container, proxy):
     """Every object of a deleted bucket answers "not found": that is not a missing artifact."""
-    state = tmp_path / "state.db"
-    a = Project(tmp_path / "a", backend, container, proxy.endpoint, state)
+    a = Project(tmp_path / "a", backend, container, proxy.endpoint)
     proc, _ = a.get()
     assert proc.returncode == 0, _explain(proc)
     backend.fs().rm(container, recursive=True)
@@ -600,7 +593,10 @@ def test_a_deleted_bucket_is_a_failed_run_not_a_recompute(tmp_path, backend, con
         f"setup failed: the {backend.id} emulator did not delete the bucket"
     )
 
-    b = Project(tmp_path / "b", backend, container, proxy.endpoint, state)
+    # The same machine, its local copies gone (a new container with its history restored).
+    shutil.rmtree(a.dir / ".barca" / "artifacts", ignore_errors=True)
+    (a.dir / "user.imported").unlink(missing_ok=True)
+    b = Project(tmp_path / "a", backend, container, proxy.endpoint)
     proc, took = b.get()
     _assert_store_failure(proc, b)
     assert "was not found" in proc.stderr, _explain(proc)
@@ -610,14 +606,16 @@ def test_a_deleted_bucket_is_a_failed_run_not_a_recompute(tmp_path, backend, con
 
 def test_a_wrong_bucket_name_is_a_failed_run_not_a_recompute(tmp_path, backend, container, proxy):
     """A misspelled bucket must not turn into a full recompute written to a new bucket."""
-    state = tmp_path / "state.db"
-    a = Project(tmp_path / "a", backend, container, proxy.endpoint, state)
+    a = Project(tmp_path / "a", backend, container, proxy.endpoint)
     proc, _ = a.get()
     assert proc.returncode == 0, _explain(proc)
     before = _stored(backend, container)
 
     wrong = f"{container}-typo"
-    b = Project(tmp_path / "b", backend, wrong, proxy.endpoint, state)
+    # The same machine, its local copies gone (a new container with its history restored).
+    shutil.rmtree(a.dir / ".barca" / "artifacts", ignore_errors=True)
+    (a.dir / "user.imported").unlink(missing_ok=True)
+    b = Project(tmp_path / "a", backend, wrong, proxy.endpoint)
     proc, took = b.get()
     _assert_store_failure(proc, b)
     assert took < 30, f"a wrong bucket name took {took:.1f}s to report"
@@ -627,8 +625,7 @@ def test_a_wrong_bucket_name_is_a_failed_run_not_a_recompute(tmp_path, backend, 
 
 def test_an_unreachable_store_fails_a_fetch_in_bounded_time(tmp_path, backend, container, proxy):
     """Connection refused on a fetch: exit 3, nothing recomputed, within `transfer_timeout`."""
-    state = tmp_path / "state.db"
-    a = Project(tmp_path / "a", backend, container, proxy.endpoint, state)
+    a = Project(tmp_path / "a", backend, container, proxy.endpoint)
     proc, _ = a.get()
     assert proc.returncode == 0, _explain(proc)
 
@@ -637,7 +634,10 @@ def test_an_unreachable_store_fails_a_fetch_in_bounded_time(tmp_path, backend, c
     with socket.socket() as unused:
         unused.bind(("127.0.0.1", 0))
         dead = f"http://127.0.0.1:{unused.getsockname()[1]}"
-    b = Project(tmp_path / "b", backend, container, dead, state, transfer_timeout=5)
+    # The same machine, its local copies gone (a new container with its history restored).
+    shutil.rmtree(a.dir / ".barca" / "artifacts", ignore_errors=True)
+    (a.dir / "user.imported").unlink(missing_ok=True)
+    b = Project(tmp_path / "a", backend, container, dead, transfer_timeout=5)
     proc, took = b.get(timeout=110)
     _assert_store_failure(proc, b)
     # One attempt may run for transfer_timeout; it is then abandoned, not retried.
@@ -646,13 +646,15 @@ def test_an_unreachable_store_fails_a_fetch_in_bounded_time(tmp_path, backend, c
 
 
 def test_a_stalled_store_fails_a_fetch_instead_of_hanging(tmp_path, backend, container, proxy):
-    state = tmp_path / "state.db"
-    a = Project(tmp_path / "a", backend, container, proxy.endpoint, state)
+    a = Project(tmp_path / "a", backend, container, proxy.endpoint)
     proc, _ = a.get()
     assert proc.returncode == 0, _explain(proc)
 
     proxy.stall = True
-    b = Project(tmp_path / "b", backend, container, proxy.endpoint, state, transfer_timeout=3)
+    # The same machine, its local copies gone (a new container with its history restored).
+    shutil.rmtree(a.dir / ".barca" / "artifacts", ignore_errors=True)
+    (a.dir / "user.imported").unlink(missing_ok=True)
+    b = Project(tmp_path / "a", backend, container, proxy.endpoint, transfer_timeout=3)
     proc, took = b.get(timeout=90)
     _assert_store_failure(proc, b)
     assert "timed out" in proc.stderr or "TimeoutError" in proc.stderr, _explain(proc)
@@ -672,8 +674,7 @@ def test_credentials_that_cannot_list_say_so_instead_of_bucket_not_found(tmp_pat
     fs = backend.fs()
     fs.mkdir(container)
     try:
-        state = tmp_path / "state.db"
-        a = Project(tmp_path / "a", backend, container, backend.endpoint, state)
+        a = Project(tmp_path / "a", backend, container, backend.endpoint)
         proc, _ = a.get()
         assert proc.returncode == 0, _explain(proc)
         for path in _stored(backend, container):
@@ -692,7 +693,10 @@ def test_credentials_that_cannot_list_say_so_instead_of_bucket_not_found(tmp_pat
         }
         fs.call_s3("put_bucket_policy", Bucket=container, Policy=json.dumps(policy))
 
-        b = Project(tmp_path / "b", backend, container, backend.endpoint, state)
+        # The same machine, its local copies gone (a new container with its history restored).
+        shutil.rmtree(a.dir / ".barca" / "artifacts", ignore_errors=True)
+        (a.dir / "user.imported").unlink(missing_ok=True)
+        b = Project(tmp_path / "a", backend, container, backend.endpoint)
         toml = (b.dir / "barca.toml").read_text().split("[remote.storage_options.s3]")[0]
         (b.dir / "barca.toml").write_text(
             toml + "[remote.storage_options.s3]\nanon = true\n"

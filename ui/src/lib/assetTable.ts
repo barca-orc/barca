@@ -91,6 +91,8 @@ function staleReason(reason: CacheStatus['reason']): string {
     .with('failed', () => 'last run failed')
     .with('artifact_missing', () => 'artifact missing')
     .with('local_only', () => 'local only')
+    .with('store_only', () => 'store only')
+    .with('mismatch', () => 'store copy differs')
     .with(
       'materialized',
       'no_record',

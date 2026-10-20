@@ -718,7 +718,7 @@ def test_with_a_store_a_deleted_local_copy_is_fetched_not_recomputed(tmp_path):
 def test_an_unavailable_directory_store_does_not_lose_hits_that_are_on_disk(tmp_path):
     root = project(tmp_path)
     store = tmp_path / "store"
-    env = {"BARCA_REMOTE_URI": str(store), "BARCA_STATE": "off"}
+    env = {"BARCA_REMOTE_URI": str(store)}
     assert result(cli(root, "run", "publish", "--json", **env))["steps_executed"] == 2
     # The share goes away (unmounted); the local copies of every artifact are still here.
     store.rename(tmp_path / "unmounted")
@@ -789,7 +789,7 @@ def test_a_result_gone_from_both_that_nothing_reads_is_not_recomputed(tmp_path):
 def test_a_directory_store_that_is_gone_fails_the_run_instead_of_recomputing(tmp_path):
     root = project(tmp_path)
     store = tmp_path / "store"
-    env = {"BARCA_REMOTE_URI": str(store), "BARCA_STATE": "off"}
+    env = {"BARCA_REMOTE_URI": str(store)}
     assert result(cli(root, "run", "publish", "--json", **env))["steps_executed"] == 2
     # The share goes away, and the local copy of what `publish` reads is gone as well.
     store.rename(tmp_path / "unmounted")

@@ -281,11 +281,11 @@ def test_branch_results_arrive_with_a_remote_store_configured(root, target):
     assert code == 0, err
     assert_intact(json.loads(out)["final_output"])
     assert "null" not in err and "warning" not in err.lower(), err
-    # Branch results are not uploaded: the store has the caller's result and the shared
-    # history, however many branches ran.
+    # Branch results are not uploaded: the store has the caller's result and the history's
+    # backup, however many branches ran.
     stored = sorted(p.name for p in (root / "store").rglob("*") if p.is_file())
-    results = [name for name in stored if not name.startswith("metadata.db")]
-    assert len(results) == 1 and "metadata.db" in stored, stored
+    results = [name for name in stored if not name.endswith(("Z.db", "Z.json"))]
+    assert len(results) == 1 and any(n.endswith("Z.db") for n in stored), stored
     assert not [p for p in (root / "store").rglob("*") if "branch" in p.name]
 
 

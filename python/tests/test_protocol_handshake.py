@@ -40,6 +40,7 @@ def test_real_connection_negotiates_before_returning(tmp_path, monkeypatch, role
         listener.bind(path)
         listener.listen(1)
         listener.settimeout(5)
+
         def coordinator():
             try:
                 peer, _ = listener.accept()
@@ -47,13 +48,27 @@ def test_real_connection_negotiates_before_returning(tmp_path, monkeypatch, role
                     peer.settimeout(5)
                     seen.append(receive(peer))
                     if response == "valid":
-                        send(peer, {"type": "hello", "role": "coordinator", "protocol_version": _runtime.PROTOCOL_VERSION})
+                        send(
+                            peer,
+                            {
+                                "type": "hello",
+                                "role": "coordinator",
+                                "protocol_version": _runtime.PROTOCOL_VERSION,
+                            },
+                        )
                     elif response == "malformed":
                         peer.sendall(struct.pack(">I", 1) + b"{")
                     elif response == "mismatch":
-                        send(peer, {"type": "protocol_error", "message": "worker protocol v2, coordinator expects v3; reinstall barca"})
+                        send(
+                            peer,
+                            {
+                                "type": "protocol_error",
+                                "message": "worker protocol v2, coordinator expects v3; reinstall barca",
+                            },
+                        )
             except BaseException as error:
                 errors.append(error)
+
         thread = threading.Thread(target=coordinator)
         thread.start()
         try:
@@ -68,7 +83,10 @@ def test_real_connection_negotiates_before_returning(tmp_path, monkeypatch, role
             _runtime.disconnect()
             thread.join(6)
         assert not thread.is_alive() and not errors, errors
-        assert seen == [{"type": "hello", "role": role, "protocol_version": _runtime.PROTOCOL_VERSION}]
+        assert seen == [
+            {"type": "hello", "role": role, "protocol_version": _runtime.PROTOCOL_VERSION}
+        ]
+
 
 @pytest.mark.parametrize("helper", ["worker", "transfer"])
 def test_coordinator_rejects_and_reaps_wrong_version_helper(tmp_path, helper):
@@ -80,7 +98,7 @@ def test_coordinator_rejects_and_reaps_wrong_version_helper(tmp_path, helper):
     package = tmp_path / "barca"
     package.mkdir()
     (package / "__init__.py").write_text("")
-    (package / f"_{helper}.py").write_text(f'''
+    (package / f"_{helper}.py").write_text(f"""
 import json, os, socket, struct, time
 from pathlib import Path
 Path("helper-pid").write_text(str(os.getpid()))
@@ -89,14 +107,23 @@ s.connect(os.environ["BARCA_SOCKET"])
 data = json.dumps({{"type": "hello", "role": {helper!r}, "protocol_version": 99}}).encode()
 s.sendall(struct.pack(">I", len(data)) + data)
 time.sleep(60)
-''')
-    (tmp_path / "p.py").write_text('from barca import asset\n@asset()\ndef value():\n    open("step-ran", "w").write("unexpected")\n    return 42\n')
+""")
+    (tmp_path / "p.py").write_text(
+        'from barca import asset\n@asset()\ndef value():\n    open("step-ran", "w").write("unexpected")\n    return 42\n'
+    )
     env = {**os.environ, "BARCA_REMOTE": "off"}
     if helper == "transfer":
         env.pop("BARCA_REMOTE")
-        env.update(BARCA_REMOTE_URI=str(tmp_path / "store"), BARCA_STATE="off")
+        env.update(BARCA_REMOTE_URI=str(tmp_path / "store"))
         (tmp_path / "store").mkdir()
-    result = subprocess.run([_find_binary(), "get", "value", "p.py", "--json"], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=30)
+    result = subprocess.run(
+        [_find_binary(), "get", "value", "p.py", "--json"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
     assert result.returncode == 3, result.stderr
     assert f"{helper} protocol v99, coordinator expects v3" in result.stderr
     assert "reinstall barca" in result.stderr

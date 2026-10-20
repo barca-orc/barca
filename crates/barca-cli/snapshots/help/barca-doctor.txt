@@ -16,7 +16,7 @@ Examples:
   barca doctor pipeline.py --json    # structured checks, no steps executed
   barca doctor src/ --env local --pretty   # selected sources and environment
 
-Checks project root, Python, config, state mode, cache writability, metadata integrity,
+Checks project root, Python, config, backups, cache writability, metadata integrity,
 static source parsing, and configured stores. Never imports pipeline modules or evaluates
 dynamic partition expressions. Prints the report on stdout; exit 0 when all checks pass,
 3 when a prerequisite fails. Store probes list but never create buckets or objects.

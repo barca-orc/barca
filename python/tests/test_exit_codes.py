@@ -321,16 +321,22 @@ def test_metadata_db_unavailable_exits_3(project):
     assert "Database error" in proc.stderr
 
 
-def test_shared_state_pull_failure_exits_3(project):
-    proc = barca(
-        project,
-        "get",
-        "good",
-        "pipeline.py",
-        env={"BARCA_STATE_URI": "nosuchproto://bucket/metadata.db"},
-    )
-    assert proc.returncode == 3, proc.stderr
-    assert "shared state pull" in proc.stderr
+@pytest.mark.parametrize(
+    "setting",
+    ["BARCA_STATE=optimistic", "BARCA_STATE=off", "BARCA_STATE_URI=s3://b/h.db", "toml"],
+)
+def test_a_removed_shared_history_setting_exits_2_naming_the_release(project, setting):
+    """`optimistic` mode and its settings were removed in 0.26.0 (RFC-0009): refused by name."""
+    if setting == "toml":
+        (project / "barca.toml").write_text('[remote]\nuri = "/tmp/x"\nstate = "optimistic"\n')
+        env = {}
+    else:
+        name, value = setting.split("=", 1)
+        env = {name: value}
+    proc = barca(project, "get", "good", "pipeline.py", env=env)
+    assert proc.returncode == 2, proc.stderr
+    assert "0.26.0" in proc.stderr and "no longer supported" in proc.stderr, proc.stderr
+    assert not (project / ".barca").exists()
 
 
 def test_worker_spawn_failure_exits_3(project, tmp_path_factory):
