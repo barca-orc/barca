@@ -67,7 +67,9 @@ What the spans carry:
 | step | `barca.node`, `barca.kind` | node id; `asset`, `task` or `sensor` |
 | step | `barca.outcome` | `ran`, `cached` or `failed` |
 | step | `barca.run_hash` | the step's run hash |
+| step | `barca.upstream` | the node's direct upstream node ids, sorted and comma-separated; absent on a node with none |
 | step | `barca.attempts`, `barca.bytes` | attempts made (see Limits for partitions); size of the result |
+| step | `barca.digest` | on a step that ran: SHA-256 of the bytes it wrote, the `content_hash` `barca status --json` shows for that materialization |
 | step | `barca.cpu_seconds`, `barca.max_rss_bytes` | when the worker measured them |
 | step | `error.type`, `error.message`, `error.stack` | on a failed step: the exception and its traceback |
 
@@ -129,6 +131,54 @@ executed step and can delay jobs when the Agent is unavailable; the SDK's timeou
 retry settings apply. Python spans can arrive before the finished run trace. A killed or
 cancelled worker may lose its in-flight Python span. SDK initialization or delivery failures
 never change a step's result.
+
+## Logs under `barca serve`
+
+By default `barca serve` writes its lines as text on stderr, as `get` and `run` do. A container
+log collector that files stderr as errors then tags every one of them, a step that completed
+included, as an error, and nothing in them names the run. `BARCA_LOG=json` makes `barca serve`
+write each of its lines as one JSON object on stdout instead:
+
+```bash
+export BARCA_LOG=json
+export BARCA_TELEMETRY=datadog
+barca serve pipeline.py
+```
+
+```
+{"ts":"2026-10-20T19:45:44.006Z","level":"info","msg":"scheduled run pipeline.py:heartbeat → 2b585caaa002","node":"pipeline.py:heartbeat"}
+{"ts":"2026-10-20T19:45:44.067Z","level":"info","msg":"step:pipeline.py:orders completed 0.0s (1/2)","run_id":"2b585c3e0785","node":"pipeline.py:orders","dd.trace_id":"8371769010332850555","dd.span_id":"1894635935906895539"}
+{"ts":"2026-10-20T19:45:44.068Z","level":"info","msg":"tick 3","run_id":"2b585c3e0785","node":"pipeline.py:heartbeat","dd.trace_id":"8371769010332850555","dd.span_id":"2430261483699309868"}
+{"ts":"2026-10-20T19:45:44.073Z","level":"info","msg":"2/2 steps | done in 0.0s","run_id":"2b585c3e0785","dd.trace_id":"8371769010332850555","dd.span_id":"1993890634025969937"}
+```
+
+| Field | Value |
+|---|---|
+| `ts` | when the line was written, UTC with milliseconds |
+| `level` | `error` for a failure (`step:<id> failed: ...`, `... steps \| failed in ...`, an error that stops the server), `warning` for a warning, a skipped tick or a cancelled run, `info` for everything else |
+| `msg` | the line as barca prints it without `BARCA_LOG`, less its `[barca] ` prefix |
+| `run_id` | the run the line belongs to: the `barca.run_id` of its spans and the id `barca logs` and `barca history` take. Absent on server lines (startup, schedule ticks, reloads) |
+| `node` | the step the line is about: on `step:` lines, on a step's output and on a schedule tick's lines |
+| `dd.trace_id`, `dd.span_id` | with the Datadog integration on: the run's trace id and the id of the step's span, or of the run span on a line with no node, as decimal strings. Datadog's log pipeline reads these attributes as the trace and span ids, so a line links to its trace |
+
+What a step prints (its stdout) is an `info` line with its run and node. Without `BARCA_LOG`
+`barca serve` does not write a step's output at all; it is kept with the run either way
+(`barca logs <run_id>`).
+
+`BARCA_LOG` changes only `barca serve`. `get`, `run` and every other command keep progress and
+errors on stderr as text; given `BARCA_LOG=json` they say so once
+(`[barca] warning: BARCA_LOG applies to barca serve only; this command writes its usual lines`)
+and change nothing else. `BARCA_LOG=text`, or unset, is the default; another value stops
+`barca serve` with a usage error (exit 2).
+
+Limits:
+
+- What a step writes to its stderr is not barca's line and stays on stderr as it is: Python's
+  `logging` writes there by default, and so does a traceback from a worker that died.
+- A notice from a worker process, such as `importing <file>`, is a JSON line without a run or
+  a node.
+- `level` is read from the line, so a new kind of line may be filed at `info` until barca
+  learns it.
 
 ## What is sent
 

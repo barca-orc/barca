@@ -549,6 +549,17 @@ pub(crate) fn telemetry_report(
         })
     };
 
+    let upstream = |node_id: &str| {
+        let mut ids: Vec<String> = dag
+            .upstream(crate::StepId::parse(node_id).base_id())
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        ids.sort();
+        ids.dedup();
+        ids
+    };
+
     let mut steps: Vec<StepReport> = Vec::new();
     for (node_id, oref) in l.all_outputs {
         let cached = l.cached_node_ids.contains(node_id);
@@ -571,7 +582,16 @@ pub(crate) fn telemetry_report(
             duration_ns: step_duration,
             attempts: if cached { None } else { attempts(node_id) },
             run_hash: l.run_hashes.get(node_id).cloned(),
+            upstream: upstream(node_id),
             size_bytes: Some(oref.size_bytes),
+            digest: if cached {
+                None
+            } else {
+                l.output_hashes
+                    .get(node_id)
+                    .or(oref.content_hash.as_ref())
+                    .cloned()
+            },
             cpu_seconds,
             max_rss_bytes,
             error_type: None,
@@ -598,7 +618,9 @@ pub(crate) fn telemetry_report(
             duration_ns: step_duration,
             attempts: Some(failure.error.attempts),
             run_hash: l.run_hashes.get(&failure.node_id).cloned(),
+            upstream: upstream(&failure.node_id),
             size_bytes: None,
+            digest: None,
             cpu_seconds: None,
             max_rss_bytes: None,
             error_type: Some(error_type),
@@ -1886,6 +1908,33 @@ sys.exit(_state.main())
 
         persist_run(&db_path, &fx.ledger("r1")).await.unwrap();
         assert_eq!(rows(&db_path).await, complete("r1"));
+    }
+
+    #[test]
+    fn step_reports_name_their_upstream_and_the_digest_of_what_ran() {
+        let mut fx = Fixture::new();
+        fx.outputs.get_mut("f.py:a").unwrap().content_hash = Some("sha-a".to_string());
+        fx.outputs.get_mut("f.py:cached").unwrap().content_hash = Some("sha-c".to_string());
+        let source = "from barca import asset\n@asset()\ndef raw(): return 1\n@asset()\ndef rates(): return 2\n\
+                      @asset(inputs={\"rates\": rates, \"raw\": raw})\ndef a(rates, raw): return raw\n\
+                      @asset(inputs={\"raw\": raw})\ndef cached(raw): return raw\n\
+                      @asset(inputs={\"a\": a})\ndef bad(a): return a\n";
+        let dag = crate::Dag::build(&crate::parse::extract_nodes(source, "f.py").unwrap()).unwrap();
+        let report = telemetry_report(
+            &fx.ledger("r1"),
+            &dag,
+            std::time::UNIX_EPOCH,
+            &HashMap::new(),
+            "all",
+        );
+        let step = |id: &str| report.steps.iter().find(|s| s.node_id == id).unwrap();
+        assert_eq!(step("f.py:a").upstream, ["f.py:rates", "f.py:raw"]);
+        assert_eq!(step("f.py:a").digest.as_deref(), Some("sha-a"));
+        // A cached step names its upstream but carries no digest: nothing was written.
+        assert_eq!(step("f.py:cached").upstream, ["f.py:raw"]);
+        assert_eq!(step("f.py:cached").digest, None);
+        assert_eq!(step("f.py:bad").upstream, ["f.py:a"]);
+        assert_eq!(step("f.py:bad").digest, None);
     }
 
     #[test]

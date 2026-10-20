@@ -78,6 +78,26 @@ fn main() {
         finish(*json || fields.is_some());
     }
 
+    // `BARCA_LOG=json`: structured lines on stdout, for `barca serve` only (#434).
+    let barca_log = std::env::var(barca_core::jsonlog::ENV_VAR).ok();
+    match (
+        barca_core::jsonlog::requested(barca_log.as_deref()),
+        matches!(cli, Cli::Serve { .. }),
+    ) {
+        (Ok(false), _) => {}
+        (Ok(true), true) => barca_core::jsonlog::enable(barca_core::telemetry::is_on("datadog")),
+        (Err(value), true) => CliError::from_prose(
+            ErrorKind::Usage,
+            format!("BARCA_LOG={value} is not a log format: use json, or text (the default)"),
+        )
+        .emit(json),
+        (_, false) => {
+            barca_core::warnings::warn_once(
+                "BARCA_LOG applies to barca serve only; this command writes its usual lines",
+            );
+        }
+    }
+
     // Hints in errors name files as the user typed them, so take them before rebasing.
     let ctx = context(&cli);
     // Run from the project root (the nearest barca.toml at or above the cwd), so `.barca/`,

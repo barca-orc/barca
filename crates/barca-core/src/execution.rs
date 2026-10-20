@@ -355,8 +355,19 @@ struct RunSession<'a, 'r> {
     started: RunStart,
 }
 
-pub(crate) async fn execute(mut request: ExecuteRequest<'_>) -> Result<Executed, BarcaError> {
+pub(crate) async fn execute(request: ExecuteRequest<'_>) -> Result<Executed, BarcaError> {
     let started = RunStart::begin(&request)?;
+    // Lines written from here on belong to this run (`BARCA_LOG=json` under serve). Boxed: the
+    // run's state machine is large, and wrapping it inline in the task-local scope doubled the
+    // future a serve run task carries, which overflowed a worker thread's stack in debug builds.
+    let run_id = started.run_id.clone();
+    crate::jsonlog::in_run(run_id, Box::pin(execute_started(request, started))).await
+}
+
+async fn execute_started(
+    mut request: ExecuteRequest<'_>,
+    started: RunStart,
+) -> Result<Executed, BarcaError> {
     // Held from before anything is decided: until the plan is known, eviction in this process
     // keeps to leftovers and superseded results.
     let pin = crate::gc::pin(&started.run_id);
@@ -2525,6 +2536,7 @@ async fn dispatch_phase(
             ref line,
         } = ev
         {
+            crate::jsonlog::step_output(node_id, line);
             logs_sink.push((node_id.clone(), line.clone()));
         }
         if let crate::RunEvent::StepFinished {

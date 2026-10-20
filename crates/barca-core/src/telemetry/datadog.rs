@@ -254,6 +254,13 @@ impl Datadog {
             if let Some(hash) = &step.run_hash {
                 meta.insert("barca.run_hash".to_string(), json!(hash));
             }
+            // Span tags are strings: the ids, comma-separated.
+            if !step.upstream.is_empty() {
+                meta.insert("barca.upstream".to_string(), json!(step.upstream.join(",")));
+            }
+            if let Some(digest) = &step.digest {
+                meta.insert("barca.digest".to_string(), json!(digest));
+            }
             if let Some(t) = &step.error_type {
                 meta.insert("error.type".to_string(), json!(t));
             }
@@ -486,7 +493,9 @@ mod tests {
             duration_ns: 500,
             attempts: Some(1),
             run_hash: Some("abc".to_string()),
+            upstream: Vec::new(),
             size_bytes: Some(42),
+            digest: None,
             cpu_seconds: None,
             max_rss_bytes: None,
             error_type: None,
@@ -611,10 +620,10 @@ mod tests {
         failed.error_message = Some("x".repeat(MAX_MESSAGE_CHARS + 500));
         failed.error_traceback = Some(format!("{}  File \"p.py\", line 3", "y".repeat(5000)));
         failed.attempts = None;
-        let payload = datadog().trace(&run(
-            "failed",
-            vec![step("p.py:orders", StepOutcome::Cached), failed],
-        ));
+        let mut orders = step("p.py:orders", StepOutcome::Cached);
+        orders.upstream = vec!["p.py:raw".to_string(), "p.py:rates".to_string()];
+        orders.digest = Some("sha".to_string());
+        let payload = datadog().trace(&run("failed", vec![orders, failed]));
 
         let traces = payload.as_array().unwrap();
         assert_eq!(traces.len(), 1);
@@ -643,6 +652,10 @@ mod tests {
         assert_eq!(spans[1]["meta"]["barca.outcome"], "cached");
         assert_eq!(spans[1]["error"], 0);
         assert_eq!(spans[1]["metrics"]["barca.bytes"], 42);
+        assert_eq!(spans[1]["meta"]["barca.upstream"], "p.py:raw,p.py:rates");
+        assert_eq!(spans[1]["meta"]["barca.digest"], "sha");
+        assert!(spans[2]["meta"].get("barca.upstream").is_none());
+        assert!(spans[2]["meta"].get("barca.digest").is_none());
         assert_eq!(spans[2]["meta"]["barca.kind"], "task");
         assert_eq!(spans[2]["error"], 1);
         assert_eq!(spans[2]["meta"]["error.type"], "ValueError");

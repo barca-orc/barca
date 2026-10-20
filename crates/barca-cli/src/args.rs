@@ -290,6 +290,7 @@ const SERVE_HELP: &str = "\
 Examples:
   BARCA_STATE=off barca serve pipeline.py    # local history; keep configured artifact sharing
   BARCA_REMOTE=off barca serve pipeline.py   # local artifacts and history
+  BARCA_LOG=json barca serve pipeline.py     # each line a JSON object on stdout, with run_id and node
   barca serve                                # every file in the project; files added later need a restart
   barca serve pipeline.py                    # HTTP API on 127.0.0.1:8274 plus the scheduler
   barca serve pipeline.py --port 8400        # custom port
@@ -308,6 +309,7 @@ continue. Startup logs, /health load_errors and the UI show unloaded files and a
 Trigger deployed runs through HTTP or barca.Client. Ordinary get/run commands execute locally;
 CLI --server, server URL configuration and the shared-ledger design are not implemented yet.
 With a remote artifact store, set BARCA_STATE=off to retain local metadata.
+Lines go to stderr as text; BARCA_LOG=json writes them to stdout as JSON (barca docs telemetry).
 More: barca docs scheduling";
 
 const LIST_HELP: &str = "\

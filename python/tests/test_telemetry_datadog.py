@@ -188,6 +188,18 @@ def test_a_run_is_one_trace_with_a_span_per_step(project, agent):
         assert span["start"] + span["duration"] <= root["start"] + root["duration"] + 50_000_000
         assert span["metrics"]["barca.attempts"] == 1
     assert len({s["span_id"] for s in spans}) == len(spans)
+    # Lineage and what was written: direct upstream ids, and the digest the run recorded.
+    assert "barca.upstream" not in steps["orders"]["meta"]
+    assert steps["report"]["meta"]["barca.upstream"] == "pipeline.py:orders"
+    assert steps["publish"]["meta"]["barca.upstream"] == "pipeline.py:report"
+    for name in ("orders", "report"):
+        status = cli(project, "status", name, "pipeline.py", "--json")
+        (node,) = [
+            n for n in json.loads(status.stdout)["nodes"] if n["id"] == f"pipeline.py:{name}"
+        ]
+        recorded = node["last_materialization"]
+        assert steps[name]["meta"]["barca.digest"] == recorded["content_hash"]
+        assert steps[name]["metrics"]["barca.bytes"] == recorded["size_bytes"]
 
 
 def test_a_cached_step_is_reported_as_cached(project, agent):
@@ -202,6 +214,9 @@ def test_a_cached_step_is_reported_as_cached(project, agent):
     assert steps["report"]["meta"]["barca.outcome"] == "cached"
     assert steps["publish"]["meta"]["barca.outcome"] == "ran"
     assert steps["orders"]["duration"] == 0
+    # A cached step wrote nothing: no digest, but its lineage is the same.
+    assert "barca.digest" not in steps["report"]["meta"]
+    assert steps["report"]["meta"]["barca.upstream"] == "pipeline.py:orders"
     assert root["metrics"]["barca.steps.cached"] == 2
     assert root["service"] == "barca"
 
@@ -328,6 +343,145 @@ def test_scheduled_runs_under_serve_are_reported(tmp_path, agent):
     assert len(roots) >= 2, "each tick's run should send its own trace"
     assert len({r["trace_id"] for r in roots}) == len(roots)
     assert all(r["service"] == "scheduler" and r["resource"].startswith("run ") for r in roots)
+
+
+def serve_for(tmp_path: Path, seconds: float, env: dict[str, str], until=None):
+    """Run `barca serve` on a scheduled pipeline; stop it after `seconds` or once `until()`."""
+    import signal
+    import socket
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    base = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
+    serve = subprocess.Popen(
+        [_find_binary(), "serve", "pipeline.py", "--port", str(port)],
+        cwd=tmp_path,
+        env={**base, **env},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline and not (until and until()):
+            time.sleep(0.25)
+    finally:
+        serve.send_signal(signal.SIGTERM)
+        try:
+            out, err = serve.communicate(timeout=30)
+        except subprocess.TimeoutExpired:
+            serve.kill()
+            out, err = serve.communicate()
+    return serve.returncode, out, err
+
+
+SCHEDULED = (
+    "from barca import asset, task, Schedule\n\n\n"
+    "@asset()\n"
+    "def orders() -> dict:\n"
+    '    return {"rows": 3}\n\n\n'
+    '@task(inputs={"orders": orders}, freshness=Schedule("* * * * * *"))\n'
+    "def heartbeat(orders: dict) -> None:\n"
+    '    print("tick", orders["rows"])\n'
+)
+
+
+def test_barca_log_json_under_serve_writes_json_lines_joined_to_the_trace(tmp_path, agent):
+    (tmp_path / "pipeline.py").write_text(SCHEDULED)
+
+    def two_runs():
+        return sum(s["name"] == "barca.run" for r in agent.requests for s in r["body"][0]) >= 2
+
+    code, out, err = serve_for(
+        tmp_path, 60, {"BARCA_LOG": "json", **datadog(agent)}, until=two_runs
+    )
+    assert code == 0, err
+    # Every line on stdout is one JSON object; barca writes none of its lines to stderr.
+    lines = [json.loads(line) for line in out.splitlines()]
+    assert "[barca]" not in err, err
+    for line in lines:
+        assert set(line) <= {"ts", "level", "msg", "run_id", "node", "dd.trace_id", "dd.span_id"}
+        assert line["level"] in ("info", "warning", "error"), line
+        assert line["ts"].endswith("Z"), line
+        assert not line["msg"].startswith("[barca]"), line
+    assert any(line["msg"].startswith("serving on http://") for line in lines)
+    # The worker's own notice is a line too, without a run.
+    assert any(line["msg"].startswith("importing ") for line in lines), lines
+
+    roots = {
+        s["meta"]["barca.run_id"]: s
+        for r in agent.requests
+        for s in r["body"][0]
+        if s["name"] == "barca.run"
+    }
+    steps = {
+        (s["meta"]["barca.run_id"], s["meta"]["barca.node"]): s
+        for r in agent.requests
+        for s in r["body"][0]
+        if s["name"] == "barca.step"
+    }
+    # The task's print() is an info line with its run and node, joined to the step's span.
+    ticks = [line for line in lines if line["msg"] == "tick 3"]
+    assert ticks, lines
+    joined = [t for t in ticks if t["run_id"] in roots]
+    assert joined, (ticks, list(roots))
+    for tick in joined:
+        assert tick["level"] == "info"
+        assert tick["node"] == "pipeline.py:heartbeat"
+        span = steps[(tick["run_id"], "pipeline.py:heartbeat")]
+        assert tick["dd.trace_id"] == str(span["trace_id"])
+        assert tick["dd.span_id"] == str(span["span_id"])
+    # A step line names its node; the end-of-run line is joined to the run span.
+    run_id = joined[0]["run_id"]
+    of_run = [line for line in lines if line.get("run_id") == run_id]
+    done = [line for line in of_run if "steps | done in" in line["msg"]]
+    assert len(done) == 1 and "node" not in done[0], of_run
+    assert done[0]["dd.span_id"] == str(roots[run_id]["span_id"])
+    completed = [line for line in of_run if line["msg"].startswith("step:pipeline.py:heartbeat ")]
+    assert completed and completed[0]["node"] == "pipeline.py:heartbeat", of_run
+    scheduled = [line for line in lines if line["msg"].startswith("scheduled run ")]
+    assert scheduled and scheduled[0]["node"] == "pipeline.py:heartbeat"
+
+
+def test_barca_log_json_without_telemetry_has_no_trace_ids(tmp_path):
+    (tmp_path / "pipeline.py").write_text(SCHEDULED)
+    code, out, err = serve_for(tmp_path, 4, {"BARCA_LOG": "json"})
+    assert code == 0, err
+    lines = [json.loads(line) for line in out.splitlines()]
+    ticks = [line for line in lines if line["msg"] == "tick 3"]
+    assert ticks, lines
+    assert all("dd.trace_id" not in line and "dd.span_id" not in line for line in lines)
+    assert all(t["run_id"] and t["node"] == "pipeline.py:heartbeat" for t in ticks)
+
+
+def test_without_barca_log_serve_writes_text_lines_to_stderr(tmp_path):
+    (tmp_path / "pipeline.py").write_text(SCHEDULED)
+    code, out, err = serve_for(tmp_path, 3, {})
+    assert code == 0, err
+    assert out == ""
+    assert "[barca] serving on http://" in err
+    # Captured task output is kept with the run (`barca logs`), not written by serve.
+    assert "tick 3" not in err
+
+
+def test_barca_log_on_another_command_is_a_warning_and_changes_nothing(project):
+    plain = cli(project, "get", "orders", "pipeline.py", "--json")
+    proc = cli(project, "get", "orders", "pipeline.py", "--json", BARCA_LOG="json")
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout).keys() == json.loads(plain.stdout).keys()
+    assert (
+        "[barca] warning: BARCA_LOG applies to barca serve only; this command writes its usual "
+        "lines" in proc.stderr
+    )
+    assert '"ts"' not in proc.stderr + proc.stdout
+
+
+def test_barca_log_with_an_unknown_value_is_a_usage_error_for_serve(project):
+    proc = cli(project, "serve", "pipeline.py", BARCA_LOG="yaml")
+    assert proc.returncode == 2
+    assert "BARCA_LOG=yaml is not a log format" in proc.stderr
+    assert proc.stdout == ""
 
 
 @pytest.mark.parametrize("value", ["false", "False", "0", "", "no", "off"])

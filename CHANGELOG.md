@@ -62,6 +62,14 @@ and these tags are available on the same releases page.
   same ordering. Dispatch also finds an upstream's output by id instead of scanning every
   output, and the end-of-run check no longer scans every item on each event.
 
+- `barca serve`: `BARCA_LOG=json` writes every line as one JSON object on stdout, with `ts`, a
+  real `level` (`info`, `warning`, `error`), `msg`, the `run_id` and `node` it is about, and
+  `dd.trace_id`/`dd.span_id` when the Datadog integration is on, so a container's logs join the
+  run's trace and are no longer all filed as errors. A step's printed output becomes `info` lines
+  of its run. Experimental; without it nothing changes, and `get`/`run` keep progress and errors
+  on stderr (`BARCA_LOG` on another command prints a warning). `barca.step` spans gain
+  `barca.upstream` (direct upstream ids) and, on a step that ran, `barca.digest` (#434).
+
 ## 0.24.2 (2026-10-20)
 
 ### Bug Fixes

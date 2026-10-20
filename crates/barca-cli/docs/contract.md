@@ -50,6 +50,7 @@ outside the `GENERATED` blocks is written by hand.
 | `status --sample` and `nodes[].shape` | read by a Python helper (`barca._inspect`) whose output may grow per format; the wording of `shape.note` (an unreadable, too large or unreachable artifact) may change |
 | `BARCA_PROGRESS_SECS`, `BARCA_POOL_SIZE`, `BARCA_COMM_COST_SECONDS`, `BARCA_TRACE_TIMING` | tuning and benchmarking knobs |
 | `BARCA_TELEMETRY` and the spans it sends | new: span names, tags and metrics may change |
+| `BARCA_LOG` and the JSON lines of `barca serve` | new: the fields and how a line's `level` is chosen may change |
 | the `[barca] <n> more: ...` line | collapsing repeated library warnings is new; which output counts as a warning may change |
 | `BARCA_ARTIFACT_URI` | 0.4.0 back-compat override, superseded by `BARCA_REMOTE_URI` / `[remote].artifacts_uri` |
 | `barca gc` and its JSON, `[cache] max_size`, `BARCA_CACHE_MAX_SIZE`, the `cache` key of `get`/`run` results, the step and status reason `evicted`, the `cache_size` doctor check | new in 0.25 (RFC-0012): the low watermark, the eviction order and the JSON shapes may change after field use |
@@ -346,6 +347,7 @@ value of its first key only.
 | `BARCA_TRACE_TIMING` | when set, prints a timing waterfall on stderr | experimental |
 | `BARCA_CACHE_MAX_SIZE` | size limit for `.barca/` (`[cache] max_size`): `20GB`, `500MB`, `20GiB`, bytes, `10%` of the filesystem or `off`; default 10% of the filesystem; an invalid value is a usage error (exit 2) | experimental |
 | `BARCA_TELEMETRY` | comma-separated telemetry integrations to send finished runs to; `datadog` is the only one (`barca docs telemetry`) | experimental |
+| `BARCA_LOG` | `json`: `barca serve` writes every line as one JSON object on stdout instead of text on stderr (`barca docs telemetry`, "Logs under barca serve"); `text` or unset: the default. Under `serve` any other value is a usage error (exit 2). On every other command it changes nothing and prints `[barca] warning: BARCA_LOG applies to barca serve only; this command writes its usual lines` | experimental |
 
 barca sets `BARCA_SOCKET`, `BARCA_WORKER`, `BARCA_WORKER_ID` (and passes `BARCA_ARTIFACT_URI`,
 `BARCA_STORAGE_OPTIONS`) for its own worker processes; these are internal, not part of the
@@ -387,6 +389,10 @@ later reported as `interrupted` (`barca docs cache`).
 
 `barca serve` is not a run: stopped by SIGINT or SIGTERM it cancels the runs in flight, records
 them as `cancelled` and exits 0 (`barca docs scheduling`, "Stopping the server").
+
+With `BARCA_LOG=json`, `barca serve` writes its lines, an error that stops it included, as JSON
+objects on stdout instead of text on stderr. Exit codes do not change. `get`, `run` and every
+other command keep progress and errors on stderr whatever `BARCA_LOG` says.
 
 An error in a pipeline file (a syntax error, a decorator argument barca does not define, an
 invalid `env=` or cron) fails every command that reads that file, whatever the target: `list`,
