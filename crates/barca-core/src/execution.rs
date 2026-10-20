@@ -799,12 +799,14 @@ async fn open_run<'a, 'r>(
             } else {
                 "failed"
             };
-            db::insert_logs(
-                &request.cfg.db_path,
-                &started.run_id,
-                &[(String::new(), format!("[barca] {error}"))],
-            )
-            .await?;
+            let line = match crate::interrupt::cancel_reason() {
+                Some(reason) if matches!(error, BarcaError::Cancelled) => {
+                    format!("[barca] run cancelled: {reason}")
+                }
+                _ => format!("[barca] {error}"),
+            };
+            db::insert_logs(&request.cfg.db_path, &started.run_id, &[(String::new(), line)])
+                .await?;
             db::finish_run(
                 &request.cfg.db_path,
                 &started.run_id,
@@ -2810,13 +2812,30 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
     if let Some(error) = recorder_error {
         crate::errln!("[barca] {error}; terminal results have been recorded");
     }
+    // Why the run was cancelled, when whoever cancelled it said (`barca serve` stopping
+    // before its drain finished): a line in the run's logs and `barca.reason` on its span.
+    let cancel_reason = was_cancelled
+        .then(crate::interrupt::cancel_reason)
+        .flatten();
+    let logs_buffer: std::borrow::Cow<'_, [(String, String)]> = match &cancel_reason {
+        Some(reason) => {
+            let mut logs = logs_buffer.to_vec();
+            logs.push((String::new(), format!("[barca] run cancelled: {reason}")));
+            logs.into()
+        }
+        None => logs_buffer.into(),
+    };
+    let logs_buffer = &*logs_buffer;
     // Persist captured output. Rust owns persistence — logs land in the DB
     // regardless of how the run was triggered (CLI or server).
     db::insert_logs(db_path, run_id, logs_buffer).await?;
     trace_point!("persist_run_done");
 
     if !telemetry.is_empty() {
-        let report = telemetry_report(&ledger, dag, run_started, step_clocks, Some(&cfg.env));
+        let mut report = telemetry_report(&ledger, dag, run_started, step_clocks, Some(&cfg.env));
+        if report.reason.is_none() {
+            report.reason = cancel_reason;
+        }
         let history = crate::telemetry::JobHistory::new(db_path);
         crate::telemetry::export(telemetry, &report, &history).await;
         trace_point!("telemetry_exported");

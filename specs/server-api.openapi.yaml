@@ -40,7 +40,8 @@ paths:
                 type: string
               description: Methods accepted by this route
       description: Liveness, not readiness or authentication. The API has no authentication.
-        Read-only mode refuses mutating routes; it does not restrict inspection access.
+        status is draining from the first SIGTERM or SIGINT until the server exits; the
+        response stays 200. Read-only mode refuses mutating routes; it does not restrict inspection access.
         load_errors reports unloaded sources and excluded dependent definitions from
         the selected served graph. Healthy loads return an empty array; healthy
         definitions remain inspectable beside those diagnostics.
@@ -462,6 +463,20 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '503':
+          description: The server is draining before it stops (SIGTERM or SIGINT) and
+            admits no new run; runs already admitted go on
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                pattern: ^[1-9][0-9]*$
+              description: Seconds to wait before retrying, the server's drain timeout
+                (at least 1)
         '405':
           description: Registered path with unsupported method; Allow header identifies
             supported methods
@@ -502,6 +517,20 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '503':
+          description: The server is draining before it stops (SIGTERM or SIGINT) and
+            admits no new run; runs already admitted go on
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                pattern: ^[1-9][0-9]*$
+              description: Seconds to wait before retrying, the server's drain timeout
+                (at least 1)
         '404':
           description: Resource not found
           content:
@@ -618,6 +647,20 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '503':
+          description: The server is draining before it stops (SIGTERM or SIGINT) and
+            admits no new run; runs already admitted go on
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                pattern: ^[1-9][0-9]*$
+              description: Seconds to wait before retrying, the server's drain timeout
+                (at least 1)
         '404':
           description: Resource not found
           content:
@@ -1216,7 +1259,12 @@ components:
       - load_errors
       properties:
         status:
-          const: ok
+          description: ok, or draining once the server was told to stop (SIGTERM or
+            SIGINT); a draining server refuses new runs with 503 and finishes the runs
+            in flight
+          enum:
+          - ok
+          - draining
         version: *id002
         read_only: &id026
           type: boolean

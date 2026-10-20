@@ -47,7 +47,7 @@ barca plan [file.py|dir/ ...]                Emit the execution plan as JSON (ex
 barca history [-l N | --all] [--json|--pretty]  Show recent runs
 barca stats <target> [file.py|dir/ ...]       Show timing/cache stats for an asset
 barca gc [--dry-run] [--max-size SIZE] [--json]  Evict cached results to keep .barca/ under its size limit (experimental)
-barca serve [file.py|dir/ ...] [--port N] [--host IP] [--watch] [--no-schedule] [--timezone TZ] [--read-only]
+barca serve [file.py|dir/ ...] [--port N] [--host IP] [--watch] [--no-schedule] [--timezone TZ] [--read-only] [--drain-timeout SECONDS]
                                                Run the HTTP API server
 barca list [file.py|dir/ ...] [-l N | --all] [--json]  List discovered definitions and their deps
 barca status [target[,target...]] [file.py|dir/ ...] [--json] [--sample N]
@@ -451,6 +451,7 @@ endpoints and [Deploying](/deploying/) for running it behind nginx.
 barca serve pipeline.py                 # default port 8274
 barca serve pipeline.py --host 0.0.0.0  # every interface (containers, VMs); no auth
 barca serve --timezone utc              # every file in the project; cron evaluated in UTC
+barca serve pipeline.py --drain-timeout 120   # on SIGTERM, runs in flight get 2 minutes
 ```
 
 | Flag | Default | Meaning |
@@ -461,7 +462,14 @@ barca serve --timezone utc              # every file in the project; cron evalua
 | `--no-schedule` | off | Do not fire `Schedule(...)` nodes. |
 | `--timezone <TZ>` | `local` | Timezone for cron: `local`, `utc` or an IANA name such as `America/New_York`. Any other value is a usage error (exit 2). |
 | `--read-only` | off | Refuse runs, never schedule, read the metadata DB from copies. |
+| `--drain-timeout <SECONDS>` | `[server] drain_timeout`, else `30` | On SIGTERM or SIGINT, how long runs in flight get to finish before they are cancelled. `0` cancels them at once. |
 | `--env <name>` | `default` | Use a named environment's cache and history. |
+
+SIGTERM or SIGINT drains the server: new runs get `503` with `Retry-After`, the scheduler stops,
+`/health` reports `draining`, and runs in flight finish, uploads included. The exit code is `0`
+when they all finished. When `--drain-timeout` passes or a second signal arrives first, the runs
+left are cancelled (recorded as `cancelled`, reason `server shutdown`) and the exit code is `1`.
+See [Server API](/reference/server-api/#stopping-the-drain).
 
 With a remote store, `barca serve` backs its metadata DB up every minute it changed (not with
 `--read-only`), and `barca state restore` refuses to run while it is up. See

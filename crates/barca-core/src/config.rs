@@ -25,6 +25,7 @@ pub struct BarcaToml {
     pub remote: Option<RemoteToml>,
     pub discovery: Option<DiscoveryToml>,
     pub cache: Option<CacheToml>,
+    pub server: Option<ServerToml>,
 }
 
 /// `[cache]`: how much disk `.barca/` may use (RFC-0012, see `gc`).
@@ -34,6 +35,19 @@ pub struct CacheToml {
     /// `"20GB"`, `"500MB"`, `"20GiB"`, a number of bytes, `"10%"` of the filesystem, or `"off"`.
     pub max_size: Option<toml::Value>,
 }
+
+/// `[server]`: how `barca serve` behaves.
+#[derive(Debug, Deserialize, Default, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct ServerToml {
+    /// Seconds a stopping server waits for in-flight runs before it cancels them
+    /// (`--drain-timeout` overrides it). 0 cancels them at once.
+    pub drain_timeout: Option<u64>,
+}
+
+/// How long `barca serve` waits for in-flight runs on SIGTERM or SIGINT by default: the
+/// grace period Kubernetes gives a pod.
+pub const DEFAULT_DRAIN_TIMEOUT_SECS: u64 = 30;
 
 /// `[discovery]`: which files a walk of the project finds (see `discover`).
 #[derive(Debug, Deserialize, Default, Clone)]
@@ -126,6 +140,9 @@ pub struct ResolvedConfig {
     pub cache_max_size: crate::gc::MaxSize,
     /// Where [`Self::cache_max_size`] came from, for messages.
     pub cache_max_size_source: &'static str,
+    /// `[server] drain_timeout`: seconds `barca serve` waits for in-flight runs once told to
+    /// stop, before it cancels them. Only `serve` reads it.
+    pub drain_timeout_secs: u64,
 }
 
 impl ResolvedConfig {
@@ -283,6 +300,11 @@ pub fn resolve(cli_env: Option<&str>) -> Result<ResolvedConfig, BarcaError> {
 pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, BarcaError> {
     let file = load_toml(cwd)?.unwrap_or_default();
     let remote = file.remote.unwrap_or_default();
+    let drain_timeout_secs = file
+        .server
+        .as_ref()
+        .and_then(|server| server.drain_timeout)
+        .unwrap_or(DEFAULT_DRAIN_TIMEOUT_SECS);
 
     // env name: CLI > BARCA_ENV > default_env in toml > "default"
     let (env, env_source) = match (cli_env, env_var("BARCA_ENV"), file.default_env) {
@@ -316,6 +338,7 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
                 storage_options_json: None,
                 cache_max_size,
                 cache_max_size_source,
+                drain_timeout_secs,
             });
         }
         Some(other) => {
@@ -404,6 +427,7 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
         storage_options_json,
         cache_max_size,
         cache_max_size_source,
+        drain_timeout_secs,
     })
 }
 
@@ -698,6 +722,27 @@ mod tests {
         assert!(cfg.storage_options_json.is_none());
         assert!(cfg.artifact_root.ends_with(".barca/artifacts"));
         assert!(cfg.db_path.ends_with(".barca/metadata.db"));
+    }
+
+    #[test]
+    fn the_drain_timeout_defaults_to_30_seconds_and_server_drain_timeout_sets_it() {
+        let _e = clean_env();
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(resolve_in(None, dir.path()).unwrap().drain_timeout_secs, 30);
+        write_toml(dir.path(), "[server]\ndrain_timeout = 120\n");
+        assert_eq!(
+            resolve_in(None, dir.path()).unwrap().drain_timeout_secs,
+            120
+        );
+        unsafe { std::env::set_var("BARCA_REMOTE", "off") };
+        assert_eq!(
+            resolve_in(None, dir.path()).unwrap().drain_timeout_secs,
+            120
+        );
+        unsafe { std::env::remove_var("BARCA_REMOTE") };
+        write_toml(dir.path(), "[server]\ndrain = 1\n");
+        let err = resolve_in(None, dir.path()).unwrap_err().to_string();
+        assert!(err.contains("drain"), "{err}");
     }
 
     #[test]

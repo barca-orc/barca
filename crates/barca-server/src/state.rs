@@ -317,12 +317,18 @@ pub struct AppState {
     /// parallel; the shared metadata.db is kept race-free by a process-wide DB
     /// lock in `barca-core`, not by serializing whole runs.
     pub run_slots: Arc<Semaphore>,
-    /// Total permits in `run_slots` — lets shutdown wait for in-flight runs by
-    /// re-acquiring every permit.
-    pub run_slot_count: usize,
-    /// Cancelled on graceful shutdown; every run token is a child of this, so
-    /// Ctrl-C stops in-flight runs (workers terminated, runs marked cancelled).
+    /// Cancelled when a drain ends without the runs finishing (its deadline, or a second
+    /// SIGTERM/SIGINT); every run token is a child of this, so in-flight runs stop (workers
+    /// terminated, runs marked cancelled with [`Self::cancel_reason`]).
     pub shutdown: CancellationToken,
+    /// Cancelled by the first SIGTERM/SIGINT: the server drains. New runs are refused with
+    /// `503`, the scheduler stops and `/health` says `draining`; runs in flight go on.
+    pub draining: CancellationToken,
+    /// Why the server cancelled its runs (`server shutdown`), set before [`Self::shutdown`]
+    /// is cancelled. Every run executes inside its scope, so the run records the reason.
+    pub cancel_reason: barca_core::interrupt::CancelReason,
+    /// Every run task, so a drain can wait for them to end.
+    pub run_tasks: tokio_util::task::TaskTracker,
     /// Live scheduler view, published by the scheduler and read by `GET /schedule`.
     pub schedule: Arc<RwLock<Vec<JobStatus>>>,
     /// Bumped by the `--watch` file watcher on every DAG invalidation, so the
@@ -341,11 +347,35 @@ impl AppState {
             cache: Arc::new(RwLock::new(DagCache::default())),
             events: Arc::new(DashMap::new()),
             run_slots: Arc::new(Semaphore::new(run_slot_count)),
-            run_slot_count,
             shutdown: CancellationToken::new(),
+            draining: CancellationToken::new(),
+            cancel_reason: barca_core::interrupt::CancelReason::new(),
+            run_tasks: tokio_util::task::TaskTracker::new(),
             schedule: Arc::new(RwLock::new(Vec::new())),
             dag_generation: Arc::new(AtomicU64::new(0)),
         }
+    }
+}
+
+impl AppState {
+    /// Whether the server is draining (or past it): no new run is admitted.
+    pub fn is_draining(&self) -> bool {
+        self.draining.is_cancelled()
+    }
+
+    /// The error a cancelled run reports: `run cancelled`, plus the reason when the server
+    /// cancelled it (`run cancelled: server shutdown`).
+    pub fn cancelled_message(&self) -> String {
+        match self.cancel_reason.get() {
+            Some(reason) => format!("run cancelled: {reason}"),
+            None => "run cancelled".to_string(),
+        }
+    }
+
+    /// The seconds a client refused during a drain is told to wait (`Retry-After`): the drain
+    /// timeout, by when this server is gone and its replacement is likely up. At least 1.
+    pub fn retry_after_secs(&self) -> u64 {
+        self.config.resolved.drain_timeout_secs.max(1)
     }
 }
 

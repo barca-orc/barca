@@ -88,6 +88,8 @@ services:
       - ./project:/project
       - barca-state:/project/.barca
     restart: unless-stopped
+    # Longer than the drain timeout (30 s), so runs in flight finish on `docker compose stop`.
+    stop_grace_period: 40s
     ports:
       - "127.0.0.1:8080:8080"
     healthcheck:
@@ -150,7 +152,13 @@ What each part is for:
   waits out its timeout and then kills the process. Later releases shut down the same way on
   SIGTERM as on SIGINT, as process 1 too: with them the line can be removed, and leaving it in
   changes nothing.
+- **`stop_grace_period`.** On `docker compose stop` (and on a redeploy) barca drains: runs in
+  flight get up to 30 seconds to finish (`--drain-timeout`, `[server] drain_timeout`). Docker
+  kills the container after 10 seconds unless told otherwise, so give it longer than the drain
+  timeout. With `docker stop` that is `-t 40`; in Kubernetes, `terminationGracePeriodSeconds`
+  (default 30) should exceed it too.
 - **The health check.** `GET /health` returns 200 with the JSON above when the server is up.
+  While it drains it still returns 200, with `"status": "draining"`.
   The check runs inside the container, so it can use `127.0.0.1`. The slim image has no
   `curl`, so the check uses Python.
 - **The port.** With the default loopback address, publishing barca's own port
@@ -211,14 +219,17 @@ The legacy override is unnecessary for the verified v0.24.0 Linux targets above.
 ### What happens on restart
 
 - **Stopped with SIGINT or SIGTERM** (`docker compose stop`, `docker stop`, `systemctl stop`,
-  Ctrl-C; SIGTERM from 0.20.0, see `stop_signal` above): runs in progress are cancelled,
-  their workers are stopped, and they are recorded as `cancelled`. The process exits with
-  code 0, normally in less than a second. From 0.20.0 the shutdown also ends open `/events`
-  streams (in 0.19.0 and earlier a browser tab left on a run page keeps a stopping server
-  alive until Docker kills it) and is bounded at about 12 seconds: runs get 10 seconds to
-  stop, open connections 2 more. Docker's default stop timeout is 10 seconds; a step that
-  does not stop when its worker is told to can outlast it, and Docker then kills the
-  container.
+  Ctrl-C; SIGTERM from 0.20.0, see `stop_signal` above). From 0.27.0 the server drains: new
+  runs get `503` with `Retry-After`, the scheduler stops, `/health` reports `draining`, and the
+  runs in progress finish and are recorded, artifact uploads included, for up to
+  `--drain-timeout` seconds (default 30). The process then exits 0. If the deadline passes or
+  a second signal arrives first, the runs left are cancelled: their workers are stopped, the
+  steps that finished are kept, and they are recorded as `cancelled` with reason
+  `server shutdown`. The process then exits 1, after at most about 12 more seconds (10 for
+  the runs to stop, 2 for open connections). Before 0.27.0 the first signal cancelled the runs
+  in progress at once and the process exited 0. Give the supervisor a grace period longer
+  than the drain timeout (`stop_grace_period` above); otherwise Docker kills the container
+  mid-drain, as in the next case.
 - **Killed** (SIGKILL, out of memory, host lost): steps that had finished are already recorded
   and are served from cache next time. In 0.19.0 and earlier the run in progress stays in
   `barca history` with status `running` for good: those versions look for the run's process

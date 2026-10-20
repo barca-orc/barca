@@ -315,6 +315,7 @@ Examples:
   barca serve pipeline.py --timezone utc     # evaluate cron in UTC (default: local)
   barca serve pipeline.py --timezone America/New_York   # an IANA zone name
   barca serve pipeline.py --read-only        # inspect only: no runs, no scheduler, DB never written
+  barca serve pipeline.py --drain-timeout 120   # on SIGTERM, give runs in flight 2 minutes
 
 Binds to 127.0.0.1 by default. There is no authentication: with --host 0.0.0.0, anyone who
 can reach the port can trigger runs, so keep it on a private network or behind a proxy.
@@ -325,6 +326,10 @@ Trigger deployed runs through HTTP or barca.Client. Ordinary get/run commands ex
 CLI --server, server URL configuration and the shared-ledger design are not implemented yet.
 With a store ([remote] uri), the metadata DB is backed up there every minute it changed
 (barca docs remote); barca state restore refuses to run while the server is up.
+SIGTERM or SIGINT drains: new runs get 503 with Retry-After, the scheduler stops, /health
+says draining, and runs in flight finish (uploads included) for up to --drain-timeout seconds
+(default 30, [server] drain_timeout in barca.toml). Exit 0 when they all finished. The deadline
+or a second signal cancels the rest with reason \"server shutdown\": exit 1.
 More: barca docs scheduling";
 
 const LIST_HELP: &str = "\
@@ -704,6 +709,10 @@ pub(crate) enum Cli {
         /// Inspect only: refuse runs, never schedule, read the metadata DB from snapshots
         #[arg(long)]
         read_only: bool,
+        /// Seconds to wait for runs in flight after SIGTERM or SIGINT before cancelling them
+        /// (exit 1). Default: [server] drain_timeout in barca.toml, else 30. 0 cancels at once
+        #[arg(long, value_name = "SECONDS")]
+        drain_timeout: Option<u64>,
         /// Environment name (separates cache/state per environment)
         #[arg(long)]
         env: Option<String>,

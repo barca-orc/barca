@@ -4,7 +4,7 @@ use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode},
 };
-use barca_server::{ServeConfig, app};
+use barca_server::{ServeConfig, app, draining_app};
 use futures::StreamExt;
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, path::Path, sync::OnceLock, time::Duration};
@@ -233,6 +233,12 @@ fn spec_matches_router_paths_and_methods_and_all_schemas_compile() {
     let health = validator(&json!({"$ref":"#/components/schemas/Health"}));
     assert!(health.is_valid(
         &json!({"status":"ok","version":"1","read_only":false,"scheduler":false,"load_errors":[]})
+    ));
+    assert!(health.is_valid(
+        &json!({"status":"draining","version":"1","read_only":false,"scheduler":false,"load_errors":[]})
+    ));
+    assert!(!health.is_valid(
+        &json!({"status":"stopping","version":"1","read_only":false,"scheduler":false,"load_errors":[]})
     ));
     assert!(
         !health.is_valid(&json!({"status":"ok","version":"1","read_only":false,"scheduler":false}))
@@ -665,5 +671,36 @@ async fn declared_asset_name_matches_schema_state_and_get_target() {
     assert_eq!(
         wait(&router, handle["run_id"].as_str().unwrap()).await["status"],
         "complete"
+    );
+}
+
+#[tokio::test]
+async fn a_draining_server_refuses_runs_and_says_so_on_health() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = draining_app(config(dir.path(), false));
+    let health = checked(&router, "GET", "/health", "/health", 200).await;
+    assert_eq!(health["status"], "draining");
+    for (url, path) in [
+        ("/run", "/run"),
+        ("/run/publish", "/run/{target}"),
+        ("/get/first", "/get/{target}"),
+    ] {
+        let resp = request(&router, "POST", url).await;
+        assert_eq!(
+            resp.headers()["retry-after"].to_str().unwrap(),
+            "30",
+            "the default drain timeout"
+        );
+        let body = checked(&router, "POST", url, path, 503).await;
+        assert!(
+            body["error"].as_str().unwrap().contains("shutting down"),
+            "{body}"
+        );
+    }
+    // Reads stay available while the runs in flight finish.
+    checked(&router, "GET", "/runs?limit=0", "/runs", 200).await;
+    assert!(
+        !dir.path().join("metadata.db").exists(),
+        "a refused run touched history"
     );
 }

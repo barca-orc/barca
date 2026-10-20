@@ -27,7 +27,8 @@ barca serve pipeline.py --host 0.0.0.0    # every interface (containers, VMs)
 barca serve --port 8400 --timezone utc    # every file in the project
 ```
 
-The flags (`--host`, `--port`, `--watch`, `--no-schedule`, `--timezone`, `--read-only`, `--env`) are in
+The flags (`--host`, `--port`, `--watch`, `--no-schedule`, `--timezone`, `--read-only`,
+`--drain-timeout`, `--env`) are in
 the [CLI reference](/reference/cli/#serve). On start the server prints its address and the
 schedule on stderr:
 
@@ -237,6 +238,8 @@ measured it, after a run or on its once-a-minute check (see
 `[cache].max_size` off, and on a `--read-only` server, which deletes nothing. A run result
 gains `cache: {size_bytes, limit_bytes, evicted_files, evicted_bytes}` when the check after it
 found `.barca/` over its limit.
+`status` is `ok`, or `draining` from the first SIGTERM or SIGINT until the server exits (see
+[the drain](#stopping-the-drain)); the response is `200` either way.
 
 `scheduler` is `true` when this server fires `Schedule(...)` nodes: on by default, `false` with
 `--no-schedule` or `--read-only`.
@@ -280,6 +283,27 @@ connects after the run started first receives the events it missed; the stream s
 `run_finished` (with a keep-alive every 15s) until the run is evicted. The response carries
 `X-Accel-Buffering: no` so nginx passes events through as they happen. `/logs` accepts either the
 `run_id` returned by `POST /run` or the run id stored in run history.
+
+### Stopping: the drain
+
+The first SIGTERM or SIGINT starts a drain. Until the server exits:
+
+- `POST /run`, `POST /run/{target}` and `POST /get/{target}` return `503` with
+  `{ "error": "this server is shutting down: ..." }` and a `Retry-After` header: the drain
+  timeout in seconds, at least 1. No run is started.
+- `GET /health` returns `200` with `"status": "draining"`.
+- The scheduler stops; a tick that falls in the drain starts no run, and the next server's
+  startup catch-up fires the job once.
+- Reads, `/status`, `/events` and `DELETE /run/{run_id}` keep working, and the runs in flight
+  finish, artifact uploads included.
+
+The drain lasts until every run in flight has finished (exit 0), for at most `--drain-timeout`
+seconds (`[server] drain_timeout` in `barca.toml`, default 30). When the deadline passes or a
+second SIGTERM or SIGINT arrives first, the runs left are cancelled as by `DELETE /run`, with
+`"error": "run cancelled: server shutdown"`, the line `[barca] run cancelled: server shutdown` in
+their logs and `barca.reason: server shutdown` on their `barca.run` span; the server exits 1. Open
+`/events` streams end once the runs are over. See [Deploying](/deploying/#what-happens-on-restart)
+for supervisor grace periods.
 
 ### Read-only mode
 
@@ -399,7 +423,8 @@ separate: they start the `barca` binary for one command and do not talk to a ser
 Errors return a JSON body `{ "error": "..." }`: `404` for an unknown name in
 `GET /assets/{name}`, an unknown target in `POST /run/{target}` or `POST /get/{target}`, or an
 unknown run id; `400` for parse and DAG errors and for a target of the wrong kind for the
-endpoint; `403` for a run or cancel requested of a `--read-only` server; `409` for conflicts (a
+endpoint; `403` for a run or cancel requested of a `--read-only` server; `503`, with a
+`Retry-After` header, for a run requested of a server that is draining before it stops; `409` for conflicts (a
 name that matches several nodes in `GET /assets/{name}` or in a trigger, or cancelling a run
 that already finished); `405`, with the allowed methods in `error` and in the `Allow`
 header, for a known path asked with the wrong method; and `500` for execution or database

@@ -152,9 +152,12 @@ WorkingDirectory=/srv/pipelines
 WantedBy=multi-user.target
 ```
 
-`systemctl stop` sends SIGTERM. Barca then cancels the runs in flight, records them as
-`cancelled` and exits 0, normally in less than a second. For a container, see
-[Deploying](/deploying/#in-a-container).
+`systemctl stop` sends SIGTERM. Barca then drains: it refuses new runs and stops firing
+schedules, lets the runs in flight finish for up to `--drain-timeout` seconds (default 30;
+`[server] drain_timeout` in `barca.toml`) and exits 0. Runs still going at the deadline, or at
+a second SIGTERM, are cancelled with reason `server shutdown`, and the server exits 1. systemd
+waits 90 seconds (`TimeoutStopSec`) before it kills the service; keep that longer than the
+drain timeout. For a container, see [Deploying](/deploying/#in-a-container).
 
 ## Inspecting the schedule
 

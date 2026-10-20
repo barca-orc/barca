@@ -57,6 +57,47 @@ impl From<CancellationToken> for Interrupt {
     }
 }
 
+/// Why a run was cancelled, when whoever cancels it knows: `barca serve` sets
+/// `server shutdown` before it cancels the runs a drain did not finish (#190).
+///
+/// The run reads it when it records itself as cancelled: the reason goes into the run's logs
+/// (`[barca] run cancelled: <reason>`) and onto the `barca.run` telemetry span as
+/// `barca.reason`. It travels as a task-local value around the run's future
+/// ([`CancelReason::scope`]), so the cancellation token stays a plain token. The first reason
+/// set is kept.
+#[derive(Clone, Debug, Default)]
+pub struct CancelReason(std::sync::Arc<std::sync::OnceLock<String>>);
+
+tokio::task_local! {
+    static CANCEL_REASON: CancelReason;
+}
+
+impl CancelReason {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record the reason. Set it before cancelling the run's token. A later call is ignored.
+    pub fn set(&self, reason: impl Into<String>) {
+        let _ = self.0.set(reason.into());
+    }
+
+    pub fn get(&self) -> Option<String> {
+        self.0.get().cloned()
+    }
+
+    /// Run `fut` (a run) with this reason visible to it through [`cancel_reason`].
+    pub async fn scope<F: std::future::Future>(self, fut: F) -> F::Output {
+        CANCEL_REASON.scope(self, fut).await
+    }
+}
+
+/// The reason set for the run executing on this task, if it was started inside
+/// [`CancelReason::scope`] and a reason has been set.
+pub fn cancel_reason() -> Option<String> {
+    CANCEL_REASON.try_with(|r| r.get()).ok().flatten()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -79,5 +120,25 @@ mod tests {
         let i = Interrupt::from(token.clone());
         token.cancel();
         assert!(i.cancel.is_cancelled() && !i.abandon.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn a_cancel_reason_is_seen_inside_its_scope_only_once_set() {
+        assert_eq!(cancel_reason(), None, "outside any scope");
+        let reason = CancelReason::new();
+        let seen = reason.clone().scope(async {
+            let before = cancel_reason();
+            tokio::task::yield_now().await;
+            (before, cancel_reason())
+        });
+        reason.set("server shutdown");
+        reason.set("ignored");
+        assert_eq!(
+            seen.await,
+            (
+                Some("server shutdown".into()),
+                Some("server shutdown".into())
+            )
+        );
     }
 }

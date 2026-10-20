@@ -91,6 +91,10 @@ include = ["pipelines/**/*.py"]            # only these files (replaces the walk
 # filesystem, or "off". Default: 10% of the filesystem. See "Cache size" below.
 max_size = "20GB"
 
+[server]
+# Seconds `barca serve` waits for runs in flight on SIGTERM or SIGINT before cancelling them.
+drain_timeout = 30
+
 [remote]
 # Root of the remote store. Setting it turns remote storage on:
 # artifacts at {uri}/{env}/artifacts, backups of the history at {uri}/{env}/state/backups/.
@@ -114,6 +118,7 @@ endpoint_url = "https://<account-id>.r2.cloudflarestorage.com"
 | `[discovery].include` | none | Glob patterns; only matching files are discovered. See [Discovery](/reference/discovery/). |
 | `[discovery].exclude` | none | Glob patterns skipped in addition to the built-in list. |
 | `[cache].max_size` | 10% of the filesystem | Size limit for `.barca/`; past it barca evicts down to 80% of it. `"off"` for no limit. See [Cache size](#cache-size). |
+| `[server].drain_timeout` | 30 | Seconds `barca serve` waits for runs in flight once stopped with SIGTERM or SIGINT, before it cancels them and exits 1. `0` cancels at once. `--drain-timeout` overrides it. |
 | `[remote].uri` | none | Root of the remote store. |
 | `[remote].artifacts_uri` | `{uri}/{env}/artifacts` | Artifact location, used as written. |
 | `[remote].transfer_concurrency` | 4 | Transfers in flight at once. |
