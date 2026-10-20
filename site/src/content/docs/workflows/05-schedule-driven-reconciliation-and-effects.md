@@ -92,12 +92,15 @@ each target that was checked, so the `Always` nodes below `prices` appear in the
 
 ## Refreshing a `Manual` node
 
-`baseline` changes only when it is named:
+`baseline` changes only when it is named in `--refresh`:
 
 ```bash
-barca get baseline pipeline.py                 # recompute it as the target
-barca get report pipeline.py --refresh baseline
+barca get baseline pipeline.py --refresh baseline   # recompute it as the target
+barca get report pipeline.py --refresh baseline     # recompute it and what reads it
 ```
+
+`barca get baseline pipeline.py` without `--refresh baseline` returns its current result, with
+the stale note when its input has changed.
 
 The next tick finds `report` and `publish` out of date against the new `baseline`, computes
 `report` and fires `send_report` and `publish`.

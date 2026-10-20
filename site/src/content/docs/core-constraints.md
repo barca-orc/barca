@@ -99,8 +99,9 @@ to read costs nothing. Deleting all of `.barca/` removes the cache and the histo
   no scheduled node above it is never run by a tick.
 - `Manual` assets and tasks pin themselves. A tick never runs one, and `barca get` or
   `barca run` of something below it reads its latest successful result, even when stale, and
-  says so on stderr. Only naming it (`--refresh <name>`, `--refresh-all`, or getting it as the
-  target) recomputes it. A never-computed `Manual` upstream makes `barca get` exit 2; under a
+  says so on stderr. Only naming it in `--refresh` (or `--refresh-all`) recomputes
+  it, also when it is the target of `barca get`; a `Manual` task named as the target of
+  `barca run` runs. A never-computed `Manual` upstream makes `barca get` exit 2; under a
   tick, the nodes that read it are skipped as `blocked`.
 - Sensors are polled whenever a run needs them, whatever their freshness.
 - A partitioned `Manual` node is not pinned yet: it is computed like an `Always` node.

@@ -244,6 +244,25 @@ a task.
 - **A task with no recorded run.** It is out of date, so it fires at the first tick that
   reaches it (rule 10).
 
+### 4.6 Implementation notes
+
+Implemented in #253 (PR #470). Decisions taken there, on 2026-10-20:
+
+- **A `Manual` target is pinned too.** `barca get baseline` without `--refresh baseline`
+  returns its current result, with the stale note; one that was never computed is the same
+  usage error (exit 2) as a never-computed upstream. Only `--refresh <name>` or `--refresh-all`
+  recomputes it. A `Manual` task named as the target of `barca run` runs, since `--refresh`
+  names assets only.
+- **Ticks reach through `Manual` nodes.** As in section 3.3 (`publish` reads only `baseline`),
+  the walk from a scheduled node goes past a `Manual` node, which is not a target, and the
+  up-to-date rules decide what runs. Rule 7's "only through `Always` nodes" is read that way.
+- **Failures are counted per scheduled node** (section 4.2): a tick counts as failed when any
+  of its targets failed, and the job is skipped at its `max_failures`.
+- **`max_failures` is not hashed.** Freshness does not count in the definition hash, the cron
+  included, so neither does `max_failures` (section 4.2 assumed the cron did).
+- A partitioned `Manual` node is not pinned yet, and a partitioned task below a tick always
+  fires.
+
 ## 5. Determinism, Caching & Testing
 
 Cache keys do not change. The plan for a tick is deterministic given the DAG and the

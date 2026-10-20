@@ -16,7 +16,7 @@ def clean(data: dict) -> dict:
     return {"x": data["x"] + 1}
 
 
-@asset(freshness=Manual)                   # refreshed by hand only; readers get its last result
+@asset(freshness=Manual)                   # computed only when named in --refresh
 def pinned() -> dict:
     return {"x": 0}
 

@@ -48,7 +48,7 @@ def observed(): return True, "version"
         text=True,
     )
     assert never.returncode == 2, never.stderr
-    assert run(tmp_path, "get", "source")["steps_executed"] == 1
+    assert run(tmp_path, "get", "source", "--refresh", "source")["steps_executed"] == 1
     assert run(tmp_path, "get", "downstream")["steps_executed"] == 1
     assert run(tmp_path, "get", "downstream")["steps_executed"] == 0
     # An edit of the Manual node does not recompute it on the way to downstream.

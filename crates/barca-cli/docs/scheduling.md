@@ -97,9 +97,11 @@ node above it recomputes it. Nothing happens between ticks.
 A `Manual` asset or task is never run by a tick, and a `barca get` or `barca run` of something
 below it does not recompute it: whatever reads it reads its latest result, even when its inputs
 or code have changed since. Nodes below it are hashed against that result, so they are not
-recomputed because of it until it changes. Only naming it gets it recomputed:
-`barca get baseline pipeline.py --refresh baseline` (or `barca get baseline pipeline.py`, or
-`--refresh-all`). The next tick then finds what reads it out of date and updates it.
+recomputed because of it until it changes. Only naming it in `--refresh` gets it recomputed:
+`barca get baseline pipeline.py --refresh baseline` (or `--refresh-all`). That holds when it is
+the target too: `barca get baseline pipeline.py` returns its current result, with the stale
+note, and exits 2 when it was never computed. A `Manual` task named as the target of
+`barca run` runs. The next tick then finds what reads it out of date and updates it.
 
 ```python
 from pathlib import Path

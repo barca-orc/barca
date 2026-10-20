@@ -345,7 +345,7 @@ def test_get_behind_a_never_computed_manual_node_is_a_usage_error(tmp_path):
 def test_get_reads_a_stale_manual_upstream_as_it_is_with_a_note(tmp_path):
     (tmp_path / "pipeline.py").write_text(PINNED)
     _write(tmp_path, "prices.txt", "p1")
-    assert _barca(tmp_path, "get", "baseline", "pipeline.py").returncode == 0
+    assert _barca(tmp_path, "get", "baseline", "pipeline.py", "--refresh", "baseline").returncode == 0
 
     _write(tmp_path, "prices.txt", "p2")
     done = _barca(tmp_path, "get", "report", "pipeline.py", "--json")
@@ -379,7 +379,46 @@ def test_get_reads_a_stale_manual_upstream_as_it_is_with_a_note(tmp_path):
 def test_get_of_a_fresh_manual_upstream_prints_no_note(tmp_path):
     (tmp_path / "pipeline.py").write_text(PINNED)
     _write(tmp_path, "prices.txt", "p1")
-    assert _barca(tmp_path, "get", "baseline", "pipeline.py").returncode == 0
+    assert _barca(tmp_path, "get", "baseline", "pipeline.py", "--refresh", "baseline").returncode == 0
     done = _barca(tmp_path, "get", "report", "pipeline.py")
     assert done.returncode == 0, done.stderr
     assert "Manual and stale" not in done.stderr
+
+
+def test_get_of_a_manual_target_reads_it_as_it_is_unless_refresh_names_it(tmp_path):
+    (tmp_path / "pipeline.py").write_text(PINNED)
+    _write(tmp_path, "prices.txt", "p1")
+    # Never computed, and not named in --refresh: the same usage error as for an upstream.
+    never = _barca(tmp_path, "get", "baseline", "pipeline.py")
+    assert never.returncode == 2, never.stderr
+    assert "barca get baseline pipeline.py --refresh baseline" in never.stderr
+    assert "baseline" not in _rows(tmp_path)
+
+    first = _barca(tmp_path, "get", "baseline", "pipeline.py", "--refresh", "baseline", "--json")
+    assert json.loads(first.stdout)["final_output"] == {"baseline": "p1"}
+
+    # Stale, asked for by name without --refresh: its current result, with the note.
+    _write(tmp_path, "prices.txt", "p2")
+    done = _barca(tmp_path, "get", "baseline", "pipeline.py", "--json")
+    assert done.returncode == 0, done.stderr
+    assert json.loads(done.stdout)["final_output"] == {"baseline": "p1"}
+    assert (
+        "[barca] note: baseline is Manual and stale; "
+        "barca get baseline pipeline.py --refresh baseline to recompute"
+    ) in done.stderr
+    assert _rows(tmp_path).get("baseline") == 1
+
+    done = _barca(tmp_path, "get", "baseline", "pipeline.py", "--refresh", "baseline", "--json")
+    assert json.loads(done.stdout)["final_output"] == {"baseline": "p2"}
+    assert _rows(tmp_path).get("baseline") == 2
+
+
+def test_run_of_a_manual_task_runs_it(tmp_path):
+    (tmp_path / "pipeline.py").write_text(
+        PINNED.replace('@task(inputs={"baseline": baseline})', '@task(inputs={"baseline": baseline}, freshness=Manual)')
+    )
+    _write(tmp_path, "prices.txt", "p1")
+    assert _barca(tmp_path, "get", "baseline", "pipeline.py", "--refresh", "baseline").returncode == 0
+    done = _barca(tmp_path, "run", "publish", "pipeline.py")
+    assert done.returncode == 0, done.stderr
+    assert _lines(tmp_path / "published.log") == ["p1"]

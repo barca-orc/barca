@@ -1557,7 +1557,28 @@ async fn pin_manual<'a>(
         });
     }
     let ids: Vec<&str> = targets.iter().map(|(_, id)| id.as_str()).collect();
-    planned.cone = Some(crate::freshness::walk(dag, &ids, policy).cone);
+    let mut cone = crate::freshness::walk(dag, &ids, policy).cone;
+    // Outside a tick, the sensors a pinned node reads directly are polled too, so the stale note
+    // compares against what they return now, not what they returned last time.
+    if rules.tick.is_none() {
+        let mut planned_ids: std::collections::HashSet<&str> = cone.iter().copied().collect();
+        for id in pins.pinned.keys() {
+            for up in dag.upstream(id) {
+                if dag
+                    .get_node(up)
+                    .is_some_and(|n| n.kind() == crate::NodeKind::Sensor)
+                {
+                    planned_ids.insert(up);
+                }
+            }
+        }
+        cone = dag
+            .topo_order()
+            .into_iter()
+            .filter(|id| planned_ids.contains(id))
+            .collect();
+    }
+    planned.cone = Some(cone);
     planned.pinned = pins.pinned;
     Ok(planned)
 }

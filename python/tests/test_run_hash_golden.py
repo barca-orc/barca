@@ -221,7 +221,9 @@ def cold_run_hashes(root: Path, files: dict | None = None) -> dict:
     assert listing.returncode == 0, listing.stderr
     for node in json.loads(listing.stdout)["nodes"]:
         proc = subprocess.run(
-            [_find_binary(), "get", node["id"], "--dry-run", "--json"],
+            # --refresh-all: a cold Manual target is computed only when refreshed (RFC-0008);
+            # refreshing does not change run hashes.
+            [_find_binary(), "get", node["id"], "--dry-run", "--json", "--refresh-all"],
             cwd=root,
             capture_output=True,
             text=True,

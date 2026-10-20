@@ -440,8 +440,9 @@ above: it pins itself rather than blocking what is below it. A tick never runs
 a `Manual` asset or task, and a tick, `barca get` or `barca run` of something
 below it reads its latest successful result, even when stale; the nodes below
 are hashed against that result and still update for their other inputs. Only
-naming it (`--refresh`, `--refresh-all`, or getting it as the target)
-recomputes it. Only a `Manual` node that was never computed blocks: `barca get`
+naming it in `--refresh` (or `--refresh-all`) recomputes it, also when it is
+the target of `barca get`; a `Manual` task named as the target of `barca run`
+runs. Only a `Manual` node that was never computed blocks: `barca get`
 exits 2, and a tick reports its readers as skipped with reason `blocked`.
 Sensors are never pinned, a partitioned `Manual` node is not pinned yet, and
 HTTP requests compute `Manual` upstreams as before. Consecutive failed ticks

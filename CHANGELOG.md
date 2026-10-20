@@ -26,10 +26,11 @@ and these tags are available on the same releases page.
   input change. **Breaking:** unscheduled `Always` nodes below a scheduled node, tasks included,
   now run at its ticks; to keep a node out of them, make it `Manual` or give it its own
   `Schedule`. **Breaking:** `barca get` and `barca run` (and ticks) no longer recompute a stale
-  `Manual` upstream: they read its latest result and print
+  `Manual` node, upstream or the target of `barca get`, unless `--refresh` names it: they read
+  its latest result and print
   `[barca] note: <name> is Manual and stale; ...`; name it in `--refresh` (or use
-  `--refresh-all`) to recompute it. A `Manual` upstream that has never been computed is a usage
-  error (exit 2) naming that command.
+  `--refresh-all`) to recompute it. A `Manual` node that has never been computed is a usage
+  error (exit 2) naming that command. A `Manual` task named as the target of `barca run` runs.
 
 ### Bug Fixes
 

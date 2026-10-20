@@ -165,7 +165,8 @@ shows it (the `freshness` key in its JSON). Freshness is not part of the definit
   A node with no scheduled node above it is never run by a tick.
 - `Manual`: refreshed by hand only. A tick never runs it, and `barca get` or `barca run` of
   something below it reads its latest successful result, even when stale, with a note on
-  stderr. `--refresh <name>`, `--refresh-all` or getting it as the target recomputes it. A
+  stderr. Only `--refresh <name>` or `--refresh-all` recomputes it, also when it is the
+  target of `barca get`; a `Manual` task named as the target of `barca run` runs. A
   `Manual` node that was never computed makes `barca get` of what reads it exit 2. A partitioned
   `Manual` node is not pinned yet, and requests to `barca serve` (`POST /get`, `POST /run`)
   compute `Manual` upstreams as before.

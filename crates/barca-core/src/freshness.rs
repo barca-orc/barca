@@ -107,7 +107,10 @@ fn refreshed(policy: &CachePolicy, id: &str) -> bool {
 }
 
 /// What a request for `targets` reads: its cone, walking upstream from the targets but not past
-/// a `Manual` node that is not a target and not refreshed (`stops`, which are in the cone).
+/// a `Manual` node that is not named in `--refresh` (`stops`, which are in the cone). A `Manual`
+/// asset is read as it is even when it is the target: only `--refresh` (or `--refresh-all`)
+/// recomputes it. A `Manual` task named as the target of `barca run` runs: that is how a task is
+/// refreshed by hand (`--refresh` names assets only).
 pub(crate) struct Walk<'a> {
     /// Every node the run plans, in dependency order.
     pub(crate) cone: Vec<&'a str>,
@@ -127,8 +130,9 @@ pub(crate) fn walk<'a>(dag: &'a Dag, targets: &[&str], policy: &CachePolicy) -> 
         }
     }
     while let Some(id) = queue.pop_front() {
-        let is_target = targets.contains(&id);
-        if !is_target && pins_itself(dag, id) && !refreshed(policy, id) {
+        let task_target =
+            targets.contains(&id) && dag.get_node(id).is_some_and(|n| n.kind() == NodeKind::Task);
+        if !task_target && pins_itself(dag, id) && !refreshed(policy, id) {
             stops.insert(id);
             continue;
         }
@@ -310,8 +314,8 @@ pub(crate) fn stale_note(dag: &Dag, id: &str, file_args: &[String]) -> String {
 /// The usage error for a request that reads a `Manual` node that has never been computed.
 pub(crate) fn never_computed(dag: &Dag, id: &str, file_args: &[String]) -> crate::BarcaError {
     crate::BarcaError::Usage(format!(
-        "'{}' is Manual and has never been computed, so nothing that reads it can run; a \
-         Manual node is computed only when asked for by name\nCompute it first: {}",
+        "'{}' is Manual and has never been computed; a Manual node is computed only when \
+         named in --refresh\nCompute it first: {}",
         short_name(id),
         refresh_command(dag, id, file_args)
     ))
@@ -456,7 +460,7 @@ mod tests {
     }
 
     #[test]
-    fn the_walk_stops_at_a_manual_upstream_but_not_at_a_manual_target() {
+    fn the_walk_stops_at_a_manual_node_target_or_not_unless_refreshed() {
         let d = dag(&[
             node("raw", 'a', "always", &[]),
             node("model", 'a', "manual", &["raw"]),
@@ -467,9 +471,29 @@ mod tests {
         assert_eq!(names(&w.stops), ["model"]);
         assert_eq!(w.cone.len(), 2, "raw is not planned: {:?}", w.cone);
 
+        // `barca get model` without `--refresh model` reads it as it is too.
         let model = id(&d, "model");
         let w = walk(&d, &[&model], &CachePolicy::CacheAware);
-        assert!(w.stops.is_empty(), "a target is never pinned");
+        assert_eq!(names(&w.stops), ["model"]);
+        assert_eq!(w.cone.len(), 1);
+        let named = CachePolicy::RefreshSelective {
+            names: vec!["model".into()],
+            cascade: true,
+        };
+        let w = walk(&d, &[&model], &named);
+        assert!(w.stops.is_empty());
+        assert_eq!(w.cone.len(), 2);
+    }
+
+    #[test]
+    fn a_manual_task_named_as_the_target_runs() {
+        let d = dag(&[
+            node("raw", 'a', "always", &[]),
+            node("ship", 't', "manual", &["raw"]),
+        ]);
+        let ship = id(&d, "ship");
+        let w = walk(&d, &[&ship], &CachePolicy::CacheAware);
+        assert!(w.stops.is_empty());
         assert_eq!(w.cone.len(), 2);
     }
 

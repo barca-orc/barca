@@ -118,8 +118,9 @@ not make them stale until it changes. When it is stale, `barca get report` says 
 [barca] note: baseline is Manual and stale; barca get baseline pipeline.py --refresh baseline to recompute
 ```
 
-Only naming it recomputes it: `--refresh baseline`, `--refresh-all`, or getting `baseline` as
-the target. The next tick then finds what reads it out of date and updates it.
+Only naming it in `--refresh` recomputes it: `--refresh baseline` or `--refresh-all`, also when
+it is the target (`barca get baseline` alone returns its current result, with the note when it
+is stale). A `Manual` task named as the target of `barca run` runs. The next tick then finds what reads it out of date and updates it.
 
 - A `Manual` node that has never been computed cannot be read. `barca get report` is then a
   usage error (exit 2) whose remediation is that command. Under a tick, the nodes that read it

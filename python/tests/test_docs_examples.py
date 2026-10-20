@@ -279,9 +279,10 @@ def test_assets_topic_example(binary, topics, tmp_path):
     write_example(topics, "assets", tmp_path)
     clean = result(barca(binary, tmp_path, "get", "clean", "pipeline.py"))
     assert clean["steps_executed"] == 2 and clean["final_output"] == {"x": 2}
-    assert result(barca(binary, tmp_path, "get", "pinned", "pipeline.py"))["final_output"] == {
-        "x": 0
-    }
+    # Manual: never computed, so it is computed only when named in --refresh.
+    assert barca(binary, tmp_path, "get", "pinned", "pipeline.py").returncode == 2
+    pinned = barca(binary, tmp_path, "get", "pinned", "pipeline.py", "--refresh", "pinned")
+    assert result(pinned)["final_output"] == {"x": 0}
     # A Schedule asset still materializes on `barca get`; the schedule fires only under serve.
     assert result(barca(binary, tmp_path, "get", "daily", "pipeline.py"))["final_output"] == {
         "x": 2

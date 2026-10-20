@@ -326,7 +326,7 @@ not define (`@asset(after=x)`, `input=` for `inputs=`, `@asset(**options)`; `bar
 "Accepted arguments"), a DAG that cannot be built (an input that
 names no definition, a cycle, a partitioned asset in an unpartitioned asset's `inputs=` without
 `collect()`, a `partitions_from()` the asset cannot mirror), invalid `--env` or `barca.toml`, a
-`get`/`run` that reads a `Manual` node that has never been computed (the remediation is the
+`get`/`run` that reads (or a `get` that targets) a `Manual` node that has never been computed, without naming it in `--refresh` (the remediation is the
 command that computes it; `barca docs cache`). `infra`:
 barca or its environment failed (metadata DB, workers, remote state, I/O); retrying may help.
 `cancelled`: stopped by Ctrl-C (SIGINT) or by SIGTERM (what a supervisor, a CI timeout or

@@ -644,8 +644,11 @@ they are served from cache until it changes. When it is stale, stderr says how t
 [barca] note: baseline is Manual and stale; barca get baseline pipeline.py --refresh baseline to recompute
 ```
 
-- Naming it recomputes it: `--refresh baseline` (with the cascade, everything below it in the
-  cone too), `--refresh-all`, or `barca get baseline` itself (a target is never read as it is).
+- Only naming it in `--refresh` recomputes it: `--refresh baseline` (with the cascade,
+  everything below it in the cone too) or `--refresh-all`. That holds when it is the target too:
+  `barca get baseline` without `--refresh baseline` returns its current result, with the same
+  note when it is stale. A `Manual` task named as the target of `barca run` runs, since
+  `--refresh` names assets only.
 - `--refresh` cannot name an asset behind it: the run does not plan it, so the name is a usage
   error that lists the assets you can refresh.
 - A `Manual` node that has never been computed cannot be read: the command exits 2 and the
