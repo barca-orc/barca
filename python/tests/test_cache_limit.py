@@ -200,7 +200,9 @@ def test_a_get_over_the_limit_keeps_what_it_produced_read_and_returned(project):
     barca(project, "get", "pipeline.py", "--json")
     other = current(project, "other")
     reference = current(project, "reference")
-    out = barca(project, "get", "report", "pipeline.py", "--json", BARCA_CACHE_MAX_SIZE="1")
+    out = barca(
+        project, "get", "report", "pipeline.py", "-o", "value", "--json", BARCA_CACHE_MAX_SIZE="1"
+    )
     result = json.loads(out.stdout)
     assert result["final_output"] == {"sum": 6}
     assert set(result["cache"]) == {"size_bytes", "limit_bytes", "evicted_files", "evicted_bytes"}
@@ -259,7 +261,9 @@ def test_a_live_run_in_another_process_leaves_all_but_tiers_1_and_2(project):
 
 
 def test_evicted_results_come_back_with_the_same_bytes_and_say_they_were_evicted(project):
-    first = json.loads(barca(project, "get", "report", "pipeline.py", "--json").stdout)
+    first = json.loads(
+        barca(project, "get", "report", "pipeline.py", "-o", "value", "--json").stdout
+    )
     files = {node: project / current(project, node) for node in ("source", "features", "report")}
     before = {node: digest(path) for node, path in files.items()}
     done = gc(project, "--max-size", "1")
@@ -276,7 +280,7 @@ def test_evicted_results_come_back_with_the_same_bytes_and_say_they_were_evicted
     dry = json.loads(barca(project, "get", "report", "pipeline.py", "--dry-run", "--json").stdout)
     assert {s["reason"] for s in dry["steps"]} == {"evicted"}
 
-    out = barca(project, "get", "report", "pipeline.py", "--json")
+    out = barca(project, "get", "report", "pipeline.py", "-o", "value", "--json")
     result = json.loads(out.stdout)
     assert result["final_output"] == first["final_output"]
     assert {s["reason"] for s in result["steps"]} == {"evicted"}
