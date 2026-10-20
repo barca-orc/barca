@@ -142,12 +142,16 @@ To read the result:
 barca get summary pipeline.py -o value           # only the value, pretty-printed
 barca get summary pipeline.py -o value --json    # the JSON result with the value in final_output
 barca get summary pipeline.py -o path | xargs cat   # only the path, one line per artifact
+barca get summary pipeline.py -o url --expires 12h  # a signed HTTPS link to the result in the store
 ```
 
 `-o value` reads json, parquet, CSV and pickle with the reader `barca.get()` uses; a table
 prints as a list of row objects. `-o path` is the default spelled out: with `--json` it prints
 the default JSON. Up to 0.24 `final_output` was the value of a json result and a terminal
-printed the value; `-o value` prints it now.
+printed the value; `-o value` prints it now. `-o url` (experimental) prints a signed HTTPS link to
+each result in a cloud store, valid for `--expires` (default `1h`, at most `7d`); with `--json`
+each `_barca_artifact` pointer gains `url` and `url_expires_at`. See
+[Remote storage: signed URLs](/reference/remote-storage/#sharing-a-result-signed-urls).
 
 **Partitioned targets.** A partitioned asset returns every key, sorted: `final_output` is an
 object keyed by partition key (`"region=emea"`; a compound key is `"day=d1,region=emea"`), each a

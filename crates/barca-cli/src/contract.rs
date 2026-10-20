@@ -64,6 +64,10 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
         "kept for compatibility; --json / --pretty are the canonical spelling",
     ),
     (
+        "get --expires",
+        "new with -o url (signed links to results in a cloud store); the link format is the cloud's",
+    ),
+    (
         "status --sample",
         "sample rows come from a Python helper whose output may grow",
     ),

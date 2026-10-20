@@ -47,6 +47,8 @@ pub(crate) enum GetOutput {
     Path,
     /// The value, pretty-printed (a mapping of key to value for a partitioned target)
     Value,
+    /// A signed HTTPS URL to each artifact in the store, one per line (experimental)
+    Url,
     /// One-line JSON, as --json
     Json,
     /// Summary and paths for people, as --pretty
@@ -95,6 +97,9 @@ Examples:
   barca get total pipeline.py -o path      # only the artifact path, one per line (pipe it to xargs cat)
   barca get total pipeline.py -o value     # only the value, pretty-printed (json, parquet, CSV, pickle)
   barca get total pipeline.py -o value --json   # the JSON result with the value in final_output
+  barca get total pipeline.py -o url       # a signed HTTPS link to the result in the store (1 hour)
+  barca get total pipeline.py -o url --expires 7d   # a link that works for 7 days (the maximum)
+  barca get sales pipeline.py -o url --partition region=emea --expires 30m   # one key's link
   barca get sales pipeline.py              # a partitioned target: one path per key
   barca get sales pipeline.py --partition region=emea,amer   # only these keys: computed and returned
   barca get sales pipeline.py --partition region=emea --refresh sales   # recompute only that key
@@ -110,6 +115,11 @@ small json value is previewed under it in a terminal), and in JSON final_output 
 {\"_barca_artifact\": {\"path\", \"format\", \"size_bytes\"}} for every format. -o path prints only
 the paths, one per line; -o value prints only the value. With --json, -o path|value choose what
 final_output holds (-o path is the default). -o json|pretty are older spellings of --json|--pretty.
+-o url (experimental) prints a signed HTTPS URL per result instead of its path: anyone with the
+link can download the artifact from the store until it expires (--expires, default 1h, at most
+7d; it cannot be revoked sooner). With --json each _barca_artifact pointer gains url and
+url_expires_at. It needs a cloud store (s3://, gs://, abfs://; a local store is exit 2); a result
+that is not in the store, or credentials that cannot sign, is exit 3 (barca docs remote).
 A partitioned target returns every key, sorted: final_output is an object keyed by partition key
 (\"region=emea\") and -o path prints one path per key. --partition region=emea,amer (or a JSON
 object for compound keys) selects keys of the target: only they run, are returned and are
@@ -416,10 +426,14 @@ pub(crate) enum Cli {
         /// [TARGET[,TARGET...]] [file.py|dir/ ...] — both optional: no target gets every asset
         /// and sensor; no files reads the whole project (`barca docs discovery`)
         args: Vec<String>,
-        /// What to print: artifact paths (the default) or values. Alone, -o path|value prints
-        /// only that; with --json, it chooses what `final_output` holds
+        /// What to print: artifact paths (the default), values, or signed URLs. Alone,
+        /// -o path|value|url prints only that; with --json, it chooses what `final_output` holds
         #[arg(short, long)]
         output: Option<GetOutput>,
+        /// With -o url: how long the links work, as 30m, 12h, 7d or seconds (default 1h, at
+        /// most 7d). Experimental
+        #[arg(long, value_name = "DURATION")]
+        expires: Option<String>,
         #[command(flatten)]
         format: FormatFlags,
         /// Select keys of a partitioned target: `region=emea,amer`, or a JSON object for

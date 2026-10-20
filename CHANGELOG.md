@@ -12,6 +12,18 @@ reconciliation, and verified shared DuckDB worker lifetime. See
 upgrade and breaking-change notes. Releases between the historical entries below
 and these tags are available on the same releases page.
 
+## Pending
+
+### Features
+
+- Signed URLs (experimental, RFC-0011, #452): `barca.signed_url(uri, expires=3600)` returns a
+  time-limited, read-only HTTPS link to any object in S3 (also R2 and MinIO), GCS or Azure, signed
+  with the credentials barca already uses: SigV4 on S3, V4 on GCS (IAM `signBlob` when there is no
+  key), and on Azure a service SAS with an account key or a user delegation SAS from
+  `DefaultAzureCredential`. `barca get <target> -o url [--expires 30m|12h|7d|seconds]` prints one
+  link per result (default 1 hour, at most 7 days); with `--json` each `_barca_artifact` gains
+  `url` and `url_expires_at`. Links download as `<node>.<ext>`. The URL goes to stdout only.
+
 ## Pending 0.24.0
 
 ### Breaking

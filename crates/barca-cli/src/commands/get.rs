@@ -27,6 +27,9 @@ pub(crate) async fn get_cmd(
     fields: Option<&[String]>,
 ) -> Result<(), barca_core::BarcaError> {
     let cfg = barca_core::config::resolve(env)?;
+    if mode.url_expires.is_some() {
+        signable_store(&cfg)?;
+    }
     let file_args: Vec<String> = files.iter().map(|p| p.display().to_string()).collect();
     if dry_run {
         return explain_cmd(
@@ -64,11 +67,15 @@ pub(crate) async fn get_cmd(
         let _ = log_task.await;
         let result = result?;
         let mut returned = Vec::with_capacity(result.targets.len());
-        for (_, t) in &result.targets {
+        for (name, t) in &result.targets {
             returned.push(
                 reader
-                    .returned(t.final_output.as_ref(), t.partitions.as_deref())
-                    .await,
+                    .returned(
+                        Some(name.as_str()),
+                        t.final_output.as_ref(),
+                        t.partitions.as_deref(),
+                    )
+                    .await?,
             );
         }
         super::emit(barca_core::report::render_get_multi(
@@ -101,7 +108,12 @@ pub(crate) async fn get_cmd(
             let partial = match &e {
                 barca_core::BarcaError::WorkerFailed(f) => {
                     match f.run.as_ref().and_then(|r| r.partitions.as_deref()) {
-                        Some(keys) => Some(reader.returned(None, Some(keys)).await),
+                        // A link that cannot be signed is left out: the run's own failure is
+                        // what this command reports.
+                        Some(keys) => reader
+                            .returned(target.as_deref(), None, Some(keys))
+                            .await
+                            .ok(),
                         None => None,
                     }
                 }
@@ -116,8 +128,12 @@ pub(crate) async fn get_cmd(
         }
     };
     let returned = reader
-        .returned(result.final_output.as_ref(), result.partitions.as_deref())
-        .await;
+        .returned(
+            target.as_deref(),
+            result.final_output.as_ref(),
+            result.partitions.as_deref(),
+        )
+        .await?;
     super::emit(barca_core::report::render_get(
         &result,
         target.as_deref(),
@@ -136,18 +152,36 @@ struct Reader<'a> {
 }
 
 impl Reader<'_> {
-    /// One target's output: its artifact, or each of a partitioned target's keys.
+    /// One target's output: its artifact, or each of a partitioned target's keys. `target` is
+    /// the name it was asked for (it names the node in a signed link's file name and errors).
     async fn returned(
         &self,
+        target: Option<&str>,
         single: Option<&OutputRef>,
         keys: Option<&[(String, OutputRef)]>,
-    ) -> Returned {
+    ) -> Result<Returned, barca_core::BarcaError> {
         let items: Vec<(Option<&str>, &OutputRef)> = match keys {
             Some(keys) => keys.iter().map(|(k, o)| (Some(k.as_str()), o)).collect(),
             None => single.into_iter().map(|o| (None, o)).collect(),
         };
         let refs: Vec<&OutputRef> = items.iter().map(|(_, o)| *o).collect();
-        let shown_values: Vec<Value> = if self.mode.values {
+        let signed = match self.mode.url_expires {
+            Some(secs) => Some(self.sign(target, &items, secs).await?),
+            None => None,
+        };
+        let shown_values: Vec<Value> = if let Some(signed) = &signed {
+            refs.iter()
+                .zip(signed)
+                .map(|(o, s)| {
+                    let mut pointer = artifact_metadata(o);
+                    if let Some(Value::Object(inner)) = pointer.get_mut("_barca_artifact") {
+                        inner.insert("url".into(), s.url.clone().into());
+                        inner.insert("url_expires_at".into(), s.expires_at.clone().into());
+                    }
+                    pointer
+                })
+                .collect()
+        } else if self.mode.values {
             barca_core::values::read_values(self.python, self.cfg, &refs)
                 .await
                 .into_iter()
@@ -168,12 +202,18 @@ impl Reader<'_> {
         };
         let preview = self.mode.shape == GetShape::Pretty
             && !self.mode.values
+            && signed.is_none()
             && std::io::IsTerminal::is_terminal(&std::io::stdout());
         let shown = items
             .iter()
-            .map(|(key, oref)| Shown {
+            .enumerate()
+            .map(|(i, (key, oref))| Shown {
                 key: key.map(str::to_string),
-                path: oref.path.clone(),
+                // Under -o url the link is printed where the path would be.
+                path: match &signed {
+                    Some(signed) => signed[i].url.clone(),
+                    None => oref.path.clone(),
+                },
                 preview: preview.then(|| preview_of(oref)).flatten(),
             })
             .collect();
@@ -187,12 +227,145 @@ impl Reader<'_> {
             )),
             None => shown_values.into_iter().next(),
         };
-        Returned {
+        Ok(Returned {
             final_output,
             values: self.mode.values,
             shown,
-        }
+        })
     }
+
+    /// A signed URL for each returned artifact's object in the store, in order. Any failure
+    /// fails the command: exit 2 when signing cannot apply, else exit 3 naming the node.
+    async fn sign(
+        &self,
+        target: Option<&str>,
+        items: &[(Option<&str>, &OutputRef)],
+        secs: u64,
+    ) -> Result<Vec<barca_core::values::Signed>, barca_core::BarcaError> {
+        use barca_core::BarcaError;
+        let local_root = std::fs::canonicalize(&self.cfg.local_artifact_dir)
+            .unwrap_or_else(|_| PathBuf::from(&self.cfg.local_artifact_dir));
+        let layout = barca_core::transfer::ArtifactLayout::new(local_root, &self.cfg.artifact_root);
+        let mut requests = Vec::with_capacity(items.len());
+        let mut names = Vec::with_capacity(items.len());
+        for (key, oref) in items {
+            let node = node_name(target, &oref.path);
+            let shown = match key {
+                Some(k) => format!("'{node}' ({k})"),
+                None => format!("'{node}'"),
+            };
+            let local = std::fs::canonicalize(&oref.path).unwrap_or_else(|_| {
+                std::env::current_dir()
+                    .map(|cwd| cwd.join(&oref.path))
+                    .unwrap_or_else(|_| PathBuf::from(&oref.path))
+            });
+            let Some(uri) = layout.store_for(&local.to_string_lossy()) else {
+                return Err(BarcaError::Other(format!(
+                    "the result of {shown} ({}) is not under this environment's artifact \
+                     directory, so it has no object in the store to sign\nRun `barca doctor` \
+                     to check the store, then `barca get` again.",
+                    oref.path
+                )));
+            };
+            let ext = std::path::Path::new(&oref.path)
+                .extension()
+                .map(|e| format!(".{}", e.to_string_lossy()))
+                .unwrap_or_default();
+            requests.push(barca_core::values::SignRequest {
+                uri,
+                filename: format!("{node}{ext}"),
+            });
+            names.push(shown);
+        }
+        // TODO(#444): retry this command's pending uploads (`local only` results) here, before
+        // signing, so a result that is not in the store yet is uploaded rather than reported.
+        let answers = barca_core::values::sign_urls(self.python, self.cfg, &requests, secs).await;
+        let mut out = Vec::with_capacity(answers.len());
+        for (answer, shown) in answers.into_iter().zip(&names) {
+            match answer {
+                Ok(signed) => {
+                    if let Some(note) = &signed.note {
+                        barca_core::errln!("[barca] warning: the link to {shown}: {note}");
+                    }
+                    out.push(signed);
+                }
+                Err(f) => return Err(sign_error(shown, &f)),
+            }
+        }
+        Ok(out)
+    }
+}
+
+/// The node a returned artifact belongs to, for a signed link's file name and for errors: the
+/// target's name, else the artifact directory's (`pipeline.py--total` -> `total`).
+fn node_name(target: Option<&str>, path: &str) -> String {
+    if let Some(t) = target {
+        return t.rsplit(':').next().unwrap_or(t).to_string();
+    }
+    let dir = std::path::Path::new(path)
+        .parent()
+        .and_then(|p| p.file_name())
+        .map(|d| d.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    match dir.rsplit_once("--") {
+        Some((_, name)) if !name.is_empty() => name.to_string(),
+        _ => dir,
+    }
+}
+
+/// The error for one result that could not be signed: what, why, and what to run.
+fn sign_error(shown: &str, f: &barca_core::values::SignFailure) -> barca_core::BarcaError {
+    use barca_core::BarcaError;
+    let fix = match f.kind.as_str() {
+        "usage" => {
+            return BarcaError::Usage(format!("could not sign a URL for {shown}: {}", f.message));
+        }
+        "missing" => {
+            "The result is recorded but its object is not in the store. Run `barca \
+                      doctor` to check the store, then refresh the node (`--refresh`) to compute \
+                      and upload it again."
+        }
+        "credentials" => {
+            "Run `barca doctor` to see which identity barca uses. Signing needs \
+                          read access to the object and, on GCS without a key, \
+                          roles/iam.serviceAccountTokenCreator; on Azure without an account \
+                          key, permission to create user delegation keys (barca docs remote)."
+        }
+        _ => "Run `barca doctor` to check that the store is reachable, then retry.",
+    };
+    BarcaError::Other(format!(
+        "could not sign a URL for {shown}: {}\n{fix}",
+        f.message
+    ))
+}
+
+/// `-o url` needs a cloud store: no store, a shared directory, `file://` or `memory://` have
+/// no URL to share (exit 2).
+fn signable_store(cfg: &barca_core::config::ResolvedConfig) -> Result<(), barca_core::BarcaError> {
+    let root = &cfg.artifact_root;
+    let scheme = root
+        .split_once("://")
+        .map(|(s, _)| s.to_ascii_lowercase())
+        .unwrap_or_default();
+    let cloud = matches!(
+        scheme.as_str(),
+        "s3" | "s3a" | "gs" | "gcs" | "abfs" | "abfss"
+    );
+    if cloud && cfg.remote_artifacts() {
+        return Ok(());
+    }
+    let why = if !cfg.remote_artifacts() {
+        format!("this project has no artifact store; its artifacts are local ({root})")
+    } else if scheme.is_empty() || scheme == "file" {
+        format!("the artifact store {root} is a directory, which has no URL to share")
+    } else {
+        format!("the artifact store {scheme}:// is not a cloud bucket")
+    };
+    Err(barca_core::BarcaError::Usage(format!(
+        "-o url needs a cloud artifact store: {why}\nSet [remote] uri in barca.toml (or \
+         BARCA_REMOTE_URI) to an s3://, gs:// or abfs:// store (barca docs remote), or use \
+         -o path."
+    )))
 }
 
 /// A small json value, pretty-printed, to show under its path.

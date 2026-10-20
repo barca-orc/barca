@@ -110,6 +110,22 @@ selectors remain execution metadata; materialized outputs and DAG inputs travel 
 file reference. Transfer replies preserve digest, size, fetch/mismatch and failure
 attempt/missing fields; the transfer protocol never carries file bytes.
 
+## Value helper requests
+
+`python -m barca._value` is a one-shot helper, not a socket peer: one JSON document on
+stdin, one JSON array on stdout, one answer per item in request order; a fatal error is
+a non-zero exit whose last stderr line is the message. A read request (`barca get -o
+value`) is `{"artifacts": [{"path", "format"}]}`, answered with `{"value"}` or
+`{"error"}`. A sign request (`barca get -o url`, RFC-0011) is
+`{"op": "sign", "version": 1, "objects": [{"uri", "expires", "filename"}]}`, with
+`expires` in whole seconds (1 to 604800) and `filename` the download name; each answer is
+`{"url", "expires_at"}` (RFC 3339 UTC, `Z`) with an optional `note`, or
+`{"error", "kind"}` with `kind` one of `usage`, `missing`, `credentials`, `store`. The
+helper refuses any other sign `version` before signing anything. A signed URL appears
+only in a successful answer on stdout; errors and notes never contain one.
+Conformance: [signed URL tests](../python/tests/test_signed_urls.py) and the answer
+parser tests in [values.rs](../crates/barca-core/src/values.rs).
+
 ## Version policy and conformance
 
 Protocol, package, plan and DB versions are independent. Additive optional fields

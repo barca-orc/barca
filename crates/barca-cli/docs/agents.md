@@ -136,6 +136,7 @@ one per partition key. Read the file, query it with `barca sql`, or ask for the 
 | `barca get total pipeline.py -o path` | only the path, one per line (for `xargs`, `$(...)`) |
 | `barca get total pipeline.py -o value` | only the value, pretty-printed |
 | `barca get total pipeline.py -o value --json` | the JSON result with the value in `final_output` |
+| `barca get total pipeline.py -o url` | a signed HTTPS link per result in a cloud store (experimental; `barca docs remote`) |
 
 `-o path` is the default spelled out: with `--json` it prints the default JSON. `-o value` reads
 json, parquet, CSV and pickle with the reader `barca.get()` uses; a table becomes a list of row
@@ -419,6 +420,9 @@ barca.run("send_email", "pipeline.py", refresh=["report"])
 `barca.plan`, `barca.history` and `barca.stats` return parsed dicts, and `barca.BarcaError` is
 raised on failure; for `get`/`run`/`plan` its `kind`, `code`, `remediation` (and for a failed step
 `node`, `traceback`, `artifact_dir`) come from the error envelope. Or read a parquet `path` directly with duckdb/pandas/polars.
+`barca.signed_url("s3://bucket/key.csv", expires=3600)` (experimental) returns a time-limited
+HTTPS link to any object in S3, GCS or Azure; `barca get <target> -o url` gives one for a result
+(`barca docs remote`, "Sharing a result: signed URLs").
 
 ## Looking at cached results
 
