@@ -99,7 +99,7 @@ def project(tmp_path):
 def test_a_failed_upload_after_the_steps_is_a_warning_and_the_next_get_uploads_it(project):
     root, store, artifacts = project
 
-    proc = cli(root, store, "get", "total", "--json")
+    proc = cli(root, store, "get", "total", "-o", "value", "--json")
 
     # Every step succeeded: exit 0, the value, and one warning naming what and why.
     doc = ok(proc)
@@ -146,7 +146,7 @@ def test_a_failed_upload_after_the_steps_is_a_warning_and_the_next_get_uploads_i
     assert "2 pending uploads from an earlier run, uploaded first" in pretty.stdout, pretty.stdout
 
     # Still failing: a cached get serves the local copy, exits 0 and keeps them pending.
-    again = cli(root, store, "get", "total", "--json")
+    again = cli(root, store, "get", "total", "-o", "value", "--json")
     doc = ok(again)
     assert doc["final_output"] == {"sum": 7}
     assert doc["steps_executed"] == 0
@@ -200,7 +200,7 @@ def test_a_failed_backup_upload_after_the_steps_is_a_warning(tmp_path):
     assert len(list(backups.glob("*Z.db"))) == 1
     read_only(backups)
     try:
-        proc = cli(root, store, "get", "total", "--json")
+        proc = cli(root, store, "get", "total", "-o", "value", "--json")
         doc = ok(proc)
         assert doc["final_output"] == {"sum": 7}
         assert doc["uploads"]["pending"] == 0, doc

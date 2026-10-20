@@ -102,7 +102,7 @@ def test_real_minute_checkpoint_backs_up_progress_and_restores_a_wiped_machine(t
 
         (machine / "release").touch()
         resumed = subprocess.run(
-            [_find_binary(), "get", "pipeline.py", "--agent"],
+            [_find_binary(), "get", "pipeline.py", "--agent", "-o", "value", "--json"],
             cwd=machine,
             env=env,
             text=True,

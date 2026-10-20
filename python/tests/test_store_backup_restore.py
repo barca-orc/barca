@@ -98,7 +98,7 @@ def test_each_unsynced_reason_is_repaired_by_get_without_a_step(project):
     # local_only: the store lost its object.
     stored.unlink()
     assert cache(root, store)["total"] == ("unsynced", "local_only")
-    proc = cli(root, store, "get", "total", "--json")
+    proc = cli(root, store, "get", "total", "-o", "value", "--json")
     doc = ok(proc)
     assert doc["steps_executed"] == 0 and doc["final_output"] == {"sum": 7}
     assert "pipeline.py:total: not in the artifact store; uploading" in proc.stderr, proc.stderr
@@ -110,7 +110,7 @@ def test_each_unsynced_reason_is_repaired_by_get_without_a_step(project):
     assert cache(root, store)["total"] == ("unsynced", "store_only")
     table = cli(root, store, "status", "--pretty")
     assert "unsynced  store only" in table.stdout, table.stdout
-    doc = ok(cli(root, store, "get", "total", "--json"))
+    doc = ok(cli(root, store, "get", "total", "-o", "value", "--json"))
     assert doc["steps_executed"] == 0 and doc["final_output"] == {"sum": 7}
     assert local.read_bytes() == original
     assert cache(root, store)["total"] == ("cached", "materialized")
@@ -118,7 +118,7 @@ def test_each_unsynced_reason_is_repaired_by_get_without_a_step(project):
     # mismatch: the store's object has other bytes for the same code and inputs.
     stored.write_bytes(b'{"sum": 70000}')
     assert cache(root, store)["total"] == ("unsynced", "mismatch")
-    proc = cli(root, store, "get", "total", "--json")
+    proc = cli(root, store, "get", "total", "-o", "value", "--json")
     doc = ok(proc)
     assert doc["steps_executed"] == 0 and doc["final_output"] == {"sum": 7}
     step = {s["id"].rsplit(":", 1)[1]: s for s in doc["steps"]}["total"]
