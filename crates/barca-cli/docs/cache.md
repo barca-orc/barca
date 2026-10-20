@@ -818,6 +818,19 @@ The change is local to the selected environment's metadata database.
 `--env <name>` (or `BARCA_ENV`, or `default_env` in `barca.toml`, else `default`) fully
 separates cache, artifacts and shared state. Use it for dev/staging/prod isolation.
 
+`get`, `run` and `serve` print the environment and artifact store they use once at startup, on
+stderr, when the environment comes from `default_env` in `barca.toml` or an artifact store is
+configured, so a one-off command on a box set up for another environment says so:
+
+```
+[barca] env prod (default_env in barca.toml); artifact store local (.barca/envs/prod/artifacts)
+[barca] env dev (--env); artifact store s3://bucket/proj/dev/artifacts
+```
+
+The source in brackets is `--env`, `BARCA_ENV`, `default_env in barca.toml` or `built-in
+default`. Credentials and signed URI queries are redacted. The line is never on stdout, so
+`--json` output is unchanged. With neither setting, nothing is printed.
+
 ## Metadata schema compatibility
 
 Run history, captured logs and schedules are durable data. Barca records the

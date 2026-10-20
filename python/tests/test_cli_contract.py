@@ -413,7 +413,9 @@ def runs(tmp_path_factory) -> dict:
 
     agent: set[str] = set()
     for line in proc.stderr.splitlines():
-        if line.startswith(("[barca] checking artifact store ", "[barca] uploading ")):
+        if line.startswith(
+            ("[barca] checking artifact store ", "[barca] uploading ", "[barca] env ")
+        ):
             line = line.replace(str(store_case / "store"), "<store>")
             line = re.sub(r"uploading \d+ artifacts", "uploading <n> artifacts", line)
             agent.add(normalize_agent_line(line))

@@ -1271,6 +1271,7 @@ placeholders:
 [barca] <n>/<total> steps | done in <secs>s
 [barca] <n>/<total> steps | failed in <secs>s
 [barca] checking artifact store <store>/default/artifacts (timeout <secs>s)
+[barca] env default (built-in default); artifact store <store>/default/artifacts
 [barca] importing <module>
 [barca] run failed: step 'pipeline.py:broken' failed: ValueError: contract fixture failure; 0 downstream steps skipped (exit 1)
 [barca] step:pipeline.py:broken failed: ValueError: contract fixture failure
@@ -1293,6 +1294,7 @@ placeholders:
 | `[barca] step:<id> failed: <first line of the error>` | a step raised | stable |
 | `[barca] run failed: step '<id>' failed: <first error line>; <n> downstream steps skipped (exit <code>)` | last stderr line of a failed run, after the error envelope (every mode) | stable |
 | `[barca] <n>/<total> steps \| done in <secs>s` | end of a run that executed steps, with or without `--agent`; `failed in` when a step failed, `cancelled after` on a Ctrl-C that arrives while steps are running (never `done` then). The line is about the steps: with an artifact store, a Ctrl-C after the last step finished (while artifacts upload or the shared history is pushed) follows a `done` line, and the exit code (130) and the error envelope still say `cancelled` (`barca docs remote`, "Ctrl-C") | stable |
+| `[barca] env <env> (<source>); artifact store <store>` | once at startup of `get`, `run` and `serve` (every mode) when the environment comes from `default_env` in `barca.toml` or a separate artifact store is configured. `<source>` is `--env`, `BARCA_ENV`, `default_env in barca.toml` or `built-in default`; `<store>` is the store URI with credentials redacted, or `local (<dir>)` | experimental |
 | `[barca] checking artifact store <store> (timeout <secs>s)` | before workers start whenever a separate artifact store is configured, including state-off runs; requires bucket/container-root listing and backend existence access, verifies reachability rather than write permission | experimental |
 | `[barca] uploading <n> artifacts to <store> (timeout <secs>s per attempt); waiting for confirmation` | before awaiting queued artifact uploads (every mode) | experimental |
 | `[barca] still waiting for artifact uploads to <store> (<secs>s)` | every 10 seconds while the upload drain waits (every mode); destinations omit URI passwords and signed query parameters | experimental |

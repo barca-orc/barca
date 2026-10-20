@@ -19,6 +19,9 @@ pub(crate) async fn run_cmd(
     fields: Option<&[String]>,
 ) -> Result<(), barca_core::BarcaError> {
     let cfg = barca_core::config::resolve(env)?;
+    if let Some(line) = cfg.startup_line() {
+        barca_core::errln!("{line}");
+    }
     let file_args: Vec<String> = files.iter().map(|p| p.display().to_string()).collect();
     if dry_run {
         return explain_cmd(

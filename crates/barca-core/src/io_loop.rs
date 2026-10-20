@@ -747,20 +747,21 @@ impl WorkerPool {
                     if let Some(mut handle) = self.workers.remove(&worker_id) {
                         if let Some(in_flight) = handle.leases.pop_front() {
                             let ran_for = handle.front_since.elapsed();
+                            let node_id = coord.item(in_flight).step_id.display();
+                            let status = reap_briefly(&mut handle.child).await;
+                            let error = disconnect_message(&node_id, status, false);
                             if let Some(ref mut ev) = on_event {
                                 ev(RunEvent::StepFinished {
-                                    node_id: coord.item(in_flight).step_id.display(),
+                                    node_id,
                                     ok: false,
                                     elapsed_seconds: Some(ran_for.as_secs_f64()),
-                                    error: Some("worker disconnected".to_string()),
+                                    error: Some(error.clone()),
                                     import_seconds: None,
                                 });
                             }
-                            if let FailureAction::RetryAfter(delay) = coord.on_item_failed(
-                                in_flight,
-                                "worker disconnected".to_string(),
-                                ran_for,
-                            ) {
+                            if let FailureAction::RetryAfter(delay) =
+                                coord.on_item_failed(in_flight, error, ran_for)
+                            {
                                 schedule_retry(&self.event_tx, in_flight, delay);
                             }
                             self.drop_branch_results(in_flight);
@@ -782,25 +783,24 @@ impl WorkerPool {
                         // never ended (#333).
                         let mut fw = self.frozen.swap_remove(at);
                         let ran_for = fw.front_since.elapsed();
+                        let node_id = coord.item(fw.parent_item).step_id.display();
+                        // A stopped process is not reported by `try_wait` (no WUNTRACED), so
+                        // a frozen worker is only named here once it has really exited.
+                        let status = reap_briefly(&mut fw.child).await;
+                        let error = disconnect_message(&node_id, status, true);
                         if let Some(ref mut ev) = on_event {
                             ev(RunEvent::StepFinished {
-                                node_id: coord.item(fw.parent_item).step_id.display(),
+                                node_id,
                                 ok: false,
                                 elapsed_seconds: Some(ran_for.as_secs_f64()),
-                                error: Some(
-                                    "worker disconnected while waiting for parallel() branches"
-                                        .to_string(),
-                                ),
+                                error: Some(error.clone()),
                                 import_seconds: None,
                             });
                         }
                         coord.abandon_group(fw.group_id);
-                        if let FailureAction::RetryAfter(delay) = coord.on_item_failed(
-                            fw.parent_item,
-                            "worker disconnected while it waited for its parallel() branches"
-                                .to_string(),
-                            ran_for,
-                        ) {
+                        if let FailureAction::RetryAfter(delay) =
+                            coord.on_item_failed(fw.parent_item, error, ran_for)
+                        {
                             schedule_retry(&self.event_tx, fw.parent_item, delay);
                         }
                         self.drop_branch_results(fw.parent_item);
@@ -1321,6 +1321,78 @@ async fn exited(child: &mut Child) -> String {
 
 // ─── Process lifecycle ────────────────────────────────────────────────────────
 
+/// How long a disconnect waits for the worker's exit status. The socket can close a moment
+/// before the kernel has finished tearing the process down; a worker that is still alive
+/// after this is reported with the plain "worker disconnected" wording.
+const EXIT_STATUS_WAIT: Duration = Duration::from_millis(300);
+
+/// The exit status of a worker whose socket closed, polled without blocking for up to
+/// [`EXIT_STATUS_WAIT`]. `None` when the process has not exited by then.
+async fn reap_briefly(child: &mut Child) -> Option<std::process::ExitStatus> {
+    let deadline = std::time::Instant::now() + EXIT_STATUS_WAIT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Some(status),
+            Ok(None) if std::time::Instant::now() < deadline => {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// The name of a signal that ends a worker, `signal N` for one not listed.
+fn signal_name(signal: i32) -> String {
+    let name = match signal {
+        libc::SIGKILL => "SIGKILL",
+        libc::SIGSEGV => "SIGSEGV",
+        libc::SIGTERM => "SIGTERM",
+        libc::SIGABRT => "SIGABRT",
+        libc::SIGBUS => "SIGBUS",
+        libc::SIGFPE => "SIGFPE",
+        libc::SIGILL => "SIGILL",
+        libc::SIGINT => "SIGINT",
+        libc::SIGHUP => "SIGHUP",
+        libc::SIGQUIT => "SIGQUIT",
+        libc::SIGPIPE => "SIGPIPE",
+        libc::SIGXCPU => "SIGXCPU",
+        libc::SIGXFSZ => "SIGXFSZ",
+        libc::SIGUSR1 => "SIGUSR1",
+        libc::SIGUSR2 => "SIGUSR2",
+        libc::SIGALRM => "SIGALRM",
+        libc::SIGSYS => "SIGSYS",
+        libc::SIGTRAP => "SIGTRAP",
+        _ => return format!("signal {signal}"),
+    };
+    name.to_string()
+}
+
+/// The step error for a worker that disconnected while running `node` (or, `frozen`, while
+/// it waited for its `parallel()` branches): the exit status when there is one, so a worker
+/// killed by the kernel reads as such and not as a bare disconnect (#433).
+fn disconnect_message(
+    node: &str,
+    status: Option<std::process::ExitStatus>,
+    frozen: bool,
+) -> String {
+    use std::os::unix::process::ExitStatusExt;
+    let waiting = if frozen {
+        " while it waited for its parallel() branches"
+    } else {
+        ""
+    };
+    let how = match status {
+        Some(s) => match (s.signal(), s.code()) {
+            (Some(libc::SIGKILL), _) => "SIGKILL (possibly the OOM killer)".to_string(),
+            (Some(sig), _) => signal_name(sig),
+            (None, Some(code)) => format!("code {code}"),
+            (None, None) => return format!("worker disconnected{waiting}"),
+        },
+        None => return format!("worker disconnected{waiting}"),
+    };
+    format!("worker for {node} exited with {how}{waiting}")
+}
+
 /// Gracefully terminate a child process. Sends SIGTERM first to let the process
 /// flush buffered stdout/stderr, then falls back to SIGKILL after a brief wait.
 fn graceful_kill(child: &mut Child) {
@@ -1485,6 +1557,43 @@ mod tests {
     use super::*;
     use crate::coordinator::ItemSpec;
     use std::collections::HashMap;
+
+    #[test]
+    fn a_dead_workers_exit_status_names_the_signal_or_code() {
+        use std::os::unix::process::ExitStatusExt;
+        let killed = std::process::ExitStatus::from_raw(libc::SIGKILL);
+        assert_eq!(
+            disconnect_message("p.py:big", Some(killed), false),
+            "worker for p.py:big exited with SIGKILL (possibly the OOM killer)"
+        );
+        let segv = std::process::ExitStatus::from_raw(libc::SIGSEGV);
+        assert_eq!(
+            disconnect_message("p.py:big", Some(segv), true),
+            "worker for p.py:big exited with SIGSEGV while it waited for its parallel() branches"
+        );
+        let code = std::process::ExitStatus::from_raw(3 << 8);
+        assert_eq!(
+            disconnect_message("p.py:big", Some(code), false),
+            "worker for p.py:big exited with code 3"
+        );
+        assert_eq!(
+            disconnect_message("p.py:big", None, false),
+            "worker disconnected"
+        );
+        assert_eq!(signal_name(64), "signal 64");
+    }
+
+    #[tokio::test]
+    async fn a_live_process_is_not_reaped_and_a_dead_one_is() {
+        let mut sleeper = crate::helper_proc::spawn_std(Command::new("sleep").arg("5")).unwrap();
+        assert!(reap_briefly(&mut sleeper).await.is_none());
+        sleeper.kill().unwrap();
+        let status = reap_briefly(&mut sleeper)
+            .await
+            .expect("killed process reaped");
+        use std::os::unix::process::ExitStatusExt;
+        assert_eq!(status.signal(), Some(libc::SIGKILL));
+    }
 
     #[tokio::test]
     async fn completed_receipts_do_not_overtake_their_stdout_frames() {

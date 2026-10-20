@@ -374,5 +374,8 @@ def test_a_caller_killed_while_its_branches_run_fails_its_step(root):
     assert code == 1, (code, err)
     doc = json.loads(out)
     assert doc["failed_node"] == "pipeline.py:waits"
-    assert "worker disconnected while it waited for its parallel() branches" in doc["error"], err
+    assert (
+        "worker for pipeline.py:waits exited with SIGKILL (possibly the OOM killer)"
+        " while it waited for its parallel() branches"
+    ) in doc["error"], err
     assert branch_files(root) == []

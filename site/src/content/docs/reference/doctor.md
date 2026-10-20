@@ -24,6 +24,11 @@ The default follows the usual terminal/pipe output choice. Exit 0 means every ch
 exit 3 means at least one prerequisite failed, with the normal error envelope on stderr.
 Argument errors still exit 2. Check names and provider-specific `data` are experimental.
 
+`get`, `run` and `serve` also print the selected environment and artifact store once at
+startup, on stderr, when the environment comes from `default_env` in `barca.toml` or a store
+is configured: `[barca] env prod (default_env in barca.toml); artifact store <store>`. See
+[Configuration](/reference/config/#environments---env).
+
 The Python probe has a 30-second overall deadline. It lists stores and looks up the
 identity behind the selected credentials where supported: AWS STS caller, Azure token
 principal/tenant, Google credential email or token identity, and an access-key fingerprint

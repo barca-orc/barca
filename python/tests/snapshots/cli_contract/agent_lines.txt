@@ -2,6 +2,7 @@
 [barca] <n>/<total> steps | done in <secs>s
 [barca] <n>/<total> steps | failed in <secs>s
 [barca] checking artifact store <store>/default/artifacts (timeout <secs>s)
+[barca] env default (built-in default); artifact store <store>/default/artifacts
 [barca] importing <module>
 [barca] run failed: step 'pipeline.py:broken' failed: ValueError: contract fixture failure; 0 downstream steps skipped (exit 1)
 [barca] step:pipeline.py:broken failed: ValueError: contract fixture failure
