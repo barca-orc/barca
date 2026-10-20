@@ -122,9 +122,13 @@ def total(orders: pl.LazyFrame):
     ref = result["final_output"]["_barca_artifact"]
     assert ref["format"] == "csv" and ref["path"].endswith(".csv")
     assert (tmp_path / "export.csv").read_text().startswith("id,amount\n")
-    assert cli("get", "total", "pipeline.py", "--json")["final_output"] == {"total": 21.5}
+    assert cli("get", "total", "pipeline.py", "-o", "value", "--json")["final_output"] == {
+        "total": 21.5
+    }
     # Cache hits must retain their CSV format and remain readable.
-    assert cli("get", "total", "pipeline.py", "--json")["final_output"] == {"total": 21.5}
+    assert cli("get", "total", "pipeline.py", "-o", "value", "--json")["final_output"] == {
+        "total": 21.5
+    }
     status = cli("status", "orders", "pipeline.py", "--json", "--sample", "1")
     assert "csv" in json.dumps(status) and "9.5" in json.dumps(status)
     assert cli("sql", "select sum(amount) as total from orders", "pipeline.py", "--json")[

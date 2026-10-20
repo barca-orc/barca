@@ -13,9 +13,11 @@ pub(crate) async fn explain_cmd(
     label: &str,
     mode: OutputMode,
     fields: Option<&[String]>,
+    partition: Option<&barca_core::selection::PartitionSelection>,
 ) -> Result<(), barca_core::BarcaError> {
     let result =
-        barca_core::queries::explain(cfg, targets, file_args, python, policy, label).await?;
+        barca_core::queries::explain(cfg, targets, file_args, python, policy, label, partition)
+            .await?;
     super::emit(barca_core::report::render_explain(
         &result,
         label,
@@ -106,13 +108,12 @@ pub(crate) fn read_final_output(oref: &barca_core::dispatch::OutputRef) -> serde
 
 /// Drain streamed events through completion; stdout remains exclusively the command result.
 pub(crate) fn user_logs(
-    mode: OutputMode,
+    show: bool,
 ) -> (
     tokio::sync::mpsc::UnboundedSender<barca_core::RunEvent>,
     tokio::task::JoinHandle<()>,
 ) {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    let show = !matches!(mode, OutputMode::Json);
     let task = tokio::spawn(async move {
         while let Some(event) = rx.recv().await {
             if show && let barca_core::RunEvent::Log { node_id, line } = event {

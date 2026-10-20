@@ -148,8 +148,9 @@ Poll `GET /status/{run_id}` until `status` reaches a terminal state (`complete`,
 ```
 
 `result.final_output` is always a pointer to the artifact file (`path`, `format`,
-`size_bytes`, `elapsed_seconds`), for json results too. The command line prints a json value
-inline; the server does not. Read the file at `path`, relative to the project root.
+`size_bytes`, `elapsed_seconds`), for json results too, as `barca get --json` prints it (the
+command line also has `-o value`). For a partitioned target the server still returns the first
+key's pointer; the command line returns every key. Read the file at `path`, relative to the project root.
 
 `POST /run/{target}` and `POST /get/{target}` check the target before they start a run, with
 the check `barca run` and `barca get` make (one function decides for both; a wrong-kind answer

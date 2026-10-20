@@ -56,6 +56,6 @@ def test_step_prints_go_to_stderr_and_stdout_is_pure_json(tmp_path: Path) -> Non
 
 def test_get_stdout_is_pure_json_with_printing_asset(tmp_path: Path) -> None:
     (tmp_path / "p.py").write_text(PIPELINE)
-    r = _barca(tmp_path, "get", "noisy", "p.py", "--json")
+    r = _barca(tmp_path, "get", "noisy", "p.py", "-o", "value", "--json")
     assert r.returncode == 0, r.stderr
     assert json.loads(r.stdout)["final_output"] == {"n": 1}

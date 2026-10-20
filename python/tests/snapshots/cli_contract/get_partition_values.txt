@@ -1,0 +1,19 @@
+# barca get per_key pipeline.py --partition k=a -o value --json  (stdout, exit 0)
+elapsed_seconds : number
+final_output : object
+final_output.<key> : <user value>
+phases : integer
+run_id : string
+status : string
+steps : array
+steps[] : object
+steps[].id : string
+steps[].kind : string
+steps[].partitions : object
+steps[].partitions.cached : integer
+steps[].partitions.total : integer
+steps[].partitions.will_run : integer
+steps[].partitions.will_run_keys : array
+steps[].status : string
+steps_executed : integer
+warnings : array

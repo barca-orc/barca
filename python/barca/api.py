@@ -150,6 +150,19 @@ def _read_output(output_ref: Any) -> Any:
     return output_ref
 
 
+def _read_final_output(output: Any) -> Any:
+    """Read `final_output` from `barca get --json`: one artifact pointer, or for a partitioned
+    target a mapping of partition key (``"region=emea"``) to pointer, read as key to value."""
+    if (
+        isinstance(output, dict)
+        and output
+        and "_barca_artifact" not in output
+        and all(isinstance(v, dict) and "_barca_artifact" in v for v in output.values())
+    ):
+        return {key: _read_output(ref) for key, ref in output.items()}
+    return _read_output(output)
+
+
 def _refresh_args(refresh: list[str] | None, refresh_all: bool, cascade: bool) -> list[str]:
     """The refresh flags shared by ``get`` and ``run``."""
     if refresh_all:
@@ -168,6 +181,7 @@ def get(
     refresh: list[str] | None = None,
     refresh_all: bool = False,
     cascade: bool = True,
+    partition: "str | dict[str, Any] | None" = None,
 ) -> Any:
     """Get asset value(s).
 
@@ -181,14 +195,21 @@ def get(
     them; ``cascade=False`` (``--no-cascade``) re-materializes only the named
     ones. ``refresh_all=True`` re-materializes every asset in the cone.
 
+    A partitioned target returns a dict of partition key (``"region=emea"``) to
+    value, for every key or for the keys ``partition`` selects: ``"region=emea,amer"``
+    or a dict for compound keys, ``{"region": "emea", "day": ["d1", "d2"]}``
+    (``--partition``).
+
     Returns the deserialized value of the target asset directly.
     """
     args: list[str] = ["get", target_or_file, *extra_files, "--json"]
     args += _refresh_args(refresh, refresh_all, cascade)
+    if partition is not None:
+        args += ["--partition", partition if isinstance(partition, str) else json.dumps(partition)]
     result = _exec(args)
     output = result.get("final_output")
     if output is not None:
-        return _read_output(output)
+        return _read_final_output(output)
     return output
 
 

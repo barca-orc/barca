@@ -78,6 +78,35 @@ def summary(all_sales: list[dict]) -> dict:
   upgrading; with at least as many workers as the two assets have keys together, nothing
   changes.
 
+## Getting partitions
+
+`barca get` on a partitioned asset returns every key, sorted by key: one artifact path per key,
+and in JSON a `final_output` object keyed by partition key (`dimension=value`, dimensions sorted
+and joined with `,` for a compound key). `-o value` maps each key to its value instead.
+
+```bash
+barca get sales pipeline.py                                  # one path per key
+barca get sales pipeline.py -o value                         # {"region=amer": {...}, "region=apac": {...}, "region=emea": {...}}
+barca get sales pipeline.py --partition region=emea,amer     # only these keys run and are returned
+barca get sales pipeline.py --partition region=emea --refresh sales   # recompute only emea
+barca get margin pipeline.py --partition '{"region":"apac"}'           # a JSON object (for compound keys)
+```
+
+- `--partition DIMENSION=VALUE[,VALUE...]` selects keys of the target; a JSON object selects on
+  several dimensions, each a value or a list of values. A key is selected when every named
+  dimension has one of the listed values.
+- Only the selected keys of the target are computed, returned and refreshed. The rest of the
+  cone is planned as without the flag: `barca get margin --partition region=apac` brings every
+  key of `sales` up to date (from cache when fresh), and `--refresh sales` with it recomputes
+  every key of `sales`.
+- A usage error (exit 2), before anything runs: no target, a target that is not partitioned or
+  lacks a named dimension, a value that is not one of the target's keys (when its keys are known
+  before the run), or a target that another target of the same run reads.
+- The keys of a `partitions_from` target are known only after its source ran. A selection that
+  matches none of them returns no key, with a warning on stderr.
+- When a key fails, the run fails (exit 1, `failed_node` names the key). The keys that succeeded
+  are returned; a failed key has no artifact and runs again on the next `get`.
+
 See also: `barca docs sinks` (one file per partition), `barca docs examples/partitions`.
 
 `barca plan` uses the same worker-pool size as execution: available cores, overridden

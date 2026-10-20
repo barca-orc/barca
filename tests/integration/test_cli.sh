@@ -20,8 +20,8 @@ trap cleanup EXIT
 # Extract the JSON line from barca stdout (last line; user prints come before it).
 barca_json() { echo "$1" | tail -1; }
 
-# Extract a field from the final_output JSON.
-final() { barca_json "$1" | python3 -c "import json,sys; d=json.load(sys.stdin); print(json.dumps(d['final_output']))"; }
+# The target's value: `barca get` prints a pointer to the artifact; read the file it names.
+final() { barca_json "$1" | python3 -c "import json,sys; d=json.load(sys.stdin)['final_output']; print(json.dumps(json.load(open(d['_barca_artifact']['path']))))"; }
 
 # ─── Test: trivial asset ────────────────────────────────────────────────────
 echo "=== Trivial asset ==="

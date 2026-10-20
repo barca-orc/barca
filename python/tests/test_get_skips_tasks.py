@@ -117,7 +117,7 @@ ASSETS_AND_SENSORS = {"feed", "lonely", "src", "mid"}
 
 class TestBareGet:
     def test_skips_tasks(self, project):
-        result = ok(barca_cli(project, "get", "pipeline.py"))
+        result = ok(barca_cli(project, "get", "pipeline.py", "-o", "value", "--json"))
         assert names(result) == ASSETS_AND_SENSORS
         assert ran(project) == ASSETS_AND_SENSORS
         # The final value is the last asset's, not a task's.

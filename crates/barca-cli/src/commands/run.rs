@@ -22,11 +22,11 @@ pub(crate) async fn run_cmd(
     let file_args: Vec<String> = files.iter().map(|p| p.display().to_string()).collect();
     if dry_run {
         return explain_cmd(
-            &cfg, &targets, &file_args, python, policy, "run", mode, fields,
+            &cfg, &targets, &file_args, python, policy, "run", mode, fields, None,
         )
         .await;
     }
-    let (events, log_task) = super::execute::user_logs(mode);
+    let (events, log_task) = super::execute::user_logs(!matches!(mode, OutputMode::Json));
     if targets.len() > 1 {
         let result = barca_core::commands::run_many_streaming(
             &cfg,

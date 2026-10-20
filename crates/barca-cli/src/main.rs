@@ -121,6 +121,7 @@ async fn run_cli(cli: Cli, ctx: &Context) -> Result<(), CliError> {
             args,
             output,
             format,
+            partition,
             refresh,
             no_cascade,
             refresh_all,
@@ -130,7 +131,12 @@ async fn run_cli(cli: Cli, ctx: &Context) -> Result<(), CliError> {
             env,
         } => {
             check_order("get", &args)?;
-            let output = get_run_mode(output, format, fields.as_deref())?;
+            let output = get_mode(output, format, fields.as_deref())?;
+            let partition = partition
+                .as_deref()
+                .map(barca_core::selection::PartitionSelection::parse)
+                .transpose()
+                .map_err(|msg| CliError::from_prose(ErrorKind::Usage, format!("error: {msg}")))?;
             let (target, files) = split_target_files(args);
             check_py_files(&files, refresh.as_deref())?;
             if files.is_empty() {
@@ -154,6 +160,7 @@ async fn run_cli(cli: Cli, ctx: &Context) -> Result<(), CliError> {
                 &python,
                 output,
                 policy,
+                partition,
                 dry_run,
                 agent,
                 fields.as_deref(),

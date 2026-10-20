@@ -332,14 +332,14 @@ def test_each_reported_case_once_per_step_input(tmp_path):
 
 
 def test_a_lazy_input_is_not_said_to_be_loaded(tmp_path):
-    proc = barca(write(tmp_path, REPORTED), "get", "lazy_polars", "pipeline.py", "--json")
+    proc = barca(write(tmp_path, REPORTED), "get", "lazy_polars", "pipeline.py", "-o", "value", "--json")
     assert proc.returncode == 0, proc.stderr
     [w] = json_warnings(proc)
     assert "loaded in full" not in w["message"]
     assert "annotated as a lazy input (polars_lazy)" in w["message"]
     assert "opened but not read" in w["message"]
     # The eager one in the same file is.
-    [eager] = json_warnings(barca(tmp_path, "get", "dropped", "pipeline.py", "--json"))
+    [eager] = json_warnings(barca(tmp_path, "get", "dropped", "pipeline.py", "-o", "value", "--json"))
     assert "loaded in full each time the step runs" in eager["message"]
 
 
@@ -361,7 +361,7 @@ def test_nothing_is_reported_for_uses_the_analysis_cannot_see_and_documented_exc
         ("cache_trigger", 1),
         ("ordering_only", 1),
     ]:
-        run = barca(tmp_path, "get", target, "pipeline.py", "--json")
+        run = barca(tmp_path, "get", target, "pipeline.py", "-o", "value", "--json")
         assert run.returncode == 0, (target, run.stderr)
         out = json.loads(run.stdout)
         assert (out["final_output"], out["warnings"]) == (value, []), target
@@ -380,7 +380,7 @@ def test_an_input_read_by_name_from_a_string_is_used(tmp_path):
         ("pandas_query", 7),
         ("query_from_a_constant", 10),  # the query is not in the body: barca cannot tell
     ]:
-        run = barca(cwd, "get", target, "pipeline.py", "--json")
+        run = barca(cwd, "get", target, "pipeline.py", "-o", "value", "--json")
         assert run.returncode == 0, (target, run.stderr)
         out = json.loads(run.stdout)
         assert (out["final_output"], out["warnings"]) == (value, []), target
@@ -408,7 +408,7 @@ def test_the_underscore_prefix_declares_an_input_unused_on_purpose(tmp_path):
         'def report(raw: dict, _other) -> int:\n    return [raw["n"], _other]',
     )
     assert source != PIPELINE
-    first = barca(write(tmp_path, source), "get", "report", "pipeline.py", "--json")
+    first = barca(write(tmp_path, source), "get", "report", "pipeline.py", "-o", "value", "--json")
     assert first.returncode == 0, first.stderr
     out = json.loads(first.stdout)
     assert out["warnings"] == [] and stderr_warnings(first) == []
@@ -416,7 +416,7 @@ def test_the_underscore_prefix_declares_an_input_unused_on_purpose(tmp_path):
     assert [s["id"] for s in out["steps"]].index("pipeline.py:other") < len(out["steps"]) - 1
 
     write(tmp_path, source.replace('{"m": 2}', '{"m": 3}'))
-    second = json.loads(barca(tmp_path, "get", "report", "pipeline.py", "--json").stdout)
+    second = json.loads(barca(tmp_path, "get", "report", "pipeline.py", "-o", "value", "--json").stdout)
     status = {s["id"]: s["status"] for s in second["steps"]}
     assert status["pipeline.py:other"] == "ran"
     assert status["pipeline.py:report"] == "ran"  # still a cache dependency
@@ -429,10 +429,10 @@ def test_the_underscore_prefix_declares_an_input_unused_on_purpose(tmp_path):
 def test_a_target_whose_cone_has_no_unused_input_reports_nothing(tmp_path):
     cwd = write(tmp_path, PIPELINE)
     for args in (
-        ["get", "unrelated", "pipeline.py", "--json"],
+        ["get", "unrelated", "pipeline.py", "-o", "value", "--json"],
         ["get", "unrelated", "pipeline.py", "--dry-run", "--json"],
-        ["get", "unrelated,raw", "pipeline.py", "--json"],
-        ["get", "unrelated", "pipeline.py", "--agent", "--json"],
+        ["get", "unrelated,raw", "pipeline.py", "-o", "value", "--json"],
+        ["get", "unrelated", "pipeline.py", "--agent", "-o", "value", "--json"],
     ):
         proc = barca(cwd, *args)
         assert proc.returncode == 0, proc.stderr
@@ -444,14 +444,14 @@ def test_a_target_whose_cone_has_no_unused_input_reports_nothing(tmp_path):
     "args",
     [
         ["plan", "pipeline.py"],
-        ["get", "report", "pipeline.py", "--json"],
+        ["get", "report", "pipeline.py", "-o", "value", "--json"],
         ["get", "report", "pipeline.py", "--dry-run", "--json"],
-        ["get", "pipeline.py", "--json"],  # no target: every asset
+        ["get", "pipeline.py", "-o", "value", "--json"],  # no target: every asset
         ["get", "pipeline.py", "--dry-run", "--json"],
-        ["get", "report,unrelated", "pipeline.py", "--json"],
+        ["get", "report,unrelated", "pipeline.py", "-o", "value", "--json"],
         ["get", "report,unrelated", "pipeline.py", "--dry-run", "--json"],
-        ["get", "report", "pipeline.py", "--agent", "--json"],
-        ["get", "report", "pipeline.py", "--json", "--fields", "id"],
+        ["get", "report", "pipeline.py", "--agent", "-o", "value", "--json"],
+        ["get", "report", "pipeline.py", "-o", "value", "--json", "--fields", "id"],
         ["run", "publish", "pipeline.py", "--json"],  # upstream of the task
         ["run", "publish", "pipeline.py", "--dry-run", "--json"],
         ["run", "publish", "pipeline.py", "--agent", "--json"],
@@ -487,8 +487,8 @@ def test_human_output_gets_the_stderr_line_and_stdout_is_unchanged(tmp_path, arg
 def test_a_cached_step_is_reported_on_every_run(tmp_path):
     """The list depends on the source and the target only, never on what is cached."""
     cwd = write(tmp_path, PIPELINE)
-    first = barca(cwd, "get", "report", "pipeline.py", "--json")
-    second = barca(cwd, "get", "report", "pipeline.py", "--json")
+    first = barca(cwd, "get", "report", "pipeline.py", "-o", "value", "--json")
+    second = barca(cwd, "get", "report", "pipeline.py", "-o", "value", "--json")
     assert json.loads(second.stdout)["steps_executed"] == 0
     assert json_warnings(second) == json_warnings(first) != []
     assert stderr_warnings(second) == stderr_warnings(first)
@@ -517,7 +517,7 @@ def test_a_failed_run_keeps_exit_1_and_still_carries_the_warnings(tmp_path):
 
 
 def test_a_usage_error_keeps_exit_2_and_prints_no_warning(tmp_path):
-    proc = barca(write(tmp_path, PIPELINE), "get", "nope", "pipeline.py", "--json")
+    proc = barca(write(tmp_path, PIPELINE), "get", "nope", "pipeline.py", "-o", "value", "--json")
     assert proc.returncode == 2
     assert stderr_warnings(proc) == []
     assert proc.stdout == ""
@@ -655,7 +655,7 @@ def test_mixed_concatenations_aliases_and_keyword_queries_are_not_reported(tmp_p
         "entry_point_bound_to_a_local",
         "plain_part_outside_any_call",
     ):
-        run = barca(cwd, "get", target, "pipeline.py", "--json")
+        run = barca(cwd, "get", target, "pipeline.py", "-o", "value", "--json")
         assert run.returncode == 0, (target, run.stderr)
         out = json.loads(run.stdout)
         assert (out["final_output"], out["warnings"]) == (60, []), target
@@ -715,7 +715,7 @@ def test_a_call_on_a_project_module_is_never_narrowed_but_a_known_package_is(tmp
         ("own_query_helper", 60, []),
         ("arrow_table", 2, [("pipeline.py:arrow_table", "orders")]),
     ]:
-        run = barca(tmp_path, "get", target, "pipeline.py", "--json")
+        run = barca(tmp_path, "get", target, "pipeline.py", "-o", "value", "--json")
         assert run.returncode == 0, (target, run.stderr)
         out = json.loads(run.stdout)
         assert (out["final_output"], pairs(out["warnings"])) == (value, expected), target
@@ -771,13 +771,13 @@ def really_unused(orders: pd.DataFrame) -> int:
     return 7
 """.replace(bodies["capture"], bodies[binding])
     cwd = write(tmp_path, source)
-    run = barca(cwd, "get", "shadowed", "pipeline.py", "--json")
+    run = barca(cwd, "get", "shadowed", "pipeline.py", "-o", "value", "--json")
     assert run.returncode == 0, run.stderr
     output = json.loads(run.stdout)
     assert output["final_output"] == 60
     assert output["warnings"] == []
     assert stderr_warnings(run) == []
-    control = barca(cwd, "get", "really_unused", "pipeline.py", "--json")
+    control = barca(cwd, "get", "really_unused", "pipeline.py", "-o", "value", "--json")
     assert control.returncode == 0, control.stderr
     assert json.loads(control.stdout)["final_output"] == 7
     assert pairs(json_warnings(control)) == [("pipeline.py:really_unused", "orders")]

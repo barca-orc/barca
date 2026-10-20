@@ -44,7 +44,7 @@ def project(tmp_path) -> Path:
 
 def get(project: Path, *flags: str, keys: str = "a,b,c") -> dict:
     proc = subprocess.run(
-        [_find_binary(), "get", "summary", "pipeline.py", *flags],
+        [_find_binary(), "get", "summary", "pipeline.py", *flags, "-o", "value", "--json"],
         cwd=project,
         env={**os.environ, "BARCA_TEST_KEYS": keys},
         capture_output=True,

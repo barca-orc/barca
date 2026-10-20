@@ -19,6 +19,8 @@ import pytest
 
 from barca.api import _find_binary
 
+from .get_values import value_args
+
 PIPELINE = """
 from pathlib import Path
 from barca import asset, partitions, sensor, task
@@ -65,7 +67,11 @@ def project(tmp_path) -> Path:
 
 def run(project: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
-        [_find_binary(), *args], cwd=project, env=os.environ, capture_output=True, text=True
+        [_find_binary(), *value_args(args)],
+        cwd=project,
+        env=os.environ,
+        capture_output=True,
+        text=True,
     )
 
 

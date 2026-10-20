@@ -100,7 +100,7 @@ def ran(result: dict) -> dict[str, list[str] | bool]:
 
 def get(project: Path, target: str = "report") -> dict:
     proc = subprocess.run(
-        [_find_binary(), "get", target, "pipeline.py"], cwd=project, capture_output=True, text=True
+        [_find_binary(), "get", target, "pipeline.py", "-o", "value", "--json"], cwd=project, capture_output=True, text=True
     )
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout.strip().splitlines()[-1])
@@ -327,7 +327,7 @@ def test_an_unknown_argument_edit_is_rejected_before_using_the_cache(project):
     assert get(project, "end")["steps_executed"] == 0
     write(project, chain('@asset(inputs={"x": a}, mode="fast")'))
     proc = subprocess.run(
-        [_find_binary(), "get", "end", "pipeline.py"],
+        [_find_binary(), "get", "end", "pipeline.py", "-o", "value", "--json"],
         cwd=project,
         capture_output=True,
         text=True,

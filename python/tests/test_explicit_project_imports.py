@@ -8,6 +8,8 @@ import sys
 import pytest
 from barca.api import _find_binary
 
+from .get_values import value_args
+
 SCRUB = ("BARCA_", "AWS_", "AZURE_", "GOOGLE_", "FSSPEC_")
 
 
@@ -20,7 +22,7 @@ def env(pool=None):
 
 def cli(root, *args, pool=None):
     return subprocess.run(
-        [_find_binary(), *args],
+        [_find_binary(), *value_args(args)],
         cwd=root,
         env=env(pool),
         capture_output=True,

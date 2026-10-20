@@ -46,7 +46,7 @@ outside the `GENERATED` blocks is written by hand.
 | `barca doctor` and its JSON | prerequisite check names and provider-specific identity data may evolve; failed checks exit 3 with the report on stdout and the standard error envelope on stderr |
 | `barca plan` and its JSON | prints the planner's internal phase/stream layout, which changes with scheduling work (`reason` is an object, `{"type": "initial"}` or `{"type": "fan_in", "node_id": ...}`) |
 | `barca serve` and all its flags | the HTTP API and scheduler are young: no auth, no shared remote state, routes may change. Its JSON is the engine's own serialization (for example `GET /assets` has `freshness: {"type": "Always"}` and `stats.node_id`), not the CLI's |
-| `get -o/--output`, `run -o/--output` | kept for compatibility; `--json` / `--pretty` are the canonical spelling |
+| `get -o json\|pretty`, `run -o/--output` | kept for compatibility; `--json` / `--pretty` are the canonical spelling. `get -o path\|value` is stable |
 | `status --sample` and `nodes[].shape` | read by a Python helper (`barca._inspect`) whose output may grow per format; the wording of `shape.note` (an unreadable, too large or unreachable artifact) may change |
 | `BARCA_PROGRESS_SECS`, `BARCA_POOL_SIZE`, `BARCA_COMM_COST_SECONDS`, `BARCA_TRACE_TIMING` | tuning and benchmarking knobs |
 | `BARCA_TELEMETRY` and the spans it sends | new: span names, tags and metrics may change |
@@ -68,7 +68,7 @@ outside the `GENERATED` blocks is written by hand.
 <!-- BEGIN GENERATED commands -->
 | Command | Arguments | Stability | Purpose |
 |---|---|---|---|
-| `barca get` | `[<ARGS>...]` | stable | Get asset value(s) — cache-aware, runs only the needed subgraph |
+| `barca get` | `[<ARGS>...]` | stable | Get assets — cache-aware, runs only the needed subgraph; prints their artifact paths |
 | `barca run` | `<ARGS>...` | stable | Run a task and its dependency cone — the task always re-runs |
 | `barca plan` | `[<FILES>...]` | experimental: prints the planner's internal phase/stream layout, which changes with scheduling work | Parse source files and emit the execution plan as JSON |
 | `barca doctor` | `[<FILES>...]` | experimental: new prerequisite report; check names and provider-specific data may evolve | Diagnose project prerequisites without running pipeline steps |
@@ -121,15 +121,16 @@ default, and any aliases.
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
 | `<ARGS>...` | - | - | stable | [TARGET[,TARGET...]] [file.py\|dir/ ...] — both optional: no target gets every asset and sensor; no files reads the whole project (`barca docs discovery`) |
-| `-o, --output` | `json\|value\|pretty` | - | experimental: kept for compatibility; --json / --pretty are the canonical spelling | Output format (kept for compatibility; --json / --pretty are the canonical spelling) |
+| `-o, --output` | `path\|value\|json\|pretty` | - | stable | What to print: artifact paths (the default) or values. Alone, -o path\|value prints only that; with --json, it chooses what `final_output` holds |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
+| `--partition` | `KEY=VALUE[,VALUE]\|JSON` | - | stable | Select keys of a partitioned target: `region=emea,amer`, or a JSON object for compound keys (`{"region": "emea", "day": "2026-10-14"}`). Only those keys are computed and returned, and --refresh of the target refreshes only them |
 | `--refresh` | comma-separated names | - | stable | Assets to force re-materialize, as ONE comma-separated list (`--refresh a,b`, not `--refresh a b`); the target itself may be named. Every asset downstream of them in the target's cone re-materializes too (see --no-cascade) |
 | `--no-cascade` | - | default `false` | stable | With --refresh: re-materialize only the named assets, not what is downstream of them. Cached downstream assets then do not reflect the refresh; barca warns |
 | `--refresh-all` | - | default `false` | stable | Force re-materialize EVERY asset in the target's cone (nothing comes from cache) |
 | `--dry-run` | - | default `false` | stable | Show what this command would do (each step cached or will-run, and why) without executing steps or recording a run (shared history may synchronize) |
 | `--agent` | - | default `false` | stable | Agent-friendly output: plain structured progress lines instead of visual progress bar |
-| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `partitions`, `env` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones |
+| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `partitions`, `env` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Implies --json; not valid with --pretty or -o pretty. An unknown key is a usage error listing the valid ones |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
 
 #### barca run
@@ -273,13 +274,44 @@ default, and any aliases.
 `get`, `run`, `logs`, `list`, `status`, `history` and `stats` choose JSON or human output on stdout by
 one rule, first match wins:
 
-1. a flag: `--json` or `--pretty` (on `get`/`run` also `-o json|value|pretty`); `--fields`
-   implies JSON and is a usage error with `--pretty`, `-o pretty` or `-o value`;
+1. a flag: `--json` or `--pretty` (on `get`/`run` also `-o json|pretty`, which cannot be
+   combined with them); `--fields` implies JSON and is a usage error with `--pretty` or
+   `-o pretty` (on `run` also with `-o value`);
 2. `BARCA_OUTPUT=json|pretty`;
 3. the terminal: stdout is a TTY, human output; anything else, JSON.
 
 `plan` always prints JSON. `docs` prints markdown unless `--json` or `--fields` is given. Errors
 follow the same rule: in JSON mode they are the envelope on stderr (see Errors).
+
+### What `get` returns (stable)
+
+`barca get` returns artifact paths: one per target, one per partition key. `-o path` (the
+default) and `-o value` choose what is returned. Alone, `-o path` prints only the paths, one per
+line, and `-o value` only the value, pretty-printed; with `--json` (or `--fields`) they choose
+what `final_output` holds, and with `--pretty` they add the human summary. Without `-o`, the
+rule above chooses between the JSON result and the summary, and paths are returned. In a
+terminal the summary previews a small json value (at most 10 lines) under its path; the preview
+is human output, not contract. `run` keeps `-o value`, the task's value, and prints a task's
+value in `final_output` as before.
+
+| Invocation | stdout |
+|---|---|
+| `get` (piped), `get --json`, `get -o path --json` | the JSON result, `final_output` a pointer `{"_barca_artifact": {"path", "format", "size_bytes"}}` for every format |
+| `get -o value --json` | the JSON result, `final_output` the value |
+| `get -o path` | the paths, one per line |
+| `get -o value` | the value, pretty-printed |
+
+A partitioned target returns every key, or the keys `--partition` selects
+(`DIMENSION=VALUE[,VALUE...]`, or a JSON object of dimension to value or list of values). Its
+`final_output` is an object keyed by partition key (`dim=value`, dimensions sorted and joined
+with `,`), sorted, each a pointer or (under `-o value`) a value; `-o path` prints one line per
+key in the same order. A `--partition` that names no target, a target that is not partitioned
+or has no such dimension, a value that is not one of its keys, or a target another target of the
+run reads, is a usage error (exit 2) before anything runs.
+
+Up to 0.24, `final_output` held the value of a json artifact and a terminal printed the value;
+`-o value` (with `--json` for the JSON line) prints it now. A partitioned target returned the
+value of its first key only.
 
 ## Environment variables
 
@@ -463,7 +495,11 @@ the set of `kind` values grows additively.
 | Key | Type | Present |
 |---|---|---|
 | `elapsed_seconds` | number | always |
-| `final_output` | `<user value>` | always |
+| `final_output` | object | always |
+| `final_output._barca_artifact` | object | always |
+| `final_output._barca_artifact.format` | string | always |
+| `final_output._barca_artifact.path` | string | always |
+| `final_output._barca_artifact.size_bytes` | integer | always |
 | `phases` | integer | always |
 | `run_id` | string | always |
 | `status` | string | always |
@@ -484,8 +520,9 @@ the set of `kind` values grows additively.
 <!-- END GENERATED schema get -->
 
 - `status` is `success` (see the failed result line below for `failed`).
-- `steps_executed` is 0 when everything came from cache. `final_output` is the target's value
-  (with no target, the last asset's), or `null` for a task that returned nothing.
+- `steps_executed` is 0 when everything came from cache. On `get`, `final_output` is the
+  pointer to the target's artifact (with no target, the last asset's); on `run` it is the
+  task's value, or `null` for a task that returned nothing.
 - `steps[]`: `status` is `ran`, `cached`, `partial` or `failed`; `reason` (why it ran) is one of
   `task`, `sensor`, `refresh`, `refresh_cascade`, `refresh_all`, `not_materialized`,
   `artifact_missing`, `partitions_unknown`, `sensor_output_unknown`, with `detail` in words.
@@ -512,7 +549,11 @@ avoid depending on CI machine speed. `barca docs status` explains the timing sco
 | Key | Type | Present |
 |---|---|---|
 | `elapsed_seconds` | number | always |
-| `final_output` | `<user value>` | always |
+| `final_output` | object | always |
+| `final_output._barca_artifact` | object | always |
+| `final_output._barca_artifact.format` | string | always |
+| `final_output._barca_artifact.path` | string | always |
+| `final_output._barca_artifact.size_bytes` | integer | always |
 | `phases` | integer | always |
 | `run_id` | string | always |
 | `status` | string | always |
@@ -531,7 +572,31 @@ avoid depending on CI machine speed. `barca docs status` explains the timing sco
 | `warnings` | array | always |
 <!-- END GENERATED schema get_timing_retry -->
 
-For a parquet or pickle artifact, `final_output` is a pointer instead of the value:
+Under `-o value --json`, `final_output` is the value instead (a table is a list of row
+objects):
+
+<!-- BEGIN GENERATED schema get_value -->
+| Key | Type | Present |
+|---|---|---|
+| `elapsed_seconds` | number | always |
+| `final_output` | `<user value>` | always |
+| `phases` | integer | always |
+| `run_id` | string | always |
+| `status` | string | always |
+| `steps` | array | always |
+| `steps[]` | object | always |
+| `steps[].artifact` | string | always |
+| `steps[].env` | object | sometimes |
+| `steps[].env.<name>` | null \| string | always |
+| `steps[].id` | string | always |
+| `steps[].kind` | string | always |
+| `steps[].run_hash` | string | always |
+| `steps[].status` | string | always |
+| `steps_executed` | integer | always |
+| `warnings` | array | always |
+<!-- END GENERATED schema get_value -->
+
+A parquet or pickle artifact has the same pointer as a json one:
 
 <!-- BEGIN GENERATED schema get_artifact_pointer -->
 | Key | Type | Present |
@@ -566,7 +631,11 @@ A partitioned step carries `partitions` (counted in keys; `will_run_keys` lists 
 | Key | Type | Present |
 |---|---|---|
 | `elapsed_seconds` | number | always |
-| `final_output` | `<user value>` | always |
+| `final_output` | object | always |
+| `final_output._barca_artifact` | object | always |
+| `final_output._barca_artifact.format` | string | always |
+| `final_output._barca_artifact.path` | string | always |
+| `final_output._barca_artifact.size_bytes` | integer | always |
 | `phases` | integer | always |
 | `run_id` | string | always |
 | `status` | string | always |
@@ -589,6 +658,61 @@ A partitioned step carries `partitions` (counted in keys; `will_run_keys` lists 
 | `steps_executed` | integer | always |
 | `warnings` | array | always |
 <!-- END GENERATED schema get_partitioned -->
+
+A partitioned target (`get per_key`) returns every key: `final_output` is an object keyed by
+partition key, each a pointer.
+
+<!-- BEGIN GENERATED schema get_partition_keys -->
+| Key | Type | Present |
+|---|---|---|
+| `elapsed_seconds` | number | always |
+| `final_output` | object | always |
+| `final_output.<key>` | object | always |
+| `final_output.<key>._barca_artifact` | object | always |
+| `final_output.<key>._barca_artifact.format` | string | always |
+| `final_output.<key>._barca_artifact.path` | string | always |
+| `final_output.<key>._barca_artifact.size_bytes` | integer | always |
+| `phases` | integer | always |
+| `run_id` | string | always |
+| `status` | string | always |
+| `steps` | array | always |
+| `steps[]` | object | always |
+| `steps[].id` | string | always |
+| `steps[].kind` | string | always |
+| `steps[].partitions` | object | always |
+| `steps[].partitions.cached` | integer | always |
+| `steps[].partitions.total` | integer | always |
+| `steps[].partitions.will_run` | integer | always |
+| `steps[].partitions.will_run_keys` | array | always |
+| `steps[].status` | string | always |
+| `steps_executed` | integer | always |
+| `warnings` | array | always |
+<!-- END GENERATED schema get_partition_keys -->
+
+With `--partition k=a -o value --json`, only the selected keys, each its value:
+
+<!-- BEGIN GENERATED schema get_partition_values -->
+| Key | Type | Present |
+|---|---|---|
+| `elapsed_seconds` | number | always |
+| `final_output` | object | always |
+| `final_output.<key>` | `<user value>` | always |
+| `phases` | integer | always |
+| `run_id` | string | always |
+| `status` | string | always |
+| `steps` | array | always |
+| `steps[]` | object | always |
+| `steps[].id` | string | always |
+| `steps[].kind` | string | always |
+| `steps[].partitions` | object | always |
+| `steps[].partitions.cached` | integer | always |
+| `steps[].partitions.total` | integer | always |
+| `steps[].partitions.will_run` | integer | always |
+| `steps[].partitions.will_run_keys` | array | always |
+| `steps[].status` | string | always |
+| `steps_executed` | integer | always |
+| `warnings` | array | always |
+<!-- END GENERATED schema get_partition_values -->
 
 `run` prints the same shape:
 
@@ -653,6 +777,46 @@ envelope goes to stderr:
 | `warnings` | array | always |
 <!-- END GENERATED schema run_failed -->
 
+A partitioned target of `get` with a failed key is a failed step as above (exit 1, `failed_node`
+names the key's step, e.g. `pipeline.py:flaky[k=bad]`). The line also has `final_output`: the
+keys that succeeded, keyed as above; the failed keys are absent and have no artifact, so the next
+`get` computes them again. Stability: experimental. Whether a partial failure gets its own exit
+code, and whether the result lists the failed keys, is not decided yet.
+
+<!-- BEGIN GENERATED schema get_partition_failed -->
+| Key | Type | Present |
+|---|---|---|
+| `elapsed_seconds` | number | always |
+| `error` | string | always |
+| `failed_node` | string | always |
+| `final_output` | object | always |
+| `final_output.<key>` | object | always |
+| `final_output.<key>._barca_artifact` | object | always |
+| `final_output.<key>._barca_artifact.format` | string | always |
+| `final_output.<key>._barca_artifact.path` | string | always |
+| `final_output.<key>._barca_artifact.size_bytes` | integer | always |
+| `phases` | integer | always |
+| `run_id` | string | always |
+| `status` | string | always |
+| `steps` | array | always |
+| `steps[]` | object | always |
+| `steps[].attempts` | integer | always |
+| `steps[].detail` | string | always |
+| `steps[].elapsed_seconds` | number | always |
+| `steps[].id` | string | always |
+| `steps[].kind` | string | always |
+| `steps[].partitions` | object | always |
+| `steps[].partitions.cached` | integer | always |
+| `steps[].partitions.total` | integer | always |
+| `steps[].partitions.will_run` | integer | always |
+| `steps[].partitions.will_run_keys` | array | always |
+| `steps[].partitions.will_run_keys[]` | string | always |
+| `steps[].reason` | string | always |
+| `steps[].status` | string | always |
+| `steps_executed` | integer | always |
+| `warnings` | array | always |
+<!-- END GENERATED schema get_partition_failed -->
+
 ### get and run: a store copy that differs from its recorded hash
 
 With an artifact store, an artifact fetched from the store is checked against the SHA-256
@@ -664,7 +828,11 @@ entries:
 | Key | Type | Present |
 |---|---|---|
 | `elapsed_seconds` | number | always |
-| `final_output` | `<user value>` | always |
+| `final_output` | object | always |
+| `final_output._barca_artifact` | object | always |
+| `final_output._barca_artifact.format` | string | always |
+| `final_output._barca_artifact.path` | string | always |
+| `final_output._barca_artifact.size_bytes` | integer | always |
 | `phases` | integer | always |
 | `run_id` | string | always |
 | `status` | string | always |
@@ -712,7 +880,9 @@ Stability: stable.
 ### get and run: several targets
 
 With `a,b`, `final_output` is replaced by `targets`, keyed by target name in the order given.
-A successful target has `final_output`; a failed one has `failed_node` (the step that raised:
+A successful target has `final_output` (on `get` a pointer, or with `-o value --json` its value);
+a failed partitioned target of `get` also has `final_output` with the keys that succeeded; a
+failed one has `failed_node` (the step that raised:
 the target or something upstream; the same key as a failed single-target run) and `error`. Top-level `status` is `failed` if any target
 failed, and the exit code is then 1. Steps skipped because an upstream failed have `status`
 `skipped` and `reason` `upstream_failed`.
@@ -736,8 +906,8 @@ failed, and the exit code is then 1. Steps skipped because an upstream failed ha
 | `steps_executed` | integer | always |
 | `targets` | object | always |
 | `targets.<name>` | object | always |
-| `targets.<name>.final_output` | `<user value>` \| object | always |
-| `targets.<name>.final_output._barca_artifact` | object | sometimes |
+| `targets.<name>.final_output` | object | always |
+| `targets.<name>.final_output._barca_artifact` | object | always |
 | `targets.<name>.final_output._barca_artifact.format` | string | always |
 | `targets.<name>.final_output._barca_artifact.path` | string | always |
 | `targets.<name>.final_output._barca_artifact.size_bytes` | integer | always |
@@ -967,7 +1137,7 @@ counts every node even when `nodes` is truncated.
 | `nodes[].inputs` | array | always |
 | `nodes[].inputs[]` | string | always |
 | `nodes[].kind` | string | always |
-| `nodes[].last_materialization` | object | always |
+| `nodes[].last_materialization` | null \| object | always |
 | `nodes[].last_materialization.artifact` | null \| string | always |
 | `nodes[].last_materialization.content_hash` | string | sometimes |
 | `nodes[].last_materialization.created_at` | string | always |
@@ -984,6 +1154,7 @@ counts every node even when `nodes` is truncated.
 | `nodes[].partitions.cached` | integer | always |
 | `nodes[].partitions.missing` | integer | always |
 | `nodes[].partitions.missing_keys` | array | always |
+| `nodes[].partitions.missing_keys[]` | string | always |
 | `nodes[].partitions.total` | integer | always |
 | `nodes[].shape` | null \| object | always |
 | `nodes[].shape.columns` | array | sometimes |
@@ -1359,7 +1530,11 @@ when known. These additive keys are stable. See `barca docs cache` and
 | Key | Type | Present |
 |---|---|---|
 | `elapsed_seconds` | number | always |
-| `final_output` | `<user value>` | always |
+| `final_output` | object | always |
+| `final_output._barca_artifact` | object | always |
+| `final_output._barca_artifact.format` | string | always |
+| `final_output._barca_artifact.path` | string | always |
+| `final_output._barca_artifact.size_bytes` | integer | always |
 | `phases` | integer | always |
 | `run_id` | string | always |
 | `status` | string | always |

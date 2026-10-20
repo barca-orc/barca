@@ -60,8 +60,8 @@ barca get b pipeline.py
 [barca] 2/2 steps | done in 0.0s
 Run 5274349f8960 | got 'b' in 0.165s (2 steps, 1 phase)
 
-Value:
-"BANANA"
+.barca/artifacts/pipeline.py--b/....json
+  "BANANA"
 ```
 
 The second run executes nothing (`0 steps`). `barca get a pipeline.py` returns `a` alone,

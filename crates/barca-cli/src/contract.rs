@@ -60,10 +60,6 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
         "the HTTP API and scheduler are young: no auth, no shared remote state, routes may change",
     ),
     (
-        "get --output",
-        "kept for compatibility; --json / --pretty are the canonical spelling",
-    ),
-    (
         "run --output",
         "kept for compatibility; --json / --pretty are the canonical spelling",
     ),

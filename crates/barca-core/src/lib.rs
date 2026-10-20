@@ -40,6 +40,7 @@ mod result_journal;
 pub mod results;
 mod run_owner;
 pub mod schedule;
+pub mod selection;
 pub mod sql;
 pub(crate) mod state_base;
 pub mod state_carry;
@@ -54,6 +55,7 @@ pub mod term;
 pub mod transfer;
 pub mod unrelated_modules;
 pub mod unused_inputs;
+pub mod values;
 pub mod warnings;
 
 pub use dag::Dag;
@@ -126,6 +128,10 @@ pub struct PartialRun {
     pub steps: Vec<results::StepReport>,
     /// Plan-time warnings for the steps this run planned (the same list a successful run has).
     pub warnings: Vec<warnings::PlanWarning>,
+    /// A partitioned target's keys that succeeded before the run stopped (failed keys are
+    /// absent); `None` for an unpartitioned target.
+    #[serde(default, skip)]
+    pub partitions: Option<Vec<(String, dispatch::OutputRef)>>,
 }
 
 impl FailedStep {

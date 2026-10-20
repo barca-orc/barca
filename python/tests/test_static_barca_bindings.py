@@ -7,12 +7,14 @@ import subprocess
 import pytest
 from barca.api import _find_binary
 
+from .get_values import value_args
+
 
 def invoke(root, *args):
     env = {k: v for k, v in os.environ.items() if not k.startswith("BARCA_")}
     env["BARCA_POOL_SIZE"] = "2"
     return subprocess.run(
-        [_find_binary(), *args],
+        [_find_binary(), *value_args(args)],
         cwd=root,
         env=env,
         capture_output=True,
@@ -204,11 +206,11 @@ def test_package_star_exports_match_worker_import_path(tmp_path, import_line):
     listed = invoke(tmp_path, "list", "pkg/pipeline.py", "--json")
     assert listed.returncode == 0, listed.stderr
     assert json.loads(listed.stdout)["total"] == 1
-    first = invoke(tmp_path, "get", "foo", "pkg/pipeline.py", "--json")
+    first = invoke(tmp_path, "get", "foo", "pkg/pipeline.py", "-o", "value", "--json")
     assert first.returncode == 0, first.stderr
     assert json.loads(first.stdout)["final_output"] == 2026
     (package / "shared.py").write_text("__all__ = ['YEAR']\nYEAR = 2027\n")
-    again = invoke(tmp_path, "get", "foo", "pkg/pipeline.py", "--json")
+    again = invoke(tmp_path, "get", "foo", "pkg/pipeline.py", "-o", "value", "--json")
     assert again.returncode == 0, again.stderr
     assert json.loads(again.stdout)["final_output"] == 2027
     assert json.loads(again.stdout)["steps_executed"] == 1

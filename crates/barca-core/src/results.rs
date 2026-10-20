@@ -21,6 +21,12 @@ pub struct GetResult {
     /// Plan-time warnings for the steps this run planned (`[]` when there are none).
     #[serde(default)]
     pub warnings: Vec<PlanWarning>,
+    /// When the returned node is partitioned: each returned key (`dim=value,...`, sorted) and
+    /// its artifact. Keys that failed or were not selected are absent. `final_output` is then
+    /// the first of them, for callers that read one output (the HTTP API).
+    #[serde(skip)]
+    #[cfg_attr(feature = "ts", ts(skip))]
+    pub partitions: Option<Vec<(String, OutputRef)>>,
 }
 
 /// The result of `barca get|run a,b` (several targets): one run over the union of the targets'
@@ -104,6 +110,10 @@ pub struct TargetOutcome {
     /// same key a failed single-target run uses).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failed_node: Option<String>,
+    /// A partitioned target's returned keys and their artifacts (see [`GetResult::partitions`]);
+    /// on a failed target, the keys that succeeded.
+    #[serde(skip)]
+    pub partitions: Option<Vec<(String, OutputRef)>>,
 }
 
 /// How a step was (or, in a dry run, will be) treated.

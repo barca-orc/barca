@@ -65,7 +65,7 @@ def answer(value: int) -> int: return value + 1
             assert not (project / "imported").exists()
             hashes = []
             for count in (2, 0):
-                result = command("get", "answer", "pipeline.py")
+                result = command("get", "answer", "pipeline.py", "-o", "value")
                 assert result["status"] == "success" and result["final_output"] == 42
                 assert result["steps_executed"] == count, result
                 hashes.append([(step["id"], step["run_hash"]) for step in result["steps"]])

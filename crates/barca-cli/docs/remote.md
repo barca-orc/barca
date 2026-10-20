@@ -436,9 +436,9 @@ check as step 1 says so; barca may fail with `short read on page`, `database dis
 malformed`, or stop with an internal error of the database engine) is repaired the same way:
 step 2 alone, or the `rm -f` line to start again.
 
-`barca get --json` reports a result as it does without a store: json values inline, parquet and
-pickle as a pointer (`{"_barca_artifact": {"path", ...}}`) to the copy in `.barca/artifacts/`.
-A final output another machine produced is downloaded first.
+`barca get --json` reports a result as it does without a store: a pointer
+(`{"_barca_artifact": {"path", ...}}`) to the copy in `.barca/artifacts/`, and `-o value` reads
+that copy. A final output another machine produced is downloaded first.
 
 ## What happens during a run
 

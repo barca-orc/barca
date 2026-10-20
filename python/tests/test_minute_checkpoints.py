@@ -81,7 +81,7 @@ def test_real_minute_checkpoint_survives_sigkill_and_skips_clean_ticks(tmp_path)
         assert proc.wait(timeout=15) == -signal.SIGKILL
         (machine_b / "release").touch()
         resumed = subprocess.run(
-            [_find_binary(), "get", "pipeline.py", "--agent"],
+            [_find_binary(), "get", "pipeline.py", "--agent", "-o", "value", "--json"],
             cwd=machine_b,
             env=env,
             text=True,

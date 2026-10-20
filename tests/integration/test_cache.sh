@@ -42,16 +42,16 @@ def c(data: dict) -> dict:
 PYEOF
 
 # First get: should execute all 3 (a→b→c)
-OUT1=$($BARCA get c "$TMPDIR/chain.py" 2>/dev/null)
+OUT1=$($BARCA get c "$TMPDIR/chain.py" -o value --json 2>/dev/null)
 S1=$(steps "$OUT1")
 [ "$S1" = "3" ] && pass "first get executes all 3" || fail "first get: expected 3 steps, got $S1"
 
 # Second get: should be all cached (0 steps executed)
-OUT2=$($BARCA get c "$TMPDIR/chain.py" 2>/dev/null)
+OUT2=$($BARCA get c "$TMPDIR/chain.py" -o value --json 2>/dev/null)
 S2=$(steps "$OUT2")
 [ "$S2" = "0" ] && pass "second get is fully cached" || fail "second get: expected 0 steps, got $S2"
 
-# Output should match — final_output is now inlined
+# Output should match (`-o value` puts the value in final_output)
 V1=$(echo "$OUT1" | python3 -c "import json,sys; print(json.dumps(json.load(sys.stdin)['final_output']))")
 V2=$(echo "$OUT2" | python3 -c "import json,sys; print(json.dumps(json.load(sys.stdin)['final_output']))")
 [ "$V1" = "$V2" ] && pass "cached output matches" || fail "output mismatch: $V1 vs $V2"

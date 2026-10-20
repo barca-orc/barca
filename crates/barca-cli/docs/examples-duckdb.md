@@ -70,9 +70,10 @@ What to notice:
   `barca.duckdb_connection()` and see `barca docs types` for the rules.
 - `revenue` is cast to `double`: DuckDB decimals come back as Python `Decimal`, which is not
   JSON-serializable, so a dict holding one would be pickled instead of stored as JSON.
-- The final JSON has `"final_output": {"region": "EMEA", ...}`. To see a parquet step instead,
-  `barca get revenue_by_region pipeline.py` returns an `_barca_artifact` pointer with the file
-  path; `barca.get("revenue_by_region", "pipeline.py")` returns a DataFrame.
+- `barca get top_region pipeline.py` prints the path of its `.json` artifact;
+  `barca get top_region pipeline.py -o value` prints `{"region": "EMEA", ...}`. A parquet step
+  works the same way: `barca get revenue_by_region pipeline.py -o value` prints its rows as a
+  list of objects, and `barca.get("revenue_by_region", "pipeline.py")` returns a DataFrame.
 
 To load only a subset of a large upstream, keep the input a relation and narrow it in SQL
 before converting anything to pandas: `barca docs big-inputs`.
