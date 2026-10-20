@@ -564,6 +564,59 @@ up to 16 MB; a store it cannot read is a `note` on each shape, not a failed comm
 (`barca docs status`). `barca sql` downloads the artifacts of the views a query names and reuses
 the copies while the objects are unchanged (`barca docs sql`).
 
+## Sharing a result: signed URLs
+
+Experimental. A signed URL is a time-limited HTTPS link to one object in the bucket. Anyone who
+has it can download the object, without cloud credentials, until it expires: a stakeholder who
+wants the CSV, a BI tool that loads parquet over HTTPS, a link in a chat message.
+
+```bash
+barca get total pipeline.py -o url                    # one link per result, valid for 1 hour
+barca get total pipeline.py -o url --expires 7d       # 30m, 12h, 7d or seconds; at most 7d
+barca get sales pipeline.py -o url --partition region=emea   # one link per selected key
+barca get total pipeline.py -o url --json             # each _barca_artifact gains url, url_expires_at
+```
+
+`-o url` resolves results exactly as `-o path` (the target is brought up to date first) and
+prints one URL per line, in the same order. The link downloads as `<node>.<ext>` (it sets
+`Content-Disposition: attachment; filename="total.json"`). In Python, any object can be signed,
+not only results:
+
+```python
+import barca
+
+url = barca.signed_url("s3://reports/weekly/2026-10-19.csv")                 # 1 hour
+url = barca.signed_url("abfss://out@acct.dfs.core.windows.net/x.parquet", expires=86400)
+```
+
+`expires` is seconds or a `datetime.timedelta`. `barca.signed_url` checks that the object
+exists and raises `barca.BarcaError` naming the URI and the reason. It needs the store's extra,
+not the barca binary.
+
+Signing uses the credentials barca already uses for the store. What each cloud needs:
+
+| Cloud | How the link is signed | What the identity needs |
+|---|---|---|
+| S3, R2, MinIO | SigV4 presigned GET; R2 and MinIO through the `endpoint_url` in the s3 storage options | `s3:GetObject` on the object. A link signed with temporary credentials (SSO, an instance role) stops working when they expire; `url_expires_at` then reports the earlier time |
+| GCS | V4 signed URL. With a service-account key it is signed locally; with workload identity or the metadata server, through IAM `signBlob` as that service account | without a key: `iam.serviceAccounts.signBlob` on the service account (`roles/iam.serviceAccountTokenCreator`). User credentials (`gcloud auth application-default login`) cannot sign: log in with `--impersonate-service-account=SA_EMAIL` |
+| Azure | with an account key or connection string, a service SAS; otherwise a user delegation SAS from `DefaultAzureCredential` | without a key: `Microsoft.Storage/storageAccounts/blobServices/generateUserDelegationKey/action` (in Storage Blob Delegator and Storage Blob Data Contributor) and read access to the blob. A SAS token in the storage options cannot sign new links |
+
+Know before sharing:
+
+- **A link cannot be revoked before it expires**, except by rotating the key that signed it (an
+  S3 access key, an Azure account key) or revoking the Azure user delegation keys. That is why
+  the default is one hour and the maximum is 7 days.
+- **An old link keeps serving the old bytes.** Artifacts are stored as `{node}/{run_hash}{ext}`,
+  so a newer result is a new object. A link made before a refresh still downloads the result it
+  was made for, until it expires.
+- **The URL is printed to stdout only.** It is a bearer credential: barca does not write it to
+  stderr, the metadata database, run history, `barca logs` or telemetry.
+- `-o url` needs a cloud store. With no store, a shared directory or `file://`, it is a usage
+  error (exit 2), as is `--expires` over 7d or without `-o url`. A result that is not in the store,
+  or credentials that cannot sign, is exit 3 naming the node; `barca doctor` shows which identity
+  barca uses.
+- Sinks are not signed by `-o url`; sign the URI a sink wrote with `barca.signed_url`.
+
 ## Limitations
 
 - Backups are this machine's: two machines on one store without a server interleave them

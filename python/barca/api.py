@@ -4,6 +4,7 @@ Calls the barca binary under the hood, parses results, and returns
 Python objects. Artifact files are deserialized automatically.
 """
 
+import datetime
 import json
 import shutil
 import subprocess
@@ -282,3 +283,30 @@ def stats(target: str, file: str, *extra_files: str) -> dict:
     """
     files = [file, *extra_files]
     return _exec(["stats", target, *files, "--json"])
+
+
+def signed_url(uri: str, expires: "int | float | datetime.timedelta" = 3600) -> str:
+    """A time-limited, read-only HTTPS URL for the object at ``uri``. Experimental.
+
+    Anyone holding the URL can download the object, without credentials, until it expires.
+    ``uri`` names an object in S3 (``s3://``, ``s3a://``; R2 and MinIO through the endpoint
+    in ``BARCA_STORAGE_OPTIONS``), GCS (``gs://``, ``gcs://``) or Azure (``abfs://``,
+    ``abfss://``), signed with the same credentials barca uses for its store. ``expires`` is
+    seconds or a ``datetime.timedelta``: one hour by default, at most 7 days. The link
+    downloads the object under its own name. It cannot be revoked before it expires.
+
+    The object must exist. Raises :class:`BarcaError` naming the URI and the reason (``kind``
+    ``usage`` for a URI or expiry that cannot be signed, ``infra`` for a missing object or
+    credentials that cannot sign). Needs the store's extra (``barca[s3]``, ``barca[gcs]``,
+    ``barca[azure]``), not the barca binary.
+    """
+    from barca import _storage
+
+    try:
+        url, _ = _storage.sign_url(uri, expires)
+    except _storage.SignError as exc:
+        error = BarcaError(str(exc))
+        error.kind = "usage" if exc.kind == "usage" else "infra"
+        error.code = 2 if exc.kind == "usage" else 3
+        raise error from None
+    return url

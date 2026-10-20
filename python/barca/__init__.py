@@ -34,6 +34,7 @@ __all__ = [
     "plan",
     "history",
     "stats",
+    "signed_url",
     "BarcaError",
     "Client",
     "Run",
@@ -340,7 +341,7 @@ def duckdb_connection():
 
 # ─── Python API ──────────────────────────────────────────────────────────────
 
-from barca.api import BarcaError, get, history, plan, run, stats  # noqa: E402
+from barca.api import BarcaError, get, history, plan, run, signed_url, stats  # noqa: E402
 from barca.client import Client, Run  # noqa: E402
 
 

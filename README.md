@@ -303,7 +303,7 @@ error (exit 2) that names the right one. `barca pipeline.py` is short for
 
 | Command | What it does |
 |---|---|
-| `barca get [target] [files...]` | Get one asset, several (`a,b`), or with no target every asset and sensor. Runs only what is not cached and prints the artifact paths (one per partition key); `-o value` prints the value, `-o path` only the paths, `--partition region=emea` selects keys of a partitioned target. |
+| `barca get [target] [files...]` | Get one asset, several (`a,b`), or with no target every asset and sensor. Runs only what is not cached and prints the artifact paths (one per partition key); `-o value` prints the value, `-o path` only the paths, `-o url [--expires 1h]` a signed HTTPS link to each result in a cloud store (experimental), `--partition region=emea` selects keys of a partitioned target. |
 | `barca run <task> [files...]` | Run a task, or several (`a,b`), and what they depend on. The task always runs. |
 | &nbsp;&nbsp;`get` and `run` flags | `--refresh a,b`, `--no-cascade`, `--refresh-all`, `--dry-run`, `--env <name>`, `--agent` (plain progress lines), `--json`, `--pretty`, `--fields` |
 | `barca doctor [files...]` | Check project, Python, cache, metadata and stores without running steps (`--json`, `--pretty`, `--env`). See `barca docs doctor` for local-only debugging. |

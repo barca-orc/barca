@@ -52,6 +52,7 @@ outside the `GENERATED` blocks is written by hand.
 | `barca plan` and its JSON | prints the planner's internal phase/stream layout, which changes with scheduling work (`reason` is an object, `{"type": "initial"}` or `{"type": "fan_in", "node_id": ...}`) |
 | `barca serve` and all its flags | the HTTP API and scheduler are young: no auth, routes may change. Its JSON is the engine's own serialization (for example `GET /assets` has `freshness: {"type": "Always"}` and `stats.node_id`), not the CLI's |
 | `get -o json\|pretty`, `run -o/--output` | kept for compatibility; `--json` / `--pretty` are the canonical spelling. `get -o path\|value` is stable |
+| `get -o url`, `get --expires`, and `url` / `url_expires_at` in a `_barca_artifact` pointer | new (RFC-0011): signed HTTPS links to results in a cloud store. The URL's form is the cloud's own (SigV4, GCS V4, Azure SAS); `url_expires_at` is RFC 3339 UTC. `get -o url` with no cloud store, or an `--expires` over `7d`, is exit 2; a result missing from the store or credentials that cannot sign is exit 3 |
 | `status --sample` and `nodes[].shape` | read by a Python helper (`barca._inspect`) whose output may grow per format; the wording of `shape.note` (an unreadable, too large or unreachable artifact) may change |
 | `BARCA_PROGRESS_SECS`, `BARCA_POOL_SIZE`, `BARCA_COMM_COST_SECONDS`, `BARCA_TRACE_TIMING` | tuning and benchmarking knobs |
 | `BARCA_TELEMETRY` and the spans it sends | new: span names, tags and metrics may change |
@@ -131,7 +132,8 @@ default, and any aliases.
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
 | `<ARGS>...` | - | - | stable | [TARGET[,TARGET...]] [file.py\|dir/ ...] — both optional: no target gets every asset and sensor; no files reads the whole project (`barca docs discovery`) |
-| `-o, --output` | `path\|value\|json\|pretty` | - | stable | What to print: artifact paths (the default) or values. Alone, -o path\|value prints only that; with --json, it chooses what `final_output` holds |
+| `-o, --output` | `path\|value\|url\|json\|pretty` | - | stable | What to print: artifact paths (the default), values, or signed URLs. Alone, -o path\|value\|url prints only that; with --json, it chooses what `final_output` holds |
+| `--expires` | `DURATION` | - | experimental: new with -o url (signed links to results in a cloud store); the link format is the cloud's | With -o url: how long the links work, as 30m, 12h, 7d or seconds (default 1h, at most 7d). Experimental |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `--partition` | `KEY=VALUE[,VALUE]\|JSON` | - | stable | Select keys of a partitioned target: `region=emea,amer`, or a JSON object for compound keys (`{"region": "emea", "day": "2026-10-14"}`). Only those keys are computed and returned, and --refresh of the target refreshes only them |

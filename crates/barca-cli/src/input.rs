@@ -179,7 +179,7 @@ pub(crate) fn json_output(cli: &Cli) -> bool {
             format,
             fields,
             ..
-        } => get_mode(*output, *format, fields.as_deref())
+        } => get_mode(*output, None, *format, fields.as_deref())
             .is_ok_and(|m| m.shape == barca_core::report::GetShape::Json),
         Cli::Run {
             output,
@@ -256,6 +256,48 @@ pub(crate) fn get_run_mode(
 pub(crate) struct GetMode {
     pub shape: barca_core::report::GetShape,
     pub values: bool,
+    /// `-o url`: sign each returned artifact for this many seconds.
+    pub url_expires: Option<u64>,
+}
+
+/// Default lifetime of a `-o url` link: one hour.
+pub(crate) const DEFAULT_URL_EXPIRES_SECS: u64 = 3600;
+/// Longest lifetime of a `-o url` link: 7 days (the SigV4 and Azure delegation key limit).
+pub(crate) const MAX_URL_EXPIRES_SECS: u64 = 7 * 24 * 3600;
+
+/// `--expires`: `30m`, `12h`, `7d`, `45s` or plain seconds, from 1 second to 7 days. The same
+/// limits as `barca.signed_url` in Python (`_storage.expiry_seconds`); the shared cases are in
+/// `expiry_cases.json`.
+pub(crate) fn parse_expires(text: &str) -> Result<u64, String> {
+    let t = text.trim();
+    let (digits, unit) = match t.char_indices().last() {
+        Some((i, c)) if c.is_ascii_alphabetic() => (&t[..i], c.to_ascii_lowercase()),
+        _ => (t, 's'),
+    };
+    let scale = match unit {
+        's' => 1,
+        'm' => 60,
+        'h' => 3600,
+        'd' => 86_400,
+        _ => 0,
+    };
+    let invalid =
+        || format!("--expires '{text}' is not a duration: use 30m, 12h, 7d or a number of seconds");
+    if scale == 0 || digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(invalid());
+    }
+    let n: u64 = digits.parse().map_err(|_| invalid())?;
+    let secs = n.saturating_mul(scale);
+    if secs == 0 {
+        return Err(format!("--expires '{text}' must be at least 1 second"));
+    }
+    if secs > MAX_URL_EXPIRES_SECS {
+        return Err(format!(
+            "--expires '{text}' is longer than the maximum of 7d ({MAX_URL_EXPIRES_SECS} seconds)\n\
+             A signed URL cannot be revoked before it expires; use 7d or less."
+        ));
+    }
+    Ok(secs)
 }
 
 impl GetMode {
@@ -278,12 +320,27 @@ impl GetMode {
 #[allow(clippy::result_large_err)] // cold path: built once, right before exiting
 pub(crate) fn get_mode(
     output: Option<GetOutput>,
+    expires: Option<&str>,
     format: FormatFlags,
     fields: Option<&[String]>,
 ) -> Result<GetMode, CliError> {
     use barca_core::report::GetShape;
     let usage = |msg: &str| Err(CliError::from_prose(ErrorKind::Usage, msg.to_string()));
     let explicit = format.json || format.pretty;
+    let url_expires = match (output, expires) {
+        (Some(GetOutput::Url), Some(e)) => match parse_expires(e) {
+            Ok(secs) => Some(secs),
+            Err(msg) => return usage(&format!("error: {msg}")),
+        },
+        (Some(GetOutput::Url), None) => Some(DEFAULT_URL_EXPIRES_SECS),
+        (_, Some(_)) => {
+            return usage(
+                "error: --expires applies only to -o url\n\
+                 Add -o url to print signed links, or drop --expires.",
+            );
+        }
+        (_, None) => None,
+    };
     let (shape, values) = match output {
         Some(GetOutput::Json | GetOutput::Pretty) if explicit => {
             return usage(
@@ -293,7 +350,7 @@ pub(crate) fn get_mode(
         }
         Some(GetOutput::Json) => (GetShape::Json, false),
         Some(GetOutput::Pretty) => (GetShape::Pretty, false),
-        Some(o @ (GetOutput::Path | GetOutput::Value)) => {
+        Some(o @ (GetOutput::Path | GetOutput::Value | GetOutput::Url)) => {
             let shape = if format.json || fields.is_some() {
                 GetShape::Json
             } else if format.pretty {
@@ -314,7 +371,11 @@ pub(crate) fn get_mode(
             "error: --fields applies to JSON output\nDrop -o pretty/--pretty, or use --json.",
         );
     }
-    Ok(GetMode { shape, values })
+    Ok(GetMode {
+        shape,
+        values,
+        url_expires,
+    })
 }
 
 /// Whether an inspection command prints JSON. `--fields` implies JSON; with `--pretty` it is a
@@ -496,4 +557,46 @@ pub(crate) fn targets_arg(
 /// Inspection commands use the shared output rule.
 pub(crate) fn is_json(flags: FormatFlags) -> bool {
     output::resolve(flags.explicit()) == Format::Json
+}
+
+#[cfg(test)]
+mod expiry_tests {
+    use super::*;
+
+    /// The cases `python/tests/test_signed_urls.py` also checks against `barca.signed_url`.
+    #[test]
+    fn expires_follows_the_shared_table() {
+        let cases: Vec<serde_json::Value> =
+            serde_json::from_str(include_str!("expiry_cases.json")).unwrap();
+        for case in cases {
+            let input = case["input"].as_str().unwrap();
+            let got = parse_expires(input);
+            match case["error"].as_str() {
+                None => assert_eq!(got, Ok(case["seconds"].as_u64().unwrap()), "{input}"),
+                Some(kind) => {
+                    let msg = got.expect_err(input);
+                    let expected = match kind {
+                        "too_long" => "longer than the maximum of 7d",
+                        "too_short" => "at least 1 second",
+                        _ => "is not a duration",
+                    };
+                    assert!(msg.contains(expected), "{input}: {msg}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn expires_needs_o_url_and_defaults_to_an_hour() {
+        let flags = FormatFlags::default();
+        let mode = get_mode(Some(GetOutput::Url), None, flags, None).unwrap();
+        assert_eq!(mode.url_expires, Some(DEFAULT_URL_EXPIRES_SECS));
+        assert_eq!(mode.shape, barca_core::report::GetShape::Bare);
+        let mode = get_mode(Some(GetOutput::Url), Some("30m"), flags, None).unwrap();
+        assert_eq!(mode.url_expires, Some(1800));
+        assert!(get_mode(Some(GetOutput::Path), Some("1h"), flags, None).is_err());
+        assert!(get_mode(None, Some("1h"), flags, None).is_err());
+        assert!(get_mode(Some(GetOutput::Url), Some("8d"), flags, None).is_err());
+        assert_eq!(get_mode(None, None, flags, None).unwrap().url_expires, None);
+    }
 }
