@@ -340,7 +340,9 @@ Each `ScheduleEntry` is:
   "next_fire": 1780740000,
   "last_fired": 1780653600,
   "last_run": "1b942bb33182",
-  "last_status": "complete"
+  "last_status": "complete",
+  "last_skipped": 1780657200,
+  "skipped_for": "7c0d5e2a91f4"
 }
 ```
 
@@ -351,6 +353,12 @@ zone and always uses the local time of the machine it runs on. A job the schedul
 gets `last_fired` set to the time the server first started with it, so it is not `null` even
 though nothing has run. `last_run` is the most recent scheduled `run_id` and `last_status` its state
 (`pending`/`running`/`complete`/`failed`/`cancelled`, or `null` if none yet).
+
+A tick is skipped while a run of the same node is pending or running, whether the scheduler or
+an HTTP request started it (`POST /run` counts for scheduled assets and sensors, not tasks).
+`last_skipped` is the time of the last skipped tick (unix epoch seconds) and `skipped_for` the
+`run_id` of the run that was in flight; both are `null` until a tick is skipped, and a restart
+clears them.
 
 ## Python client
 

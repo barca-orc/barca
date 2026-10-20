@@ -603,6 +603,8 @@ pub(crate) fn telemetry_report(
         target: l.target.map(str::to_string),
         job: job.to_string(),
         status: l.status.to_string(),
+        reason: None,
+        in_flight_run: None,
         start_unix_ns,
         duration_ns,
         steps_total: l.steps_total,

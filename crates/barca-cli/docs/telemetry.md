@@ -61,7 +61,8 @@ What the spans carry:
 | run, step | `barca.job` | canonical resolved job ids, sorted and comma-separated, or `all` |
 | run | `barca.run_id` | the run id `barca get --json` prints (also on every step span) |
 | run | `barca.command`, `barca.target` | `get` or `run`, and the target as given |
-| run | `barca.status` | `success`, `failed` or `cancelled`; the span is an error unless `success` |
+| run | `barca.status` | `success`, `failed` or `cancelled`; the span is an error unless `success`. `skipped` for a `barca serve` tick that started nothing, not an error |
+| run | `barca.reason`, `barca.in_flight_run` | on a skipped tick only: `in_flight`, and the `run_id` of the run of the same node that was still going. The span has no steps, no duration, and an id of its own |
 | run | `barca.steps.total`, `barca.steps.executed`, `barca.steps.cached` | step counts |
 | step | `barca.node`, `barca.kind` | node id; `asset`, `task` or `sensor` |
 | step | `barca.outcome` | `ran`, `cached` or `failed` |
