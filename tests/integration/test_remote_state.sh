@@ -49,7 +49,7 @@ TOML
 echo "── machine A: first run materializes and pushes"
 make_machine "$TMP/machine-a"
 export EXEC_LOG="$TMP/exec-a.log"
-(cd "$TMP/machine-a" && $BARCA get pipeline.py --agent > result-a.json 2> stderr-a.log) \
+(cd "$TMP/machine-a" && $BARCA get pipeline.py --agent -o value --json > result-a.json 2> stderr-a.log) \
     || { cat "$TMP/machine-a/stderr-a.log"; exit 1; }
 grep -q '"steps_executed":2' "$TMP/machine-a/result-a.json" \
     || { echo "FAIL: machine A did not execute 2 steps"; cat "$TMP/machine-a/result-a.json"; exit 1; }
@@ -92,7 +92,7 @@ print(sum(1 for (p,) in rows if not p.startswith('$SHARED/default/artifacts/')))
 echo "── machine B: pristine workdir, full cache hit, zero Python executions"
 make_machine "$TMP/machine-b"
 export EXEC_LOG="$TMP/exec-b.log"
-(cd "$TMP/machine-b" && $BARCA get pipeline.py --agent > result-b.json 2> stderr-b.log) \
+(cd "$TMP/machine-b" && $BARCA get pipeline.py --agent -o value --json > result-b.json 2> stderr-b.log) \
     || { cat "$TMP/machine-b/stderr-b.log"; exit 1; }
 grep -q '"steps_executed":0' "$TMP/machine-b/result-b.json" \
     || { echo "FAIL: machine B re-executed steps"; cat "$TMP/machine-b/result-b.json"; exit 1; }
@@ -127,7 +127,7 @@ def doubled(nums: list) -> list:
     return [n * 2 for n in nums]
 PYEOF
 export EXEC_LOG="$TMP/exec-d.log"
-(cd "$TMP/machine-d" && $BARCA get doubled pipeline.py --agent > result-d.json 2> stderr-d.log) \
+(cd "$TMP/machine-d" && $BARCA get doubled pipeline.py --agent -o value --json > result-d.json 2> stderr-d.log) \
     || { cat "$TMP/machine-d/stderr-d.log"; exit 1; }
 [ "$(cat "$EXEC_LOG")" = "doubled" ] \
     || { echo "FAIL: D should execute only doubled, ran:"; cat "$EXEC_LOG"; exit 1; }
@@ -163,13 +163,13 @@ for m in machine-e machine-f; do
     printf '%s' "$FANOUT" > "$TMP/$m/fanout.py"
     printf '[remote]\nuri = "%s"\n' "$SHARED" > "$TMP/$m/barca.toml"
 done
-(cd "$TMP/machine-e" && $BARCA get shard fanout.py --agent > shard-e.json 2> shard-e.log) \
+(cd "$TMP/machine-e" && $BARCA get shard fanout.py --agent -o value --json > shard-e.json 2> shard-e.log) \
     || { cat "$TMP/machine-e/shard-e.log"; exit 1; }
 grep -q '"steps_executed":4' "$TMP/machine-e/shard-e.json" \
     || { echo "FAIL: E should run universe + 3 shards"; cat "$TMP/machine-e/shard-e.json"; exit 1; }
 # F: universe and every shard are cached remotely; expanding the partitions
 # needs universe's artifact on F's disk.
-(cd "$TMP/machine-f" && $BARCA get shard fanout.py --agent > shard-f.json 2> shard-f.log) \
+(cd "$TMP/machine-f" && $BARCA get shard fanout.py --agent -o value --json > shard-f.json 2> shard-f.log) \
     || { cat "$TMP/machine-f/shard-f.log"; exit 1; }
 grep -q '"steps_executed":0' "$TMP/machine-f/shard-f.json" \
     || { echo "FAIL: F should be a full cache hit"; cat "$TMP/machine-f/shard-f.json" "$TMP/machine-f/shard-f.log"; exit 1; }
@@ -195,7 +195,7 @@ print(sqlite3.connect('$STATE_BLOB').execute(\"SELECT COUNT(*) FROM materializat
 ")
     chmod 555 "$SHARED/default/artifacts"
     set +e
-    (cd "$TMP/machine-g" && $BARCA get unshippable pipeline.py --agent > result-g.json 2> stderr-g.log)
+    (cd "$TMP/machine-g" && $BARCA get unshippable pipeline.py --agent -o value --json > result-g.json 2> stderr-g.log)
     STATUS=$?
     set -e
     chmod 755 "$SHARED/default/artifacts"
@@ -233,7 +233,7 @@ if problems:
 PYEOF
 
     echo "── once the store is writable again, the step recomputes and is recorded"
-    (cd "$TMP/machine-g" && $BARCA get unshippable pipeline.py --agent > rerun-g.json 2> rerun-g.log) \
+    (cd "$TMP/machine-g" && $BARCA get unshippable pipeline.py --agent -o value --json > rerun-g.json 2> rerun-g.log) \
         || { echo "FAIL: rerun after fixing the store failed"; cat "$TMP/machine-g/rerun-g.log"; exit 1; }
     ls "$SHARED"/default/artifacts/*unshippable*/*.json > /dev/null 2>&1 \
         || { echo "FAIL: rerun did not upload the artifact"; exit 1; }
@@ -256,8 +256,8 @@ unset EXEC_LOG
 # that mutates the blob between pull and push via BARCA hooks is not
 # available, so approximate: A pushes run 2, then C runs (pulls fresh) — and
 # assert the blob accumulates run history monotonically.
-(cd "$TMP/machine-a" && $BARCA get pipeline.py --refresh-all --agent > /dev/null 2>&1)
-(cd "$TMP/machine-c" && $BARCA get pipeline.py --agent > /dev/null 2>&1)
+(cd "$TMP/machine-a" && $BARCA get pipeline.py --refresh-all --agent -o value --json > /dev/null 2>&1)
+(cd "$TMP/machine-c" && $BARCA get pipeline.py --agent -o value --json > /dev/null 2>&1)
 RUNS=$(python3 -c "
 import sqlite3
 conn = sqlite3.connect('$STATE_BLOB')
