@@ -31,7 +31,7 @@ pub mod load;
 mod mismatch;
 pub mod model;
 pub mod parse;
-mod pending_uploads;
+pub mod pending_uploads;
 mod persist;
 pub mod planner;
 pub mod project_modules;

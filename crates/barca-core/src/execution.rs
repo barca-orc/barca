@@ -582,7 +582,7 @@ async fn start_workers(
             return Err(error);
         }
         // Results an earlier command computed here and could not upload go first (#390).
-        if let Err(error) = retry_pending_uploads(&mut client, db_path, cancel, &location).await {
+        if let Err(error) = retry_pending_uploads(&mut client, db_path, cancel, &location, None).await {
             client.abort().await;
             return Err(error);
         }
@@ -658,9 +658,13 @@ async fn retry_pending_uploads(
     db_path: &str,
     cancel: &CancellationToken,
     location: &str,
+    only: Option<&std::collections::HashSet<&str>>,
 ) -> Result<(), BarcaError> {
     use crate::pending_uploads::Settled;
-    let pending = crate::pending_uploads::list(db_path).await?;
+    let mut pending = crate::pending_uploads::list(db_path).await?;
+    if let Some(only) = only {
+        pending.retain(|p| only.contains(p.store_path.as_str()));
+    }
     if pending.is_empty() {
         return Ok(());
     }
@@ -733,6 +737,38 @@ async fn retry_pending_uploads(
         }
     }
     crate::pending_uploads::settle(db_path, &settled).await
+}
+/// Upload this host's pending results (#390) among `store_paths` (artifact-store locations) now,
+/// before something needs them in the store: `barca get -o url` signs only objects the store
+/// holds. Starts the transfer helper only when one of them is pending; one that fails again
+/// stays pending with its new error, and the caller finds it still missing from the store.
+pub(crate) async fn upload_pending(
+    python: &std::path::Path,
+    cfg: &crate::config::ResolvedConfig,
+    store_paths: &[String],
+    cancel: &CancellationToken,
+) -> Result<(), BarcaError> {
+    if !cfg.remote_artifacts() {
+        return Ok(());
+    }
+    let wanted: std::collections::HashSet<&str> = store_paths.iter().map(String::as_str).collect();
+    let pending = crate::pending_uploads::list(&cfg.db_path).await?;
+    if !pending.iter().any(|p| wanted.contains(p.store_path.as_str())) {
+        return Ok(());
+    }
+    let mut client = TransferClient::launch(python, cfg, &db::generate_run_id())?
+        .connect()
+        .await?;
+    let location = crate::transfer::diagnostic_uri(&cfg.artifact_root);
+    let retried =
+        retry_pending_uploads(&mut client, &cfg.db_path, cancel, &location, Some(&wanted)).await;
+    match retried {
+        Ok(()) => client.shutdown().await,
+        Err(_) => {
+            client.abort().await;
+        }
+    }
+    retried
 }
 async fn open_run<'a, 'r>(
     request: &'a ExecuteRequest<'r>,

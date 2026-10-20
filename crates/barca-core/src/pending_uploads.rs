@@ -309,3 +309,15 @@ mod tests {
         assert!(list(&path).await.unwrap().is_empty());
     }
 }
+
+/// Upload this host's pending results among `store_paths` now (see
+/// [`crate::execution::upload_pending`]): `barca get -o url` calls it before signing, so a
+/// `local only` result is uploaded and then signed rather than reported missing.
+pub async fn upload_now(
+    python: &std::path::Path,
+    cfg: &crate::config::ResolvedConfig,
+    store_paths: &[String],
+    cancel: &tokio_util::sync::CancellationToken,
+) -> Result<(), BarcaError> {
+    crate::execution::upload_pending(python, cfg, store_paths, cancel).await
+}

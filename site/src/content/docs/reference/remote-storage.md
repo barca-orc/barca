@@ -611,9 +611,11 @@ Know before sharing:
 - **The URL is printed to stdout only.** It is a bearer credential: barca does not write it to
   stderr, the metadata database, run history, `barca logs` or telemetry.
 - `-o url` needs a cloud store. With no store, a shared directory or `file://`, it is a usage
-  error (exit 2), as is `--expires` over 7d or without `-o url`. A result that is not in the store,
-  or credentials that cannot sign, is exit 3 naming the node; `barca doctor` shows which identity
-  barca uses.
+  error (exit 2), as is `--expires` over 7d or without `-o url`. A `local only` result (its
+  upload failed after the step succeeded) is uploaded before it is signed, and a cached result
+  missing from the store is uploaded from this machine's copy. A result that still is not in the
+  store, or credentials that cannot sign, is exit 3 naming the node; `barca doctor` shows which
+  identity barca uses.
 - Sinks are not signed by `-o url`; sign the URI a sink wrote with `barca.signed_url`.
 
 ## Limitations

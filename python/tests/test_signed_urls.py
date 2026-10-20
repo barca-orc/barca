@@ -529,9 +529,45 @@ def test_get_o_url_on_a_partitioned_target_links_the_selected_keys(project, stor
     assert [json.loads(_fetch(u)[1])["region"] for u in urls] == ["amer", "emea"]  # -o path order
 
 
-def test_a_result_missing_from_the_store_is_exit_3_naming_the_node(project, store):
-    """The object behind a recorded result is gone (until #444 retries pending uploads first,
-    this is also what a `local only` result gets)."""
+FAIL_PUT_SHIM = """
+import os
+from pathlib import Path
+
+_spec = os.environ.get("BARCA_TEST_FAIL_PUTS")
+if _spec:
+    from barca import _storage
+
+    _directory, _times = _spec.rsplit(":", 1)
+    _real = _storage.put_file
+
+    def put_file(local_path, dest):
+        failed = Path(_directory)
+        if len(list(failed.iterdir())) < int(_times):
+            (failed / f"{os.getpid()}-{len(list(failed.iterdir()))}").touch()
+            raise PermissionError(f"denied by the test: {dest}")
+        return _real(local_path, dest)
+
+    _storage.put_file = put_file
+"""
+
+
+def _failing_puts(tmp_path: Path, store: dict, times: int) -> dict:
+    """`store` with the first `times` artifact uploads (in any barca process) refused."""
+    shim = tmp_path / "fail-puts-shim"
+    shim.mkdir()
+    (shim / "sitecustomize.py").write_text(FAIL_PUT_SHIM)
+    failed = tmp_path / "failed-puts"
+    failed.mkdir()
+    return {
+        **store,
+        "PYTHONPATH": str(shim) + os.pathsep + os.environ.get("PYTHONPATH", ""),
+        "BARCA_TEST_FAIL_PUTS": f"{failed}:{times}",
+    }
+
+
+def test_a_result_missing_from_the_store_is_repaired_then_signed(project, store):
+    """The object behind a cached result is gone from the store: `get` uploads this machine's
+    copy (#471) and the link serves it."""
     import fsspec
 
     out = json.loads(_cli(project, store, "get", "total", "pipeline.py", "--json").stdout)
@@ -539,9 +575,37 @@ def test_a_result_missing_from_the_store_is_exit_3_naming_the_node(project, stor
     stored = f"{store['BARCA_REMOTE_URI']}/default/artifacts/{local.parent.name}/{local.name}"
     fsspec.filesystem("s3", skip_instance_cache=True, **_s3_options()["s3"]).rm(stored)
 
-    proc = _cli(project, store, "get", "total", "pipeline.py", "-o", "url", "--json")
+    proc = _cli(project, store, "get", "total", "pipeline.py", "-o", "url")
+    assert proc.returncode == 0, proc.stderr
+    assert "not in the artifact store; uploading this machine's copy" in proc.stderr
+    (url,) = proc.stdout.splitlines()
+    assert json.loads(_fetch(url)[1]) == {"total": 3}
+
+
+def test_a_local_only_result_is_uploaded_then_signed(project, store, tmp_path):
+    """The step succeeds and its upload fails (#444): the result is `local only`. `-o url`
+    uploads it before signing, so the link serves it."""
+    env = _failing_puts(tmp_path, store, times=1)
+    proc = _cli(project, env, "get", "total", "pipeline.py", "-o", "url")
+    assert proc.returncode == 0, proc.stderr
+    assert "warning: 1 result not uploaded" in proc.stderr, proc.stderr
+    assert "uploaded 1 pending result" in proc.stderr, proc.stderr
+    (url,) = proc.stdout.splitlines()
+    assert json.loads(_fetch(url)[1]) == {"total": 3}
+
+    status = json.loads(_cli(project, store, "status", "total", "pipeline.py", "--json").stdout)
+    (node,) = [n for n in status["nodes"] if n["id"].endswith(":total")]
+    assert node["cache"]["state"] == "cached", node
+
+
+def test_a_result_that_cannot_reach_the_store_is_exit_3_naming_the_node(project, store, tmp_path):
+    """Every upload is refused: the run succeeds with the result `local only`, the upload
+    before signing fails again, and signing names the node."""
+    env = _failing_puts(tmp_path, store, times=100)
+    proc = _cli(project, env, "get", "total", "pipeline.py", "-o", "url", "--json")
     assert proc.returncode == 3, proc.stderr
     assert proc.stdout == ""
+    assert "1 pending result still not uploaded" in proc.stderr, proc.stderr
     envelope = json.loads(proc.stderr.strip().splitlines()[-1])
     assert envelope["kind"] == "infra"
     assert "'total'" in envelope["error"] and "is not in the store" in envelope["error"]
