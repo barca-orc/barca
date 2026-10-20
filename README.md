@@ -21,7 +21,8 @@ needs to run, and runs it in Python worker processes. Results are stored as file
 `.barca/`. An asset runs again only when its code or its inputs change; sensors and tasks
 run every time. Project helper references in defaults, decorators, exception handler types,
 set literals, match patterns, assignment targets and loop `else:` blocks contribute to cache
-hashes. Module-level control-flow bindings, unpacked/augmented constants and helper-module
+hashes, as do modules re-exported through another module's `import` and import chains of any
+depth. Module-level control-flow bindings, unpacked/augmented constants and helper-module
 star imports retain their dependencies conservatively.
 
 There is no server to run and no configuration file to write. `barca serve` adds
