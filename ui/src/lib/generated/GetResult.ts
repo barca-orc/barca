@@ -15,8 +15,8 @@ steps: Array<StepReport>,
  */
 warnings: Array<PlanWarning>,
 /**
- * Present when the check after the run found `.barca/` over its size limit and evicted
- * (RFC-0012).
+ * Present when the check after the run found `.barca/` over its size limit (RFC-0012):
+ * what it evicted, and the size after.
  */
 cache?: CacheReport | null,
 /**
