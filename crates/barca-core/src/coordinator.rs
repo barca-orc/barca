@@ -147,6 +147,11 @@ pub struct Coordinator {
     done: HashSet<ItemId>,
     /// Permanently failed items.
     failed: HashMap<ItemId, String>,
+    /// When each failed item's first attempt started (wall clock), kept across retries.
+    first_attempt_at: HashMap<ItemId, std::time::SystemTime>,
+    /// For a permanently failed item: when its first attempt started and the wall time from
+    /// then to the permanent failure, retries and backoff included.
+    failure_clocks: HashMap<ItemId, (std::time::SystemTime, std::time::Duration)>,
     /// Skipped items (upstream data dep failed).
     skipped: HashSet<ItemId>,
     /// Items parked for retry backoff — not ready until requeue() is called.
@@ -178,6 +183,8 @@ impl Coordinator {
             executing: HashSet::new(),
             done: HashSet::new(),
             failed: HashMap::new(),
+            first_attempt_at: HashMap::new(),
+            failure_clocks: HashMap::new(),
             skipped: HashSet::new(),
             waiting_retry: HashSet::new(),
             outputs: HashMap::new(),
@@ -327,10 +334,22 @@ impl Coordinator {
         self.unblock_dependents(item_id);
     }
 
-    /// Mark an item as failed. Retries if budget remains, else cascades.
-    /// Backoff delay grows linearly: `retry_backoff_seconds * attempts`.
-    pub fn on_item_failed(&mut self, item_id: ItemId, error: String) -> FailureAction {
+    /// Mark an item as failed after an attempt that ran for `elapsed`. Retries if budget
+    /// remains, else cascades. Backoff delay grows linearly: `retry_backoff_seconds * attempts`.
+    pub fn on_item_failed(
+        &mut self,
+        item_id: ItemId,
+        error: String,
+        elapsed: std::time::Duration,
+    ) -> FailureAction {
         self.executing.remove(&item_id);
+
+        let now = std::time::SystemTime::now();
+        let attempt_start = now.checked_sub(elapsed).unwrap_or(now);
+        let first = *self
+            .first_attempt_at
+            .entry(item_id)
+            .or_insert(attempt_start);
 
         let item = self.items.get_mut(&item_id).unwrap();
 
@@ -346,6 +365,10 @@ impl Coordinator {
         } else {
             // Permanent failure
             self.failed.insert(item_id, error);
+            self.failure_clocks.insert(
+                item_id,
+                (first, now.duration_since(first).unwrap_or(elapsed)),
+            );
 
             if let Some(group_id) = self.items[&item_id].group {
                 let group = self.groups.get_mut(&group_id).unwrap();
@@ -709,6 +732,15 @@ impl Coordinator {
             .collect()
     }
 
+    /// When a permanently failed item's first attempt started, and the wall time from then
+    /// to its permanent failure (retries and backoff included).
+    pub fn failure_clock(
+        &self,
+        item_id: ItemId,
+    ) -> Option<(std::time::SystemTime, std::time::Duration)> {
+        self.failure_clocks.get(&item_id).copied()
+    }
+
     pub fn skipped_items(&self) -> Vec<ItemId> {
         self.skipped.iter().copied().collect()
     }
@@ -947,7 +979,7 @@ mod tests {
             }],
         );
         c.next_ready(); // pop a
-        c.on_item_failed(a, "boom".into());
+        c.on_item_failed(a, "boom".into(), std::time::Duration::ZERO);
         assert!(c.is_finished()); // b is skipped
         assert_eq!(c.skipped_items().len(), 1);
     }
@@ -965,7 +997,7 @@ mod tests {
             }],
         );
         c.next_ready(); // pop a
-        c.on_item_failed(a, "boom".into());
+        c.on_item_failed(a, "boom".into(), std::time::Duration::ZERO);
         // b should be unblocked (ordering dep satisfied by failure)
         assert_eq!(c.next_ready(), Some(b));
     }
@@ -1006,7 +1038,11 @@ mod tests {
             "the two that had not started are dropped"
         );
         assert!(!c.is_group_complete(group), "one branch is still running");
-        c.on_item_failed(parent, "worker disconnected".to_string());
+        c.on_item_failed(
+            parent,
+            "worker disconnected".to_string(),
+            std::time::Duration::ZERO,
+        );
         assert!(!c.is_finished());
         c.on_item_completed(running);
         assert!(c.is_group_complete(group));
@@ -1038,7 +1074,7 @@ mod tests {
         s.retries = 3; // 3 attempts total
         let a = c.add_item(dummy_step_id("a"), s, vec![]);
         c.next_ready();
-        c.on_item_failed(a, "fail 1".into());
+        c.on_item_failed(a, "fail 1".into(), std::time::Duration::ZERO);
         // Should be back in ready (attempt 1 of 3)
         assert_eq!(c.ready_count(), 1);
         assert_eq!(c.next_ready(), Some(a));
@@ -1049,9 +1085,41 @@ mod tests {
         let mut c = Coordinator::new();
         let a = c.add_item(dummy_step_id("a"), spec("a"), vec![]); // retries=1 → no retry
         c.next_ready();
-        assert_eq!(c.on_item_failed(a, "boom".into()), FailureAction::Failed);
+        assert_eq!(
+            c.on_item_failed(a, "boom".into(), std::time::Duration::ZERO),
+            FailureAction::Failed
+        );
         assert_eq!(c.failed_items().len(), 1);
         assert!(c.is_finished());
+    }
+
+    #[test]
+    fn failure_clock_spans_first_attempt_to_permanent_failure() {
+        use std::time::Duration;
+        let mut c = Coordinator::new();
+        let mut s = spec("a");
+        s.retries = 2;
+        let a = c.add_item(dummy_step_id("a"), s, vec![]);
+
+        c.next_ready();
+        // The first attempt ran for 5 s; it is not yet permanent, so no clock.
+        c.on_item_failed(a, "fail 1".into(), Duration::from_secs(5));
+        assert_eq!(c.failure_clock(a), None);
+        c.next_ready();
+        let (started, wall) = match c.on_item_failed(a, "fail 2".into(), Duration::from_secs(3)) {
+            FailureAction::Failed => c.failure_clock(a).unwrap(),
+            other => panic!("expected a permanent failure, got {other:?}"),
+        };
+        // The wall time runs from the first attempt's start, so it covers both attempts.
+        assert!(wall >= Duration::from_secs(5), "{wall:?}");
+        assert!(wall < Duration::from_secs(6), "{wall:?}");
+        let ago = std::time::SystemTime::now()
+            .duration_since(started)
+            .unwrap();
+        assert!(
+            ago >= Duration::from_secs(5) && ago < Duration::from_secs(6),
+            "{ago:?}"
+        );
     }
 
     #[test]
@@ -1064,13 +1132,13 @@ mod tests {
         c.next_ready();
         assert_eq!(c.item(a).attempts, 1);
         assert_eq!(
-            c.on_item_failed(a, "fail 1".into()),
+            c.on_item_failed(a, "fail 1".into(), std::time::Duration::ZERO),
             FailureAction::RetryNow
         );
         c.next_ready();
         assert_eq!(c.item(a).attempts, 2);
         assert_eq!(
-            c.on_item_failed(a, "fail 2".into()),
+            c.on_item_failed(a, "fail 2".into(), std::time::Duration::ZERO),
             FailureAction::RetryNow
         );
         c.next_ready();
@@ -1092,7 +1160,7 @@ mod tests {
         c.next_ready();
         // delay = backoff * attempt: 0.2 * 1 after the first failure.
         assert_eq!(
-            c.on_item_failed(a, "fail 1".into()),
+            c.on_item_failed(a, "fail 1".into(), std::time::Duration::ZERO),
             FailureAction::RetryAfter(std::time::Duration::from_secs_f64(0.2)),
         );
         // Parked: not ready, not finished, until the caller requeues.
@@ -1103,14 +1171,17 @@ mod tests {
 
         // Second failure: delay = 0.2 * 2.
         assert_eq!(
-            c.on_item_failed(a, "fail 2".into()),
+            c.on_item_failed(a, "fail 2".into(), std::time::Duration::ZERO),
             FailureAction::RetryAfter(std::time::Duration::from_secs_f64(0.4)),
         );
         c.requeue(a);
         assert_eq!(c.next_ready(), Some(a));
 
         // Third failure exhausts the budget regardless of backoff.
-        assert_eq!(c.on_item_failed(a, "fail 3".into()), FailureAction::Failed);
+        assert_eq!(
+            c.on_item_failed(a, "fail 3".into(), std::time::Duration::ZERO),
+            FailureAction::Failed
+        );
         assert!(c.is_finished());
     }
 

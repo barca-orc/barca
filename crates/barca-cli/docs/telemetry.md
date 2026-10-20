@@ -76,7 +76,12 @@ Timing:
 - A step that ran is placed by its worker's clock: the span covers the function and writing its
   result. For a step that was retried, that is its last attempt.
 - A cached step is a zero-length span at the start of the run.
-- A failed step is a zero-length span at the end of the run. Its duration is not reported.
+- A failed step carries its duration: the span runs from the start of its first attempt to the
+  moment it failed for good, so retries and the wait between them are inside it, and a step that
+  timed out lasts about its `timeout_seconds`. This is wall time, so it can be longer than the
+  step's `elapsed_seconds` in `barca get --json`, which adds up only the time the attempts ran.
+- A step whose function ran but whose upload to a remote store failed (`UploadError`) is
+  placed by its worker's clock like a step that ran.
 
 Every run is kept: the trace is sent with sampling priority 1. Step spans are marked as
 measured, which asks Datadog to compute its trace metrics for `barca.step` as well as

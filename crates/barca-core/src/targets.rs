@@ -457,6 +457,8 @@ def lone() -> int:
                 message: message.to_string(),
                 traceback: String::new(),
                 attempts: 1,
+                started_unix_ns: None,
+                elapsed_seconds: None,
             },
         }
     }

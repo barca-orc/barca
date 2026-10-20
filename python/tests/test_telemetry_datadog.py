@@ -221,6 +221,34 @@ def test_a_failed_step_marks_its_span_and_the_run_as_errors(project, agent):
     assert by_node(spans)["report"]["error"] == 0
 
 
+def test_a_failed_step_span_lasts_from_its_first_attempt_to_its_failure(tmp_path, agent):
+    (tmp_path / "pipeline.py").write_text(
+        "import time\n"
+        "from barca import task\n\n\n"
+        "@task(timeout_seconds=1)\n"
+        "def slow() -> None:\n"
+        "    time.sleep(10)\n\n\n"
+        "@task(retries=2)\n"
+        "def flaky() -> None:\n"
+        "    time.sleep(0.3)\n"
+        "    raise ValueError('no')\n"
+    )
+    for name, low, high in (("slow", 1.0, 3.0), ("flaky", 0.6, 3.0)):
+        proc = cli(tmp_path, "run", name, "--json", **datadog(agent))
+        assert proc.returncode == 1, proc.stderr
+        (row,) = json.loads(proc.stdout)["steps"]
+        spans = agent.spans()
+        (root,) = [s for s in spans if s["name"] == "barca.run"]
+        step = by_node(spans)[name]
+        assert step["meta"]["barca.outcome"] == "failed"
+        # A timeout reports about its timeout; retries are inside the span.
+        assert low * 1e9 <= step["duration"] <= high * 1e9, step["duration"]
+        # The span covers at least the time the attempts ran (the run JSON's elapsed_seconds).
+        assert step["duration"] >= row["elapsed_seconds"] * 1e9 - 5_000_000
+        assert root["start"] <= step["start"]
+        assert step["start"] + step["duration"] <= root["start"] + root["duration"] + 50_000_000
+
+
 def test_an_unreachable_agent_warns_and_does_not_fail_the_run(project):
     proc = cli(
         project,
