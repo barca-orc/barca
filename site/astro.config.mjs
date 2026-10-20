@@ -148,6 +148,7 @@ export default defineConfig({
             { label: 'RFC-0008: Freshness Propagation', slug: 'rfcs/0008-freshness-propagation' },
             { label: 'RFC-0009: Store Backup & Restore', slug: 'rfcs/0009-store-backup-and-restore' },
             { label: 'RFC-0011: Signed URLs', slug: 'rfcs/0011-signed-urls' },
+            { label: 'RFC-0012: A Size Limit for .barca', slug: 'rfcs/0012-cache-size-limit' },
           ],
         },
       ],
