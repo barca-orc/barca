@@ -36,9 +36,9 @@ def total(orders: list) -> dict:
 
 ```bash
 printf 'id,amount\n1,10\n2,20\n' > orders.csv
-barca get total pipeline.py --agent
+barca get total pipeline.py --agent -o value --json
 printf '3,30\n' >> orders.csv
-barca get total pipeline.py --agent
+barca get total pipeline.py --agent -o value --json
 ```
 
 The second run does not see the new row:
@@ -53,7 +53,7 @@ Without a sensor, the way to pick up the change is `--refresh`, which recomputes
 name and everything downstream of them. It takes one comma-separated list (`--refresh a,b`).
 
 ```bash
-barca get total pipeline.py --refresh orders --agent
+barca get total pipeline.py --refresh orders --agent -o value --json
 ```
 
 ```
@@ -100,7 +100,7 @@ use `version` in its body; barca does not warn about an unused input that comes 
 ### First run after the conversion
 
 ```bash
-barca get total pipeline.py --agent
+barca get total pipeline.py --agent -o value --json
 ```
 
 ```
@@ -118,7 +118,7 @@ Expect one recompute of every converted asset and everything downstream of it.
 ### Unchanged observation
 
 ```bash
-barca get total pipeline.py --agent
+barca get total pipeline.py --agent -o value --json
 ```
 
 ```
@@ -135,7 +135,7 @@ The sensor runs every time. It returned the same value, so its consumers are ser
 
 ```bash
 printf '4,40\n' >> orders.csv
-barca get total pipeline.py --agent
+barca get total pipeline.py --agent -o value --json
 ```
 
 ```
@@ -157,7 +157,7 @@ computed for that value is reused:
 
 ```bash
 printf 'id,amount\n1,10\n2,20\n3,30\n' > orders.csv
-barca get total pipeline.py --agent
+barca get total pipeline.py --agent -o value --json
 ```
 
 ```

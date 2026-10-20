@@ -55,15 +55,17 @@ In a terminal:
 [barca] 1/1 steps | done in 0.0s
 Run 52255d4e3e20 | got 'a' in 0.138s (1 step, 1 phase)
 
-Value:
-"yellow banana"
+.barca/artifacts/pipeline.py--a/380bca24....json
+  "yellow banana"
 ```
+
+`barca get a pipeline.py -o value` prints only the value, and `-o path` only the path.
 
 Piped or captured, stdout is one JSON object instead (`--json` forces it, `--pretty` forces the
 table). Progress stays on stderr:
 
 ```json
-{"elapsed_seconds":0.887860791,"final_output":"yellow banana","phases":1,"run_id":"522b0b6dc4d0","status":"success","steps":[{"detail":"no cached result for this code and these inputs","id":"pipeline.py:a","kind":"asset","reason":"not_materialized","run_hash":"380bca24...","status":"ran"}],"steps_executed":1,"warnings":[]}
+{"elapsed_seconds":0.887860791,"final_output":{"_barca_artifact":{"format":"json","path":".barca/artifacts/pipeline.py--a/380bca24....json","size_bytes":15}},"phases":1,"run_id":"522b0b6dc4d0","status":"success","steps":[{"detail":"no cached result for this code and these inputs","id":"pipeline.py:a","kind":"asset","reason":"not_materialized","run_hash":"380bca24...","status":"ran"}],"steps_executed":1,"warnings":[]}
 ```
 
 Run the same command again and the function does not run:
@@ -71,8 +73,8 @@ Run the same command again and the function does not run:
 ```
 Run 52252d1eb128 | got 'a' in 0.021s (0 steps, 1 phase)
 
-Value:
-"yellow banana"
+.barca/artifacts/pipeline.py--a/....json
+  "yellow banana"
 ```
 
 In JSON the step has `"status":"cached"`, an `artifact` path, and `steps_executed` is 0.

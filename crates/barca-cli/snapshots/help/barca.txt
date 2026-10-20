@@ -4,7 +4,7 @@ Every asset output is fully materialized to an artifact file at step boundaries 
 Usage: barca <COMMAND>
 
 Commands:
-  get      Get asset value(s) — cache-aware, runs only the needed subgraph
+  get      Get assets — cache-aware, runs only the needed subgraph; prints their artifact paths
   run      Run a task and its dependency cone — the task always re-runs
   plan     Parse source files and emit the execution plan as JSON
   doctor   Diagnose project prerequisites without running pipeline steps

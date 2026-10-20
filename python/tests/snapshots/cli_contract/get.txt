@@ -1,6 +1,10 @@
 # barca get total pipeline.py --json  (stdout, exit 0)
 elapsed_seconds : number
-final_output : <user value>
+final_output : object
+final_output._barca_artifact : object
+final_output._barca_artifact.format : string
+final_output._barca_artifact.path : string
+final_output._barca_artifact.size_bytes : integer
 phases : integer
 run_id : string
 status : string

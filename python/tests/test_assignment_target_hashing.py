@@ -47,7 +47,7 @@ def unrelated():
 
     def run():
         proc = subprocess.run(
-            [_find_binary(), "get", "value,unrelated", "pipeline.py", "--json"],
+            [_find_binary(), "get", "value,unrelated", "pipeline.py", "-o", "value", "--json"],
             cwd=tmp_path,
             env=env,
             capture_output=True,

@@ -59,15 +59,15 @@ def test_default_helper_edit_invalidates_only_its_consumers(tmp_path, body):
         + body
         + "\n@asset()\ndef unrelated():\n    return 7\n"
     )
-    first = cli(tmp_path, "get", "p.py", "--json")
+    first = cli(tmp_path, "get", "p.py", "-o", "value", "--json")
     assert first["steps_executed"] == 2
-    assert cli(tmp_path, "get", "p.py", "--json")["steps_executed"] == 0
+    assert cli(tmp_path, "get", "p.py", "-o", "value", "--json")["steps_executed"] == 0
     (tmp_path / "helpers.py").write_text("def compute():\n    return 222\n")
-    changed = cli(tmp_path, "get", "p.py", "--json")
+    changed = cli(tmp_path, "get", "p.py", "-o", "value", "--json")
     assert changed["steps_executed"] == 1
     assert {s["id"]: s["status"] for s in changed["steps"]} == {
         "p.py:value": "ran",
         "p.py:unrelated": "cached",
     }
-    assert cli(tmp_path, "get", "value", "p.py", "--json")["final_output"] == 222
-    assert cli(tmp_path, "get", "p.py", "--json")["steps_executed"] == 0
+    assert cli(tmp_path, "get", "value", "p.py", "-o", "value", "--json")["final_output"] == 222
+    assert cli(tmp_path, "get", "p.py", "-o", "value", "--json")["steps_executed"] == 0

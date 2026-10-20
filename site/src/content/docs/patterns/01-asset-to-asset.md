@@ -43,11 +43,11 @@ The first run executes all three steps. Progress goes to stderr and the result t
 [barca] 3/3 steps | done in 0.0s
 Run 51dc7bf7a540 | got 'summary' in 0.058s (3 steps, 1 phase)
 
-Value:
-{
-  "count": 2,
-  "total": 165.5
-}
+.barca/artifacts/pipeline.py--summary/....json
+  {
+    "count": 2,
+    "total": 165.5
+  }
 ```
 
 The second run executes nothing. Every step has a run hash, computed from its code and its

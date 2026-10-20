@@ -15,6 +15,7 @@ from barca import _storage
 from barca.api import _find_binary
 
 from . import emulators
+from .get_values import value_args
 from .test_remote_env_config import CASES, SCRUB, _reachable, barca
 
 HOLD = str(Path(__file__).parent / "hold")
@@ -110,7 +111,7 @@ def held_run(root, options, point, *args):
     }
     with (gate / "stdout").open("w") as out, (gate / "stderr").open("w") as err:
         proc = subprocess.Popen(
-            [_find_binary(), *args, "pipeline.py", "--json"],
+            [_find_binary(), *value_args(args, json=False), "pipeline.py", "--json"],
             cwd=root,
             env=env,
             stdout=out,

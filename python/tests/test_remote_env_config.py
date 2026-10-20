@@ -20,6 +20,7 @@ import pytest
 from barca.api import _find_binary
 
 from . import emulators
+from .get_values import value_args
 
 S3_ENDPOINT = os.environ.get("BARCA_TEST_S3_ENDPOINT", "http://localhost:9100")
 GCS_ENDPOINT = os.environ.get("BARCA_TEST_GCS_ENDPOINT", "http://localhost:9200")
@@ -127,7 +128,7 @@ CASES = {
 def barca(cwd: Path, env: dict, *args: str) -> dict:
     base = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
     proc = subprocess.run(
-        [_find_binary(), *args, "--json"],
+        [_find_binary(), *value_args(args, json=False), "--json"],
         cwd=cwd,
         env={**base, **env},
         capture_output=True,

@@ -70,7 +70,7 @@ def _local_copies(root: Path) -> list[Path]:
 
 def test_a_lazy_reader_does_not_download_the_input(machine):
     root = machine("lazy")
-    proc = cli(root, "get", "lazy_sum", "--json")
+    proc = cli(root, "get", "lazy_sum", "-o", "value", "--json")
     assert str(TOTAL) in ok(proc).__repr__(), proc.stdout
     assert "fetched" not in proc.stderr, proc.stderr
     assert _local_copies(root) == []
@@ -78,19 +78,19 @@ def test_a_lazy_reader_does_not_download_the_input(machine):
 
 def test_an_eager_reader_downloads_it_once_and_later_runs_reuse_the_copy(machine):
     root = machine("eager")
-    proc = cli(root, "get", "eager_sum", "--json")
+    proc = cli(root, "get", "eager_sum", "-o", "value", "--json")
     assert str(TOTAL) in ok(proc).__repr__(), proc.stdout
     assert "fetched 1 cached artifact" in proc.stderr, proc.stderr
     assert len(_local_copies(root)) == 1
 
-    again = cli(root, "get", "lazy_sum", "--json")
+    again = cli(root, "get", "lazy_sum", "-o", "value", "--json")
     assert str(TOTAL) in ok(again).__repr__(), again.stdout
     assert "fetched" not in again.stderr, again.stderr
 
 
 def test_one_eager_reader_in_the_phase_downloads_it_for_both(machine):
     root = machine("mixed")
-    proc = cli(root, "get", "lazy_sum,eager_sum", "--json")
+    proc = cli(root, "get", "lazy_sum,eager_sum", "-o", "value", "--json")
     assert ok(proc).__repr__().count(str(TOTAL)) == 2, proc.stdout
     assert "fetched 1 cached artifact" in proc.stderr, proc.stderr
     assert len(_local_copies(root)) == 1

@@ -137,7 +137,7 @@ def _not_barca(stderr: str) -> list[str]:
 
 def test_repeated_log_warning_is_printed_once_per_run_with_a_count(tmp_path: Path) -> None:
     (tmp_path / "p.py").write_text(PARTITIONED)
-    r = _barca(tmp_path, "get", "total", "p.py", "--json", BARCA_POOL_SIZE="4")
+    r = _barca(tmp_path, "get", "total", "p.py", "-o", "value", "--json", BARCA_POOL_SIZE="4")
     assert r.returncode == 0, r.stderr
     lines = r.stderr.splitlines()
     # 8 partitions x 5 = 40 occurrences over 4 workers: one printed, 39 counted.
@@ -221,7 +221,7 @@ def test_step_prints_raw_stderr_and_error_records_are_unchanged(tmp_path: Path) 
 def test_failure_message_and_envelope_are_unchanged(tmp_path: Path) -> None:
     """A step that fails with the very text that was collapsed still reports it in full."""
     (tmp_path / "p.py").write_text(MIXED)
-    r = _barca(tmp_path, "get", "broken", "p.py", "--json")
+    r = _barca(tmp_path, "get", "broken", "p.py", "-o", "value", "--json")
     assert r.returncode == 1, r.stderr
     lines = r.stderr.splitlines()
     assert (
@@ -294,7 +294,7 @@ def test_a_plan_warning_is_printed_once_however_many_partitions_and_targets(tmp_
     per target that shares the step, and never part of the `N more:` summary, which counts
     what the workers suppressed."""
     (tmp_path / "p.py").write_text(PLAN_WARNED)
-    r = _barca(tmp_path, "get", "total,count", "p.py", "--json", BARCA_POOL_SIZE="4")
+    r = _barca(tmp_path, "get", "total,count", "p.py", "-o", "value", "--json", BARCA_POOL_SIZE="4")
     assert r.returncode == 0, r.stderr
     lines = r.stderr.splitlines()
     own = [ln for ln in lines if ln.startswith("[barca] warning: ")]

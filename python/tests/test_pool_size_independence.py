@@ -21,12 +21,14 @@ import pytest
 
 from barca.api import _find_binary
 
+from .get_values import value_args
+
 POOLS = [1, 2, 3, 5, 16]
 
 
 def barca(project: Path, pool: int, *args: str) -> dict:
     proc = subprocess.run(
-        [_find_binary(), *args],
+        [_find_binary(), *value_args(args)],
         cwd=project,
         env={**os.environ, "BARCA_POOL_SIZE": str(pool)},
         capture_output=True,

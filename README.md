@@ -46,13 +46,13 @@ def summary(data: list[dict]) -> dict:
 ```
 $ barca get pipeline.py
 [barca] 2/2 steps | done in 0.0s
-Run 51fabebab1c0 | all assets in 0.135s (2 steps, 1 phase)
+Run 354b04602500 | all assets in 0.063s (2 steps, 1 phase)
 
-Value:
-{
-  "count": 3,
-  "total": 6
-}
+.barca/artifacts/pipeline.py--summary/2d10c4c5ef45...json
+  {
+    "count": 3,
+    "total": 6
+  }
 
 $ barca get pipeline.py
 Run 51fa8fe09d90 | all assets in 0.005s (0 steps, 1 phase)
@@ -303,7 +303,7 @@ error (exit 2) that names the right one. `barca pipeline.py` is short for
 
 | Command | What it does |
 |---|---|
-| `barca get [target] [files...]` | Get one asset, several (`a,b`), or with no target every asset and sensor. Runs only what is not cached. |
+| `barca get [target] [files...]` | Get one asset, several (`a,b`), or with no target every asset and sensor. Runs only what is not cached and prints the artifact paths (one per partition key); `-o value` prints the value, `-o path` only the paths, `--partition region=emea` selects keys of a partitioned target. |
 | `barca run <task> [files...]` | Run a task, or several (`a,b`), and what they depend on. The task always runs. |
 | &nbsp;&nbsp;`get` and `run` flags | `--refresh a,b`, `--no-cascade`, `--refresh-all`, `--dry-run`, `--env <name>`, `--agent` (plain progress lines), `--json`, `--pretty`, `--fields` |
 | `barca doctor [files...]` | Check project, Python, cache, metadata and stores without running steps (`--json`, `--pretty`, `--env`). See `barca docs doctor` for local-only debugging. |

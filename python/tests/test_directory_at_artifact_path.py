@@ -91,7 +91,7 @@ def project(tmp_path):
     root = tmp_path / "project"
     root.mkdir()
     (root / "pipeline.py").write_text(PIPELINE)
-    assert ok(cli(root, "get", "total", "--json"))["steps_executed"] == 2
+    assert ok(cli(root, "get", "total", "-o", "value", "--json"))["steps_executed"] == 2
     return root
 
 
@@ -102,7 +102,7 @@ def test_a_step_that_reads_it_recomputes_the_input_and_the_directory_is_moved_as
     path = artifact(project, "numbers")
     put_directory(path)
 
-    proc = cli(project, "get", "total", "--refresh", "total", "--json")
+    proc = cli(project, "get", "total", "--refresh", "total", "-o", "value", "--json")
 
     doc = ok(proc)
     assert doc["final_output"] == {"sum": 7}
@@ -125,19 +125,19 @@ def test_returned_as_the_commands_output_it_is_computed_again_not_pointed_at(pro
     (node,) = status["nodes"]
     assert (node["cache"]["state"], node["cache"]["reason"]) == ("stale", "artifact_missing")
 
-    doc = ok(cli(project, "get", "numbers", "--json"))
+    doc = ok(cli(project, "get", "numbers", "-o", "value", "--json"))
     assert doc["final_output"] == [3, 4]
     assert steps(doc) == {"numbers": ("ran", "artifact_missing")}
     assert (moved_aside(path) / "inner" / "x").read_text() == "mine"
 
-    again = ok(cli(project, "get", "numbers", "--json"))
+    again = ok(cli(project, "get", "numbers", "-o", "value", "--json"))
     assert again["steps_executed"] == 0 and steps(again) == {"numbers": ("cached", None)}
 
 
 def test_a_refresh_writes_over_it_after_moving_it_aside(project):
     path = artifact(project, "numbers")
     put_directory(path)
-    doc = ok(cli(project, "get", "total", "--refresh", "numbers", "--json"))
+    doc = ok(cli(project, "get", "total", "--refresh", "numbers", "-o", "value", "--json"))
     assert steps(doc) == {"numbers": ("ran", "refresh"), "total": ("ran", "refresh_cascade")}
     assert json.loads(path.read_text()) == [3, 4]
     assert (moved_aside(path) / "inner" / "x").read_text() == "mine"
@@ -146,7 +146,7 @@ def test_a_refresh_writes_over_it_after_moving_it_aside(project):
 def test_an_empty_directory_is_removed_without_a_warning(project):
     path = artifact(project, "numbers")
     put_directory(path, contents=False)
-    proc = cli(project, "get", "numbers", "--json")
+    proc = cli(project, "get", "numbers", "-o", "value", "--json")
     assert ok(proc)["final_output"] == [3, 4]
     assert siblings(path) == [path.name] and path.is_file()
     assert "not an artifact" not in proc.stderr, proc.stderr
@@ -155,7 +155,7 @@ def test_an_empty_directory_is_removed_without_a_warning(project):
 def test_a_directory_nothing_reads_is_not_touched(project):
     path = artifact(project, "numbers")
     put_directory(path)
-    doc = ok(cli(project, "get", "total", "--json"))
+    doc = ok(cli(project, "get", "total", "-o", "value", "--json"))
     assert doc["steps_executed"] == 0
     assert steps(doc) == {"numbers": ("cached", None), "total": ("cached", None)}
     assert path.is_dir() and (path / "inner" / "x").read_text() == "mine"
@@ -170,7 +170,7 @@ def test_a_symlink_to_a_directory_is_replaced_and_its_target_is_untouched(projec
     path.unlink()
     path.symlink_to(elsewhere, target_is_directory=True)
 
-    doc = ok(cli(project, "get", "numbers", "--json"))
+    doc = ok(cli(project, "get", "numbers", "-o", "value", "--json"))
 
     assert doc["final_output"] == [3, 4]
     assert steps(doc) == {"numbers": ("ran", "artifact_missing")}
@@ -187,7 +187,7 @@ def test_each_directory_found_there_gets_a_name_of_its_own(project):
         path.unlink()
         path.mkdir()
         (path / marker).write_text(marker)
-        assert ok(cli(project, "get", "numbers", "--json"))["final_output"] == [3, 4]
+        assert ok(cli(project, "get", "numbers", "-o", "value", "--json"))["final_output"] == [3, 4]
         suffix = ".moved-aside" + ("" if n == 1 else f"-{n}")
         assert (path.with_name(path.name + suffix) / marker).read_text() == marker
     assert siblings(path) == [
@@ -203,7 +203,7 @@ def test_a_dangling_symlink_is_replaced_by_the_artifact(project, tmp_path):
     path = artifact(project, "numbers")
     path.unlink()
     path.symlink_to(tmp_path / "nowhere.json")
-    doc = ok(cli(project, "get", "numbers", "--json"))
+    doc = ok(cli(project, "get", "numbers", "-o", "value", "--json"))
     assert steps(doc) == {"numbers": ("ran", "artifact_missing")}
     assert path.is_file() and not path.is_symlink()
     assert not (tmp_path / "nowhere.json").exists()
@@ -220,11 +220,11 @@ def test_a_symlink_to_a_file_is_read_as_the_artifact_and_a_refresh_replaces_the_
     path.unlink()
     path.symlink_to(target)
 
-    doc = ok(cli(project, "get", "numbers", "--json"))
+    doc = ok(cli(project, "get", "numbers", "-o", "value", "--json"))
     assert steps(doc) == {"numbers": ("cached", None)} and doc["final_output"] == [5, 5]
     assert path.is_symlink()
 
-    doc = ok(cli(project, "get", "numbers", "--refresh", "numbers", "--json"))
+    doc = ok(cli(project, "get", "numbers", "--refresh", "numbers", "-o", "value", "--json"))
     assert doc["final_output"] == [3, 4]
     assert path.is_file() and not path.is_symlink()
     assert target.read_text() == "[5, 5]"
@@ -238,7 +238,7 @@ def test_concurrent_runs_meeting_the_same_directory_all_succeed(project):
     env = {k: v for k, v in os.environ.items() if not k.startswith("BARCA_")}
     procs = [
         subprocess.Popen(
-            [_find_binary(), "get", "numbers", "--json"],
+            [_find_binary(), "get", "numbers", "-o", "value", "--json"],
             cwd=project,
             env=env,
             stdout=subprocess.PIPE,
@@ -262,7 +262,7 @@ def test_a_directory_barca_may_not_move_is_an_infrastructure_error_not_a_failed_
     put_directory(path)
     path.parent.chmod(0o555)
     try:
-        proc = cli(project, "get", "numbers", "--json")
+        proc = cli(project, "get", "numbers", "-o", "value", "--json")
     finally:
         path.parent.chmod(0o755)
 
@@ -276,7 +276,7 @@ def test_a_directory_barca_may_not_move_is_an_infrastructure_error_not_a_failed_
     assert "traceback" not in envelope
     assert (path / "inner" / "x").read_text() == "mine"
     # With the permission back, the same command succeeds.
-    assert ok(cli(project, "get", "numbers", "--json"))["final_output"] == [3, 4]
+    assert ok(cli(project, "get", "numbers", "-o", "value", "--json"))["final_output"] == [3, 4]
 
 
 SINK_PIPELINE = """
@@ -297,7 +297,7 @@ def test_a_directory_at_a_sink_path_fails_the_sink_and_is_never_moved(tmp_path):
     (out / "inner" / "x").write_text("mine")
     (root / "pipeline.py").write_text(SINK_PIPELINE)
 
-    proc = cli(root, "get", "exported", "--json")
+    proc = cli(root, "get", "exported", "-o", "value", "--json")
 
     assert ok(proc)["final_output"] == {"v": 1}  # the asset itself succeeds
     assert "[barca] SINK FAILED: pipeline.py:exported" in proc.stderr, proc.stderr
@@ -317,7 +317,7 @@ def test_a_symlink_at_a_sink_path_is_written_through_and_stays_a_link(tmp_path):
     link.symlink_to(target)
     (root / "pipeline.py").write_text(SINK_PIPELINE)
 
-    proc = cli(root, "get", "exported", "--json")
+    proc = cli(root, "get", "exported", "-o", "value", "--json")
 
     assert ok(proc)["final_output"] == {"v": 1}
     assert "SINK FAILED" not in proc.stderr, proc.stderr
@@ -335,7 +335,7 @@ def test_a_symlink_to_a_directory_at_a_sink_path_fails_the_sink_and_stays(tmp_pa
     link.symlink_to(target, target_is_directory=True)
     (root / "pipeline.py").write_text(SINK_PIPELINE)
 
-    proc = cli(root, "get", "exported", "--json")
+    proc = cli(root, "get", "exported", "-o", "value", "--json")
 
     assert ok(proc)["final_output"] == {"v": 1}
     assert "[barca] SINK FAILED: pipeline.py:exported" in proc.stderr, proc.stderr
@@ -354,9 +354,9 @@ def shared(tmp_path):
     for root in (producer, reader):
         root.mkdir()
         (root / "pipeline.py").write_text(PIPELINE)
-    ok(cli(producer, "get", "total", "--json", store=store))
+    ok(cli(producer, "get", "total", "-o", "value", "--json", store=store))
     # `get numbers` makes the reader hold a local copy of it.
-    ok(cli(reader, "get", "numbers", "--json", store=store))
+    ok(cli(reader, "get", "numbers", "-o", "value", "--json", store=store))
     return store, reader
 
 
@@ -365,7 +365,7 @@ def test_a_directory_at_the_local_copy_is_moved_aside_and_the_store_copy_fetched
     path = artifact(reader, "numbers")
     put_directory(path)
 
-    proc = cli(reader, "get", "numbers", "--json", store=store)
+    proc = cli(reader, "get", "numbers", "-o", "value", "--json", store=store)
 
     doc = ok(proc)
     assert doc["final_output"] == [3, 4]
@@ -384,7 +384,7 @@ def test_a_directory_at_the_local_copy_and_no_store_copy_recomputes(shared):
     (stored,) = store.glob("default/artifacts/*--numbers/*.json")
     stored.unlink()
 
-    doc = ok(cli(reader, "get", "numbers", "--json", store=store))
+    doc = ok(cli(reader, "get", "numbers", "-o", "value", "--json", store=store))
 
     assert doc["final_output"] == [3, 4]
     assert steps(doc) == {"numbers": ("ran", "artifact_missing")}
@@ -399,7 +399,7 @@ def test_a_directory_in_the_store_is_an_infra_error_and_is_left_alone(shared):
     (stored / "theirs").mkdir(parents=True)
     artifact(reader, "numbers").unlink()  # the reader has to ask the store
 
-    proc = cli(reader, "get", "numbers", "--json", store=store)
+    proc = cli(reader, "get", "numbers", "-o", "value", "--json", store=store)
 
     assert proc.returncode == 3, proc.stderr
     envelope = json.loads(next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{")))
@@ -420,7 +420,7 @@ def test_a_directory_in_the_store_fails_the_upload_the_same_way(shared, tmp_path
     stored.unlink()
     (stored / "theirs").mkdir(parents=True)
 
-    proc = cli(reader, "get", "numbers", "--refresh", "numbers", "--json", store=store)
+    proc = cli(reader, "get", "numbers", "--refresh", "numbers", "-o", "value", "--json", store=store)
 
     assert proc.returncode == 3, proc.stderr
     envelope = json.loads(next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{")))
@@ -433,7 +433,7 @@ def test_a_directory_in_the_store_fails_the_upload_the_same_way(shared, tmp_path
     # Removed there, the same command stores the result.
     (stored / "theirs").rmdir()
     stored.rmdir()
-    ok(cli(reader, "get", "numbers", "--refresh", "numbers", "--json", store=store))
+    ok(cli(reader, "get", "numbers", "--refresh", "numbers", "-o", "value", "--json", store=store))
     assert json.loads(stored.read_text()) == [3, 4]
 
 
@@ -446,7 +446,7 @@ def test_a_directory_where_the_shared_history_belongs_says_so(tmp_path):
     root.mkdir()
     (root / "pipeline.py").write_text(PIPELINE)
 
-    proc = cli(root, "get", "numbers", "--json", store=store)
+    proc = cli(root, "get", "numbers", "-o", "value", "--json", store=store)
 
     assert proc.returncode == 3, proc.stderr
     envelope = json.loads(next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{")))
@@ -464,7 +464,7 @@ def test_a_local_directory_barca_may_not_move_fails_the_fetch_with_the_same_advi
     put_directory(path)
     path.parent.chmod(0o555)
     try:
-        proc = cli(reader, "get", "numbers", "--json", store=store)
+        proc = cli(reader, "get", "numbers", "-o", "value", "--json", store=store)
     finally:
         path.parent.chmod(0o755)
 

@@ -13,6 +13,8 @@ from pathlib import Path
 
 from barca.api import _find_binary
 
+from .get_values import value_args
+
 PIPELINE = """
 from pathlib import Path
 from barca import asset
@@ -31,7 +33,11 @@ def out(s: dict) -> dict:
 
 def barca(cwd: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
-        [_find_binary(), *args, "--json"], cwd=cwd, capture_output=True, text=True, check=False
+        [_find_binary(), *value_args(args, json=False), "--json"],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=False,
     )
 
 

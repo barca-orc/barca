@@ -342,7 +342,7 @@ class Project:
     def get(self, *args: str, timeout: float = 120) -> tuple[subprocess.CompletedProcess, float]:
         t0 = time.monotonic()
         proc = subprocess.run(
-            [BARCA, "get", *args, "pipeline.py", "--agent"],
+            [BARCA, "get", *args, "pipeline.py", "--agent", "-o", "value", "--json"],
             cwd=self.dir,
             env=self.env,
             capture_output=True,
@@ -373,7 +373,7 @@ class Project:
             "PYTHONPATH": str(shim) + os.pathsep + self.env.get("PYTHONPATH", ""),
         }
         with subprocess.Popen(
-            [BARCA, "get", "pipeline.py", "--agent"],
+            [BARCA, "get", "pipeline.py", "--agent", "-o", "value", "--json"],
             cwd=self.dir,
             env=env,
             stdout=subprocess.PIPE,

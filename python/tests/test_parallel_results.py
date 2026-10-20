@@ -20,6 +20,8 @@ from pathlib import Path
 import pytest
 from barca.api import _error_envelope, _find_binary
 
+from .get_values import value_args
+
 pytest.importorskip("duckdb")
 pytest.importorskip("numpy")
 pytest.importorskip("pandas")
@@ -220,7 +222,8 @@ def run(
         (root / "store").mkdir(exist_ok=True)
         env["BARCA_REMOTE_URI"] = str(root / "store")
     proc = subprocess.Popen(
-        [_find_binary(), command, target, *extra],
+        # `get` prints artifact paths by default; these tests check values.
+        [_find_binary(), *value_args([command, target, *extra])],
         cwd=root,
         env=env,
         stdout=subprocess.PIPE,

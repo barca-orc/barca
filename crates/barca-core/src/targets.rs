@@ -255,6 +255,7 @@ pub(crate) fn target_outcomes(
     targets: &[(String, String)],
     all_outputs: &HashMap<String, OutputRef>,
     failures: &[dispatch::StepFailure],
+    selection: Option<&crate::selection::PartitionSelection>,
 ) -> Vec<(String, TargetOutcome)> {
     let base = |f: &dispatch::StepFailure| crate::StepId::parse(&f.node_id).base_id().to_string();
     targets
@@ -266,24 +267,32 @@ pub(crate) fn target_outcomes(
                     .into_iter()
                     .find_map(|id| failures.iter().find(|f| base(f) == id))
             });
-            let outcome = match (failure, output_for(tid, all_outputs)) {
+            let partitions = crate::selection::partition_outputs(dag, tid, all_outputs, selection);
+            let output = match &partitions {
+                Some(keys) => keys.first().map(|(_, o)| o.clone()),
+                None => output_for(tid, all_outputs),
+            };
+            let outcome = match (failure, output) {
                 (Some(f), _) => TargetOutcome {
                     status: "failed".to_string(),
                     final_output: None,
                     error: Some(f.error.message.clone()),
                     failed_node: Some(f.node_id.clone()),
+                    partitions,
                 },
                 (None, Some(out)) => TargetOutcome {
                     status: "success".to_string(),
                     final_output: Some(out),
                     error: None,
                     failed_node: None,
+                    partitions,
                 },
                 (None, None) => TargetOutcome {
                     status: "failed".to_string(),
                     final_output: None,
                     error: Some("did not run".to_string()),
                     failed_node: None,
+                    partitions,
                 },
             };
             (name.clone(), outcome)
@@ -479,6 +488,7 @@ def lone() -> int:
             final_output: None,
             error: None,
             failed_node: None,
+            partitions: None,
         }
     }
 
@@ -612,7 +622,7 @@ def lone() -> int:
         let outputs: HashMap<String, OutputRef> =
             [("p.py:check_a".to_string(), oref("a.json"))].into();
         let failures = vec![failure("p.py:left", "boom")];
-        let out = target_outcomes(&dag, &targets, &outputs, &failures);
+        let out = target_outcomes(&dag, &targets, &outputs, &failures, None);
         assert_eq!(out[0].0, "check_a");
         assert_eq!(out[0].1.status, "success");
         assert_eq!(out[0].1.final_output.as_ref().unwrap().path, "a.json");

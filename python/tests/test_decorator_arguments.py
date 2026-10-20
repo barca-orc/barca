@@ -184,7 +184,7 @@ def test_one_bad_file_stops_every_command_that_reads_it_and_no_other(tmp_path: P
         ), args
 
     # Naming the files to read leaves the bad one out.
-    proc = barca_cmd(tmp_path, "get", "fine", "good.py", "--json")
+    proc = barca_cmd(tmp_path, "get", "fine", "good.py", "-o", "value", "--json")
     assert proc.returncode == 0, proc.stderr
     assert json.loads(proc.stdout)["final_output"] == 1
 
@@ -252,7 +252,7 @@ def test_partitions_and_serializer_work_on_tasks_and_sensors_as_on_0_18_1(tmp_pa
         "publishing b",
     ]
 
-    proc = barca_cmd(tmp_path, "get", "watch", "pipeline.py", "--json")
+    proc = barca_cmd(tmp_path, "get", "watch", "pipeline.py", "-o", "value", "--json")
     assert proc.returncode == 0, proc.stderr
     result = json.loads(proc.stdout)
     assert result["steps_executed"] == 2

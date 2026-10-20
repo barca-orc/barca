@@ -61,6 +61,7 @@ pub async fn get(
         command_label: "get",
         interrupt: cancel.into(),
         event_tx: None,
+        partition: None,
     })
     .await?
     .into_single()
@@ -88,6 +89,7 @@ pub async fn run(
         command_label: "run",
         interrupt: cancel.into(),
         event_tx: None,
+        partition: None,
     })
     .await?
     .into_single()
@@ -105,6 +107,7 @@ pub async fn get_streaming(
     agent_mode: bool,
     cancel: impl Into<crate::interrupt::Interrupt>,
     event_tx: Option<UnboundedSender<crate::RunEvent>>,
+    partition: Option<crate::selection::PartitionSelection>,
 ) -> Result<GetResult, BarcaError> {
     let names: Vec<String> = target_name.map(str::to_string).into_iter().collect();
     execute(ExecuteRequest {
@@ -118,6 +121,7 @@ pub async fn get_streaming(
         command_label: "get",
         interrupt: cancel.into(),
         event_tx,
+        partition,
     })
     .await?
     .into_single()
@@ -146,6 +150,7 @@ pub async fn run_streaming(
         command_label: "run",
         interrupt: cancel.into(),
         event_tx,
+        partition: None,
     })
     .await?
     .into_single()
@@ -172,6 +177,7 @@ pub async fn get_many(
         agent_mode,
         cancel,
         None,
+        None,
     )
     .await
 }
@@ -187,6 +193,7 @@ pub async fn get_many_streaming(
     agent_mode: bool,
     cancel: impl Into<crate::interrupt::Interrupt>,
     event_tx: Option<UnboundedSender<crate::RunEvent>>,
+    partition: Option<crate::selection::PartitionSelection>,
 ) -> Result<MultiResult, BarcaError> {
     execute(ExecuteRequest {
         dag: None,
@@ -199,6 +206,7 @@ pub async fn get_many_streaming(
         command_label: "get",
         interrupt: cancel.into(),
         event_tx,
+        partition,
     })
     .await
     .map(Executed::into_multi)
@@ -251,6 +259,7 @@ pub async fn run_many_streaming(
         command_label: "run",
         interrupt: cancel.into(),
         event_tx,
+        partition: None,
     })
     .await
     .map(Executed::into_multi)
@@ -281,6 +290,7 @@ pub async fn get_streaming_from_dag(
         command_label: "get",
         interrupt: cancel.into(),
         event_tx,
+        partition: None,
     })
     .await?
     .into_single()
@@ -310,6 +320,7 @@ pub async fn run_streaming_from_dag(
         command_label: "run",
         interrupt: cancel.into(),
         event_tx,
+        partition: None,
     })
     .await?
     .into_single()
