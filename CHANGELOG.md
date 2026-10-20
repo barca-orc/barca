@@ -12,7 +12,7 @@ reconciliation, and verified shared DuckDB worker lifetime. See
 upgrade and breaking-change notes. Releases between the historical entries below
 and these tags are available on the same releases page.
 
-## Pending 0.24.0
+## 0.24.2 (2026-10-20)
 
 ### Bug Fixes
 
@@ -35,15 +35,19 @@ and these tags are available on the same releases page.
   <store>` once on stderr at startup when `default_env` from `barca.toml` or an artifact store
   is in effect.
 
-- Follow project helper references in exception handler types, including exception tuples
-  and `except*`. Editing those helpers invalidates their consumers. Existing affected
-  consumers may recompute once after upgrading.
-
 - Follow a project module reached through another module's `import` (`from wrapper import
   helpers` or `wrapper.helpers.f()` where `wrapper.py` does `import helpers`), and follow
   import chains at any depth instead of stopping six project modules deep; modules that
   import each other terminate. Editing such a helper now invalidates its consumers. Existing
   affected consumers may recompute once after upgrading.
+
+## 0.24.0
+
+### Bug Fixes
+
+- Follow project helper references in exception handler types, including exception tuples
+  and `except*`. Editing those helpers invalidates their consumers. Existing affected
+  consumers may recompute once after upgrading.
 
 - Follow project helper references inside set literals. Editing those helpers now invalidates
   their cached consumers. Existing affected consumers may recompute once after upgrading.
