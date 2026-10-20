@@ -5,7 +5,11 @@ cache.evicted_files : integer
 cache.limit_bytes : integer
 cache.size_bytes : integer
 elapsed_seconds : number
-final_output : <user value>
+final_output : object
+final_output._barca_artifact : object
+final_output._barca_artifact.format : string
+final_output._barca_artifact.path : string
+final_output._barca_artifact.size_bytes : integer
 phases : integer
 run_id : string
 status : string

@@ -1357,7 +1357,11 @@ are `null` when the asset never ran; `recent_runs[].error_message` is a string f
 | `cache.limit_bytes` | integer | always |
 | `cache.size_bytes` | integer | always |
 | `elapsed_seconds` | number | always |
-| `final_output` | `<user value>` | always |
+| `final_output` | object | always |
+| `final_output._barca_artifact` | object | always |
+| `final_output._barca_artifact.format` | string | always |
+| `final_output._barca_artifact.path` | string | always |
+| `final_output._barca_artifact.size_bytes` | integer | always |
 | `phases` | integer | always |
 | `run_id` | string | always |
 | `status` | string | always |
