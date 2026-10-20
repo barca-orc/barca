@@ -997,13 +997,18 @@ pub async fn init_db(db_path: &str) -> Result<(), BarcaError> {
 }
 
 /// Migrate legacy metadata atomically, preserving authoritative history. Unknown versions
-/// are refused before any write; current databases are validated without changing them.
+/// are refused before any write; complete current databases are left unchanged.
+///
+/// Format 1 is additive: a format-1 database written by an earlier release may lack a
+/// nullable column added since (`materializations.bytes_changed` in 0.24.0). It gets the
+/// same additive migration as a legacy database, in one transaction, and an older release
+/// still reads the result.
 pub(crate) async fn init_schema(conn: &turso::Connection) -> Result<(), BarcaError> {
     let version = crate::db_schema::check(conn).await?;
-    if version == crate::db_schema::VERSION {
-        return crate::state_validate::usable_schema(conn)
-            .await?
-            .map_err(BarcaError::Db);
+    if version == crate::db_schema::VERSION
+        && crate::state_validate::usable_schema(conn).await?.is_ok()
+    {
+        return Ok(());
     }
     crate::state_validate::legacy_schema(conn)
         .await?
