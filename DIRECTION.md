@@ -20,7 +20,7 @@ An embedded orchestrator. You mark Python functions with `@asset`, `@sensor`, `@
 
 ## Now, in order
 
-The milestone an issue sits in is its item below; the release it ships in is in the sequence that follows.
+An issue's milestone is the release it ships in; the four items below are the order.
 
 1. **Correctness and recovery.** Shipped at 0.24.1: upload receipts (#381), a killed run that stays `running` (#290). Left: the last two hash holes, re-exports and deep import chains (#295); a partitioned target that returns one key (#287); a worker killed by the kernel reported as a bare `worker disconnected` (#433); failed steps that report no duration in telemetry (#437); superlinear cold partition scaling, reproduced before it is fixed (#345); the realistic fixture, small size first (#250). The corrupt shared-history blob (#243) closes when the pull is removed (#403).
 2. **Everyday use.** Shipped at 0.24.1: per-step timings (#386), usable task output (#387), `barca doctor` (#388), the one-line failure summary (#389), sane `barca list` defaults (#391), the changed-bytes warning (#392). Left: paths by default in `barca get` output (#404), a remote store that fails soft after the work is done (#390), a metadata backup with a restore command in place of the shared-history blob (RFC-0009, #403), logs you can join to a trace under `serve` (#434), current numbers on the comparison pages (#65). Later: a limit on how many heavy workers run at once (#436).
@@ -29,17 +29,44 @@ The milestone an issue sits in is its item below; the release it ships in is in 
 
 ### Release sequence
 
-Each minor release carries one breaking theme.
+Each release is a GitHub milestone with a due date; the milestone page is the schedule. Each minor carries one breaking theme and is followed by a cleanup release (below). Dates are targets set on 2026-10-20 at the pace of the last two releases, not promises.
 
-| Release | Theme | Issues, in order |
-|---|---|---|
-| 0.24.2 | Patch: the three production reports | #437, #432, #433 |
-| 0.25.0 | Breaking: output shape | #287 with #404 in one PR, then #295, then reproduce #345 |
-| 0.26.0 | Breaking: the store is a backup, `optimistic` is gone | #390, then #403 (closes #243) |
-| 0.27.0 | The server is the ledger | #190, #393 with #435, #394, #402 |
-| 0.28.0 | Breaking: freshness propagation | #253 |
+| Milestone | Due | Theme | Issues, in order |
+|---|---|---|---|
+| 0.24.2 | 2026-10-24 | Patch: the three production reports | #437, #432, #433 |
+| 0.24.3 cleanup | 2026-10-31 | Dependabot criticals (#439), comparison numbers (#65) | |
+| 0.25.0 | 2026-11-07 | Breaking: output shape | #287 with #404 in one PR, then #295, then reproduce #345 |
+| 0.25.1 cleanup | 2026-11-14 | | |
+| 0.26.0 | 2026-11-28 | Breaking: the store is a backup, `optimistic` is gone | #390, then #403 (closes #243) |
+| 0.26.1 cleanup | 2026-12-05 | Delete the state-sync modules and optimistic paths | |
+| 0.27.0 | 2026-12-31 | The server is the ledger | #190, #393 with #435, #394, #402; #250 small fixture and #434 alongside |
+| 0.27.1 cleanup | 2027-01-08 | Drop the route aliases from #393 | |
+| 0.28.0 | 2027-01-29 | Breaking: freshness propagation | #253 |
 
-Alongside, gating nothing: the small #250 fixture before #394; the #65 numbers; #434.
+An open issue with no milestone is unscheduled on purpose (#436); it is scheduled when it becomes the next most important thing.
+
+### Cleanup releases
+
+After every minor, a `0.x.1 cleanup` milestone: one week, no features. The checklist is the release; each item that finds something becomes an ordinary issue in that milestone.
+
+- Re-read every surface the minor shipped against "What barca is" and the non-goals. What drifted is reverted or gets an issue.
+- Delete what the previous minor deprecated, and the modules its Breaking lines made unreachable.
+- Diff the manual, `contract.md`, the snapshots and the site pages against behaviour you can run.
+- Dependabot: zero critical and high; lockfiles refreshed; what cannot be bumped gets an issue naming the blocker.
+- Flaky or skipped tests are fixed or deleted, never kept.
+- Every open question due by this release is decided and moved to "Decided", or deferred with a reason.
+- `specs/README.md` says implemented or proposed truthfully for every boundary.
+
+## Open questions
+
+Design questions nobody has answered yet, the issue each blocks, and the release it must be decided by. Proposals in issue status lines are proposals until they appear under "Decided".
+
+- **Partial failure of a partitioned target** (#287): the exit code when some selected keys fail, and whether the JSON lists the failed keys. By 0.25.0.
+- **Drain defaults** (#190): the default grace, the config key (`[server] drain_timeout` is proposed), and the exit code after a forced stop. By 0.27.0.
+- **Pause persistence** (#435): whether a paused schedule stays paused across a server restart. Proposed yes. By 0.27.0.
+- **Route aliases and resume** (#393): how long the old routes stay as aliases, and when `Last-Event-ID` resume replaces the drop-is-infra-error rule. By 0.27.0.
+- **Fixture home** (#250): `examples/planning_pipeline/` or `benchmarks/planning_pipeline/`. By 0.27.0.
+- **Heavy-worker limit** (#436): a per-node weight, a concurrency group, or a memory budget from recorded RSS. Unscheduled; decided when scheduled.
 
 ## Decided, October 2026
 
@@ -63,6 +90,6 @@ Named refresh groups; a schema contract on sinks; OTLP export; Slack and email n
 
 - An issue states one observable problem and what done looks like. No process vocabulary, no ledger of CI runs.
 - Labels: `bug` or `enhancement`, one `area:*`, `parked` for closed ideas. Nothing else.
-- Milestones match the four items above. A decision in "Decided" is the answer to a design question; reopen it with a reason, not a re-ask.
+- Milestones are releases, one per row of the release sequence, with a due date. The four items above are the order within and between them, not milestones. A decision in "Decided" is the answer to a design question; reopen it with a reason, not a re-ask. A question nobody has answered is listed under "Open questions" with the release it must be decided by.
 - Design that touches the public surface is an RFC on the site. A design PR is decided within a week: merged as Accepted, or closed with a sentence saying why.
 - `specs/` holds the four boundary specifications and their index. Implementation notes live in the PR that made them.
