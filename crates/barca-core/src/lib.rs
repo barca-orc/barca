@@ -23,6 +23,7 @@ pub mod groups;
 pub mod hash;
 #[doc(hidden)]
 pub mod helper_proc;
+pub mod http;
 pub mod interrupt;
 pub mod io_loop;
 pub mod load;

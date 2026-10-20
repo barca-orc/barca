@@ -2467,6 +2467,7 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
         command: command_label,
         files: db::encode_files(file_args),
         target: target_label.as_deref(),
+        job: job_name,
         steps_total: exec_plan.total_steps,
         steps_executed,
         steps_cached,
@@ -2492,8 +2493,9 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
     trace_point!("persist_run_done");
 
     if !telemetry.is_empty() {
-        let report = telemetry_report(&ledger, dag, run_started, step_clocks, job_name);
-        crate::telemetry::export(telemetry, &report).await;
+        let report = telemetry_report(&ledger, dag, run_started, step_clocks, Some(&cfg.env));
+        let history = crate::telemetry::JobHistory::new(db_path);
+        crate::telemetry::export(telemetry, &report, &history).await;
         trace_point!("telemetry_exported");
     }
 
@@ -2934,6 +2936,7 @@ mod store_tests {
             command: "get",
             files: "f.py".to_string(),
             target: None,
+            job: "f:a",
             steps_total: 1,
             steps_executed: 1,
             steps_cached: 0,
@@ -2989,6 +2992,7 @@ mod store_tests {
             command: "get",
             files: "f.py".to_string(),
             target: None,
+            job: "f:a",
             steps_total: 2,
             steps_executed: 2,
             steps_cached: 0,

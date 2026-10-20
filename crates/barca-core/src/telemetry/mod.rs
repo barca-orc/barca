@@ -4,17 +4,22 @@
 //! The engine builds one [`RunReport`] per run and knows nothing about where it
 //! goes. An integration is a module that implements [`Integration`] and is
 //! listed in the `integrations!` table below; `BARCA_TELEMETRY=<name>[,<name>]`
-//! switches it on. Exporting never fails a run: an integration that cannot
-//! deliver gets one warning line on stderr.
+//! switches it on. Slack is the exception: it is not named there, and
+//! `BARCA_SLACK_WEBHOOK_URL` alone switches it on. Exporting never fails a run: an
+//! integration that cannot deliver gets one warning line on stderr.
 
 pub mod datadog;
+pub mod history;
+pub mod slack;
+
+pub use history::JobHistory;
 
 use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
 /// How long one integration may take to deliver a signal before it is abandoned.
-const EXPORT_TIMEOUT: Duration = Duration::from_secs(3);
+pub(crate) const EXPORT_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// What happened to one step of a run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,6 +73,8 @@ pub struct RunReport {
     pub target: Option<String>,
     /// Canonical resolved job ids, independent of how a target was entered.
     pub job: String,
+    /// The barca environment the run used (`--env`, `BARCA_ENV`, ...), when known.
+    pub env: Option<String>,
     /// `success`, `failed` or `cancelled`; `skipped` for a `barca serve` tick that did not
     /// start a run.
     pub status: String,
@@ -118,8 +125,10 @@ pub(crate) type Export<'a> = Pin<Box<dyn Future<Output = Result<(), String>> + S
 
 /// Somewhere run reports and optional server lifecycle signals can be sent.
 pub trait Integration: Send + Sync {
-    /// Deliver one finished run. An `Err` is reported as a warning; it never fails the run.
-    fn export<'a>(&'a self, run: &'a RunReport) -> Export<'a>;
+    /// Deliver one finished run. `history` reads the job's earlier runs and the last post an
+    /// integration recorded for it. An `Err` is reported as a warning; it never fails the run,
+    /// and it must not contain a secret such as a webhook URL.
+    fn export<'a>(&'a self, run: &'a RunReport, history: &'a JobHistory) -> Export<'a>;
     /// Optional server lifecycle support. Integrations can remain run-only.
     fn export_server<'a>(&'a self, _server: &'a ServerReport) -> Export<'a> {
         Box::pin(async { Ok(()) })
@@ -160,15 +169,15 @@ fn parse_names(raw: &str) -> Vec<String> {
     names
 }
 
-/// The integrations `BARCA_TELEMETRY` switches on. An unknown name or a
-/// misconfigured integration is a warning, not an error: telemetry must not
-/// stop a run.
+/// The integrations `BARCA_TELEMETRY` switches on, and Slack when `BARCA_SLACK_WEBHOOK_URL`
+/// is set. An unknown name or a misconfigured integration is a warning, not an error:
+/// telemetry must not stop a run.
 pub fn configured() -> Vec<(String, Box<dyn Integration>)> {
-    let Ok(raw) = std::env::var("BARCA_TELEMETRY") else {
-        return Vec::new();
-    };
     let mut out = Vec::new();
-    for name in parse_names(&raw) {
+    let names = std::env::var("BARCA_TELEMETRY")
+        .map(|raw| parse_names(&raw))
+        .unwrap_or_default();
+    for name in names {
         match build(&name) {
             Some(Ok(Some(integration))) => out.push((name, integration)),
             // Switched off by its own settings: nothing to send, nothing to say.
@@ -177,11 +186,24 @@ pub fn configured() -> Vec<(String, Box<dyn Integration>)> {
                 crate::warnings::warn_once(&format!("telemetry '{name}' is off: {e}"));
             }
             None => {
+                let hint = if name == slack::NAME {
+                    format!("; Slack is switched on by setting {}", slack::WEBHOOK_VAR)
+                } else {
+                    String::new()
+                };
                 crate::warnings::warn_once(&format!(
-                    "unknown telemetry integration '{name}' in BARCA_TELEMETRY (known: {})",
+                    "unknown telemetry integration '{name}' in BARCA_TELEMETRY (known: {}){hint}",
                     KNOWN.join(", ")
                 ));
             }
+        }
+    }
+    // Slack's switch is its own variable, which is barca's alone (see `slack.rs`).
+    match slack::Slack::from_env() {
+        Ok(Some(slack)) => out.push((slack::NAME.to_string(), Box::new(slack))),
+        Ok(None) => {}
+        Err(e) => {
+            crate::warnings::warn_once(&format!("telemetry '{}' is off: {e}", slack::NAME));
         }
     }
     out
@@ -192,9 +214,13 @@ pub fn configured() -> Vec<(String, Box<dyn Integration>)> {
 /// A delivery failure is reported when it starts and when it ends, not on every run:
 /// `barca serve` exports a run per tick, and a backend that is down for a day should not
 /// write a line every few minutes.
-pub async fn export(integrations: &[(String, Box<dyn Integration>)], run: &RunReport) {
+pub async fn export(
+    integrations: &[(String, Box<dyn Integration>)],
+    run: &RunReport,
+    history: &JobHistory,
+) {
     for (name, integration) in integrations {
-        let outcome = tokio::time::timeout(EXPORT_TIMEOUT, integration.export(run)).await;
+        let outcome = tokio::time::timeout(EXPORT_TIMEOUT, integration.export(run, history)).await;
         let problem = match outcome {
             Ok(Ok(())) => {
                 if failing()

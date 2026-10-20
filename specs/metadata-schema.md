@@ -72,3 +72,25 @@ Materializations also carry `bytes_changed INTEGER DEFAULT 0`, an additive forma
 column. It records a byte mismatch when inserting a recompute with the same node/run
 hash; legacy rows default to 0. Shared-history carry preserves both `output_hash` and
 `bytes_changed` rather than recomputing the event. See [materialization-digests.md](materialization-digests.md).
+
+### Additions within format 1
+
+Format 1 is additive: a release may add a nullable column or a table to it without a new
+version number. A format-1 database written by an earlier release that lacks one gets the
+same additive migration as a legacy database, in one transaction, keeping every row; an older
+release keeps reading the result, because it leaves unknown nullable columns and unknown
+tables alone. Downloaded shared state is accepted on the same terms before it is migrated.
+
+- `runs.job` (TEXT, nullable): the canonical resolved job ids of a finished run, written with
+  its outcome, and the index `idx_runs_job (job, id)`. Rows from earlier releases, and runs
+  that never finished, keep `NULL`.
+- `notifications (job, integration, posted_at, state, message_ref)`, primary key
+  `(job, integration)`: the last post a notification integration (Slack, RFC-0010) made about
+  a job. `posted_at` is UTC text in SQLite's `datetime('now')` format; `state` is `failing`,
+  `still_failing`, `recovered` or `succeeded`; `message_ref` is empty for a webhook post and
+  reserved for an integration whose posts have ids. Shared-history carry does not copy these
+  rows; they reach the shared database when the run that wrote them pushes it.
+
+Conformance: `a_format_1_database_from_an_earlier_release_gets_what_format_1_added_since` in
+`db_schema.rs`, `the_table_list_is_exactly_the_schema_init_db_creates` in `state_validate.rs`,
+and the job history tests in `crates/barca-core/src/telemetry/history.rs`.

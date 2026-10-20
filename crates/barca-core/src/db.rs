@@ -998,12 +998,16 @@ pub async fn init_db(db_path: &str) -> Result<(), BarcaError> {
 
 /// Migrate legacy metadata atomically, preserving authoritative history. Unknown versions
 /// are refused before any write; current databases are validated without changing them.
+///
+/// Format 1 is additive: a format-1 database written by an earlier release may lack a
+/// nullable column or a table added since (`runs.job`, `notifications`). It gets the same
+/// additive migration, in one transaction, and an older release still reads the result.
 pub(crate) async fn init_schema(conn: &turso::Connection) -> Result<(), BarcaError> {
     let version = crate::db_schema::check(conn).await?;
-    if version == crate::db_schema::VERSION {
-        return crate::state_validate::usable_schema(conn)
-            .await?
-            .map_err(BarcaError::Db);
+    if version == crate::db_schema::VERSION
+        && crate::state_validate::usable_schema(conn).await?.is_ok()
+    {
+        return Ok(());
     }
     crate::state_validate::legacy_schema(conn)
         .await?
@@ -1122,6 +1126,31 @@ async fn migrate_legacy_schema(conn: &turso::Connection) -> Result<(), BarcaErro
     // Who is executing a `running` run (#214): the coordinator's pid and host, so a run whose
     // process died without recording an outcome can be told from one still in progress.
     crate::db_schema::add_columns(conn, "runs", crate::db_schema::RUN_COLUMNS).await?;
+
+    // A notification integration finds a job's previous finished run through this index.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_runs_job ON runs(job, id)",
+        (),
+    )
+    .await
+    .map_err(|e| BarcaError::Db(format!("failed to create index: {e}")))?;
+
+    // The last post a notification integration (Slack) made about a job, so a job that keeps
+    // failing is announced once and reminded once a day, across processes and restarts.
+    // `message_ref` is reserved for an integration whose posts have ids (empty for a webhook).
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS notifications (
+            job TEXT NOT NULL,
+            integration TEXT NOT NULL,
+            posted_at TEXT NOT NULL,
+            state TEXT NOT NULL,
+            message_ref TEXT,
+            PRIMARY KEY (job, integration)
+        )",
+        (),
+    )
+    .await
+    .map_err(|e| BarcaError::Db(format!("failed to create notifications table: {e}")))?;
 
     // A pull of the shared state looks for unfinished runs on both sides (`state_carry`):
     // through this index that costs the number of such runs, not the length of the history.

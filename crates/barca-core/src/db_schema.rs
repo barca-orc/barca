@@ -13,6 +13,10 @@ pub(crate) const RUN_COLUMNS: &[&str] = &[
     // and the marker it holds. It lets a reader tell a dead process from a live one
     // where pid and host cannot, in a container. NULL on rows from older versions.
     "owner TEXT",
+    // The canonical resolved job ids of a finished run (`RunReport.job`), set with its outcome.
+    // How a notification integration finds the job's previous run. NULL on rows from older
+    // versions and on runs that never finished.
+    "job TEXT",
 ];
 
 pub(crate) const MATERIALIZATION_COLUMNS: &[&str] = &[
@@ -183,6 +187,38 @@ mod tests {
             .await,
             1
         );
+    }
+
+    /// A format-1 database written before `runs.job` and `notifications` existed opens, gains
+    /// them in place, and keeps its rows.
+    #[tokio::test]
+    async fn a_format_1_database_from_an_earlier_release_gets_what_format_1_added_since() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("format1.db").display().to_string();
+        populated(&path, "saved").await;
+        {
+            let (_db, conn) = raw(&path).await;
+            conn.execute("DROP TABLE notifications", ()).await.unwrap();
+            conn.execute("DROP INDEX idx_runs_job", ()).await.unwrap();
+            conn.execute("ALTER TABLE runs DROP COLUMN job", ())
+                .await
+                .unwrap();
+            assert_eq!(scalar(&conn, "PRAGMA user_version").await, VERSION);
+            db::checkpoint(&conn).await.unwrap();
+        }
+        db::init_db(&path).await.unwrap();
+        db::init_db(&path).await.unwrap();
+        assert_eq!(
+            db::get_run(&path, "saved").await.unwrap().unwrap().status,
+            "success"
+        );
+        let (_db, conn) = raw(&path).await;
+        assert_eq!(scalar(&conn, "PRAGMA user_version").await, VERSION);
+        assert_eq!(
+            scalar(&conn, "SELECT COUNT(*) FROM runs WHERE job IS NULL").await,
+            1
+        );
+        assert_eq!(scalar(&conn, "SELECT COUNT(*) FROM notifications").await, 0);
     }
 
     #[tokio::test]

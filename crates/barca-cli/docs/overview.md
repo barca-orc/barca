@@ -72,7 +72,8 @@ that; see `barca docs agents`.
 - `barca docs partitions` — fan-out over keys, fan-in with `collect`
 - `barca docs sinks` — export outputs to local or remote paths
 - `barca docs scheduling` — freshness, cron schedules, `barca serve`, HTTP/Python client setup and current server-mode limits
-- `barca docs telemetry` — report runs and steps to Datadog (`BARCA_TELEMETRY=datadog`)
+- `barca docs telemetry` — report runs and steps to Datadog (`BARCA_TELEMETRY=datadog`), and post
+  to Slack when a job starts failing or recovers (`BARCA_SLACK_WEBHOOK_URL`)
 - `barca docs status` — one view of cache state, last run and artifact shape per node
 - `barca docs sql` — query cached results with DuckDB while debugging, without writing a step
 - `barca docs skill` — the short agent skill (also `SKILL.md` in the repo): start here if you are an AI agent

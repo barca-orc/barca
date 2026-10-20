@@ -14,6 +14,18 @@ and these tags are available on the same releases page.
 
 ## Pending
 
+### Features
+
+- Slack notifications (RFC-0010, #450): set `BARCA_SLACK_WEBHOOK_URL` to an incoming webhook and
+  barca posts when a job starts failing, when it recovers, and once a day while it keeps failing,
+  for `barca get`, `barca run` and every run `barca serve` starts. `BARCA_SLACK_NOTIFY`
+  (`changes`, `failures`, `all`) and `BARCA_UI_URL` (run links) tune it. A delivery failure is
+  one warning that never names the webhook URL, and never changes a run's outcome. Runs now
+  record their canonical job (`runs.job`) and the last post per job is kept in a new
+  `notifications` table, both added in place within metadata format 1. The binary now carries an
+  HTTPS client (`reqwest` with `rustls`), shared with the coming `--server` client. See
+  `barca docs telemetry`.
+
 ### Performance
 
 - Cold runs of large partitioned pipelines scale linearly with the number of keys again: a

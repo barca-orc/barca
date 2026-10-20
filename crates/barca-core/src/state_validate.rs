@@ -60,6 +60,10 @@ pub(crate) const TABLES: &[(&str, &[&str])] = &[
         ],
     ),
     ("schedule_state", &["node_id", "last_fired_at"]),
+    (
+        "notifications",
+        &["job", "integration", "posted_at", "state", "message_ref"],
+    ),
 ];
 
 /// The tables whose rows are identified by an `id` row id column.
@@ -222,10 +226,11 @@ pub(crate) async fn open(path: &str, pages: Pages) -> Result<Result<Valid, Inval
     // Establish incompatibility independently of migration. If a compatible legacy
     // migration subsequently fails (I/O, commit, etc.), it is an operational error,
     // not a damaged object to restore or remove.
-    let compatible = if version == crate::db_schema::VERSION {
-        usable_schema(&conn).await?
-    } else {
-        legacy_schema(&conn).await?
+    // A format-1 database may lack what format 1 added since it first shipped; the additive
+    // migration below completes it, exactly as for a legacy one.
+    let compatible = match usable_schema(&conn).await? {
+        Ok(()) if version == crate::db_schema::VERSION => Ok(()),
+        _ => legacy_schema(&conn).await?,
     };
     if let Err(why) = compatible {
         return Ok(Err(Invalid::compatibility(why)));
