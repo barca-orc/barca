@@ -17,8 +17,9 @@ save it as a file, for example `barca docs skill > .claude/skills/barca/SKILL.md
 `get`, `run`, `logs`, `list`, `status`, `history` and `stats` pick their stdout format by one rule, first match wins:
 
 1. **A flag:** `--json` forces JSON, `--pretty` forces human output (tables, summaries).
-   `get`/`run` also keep `-o json|value|pretty`; `-o value` prints only the final value.
-   `--fields` implies JSON.
+   `get`/`run` also keep `-o json|pretty`, older spellings of `--json`/`--pretty`. `get` takes
+   `-o path|value`, which choose what it returns (below); alone they print only that. `run`
+   keeps `-o value`, which prints only the task's value. `--fields` implies JSON.
 2. **`BARCA_OUTPUT=json` or `BARCA_OUTPUT=pretty`** in the environment (for CI or a shell
    profile). Any other value is a usage error (exit 2).
 3. **The terminal:** stdout is a TTY → human output; anything else → JSON.
@@ -121,7 +122,7 @@ write one; retries (`retries=`) apply as for any failed step.
 
 Read the last JSON object on stderr with `kind` and `error`; other lines are progress,
 your steps' own output and the final run summary.
-In human mode (a terminal, `--pretty`, `-o pretty` or `-o value`) the same error is plain prose with the
+In human mode (a terminal, `--pretty`, `-o pretty`, `-o path` or `-o value`) the same error is plain prose with the
 remediation before the final run summary. Errors never go to stdout. From Python, `barca.BarcaError` carries
 the envelope as attributes: `kind`, `code`, `remediation`, `node`, `traceback`, `artifact_dir`.
 
@@ -137,9 +138,64 @@ step: `status` ran/cached/partial and why, plus `env`, the declared environment 
 used, for nodes with `env=[...]`, and `artifact_mismatch: true` when the artifact store's copy
 of the step's result, or of an input it read, is not the one that was recorded: `barca docs
 remote`),
-`final_output`. `final_output` is the value for json artifacts and
+`final_output`. On `run`, `final_output` is the task's value for a json artifact and
 `{"_barca_artifact": {"path", "format", "size_bytes"}}` for parquet and pickle
-(`barca docs types`).
+(`barca docs types`). On `get` it is always that pointer, whatever the format; see the next
+section.
+
+### What `barca get` returns: paths by default
+
+`barca get` returns where its result is, not the result: the artifact path, one per target and
+one per partition key. Read the file, query it with `barca sql`, or ask for the value:
+
+| Command | stdout |
+|---|---|
+| `barca get total pipeline.py` in a terminal | a summary line, then the path; a small json value (up to 10 lines) is shown under it |
+| `barca get total pipeline.py --json` (or piped) | the JSON result; `final_output` is `{"_barca_artifact": {"path", "format", "size_bytes"}}` for every format |
+| `barca get total pipeline.py -o path` | only the path, one per line (for `xargs`, `$(...)`) |
+| `barca get total pipeline.py -o value` | only the value, pretty-printed |
+| `barca get total pipeline.py -o value --json` | the JSON result with the value in `final_output` |
+
+`-o path` is the default spelled out: with `--json` it prints the default JSON. `-o value` reads
+json, parquet, CSV and pickle with the reader `barca.get()` uses; a table becomes a list of row
+objects, and dates become ISO strings. A value that cannot be read (a pickle of a class that is
+not importable, parquet without pyarrow or pandas) keeps its pointer, with a warning on stderr.
+
+```bash
+barca get total pipeline.py -o path | xargs cat     # the json artifact itself
+barca get total pipeline.py -o value                # just the value
+```
+
+Up to 0.24, `final_output` was the value for a json artifact and the pointer for any other, and
+a terminal showed the value: pass `-o value` (with `--json` for the JSON line) for that.
+
+**A partitioned target returns every key**, sorted by key, never one of them. `final_output` is
+an object keyed by partition key (`dim=value`, dimensions sorted and joined with `,`):
+
+```json
+{"final_output": {"region=amer": {"_barca_artifact": {...}}, "region=emea": {"_barca_artifact": {...}}}}
+```
+
+Under `-o value` each key maps to its value. `--partition region=emea,amer` selects keys: only
+those are computed and returned, and `--refresh` of the target refreshes only them. Compound keys
+take a JSON object, `--partition '{"region": "emea", "day": ["2026-10-13", "2026-10-14"]}'`: a
+key is selected when every named dimension has one of the listed values. Upstream partitioned
+assets are not narrowed; they are brought up to date for every key, from cache when fresh.
+`--partition` needs a partitioned target with those dimensions; a key that does not exist, a
+target that is not partitioned, or a target that another target of the same run reads, is a
+usage error (exit 2). The keys of a `partitions_from` target are known only once its source has
+run; a selection that matches none of them returns `{}` with a warning on stderr.
+
+If some keys fail, the run is a failed step as before (exit 1): the result line has
+`"status": "failed"` and `failed_node` names the first failed key. The keys that succeeded are
+in `final_output`; the failed ones are absent and have no artifact, so the next `barca get`
+computes them again. (Whether a partial failure should get its own exit code or list the
+failed keys is not decided yet.)
+
+```bash
+barca get sales pipeline.py --partition region=emea -o value
+barca get sales pipeline.py --partition region=emea,amer --refresh sales
+```
 
 ### Several targets in one call
 
@@ -166,7 +222,9 @@ calls. The output has the same run fields (`status` is `failed` when any target 
 - `--dry-run` with several targets reports the union once (`steps`, `summary`), and `targets`
   in place of `target`: an object keyed by target name in the order given, like a real run, each
   `{"summary": {"will_run", "cached", "unknown"}}` counted over that target's cone.
-  `-o value` prints `{target: value}` (null for a failed target).
+  `-o value` prints `{target: value}` (null for a failed target). On `get`, each target's
+  `final_output` is its pointer (a mapping per key when partitioned), or its value under
+  `-o value --json`, and `-o path` prints every target's paths, one per line.
 - Every name is checked before anything runs: an unknown name, a task passed to `get`, or an
   empty name (`a,,b`) is a usage error, exit 2, and nothing runs.
 
@@ -315,6 +373,16 @@ barca stats total pipeline.py --json  # timings and cache hit rate for one asset
 Source parsing is static and planning executes no pipeline step. `partitions(<expression>)`
 can evaluate Python and import its module while resolving keys.
 
+`.barca/` is kept under a size limit (`[cache] max_size` or `BARCA_CACHE_MAX_SIZE`, default 10%
+of the filesystem): after a `get` or `run` it may evict results the command did not produce,
+read or return, and stderr says so. An evicted result is fetched or computed again when needed
+(reason `evicted`). To see or free space on demand:
+
+```bash
+barca gc --dry-run --json           # {size_bytes, limit_bytes, after_bytes, tiers, evicted, ...}: nothing is deleted
+barca gc --json                     # evict now, down to 80% of the limit
+```
+
 For an old or container-owned run that still reads `running` after you verified it stopped,
 use `barca history --reconcile RUN_ID --json`. It records `interrupted`, prints just that
 run using the normal history envelope, preserves successful results, and refuses a proven
@@ -345,7 +413,8 @@ barca history --all --json          # every recorded run
 `--fields a,b` keeps only those keys on each item: `nodes` for `list`, `runs` for `history`,
 `recent_runs` for `stats`, `steps` for `get`/`run` (including `--dry-run`), and `topics` for
 `docs`. The rest of the JSON is unchanged. `--fields` implies JSON on every command, even in a
-terminal; combining it with `--pretty`, `-o pretty` or `-o value` is a usage error. A key that is valid but absent on an item (for example
+terminal; combining it with `--pretty` or `-o pretty` is a usage error, and so is `-o value`
+on `run`. On `get`, `--fields` with `-o path|value` prints the JSON result with paths or values. A key that is valid but absent on an item (for example
 `next_fire` on an unscheduled node) is simply omitted. An unknown key is a usage error (exit 2)
 that lists the valid keys, and nothing runs; `barca <command> --help` lists them too.
 
@@ -363,13 +432,16 @@ the envelope above. Read `.nodes` / `.runs` (for example `jq '.nodes[].id'`).
 
 ## Getting values, not pointers
 
-From Python, `barca.get` runs the command and deserializes the result:
+On the command line, `barca get total pipeline.py -o value` prints the value. From Python,
+`barca.get` runs the command and deserializes the result:
 
 ```python
 import barca
 
 df = barca.get("orders", "pipeline.py")        # parquet artifact -> pandas DataFrame
 total = barca.get("total", "pipeline.py")      # json artifact -> dict
+by_region = barca.get("sales", "pipeline.py")  # partitioned -> {"region=amer": ..., "region=emea": ...}
+emea = barca.get("sales", "pipeline.py", partition="region=emea")
 barca.run("send_email", "pipeline.py", refresh=["report"])
 ```
 
@@ -391,7 +463,7 @@ step or imports user code. To recompute first, use `--refresh`; never delete fil
   (`barca list`, `barca run validate`). Files or directories narrow it (`barca get total
   pipelines/`); a directory as the first argument needs a trailing `/` (or `.`), otherwise it is
   read as a target name. See `barca docs discovery`.
-- `barca get file.py` gets every asset and sensor (final value is the last asset). It never runs
+- `barca get file.py` gets every asset and sensor (`final_output` is the last asset's). It never runs
   tasks (it used to): stderr names the skipped tasks and the `barca run` command. A file with only
   tasks gets nothing and exits 0 with `"steps": []`.
 - `barca get name file.py [more.py ...]` gets one target; `name` can be the bare function name
@@ -432,7 +504,8 @@ step or imports user code. To recompute first, use `--refresh`; never delete fil
 
 1. Write or change the function with parameter annotations (`barca docs types`).
 2. `barca list pipeline.py` — confirm the node, its kind and its dependencies were discovered.
-3. `barca get <target> pipeline.py` — check exit code, `steps_executed`, and `final_output`.
+3. `barca get <target> pipeline.py` — check exit code, `steps_executed`, and the artifact it
+   points to (`-o value` prints the value).
 4. Run it again — `steps_executed` should be 0 (cached). If not, something upstream changed.
 5. `barca status pipeline.py --json` when you need to explain what is cached, what ran last, and
    what an artifact holds; `barca history --json` for past runs.

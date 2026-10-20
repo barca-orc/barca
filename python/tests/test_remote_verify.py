@@ -54,7 +54,7 @@ def shared(tmp_path):
         (root / "pipeline.py").write_text(PIPELINE)
         return root
 
-    first = cli(make("producer"), store, "get", "total", "--json")
+    first = cli(make("producer"), store, "get", "total", "-o", "value", "--json")
     assert first.returncode == 0, first.stderr
     return store, make
 
@@ -80,16 +80,16 @@ def test_the_uploaded_hash_is_recorded_with_the_row(shared, tmp_path):
 def test_a_changed_local_copy_is_replaced_before_a_step_reads_it(shared):
     store, make = shared
     root = make("reader")
-    assert cli(root, store, "get", "total", "--json").returncode == 0
+    assert cli(root, store, "get", "total", "-o", "value", "--json").returncode == 0
     # A new step makes this machine read `numbers`, whose copy it now holds is wrong.
-    assert cli(root, store, "get", "numbers", "--json").returncode == 0
+    assert cli(root, store, "get", "numbers", "-o", "value", "--json").returncode == 0
     _one(root, ".barca/artifacts/*numbers*/*.json").write_text("[9, 9, 9]")
     (root / "pipeline.py").write_text(
         PIPELINE + '\n\n@asset(inputs={"numbers": numbers})\ndef doubled(numbers: list) -> list:\n'
         "    return [n * 2 for n in numbers]\n"
     )
 
-    proc = cli(root, store, "get", "doubled", "--json")
+    proc = cli(root, store, "get", "doubled", "-o", "value", "--json")
     assert proc.returncode == 0, proc.stderr
     assert json.loads(proc.stdout)["final_output"] == [2, 4, 6]
     assert "fetched 1 cached artifact" in proc.stderr, proc.stderr
@@ -99,8 +99,8 @@ def test_a_changed_local_copy_is_replaced_before_a_step_reads_it(shared):
 def test_an_intact_local_copy_is_not_fetched_again(shared):
     store, make = shared
     root = make("reader")
-    assert cli(root, store, "get", "total", "--json").returncode == 0
-    again = cli(root, store, "get", "total", "--json")
+    assert cli(root, store, "get", "total", "-o", "value", "--json").returncode == 0
+    again = cli(root, store, "get", "total", "-o", "value", "--json")
     assert again.returncode == 0, again.stderr
     assert "fetched" not in again.stderr, again.stderr
 
@@ -110,7 +110,7 @@ def test_a_store_copy_that_differs_from_the_recorded_hash_is_used_with_a_warning
     store, make = shared
     _one(store, "default/artifacts/*total*/*.json").write_text('{"sum": 7}')
     root = make("reader")
-    proc = cli(root, store, "get", "total", "--json")
+    proc = cli(root, store, "get", "total", "-o", "value", "--json")
     assert proc.returncode == 0, proc.stderr
     assert json.loads(proc.stdout)["final_output"] == {"sum": 7}
     assert "warning" in proc.stderr and "total" in proc.stderr, proc.stderr
@@ -121,7 +121,7 @@ def test_a_store_copy_that_differs_from_the_recorded_hash_is_used_with_a_warning
     assert "--refresh pipeline.py:total" in steps["pipeline.py:total"]["warning"]
     assert "artifact_mismatch" not in steps.get("pipeline.py:numbers", {})
 
-    again = cli(root, store, "get", "total", "--json")
+    again = cli(root, store, "get", "total", "-o", "value", "--json")
     assert again.returncode == 0, again.stderr
     assert "fetched" not in again.stderr, again.stderr
 
@@ -131,7 +131,7 @@ def test_a_step_that_read_a_differing_input_reports_it_too(shared):
     _one(store, "default/artifacts/*numbers*/*.json").write_text("[5, 5]")
     root = make("reader")
     # `total` is recomputed, so it reads the store's (differing) copy of `numbers`.
-    proc = cli(root, store, "get", "total", "--refresh", "total", "--json")
+    proc = cli(root, store, "get", "total", "--refresh", "total", "-o", "value", "--json")
     assert proc.returncode == 0, proc.stderr
     out = json.loads(proc.stdout)
     assert out["final_output"] == {"sum": 10}
@@ -144,7 +144,7 @@ def test_a_step_that_read_a_differing_input_reports_it_too(shared):
 
 def test_an_untouched_store_copy_carries_no_marker(shared):
     store, make = shared
-    proc = cli(make("reader"), store, "get", "total", "--json")
+    proc = cli(make("reader"), store, "get", "total", "-o", "value", "--json")
     assert proc.returncode == 0, proc.stderr
     assert all("artifact_mismatch" not in st for st in json.loads(proc.stdout)["steps"])
 
@@ -163,15 +163,15 @@ def test_a_refresh_overwrites_the_store_copy_and_clears_the_mismatch(shared):
     stored = _one(store, "default/artifacts/*total*/*.json")
     stored.write_text('{"sum": 7}')
     reader = make("reader")
-    assert _marked(cli(reader, store, "get", "total", "--json")) == ["total"]
+    assert _marked(cli(reader, store, "get", "total", "-o", "value", "--json")) == ["total"]
 
-    refreshed = cli(reader, store, "get", "total", "--refresh", "total", "--json")
+    refreshed = cli(reader, store, "get", "total", "--refresh", "total", "-o", "value", "--json")
     assert refreshed.returncode == 0, refreshed.stderr
     assert _steps(refreshed)["total"]["status"] == "ran"
     assert _marked(refreshed) == []  # recomputed here, so nothing was fetched for it
     assert json.loads(stored.read_text()) == {"sum": 6}
 
-    third = cli(make("third"), store, "get", "total", "--json")
+    third = cli(make("third"), store, "get", "total", "-o", "value", "--json")
     assert third.returncode == 0, third.stderr
     assert json.loads(third.stdout)["final_output"] == {"sum": 6}
     assert _marked(third) == [] and "warning" not in third.stderr, third.stderr
@@ -180,7 +180,9 @@ def test_a_refresh_overwrites_the_store_copy_and_clears_the_mismatch(shared):
 def test_the_marker_is_in_a_multi_target_result_and_survives_fields(shared):
     store, make = shared
     _one(store, "default/artifacts/*numbers*/*.json").write_text("[5, 5]")
-    proc = cli(make("reader"), store, "get", "numbers,total", "--refresh", "total", "--json")
+    proc = cli(
+        make("reader"), store, "get", "numbers,total", "--refresh", "total", "-o", "value", "--json"
+    )
     assert proc.returncode == 0, proc.stderr
     doc = json.loads(proc.stdout)
     assert doc["targets"]["total"]["final_output"] == {"sum": 10}
@@ -212,7 +214,7 @@ def test_a_step_that_fails_after_reading_a_differing_input_reports_it(shared):
         PIPELINE + '\n\n@asset(inputs={"numbers": numbers})\ndef broken(numbers: list) -> int:\n'
         '    raise ValueError(f"cannot use {numbers}")\n'
     )
-    proc = cli(root, store, "get", "broken", "--json")
+    proc = cli(root, store, "get", "broken", "-o", "value", "--json")
     assert proc.returncode == 1, proc.stderr
     doc = json.loads(proc.stdout)  # the failed run's result line
     assert doc["status"] == "failed" and "cannot use [5, 5]" in doc["error"]
@@ -229,7 +231,7 @@ def test_a_differing_copy_and_a_missing_object_are_told_apart(shared):
     store, make = shared
     _one(store, "default/artifacts/*numbers*/*.json").write_text("[5, 5]")
     _one(store, "default/artifacts/*total*/*.json").unlink()
-    proc = cli(make("reader"), store, "get", "total", "--json")
+    proc = cli(make("reader"), store, "get", "total", "-o", "value", "--json")
     assert proc.returncode == 0, proc.stderr
     assert json.loads(proc.stdout)["final_output"] == {"sum": 10}
     steps = _steps(proc)
@@ -259,7 +261,10 @@ def test_barca_serve_reports_the_marker_in_the_run_result(tmp_path):
     # `barca serve` does not share history: results are shared, history stays local.
     env.update(BARCA_REMOTE_URI=str(store), BARCA_STATE="off")
     first = subprocess.run(
-        [_find_binary(), "get", "total", "--json"], cwd=root, env=env, capture_output=True
+        [_find_binary(), "get", "total", "-o", "value", "--json"],
+        cwd=root,
+        env=env,
+        capture_output=True,
     )
     assert first.returncode == 0, first.stderr
     # The store's copy is overwritten and this machine no longer has its own.
@@ -373,16 +378,16 @@ def _finish(proc: subprocess.Popen) -> subprocess.CompletedProcess:
 def test_overlapping_runs_of_the_same_step_leave_other_machines_working(tmp_path):
     """Two machines compute `up` at once: the store holds one result, the newest row the other."""
     store = tmp_path / "store"
-    b = _start(_machine(tmp_path, "b"), store, "get", "slow", "--json", SLOW="6")
+    b = _start(_machine(tmp_path, "b"), store, "get", "slow", "-o", "value", "--json", SLOW="6")
     time.sleep(2.5)
-    a = _finish(_start(_machine(tmp_path, "a"), store, "get", "quick", "--json"))
+    a = _finish(_start(_machine(tmp_path, "a"), store, "get", "quick", "-o", "value", "--json"))
     assert a.returncode == 0, a.stderr
     b = _finish(b)
     assert b.returncode == 0, b.stderr
     assert "conflict" in b.stderr, "the runs did not overlap: " + b.stderr
 
     for root in (tmp_path / "a", _machine(tmp_path, "c")):
-        proc = cli(root, store, "get", "up", "--json")
+        proc = cli(root, store, "get", "up", "-o", "value", "--json")
         assert proc.returncode == 0, f"{root.name}: {proc.stderr}"
         assert "id" in json.loads(proc.stdout)["final_output"]
 
@@ -390,13 +395,15 @@ def test_overlapping_runs_of_the_same_step_leave_other_machines_working(tmp_path
 def test_a_refresh_killed_after_its_upload_does_not_lock_the_step(tmp_path):
     store = tmp_path / "store"
     root = _machine(tmp_path, "d")
-    assert cli(root, store, "get", "slow", "--json").returncode == 0
-    killed = _start(root, store, "get", "slow", "--refresh", "up", "--json", SLOW="30")
+    assert cli(root, store, "get", "slow", "-o", "value", "--json").returncode == 0
+    killed = _start(
+        root, store, "get", "slow", "--refresh", "up", "-o", "value", "--json", SLOW="30"
+    )
     time.sleep(5)
     killed.kill()
     killed.communicate(timeout=30)
 
-    proc = cli(root, store, "get", "up", "--json")
+    proc = cli(root, store, "get", "up", "-o", "value", "--json")
     assert proc.returncode == 0, proc.stderr
     assert "id" in json.loads(proc.stdout)["final_output"]
 
@@ -406,7 +413,9 @@ def test_independent_histories_sharing_a_store_survive_a_deleted_local_copy(tmp_
     b, a = _machine(tmp_path, "b"), _machine(tmp_path, "a")
 
     def get(root: Path, target: str) -> subprocess.CompletedProcess:
-        return _finish(_start(root, store, "get", target, "--json", BARCA_STATE="off"))
+        return _finish(
+            _start(root, store, "get", target, "-o", "value", "--json", BARCA_STATE="off")
+        )
 
     assert get(b, "up").returncode == 0
     assert get(a, "up").returncode == 0
@@ -428,7 +437,7 @@ def test_fetch_and_warning_lines_reach_a_terminal_through_the_progress_bar(share
     master, slave = pty.openpty()
     env = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
     proc = subprocess.Popen(
-        [_find_binary(), "get", "total", "--refresh", "total", "--json"],
+        [_find_binary(), "get", "total", "--refresh", "total", "-o", "value", "--json"],
         cwd=root,
         env={**env, "BARCA_REMOTE_URI": str(store), "TERM": "xterm"},
         stdout=subprocess.PIPE,

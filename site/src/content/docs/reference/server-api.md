@@ -62,7 +62,7 @@ GET routes also accept HEAD and return the corresponding headers without a body.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET`  | `/health` | Liveness, version, whether the server is read-only, and whether it runs the scheduler, and unloaded source/definition diagnostics. |
+| `GET`  | `/health` | Liveness, version, whether the server is read-only, and whether it runs the scheduler, unloaded source/definition diagnostics, and the cache size against its limit. |
 | `GET`  | `/state` | Every node: its `barca status` entry plus typical durations and next run. |
 | `GET`  | `/groups` | Organizational groups as `[{id, name, description, members, output}]`; separate from execution edges. |
 | `GET`  | `/assets` | List every node with kind, freshness, upstream inputs and declared environment variables. |
@@ -148,8 +148,9 @@ Poll `GET /status/{run_id}` until `status` reaches a terminal state (`complete`,
 ```
 
 `result.final_output` is always a pointer to the artifact file (`path`, `format`,
-`size_bytes`, `elapsed_seconds`), for json results too. The command line prints a json value
-inline; the server does not. Read the file at `path`, relative to the project root.
+`size_bytes`, `elapsed_seconds`), for json results too, as `barca get --json` prints it (the
+command line also has `-o value`). For a partitioned target the server still returns the first
+key's pointer; the command line returns every key. Read the file at `path`, relative to the project root.
 
 `POST /run/{target}` and `POST /get/{target}` check the target before they start a run, with
 the check `barca run` and `barca get` make (one function decides for both; a wrong-kind answer
@@ -227,8 +228,16 @@ GET /health
 ```
 
 ```json
-{ "status": "ok", "version": "0.23.0", "read_only": false, "scheduler": true, "load_errors": [] }
+{ "status": "ok", "version": "0.25.0", "read_only": false, "scheduler": true, "load_errors": [],
+  "cache": { "size_bytes": 1830000000, "limit_bytes": 20000000000 } }
 ```
+
+`cache` (from 0.25, experimental) is `.barca/` against its size limit as the server last
+measured it, after a run or on its once-a-minute check (see
+[Cache size](/reference/config/#cache-size)); `null` before the first measurement, with
+`[cache].max_size` off, and on a `--read-only` server, which deletes nothing. A run result
+gains `cache: {size_bytes, limit_bytes, evicted_files, evicted_bytes}` when the check after it
+found `.barca/` over its limit.
 
 `scheduler` is `true` when this server fires `Schedule(...)` nodes: on by default, `false` with
 `--no-schedule` or `--read-only`.

@@ -23,7 +23,7 @@ def stale(tmp_path):
     # Fixtures create a real run and artifact, then reproduce a legacy row from
     # an inaccessible owner. Its successful materialization must survive recovery.
     (tmp_path / "p.py").write_text("from barca import asset\n@asset()\ndef value():\n    return 42\n")
-    proc = cli(tmp_path, "get", "value", "p.py", "--json")
+    proc = cli(tmp_path, "get", "value", "p.py", "-o", "value", "--json")
     assert proc.returncode == 0, proc.stderr
     result = json.loads(proc.stdout)
     path = tmp_path / ".barca/metadata.db"
@@ -56,7 +56,7 @@ def test_unknown_owner_is_reconciled_only_on_explicit_request(stale, mode):
     with closing(sqlite3.connect(path)) as conn:
         assert conn.execute("SELECT status, finished_at, elapsed_seconds FROM runs WHERE run_id=?", (run_id,)).fetchone() == ("interrupted", None, None)
         assert conn.execute("SELECT * FROM materializations").fetchall() == materializations
-    cached = cli(project, "get", "value", "p.py", "--json")
+    cached = cli(project, "get", "value", "p.py", "-o", "value", "--json")
     assert cached.returncode == 0, cached.stderr
     assert json.loads(cached.stdout)["steps_executed"] == 0
     assert json.loads(cached.stdout)["final_output"] == 42
@@ -89,7 +89,7 @@ def held():
     return 42
 ''')
     proc = subprocess.Popen(
-        [_find_binary(), "get", "held", "p.py", "--json"], cwd=tmp_path,
+        [_find_binary(), "get", "held", "p.py", "-o", "value", "--json"], cwd=tmp_path,
         env={**os.environ, "BARCA_REMOTE": "off"}, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
     try:

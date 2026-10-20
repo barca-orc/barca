@@ -84,7 +84,7 @@ Change `source` to return `{"rows": 4}` and run the same command, with no `--ref
 
 ```bash
 barca status pipeline.py
-barca get report pipeline.py --json
+barca get report pipeline.py -o value --json
 ```
 
 ```

@@ -226,7 +226,7 @@ def test_sigkill_reuses_confirmed_remote_results_before_final_publication(
         if proc is not None and proc.poll() is None:
             proc.kill()
             proc.wait(timeout=WAIT)
-    resumed = barca(project, "get", "pipeline.py", "--json")
+    resumed = barca(project, "get", "pipeline.py", "-o", "value", "--json")
     assert resumed.returncode == 0, resumed.stderr
     result = json.loads(resumed.stdout)
     assert (result["steps_executed"], result["final_output"]) == (1, 3)
@@ -261,7 +261,7 @@ def test_a_run_killed_with_sigkill_keeps_the_steps_it_finished(project):
 
     # The next run reuses them and computes only what was left.
     (project / "release").write_text("")
-    out = barca(project, "get", "pipeline.py", "--json")
+    out = barca(project, "get", "pipeline.py", "-o", "value", "--json")
     assert out.returncode == 0, out.stderr
     result = json.loads(out.stdout)
     by_step = {s["id"].split(":")[-1]: s["status"] for s in result["steps"]}
@@ -313,7 +313,7 @@ def test_status_counts_the_partitions_a_running_get_has_finished(tmp_path):
     assert partitions_of_part()["cached"] == 10
     run = latest_run(tmp_path)
     assert (run["status"], run["steps_executed"]) == ("success", 11)
-    again = json.loads(barca(tmp_path, "get", "pipeline.py", "--json").stdout)
+    again = json.loads(barca(tmp_path, "get", "pipeline.py", "-o", "value", "--json").stdout)
     assert again["steps_executed"] == 0
 
 
@@ -403,7 +403,7 @@ def test_a_run_killed_in_a_container_is_interrupted_after_a_restart(project):
 
     # The next run records it and reuses what the killed one finished.
     (project / "release").write_text("")
-    out = barca(project, "get", "pipeline.py", "--json")
+    out = barca(project, "get", "pipeline.py", "-o", "value", "--json")
     assert out.returncode == 0, out.stderr
     assert json.loads(out.stdout)["steps_executed"] == 1
     assert run_rows(project)[run_id][0] == "interrupted"
@@ -418,7 +418,7 @@ def test_a_live_run_on_another_kernel_stays_running_and_keeps_its_marker(project
     design took that for "killed", wrote `interrupted`, and deleted the marker of a run that
     was going. Here the reader is this machine and the run's row and marker are made to be
     those of another kernel."""
-    out = barca(project, "get", "first", "pipeline.py", "--json")
+    out = barca(project, "get", "first", "pipeline.py", "-o", "value", "--json")
     assert out.returncode == 0, out.stderr
     host = next(iter(run_rows(project).values()))[2]
     token = "0123456789abcdef0123456789abcdef"
@@ -449,7 +449,7 @@ def test_a_live_run_on_another_kernel_stays_running_and_keeps_its_marker(project
 
     assert status_of_theirs() == "running"
     # A run started here would record what it took for interrupted, and sweeps the markers.
-    out = barca(project, "get", "second", "pipeline.py", "--json")
+    out = barca(project, "get", "second", "pipeline.py", "-o", "value", "--json")
     assert out.returncode == 0, out.stderr
     assert run_rows(project)["theirs"][0] == "running"
     assert status_of_theirs() == "running"

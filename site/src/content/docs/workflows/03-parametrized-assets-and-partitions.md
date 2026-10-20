@@ -82,14 +82,14 @@ The first run executes eight steps: the sensor, three keys of `prices`, three ke
 [barca] 8/8 steps | done in 0.0s
 Run 5251655353a8 | got 'report' in 0.139s (8 steps, 3 phases)
 
-Value:
-{
-  "buys": [
-    "GOOG",
-    "MSFT"
-  ],
-  "tickers": 3
-}
+.barca/artifacts/pipeline.py--report/....json
+  {
+    "buys": [
+      "GOOG",
+      "MSFT"
+    ],
+    "tickers": 3
+  }
 ```
 
 The second run executes one step, the sensor. It returned the same value, so every key and
@@ -335,9 +335,10 @@ $ barca get summary pipeline.py --refresh 'sales[region=emea]'
 
 - `barca get sales pipeline.py` brings every key up to date.
 - `--refresh sales` recomputes every key, and everything downstream.
-- `barca get sales pipeline.py` returns one key's value as `final_output`, not all of them. The Python call `barca.get("sales", "pipeline.py")`
-  does the same. To read every key, use `barca sql "select * from sales"` or target an asset
-  that uses `collect(sales)`.
+- `barca get sales pipeline.py` returns every key: one artifact path per key, and in JSON a
+  `final_output` object keyed by `region=...`. The Python call `barca.get("sales", "pipeline.py")`
+  returns a dict of key to value. `--partition region=emea` (or `partition="region=emea"` in
+  Python) computes and returns only that key, and scopes `--refresh sales` to it.
 
 ## When a key fails
 
@@ -397,7 +398,8 @@ per key, not what your functions cost.
   and must keep the upstream's dimension name; anything else is a usage error (exit 2).
 - **A partitioned asset in a plain `inputs=`** of an unpartitioned asset, without `collect()`,
   is a usage error (exit 2).
-- **`barca get <partitioned asset>` returns one key's value.**
+- **`--partition` narrows the target only.** Upstream partitioned assets are still brought up
+  to date for every key, and `--refresh` of an upstream asset recomputes all its keys.
 - With `@sink`, each key writes its own file: `barca docs sinks`.
 - To fan work out at run time from inside a task, without caching, see
   [Parallel Tasks](/patterns/04-parallel-tasks/).

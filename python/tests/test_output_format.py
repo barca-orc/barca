@@ -174,10 +174,30 @@ def test_o_still_works_on_get_and_run(warmed):
     assert code == 0 and "run_id" in json.loads(out)
 
 
-def test_o_conflicts_with_json_and_pretty(project):
-    for flag in ("--json", "--pretty"):
-        proc = piped(project, "get", "total", "pipeline.py", "-o", "value", flag)
-        assert proc.returncode == 2, flag
+def test_o_json_and_pretty_conflict_with_json_and_pretty(project):
+    for o in ("json", "pretty"):
+        for flag in ("--json", "--pretty"):
+            proc = piped(project, "get", "total", "pipeline.py", "-o", o, flag)
+            assert proc.returncode == 2, (o, flag)
+
+
+def test_o_path_and_value_choose_what_get_returns(warmed):
+    """`-o path|value` choose what get returns; alone they print only that, with --json the
+    JSON result carries it in final_output (paths by default, 0.25.0)."""
+    default = json.loads(piped(warmed, "get", "total", "pipeline.py").stdout)
+    pointer = default["final_output"]["_barca_artifact"]
+    assert pointer["format"] == "json"
+    assert json.loads((warmed / pointer["path"]).read_text()) == 42
+    spelled = json.loads(
+        piped(warmed, "get", "total", "pipeline.py", "-o", "path", "--json").stdout
+    )
+    assert spelled["final_output"] == default["final_output"]
+    proc = piped(warmed, "get", "total", "pipeline.py", "-o", "path")
+    assert proc.returncode == 0 and proc.stdout == pointer["path"] + "\n"
+    proc = piped(warmed, "get", "total", "pipeline.py", "-o", "value", "--json")
+    assert json.loads(proc.stdout)["final_output"] == 42
+    code, out, _ = on_tty(warmed, "get", "total", "pipeline.py")
+    assert code == 0 and pointer["path"] in out and "42" in out  # the path, and a preview
 
 
 def test_no_ansi_on_piped_streams(project):

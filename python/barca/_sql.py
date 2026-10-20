@@ -134,8 +134,12 @@ def fetch(uri: str, cache_dir: str) -> tuple[str, int]:
     if os.path.exists(dest):
         try:
             with open(stamp) as f:
-                if f.read() == version:
-                    return dest, 0
+                current = f.read() == version
+            if current:
+                # The cache size limit evicts the least recently used copies first: a reuse
+                # counts as a use.
+                os.utime(stamp)
+                return dest, 0
         except OSError:
             pass
     os.makedirs(os.path.dirname(dest), exist_ok=True)

@@ -72,12 +72,12 @@ pub struct CacheStatus {
     )]
     pub state: String,
     /// Machine-readable reason: `materialized`, `changed`, `upstream_stale`, `failed`,
-    /// `artifact_missing`, `no_record`, `partitions_missing`, `partitions_unknown`,
+    /// `artifact_missing`, `evicted`, `no_record`, `partitions_missing`, `partitions_unknown`,
     /// `sensor_output_unknown`, `task` or `sensor`.
     #[cfg_attr(
         feature = "ts",
         ts(
-            type = "\"materialized\" | \"changed\" | \"upstream_stale\" | \"failed\" | \"artifact_missing\" | \"no_record\" | \"partitions_missing\" | \"partitions_unknown\" | \"sensor_output_unknown\" | \"task\" | \"sensor\""
+            type = "\"materialized\" | \"changed\" | \"upstream_stale\" | \"failed\" | \"artifact_missing\" | \"evicted\" | \"no_record\" | \"partitions_missing\" | \"partitions_unknown\" | \"sensor_output_unknown\" | \"task\" | \"sensor\""
         )
     )]
     pub reason: String,
@@ -199,6 +199,7 @@ async fn status_from_dag_with_membership(
         python,
         CachePolicy::CacheAware,
         "status",
+        None,
     )
     .await?;
     let reports: HashMap<&str, &StepReport> =
@@ -352,6 +353,8 @@ fn cache_status(
             "artifact_missing",
             r.detail.clone().unwrap_or_default(),
         ),
+        // The same, because the cache size limit deleted the file (RFC-0012).
+        ("run", Some("evicted")) => cache("stale", "evicted", r.detail.clone().unwrap_or_default()),
         ("partial", _) => {
             let (cached, total) = r
                 .partitions
@@ -533,7 +536,12 @@ async fn read_shapes_inner(
             .map(|(_, path, format)| serde_json::json!({"path": path, "format": format}))
             .collect::<Vec<_>>(),
     });
-    let shapes = match run_inspector(python, cfg, &request).await {
+    let inspector = crate::helper_proc::python_module(
+        python,
+        "barca._inspect",
+        cfg.storage_options_json.as_deref(),
+    );
+    let shapes = match run_json_helper(inspector, python, &request).await {
         Ok(shapes) if shapes.len() == wanted.len() => shapes,
         Ok(_) => vec![note("the shape reader returned an unexpected result"); wanted.len()],
         Err(e) => vec![note(&format!("could not run the shape reader: {e}")); wanted.len()],
@@ -547,17 +555,15 @@ fn note(msg: &str) -> serde_json::Value {
     serde_json::json!({ "note": msg })
 }
 
-async fn run_inspector(
+/// Run a Python helper that reads one JSON document on stdin and answers with one JSON array
+/// on stdout (`barca._inspect`, `barca._value`). Its last stderr line is the error. `cmd` is
+/// built by `helper_proc::python_module`, so it carries the resolved storage options.
+pub(crate) async fn run_json_helper(
+    mut cmd: tokio::process::Command,
     python: &Path,
-    cfg: &crate::config::ResolvedConfig,
     request: &serde_json::Value,
 ) -> Result<Vec<serde_json::Value>, String> {
     use tokio::io::AsyncWriteExt;
-    let mut cmd = crate::helper_proc::python_module(
-        python,
-        "barca._inspect",
-        cfg.storage_options_json.as_deref(),
-    );
     cmd.stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());

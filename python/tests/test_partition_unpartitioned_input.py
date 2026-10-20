@@ -14,6 +14,8 @@ import pytest
 
 from barca.api import _find_binary
 
+from .get_values import value_args
+
 # `multiplier`'s return value is spliced in so a test can change its code (and so its run hash)
 # without touching any other function's source.
 PIPELINE = """
@@ -147,7 +149,7 @@ def project(tmp_path) -> Path:
 
 def barca(project: Path, *args: str) -> dict:
     proc = subprocess.run(
-        [_find_binary(), *args],
+        [_find_binary(), *value_args(args)],
         cwd=project,
         env=os.environ,
         capture_output=True,
@@ -262,9 +264,10 @@ def test_issue_shape_with_upstream_already_cached(tmp_path):
     (tmp_path / "issue.py").write_text(ISSUE.format(m=3))
     barca(tmp_path, "get", "multiplier", "issue.py")
     first = barca(tmp_path, "get", "leaf", "issue.py")
-    assert first["final_output"]["v"] == 3
+    # A partitioned target returns every key.
+    assert first["final_output"] == {"k=a": {"k": "a", "v": 3}, "k=b": {"k": "b", "v": 3}}
 
     (tmp_path / "issue.py").write_text(ISSUE.format(m=5))
     changed = barca(tmp_path, "get", "leaf", "issue.py")
     assert changed["steps_executed"] == 3
-    assert changed["final_output"]["v"] == 5
+    assert {v["v"] for v in changed["final_output"].values()} == {5}

@@ -34,7 +34,7 @@ def test_helper_edit_in_control_flow_binding_invalidates_its_consumer(
 
     def run():
         proc = subprocess.run(
-            [_find_binary(), "get", "value,unrelated", "pipeline.py", "--json"],
+            [_find_binary(), "get", "value,unrelated", "pipeline.py", "-o", "value", "--json"],
             cwd=tmp_path,
             env=env,
             capture_output=True,

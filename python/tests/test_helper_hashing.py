@@ -16,6 +16,8 @@ import pytest
 
 from barca.api import _find_binary
 
+from .get_values import value_args
+
 PIPELINES = {
     "from_import": """
 from barca import asset
@@ -67,7 +69,7 @@ def set_helper(sub: Path, v: int) -> None:
 
 def barca(cwd: Path, *args: str) -> dict:
     proc = subprocess.run(
-        [_find_binary(), *args],
+        [_find_binary(), *value_args(args)],
         cwd=cwd,
         env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
         capture_output=True,

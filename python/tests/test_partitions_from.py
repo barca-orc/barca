@@ -17,6 +17,8 @@ import pytest
 
 from barca.api import _find_binary
 
+from .get_values import value_args
+
 PIPELINE = """
 import os
 from barca import asset, collect, partitions, partitions_from
@@ -130,7 +132,7 @@ def project(tmp_path) -> Path:
 
 def run(project: Path, *args: str, regions: str = "emea,amer,apac"):
     return subprocess.run(
-        [_find_binary(), *args],
+        [_find_binary(), *value_args(args)],
         cwd=project,
         env={**os.environ, "BARCA_TEST_REGIONS": regions},
         capture_output=True,
@@ -253,7 +255,7 @@ def test_partitioned_input_to_unpartitioned_consumer_is_a_usage_error(tmp_path):
         assert proc.returncode == 2, (cmd, proc.stderr)
         assert "collect(sales)" in proc.stderr, proc.stderr
         assert "partitions_from(sales)" in proc.stderr, proc.stderr
-    proc = run(tmp_path, "get", "summary", "p.py", "--json")
+    proc = run(tmp_path, "get", "summary", "p.py", "-o", "value", "--json")
     err = json.loads(next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{")))
     assert err["kind"] == "usage" and err["code"] == 2
     assert "collect(sales)" in err["remediation"]

@@ -108,7 +108,7 @@ def test_helper_edit_invalidates_only_its_consumers(tmp_path, case):
     )
     first = cli(tmp_path, "get", "p.py", "--json")
     assert first["steps_executed"] == 2
-    assert cli(tmp_path, "get", "value", "p.py", "--json")["final_output"] == 1
+    assert cli(tmp_path, "get", "value", "p.py", "-o", "value", "--json")["final_output"] == 1
     assert cli(tmp_path, "get", "p.py", "--json")["steps_executed"] == 0
     helpers = (tmp_path / "helpers.py").read_text()
     (tmp_path / "helpers.py").write_text(helpers.replace("return 1", "return 222"))
@@ -118,5 +118,5 @@ def test_helper_edit_invalidates_only_its_consumers(tmp_path, case):
         "p.py:value": "ran",
         "p.py:unrelated": "cached",
     }
-    assert cli(tmp_path, "get", "value", "p.py", "--json")["final_output"] == 222
+    assert cli(tmp_path, "get", "value", "p.py", "-o", "value", "--json")["final_output"] == 222
     assert cli(tmp_path, "get", "p.py", "--json")["steps_executed"] == 0

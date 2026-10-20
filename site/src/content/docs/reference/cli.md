@@ -46,6 +46,7 @@ barca run <task[,task...]> [file.py|dir/ ...] [--refresh a,b [--no-cascade] | --
 barca plan [file.py|dir/ ...]                Emit the execution plan as JSON (experimental)
 barca history [-l N | --all] [--json|--pretty]  Show recent runs
 barca stats <target> [file.py|dir/ ...]       Show timing/cache stats for an asset
+barca gc [--dry-run] [--max-size SIZE] [--json]  Evict cached results to keep .barca/ under its size limit (experimental)
 barca serve [file.py|dir/ ...] [--port N] [--host IP] [--watch] [--no-schedule] [--timezone TZ] [--read-only]
                                                Run the HTTP API server
 barca list [file.py|dir/ ...] [-l N | --all] [--json]  List discovered definitions and their deps
@@ -73,8 +74,9 @@ Node ids are relative to the root. See [Discovery](/reference/discovery/).
 one rule, first match wins:
 
 1. **A flag:** `--json` forces JSON; `--pretty` forces human output (tables, summaries). `get` and
-   `run` also keep `-o json|value|pretty` for compatibility (`-o value` prints only the final
-   value); `-o` cannot be combined with `--json` / `--pretty`.
+   `run` also keep `-o json|pretty`, older spellings that cannot be combined with `--json` /
+   `--pretty`. `get -o path|value` choose what `get` returns (see [get](#get)); `run -o value`
+   prints only the task's value.
 2. **`BARCA_OUTPUT=json` or `BARCA_OUTPUT=pretty`** in the environment. Any other value is a usage
    error (exit code 2).
 3. **The terminal:** stdout is a TTY → human output; a pipe, file or subprocess → JSON.
@@ -108,41 +110,60 @@ not cause a false unused-input warning.
 
 ## get
 
-Compute one or more assets and print the result. Only the target and what is upstream of it
-are considered, and a step whose code and inputs are unchanged is served from cache.
+Compute one or more assets and print where their results are. Only the target and what is
+upstream of it are considered, and a step whose code and inputs are unchanged is served from
+cache.
 
 ```
-$ barca get total pipeline.py --json
-[barca] 2/2 steps | done in 0.4s
-{"elapsed_seconds":0.4704835,"final_output":{"total":80.5},"phases":1,"run_id":"526915c3ef18","status":"success","steps":[{"detail":"no cached result for this code and these inputs","id":"pipeline.py:orders","kind":"asset","reason":"not_materialized","run_hash":"732a...","status":"ran"},{"detail":"no cached result for this code and these inputs","id":"pipeline.py:total","kind":"asset","reason":"not_materialized","run_hash":"f4db...","status":"ran"}],"steps_executed":2,"warnings":[]}
+$ barca get summary pipeline.py --json
+[barca] 2/2 steps | done in 0.0s
+{"elapsed_seconds":0.0628,"final_output":{"_barca_artifact":{"format":"json","path":".barca/artifacts/pipeline.py--summary/2d10....json","size_bytes":24}},"phases":1,"run_id":"354b04602500","status":"success","steps":[{"detail":"no cached result for this code and these inputs","id":"pipeline.py:raw_data","kind":"asset","reason":"not_materialized","run_hash":"a8e7...","status":"ran"},{"detail":"no cached result for this code and these inputs","id":"pipeline.py:summary","kind":"asset","reason":"not_materialized","run_hash":"2d10...","status":"ran"}],"steps_executed":2,"warnings":[]}
 ```
 
-The first line is progress, on stderr. The JSON is one line on stdout (run hashes shortened
-here). Run it again and every step is `"status":"cached"`, with its `artifact` path, and
-`"steps_executed":0`. In a terminal the same run prints a summary and the value:
+The first line is progress, on stderr. The JSON is one line on stdout (hashes shortened here).
+`final_output` is a pointer to the artifact, `{"_barca_artifact": {"path", "format",
+"size_bytes"}}`, whatever its format. Run it again and every step is `"status":"cached"`, with
+its `artifact` path, and `"steps_executed":0`. In a terminal the same run prints a summary and
+the path, with a small json value (up to 10 lines) previewed under it:
 
 ```
-$ barca get total pipeline.py
-Run 5269f89835e0 | got 'total' in 0.003s (0 steps, 1 phase)
+$ barca get summary pipeline.py
+Run 35449de4ed6f | got 'summary' in 0.004s (0 steps, 1 phase)
 
-Value:
-{
-  "total": 80.5
-}
+.barca/artifacts/pipeline.py--summary/2d10....json
+  {
+    "count": 3,
+    "total": 6
+  }
 ```
 
-`final_output` is the value itself for a json result. For a parquet or pickle result it is a
-pointer to the file:
+To read the result:
 
-```json
-{"_barca_artifact":{"format":"parquet","path":".barca/artifacts/pipeline.py--orders/732a....parquet","size_bytes":2143}}
+```bash
+barca get summary pipeline.py -o value           # only the value, pretty-printed
+barca get summary pipeline.py -o value --json    # the JSON result with the value in final_output
+barca get summary pipeline.py -o path | xargs cat   # only the path, one line per artifact
 ```
 
-For a partitioned asset `final_output` is the result of one key, not of all of them; use
-`barca sql` or a `collect` asset to read every key.
+`-o value` reads json, parquet, CSV and pickle with the reader `barca.get()` uses; a table
+prints as a list of row objects. `-o path` is the default spelled out: with `--json` it prints
+the default JSON. Up to 0.24 `final_output` was the value of a json result and a terminal
+printed the value; `-o value` prints it now.
+
+**Partitioned targets.** A partitioned asset returns every key, sorted: `final_output` is an
+object keyed by partition key (`"region=emea"`; a compound key is `"day=d1,region=emea"`), each a
+pointer, or a value under `-o value`, and `-o path` prints one line per key.
+`--partition region=emea,amer` selects keys: only those run, are returned, and are refreshed by
+`--refresh`. A JSON object selects on several dimensions,
+`--partition '{"region": "emea", "day": ["d1", "d2"]}'`. Upstream partitioned assets are not
+narrowed. A selection naming no target, an unpartitioned target, a missing dimension or key, or
+a target another target of the run reads is a usage error (exit 2). When some keys fail the run
+fails (exit 1, `failed_node` names the key) and `final_output` in the result line holds the
+keys that succeeded; how a partial failure is reported may still change
+(`barca docs partitions`).
 
 With no target (`barca get pipeline.py`, or `barca get`), barca gets every asset and sensor and
-returns the last asset's value. Tasks are skipped, and stderr names them and the `barca run`
+returns the last asset's artifact. Tasks are skipped, and stderr names them and the `barca run`
 command. A sensor nothing depends on still runs. A file with only tasks gets nothing: exit 0,
 `"steps": []`, and a stderr note pointing at `barca run`.
 
@@ -158,7 +179,10 @@ matching.
 | `--refresh-all` | Recompute every asset in the target's cone. |
 | `--dry-run` | Report each step as cached or to run, and why, without running or writing anything. |
 | `--json`, `--pretty` | Force JSON or human output. |
-| `-o json\|value\|pretty` | Older spelling, kept for compatibility. `-o value` prints only the final value. |
+| `-o path` | Print only the artifact paths, one per line (one per partition key). With `--json`, the default JSON. |
+| `-o value` | Print only the value. With `--json`, the JSON result with the value in `final_output`. |
+| `-o json\|pretty` | Older spellings of `--json` / `--pretty`. |
+| `--partition KEY=V[,V]` | Select keys of a partitioned target (a JSON object for compound keys); only they run, are returned and are refreshed. |
 | `--agent` | Plain progress lines on stderr in place of the progress bar. |
 | `--fields a,b` | Keep only these keys on each entry of `steps`: `id`, `kind`, `action`, `status`, `reason`, `detail`, `run_hash`, `artifact`, `warning`, `partitions`, `env`. |
 | `--env <name>` | Use a named environment's cache and history. |
@@ -355,6 +379,36 @@ process-id and host-name checks. See
 `barca docs cache`, "While a run is going, and after one is killed", and the shared-state
 [limitations](/reference/remote-storage/#limitations).
 
+## gc
+
+Evict cached results so `.barca/` stays under its size limit (`[cache].max_size` or
+`BARCA_CACHE_MAX_SIZE`, default 10% of the filesystem; see
+[Cache size](/reference/config/#cache-size)). barca already does this after every `get` and
+`run` once the limit is passed; `barca gc` does it now. Experimental.
+
+```bash
+barca gc --dry-run              # what would be evicted, per tier, and what it leaves
+barca gc                        # evict now, down to 80% of the limit
+barca gc --max-size 5GB         # a one-off tighter budget
+barca gc --max-size off         # only leftovers and superseded results, all of them
+barca gc --json                 # {size_bytes, limit_bytes, target_bytes, after_bytes, tiers, evicted, failed, restricted, dry_run}
+```
+
+```
+$ barca gc --dry-run
+would evict 1204 files (38.2 GB), leaving 14.9 GB of 20 GB:
+  leftovers                  3 files    1.1 GB
+  superseded              1180 files     33 GB
+  held by the store         21 files    4.1 GB
+```
+
+The order is leftovers, superseded results, local copies the artifact store holds, then the
+least recently read current results. `--dry-run` lists exactly what `barca gc` then deletes.
+While another run is in progress on this `.barca/`, only leftovers and superseded results are
+considered (`restricted` says why). `--env NAME` evicts only that environment's results. A file
+that cannot be deleted is skipped with a warning; exit 3 only when a metadata database cannot be
+read. The remote store is never touched.
+
 ## stats
 
 Show statistics for one node: how many times it ran, timings (average, median, p95, max),
@@ -465,7 +519,7 @@ choose how many items to print.
 
 `--fields a,b` keeps only those keys on each item of any JSON output: `nodes` (`list`, `status`), `runs`
 (`history`), `recent_runs` (`stats`), `steps` (`get`/`run`, including `--dry-run`) and `topics`
-(`docs`). It implies JSON everywhere; combining it with `--pretty`, `-o pretty` or `-o value` is
+(`docs`). It implies JSON everywhere; combining it with `--pretty`, `-o pretty` or `run -o value` is
 a usage error (exit 2). An unknown key is a usage error (exit 2) that lists the valid ones. Limits bound
 how many items are printed, never their content: error messages and tracebacks are always
 complete. `plan` has no per-item objects (its steps are id strings), so it takes no `--fields`.
@@ -498,7 +552,7 @@ spells it in snake_case, exactly like the `summary` keys; the table prints `neve
 | state | meaning | reasons |
 |---|---|---|
 | `cached` | a successful result matches this code and these inputs | `materialized` |
-| `stale` | ran before, but would run again | `changed`, `upstream_stale`, `failed`, `artifact_missing` |
+| `stale` | ran before, but would run again | `changed`, `upstream_stale`, `failed`, `artifact_missing`, `evicted` |
 | `never_run` | no successful materialization recorded | `no_record`, `failed` |
 | `partial` | partitioned, some keys cached | `partitions_missing` |
 | `unknown` | dynamic partitions whose source has not run | `partitions_unknown` |
@@ -620,7 +674,7 @@ succeeded):
 {"artifact_dir":".barca/artifacts/pipeline.py--clean","code":1,"error":"step 'pipeline.py:clean' failed: ZeroDivisionError: division by zero","kind":"step_failed","node":"pipeline.py:clean","remediation":"Fix the error in 'pipeline.py:clean' (see the traceback) and re-run the same command. Steps that succeeded are cached and will not re-run.","traceback":"  File \"/abs/path/pipeline.py\", line 11, in clean\n    return x / 0\n           ~~^~~"}
 ```
 
-In human mode (a terminal, `--pretty`, `-o pretty` or `-o value`) the error is prose, with the remediation
+In human mode (a terminal, `--pretty`, `-o pretty`, `-o path` or `-o value`) the error is prose, with the remediation
 on the last lines. Errors never go to stdout. The Python API raises `barca.BarcaError` with the
 same fields as attributes (`kind`, `code`, `remediation`, `node`, `traceback`, `artifact_dir`).
 

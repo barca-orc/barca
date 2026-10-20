@@ -436,9 +436,9 @@ check as step 1 says so; barca may fail with `short read on page`, `database dis
 malformed`, or stop with an internal error of the database engine) is repaired the same way:
 step 2 alone, or the `rm -f` line to start again.
 
-`barca get --json` reports a result as it does without a store: json values inline, parquet and
-pickle as a pointer (`{"_barca_artifact": {"path", ...}}`) to the copy in `.barca/artifacts/`.
-A final output another machine produced is downloaded first.
+`barca get --json` reports a result as it does without a store: a pointer
+(`{"_barca_artifact": {"path", ...}}`) to the copy in `.barca/artifacts/`, and `-o value` reads
+that copy. A final output another machine produced is downloaded first.
 
 ## What happens during a run
 
@@ -677,11 +677,14 @@ exceeds `transfer_timeout` fails as stalled and is not retried.
   directory. The same goes for a directory at `state/metadata.db`: the pull fails with
   `<uri> is a directory, not the shared history file`.
 
-`.barca/artifacts/` doubles as a local cache of the store and is never pruned automatically;
-deleting it is safe (anything needed later is downloaded again, or computed again if it is no
-longer in the store). Directories barca moved out of an artifact's way
-(`*.moved-aside*`, see `barca docs cache`) are in there too and go with it; barca never deletes
-them itself.
+`.barca/artifacts/` doubles as a local cache of the store, bounded by the cache size limit
+(`[cache] max_size`, default 10% of the filesystem; `barca docs cache`, "Disk use"). Past the
+limit, local copies of results the store holds are evicted before any result that would have to
+be computed again, and are downloaded again when something reads them. Deleting the directory by
+hand is safe too (anything needed later is downloaded again, or computed again if it is no
+longer in the store); the directories barca moved out of an artifact's way (`*.moved-aside*`)
+go with it. The store itself is never pruned by barca: bound it with your bucket's lifecycle
+rules.
 
 Using a GCS emulator (e.g. fake-gcs-server) with gcsfs 2026.10 or later: set
 `GCSFS_EXPERIMENTAL_ZB_HNS_SUPPORT=false`. gcsfs's experimental mode calls a gRPC API the

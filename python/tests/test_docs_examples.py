@@ -15,6 +15,8 @@ from pathlib import Path
 import pytest
 from barca.api import _find_binary
 
+from .get_values import value_args
+
 FENCE = re.compile(r"^```(\w*)\n(.*?)^```", re.S | re.M)
 
 
@@ -40,7 +42,9 @@ def topics(binary) -> dict[str, str]:
 
 
 def barca(binary: str, cwd: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run([binary, *args], cwd=cwd, capture_output=True, text=True)
+    # `get` prints artifact paths by default; the examples check values, so read them with
+    # `-o value` unless a test asks for the pointer itself (`-o path --json`).
+    return subprocess.run([binary, *value_args(args)], cwd=cwd, capture_output=True, text=True)
 
 
 def result(proc: subprocess.CompletedProcess) -> dict:
@@ -166,7 +170,9 @@ def test_example_duckdb_dag(binary, topics, tmp_path):
         assert list((arts / f"pipeline.py--{node}").glob("*.parquet")), f"{node} not parquet"
     assert list((arts / "pipeline.py--top_region").glob("*.json"))
     # Parquet steps return a pointer on stdout, as the manual says.
-    ptr = result(barca(binary, tmp_path, "get", "revenue_by_region", "pipeline.py"))
+    ptr = result(
+        barca(binary, tmp_path, "get", "revenue_by_region", "pipeline.py", "-o", "path", "--json")
+    )
     assert ptr["final_output"]["_barca_artifact"]["format"] == "parquet"
 
 
@@ -428,9 +434,11 @@ def test_types_topic_example_reads_one_parquet_two_ways(binary, topics, tmp_path
     write_example(topics, "types", tmp_path)
     total = result(barca(binary, tmp_path, "get", "total", "pipeline.py"))
     assert total["final_output"] == {"total": 9.5}
-    pointer = result(barca(binary, tmp_path, "get", "as_polars", "pipeline.py"))
+    pointer = result(
+        barca(binary, tmp_path, "get", "as_polars", "pipeline.py", "-o", "path", "--json")
+    )
     assert pointer["final_output"]["_barca_artifact"]["format"] == "parquet"
-    lazy = result(barca(binary, tmp_path, "get", "big_ids", "pipeline.py"))
+    lazy = result(barca(binary, tmp_path, "get", "big_ids", "pipeline.py", "-o", "path", "--json"))
     assert lazy["final_output"]["_barca_artifact"]["format"] == "parquet"
 
     import barca as barca_api
@@ -451,7 +459,7 @@ def test_assets_topic_env_example(binary, topics, tmp_path):
     def get(**env):
         base = {k: v for k, v in os.environ.items() if k not in ("SOURCE_CSV", "API_TOKEN")}
         return subprocess.run(
-            [binary, "get", "summary", "pipeline.py", "--agent"],
+            [binary, "get", "summary", "pipeline.py", "--agent", "-o", "value", "--json"],
             cwd=tmp_path,
             capture_output=True,
             text=True,
@@ -868,9 +876,13 @@ def test_big_inputs_topic_example(binary, topics, tmp_path, monkeypatch):
     write_example(topics, "big-inputs", tmp_path)
 
     # Aggregate over a lazy relation: written as parquet, a pointer on stdout.
-    per_bucket = result(barca(binary, tmp_path, "get", "per_bucket", "pipeline.py"))
+    per_bucket = result(
+        barca(binary, tmp_path, "get", "per_bucket", "pipeline.py", "-o", "path", "--json")
+    )
     assert per_bucket["final_output"]["_barca_artifact"]["format"] == "parquet"
-    bucket_3 = result(barca(binary, tmp_path, "get", "bucket_3", "pipeline.py"))
+    bucket_3 = result(
+        barca(binary, tmp_path, "get", "bucket_3", "pipeline.py", "-o", "path", "--json")
+    )
     assert bucket_3["final_output"]["_barca_artifact"]["format"] == "parquet"
 
     import barca as barca_api

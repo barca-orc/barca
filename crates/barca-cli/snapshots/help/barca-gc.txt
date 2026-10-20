@@ -1,0 +1,40 @@
+Evict cached results to keep .barca/ under its size limit
+
+The same eviction barca runs after every get and run once .barca/ is over `[cache] max_size` (default 10% of the filesystem), on demand.
+
+Usage: barca gc [OPTIONS]
+
+Options:
+      --max-size <SIZE>
+          A limit for this run in place of the configured one: 20GB, 500MB, 20GiB, bytes, 10% (of the filesystem) or off (only leftovers and superseded results)
+
+      --dry-run
+          Print what would be evicted without deleting anything
+
+      --json
+          Emit JSON on stdout (the default when stdout is not a terminal)
+
+      --pretty
+          Emit human-readable output (the default when stdout is a terminal)
+
+      --env <ENV>
+          Evict only this environment's results (leftovers are shared by all)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Examples:
+  barca gc --dry-run              # what would be evicted, per tier, and what it leaves
+  barca gc                        # evict now, down to 80% of [cache] max_size
+  barca gc --max-size 5GB         # a one-off tighter budget
+  barca gc --max-size off         # only leftovers and superseded results, all of them
+  barca gc --json                 # {size_bytes, limit_bytes, after_bytes, tiers, evicted, ...}
+  barca gc --env dev              # only the dev environment's results (leftovers are shared)
+
+Order: leftovers (dead processes' staging, *.moved-aside* directories, sql-cache copies), then
+superseded results, then local copies the artifact store holds, then the least recently read
+results. Never: the metadata DBs, a storeless Manual node's current result, or (while another
+run is in progress on this .barca/) anything but leftovers and superseded results. An evicted
+result is fetched or computed again when something needs it. The store is never touched.
+Exit 3 only when a metadata DB cannot be read; a file that cannot be deleted is skipped.
+More: barca docs cache ("Disk use")

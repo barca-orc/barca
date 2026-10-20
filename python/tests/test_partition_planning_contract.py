@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 from barca.api import _find_binary
 
+from .get_values import value_args
+
 
 def invoke(project: Path, pool: int | None, *args: str):
     env = dict(os.environ)
@@ -16,7 +18,7 @@ def invoke(project: Path, pool: int | None, *args: str):
     if pool is not None:
         env["BARCA_POOL_SIZE"] = str(pool)
     return subprocess.run(
-        [_find_binary(), *args],
+        [_find_binary(), *value_args(args)],
         cwd=project,
         env=env,
         capture_output=True,

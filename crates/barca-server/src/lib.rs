@@ -103,6 +103,13 @@ pub async fn serve(config: ServeConfig) -> Result<(), ServeError> {
         std::time::Duration::from_secs(3600),
     ));
 
+    // The cache size limit (RFC-0012): every run checks it when it ends; this checks it once a
+    // minute as well, so a server whose runs are rare still stays under its limit. A read-only
+    // server deletes nothing.
+    if !read_only {
+        tokio::spawn(cache_checkpoint(state.clone()));
+    }
+
     if read_only {
         barca_core::errln!(
             "[barca] read-only: runs are refused and the metadata DB is only read from snapshots"
@@ -166,6 +173,20 @@ pub async fn serve(config: ServeConfig) -> Result<(), ServeError> {
         telemetry.finish().await;
     }
     Ok(())
+}
+
+/// Once a minute, evict if `.barca/` is over its size limit ([`barca_core::gc::checkpoint`]).
+/// What runs in flight in this process hold is left alone.
+async fn cache_checkpoint(state: AppState) {
+    let mut every = tokio::time::interval(std::time::Duration::from_secs(60));
+    every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            _ = every.tick() => {}
+            _ = state.shutdown.cancelled() => return,
+        }
+        barca_core::gc::checkpoint(&state.config.resolved).await;
+    }
 }
 
 /// How long shutdown waits for cancelled runs to stop their workers and record themselves.

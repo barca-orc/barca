@@ -87,6 +87,7 @@ function staleReason(reason: CacheStatus['reason']): string {
     .with('sensor_output_unknown', () => 'sensor')
     .with('failed', () => 'last run failed')
     .with('artifact_missing', () => 'artifact missing')
+    .with('evicted', () => 'evicted')
     .with(
       'materialized',
       'no_record',

@@ -17,10 +17,12 @@ import pytest
 
 from barca.api import _find_binary
 
+from .get_values import value_args
+
 
 def barca(cwd: Path, *args: str, env: dict | None = None) -> dict:
     proc = subprocess.run(
-        [_find_binary(), *args],
+        [_find_binary(), *value_args(args)],
         cwd=cwd,
         env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", **(env or {})},
         capture_output=True,
@@ -312,7 +314,10 @@ def test_off_path_pipeline_requires_qualified_import_over_namespace_directory(tm
     write(tmp_path, {"barca.toml": "", **files})
 
     refused = subprocess.run(
-        [_find_binary(), "get", "val"], cwd=tmp_path, capture_output=True, text=True
+        [_find_binary(), "get", "val", "-o", "value", "--json"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
     )
     assert refused.returncode == 2, refused.stderr
     assert "off-path" in refused.stderr and "from b.shared import upstream" in refused.stderr

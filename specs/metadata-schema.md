@@ -87,3 +87,20 @@ format-1 databases without it.
 
 Conformance: `a_format_1_database_from_before_bytes_changed_gains_it_in_place` in
 `db_schema.rs` and `python/tests/test_upgrade_format1_columns.py`.
+
+## Cache size limit columns (RFC-0012)
+
+Materializations carry `evicted_at TEXT` and `last_read_at TEXT`, additive format-1 columns, and
+the index `idx_mat_path` on `artifact_path`. `evicted_at` records when this machine deleted the
+artifact file to stay under `[cache] max_size` (NULL while the file is kept); `last_read_at`
+records when a step, `barca get` or `barca sql` last read the result. Both describe this
+machine's disk: shared-history carry does not copy them (they are not in `STEP_COLUMNS`), and
+schema validation treats them as nullable columns an older barca may lack. Rows are never deleted
+by eviction.
+
+A version-1 database written by an earlier release that lacks an additive column or index of
+this release (these, or `bytes_changed`) gains them when it is opened for writing
+(`db::init_schema`): the missing columns and indexes are added and the schema validated in one
+transaction, rolled back on error, with every row preserved and the version left at 1. A
+database that already has them is only read. Conformance: the schema tests in
+`crates/barca-core/src/gc/tests.rs` and `db_schema.rs`.

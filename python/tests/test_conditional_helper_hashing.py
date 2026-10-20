@@ -8,10 +8,12 @@ from pathlib import Path
 import pytest
 from barca.api import _find_binary
 
+from .get_values import value_args
+
 
 def invoke(project: Path, *args: str):
     proc = subprocess.run(
-        [_find_binary(), *args],
+        [_find_binary(), *value_args(args)],
         cwd=project,
         capture_output=True,
         text=True,

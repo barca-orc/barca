@@ -143,7 +143,9 @@ def test_fields_trims_history_items(project):
 
 def test_fields_trims_get_and_run_steps(project):
     out = ok(barca(project, "get", "total", "pipeline.py", "--fields", "id,status"))
-    assert out["final_output"] == {"total": 6}  # the envelope is untouched
+    assert out["final_output"]["_barca_artifact"]["format"] == "json"  # the envelope is untouched
+    valued = ok(barca(project, "get", "total", "pipeline.py", "-o", "value", "--fields", "id"))
+    assert valued["final_output"] == {"total": 6}  # --fields with -o value: JSON with the value
     assert all(set(s) == {"id", "status"} for s in out["steps"])
     dry = ok(barca(project, "run", "report", "pipeline.py", "--dry-run", "--fields", "id,action"))
     assert all(set(s) == {"id", "action"} for s in dry["steps"])

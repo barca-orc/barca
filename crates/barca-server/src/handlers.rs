@@ -25,8 +25,8 @@ use tokio_stream::wrappers::BroadcastStream;
 /// Default timeout for a single run (10 minutes).
 const RUN_TIMEOUT: Duration = Duration::from_secs(600);
 
-/// `GET /health` — liveness, version, whether this server is read-only, and
-/// whether it runs the scheduler.
+/// `GET /health` — liveness, version, whether this server is read-only, whether it runs the
+/// scheduler, and the cache size against its limit.
 /// No core work.
 pub async fn health(State(state): State<AppState>) -> Json<Value> {
     Json(json!({
@@ -37,6 +37,11 @@ pub async fn health(State(state): State<AppState>) -> Json<Value> {
         // Whether this server fires `Schedule(...)` nodes: the same rule `serve`
         // uses to start the scheduler (on unless --no-schedule or --read-only).
         "scheduler": state.config.schedule && !state.config.read_only,
+        // `.barca/` against its size limit, as last measured after a run or on the minute
+        // checkpoint (RFC-0012); null before the first measurement or with the limit off.
+        "cache": barca_core::gc::last_measured()
+            .filter(|_| !state.config.read_only)
+            .map(|(size, limit)| json!({"size_bytes": size, "limit_bytes": limit})),
     }))
 }
 

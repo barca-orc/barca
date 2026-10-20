@@ -13,6 +13,8 @@ mod logs;
 pub(crate) use logs::*;
 mod history;
 pub(crate) use history::*;
+mod gc;
+pub(crate) use gc::*;
 mod stats;
 pub(crate) use stats::*;
 mod serve;

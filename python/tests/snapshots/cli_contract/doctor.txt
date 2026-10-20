@@ -3,18 +3,23 @@ checks : array
 checks[] : object
 checks[].data : object
 checks[].data.artifacts : string  (optional)
+checks[].data.available_bytes : integer  (optional)
 checks[].data.barca_version : string  (optional)
 checks[].data.enabled : boolean  (optional)
 checks[].data.executable : string  (optional)
 checks[].data.file : string  (optional)
 checks[].data.files : array  (optional)
 checks[].data.files[] : string
+checks[].data.filesystem_bytes : integer  (optional)
 checks[].data.found : boolean  (optional)
+checks[].data.limit_bytes : integer  (optional)
+checks[].data.max_size : string  (optional)
 checks[].data.metadata : string  (optional)
 checks[].data.mode : string  (optional)
 checks[].data.name : string  (optional)
 checks[].data.nodes : integer  (optional)
 checks[].data.path : string  (optional)
+checks[].data.size_bytes : integer  (optional)
 checks[].data.source : string  (optional)
 checks[].data.uri : null  (optional)
 checks[].data.version : string  (optional)

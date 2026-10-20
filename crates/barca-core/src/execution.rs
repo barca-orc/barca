@@ -83,6 +83,42 @@ fn phase_step_count(phase: &Phase) -> usize {
         .sum()
 }
 
+/// Narrow a phase whose `partitions_from` keys were just expanded to the `--partition`
+/// selection. A target whose expanded keys include none of the selected ones gets a warning:
+/// its keys were not known when the command started, so this is the first point to say so.
+fn narrow_expanded(
+    selection: &crate::selection::PartitionSelection,
+    phase: &mut Phase,
+    targets: &[(String, String)],
+) {
+    let ids: Vec<&str> = targets.iter().map(|(_, id)| id.as_str()).collect();
+    let had: Vec<&str> = ids
+        .iter()
+        .copied()
+        .filter(|id| {
+            phase
+                .streams
+                .iter()
+                .flat_map(|s| &s.steps)
+                .any(|st| st.step_id.base_id() == *id && !st.partition_keys.is_empty())
+        })
+        .collect();
+    selection.narrow_phase(phase, &ids);
+    for id in had {
+        let kept = phase
+            .streams
+            .iter()
+            .flat_map(|s| &s.steps)
+            .any(|st| st.step_id.base_id() == id);
+        if !kept {
+            crate::errln!(
+                "[barca] warning: --partition: '{}' has none of the selected keys; nothing of it is returned",
+                short_name(id)
+            );
+        }
+    }
+}
+
 /// Worker pool size: `BARCA_POOL_SIZE` overrides auto-detection when set to a
 /// positive integer. Lets benchmark harnesses (and anyone else) pin the pool
 /// to a fixed core count instead of whatever `available_parallelism()` reports
@@ -122,6 +158,7 @@ impl Executed {
                     phases: r.phases,
                     steps: r.steps,
                     warnings: r.warnings,
+                    partitions: r.partitions,
                 }));
                 Err(BarcaError::WorkerFailed(Box::new(failed)))
             }
@@ -139,6 +176,7 @@ impl Executed {
             steps: r.steps,
             warnings: r.warnings,
             targets: self.targets,
+            cache: r.cache,
         }
     }
 }
@@ -154,6 +192,8 @@ pub(crate) struct ExecuteRequest<'a> {
     pub(crate) command_label: &'a str,
     pub(crate) interrupt: crate::interrupt::Interrupt,
     pub(crate) event_tx: Option<UnboundedSender<crate::RunEvent>>,
+    /// `--partition`: the keys of the targets to compute and return (all keys when `None`).
+    pub(crate) partition: Option<crate::selection::PartitionSelection>,
 }
 
 struct Trace {
@@ -296,6 +336,10 @@ struct RunState {
     transfer_error: Option<String>,
     cached_steps: recover::CachedSteps,
     held_cached_lines: Vec<String>,
+    /// The results this run holds while it is in flight (the cache size limit leaves them).
+    pin: Option<crate::gc::Pin>,
+    /// Artifact paths (as recorded) handed to steps as inputs: `last_read_at` moves for them.
+    read_paths: std::collections::HashSet<String>,
 }
 // Fields drop in the same order as the original run locals: recorder, workers, store.
 struct RunSession<'a, 'r> {
@@ -313,6 +357,9 @@ struct RunSession<'a, 'r> {
 
 pub(crate) async fn execute(mut request: ExecuteRequest<'_>) -> Result<Executed, BarcaError> {
     let started = RunStart::begin(&request)?;
+    // Held from before anything is decided: until the plan is known, eviction in this process
+    // keeps to leftovers and superseded results.
+    let pin = crate::gc::pin(&started.run_id);
     let prepared = prepare_run(
         request.dag.take(),
         request.target_names,
@@ -320,13 +367,98 @@ pub(crate) async fn execute(mut request: ExecuteRequest<'_>) -> Result<Executed,
         request.python,
         &request.policy,
         request.command_label,
+        request.partition.as_ref(),
         |point| trace_point!(started.trace, "{point}"),
     )
     .await?;
+    pin.nodes(
+        prepared
+            .exec_plan
+            .phases
+            .iter()
+            .flat_map(|p| &p.streams)
+            .flat_map(|s| &s.steps)
+            .map(|st| st.step_id.base_id().to_string()),
+    );
     let mut session = open_run(&request, &prepared, started).await?;
+    session.state.pin = Some(pin);
     drive_phases(&mut session).await?;
+    // What the run read (its inputs, and the outputs it returns) gets its `last_read_at` before
+    // the run is recorded, so that with shared history the upload carries it and nothing is
+    // written locally after it (RFC-0012).
+    let returned: Vec<String> = {
+        let ids: Vec<&str> = prepared.targets.iter().map(|(_, id)| id.as_str()).collect();
+        let requested = recover::requested(&prepared.exec_plan, &ids);
+        session
+            .state
+            .all_outputs
+            .iter()
+            .filter(|(id, _)| requested.contains(recover::base_of(id)))
+            .map(|(_, o)| o.path.clone())
+            .collect()
+    };
+    session.state.read_paths.extend(returned);
+    let mut read: Vec<String> = session.state.read_paths.iter().cloned().collect();
+    read.sort();
+    db::touch_read(&request.cfg.db_path, &read).await;
     let elapsed = record_and_publish(&mut session).await?;
-    return_outputs(&mut session, elapsed).await
+    let mut executed = return_outputs(&mut session, elapsed).await?;
+    let own = cache_check_inputs(&session, &executed);
+    let pin = session.state.pin.take();
+    let cfg = request.cfg;
+    drop(session);
+    // The cache size limit after a run: evict if `.barca/` is over its limit. What the run
+    // produced, read or returns is never evicted.
+    executed.result.cache = crate::gc::after_command(cfg, &own, pin.as_ref()).await;
+    Ok(executed)
+}
+
+/// What a run protects from the cache size limit: everything it produced, read or returns (as
+/// recorded paths), its run hashes, and the `Manual` nodes of its DAG.
+fn cache_check_inputs(session: &RunSession<'_, '_>, executed: &Executed) -> crate::gc::Own {
+    // Every path `get` prints or returns, including each partition key of a partitioned target.
+    let returned = executed
+        .result
+        .final_output
+        .iter()
+        .chain(executed.result.partitions.iter().flatten().map(|(_, o)| o))
+        .chain(executed.targets.iter().flat_map(|(_, t)| {
+            t.final_output
+                .iter()
+                .chain(t.partitions.iter().flatten().map(|(_, o)| o))
+        }))
+        .map(|o| o.path.clone());
+    let mut read: Vec<String> = session
+        .state
+        .read_paths
+        .iter()
+        .cloned()
+        .chain(returned)
+        .collect();
+    read.sort();
+    read.dedup();
+    crate::gc::Own {
+        recorded: read
+            .into_iter()
+            .chain(session.state.all_outputs.values().map(|o| o.path.clone()))
+            .chain(session.state.store_paths.values().cloned())
+            .collect(),
+        run_hashes: session
+            .state
+            .decide_state
+            .run_hashes()
+            .values()
+            .cloned()
+            .collect(),
+        manual: session
+            .prepared
+            .dag
+            .graph
+            .node_weights()
+            .filter(|n| n.extracted.freshness == crate::model::Freshness::Manual)
+            .map(|n| n.id.clone())
+            .collect(),
+    }
 }
 async fn open_state(
     request: &ExecuteRequest<'_>,
@@ -678,25 +810,38 @@ async fn select_work<'p>(
         Work::Returned => {
             // The output this command hands back is read by whoever ran it: what it
             // prints is made local, and every part of it must be on disk or in the store.
-            let returned: Vec<String> = final_output_of(
+            let mut returned_refs: Vec<OutputRef> = final_output_of(
                 &session.prepared.exec_plan,
                 &target_ids,
                 session.prepared.keep_going,
                 &session.state.all_outputs,
             )
-            .iter()
-            .chain(
-                target_outcomes(
-                    &session.prepared.dag,
-                    &session.prepared.targets,
-                    &session.state.all_outputs,
-                    &session.state.all_failures,
-                )
-                .iter()
-                .filter_map(|(_, o)| o.final_output.as_ref()),
-            )
-            .map(|o| o.path.clone())
+            .into_iter()
             .collect();
+            for (_, outcome) in target_outcomes(
+                &session.prepared.dag,
+                &session.prepared.targets,
+                &session.state.all_outputs,
+                &session.state.all_failures,
+                session.request.partition.as_ref(),
+            ) {
+                returned_refs.extend(outcome.final_output);
+                returned_refs.extend(outcome.partitions.into_iter().flatten().map(|(_, o)| o));
+            }
+            returned_refs.extend(
+                returned_partitions(
+                    &session.prepared.dag,
+                    &session.prepared.exec_plan,
+                    &target_ids,
+                    session.prepared.keep_going,
+                    &session.state.all_outputs,
+                    session.request.partition.as_ref(),
+                )
+                .into_iter()
+                .flatten()
+                .map(|(_, o)| o),
+            );
+            let returned: Vec<String> = returned_refs.into_iter().map(|o| o.path).collect();
             let check: Vec<String> = session
                 .state
                 .cached_node_ids
@@ -801,11 +946,16 @@ async fn expand_and_decide(
         phase
     };
 
-    let expanded_phase = dispatch::expand_pending_partitions(
+    let mut expanded_phase = dispatch::expand_pending_partitions(
         phase,
         &session.state.all_outputs,
         session.prepared.pool_size,
     );
+    if let (Some(selection), Some(expanded)) =
+        (session.request.partition.as_ref(), expanded_phase.as_mut())
+    {
+        narrow_expanded(selection, expanded, &session.prepared.targets);
+    }
     let phase_ref = expanded_phase.as_ref().unwrap_or(phase);
 
     // Dynamic partitions (`partitions_from`) are a single placeholder step
@@ -840,6 +990,9 @@ async fn expand_and_decide(
     })
     .await?;
     trace_point!(session.started.trace, "phase{phase_idx}_cache_check_done");
+    if let Some(pin) = &session.state.pin {
+        pin.run_hashes(session.state.decide_state.run_hashes().values());
+    }
     if decided.streams.is_empty() {
         return Ok(None);
     }
@@ -867,7 +1020,12 @@ async fn recover_phase_inputs<'p>(
                     // Its artifact is still missing and it cannot be computed: it is no
                     // longer an output of this run.
                     for id in recover::output_ids(st) {
-                        recover::mark_recomputed(&mut session.state.step_reports, &id, false);
+                        recover::mark_recomputed(
+                            &mut session.state.step_reports,
+                            &id,
+                            false,
+                            false,
+                        );
                         session.state.cached_node_ids.remove(&id);
                         session.state.all_outputs.remove(&id);
                     }
@@ -929,21 +1087,36 @@ async fn recover_phase_inputs<'p>(
 
     if recompute {
         // These are no longer served from cache: they run, and are recorded, like any
-        // other step of this run.
+        // other step of this run. A result whose file the cache size limit deleted says so.
+        let ids: Vec<String> = filtered_phase
+            .streams
+            .iter()
+            .flat_map(|s| &s.steps)
+            .flat_map(recover::output_ids)
+            .collect();
+        let paths: Vec<&str> = ids
+            .iter()
+            .filter_map(|id| session.state.all_outputs.get(id).map(|o| o.path.as_str()))
+            .collect();
+        let evicted = db::evicted_among(&session.request.cfg.db_path, &paths).await;
         let mut lost: Vec<(String, String)> = Vec::new();
-        for step in filtered_phase.streams.iter().flat_map(|s| &s.steps) {
-            for id in recover::output_ids(step) {
-                recover::mark_recomputed(&mut session.state.step_reports, &id, false);
-                session.state.cached_node_ids.remove(&id);
-                if let Some(oref) = session.state.all_outputs.remove(&id) {
-                    lost.push((id, oref.path));
-                }
+        for id in ids {
+            let was_evicted = session
+                .state
+                .all_outputs
+                .get(&id)
+                .is_some_and(|o| evicted.contains(&o.path));
+            recover::mark_recomputed(&mut session.state.step_reports, &id, false, was_evicted);
+            session.state.cached_node_ids.remove(&id);
+            if let Some(oref) = session.state.all_outputs.remove(&id) {
+                lost.push((id, oref.path));
             }
         }
-        for line in recover::recompute_warnings(&lost) {
+        for line in recover::recompute_warnings(&lost, &evicted) {
             note(&session.pb, &line);
         }
     }
+    session.state.read_paths.extend(check);
 
     Ok(Some((filtered_phase, provided)))
 }
@@ -1334,11 +1507,12 @@ async fn return_outputs(
     session: &mut RunSession<'_, '_>,
     elapsed: f64,
 ) -> Result<Executed, BarcaError> {
-    let (mut step_reports, outcomes, final_output) = finalize_outputs(
+    let (mut step_reports, outcomes, final_output, partitions) = finalize_outputs(
         &session.prepared.dag,
         &session.prepared.targets,
         &session.prepared.exec_plan,
         session.prepared.keep_going,
+        session.request.partition.as_ref(),
         &session.state.all_outputs,
         &session.state.all_failures,
         std::mem::take(&mut session.state.step_reports),
@@ -1390,6 +1564,8 @@ async fn return_outputs(
             final_output,
             steps: step_reports,
             warnings: session.prepared.plan_warnings.clone(),
+            partitions,
+            cache: None,
         },
         targets: outcomes,
         step_failure: session
@@ -1420,6 +1596,7 @@ struct Prepared {
     plan_warnings: Vec<crate::warnings::PlanWarning>,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn prepare_run(
     supplied_dag: Option<Dag>,
     target_names: &[String],
@@ -1427,6 +1604,7 @@ async fn prepare_run(
     python: &std::path::Path,
     policy: &CachePolicy,
     command_label: &str,
+    partition: Option<&crate::selection::PartitionSelection>,
     trace: impl Fn(&str),
 ) -> Result<Prepared, BarcaError> {
     let dag = match supplied_dag {
@@ -1462,7 +1640,11 @@ async fn prepare_run(
         pool_size,
         concurrency_groups: HashMap::new(),
     };
-    let exec_plan = plan_for_targets(&dag, &target_ids, &config, command_label);
+    let mut exec_plan = plan_for_targets(&dag, &target_ids, &config, command_label);
+    if let Some(selection) = partition {
+        selection.validate(&dag, &target_ids, &exec_plan)?;
+        selection.narrow_plan(&mut exec_plan, &target_ids);
+    }
     trace("planned");
 
     if let CachePolicy::RefreshSelective { names, .. } = policy {
@@ -1490,6 +1672,7 @@ async fn finalize_outputs(
     targets: &[(String, String)],
     exec_plan: &ExecutionPlan,
     keep_going: bool,
+    selection: Option<&crate::selection::PartitionSelection>,
     all_outputs: &HashMap<String, dispatch::OutputRef>,
     all_failures: &[dispatch::StepFailure],
     step_reports: Vec<StepReport>,
@@ -1502,6 +1685,7 @@ async fn finalize_outputs(
         Vec<StepReport>,
         Vec<(String, TargetOutcome)>,
         Option<OutputRef>,
+        Option<Vec<(String, OutputRef)>>,
     ),
     BarcaError,
 > {
@@ -1550,9 +1734,20 @@ async fn finalize_outputs(
         }
     }
 
-    let outcomes = target_outcomes(dag, targets, all_outputs, all_failures);
+    let outcomes = target_outcomes(dag, targets, all_outputs, all_failures, selection);
 
-    let final_output = final_output_of(exec_plan, &target_ids, keep_going, all_outputs);
+    let partitions = returned_partitions(
+        dag,
+        exec_plan,
+        &target_ids,
+        keep_going,
+        all_outputs,
+        selection,
+    );
+    let final_output = match &partitions {
+        Some(keys) => keys.first().map(|(_, o)| o.clone()),
+        None => final_output_of(exec_plan, &target_ids, keep_going, all_outputs),
+    };
 
     // The outputs this command returns were made readable here when the last phase finished
     // (`Work::Returned`). A run that stopped at a failed step did not get that far and may still
@@ -1560,7 +1755,12 @@ async fn finalize_outputs(
     if let Some(mut s) = store.take() {
         let paths: Vec<String> = final_output
             .iter()
-            .chain(outcomes.iter().filter_map(|(_, o)| o.final_output.as_ref()))
+            .chain(partitions.iter().flatten().map(|(_, o)| o))
+            .chain(outcomes.iter().flat_map(|(_, o)| {
+                o.final_output
+                    .iter()
+                    .chain(o.partitions.iter().flatten().map(|(_, r)| r))
+            }))
             .map(|o| o.path.clone())
             .collect();
         let fetched = s.ensure_local(paths.iter().map(String::as_str), None).await;
@@ -1578,7 +1778,28 @@ async fn finalize_outputs(
         crate::mismatch::mark(dag, &mut step_reports, &s.mismatched);
     }
 
-    Ok((step_reports, outcomes, final_output))
+    Ok((step_reports, outcomes, final_output, partitions))
+}
+
+/// The keys a single-target run (or a run with no target) returns when the node it returns
+/// is partitioned; see [`crate::selection::partition_outputs`].
+fn returned_partitions(
+    dag: &Dag,
+    exec_plan: &ExecutionPlan,
+    target_ids: &[&str],
+    several_targets: bool,
+    all_outputs: &HashMap<String, OutputRef>,
+    selection: Option<&crate::selection::PartitionSelection>,
+) -> Option<Vec<(String, OutputRef)>> {
+    let node = match target_ids {
+        [one] => one.to_string(),
+        _ if several_targets => return None,
+        _ => recover::returned_step(exec_plan)?
+            .step_id
+            .base_id()
+            .to_string(),
+    };
+    crate::selection::partition_outputs(dag, &node, all_outputs, selection)
 }
 
 /// [`crate::queries::explain`] on an already-built DAG (`barca status` reuses its DAG for the node listing).
@@ -1589,12 +1810,19 @@ pub(crate) async fn explain_dag(
     python: &std::path::Path,
     policy: CachePolicy,
     command_label: &str,
+    partition: Option<&crate::selection::PartitionSelection>,
 ) -> Result<ExplainResult, BarcaError> {
-    Ok(
-        explain_dag_with_membership(dag, cfg, target_names, python, policy, command_label)
-            .await?
-            .0,
+    Ok(explain_dag_with_membership(
+        dag,
+        cfg,
+        target_names,
+        python,
+        policy,
+        command_label,
+        partition,
     )
+    .await?
+    .0)
 }
 
 /// Full actual prediction membership, moved without changing public reports.
@@ -1605,6 +1833,7 @@ pub(crate) async fn explain_dag_with_membership(
     python: &std::path::Path,
     policy: CachePolicy,
     command_label: &str,
+    partition: Option<&crate::selection::PartitionSelection>,
 ) -> Result<(ExplainResult, crate::cache::ExpandedMembership), BarcaError> {
     let targets = resolve_targets(dag, target_names, command_label)?;
     let target_ids: Vec<&str> = targets.iter().map(|(_, id)| id.as_str()).collect();
@@ -1613,7 +1842,11 @@ pub(crate) async fn explain_dag_with_membership(
         pool_size,
         concurrency_groups: HashMap::new(),
     };
-    let exec_plan = plan_for_targets(dag, &target_ids, &config, command_label);
+    let mut exec_plan = plan_for_targets(dag, &target_ids, &config, command_label);
+    if let Some(selection) = partition {
+        selection.validate(dag, &target_ids, &exec_plan)?;
+        selection.narrow_plan(&mut exec_plan, &target_ids);
+    }
     if let CachePolicy::RefreshSelective { names, .. } = &policy {
         validate_refresh_names(dag, &target_ids, names, command_label == "get")?;
     }
@@ -1652,6 +1885,11 @@ pub(crate) async fn explain_dag_with_membership(
         state.sensor_outputs = db::last_output_hashes(cache, &sensors).await?;
     }
     let mut all_outputs: HashMap<String, OutputRef> = HashMap::new();
+    // Results the cache size limit evicted: predicted as `evicted` rather than missing.
+    let evicted = match &cache {
+        Some(cache) => db::evicted_paths(cache).await,
+        None => std::collections::HashSet::new(),
+    };
     // What a run would compute again because an artifact it needs is missing (#252): the same
     // rule as `execute`, predicted from what is on this disk.
     let layout = cfg
@@ -1672,6 +1910,7 @@ pub(crate) async fn explain_dag_with_membership(
         policy: &policy,
         cache: cache.as_ref(),
         layout: layout.as_ref(),
+        evicted: &evicted,
         pool_size,
         state: &mut state,
         all_outputs: &mut all_outputs,
@@ -1680,6 +1919,7 @@ pub(crate) async fn explain_dag_with_membership(
         hash_unknown: &mut hash_unknown,
         steps: &mut steps,
         summary: &mut summary,
+        partition: partition.map(|s| (s, targets.as_slice())),
     };
     for phase in &exec_plan.phases {
         predict_phase(&mut prediction, phase).await?;
@@ -1697,6 +1937,7 @@ pub(crate) async fn explain_dag_with_membership(
         &mut cached_steps,
         &mut all_outputs,
         layout.as_ref(),
+        &evicted,
         &mut steps,
         &mut summary,
     );
@@ -1740,6 +1981,7 @@ struct Prediction<'a> {
     policy: &'a CachePolicy,
     cache: Option<&'a db::CacheReader>,
     layout: Option<&'a ArtifactLayout>,
+    evicted: &'a std::collections::HashSet<String>,
     pool_size: usize,
     state: &'a mut DecideState,
     all_outputs: &'a mut HashMap<String, OutputRef>,
@@ -1748,6 +1990,10 @@ struct Prediction<'a> {
     hash_unknown: &'a mut std::collections::HashSet<String>,
     steps: &'a mut Vec<StepReport>,
     summary: &'a mut ExplainSummary,
+    partition: Option<(
+        &'a crate::selection::PartitionSelection,
+        &'a [(String, String)],
+    )>,
 }
 fn unknown_report(dag: &Dag, base_id: &str, reason: &str, detail: String) -> StepReport {
     StepReport {
@@ -1771,6 +2017,7 @@ fn expand_prediction(ctx: &mut Prediction<'_>, phase: &Phase) -> Phase {
         ctx.cached_steps,
         ctx.all_outputs,
         ctx.layout,
+        ctx.evicted,
         ctx.steps,
         ctx.summary,
     );
@@ -1939,7 +2186,10 @@ async fn predict_steps(
 }
 async fn predict_phase(ctx: &mut Prediction<'_>, phase: &Phase) -> Result<(), BarcaError> {
     let ready = expand_prediction(ctx, phase);
-    let expanded = dispatch::expand_pending_partitions(&ready, ctx.all_outputs, ctx.pool_size);
+    let mut expanded = dispatch::expand_pending_partitions(&ready, ctx.all_outputs, ctx.pool_size);
+    if let (Some((selection, targets)), Some(phase)) = (ctx.partition, expanded.as_mut()) {
+        narrow_expanded(selection, phase, targets);
+    }
     let phase_ref = expanded.as_ref().unwrap_or(&ready);
     // The steps of this phase that would execute: what they read has to be there.
 
@@ -1957,6 +2207,7 @@ async fn predict_phase(ctx: &mut Prediction<'_>, phase: &Phase) -> Result<(), Ba
         ctx.cached_steps,
         ctx.all_outputs,
         ctx.layout,
+        ctx.evicted,
         ctx.steps,
         ctx.summary,
     );

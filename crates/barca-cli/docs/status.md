@@ -77,7 +77,7 @@ two cannot disagree. In JSON the states are snake_case, spelled exactly like the
 | state | meaning | `reason` |
 |---|---|---|
 | `cached` | a successful result matches this code and these inputs; `get` serves it | `materialized` |
-| `stale` | it ran before, but `get` would run it again | `changed`, `upstream_stale`, `failed`, `artifact_missing` |
+| `stale` | it ran before, but `get` would run it again | `changed`, `upstream_stale`, `failed`, `artifact_missing`, `evicted` |
 | `never_run` | no successful materialization is recorded | `no_record`, `failed` |
 | `partial` | a partitioned asset with some keys cached | `partitions_missing` |
 | `unknown` | dynamic partitions (`partitions_from`) whose source has not run yet, or an asset reading a sensor with no recorded output (and what depends on either) | `partitions_unknown`, `sensor_output_unknown` |
@@ -101,6 +101,8 @@ two cannot disagree. In JSON the states are snake_case, spelled exactly like the
   artifact that nothing would read does not make a node stale: it stays `cached`, and
   `cache.artifact` then names a file that is not there (`barca docs cache`, "A cached result
   whose artifact is missing").
+- `evicted`: the same, because the cache size limit deleted the artifact file (`barca docs cache`,
+  "Disk use"). A result the artifact store holds is not stale: a run downloads it again.
 
 `cache.run_hash` is the cache key for the current code and inputs; `cache.artifact` is the file a
 `get` would serve (only when `cached`).

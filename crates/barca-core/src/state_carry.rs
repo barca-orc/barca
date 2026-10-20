@@ -696,6 +696,10 @@ mod tests {
                 .iter()
                 .map(|row| row.split('\t').nth(1).unwrap().to_string())
                 .filter(|name| name != "id")
+                .filter(|name| {
+                    table != "materializations"
+                        || !crate::db_schema::LOCAL_MATERIALIZATION_COLUMNS.contains(&name.as_str())
+                })
                 .collect();
             actual.sort();
             let mut listed: Vec<String> = columns.iter().map(|c| c.to_string()).collect();

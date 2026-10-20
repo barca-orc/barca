@@ -65,6 +65,13 @@ def keys(parts: list) -> list:
     return sorted(p["key"] for p in parts)
 
 
+@asset(partitions={"k": partitions(["ok", "bad"])})
+def flaky(k: str) -> dict:
+    if k == "bad":
+        raise ValueError("contract fixture partition failure")
+    return {"key": k}
+
+
 # `rows` is never used: the one plan warning of the fixture (`unused_input`), so the commands
 # that plan `report` show a filled `warnings` array and the others an empty one.
 @task(inputs={"t": total, "rows": numbers})
@@ -91,9 +98,17 @@ CASES: list[tuple[str, list[str], str, int]] = [
     ("list_truncated", ["list", "pipeline.py", "--json", "--limit", "1"], "stdout", 0),
     ("get_dry_run", ["get", "total", "pipeline.py", "--dry-run", "--json"], "stdout", 0),
     ("get", ["get", "total", "pipeline.py", "--json"], "stdout", 0),
+    ("get_value", ["get", "total", "pipeline.py", "-o", "value", "--json"], "stdout", 0),
     ("get_artifact_pointer", ["get", "frame", "pipeline.py", "--json"], "stdout", 0),
     ("sql", ["sql", "select * from frame order by n", "pipeline.py", "--json"], "stdout", 0),
     ("get_partitioned", ["get", "keys", "pipeline.py", "--json"], "stdout", 0),
+    ("get_partition_keys", ["get", "per_key", "pipeline.py", "--json"], "stdout", 0),
+    (
+        "get_partition_values",
+        ["get", "per_key", "pipeline.py", "--partition", "k=a", "-o", "value", "--json"],
+        "stdout",
+        0,
+    ),
     ("get_multi_target", ["get", "total,frame", "pipeline.py", "--json"], "stdout", 0),
     ("run", ["run", "report", "pipeline.py", "--json"], "stdout", 0),
     (
@@ -114,11 +129,16 @@ CASES: list[tuple[str, list[str], str, int]] = [
     ("history", ["history", "--json", "--limit", "1"], "stdout", 0),
     ("stats", ["stats", "total", "pipeline.py", "--json"], "stdout", 0),
     ("doctor", ["doctor", "pipeline.py", "--json"], "stdout", 0),
+    # A dry run deletes nothing, so the cases after it see the same project. A moved-aside
+    # directory is put in place first so every tier of the list has an entry.
+    ("gc_dry_run", ["gc", "--max-size", "1", "--dry-run", "--json"], "stdout", 0),
     ("docs_index", ["docs", "--json"], "stdout", 0),
     ("docs_topic", ["docs", "cache", "--json"], "stdout", 0),
     ("error_usage", ["get", "nope", "pipeline.py", "--json"], "stderr", 2),
     ("error_usage_parse", ["list", "pipeline.py", "--jsn", "--json"], "stderr", 2),
     ("history_reconciled", ["history", "--reconcile", "orphan-run", "--json"], "stdout", 0),
+    # Last, so no other case sees the failed run.
+    ("get_partition_failed", ["get", "flaky", "pipeline.py", "--json"], "stdout", 1),
 ]
 
 # Cases that need a setup of their own, run after CASES: (case, stream, expected exit code).
@@ -165,12 +185,40 @@ TIMING_CASE = (
     "stdout",
     0,
 )
-ALL_CASES = CASES + SETUP_CASES + [TIMING_CASE]
+# `get` on a project over a 1-byte cache limit: the result gains `cache`, after a recompute
+# made a superseded result to evict (see `_cache_limit_run`).
+CACHE_CASE = ("get_cache_evicted", ["get", "total", "pipeline.py", "--json"], "stdout", 0)
+ALL_CASES = CASES + SETUP_CASES + [TIMING_CASE, CACHE_CASE]
 
 # Values that are user data, not barca's schema: recorded as `<user value>`.
-USER_VALUES = {"final_output", "targets.<name>.final_output", "nodes[].shape.sample", "rows"}
+USER_VALUES = {
+    "final_output",
+    "final_output.<key>",
+    "targets.<name>.final_output",
+    "targets.<name>.final_output.<key>",
+    "nodes[].shape.sample",
+    "rows",
+}
 # Objects keyed by user-chosen names (targets, environment variables): keys become `<name>`.
 NAME_MAPS = {"steps[].env", "targets"}
+# A partitioned target's `final_output`: an object keyed by partition key (`k=a`), each an
+# artifact pointer or a value. Keys become `<key>`.
+PARTITION_MAPS = {"final_output", "targets.<name>.final_output"}
+
+
+def _is_pointer(v) -> bool:
+    return isinstance(v, dict) and "_barca_artifact" in v
+
+
+def _is_partition_map(path: str, v) -> bool:
+    return (
+        path in PARTITION_MAPS
+        and isinstance(v, dict)
+        and not _is_pointer(v)
+        and bool(v)
+        and all(re.fullmatch(r"[^=,]+=[^,]*(,[^=,]+=[^,]*)*", k) for k in v)
+    )
+
 
 # `--agent` stderr lines, normalized: timings and counters become placeholders.
 AGENT_RUNS = [
@@ -208,7 +256,13 @@ def schema(doc) -> dict[str, tuple[str, bool]]:
         seen[path] = seen.get(path, 0) + 1
         if isinstance(v, dict):
             objects[path] = objects.get(path, 0) + 1
-        if path in USER_VALUES and not (isinstance(v, dict) and "_barca_artifact" in v):
+        if _is_partition_map(path, v):
+            types.setdefault(path, set()).add("object")
+            for child in v.values():
+                parents[f"{path}.<key>"] = path
+                walk(f"{path}.<key>", child)
+            return
+        if path in USER_VALUES and not _is_pointer(v):
             types.setdefault(path, set()).add("<user value>")
             return
         types.setdefault(path, set()).add(_type(v))
@@ -234,6 +288,7 @@ def schema(doc) -> dict[str, tuple[str, bool]]:
         optional = (
             not path.endswith("[]")
             and not path.endswith("<name>")
+            and not path.endswith("<key>")
             and seen[path] < objects.get(parent, 1)
         )
         out[path] = ("|".join(sorted(ts)), not optional)
@@ -333,6 +388,10 @@ def runs(tmp_path_factory) -> dict:
 
     out: dict = {}
     for case, argv, stream, code in CASES:
+        if case == "gc_dry_run":
+            aside = cwd / ".barca/artifacts/pipeline.py--numbers/old.json.moved-aside"
+            aside.mkdir(parents=True)
+            (aside / "junk").write_text("x")
         if case == "history_reconciled":
             with closing(sqlite3.connect(cwd / ".barca/metadata.db")) as conn:
                 conn.execute(
@@ -411,6 +470,11 @@ def runs(tmp_path_factory) -> dict:
     s = command_schema(timing_doc, slow_import=True)
     out[TIMING_CASE[0]] = (s, render_snapshot(argv, stream, code, s), timing)
 
+    cache_case = tmp_path_factory.mktemp("contract_cache")
+    proc_cache = _cache_limit_run(binary, cache_case, env)
+    s = command_schema(json.loads(proc_cache.stdout))
+    out[CACHE_CASE[0]] = (s, render_snapshot(CACHE_CASE[1], "stdout", 0, s), proc_cache)
+
     agent: set[str] = set()
     for line in proc.stderr.splitlines():
         if line.startswith(
@@ -429,6 +493,35 @@ def runs(tmp_path_factory) -> dict:
                 agent.add(normalize_agent_line(line))
     out["agent_lines"] = sorted(agent)
     return out
+
+
+def _cache_limit_run(binary: str, cwd: Path, env: dict) -> subprocess.CompletedProcess:
+    """`CACHE_CASE` after `numbers` changed once, with `BARCA_CACHE_MAX_SIZE=1`: the run evicts
+    the superseded `numbers` result and everything else it does not hold."""
+
+    def barca(argv: list[str], **extra: str) -> subprocess.CompletedProcess:
+        proc = subprocess.run(
+            [binary, *argv],
+            cwd=cwd,
+            env={**env, **extra},
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        assert proc.returncode == 0, f"barca {' '.join(argv)}\n{proc.stderr}"
+        return proc
+
+    pipeline = (
+        "from barca import asset\n\n@asset()\ndef numbers() -> list:\n    return [1, 2, 3]\n\n"
+        "@asset()\ndef other() -> int:\n    return 7\n\n"
+        "@asset(inputs={'n': numbers})\ndef total(n: list) -> int:\n    return sum(n)\n"
+    )
+    (cwd / "pipeline.py").write_text(pipeline)
+    barca(["get", "pipeline.py", "--json"])
+    (cwd / "pipeline.py").write_text(pipeline.replace("[1, 2, 3]", "[1, 2, 3, 4]"))
+    proc = barca(CACHE_CASE[1], BARCA_CACHE_MAX_SIZE="1")
+    assert "[barca] cache " in proc.stderr and "evicted" in proc.stderr, proc.stderr
+    return proc
 
 
 def _artifact_mismatch_run(binary: str, tmp: Path, env: dict) -> subprocess.CompletedProcess:
@@ -523,6 +616,20 @@ def test_schema_reduction_ignores_values():
     }
 
 
+def test_schema_reduction_names_partition_keys():
+    pointer = {"_barca_artifact": {"path": "p", "format": "json", "size_bytes": 1}}
+    s = schema({"final_output": {"k=a": pointer, "k=b": pointer}})
+    assert s["final_output"] == ("object", True)
+    assert s["final_output.<key>"] == ("object", True)
+    assert s["final_output.<key>._barca_artifact.path"] == ("string", True)
+    assert schema({"final_output": {"k=a,r=x": {"key": "a"}}})["final_output.<key>"] == (
+        "<user value>",
+        True,
+    )
+    # A value that is an ordinary object is user data, not a mapping of partition keys.
+    assert schema({"final_output": {"total": 6}}) == {"final_output": ("<user value>", True)}
+
+
 def test_warnings_is_always_an_array_filled_only_where_the_plan_has_an_unused_input(runs):
     """`barca docs contract`, "Plan warnings": the key is on every plan/get/run document; the
     fixture's one unused input (`report`'s `rows`) fills it exactly where `report` is planned."""
@@ -530,8 +637,12 @@ def test_warnings_is_always_an_array_filled_only_where_the_plan_has_an_unused_in
     without = {
         "get_dry_run",
         "get",
+        "get_value",
         "get_artifact_pointer",
         "get_partitioned",
+        "get_partition_keys",
+        "get_partition_values",
+        "get_partition_failed",
         "get_multi_target",
         "run_failed",
     }
@@ -567,7 +678,9 @@ def test_artifact_mismatch_is_a_boolean_on_the_steps_concerned_and_absent_elsewh
     marked = {st["id"]: st for st in doc["steps"] if "artifact_mismatch" in st}
     assert sorted(marked) == ["pipeline.py:numbers", "pipeline.py:total"]
     assert all(st["artifact_mismatch"] is True and st["warning"] for st in marked.values())
-    assert doc["final_output"] == {"summary": 20}  # 5 + 5 + 10: the store's copy was used
+    # 5 + 5 + 10: the store's copy was used.
+    pointer = doc["final_output"]["_barca_artifact"]
+    assert json.loads(Path(pointer["path"]).read_text()) == {"summary": 20}
     # It is a step-level finding of the run: the plan-warnings array does not carry it.
     assert doc["warnings"] == []
     assert "[barca] warning: pipeline.py:numbers: the copy at " in proc.stderr

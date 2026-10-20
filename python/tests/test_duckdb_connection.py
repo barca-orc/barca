@@ -190,7 +190,7 @@ def run_get(binary: str, cwd: Path, target: str, *flags: str) -> dict:
     # One worker, so every step shares a process: this is where shared state would leak.
     env = {**os.environ, "BARCA_POOL_SIZE": "1"}
     proc = subprocess.run(
-        [binary, "get", target, "pipeline.py", *flags],
+        [binary, "get", target, "pipeline.py", *flags, "-o", "value", "--json"],
         cwd=cwd,
         env=env,
         check=False,
@@ -253,7 +253,7 @@ def queried_via_helper(orders: duckdb.DuckDBPyRelation) -> duckdb.DuckDBPyRelati
 
 def run_failing(binary: str, cwd: Path, target: str) -> subprocess.CompletedProcess:
     proc = subprocess.run(
-        [binary, "get", target, "pipeline.py", "--refresh-all"],
+        [binary, "get", target, "pipeline.py", "--refresh-all", "-o", "value", "--json"],
         cwd=cwd,
         env={**os.environ, "BARCA_POOL_SIZE": "1"},
         check=False,

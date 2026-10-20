@@ -2,13 +2,15 @@
 
 Every asset (and task) with a cached result is a view named after its declared name
 (or function name when no explicit name is set). The query runs
-in an in-memory DuckDB over the artifact files: user code is never imported, nothing is
-recorded, and nothing is written under .barca/.
+in an in-memory DuckDB over the artifact files: user code is never imported, no run is
+recorded, and the only write under .barca/ is the read time of the queried results.
 """
 
 import json
+import sqlite3
 import subprocess
 import textwrap
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -174,13 +176,30 @@ def test_a_sql_error_is_a_usage_error_with_duckdbs_message(proj):
     assert "syntax error" in envelope(proc)["error"].lower()
 
 
-def test_sql_records_and_writes_nothing(proj):
+def test_sql_records_no_run_and_writes_only_read_times(proj):
     before = ok(barca(proj, "history", "--json"))
-    files = sorted((p, p.stat().st_mtime_ns) for p in (proj / ".barca").rglob("*") if p.is_file())
+
+    def files():
+        # The metadata DB changes: `last_read_at` of the queried results (the cache size limit
+        # evicts results nobody reads first). Nothing else under .barca does.
+        return sorted(
+            (p, p.stat().st_mtime_ns)
+            for p in (proj / ".barca").rglob("*")
+            if p.is_file() and not p.name.startswith("metadata.db")
+        )
+
+    with closing(sqlite3.connect(proj / ".barca/metadata.db")) as db:
+        db.execute("update materializations set last_read_at = null")
+        db.commit()
+    unchanged = files()
     ok(sql(proj, "select count(*) as n from orders"))
     assert ok(barca(proj, "history", "--json")) == before
-    after = sorted((p, p.stat().st_mtime_ns) for p in (proj / ".barca").rglob("*") if p.is_file())
-    assert after == files
+    assert files() == unchanged
+    with closing(sqlite3.connect(proj / ".barca/metadata.db")) as db:
+        read = db.execute(
+            "select node_id from materializations where last_read_at is not null"
+        ).fetchall()
+    assert {node.split(":")[-1] for (node,) in read} == {"orders"}
 
 
 def test_values_are_plain_json(proj):

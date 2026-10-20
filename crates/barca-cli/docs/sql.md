@@ -64,8 +64,10 @@ barca: fetched 1 remote artifact (2.1 KB) into .barca/sql-cache/
 - A copy is reused while the object is unchanged. Each query asks the store for the size and
   version of every remote file it reads (one metadata request per file) and downloads again only
   when they differ, for example after `barca get revenue --refresh revenue`.
-- The copies mirror the object's URI (`.barca/sql-cache/s3/my-bucket/...`) and are never removed
-  by barca. Deleting `.barca/sql-cache/` is always safe: it holds nothing but copies.
+- The copies mirror the object's URI (`.barca/sql-cache/s3/my-bucket/...`). They count toward the
+  cache size limit and are the first thing it evicts, least recently used first (a copy used in
+  the last 5 minutes is kept; `barca docs cache`, "Disk use"). Deleting `.barca/sql-cache/` is
+  always safe: it holds nothing but copies.
 - `show tables` lists remote views without downloading them.
 - The download uses the filesystem, credentials and `[remote.storage_options.*]` the steps use.
 
@@ -101,7 +103,9 @@ no longer in the bucket) exits 3 and carries the store's error.
 - It never executes a pipeline step or records a new run. Source parsing is static,
   but `partitions(<expression>)` may evaluate Python and import the pipeline module
   while loading its key list. With optimistic shared state, local history may change
-  when synchronized; remote artifact copies are written under `.barca/sql-cache/`.
+  when synchronized; remote artifact copies are written under `.barca/sql-cache/`. The one
+  write to the metadata DB is the read time of the results the query names (`last_read_at`),
+  which the cache size limit uses to evict results nobody reads first.
 - SQL is not restricted to SELECT: an explicit `COPY ... TO 'file.csv'` writes that
   file using DuckDB. Queries run with the process's filesystem permissions.
 - Install SQL support in barca's Python environment: `uv add 'barca[sql]'`.

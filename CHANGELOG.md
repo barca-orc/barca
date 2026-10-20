@@ -12,6 +12,38 @@ reconciliation, and verified shared DuckDB worker lifetime. See
 upgrade and breaking-change notes. Releases between the historical entries below
 and these tags are available on the same releases page.
 
+## Pending
+
+### Breaking
+
+- **Breaking:** `barca get` prints artifact paths by default (#404). In `--json` (and whenever
+  stdout is piped) `final_output` is always the pointer `{"_barca_artifact": {"path", "format",
+  "size_bytes"}}`, for json artifacts too, and a terminal shows the path with a small json value
+  previewed under it. The old default, the value, is `-o value` (`-o value --json` for the JSON
+  line); `-o path` prints only the paths. `barca.get()` still returns the value. **Breaking:** a
+  partitioned target returns every key, sorted, never one key (#287): `final_output` is an object
+  keyed by partition key (`"region=emea"`), and `barca.get()` returns a dict of key to value.
+  `--partition region=emea,amer` (or a JSON object for compound keys) selects keys, computes only
+  those and scopes `--refresh` of the target; `barca.get(..., partition=...)` does the same.
+
+### Features
+
+- **Breaking:** `.barca/` now has a size limit, `[cache] max_size` in `barca.toml` or
+  `BARCA_CACHE_MAX_SIZE` (`"20GB"`, `"500MB"`, `"20GiB"`, bytes, `"10%"` of the filesystem, or
+  `"off"`), defaulting to 10% of the filesystem `.barca/` is on. After every `get` and `run`,
+  after every `serve` run and once a minute under `serve`, a cache over its limit is evicted
+  down to 80% of it: leftovers (dead processes' staging, `*.moved-aside*` directories,
+  `sql-cache/` copies), then superseded results, then local copies the artifact store holds,
+  then the least recently read results; never the command's own outputs, results a run in
+  flight holds, a storeless `Manual` node's current result, or the metadata databases. An
+  evicted result is fetched or computed again under the same run hash when something needs it
+  (step and status reason `evicted`). A project whose cache was larger than the limit sees more
+  fetches and recomputes after upgrading; `max_size = "off"` restores the old unbounded
+  behaviour. New, experimental: `barca gc [--dry-run] [--max-size SIZE] [--json] [--env ENV]`,
+  the `cache` key on `get`/`run` results, the `cache_size` check of `barca doctor`, and `cache`
+  in `GET /health`. `materializations` gains `evicted_at` and `last_read_at` (additive, metadata
+  format 1); rows are never deleted (RFC-0012, #457).
+
 ## 0.24.3 (2026-10-20)
 
 ### Bug Fixes

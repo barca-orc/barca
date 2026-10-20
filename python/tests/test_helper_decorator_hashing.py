@@ -38,7 +38,7 @@ def test_edit_to_helper_only_decorator_invalidates_affected_asset(tmp_path, kind
 
     def run():
         proc = subprocess.run(
-            [_find_binary(), "get", "value,unrelated", "pipeline.py", "--json"],
+            [_find_binary(), "get", "value,unrelated", "pipeline.py", "-o", "value", "--json"],
             cwd=tmp_path,
             env=env,
             capture_output=True,

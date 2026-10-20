@@ -1,7 +1,7 @@
 //! Input validation, project roots, and output selection.
 
 use crate::{
-    args::{Cli, OutputMode},
+    args::{Cli, GetOutput, OutputMode},
     error::{self, CliError, Context, ErrorKind, shell_quote},
     output::{self, Format, FormatFlags},
 };
@@ -179,8 +179,9 @@ pub(crate) fn json_output(cli: &Cli) -> bool {
             format,
             fields,
             ..
-        }
-        | Cli::Run {
+        } => get_mode(*output, *format, fields.as_deref())
+            .is_ok_and(|m| m.shape == barca_core::report::GetShape::Json),
+        Cli::Run {
             output,
             format,
             fields,
@@ -195,9 +196,10 @@ pub(crate) fn json_output(cli: &Cli) -> bool {
             fields_json(*format, fields.as_deref()).unwrap_or(false)
         }
         Cli::Docs { json, fields, .. } => *json || fields.is_some(),
-        Cli::Sql { format, .. } | Cli::Logs { format, .. } | Cli::Doctor { format, .. } => {
-            is_json(*format)
-        }
+        Cli::Sql { format, .. }
+        | Cli::Logs { format, .. }
+        | Cli::Doctor { format, .. }
+        | Cli::Gc { format, .. } => is_json(*format),
         Cli::Serve { .. } | Cli::Version => false,
     }
 }
@@ -216,6 +218,7 @@ pub(crate) fn context(cli: &Cli) -> Context {
         Cli::Sql { files, .. } => ("sql", paths(files)),
         Cli::Status { args, .. } => ("status", paths(&split_target_files(args.clone()).1)),
         Cli::History { .. } => ("history", Vec::new()),
+        Cli::Gc { .. } => ("gc", Vec::new()),
         Cli::Logs { .. } => ("logs", Vec::new()),
         Cli::Docs { .. } => ("docs", Vec::new()),
         Cli::Version => ("version", Vec::new()),
@@ -241,6 +244,72 @@ pub(crate) fn get_run_mode(
         )),
         _ => Ok(OutputMode::Json),
     }
+}
+
+/// What `barca get` prints: its shape on stdout and whether it returns paths or values.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct GetMode {
+    pub shape: barca_core::report::GetShape,
+    pub values: bool,
+}
+
+impl GetMode {
+    /// The mode `--dry-run` reports in (it returns nothing, so only the shape matters).
+    pub(crate) fn explain_mode(self) -> OutputMode {
+        use barca_core::report::GetShape;
+        match (self.shape, self.values) {
+            (GetShape::Json, _) => OutputMode::Json,
+            (GetShape::Bare, true) => OutputMode::Value,
+            _ => OutputMode::Pretty,
+        }
+    }
+}
+
+/// Resolve `barca get`'s output. `-o path|value` chooses what is returned; alone it prints only
+/// that (`Bare`), with `--json` (or `--fields`) the JSON result and with `--pretty` the summary.
+/// Without them, paths are returned and the shared rule (`--json` / `--pretty`, BARCA_OUTPUT,
+/// the terminal) decides between JSON and the summary. `-o json|pretty` are the older spellings
+/// of `--json|--pretty` and cannot be combined with them.
+#[allow(clippy::result_large_err)] // cold path: built once, right before exiting
+pub(crate) fn get_mode(
+    output: Option<GetOutput>,
+    format: FormatFlags,
+    fields: Option<&[String]>,
+) -> Result<GetMode, CliError> {
+    use barca_core::report::GetShape;
+    let usage = |msg: &str| Err(CliError::from_prose(ErrorKind::Usage, msg.to_string()));
+    let explicit = format.json || format.pretty;
+    let (shape, values) = match output {
+        Some(GetOutput::Json | GetOutput::Pretty) if explicit => {
+            return usage(
+                "error: -o json|pretty and --json/--pretty both set the output format\n\
+                 Use one: --json or --pretty (with -o path or -o value to choose what is returned).",
+            );
+        }
+        Some(GetOutput::Json) => (GetShape::Json, false),
+        Some(GetOutput::Pretty) => (GetShape::Pretty, false),
+        Some(o @ (GetOutput::Path | GetOutput::Value)) => {
+            let shape = if format.json || fields.is_some() {
+                GetShape::Json
+            } else if format.pretty {
+                GetShape::Pretty
+            } else {
+                GetShape::Bare
+            };
+            (shape, o == GetOutput::Value)
+        }
+        None if fields.is_some() && !format.pretty => (GetShape::Json, false),
+        None => match output::resolve(format.explicit()) {
+            Format::Json => (GetShape::Json, false),
+            Format::Pretty => (GetShape::Pretty, false),
+        },
+    };
+    if fields.is_some() && shape != GetShape::Json {
+        return usage(
+            "error: --fields applies to JSON output\nDrop -o pretty/--pretty, or use --json.",
+        );
+    }
+    Ok(GetMode { shape, values })
 }
 
 /// Whether an inspection command prints JSON. `--fields` implies JSON; with `--pretty` it is a
@@ -347,7 +416,11 @@ pub(crate) fn enter_project_root(cli: &mut Cli) -> Result<(), barca_core::BarcaE
         Cli::Doctor { files, .. } => {
             *files = files.iter().map(|file| rebase(file)).collect();
         }
-        Cli::History { .. } | Cli::Logs { .. } | Cli::Docs { .. } | Cli::Version => {}
+        Cli::History { .. }
+        | Cli::Gc { .. }
+        | Cli::Logs { .. }
+        | Cli::Docs { .. }
+        | Cli::Version => {}
     }
     Ok(())
 }

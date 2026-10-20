@@ -34,13 +34,13 @@ def test_terminal_insert_fault_is_an_infra_error_and_preserves_prior_history(tmp
     (tmp_path / "pipeline.py").write_text(
         "from barca import asset\n@asset\ndef value(): return 42\n"
     )
-    first = run(tmp_path, "get", "pipeline.py", "--json")
+    first = run(tmp_path, "get", "pipeline.py", "-o", "value", "--json")
     assert first.returncode == 0, first.stderr
     before = sql(tmp_path, "SELECT run_id, node_id, status FROM materializations")
     assert len(before) == 1
     # No Barca process is running while the fault is installed/removed.
     sql(tmp_path, "CREATE UNIQUE INDEX terminal_fault ON materializations(node_id)")
-    failed = run(tmp_path, "get", "pipeline.py", "--refresh-all", "--json")
+    failed = run(tmp_path, "get", "pipeline.py", "--refresh-all", "-o", "value", "--json")
     assert failed.returncode == 3, failed.stderr
     error = json.loads(next(line for line in reversed(failed.stderr.splitlines()) if line.startswith("{")))
     assert error["code"] == 3
@@ -50,7 +50,7 @@ def test_terminal_insert_fault_is_an_infra_error_and_preserves_prior_history(tmp
     assert statuses[0][0] == "success"
     assert statuses[1] == ("running", None)
     sql(tmp_path, "DROP INDEX terminal_fault")
-    retried = run(tmp_path, "get", "pipeline.py", "--refresh-all", "--json")
+    retried = run(tmp_path, "get", "pipeline.py", "--refresh-all", "-o", "value", "--json")
     assert retried.returncode == 0, retried.stderr
     assert json.loads(retried.stdout)["final_output"] == 42
     assert len(sql(tmp_path, "SELECT node_id FROM materializations")) == 2
