@@ -1,4 +1,4 @@
-import type { AssetSummary, NodeState } from './types'
+import type { ListNode, NodeState } from './types'
 import { SEVERITIES, severityOf, type Severity } from './assetTable'
 
 /**
@@ -27,7 +27,7 @@ export interface Pipeline {
 }
 
 /** Distinct pipelines actually being served, derived from the asset graph. */
-export function pipelinesFromAssets(assets: AssetSummary[]): Pipeline[] {
+export function pipelinesFromAssets(assets: ListNode[]): Pipeline[] {
   const seen = new Map<string, Pipeline>()
   for (const a of assets) {
     const file = sourceFile(a.id)

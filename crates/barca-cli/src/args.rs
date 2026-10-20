@@ -264,6 +264,7 @@ Examples:
   barca history --json         # {runs: [...], total, truncated, hint?}, even in a terminal
   barca history --pretty       # the table, even when piped
   barca history --fields run_id,status,elapsed_seconds,attempts   # JSON with only these keys per run
+  barca history --fields run_id,triggered_by,scheduled_at   # what started each run (manual, api, schedule, client)
   barca history --env dev      # runs recorded in another environment
 
 --reconcile is an explicit write: first verify the run stopped. It refuses a proven live

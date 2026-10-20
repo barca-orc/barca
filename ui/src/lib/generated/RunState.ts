@@ -3,20 +3,21 @@ import type { GetResult } from "./GetResult";
 import type { RunStatus } from "./RunStatus";
 
 /**
- * In-memory record of a single run. The server-side `handle` is the polling id
- * returned by `POST /run`; the real DB run id lives inside `result` once complete.
+ * In-memory record of a single run, kept while it runs and for a while after. `handle` is
+ * the database run id, allocated when the run is accepted.
  */
 export type RunState = {
 /**
- * Server-side polling handle (see `/status/{run_id}`).
+ * The run id (see `/runs/{run_id}`); the older `/status/{run_id}` calls it the handle.
  */
 handle: string, status: RunStatus,
 /**
- * Populated when `status == Complete`. Carries the DB run id, timing, output.
+ * Populated when `status == Complete` for a single-target run. Carries the DB run id,
+ * timing, output.
  */
 result: GetResult | null,
 /**
- * Populated when `status == Failed`.
+ * Populated when the run did not succeed.
  */
 error: string | null,
 /**

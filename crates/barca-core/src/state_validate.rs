@@ -51,6 +51,10 @@ pub(crate) const RUN_COLUMNS: &[&str] = &[
     "host",
     "owner",
     "job",
+    "triggered_by",
+    "scheduled_at",
+    "schedule_id",
+    "outcome_json",
 ];
 
 /// Every column of `materializations` except its row id.
@@ -97,7 +101,10 @@ pub(crate) const TABLES: &[(&str, &[&str])] = &[
             "updated_at",
         ],
     ),
-    ("schedule_state", &["node_id", "last_fired_at"]),
+    (
+        "schedule_state",
+        &["node_id", "last_fired_at", "paused_at", "paused_until"],
+    ),
     (
         "notifications",
         &["job", "integration", "posted_at", "state", "message_ref"],
@@ -303,10 +310,12 @@ async fn schema_columns(conn: &Connection, legacy: bool) -> Result<Result<(), St
         if legacy && found.is_empty() {
             continue;
         }
+        // The additive migration adds these, so a database may lack them before it runs.
         let additions = if legacy {
             match *table {
                 "runs" => crate::db_schema::RUN_COLUMNS,
                 "materializations" => crate::db_schema::MATERIALIZATION_COLUMNS,
+                "schedule_state" => crate::db_schema::SCHEDULE_STATE_COLUMNS,
                 _ => &[],
             }
         } else {

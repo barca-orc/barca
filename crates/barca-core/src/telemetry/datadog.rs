@@ -225,6 +225,16 @@ impl Datadog {
         if let Some(handle) = &run.in_flight_run {
             meta.insert("barca.in_flight_run".to_string(), json!(handle));
         }
+        meta.insert(
+            "barca.trigger".to_string(),
+            json!(run.trigger.triggered_by.as_str()),
+        );
+        if let Some(at) = &run.trigger.scheduled_at {
+            meta.insert("barca.scheduled_at".to_string(), json!(at));
+        }
+        if let Some(id) = &run.trigger.schedule_id {
+            meta.insert("barca.schedule_id".to_string(), json!(id));
+        }
         let mut spans = vec![json!({
             "trace_id": trace_id,
             "span_id": root_id,
@@ -515,6 +525,7 @@ mod tests {
             steps_executed: 1,
             steps_cached: 1,
             steps,
+            trigger: Default::default(),
         }
     }
 
@@ -591,6 +602,17 @@ mod tests {
     }
 
     #[test]
+    fn a_scheduled_run_names_its_trigger_tick_and_schedule() {
+        let mut scheduled = run("success", Vec::new());
+        scheduled.trigger = crate::outcome::Trigger::schedule("p.py:publish", 1_800_000_000);
+        let payload = datadog().trace(&scheduled);
+        let meta = &payload[0][0]["meta"];
+        assert_eq!(meta["barca.trigger"], "schedule");
+        assert_eq!(meta["barca.scheduled_at"], "2027-01-15T08:00:00Z");
+        assert_eq!(meta["barca.schedule_id"], "p.py:publish");
+    }
+
+    #[test]
     fn a_skipped_tick_is_a_root_span_with_its_reason_and_no_error() {
         let mut skipped = run("skipped", Vec::new());
         skipped.reason = Some("in_flight".to_string());
@@ -606,6 +628,8 @@ mod tests {
         // A run that finished carries neither tag.
         let done = datadog().trace(&run("success", Vec::new()));
         assert!(done[0][0]["meta"].get("barca.reason").is_none());
+        assert_eq!(done[0][0]["meta"]["barca.trigger"], "manual");
+        assert!(done[0][0]["meta"].get("barca.scheduled_at").is_none());
     }
 
     #[test]

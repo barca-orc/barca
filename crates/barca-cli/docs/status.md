@@ -253,3 +253,16 @@ attempts per recorded materialization and its stored final-attempt duration.
 Timeout errors name the step id, including its partition key.
 
 Older read-only snapshots without attempt metadata report a null history attempt total.
+
+## What started a run
+
+`barca history --json` rows carry `triggered_by`: `manual` for a command typed on a machine
+(`barca get`, `barca run`), `api` for a run started over HTTP on `barca serve`, `schedule` for a
+cron tick, and `client` for a run a laptop posted to a server's ledger. A scheduled run also
+carries the tick it was started for in `scheduled_at` (RFC 3339, UTC) and the scheduled node in
+`schedule_id`; both are `null` otherwise. Runs recorded before barca recorded this have
+`triggered_by: null`.
+
+```bash
+barca history --json --fields run_id,triggered_by,scheduled_at,schedule_id
+```

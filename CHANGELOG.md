@@ -156,6 +156,40 @@ and these tags are available on the same releases page.
   same ordering. Dispatch also finds an upstream's output by id instead of scanning every
   output, and the end-of-run check no longer scans every item on each event.
 
+### Features
+
+- `barca serve` runs the server half of the `--server` run contract (RFC-0007 §3.4, #393).
+  `POST /runs` takes the flags of `barca get` / `barca run` as JSON and answers with the run's
+  database id at once (`dry_run` answers with the `--dry-run` JSON); targets are checked first,
+  in the CLI's words. `GET /runs/{run_id}/events` streams every stderr line a local run prints
+  (`line`, tagged `when: agent | always`), step output (`log`), step results (`step_finished`,
+  with `cached: true` for cache hits) and `run_finished` with the outcome, each event numbered
+  (`id:`); a slow or reconnecting reader receives every event once, and the stream ends after
+  `run_finished`. `GET /runs/{run_id}` answers with the outcome (the exact `--json` body, or the
+  failed-run body and error envelope) from the metadata DB, so it survives a restart;
+  `DELETE /runs/{run_id}` cancels; `GET /runs/{run_id}/output` serves the final artifact.
+  `GET /list`, `/nodes`, `/history` and `/stats/{name}` return the CLI's `--json` bodies byte
+  for byte, `GET /project` describes the deployed tree, and `GET /health` adds `api_version`,
+  `env` and `store_uri`. Runs record `triggered_by` (`manual`, `api`, `schedule`, `client`) and,
+  for scheduled runs, `scheduled_at` and `schedule_id`, in `barca history --json`, `GET /runs`
+  and the `barca.run` span (`barca.trigger`, `barca.scheduled_at`, `barca.schedule_id`, #434).
+  The web UI uses the new routes and shows what started each run.
+- `POST /schedule/{id}/pause` (optionally `?until=<RFC 3339>`) and `POST /schedule/{id}/resume`
+  hold one schedule back without `--no-schedule` (#435). `GET /schedule` reports `paused`,
+  `paused_until` and `skip_reason`; a paused job's ticks are skipped with reason `paused` (also
+  on the telemetry span) and are not caught up. Pauses are kept in `schedule_state`, so a restart
+  does not resume a paused job.
+- **Breaking (HTTP API):** every error body is the CLI error envelope (`error`, `code`, `kind`,
+  `remediation`, ...) instead of `{"error"}` alone (`error` is still there). `GET /assets` and
+  `GET /assets/{name}` return the `barca list --json` node shape (`freshness` a lowercase word,
+  cron in `schedule`) and the `barca stats --json` body (`id` instead of `node_id`).
+  `GET /runs/{id}` returns the flat run view with its `outcome` instead of `{run, steps, logs,
+  result}`. Run ids returned by the trigger routes are the database run ids. `POST /run`,
+  `POST /run/{target}`, `POST /get/{target}`, `DELETE /run/{run_id}`, `GET /status/{run_id}` and
+  `GET /events/{run_id}` stay as aliases for one minor release; use `POST /runs`,
+  `DELETE /runs/{run_id}`, `GET /runs/{run_id}` and `GET /runs/{run_id}/events`. Event streams
+  now end after `run_finished` and carry an `id:` per event.
+
 ## 0.24.2 (2026-10-20)
 
 ### Bug Fixes

@@ -540,6 +540,7 @@ pub(crate) fn telemetry_report(
         steps_executed: l.steps_executed,
         steps_cached: l.steps_cached,
         steps,
+        trigger: Default::default(),
     }
 }
 

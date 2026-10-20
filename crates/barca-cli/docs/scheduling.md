@@ -1,10 +1,10 @@
 # Scheduling and `barca serve`
 
 `barca serve` currently runs deployed code on one machine and exposes the HTTP API,
-web UI and cron scheduler. Use the HTTP API or `barca.Client` to trigger remote work.
-Ordinary `barca get` and `barca.get()` run locally. The accepted server-ledger design
-(RFC-0007), including CLI `--server`/`--local`, server URL configuration and laptop
-runs against the server's ledger, is not implemented in v0.24.0 (#393, #394, #402).
+web UI and cron scheduler. Use the HTTP API (`POST /runs`) or `barca.Client` to trigger remote
+work. Ordinary `barca get` and `barca.get()` run locally. The server half of RFC-0007's run
+contract is implemented (#393); CLI `--server`/`--local`, server URL configuration (#394) and
+laptop runs against the server's ledger (#402) are not yet.
 Deployment instructions: https://barca.sh/deploying/.
 
 Freshness is recorded on every node. Only `Schedule(...)` starts automatic runs:
@@ -59,13 +59,18 @@ The cache is keyed by the sensor's value, not by time. A sensor that returns to 
 before (a row count, a status flag) brings back the result computed for that value. Return
 something that identifies the version of the data, such as an etag or a last-modified time.
 
-`POST /run/<task>` is different from a tick: it recomputes every upstream asset.
+A scheduled run is recorded with `triggered_by: "schedule"`, the tick it was started for
+(`scheduled_at`) and the schedule (`schedule_id`, the node's id), in `barca history --json`,
+`GET /runs/{run_id}` and the `barca.run` span (`barca docs telemetry`).
+
+The older `POST /run/<task>` alias is different from a tick: it recomputes every upstream asset.
 
 A tick is skipped, not queued, while a run of the same node is pending or running, whoever
-started it: an earlier tick, `POST /get/<node>`, `POST /run/<task>`, or `POST /run` (every asset
-and sensor; it does not hold back a scheduled task). The skip is a line on stderr naming the run
-in flight, `last_skipped` and `skipped_for` in `GET /schedule` (kept in memory: a restart clears
-them), and, with telemetry on, a `barca.run` span with status `skipped` (`barca docs telemetry`).
+started it: an earlier tick, `POST /runs` naming the node, or a `POST /runs` of every asset and
+sensor (it does not hold back a scheduled task). The skip is a line on stderr naming the run
+in flight, `last_skipped`, `skip_reason: "in_flight"` and `skipped_for` in `GET /schedule`
+(kept in memory: a restart clears them), and, with telemetry on, a `barca.run` span with status
+`skipped` (`barca docs telemetry`).
 The next tick after the run ends fires as usual. Only a run of the node itself counts: a run of
 a node downstream of it does not hold the tick back, though it computes the same upstream cone.
 Two scheduled nodes that share an upstream run separately, and both may compute it.
@@ -73,6 +78,27 @@ Two scheduled nodes that share an upstream run separately, and both may compute 
 ```text
 [barca] scheduled run pipeline.py:orders skipped — run 1b942bb33182 of the same node still in flight
 ```
+
+## Pausing one schedule
+
+To hold one job back for a maintenance window or a planned manual rebuild, pause it; the rest of
+the schedule keeps firing. The id is the node's full id (percent-encode a `/` in it) or its name:
+
+```bash
+curl -X POST http://127.0.0.1:8274/schedule/daily_report/pause                              # until resumed
+curl -X POST 'http://127.0.0.1:8274/schedule/daily_report/pause?until=2026-10-21T06:00:00Z'  # until a time (RFC 3339)
+curl -X POST http://127.0.0.1:8274/schedule/daily_report/resume
+```
+
+Each answers the job's `GET /schedule` entry, which reports `paused` and `paused_until` (unix
+epoch seconds, `null` for a pause until resumed). While a job is paused its due ticks are
+skipped: a line on stderr, `skip_reason: "paused"` in `GET /schedule`, and with telemetry on a
+`barca.run` span with status `skipped` and reason `paused`. A pause ends at `until`, or when the
+job is resumed; the ticks skipped while it was paused are not caught up.
+
+A pause is kept in the metadata DB (`schedule_state`), so a restart, such as a deploy, does not
+resume a job someone paused. A pause on a node that is no longer scheduled is kept and applies
+again if the schedule comes back. A `--read-only` server refuses both routes with `403`.
 
 Cron is evaluated in one timezone for the whole server, set with `--timezone`: `local` (the
 default: the zone of the machine or container), `utc`, or an IANA name such as
@@ -98,8 +124,8 @@ barca serve pipeline.py --read-only            # inspect only: no runs, no sched
 barca serve pipeline.py --host 0.0.0.0         # listen on every interface (containers, VMs)
 ```
 
-`--read-only` serves the API without the ability to change anything: run and cancel endpoints
-return `403`, the scheduler never starts, and every read of the metadata DB goes through a
+`--read-only` serves the API without the ability to change anything: run, cancel and pause
+endpoints return `403`, the scheduler never starts, and every read of the metadata DB goes through a
 private copy, so it is safe to point at a project another process is running.
 
 `serve` binds to `127.0.0.1` by default and has no authentication. `--host 0.0.0.0` (or `::`)
@@ -115,12 +141,11 @@ nginx or Traefik (any path prefix, live logs included): https://barca.sh/deployi
 Full model: https://barca.sh/scheduling/.
 
 The UI's Runs view shows persisted CLI, scheduled and HTTP runs, plus queued/live server
-runs. Select a run to inspect its status, timing, steps, errors and logs. After triggering a
-node in the graph, use View run to open its details; even a cache hit records a new run.
-The detail URL switches to the durable run ID so it can be reopened after a server restart.
-The same inspection is available through `GET /runs?limit=100` and `GET /runs/{id}` and
-uses private DB snapshots. Logs and materialized steps survive restart; cached counts
-remain, but cached per-step reports and final output require the server's retained result.
+runs, with what started each. Select a run to inspect its status, timing, steps, errors and
+logs. After triggering a node in the graph, use View run to open its details; even a cache hit
+records a new run. The same inspection is available through `GET /runs?limit=100` and
+`GET /runs/{run_id}`, which read private DB snapshots. A run the server started keeps its full
+outcome in the DB, so `GET /runs/{run_id}` gives the same answer after a restart.
 
 ## Calling the server
 
@@ -129,16 +154,25 @@ persistent storage, and start `barca serve pipeline.py`. Workers execute on that
 From another terminal, trigger a deployed asset or task:
 
 ```bash
-curl -X POST http://127.0.0.1:8274/get/daily_report  # an asset and its dependencies
-curl -X POST http://127.0.0.1:8274/run/publish      # a task; refreshes its upstream assets
-curl http://127.0.0.1:8274/status/RETURNED_RUN_ID   # use run_id from the POST response
+curl -X POST http://127.0.0.1:8274/runs -d '{"command": "get", "targets": ["daily_report"]}'  # an asset and its dependencies
+curl -X POST http://127.0.0.1:8274/runs -d '{"command": "run", "targets": ["publish"]}'       # a task
+curl -N http://127.0.0.1:8274/runs/RETURNED_RUN_ID/events   # its progress lines and outcome, as they happen
+curl http://127.0.0.1:8274/runs/RETURNED_RUN_ID             # the run and its outcome; also after a restart
+curl http://127.0.0.1:8274/runs/RETURNED_RUN_ID/output      # the final artifact's bytes
 ```
 
-Replace the target names with functions in the deployed pipeline. The POST returns a
-polling handle immediately; poll until `status` is `complete`, `failed` or `cancelled`.
-The completed result contains an artifact pointer whose path is relative to the server's
-project root. HTTP does not return that file's bytes. Remote clients use the URL of the
-private server or its authenticating proxy in place of the loopback address above.
+Replace the target names with functions in the deployed pipeline. `POST /runs` takes the flags
+of `barca get` and `barca run` as JSON (`targets`, `refresh`, `refresh_all`, `cascade`,
+`dry_run`, `agent`) and answers `202` with the run id at once, which is the id
+`barca history` shows. The targets are checked first, in the CLI's words: a request a local
+command would refuse starts nothing. The event stream sends each stderr line a local run
+prints (`line`, tagged `when: agent` or `always`), each line a step prints (`log`), each step's
+result (`step_finished`, with `cached: true` for a cache hit), and `run_finished` with the
+outcome: the exact `barca get --json` body on success, the failed-run body and the error
+envelope on failure. A dropped connection is not resumed; reconnecting replays the run from its
+first event. Remote clients use the URL of the private server or its authenticating proxy in
+place of the loopback address above. The older `POST /get/<target>`, `POST /run/<target>`,
+`POST /run`, `GET /status/<id>` and `GET /events/<id>` routes stay for one more minor release.
 
 The standard-library Python client wraps the same API:
 
@@ -161,8 +195,8 @@ barca serve pipeline.py                  # local ledger; artifact uploads and ba
 
 Other machines do not get cache or history sharing from that store. CLI `--server`,
 `[server] url`, `BARCA_SERVER` and local runs posting results to the server's ledger belong
-to the unimplemented RFC-0007 design. `barca.get()` starts a local CLI process; use
-`Client.get()` for the HTTP request above.
+to the part of RFC-0007 not implemented yet. `barca.get()` starts a local CLI process; use
+`Client.get()` for an HTTP request.
 
 ## Stopping the server
 
@@ -184,12 +218,14 @@ drain_timeout = 300
 During the drain the server prints `[barca] SIGTERM received: draining — new runs are refused;
 waiting up to 30s for 1 run in flight (send SIGTERM again to stop now)` and:
 
-- refuses new runs: `POST /run`, `POST /run/{target}` and `POST /get/{target}` answer `503`
+- refuses new runs: `POST /runs` (a `dry_run` is still answered) and the older `POST /run`,
+  `POST /run/{target}` and `POST /get/{target}` answer `503`
   with a `Retry-After` header of the drain timeout in seconds (at least 1);
 - stops the scheduler (`[barca] scheduler stopped: the server is draining`). A tick that falls
   in the drain starts nothing; the next server's startup catch-up fires the job once;
 - reports `"status": "draining"` on `GET /health` (still `200`);
-- keeps answering reads, `/status`, `/events` and `DELETE /run/{id}`;
+- keeps answering reads, `GET /runs/{id}`, its `/events` and `DELETE /runs/{id}` (and their
+  older aliases);
 - waits for the runs in flight, their artifact uploads included, to finish and be recorded.
 
 When they have all finished it prints `[barca] drained: every run finished; shutting down`,

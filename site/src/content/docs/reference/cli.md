@@ -351,10 +351,15 @@ RUN_ID         CMD     STATUS      STEPS CACHED   TIME STARTED
 ```
 
 Times are UTC. `--fields` takes `run_id`, `command`, `files`, `target`, `status`,
-`steps_total`, `steps_executed`, `steps_cached`, `started_at`, `finished_at`,
-`elapsed_seconds`.
+`steps_total`, `steps_executed`, `steps_cached`, `attempts`, `started_at`, `finished_at`,
+`elapsed_seconds`, `triggered_by`, `scheduled_at`, `schedule_id`. `triggered_by` says what
+started the run: `manual` (a command typed on a machine), `api` (an HTTP request to
+`barca serve`), `schedule` (a cron tick, with the tick in `scheduled_at`, RFC 3339 in UTC, and
+the scheduled node in `schedule_id`) or `client`; it is `null` for runs recorded before barca
+recorded it.
 
 ```bash
+barca history --fields run_id,triggered_by,scheduled_at   # what started each run
 barca history -l 25               # last 25; human default 10, JSON default every run
 barca history --json              # {"runs": [...], "total": N, "truncated": bool, "hint"?: "..."}
 barca history --fields run_id,status   # JSON with only these keys per run

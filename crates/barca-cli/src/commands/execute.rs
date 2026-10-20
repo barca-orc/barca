@@ -1,7 +1,6 @@
 //! Execute command implementation.
 
 use crate::args::OutputMode;
-use barca_core::report::artifact_metadata;
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn explain_cmd(
@@ -94,17 +93,7 @@ pub(crate) fn cancel_on_ctrl_c() -> barca_core::interrupt::Interrupt {
     interrupt
 }
 
-/// Read an artifact for display: inline JSON values, show metadata for binary formats.
-pub(crate) fn read_final_output(oref: &barca_core::dispatch::OutputRef) -> serde_json::Value {
-    if oref.format == "json" {
-        std::fs::read_to_string(&oref.path)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_else(|| artifact_metadata(oref))
-    } else {
-        artifact_metadata(oref)
-    }
-}
+pub(crate) use barca_core::report::read_final_output;
 
 /// Drain streamed events through completion; stdout remains exclusively the command result.
 pub(crate) fn user_logs(

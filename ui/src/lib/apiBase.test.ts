@@ -33,6 +33,6 @@ describe('apiBase', () => {
 describe('apiUrl', () => {
   it('joins the base and an API path', () => {
     expect(apiUrl('/barca', '/state')).toBe('/barca/state')
-    expect(apiUrl('', '/events/abc')).toBe('/events/abc')
+    expect(apiUrl('', '/runs/abc/events')).toBe('/runs/abc/events')
   })
 })

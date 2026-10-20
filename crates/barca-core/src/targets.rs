@@ -119,7 +119,7 @@ fn dag_nodes(dag: &Dag) -> impl Iterator<Item = (&str, crate::NodeKind)> {
 /// The single node a target name identifies, whatever its kind. No match is `AssetNotFound`;
 /// several matches (the same function name in two files) is a usage error that lists the full
 /// ids to choose from.
-pub(crate) fn find_target_id(dag: &Dag, name: &str) -> Result<String, BarcaError> {
+pub fn find_target_id(dag: &Dag, name: &str) -> Result<String, BarcaError> {
     Ok(resolve_target_among(dag_nodes(dag), name, "")?)
 }
 

@@ -582,6 +582,7 @@ mod tests {
             status: "failed".into(),
             reason: None,
             in_flight_run: None,
+            trigger: Default::default(),
             start_unix_ns: 0,
             duration_ns: 252_000_000_000,
             steps_total: 2,

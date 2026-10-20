@@ -63,8 +63,10 @@ What the spans carry:
 | run | `barca.run_id` | the run id `barca get --json` prints (also on every step span) |
 | run | `barca.command`, `barca.target` | `get` or `run`, and the target as given |
 | run | `barca.status` | `success`, `failed` or `cancelled`; the span is an error unless `success`. `skipped` for a `barca serve` tick that started nothing, not an error |
-| run | `barca.reason`, `barca.in_flight_run` | on a skipped tick: `in_flight`, and the `run_id` of the run of the same node that was still going. The span has no steps, no duration, and an id of its own |
+| run | `barca.reason`, `barca.in_flight_run` | on a skipped tick only: `in_flight` and the `run_id` of the run of the same node that was still going, or `paused` for a paused schedule (no `barca.in_flight_run`). The span has no steps, no duration, and an id of its own |
 | run | `barca.reason` | on a `cancelled` run that `barca serve` cancelled because its drain ended first (the drain timeout, or a second SIGTERM/SIGINT): `server shutdown`. Other cancelled runs have no reason |
+| run | `barca.trigger` | what started the run: `manual` (a command typed on a machine), `api` (an HTTP request to `barca serve`), `schedule` (a cron tick) or `client` |
+| run | `barca.scheduled_at`, `barca.schedule_id` | on a scheduled run or skipped tick only: the tick it was for (RFC 3339, UTC) and the scheduled node's id. `barca.run` start minus `barca.scheduled_at` is how late the run started |
 | run | `barca.steps.total`, `barca.steps.executed`, `barca.steps.cached` | step counts |
 | step | `barca.node`, `barca.kind` | node id; `asset`, `task` or `sensor` |
 | step | `barca.outcome` | `ran`, `cached` or `failed` |

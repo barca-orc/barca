@@ -387,22 +387,25 @@ has to come in through a sensor. A scheduled sensor's tick runs the sensor and d
 trigger the assets that read it. The other freshness values, `Always` (the default) and
 `Manual`, are recorded and shown by `barca list` and have no effect at run time today.
 
-The server-ledger design in RFC-0007 is accepted but not implemented in v0.24.0:
+The server half of the server-mode RFC (RFC-0007) is implemented: the run contract over HTTP.
 CLI `--server`, server URL configuration and laptop runs against the shared ledger are
-still pending. Use HTTP or `barca.Client` to run deployed code on today's server;
+still pending. Use HTTP or `barca.Client` to run deployed code on the server;
 ordinary `barca get` and `barca.get()` execute locally.
 
-Runs started over HTTP are asynchronous: `POST` returns a `run_id`, and you poll
-`/status/<run_id>`.
+Runs started over HTTP are asynchronous: `POST /runs` returns the run's database id at once,
+its events stream as they happen, and `GET /runs/<run_id>` answers with its outcome, also after
+a restart.
 
 ```bash
-curl localhost:8274/health                  # {"read_only":false,"scheduler":true,"status":"ok","version":"0.23.0"}
-curl localhost:8274/schedule                # each schedule: last and next fire, last status
-curl -XPOST localhost:8274/run              # every asset and sensor (tasks are skipped) -> {"run_id":"..."}
-curl -XPOST localhost:8274/get/summary      # one asset and what it depends on
-curl -XPOST localhost:8274/run/publish      # one task; this recomputes every asset it depends on
-curl localhost:8274/status/<run_id>         # {"status":"complete","result":{...}}
-curl -XDELETE localhost:8274/run/<run_id>   # cancel a run in flight (409 if it already finished)
+curl localhost:8274/health                  # {"api_version":1,"env":"default","scheduler":true,"status":"ok",...}
+curl localhost:8274/schedule                # each schedule: last and next fire, last status, pause
+curl -XPOST localhost:8274/runs -d '{"command":"get","targets":["summary"]}'   # -> {"run_id":"..."}
+curl -XPOST localhost:8274/runs -d '{"command":"run","targets":["publish"]}'   # one task
+curl -N localhost:8274/runs/<run_id>/events # progress lines, step results, then the outcome
+curl localhost:8274/runs/<run_id>           # {"status":"success","outcome":{...the barca get --json body...}}
+curl -XDELETE localhost:8274/runs/<run_id>  # cancel a run in flight (409 if it already finished)
+curl -XPOST localhost:8274/schedule/daily/pause   # hold one schedule back; .../resume lets it fire again
+curl localhost:8274/list                    # barca list --json --all, from the server (also /nodes, /history, /stats/<name>)
 ```
 
 More: `barca docs scheduling`, the [server API reference](https://barca.sh/reference/server-api/),

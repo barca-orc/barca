@@ -75,6 +75,16 @@ pub struct RunRecord {
     pub started_at: String,
     pub finished_at: Option<String>,
     pub elapsed_seconds: Option<f64>,
+    /// What started the run: `manual` (a command typed on a machine), `api`, `schedule` or
+    /// `client`. `null` for runs recorded before barca recorded it.
+    #[serde(default)]
+    pub triggered_by: Option<crate::outcome::TriggeredBy>,
+    /// For a scheduled run: the tick it was started for (RFC 3339, UTC).
+    #[serde(default)]
+    pub scheduled_at: Option<String>,
+    /// For a scheduled run: the schedule's id (the scheduled node).
+    #[serde(default)]
+    pub schedule_id: Option<String>,
 }
 
 /// Aggregated statistics for a single asset node.
@@ -577,6 +587,12 @@ async fn add_to_current_schema(conn: &turso::Connection) -> Result<(), BarcaErro
         )
         .await?;
         crate::db_schema::add_columns(conn, "runs", crate::db_schema::RUN_COLUMNS).await?;
+        crate::db_schema::add_columns(
+            conn,
+            "schedule_state",
+            crate::db_schema::SCHEDULE_STATE_COLUMNS,
+        )
+        .await?;
         crate::db_schema::add_tables(conn).await?;
         for index in crate::db_schema::INDEXES {
             conn.execute(index, ())
@@ -715,6 +731,12 @@ async fn migrate_legacy_schema(conn: &turso::Connection) -> Result<(), BarcaErro
     )
     .await
     .map_err(|e| BarcaError::Db(format!("failed to create schedule_state table: {e}")))?;
+    crate::db_schema::add_columns(
+        conn,
+        "schedule_state",
+        crate::db_schema::SCHEDULE_STATE_COLUMNS,
+    )
+    .await?;
 
     // Captured user stdout, one row per line. Rust owns persistence; workers
     // stream lines over the socket and the coordinator writes them here.
@@ -964,6 +986,87 @@ pub async fn upsert_schedule_state(
     Ok(())
 }
 
+/// A schedule held back by `POST /schedule/{id}/pause`: since when, and until when (`None`:
+/// until it is resumed). Unix epoch seconds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SchedulePause {
+    pub paused_at: i64,
+    pub until: Option<i64>,
+}
+
+/// Every paused schedule, by node id. Expired pauses are included; the caller compares
+/// `until` with its clock.
+pub async fn get_schedule_pauses(
+    db_path: &str,
+) -> Result<HashMap<String, SchedulePause>, BarcaError> {
+    let _g = db_guard().await;
+    let (_db, conn) = open_conn(db_path).await?;
+    if !has_column(&conn, "schedule_state", "paused_at").await? {
+        return Ok(HashMap::new());
+    }
+    let mut rows = conn
+        .query(
+            "SELECT node_id, paused_at, paused_until FROM schedule_state WHERE paused_at IS NOT NULL",
+            (),
+        )
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to query schedule pauses: {e}")))?;
+    let mut out = HashMap::new();
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to read schedule pause: {e}")))?
+    {
+        let node_id = row.get::<String>(0).unwrap_or_default();
+        if let Ok(paused_at) = row.get::<i64>(1) {
+            out.insert(
+                node_id,
+                SchedulePause {
+                    paused_at,
+                    until: row.get::<i64>(2).ok(),
+                },
+            );
+        }
+    }
+    Ok(out)
+}
+
+/// Pause `node_id`'s schedule (`Some`) or resume it (`None`). A schedule with no row yet gets
+/// one anchored at `now`, as the scheduler anchors a new job. Resuming moves the last-fired
+/// record to `now`, so the ticks skipped while paused are not caught up at the next start.
+pub async fn set_schedule_pause(
+    db_path: &str,
+    node_id: &str,
+    pause: Option<SchedulePause>,
+    now: i64,
+) -> Result<(), BarcaError> {
+    let _g = db_guard().await;
+    let (_db, conn) = open_conn(db_path).await?;
+    let opt = |v: Option<i64>| v.map(|v| v.to_string()).unwrap_or_default();
+    let sql = match pause {
+        Some(_) => {
+            "INSERT INTO schedule_state (node_id, last_fired_at, paused_at, paused_until) VALUES (?1, ?2, NULLIF(?3, ''), NULLIF(?4, ''))
+             ON CONFLICT(node_id) DO UPDATE SET paused_at = NULLIF(?3, ''), paused_until = NULLIF(?4, '')"
+        }
+        None => {
+            "INSERT INTO schedule_state (node_id, last_fired_at, paused_at, paused_until) VALUES (?1, ?2, NULLIF(?3, ''), NULLIF(?4, ''))
+             ON CONFLICT(node_id) DO UPDATE SET paused_at = NULL, paused_until = NULL, last_fired_at = MAX(last_fired_at, ?2)"
+        }
+    };
+    conn.execute(
+        sql,
+        [
+            node_id.to_string(),
+            now.to_string(),
+            opt(pause.map(|p| p.paused_at)),
+            opt(pause.and_then(|p| p.until)),
+        ],
+    )
+    .await
+    .map_err(|e| BarcaError::Db(format!("failed to record schedule pause: {e}")))?;
+    Ok(())
+}
+
 /// The output hash of the latest successful materialization of each step of `base_ids` (the
 /// base id itself, or any of its partitions), keyed by display id. Steps never recorded with an
 /// output hash (never ran, or ran before barca recorded sensor outputs) are absent; so is
@@ -1119,7 +1222,7 @@ pub fn generate_run_id() -> String {
     format!("{:012x}", mixed & 0xFFFF_FFFF_FFFF)
 }
 
-/// Create a new run record at the start of execution.
+/// Create a new run record at the start of execution, started by hand.
 pub async fn create_run(
     db_path: &str,
     run_id: &str,
@@ -1128,28 +1231,176 @@ pub async fn create_run(
     target: Option<&str>,
     steps_total: Option<usize>,
 ) -> Result<(), BarcaError> {
+    create_run_with(
+        db_path,
+        NewRun {
+            run_id,
+            command,
+            files,
+            target,
+            steps_total,
+            trigger: &crate::outcome::Trigger::default(),
+        },
+    )
+    .await
+}
+
+/// A run about to start.
+pub struct NewRun<'a> {
+    pub run_id: &'a str,
+    pub command: &'a str,
+    /// [`encode_files`] of the files.
+    pub files: &'a str,
+    pub target: Option<&'a str>,
+    pub steps_total: Option<usize>,
+    pub trigger: &'a crate::outcome::Trigger,
+}
+
+/// Create a new run record at the start of execution.
+pub async fn create_run_with(db_path: &str, run: NewRun<'_>) -> Result<(), BarcaError> {
     let _g = db_guard().await;
     let (_db, conn) = open_conn(db_path).await?;
     // The marker exists from before the row does until the run has recorded its outcome
     // ([`finish_run`], or the end of this process).
-    let owner = crate::run_owner::claim(db_path, run_id);
+    let owner = crate::run_owner::claim(db_path, run.run_id);
     conn.execute(
-        "INSERT INTO runs (run_id, command, files, target, status, steps_total, pid, host, owner) VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6, ?7, NULLIF(?8, ''))",
+        "INSERT INTO runs (run_id, command, files, target, status, steps_total, pid, host, owner, triggered_by, scheduled_at, schedule_id) VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6, ?7, NULLIF(?8, ''), ?9, NULLIF(?10, ''), NULLIF(?11, ''))",
         [
-            run_id.to_string(),
-            command.to_string(),
-            files.to_string(),
-            target.unwrap_or("").to_string(),
-            steps_total.map(|n| n.to_string()).unwrap_or_default(),
+            run.run_id.to_string(),
+            run.command.to_string(),
+            run.files.to_string(),
+            run.target.unwrap_or("").to_string(),
+            run.steps_total.map(|n| n.to_string()).unwrap_or_default(),
             std::process::id().to_string(),
             local_host(),
             owner,
+            run.trigger.triggered_by.as_str().to_string(),
+            run.trigger.scheduled_at.clone().unwrap_or_default(),
+            run.trigger.schedule_id.clone().unwrap_or_default(),
         ],
     )
     .await
     .ok();
     mark_interrupted_runs(&conn, db_path).await;
     Ok(())
+}
+
+/// Record a run that ended before it started executing (its target was refused, it was
+/// cancelled while queued, its source no longer loads): a terminal row with its outcome, so
+/// the id a server answered with is found in the history like any other run.
+pub async fn record_unstarted_run(
+    db_path: &str,
+    run: NewRun<'_>,
+    status: &str,
+    outcome_json: &str,
+) -> Result<(), BarcaError> {
+    let _g = db_guard().await;
+    let (_db, conn) = open_conn(db_path).await?;
+    conn.execute(
+        "INSERT INTO runs (run_id, command, files, target, status, steps_total, finished_at, elapsed_seconds, triggered_by, scheduled_at, schedule_id, outcome_json) VALUES (?1, ?2, ?3, ?4, ?5, 0, datetime('now'), 0, ?6, NULLIF(?7, ''), NULLIF(?8, ''), ?9) ON CONFLICT(run_id) DO NOTHING",
+        [
+            run.run_id.to_string(),
+            run.command.to_string(),
+            run.files.to_string(),
+            run.target.unwrap_or("").to_string(),
+            status.to_string(),
+            run.trigger.triggered_by.as_str().to_string(),
+            run.trigger.scheduled_at.clone().unwrap_or_default(),
+            run.trigger.schedule_id.clone().unwrap_or_default(),
+            outcome_json.to_string(),
+        ],
+    )
+    .await
+    .map_err(|e| BarcaError::Db(format!("failed to record run: {e}")))?;
+    Ok(())
+}
+
+/// Store a finished run's outcome (`barca serve`): `GET /runs/{run_id}` answers from it after
+/// a restart. `status` corrects the row when the run ended before it recorded one.
+pub async fn set_run_outcome(
+    db_path: &str,
+    run_id: &str,
+    status: &str,
+    outcome_json: &str,
+) -> Result<bool, BarcaError> {
+    let _g = db_guard().await;
+    let (_db, conn) = open_conn(db_path).await?;
+    let changed = conn
+        .execute(
+            "UPDATE runs SET outcome_json = ?2, status = CASE WHEN status = 'running' THEN ?3 ELSE status END, finished_at = COALESCE(finished_at, datetime('now')) WHERE run_id = ?1",
+            [
+                run_id.to_string(),
+                outcome_json.to_string(),
+                status.to_string(),
+            ],
+        )
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to record run outcome: {e}")))?;
+    Ok(changed == 1)
+}
+
+/// The artifact (path, format) `run_id` wrote for `node_id`, if it wrote one.
+pub async fn run_artifact(
+    db_path: &str,
+    run_id: &str,
+    node_id: &str,
+) -> Result<Option<(String, String)>, BarcaError> {
+    let _g = db_guard().await;
+    let (_db, conn) = open_conn(db_path).await?;
+    let mut rows = conn
+        .query(
+            "SELECT artifact_path, COALESCE(artifact_format, '') FROM materializations WHERE run_id = ?1 AND node_id = ?2 AND status = 'success' AND artifact_path IS NOT NULL ORDER BY id DESC LIMIT 1",
+            [run_id, node_id],
+        )
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to read run artifact: {e}")))?;
+    let row = rows
+        .next()
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to read run artifact: {e}")))?;
+    Ok(row.and_then(|row| Some((row.get::<String>(0).ok()?, row.get::<String>(1).ok()?))))
+}
+
+/// A run's stored outcome ([`set_run_outcome`]), if it has one.
+pub async fn get_run_outcome(db_path: &str, run_id: &str) -> Result<Option<String>, BarcaError> {
+    let _g = db_guard().await;
+    let (_db, conn) = open_conn(db_path).await?;
+    if !has_column(&conn, "runs", "outcome_json").await? {
+        return Ok(None);
+    }
+    let mut rows = conn
+        .query("SELECT outcome_json FROM runs WHERE run_id = ?1", [run_id])
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to read run outcome: {e}")))?;
+    let row = rows
+        .next()
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to read run outcome: {e}")))?;
+    Ok(row
+        .and_then(|row| row.get::<String>(0).ok())
+        .filter(|s| !s.is_empty()))
+}
+
+/// Whether `table` has `column` (an inspected snapshot may predate it).
+async fn has_column(
+    conn: &turso::Connection,
+    table: &str,
+    column: &str,
+) -> Result<bool, BarcaError> {
+    let mut rows = conn
+        .query(&format!("PRAGMA table_info({table})"), ())
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to inspect {table} columns: {e}")))?;
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to read {table} columns: {e}")))?
+    {
+        if row.get::<String>(1).ok().as_deref() == Some(column) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// This machine's host name ("" when it cannot be read). Stored on a run row next to the pid:
@@ -1529,9 +1780,14 @@ async fn read_runs(
     } else {
         "NULL"
     };
+    let trigger = if has_column(&conn, "runs", "triggered_by").await? {
+        "triggered_by, scheduled_at, schedule_id"
+    } else {
+        "NULL, NULL, NULL"
+    };
     let mut rows = conn
         .query(
-            &format!("SELECT run_id, command, files, target, status, steps_total, steps_executed, steps_cached, started_at, finished_at, elapsed_seconds, {attempts} FROM runs WHERE (?1 = '' OR run_id = ?1) ORDER BY id DESC LIMIT ?2"),
+            &format!("SELECT run_id, command, files, target, status, steps_total, steps_executed, steps_cached, started_at, finished_at, elapsed_seconds, {attempts}, {trigger} FROM runs WHERE (?1 = '' OR run_id = ?1) ORDER BY id DESC LIMIT ?2"),
             [run_id.unwrap_or_default().to_string(), limit.to_string()],
         )
         .await
@@ -1567,6 +1823,12 @@ async fn read_runs(
                 if t.is_empty() { None } else { Some(t) }
             },
             elapsed_seconds: row.get::<f64>(10).ok(),
+            triggered_by: row
+                .get::<String>(12)
+                .ok()
+                .and_then(|t| crate::outcome::TriggeredBy::parse(&t)),
+            scheduled_at: row.get::<String>(13).ok().filter(|t| !t.is_empty()),
+            schedule_id: row.get::<String>(14).ok().filter(|t| !t.is_empty()),
         });
     }
     Ok(records)
@@ -2301,6 +2563,125 @@ mod tests {
         let state = get_schedule_state(&db_path).await.unwrap();
         assert_eq!(state.len(), 2);
         assert_eq!(state.get("test.py:daily"), Some(&3_000));
+    }
+
+    #[tokio::test]
+    async fn a_pause_is_kept_and_a_resume_moves_the_last_fired_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db").to_string_lossy().to_string();
+        init_db(&db_path).await.unwrap();
+        upsert_schedule_state(&db_path, "test.py:daily", 1_000)
+            .await
+            .unwrap();
+        let pause = SchedulePause {
+            paused_at: 1_500,
+            until: Some(9_000),
+        };
+        set_schedule_pause(&db_path, "test.py:daily", Some(pause), 1_500)
+            .await
+            .unwrap();
+        // A job that never fired gets a row anchored at the pause.
+        let forever = SchedulePause {
+            paused_at: 1_600,
+            until: None,
+        };
+        set_schedule_pause(&db_path, "test.py:new", Some(forever), 1_600)
+            .await
+            .unwrap();
+        let pauses = get_schedule_pauses(&db_path).await.unwrap();
+        assert_eq!(pauses["test.py:daily"], pause);
+        assert_eq!(pauses["test.py:new"], forever);
+        let state = get_schedule_state(&db_path).await.unwrap();
+        assert_eq!(state["test.py:daily"], 1_000, "pausing does not fire");
+        assert_eq!(state["test.py:new"], 1_600);
+        set_schedule_pause(&db_path, "test.py:daily", None, 2_000)
+            .await
+            .unwrap();
+        assert!(
+            !get_schedule_pauses(&db_path)
+                .await
+                .unwrap()
+                .contains_key("test.py:daily")
+        );
+        assert_eq!(
+            get_schedule_state(&db_path).await.unwrap()["test.py:daily"],
+            2_000,
+            "the skipped ticks are not caught up"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_run_records_its_trigger_and_a_served_run_its_outcome() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db").to_string_lossy().to_string();
+        init_db(&db_path).await.unwrap();
+        let trigger = crate::outcome::Trigger::schedule("p.py:a", 0);
+        create_run_with(
+            &db_path,
+            NewRun {
+                run_id: "tick",
+                command: "get",
+                files: "[]",
+                target: Some("p.py:a"),
+                steps_total: Some(1),
+                trigger: &trigger,
+            },
+        )
+        .await
+        .unwrap();
+        let run = get_run(&db_path, "tick").await.unwrap().unwrap();
+        assert_eq!(
+            run.triggered_by,
+            Some(crate::outcome::TriggeredBy::Schedule)
+        );
+        assert_eq!(run.scheduled_at.as_deref(), Some("1970-01-01T00:00:00Z"));
+        assert_eq!(run.schedule_id.as_deref(), Some("p.py:a"));
+        assert!(get_run_outcome(&db_path, "tick").await.unwrap().is_none());
+        assert!(
+            set_run_outcome(&db_path, "tick", "success", r#"{"status":"success"}"#)
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            get_run(&db_path, "tick").await.unwrap().unwrap().status,
+            "success"
+        );
+        assert_eq!(
+            get_run_outcome(&db_path, "tick").await.unwrap().as_deref(),
+            Some(r#"{"status":"success"}"#)
+        );
+        // A run that never started still has a row, with its outcome.
+        record_unstarted_run(
+            &db_path,
+            NewRun {
+                run_id: "queued",
+                command: "run",
+                files: "[]",
+                target: Some("t"),
+                steps_total: None,
+                trigger: &crate::outcome::Trigger::api(),
+            },
+            "cancelled",
+            r#"{"status":"cancelled"}"#,
+        )
+        .await
+        .unwrap();
+        let run = get_run(&db_path, "queued").await.unwrap().unwrap();
+        assert_eq!(run.status, "cancelled");
+        assert_eq!(run.triggered_by, Some(crate::outcome::TriggeredBy::Api));
+        assert!(run.finished_at.is_some());
+        // An ordinary run is recorded as started by hand.
+        create_run(&db_path, "cli", "get", "[]", None, Some(1))
+            .await
+            .unwrap();
+        assert_eq!(
+            get_run(&db_path, "cli")
+                .await
+                .unwrap()
+                .unwrap()
+                .triggered_by,
+            Some(crate::outcome::TriggeredBy::Manual)
+        );
     }
 
     #[tokio::test]

@@ -4,10 +4,10 @@ import { Button, IconButton, KeyValue, SidePanel, StatusBadge, Tag, StatusDot, L
 import { freshnessLabel } from '@/lib/status'
 import { shortName } from '@/lib/graph'
 import { runFeedback } from '@/lib/runFeedback'
-import type { AssetSummary, StatusKind, LogLine } from '@/lib/types'
+import type { ListNode, StatusKind, LogLine } from '@/lib/types'
 
 interface NodeInspectorProps {
-  asset: AssetSummary
+  asset: ListNode
   /** Live visual status for this node. */
   status: StatusKind
   statusLabel?: string
@@ -113,7 +113,7 @@ export function NodeInspector({
         <div>
           <KeyValue label="id">{asset.id}</KeyValue>
           <KeyValue label="kind">{asset.kind}</KeyValue>
-          <KeyValue label="freshness">{freshnessLabel(asset.freshness)}</KeyValue>
+          <KeyValue label="freshness">{freshnessLabel(asset)}</KeyValue>
           <KeyValue label="inputs">{asset.inputs.length}</KeyValue>
         </div>
 

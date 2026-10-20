@@ -9,26 +9,30 @@ import { API_BASE, apiUrl } from './apiBase'
 
 import type {
   NodeGroup,
-  AssetSummary,
+  ListNode,
   AssetDetail,
   NodeState,
   NodeStatus,
   PlanResult,
-  RunState,
   RunHandle,
+  RunRequest,
   Health,
   RunList,
-  RunDetail,
+  RunView,
+  ScheduleJob,
 } from './types'
 
 
 class ApiError extends Error {
   status: number
+  /** The error envelope's `remediation`: what to do about it, when the server says. */
+  remediation: string | null
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, remediation: string | null = null) {
     super(message)
     this.name = 'ApiError'
     this.status = status
+    this.remediation = remediation
   }
 }
 
@@ -39,33 +43,54 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   })
   if (!res.ok) {
     let message = res.statusText
+    let remediation: string | null = null
     try {
-      const body = (await res.json()) as { error?: string }
+      // Every error body is the CLI error envelope `{error, code, kind, remediation, ...}`.
+      const body = (await res.json()) as { error?: string; remediation?: string | null }
       if (body.error) message = body.error
+      if (body.remediation) remediation = body.remediation
     } catch {
       // non-JSON error body; keep statusText
     }
-    throw new ApiError(res.status, message)
+    throw new ApiError(res.status, message, remediation)
   }
   return res.json() as Promise<T>
+}
+
+/** Start a run: the flags of `barca get` / `barca run`. Answers `202 { run_id }`. */
+function startRun(body: RunRequest): Promise<RunHandle> {
+  return request<RunHandle>('/runs', { method: 'POST', body: JSON.stringify(body) })
 }
 
 export const api = {
   health: () => request<Health>('/health'),
   groups: () => request<NodeGroup[]>('/groups'),
-  assets: () => request<AssetSummary[]>('/assets'),
+  assets: () => request<ListNode[]>('/assets'),
   asset: (name: string) => request<AssetDetail>(`/assets/${encodeURIComponent(name)}`),
   assetSchema: (name: string) => request<NodeStatus[]>(`/assets/${encodeURIComponent(name)}/schema`),
   plan: () => request<PlanResult>('/plan'),
   state: () => request<NodeState[]>('/state'),
   runs: (limit = 100) => request<RunList>(`/runs?limit=${limit}`),
-  runDetail: (id: string) => request<RunDetail>(`/runs/${encodeURIComponent(id)}`),
-  status: (runId: string) => request<RunState>(`/status/${encodeURIComponent(runId)}`),
-  run: () => request<RunHandle>('/run', { method: 'POST' }),
+  runDetail: (id: string) => request<RunView>(`/runs/${encodeURIComponent(id)}`),
+  startRun,
+  /** `barca get` for every asset and sensor. */
+  getAll: () => startRun({ command: 'get', targets: [] }),
+  /** `barca get <target>`: a cache-aware materialization of one asset or sensor. */
+  getTarget: (target: string) => startRun({ command: 'get', targets: [target] }),
+  /** `barca run <task> --refresh-all`: the task re-executes along with its upstream assets. */
   runTarget: (target: string) =>
-    request<RunHandle>(`/run/${encodeURIComponent(target)}`, { method: 'POST' }),
-  getTarget: (target: string) =>
-    request<RunHandle>(`/get/${encodeURIComponent(target)}`, { method: 'POST' }),
+    startRun({ command: 'run', targets: [target], refresh_all: true }),
+  cancelRun: (runId: string) =>
+    request<{ run_id: string; status: 'cancelling' }>(`/runs/${encodeURIComponent(runId)}`, { method: 'DELETE' }),
+  schedule: () => request<ScheduleJob[]>('/schedule'),
+  /** Pause a schedule; `until` (RFC 3339) ends the pause, otherwise it lasts until resumed. */
+  pauseSchedule: (id: string, until?: string) =>
+    request<unknown>(
+      `/schedule/${encodeURIComponent(id)}/pause${until ? `?until=${encodeURIComponent(until)}` : ''}`,
+      { method: 'POST' },
+    ),
+  resumeSchedule: (id: string) =>
+    request<unknown>(`/schedule/${encodeURIComponent(id)}/resume`, { method: 'POST' }),
 }
 
 export { ApiError }

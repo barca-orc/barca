@@ -24,7 +24,7 @@ Three facts shape every deployment:
 - **One instance per project.** Runs in progress and their live events are held in the
   server's memory. Do not run two servers on one project or load-balance across several.
 
-## What ships in v0.24.0
+## What ships today
 
 The working deployment is one `barca serve` with its pipeline code, Python dependencies
 and persistent `.barca/` directory on the server. Users trigger runs through the web UI,
@@ -36,21 +36,22 @@ uv add 'barca==0.24.0'
 uv run barca serve pipeline.py --timezone utc
 ```
 
-Open `http://127.0.0.1:8274/ui/`. From the same machine, start an asset and poll its run:
+Open `http://127.0.0.1:8274/ui/`. From the same machine, start an asset and follow its run:
 
 ```bash
-curl -X POST http://127.0.0.1:8274/get/daily_report
-# Copy run_id from the response into the status URL:
-curl http://127.0.0.1:8274/status/RETURNED_RUN_ID
+curl -X POST http://127.0.0.1:8274/runs -d '{"command": "get", "targets": ["daily_report"]}'
+# Copy run_id from the response:
+curl -N http://127.0.0.1:8274/runs/RETURNED_RUN_ID/events   # its progress, then its outcome
+curl http://127.0.0.1:8274/runs/RETURNED_RUN_ID             # the run and its outcome
 ```
 
 Replace `daily_report` with an asset in the deployed pipeline. Remote users reach the
 same API through the authenticating proxy described below. See the
 [Python client](/reference/server-api/#python-client) for the equivalent SDK calls.
 
-The broader [server-ledger design (RFC-0007)](/rfcs/0007-server-mode/) is accepted but
-**not implemented in v0.24.0**. `[server] url`, `BARCA_SERVER`, the CLI `--server`/`--local`
-flags and laptop runs sharing the server's ledger are pending #393, #394 and #402.
+The [server-ledger design (RFC-0007)](/rfcs/0007-server-mode/) is accepted; its run contract
+over HTTP is implemented (#393). `[server] url`, `BARCA_SERVER`, the CLI `--server`/`--local`
+flags and laptop runs sharing the server's ledger are pending #394 and #402.
 Ordinary `barca get` and `barca.get()` still run locally. A remote artifact store does
 not give another machine access to this server's cache/history; with a remote store the
 server backs its history up there, as described below.
@@ -245,8 +246,10 @@ The legacy override is unnecessary for the verified v0.24.0 Linux targets above.
 - **Schedules catch up once.** If a tick passed while the server was down, the job fires once
   at startup (`[barca] catch-up run pipeline.py:report → ...`). Several missed ticks of one
   job still produce one run.
-- **In-memory run handles are lost.** A `run_id` returned by `POST /run` before the restart
-  is unknown to `GET /status/{run_id}` afterwards. Finished runs are in `barca history`.
+- **Finished runs are kept, runs in flight are not resumed.** `GET /runs/{run_id}` answers
+  from the metadata DB, so a run that finished before the restart shows the same outcome after
+  it; its live event stream is gone (`404`). A run still queued at the restart never started.
+  A paused schedule stays paused.
 
 ### With a remote store
 
@@ -283,7 +286,7 @@ location /barca/ {
 Open `https://your-host/barca/`. It redirects to `/barca/ui/`, and the UI finds the API under
 the same prefix. There is no base-path setting.
 
-- **Live logs.** The run event stream (`GET /events/{run_id}`) sends `X-Accel-Buffering: no`,
+- **Live logs.** The run event stream (`GET /runs/{run_id}/events`) sends `X-Accel-Buffering: no`,
   which makes nginx pass it through as it is produced. Do not add
   `proxy_ignore_headers X-Accel-Buffering`: with it nginx buffers the stream and the UI shows
   no logs until the run ends. An idle stream carries a keep-alive every 15 seconds, which is

@@ -1,8 +1,9 @@
 import { useNavigate, useSearchParams } from "react-router";
-import { ConnectionBadge, StatusBadge, Tag } from "@/components";
+import { Button, ConnectionBadge, StatusBadge, Tag } from "@/components";
 import { useAssets } from "@/hooks/useAssets";
 import { useAssetStates } from "@/hooks/useAssetStates";
 import { useHealth } from "@/hooks/useHealth";
+import { useSchedule, useToggleSchedulePause } from "@/hooks/useSchedule";
 import { severityStatus } from "@/lib/assetTable";
 import { connection } from "@/lib/connection";
 import { inPipeline, pipelineName } from "@/lib/pipeline";
@@ -18,6 +19,10 @@ export function SchedulesPage() {
   const { data: assets, isPlaceholderData, isError } = useAssets();
   const { data: states, dataUpdatedAt } = useAssetStates();
   const { data: health, isError: healthError } = useHealth();
+  // The registry only says which jobs are paused; without it rows show unpaused.
+  const { data: jobs } = useSchedule();
+  const toggle = useToggleSchedulePause();
+  const canPause = health ? health.scheduler && !health.read_only : false;
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const pipeline = params.get("pipeline");
@@ -28,6 +33,7 @@ export function SchedulesPage() {
         assets.filter((a) => inPipeline(a.id, pipeline)),
         states,
         dataUpdatedAt,
+        jobs ?? [],
       )
     : [];
 
@@ -70,6 +76,11 @@ export function SchedulesPage() {
             a <code>barca serve</code> with the scheduler is running.
           </p>
         )}
+        {toggle.isError && (
+          <p className="barca-note" role="alert">
+            Can't {toggle.variables.pause ? "pause" : "resume"} the schedule: {toggle.error.message}
+          </p>
+        )}
       </div>
 
       <div className="barca-view-body barca-table-scroll">
@@ -94,6 +105,7 @@ export function SchedulesPage() {
                 <th>Next run</th>
                 <th>Last run</th>
                 <th>State</th>
+                {canPause && <th aria-label="Actions" />}
               </tr>
             </thead>
             <tbody>
@@ -143,14 +155,43 @@ export function SchedulesPage() {
                     )}
                   </td>
                   <td>
-                    {r.severity && (
-                      <StatusBadge
-                        status={severityStatus(r.severity)}
-                        label={r.severity.replace("_", " ")}
-                        size="sm"
-                      />
+                    {r.paused ? (
+                      <span
+                        title={
+                          r.paused.until !== null
+                            ? `paused until ${new Date(r.paused.until).toLocaleString()}`
+                            : "paused until resumed"
+                        }
+                      >
+                        <StatusBadge status="skipped" label="paused" size="sm" />
+                      </span>
+                    ) : (
+                      r.severity && (
+                        <StatusBadge
+                          status={severityStatus(r.severity)}
+                          label={r.severity.replace("_", " ")}
+                          size="sm"
+                        />
+                      )
                     )}
                   </td>
+                  {canPause && (
+                    <td>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        loading={toggle.isPending && toggle.variables.id === r.id}
+                        disabled={toggle.isPending}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggle.mutate({ id: r.id, pause: r.paused === null });
+                        }}
+                        onKeyDown={(e) => e.stopPropagation()}
+                      >
+                        {r.paused ? "Resume" : "Pause"}
+                      </Button>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>

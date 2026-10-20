@@ -54,7 +54,8 @@ body is computed once and then served from cache on every tick
 result you want, not on the sensor: the tick of an asset or task at the end of the pipeline
 runs the sensors above it and computes whatever their values made stale.
 
-`POST /run/{task}` on the server is different from a tick: it recomputes every upstream asset.
+The older `POST /run/{task}` alias on the server is different from a tick: it recomputes every
+upstream asset. `POST /runs` with `{"command": "run"}` behaves like a tick.
 
 ## `Always` and `Manual`
 
@@ -182,12 +183,20 @@ last run id and last status ([Server API](/reference/server-api/#scheduling)), a
   (`[barca] catch-up run job.py:refresh → ...`). Ticks missed during a long outage are not
   replayed one for one. A job seen for the first time waits for its next tick.
 - **No overlap.** If a run of the job's node is pending or running when a tick arrives, that
-  tick is skipped, not queued, whoever started the run: an earlier tick, `POST /get/{node}`,
-  `POST /run/{task}`, or `POST /run` (every asset and sensor, so not a scheduled task). The
-  server logs `[barca] scheduled run job.py:refresh skipped — run 1b942bb33182 of the same node
-  still in flight`, `GET /schedule` reports it as `last_skipped` and `skipped_for` (in memory
-  only), and telemetry sends a `barca.run` span with status `skipped`. A run of another node,
-  even one downstream whose cone includes this one, does not hold the tick back.
+  tick is skipped, not queued, whoever started the run: an earlier tick, or `POST /runs` naming
+  the node or getting every asset and sensor (so not a scheduled task). The server logs
+  `[barca] scheduled run job.py:refresh skipped — run 1b942bb33182 of the same node still in
+  flight`, `GET /schedule` reports it as `last_skipped`, `skip_reason: "in_flight"` and
+  `skipped_for` (in memory only), and telemetry sends a `barca.run` span with status `skipped`.
+  A run of another node, even one downstream whose cone includes this one, does not hold the
+  tick back.
+- **Pausing one job.** `POST /schedule/{id}/pause` (optionally `?until=<RFC 3339>`) holds one
+  job back and `POST /schedule/{id}/resume` lets it fire again; its ticks meanwhile are skipped
+  with `skip_reason: "paused"`, and are not caught up. The pause is kept in the metadata DB, so
+  a restart does not resume it. See the [server API](/reference/server-api/#scheduling).
+- **What started a run.** A scheduled run is recorded with `triggered_by: "schedule"`, the tick
+  (`scheduled_at`) and the schedule (`schedule_id`), in `barca history --json`,
+  `GET /runs/{run_id}` and the `barca.run` span.
 - **New files and edits.** A run reads the source again each time, so an edit to a function
   takes effect at the next tick. A changed cron expression or a new scheduled node needs a
   restart, or `--watch`. A file added after startup needs a restart either way.

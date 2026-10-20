@@ -85,7 +85,7 @@ tables alone. A backup being restored is accepted on the same terms before it is
 `barca status`, which reads the newer columns, completes the schema first.
 
 What format 1 gained since it first shipped, all listed in `db_schema.rs`
-(`MATERIALIZATION_COLUMNS`, `RUN_COLUMNS`, `INDEXES`, `ADDED_TABLES`), which both `init_db` and the
+(`MATERIALIZATION_COLUMNS`, `RUN_COLUMNS`, `SCHEDULE_STATE_COLUMNS`, `INDEXES`, `ADDED_TABLES`), which both `init_db` and the
 additive migration (`additions_missing` / `add_to_current_schema`) read:
 
 - `materializations.bytes_changed` (0.24.0), the first such addition; 0.24.0 to 0.24.2 refused
@@ -105,9 +105,18 @@ additive migration (`additions_missing` / `add_to_current_schema`) read:
   `host`, `error`, `attempts`, timestamps). A database without it (opened read-only, or a copy
   being validated) reads as having no pending uploads. Only rows of this host are read, retried
   or shown. Older binaries ignore the table.
+- `runs.triggered_by` (`manual`, `api`, `schedule`, `client`), `runs.scheduled_at`,
+  `runs.schedule_id` and `runs.outcome_json` (all TEXT, nullable, 0.27.0, #393): what started a
+  run, the tick and schedule of a scheduled run, and the full outcome of a run `barca serve`
+  started, so `GET /runs/{id}` answers after a restart. Rows written before have `NULL` there
+  (`triggered_by: null`).
+- `schedule_state.paused_at` and `schedule_state.paused_until` (INTEGER unix seconds, nullable,
+  0.27.0, #435): a schedule paused with `POST /schedule/{id}/pause`; `paused_until` NULL means
+  until it is resumed.
 
 Conformance: `a_format_1_database_from_before_bytes_changed_gains_it_in_place` and
-`a_format_1_database_from_0_24_3_gains_everything_added_since` in `db_schema.rs`,
+`a_format_1_database_from_0_24_3_gains_everything_added_since` and
+`a_format_1_database_from_before_an_added_column_gets_it_and_keeps_its_rows` in `db_schema.rs`,
 `the_table_list_is_exactly_the_schema_init_db_creates` in `state_validate.rs`, the job history
 tests in `crates/barca-core/src/telemetry/history.rs`, and
 `python/tests/test_upgrade_format1_columns.py`.

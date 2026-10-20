@@ -220,7 +220,9 @@ def test_a_trigger_for_a_target_that_cannot_run_is_an_error_response(project):
         for method, path, want, says in cases:
             status, body = server.request(method, path)
             assert status == want, (path, body)
-            assert set(body) == {"error"}, (path, body)
+            # The CLI's error envelope.
+            assert {"error", "code", "kind", "remediation"} <= set(body), (path, body)
+            assert (body["kind"], body["code"]) == ("usage", 2), (path, body)
             assert body["error"].startswith(says), (path, body)
 
         # The Python client raises with the server's message.
@@ -279,7 +281,9 @@ def test_a_stop_signal_drains_the_runs_in_flight_and_exits_0(project, serve, sig
         urllib.request.urlopen(f"{base}/events/{run}", timeout=WAIT) for run in (done, going)
     ]
     for stream in streams:
-        assert stream.readline().startswith(b"data:"), "the stream has started"
+        # Each event is numbered: `id: 0`, then its data.
+        assert stream.readline() == b"id: 0\n", "the stream has started"
+        assert stream.readline().startswith(b"data:")
 
     server.proc.send_signal(sig)
     wait_for(lambda: draining(server), "/health to report draining")
@@ -301,7 +305,8 @@ def test_a_stop_signal_drains_the_runs_in_flight_and_exits_0(project, serve, sig
 
     # Both streams ended, and the drained run's delivered its successful end first.
     tails = [stream.read().decode() for stream in streams]
-    assert f'{{"type":"run_finished","run_id":"{going}","ok":true}}' in tails[1]
+    assert f'{{"type":"run_finished","run_id":"{going}","ok":true,' in tails[1]
+    assert '"status":"success"' in tails[1], "with its outcome"
 
     # The run finished and was recorded; the refused requests started none.
     assert [r["status"] for r in history(project)] == ["success", "success"]
