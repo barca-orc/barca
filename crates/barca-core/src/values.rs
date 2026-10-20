@@ -28,19 +28,15 @@ pub async fn read_values(
                 .map(|i| serde_json::json!({"path": refs[*i].path, "format": refs[*i].format}))
                 .collect::<Vec<_>>(),
         });
-        let reader = crate::helper_proc::python_module(
-            python,
-            "barca._value",
-            cfg.storage_options_json.as_deref(),
-        );
-        let answers = match crate::status::run_json_helper(reader, python, &request).await {
-            Ok(a) if a.len() == others.len() => a.into_iter().map(answer).collect(),
-            Ok(_) => vec![
-                Err("the value reader returned an unexpected result".to_string());
-                others.len()
-            ],
-            Err(e) => vec![Err(format!("could not run the value reader: {e}")); others.len()],
-        };
+        let answers =
+            match crate::status::run_json_helper(helper(python, cfg), python, &request).await {
+                Ok(a) if a.len() == others.len() => a.into_iter().map(answer).collect(),
+                Ok(_) => vec![
+                    Err("the value reader returned an unexpected result".to_string());
+                    others.len()
+                ],
+                Err(e) => vec![Err(format!("could not run the value reader: {e}")); others.len()],
+            };
         for (i, answer) in others.into_iter().zip(answers) {
             out[i] = Some(answer);
         }
@@ -48,6 +44,14 @@ pub async fn read_values(
     out.into_iter()
         .map(|v| v.expect("every artifact read"))
         .collect()
+}
+
+/// `python -m barca._value`, with the resolved storage options (reads and signing alike).
+fn helper(
+    python: &std::path::Path,
+    cfg: &crate::config::ResolvedConfig,
+) -> tokio::process::Command {
+    crate::helper_proc::python_module(python, "barca._value", cfg.storage_options_json.as_deref())
 }
 
 /// Version of the `sign` request to `barca._value` (`specs/worker-protocol.md`).
@@ -100,16 +104,11 @@ pub async fn sign_urls(
             }))
             .collect::<Vec<_>>(),
     });
-    let signer = crate::helper_proc::python_module(
-        python,
-        "barca._value",
-        cfg.storage_options_json.as_deref(),
-    );
     let failure = |message: String| SignFailure {
         kind: "store".to_string(),
         message,
     };
-    match crate::status::run_json_helper(signer, python, &request).await {
+    match crate::status::run_json_helper(helper(python, cfg), python, &request).await {
         Ok(a) if a.len() == objects.len() => a.into_iter().map(signed).collect(),
         Ok(_) => vec![
             Err(failure(
