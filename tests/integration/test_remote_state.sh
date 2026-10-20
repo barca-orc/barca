@@ -94,7 +94,7 @@ echo "── machine A without its local copies: full cache hit, zero Python exe
 rm -rf "$TMP/machine-a/.barca/artifacts"
 mkdir -p "$TMP/machine-b"
 export EXEC_LOG="$TMP/exec-b.log"
-(cd "$TMP/machine-a" && $BARCA get pipeline.py --agent > "$TMP/machine-b/result-b.json" 2> "$TMP/machine-b/stderr-b.log") \
+(cd "$TMP/machine-a" && $BARCA get pipeline.py --agent -o value --json > "$TMP/machine-b/result-b.json" 2> "$TMP/machine-b/stderr-b.log") \
     || { cat "$TMP/machine-b/stderr-b.log"; exit 1; }
 grep -q '"steps_executed":0' "$TMP/machine-b/result-b.json" \
     || { echo "FAIL: machine B re-executed steps"; cat "$TMP/machine-b/result-b.json"; exit 1; }
@@ -174,7 +174,7 @@ grep -q '"steps_executed":4' "$TMP/machine-e/shard-e.json" \
 # Without its local copies: universe and every shard are cached in the store; expanding the
 # partitions needs universe's artifact on this disk.
 rm -rf "$TMP/machine-e/.barca/artifacts"
-(cd "$TMP/machine-e" && $BARCA get shard fanout.py --agent > shard-f.json 2> shard-f.log) \
+(cd "$TMP/machine-e" && $BARCA get shard fanout.py --agent -o value --json > shard-f.json 2> shard-f.log) \
     || { cat "$TMP/machine-e/shard-f.log"; exit 1; }
 grep -q '"steps_executed":0' "$TMP/machine-e/shard-f.json" \
     || { echo "FAIL: should be a full cache hit"; cat "$TMP/machine-e/shard-f.json" "$TMP/machine-e/shard-f.log"; exit 1; }
@@ -238,7 +238,12 @@ fi
 
 echo "── a wiped machine: nothing comes back by itself; barca state restore brings the history"
 # Every directory here backs up to the same prefix, so name A's newest backup (the other
-# machines' interleave with it: one store per machine is the supported setup).
+# machines' interleave with it: one store per machine is the supported setup). Backups are named
+# by the second, so A runs once more first: a machine that backed up in the same second as A's
+# last run would otherwise have replaced A's copy in the store.
+sleep 1
+(cd "$TMP/machine-a" && $BARCA get pipeline.py --agent -o value --json > /dev/null 2> last-a.log) \
+    || { cat "$TMP/machine-a/last-a.log"; exit 1; }
 A_BACKUP=$(basename "$(ls "$TMP"/machine-a/.barca/backups/*Z.db | tail -1)")
 rm -rf "$TMP/machine-a/.barca"
 (cd "$TMP/machine-a" && $BARCA state backups --json > backups-a.json 2> backups-a.log) \
@@ -251,7 +256,7 @@ assert listed and all(b['where'] == 'store' for b in listed), listed
 (cd "$TMP/machine-a" && $BARCA state restore --from "$A_BACKUP" > /dev/null 2> restore-a.log) \
     || { cat "$TMP/machine-a/restore-a.log"; exit 1; }
 export EXEC_LOG="$TMP/exec-restored.log"
-(cd "$TMP/machine-a" && $BARCA get pipeline.py --agent > result-r.json 2> stderr-r.log) \
+(cd "$TMP/machine-a" && $BARCA get pipeline.py --agent -o value --json > result-r.json 2> stderr-r.log) \
     || { cat "$TMP/machine-a/stderr-r.log"; exit 1; }
 grep -q '"steps_executed":0' "$TMP/machine-a/result-r.json" \
     || { echo "FAIL: the restored history did not serve the cache"; cat "$TMP/machine-a/result-r.json"; exit 1; }
