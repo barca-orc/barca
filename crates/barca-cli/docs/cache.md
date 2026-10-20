@@ -640,6 +640,8 @@ the limit:
   person recomputes a `Manual` node. Barca finds `Manual` nodes by reading the project's source
   files (no import); if one of them does not parse, no current result without a store copy is
   evicted;
+- a result whose upload to the artifact store is still pending (`unsynced`, `local only` in
+  `barca status`): its local copy is the only one until the next command uploads it;
 - the metadata DBs, their logs, locks and backups, and any file under `.barca/artifacts/` that no
   result names (written by hand, or by another tool): counted, never deleted. Nothing outside
   `.barca/` is ever deleted, and the artifact store is never touched.

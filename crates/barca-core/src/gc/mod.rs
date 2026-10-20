@@ -717,6 +717,21 @@ async fn live_elsewhere(envs: &[EnvDb], ours: &HashSet<String>) -> Vec<String> {
     out
 }
 
+/// The recorded locations of this host's results whose upload is still pending (#390), in every
+/// environment: the local copy is the only one, so it is never evicted until the upload succeeds.
+/// The second value is set when a database could not be read; eviction then keeps to leftovers.
+async fn pending_uploads(envs: &[EnvDb]) -> (HashSet<String>, Option<String>) {
+    let mut out = HashSet::new();
+    let mut unread = None;
+    for env in envs {
+        match crate::pending_uploads::list(&env.db_path).await {
+            Ok(rows) => out.extend(rows.into_iter().map(|p| p.store_path)),
+            Err(e) => unread = Some(e.to_string()),
+        }
+    }
+    (out, unread)
+}
+
 async fn protections(
     project: &Project,
     envs: &[EnvDb],
@@ -725,8 +740,12 @@ async fn protections(
     pinned: &Pinned,
 ) -> (Protections, Option<String>) {
     let elsewhere = live_elsewhere(envs, &pinned.run_ids).await;
+    let (pending, pending_unread) = pending_uploads(envs).await;
+    let pending_failed = pending_unread.is_some();
     let restricted = if let Some(first) = elsewhere.first() {
         Some(format!("run {first} is in progress"))
+    } else if let Some(error) = pending_unread {
+        Some(format!("the pending uploads could not be read ({error})"))
     } else if pinned.unresolved {
         Some("a run in this process is planning".to_string())
     } else {
@@ -735,7 +754,7 @@ async fn protections(
     let manual = manual_nodes(project, rows);
     let protect = Protections {
         paths: HashSet::new(),
-        recorded: own.recorded.clone(),
+        recorded: own.recorded.iter().cloned().chain(pending).collect(),
         run_hashes: own
             .run_hashes
             .iter()
@@ -749,7 +768,11 @@ async fn protections(
             .into_iter()
             .chain(own.manual.iter().cloned())
             .collect(),
-        max_tier: restricted.is_some().then_some(Tier::Superseded),
+        max_tier: match (&restricted, pending_failed) {
+            (_, true) => Some(Tier::Leftovers),
+            (Some(_), false) => Some(Tier::Superseded),
+            (None, false) => None,
+        },
         keep_staging: !elsewhere.is_empty(),
     };
     (protect, restricted)
