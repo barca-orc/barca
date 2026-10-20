@@ -57,7 +57,7 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
     ),
     (
         "serve",
-        "the HTTP API and scheduler are young: no auth, no shared remote state, routes may change",
+        "the HTTP API and scheduler are young: no auth, no shared remote state; the older trigger routes are aliases until the next minor",
     ),
     (
         "get --output",

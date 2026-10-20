@@ -92,24 +92,64 @@ pub fn freshness_str(f: &crate::Freshness) -> &'static str {
     }
 }
 
-/// One `nodes[]` entry of `barca list --json`: `freshness` is a flat lowercase string, with the
-/// cron expression in `schedule` and the next fire time in `next_fire` for scheduled nodes.
-/// (The HTTP API's `GET /assets` keeps the engine's own serialization.)
+/// `freshness` as `barca list --json` and `GET /assets` show it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[serde(rename_all = "snake_case")]
+pub enum ListFreshness {
+    Always,
+    Manual,
+    Schedule,
+}
+
+/// One `nodes[]` entry of `barca list --json`, and one entry of the HTTP API's `GET /assets`:
+/// `freshness` is a flat lowercase word, with the cron expression in `schedule` and the next
+/// fire time in `next_fire` for scheduled nodes.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct ListNode {
+    pub id: String,
+    pub kind: crate::NodeKind,
+    pub freshness: ListFreshness,
+    /// The cron expression of a scheduled node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub schedule: Option<String>,
+    /// A scheduled node's next fire time, in local time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub next_fire: Option<String>,
+    pub inputs: Vec<String>,
+    pub env: Vec<String>,
+}
+
+impl ListNode {
+    pub fn of(a: &crate::results::AssetSummary, next_fire: Option<&String>) -> Self {
+        Self {
+            id: a.id.clone(),
+            kind: a.kind,
+            freshness: match &a.freshness {
+                crate::Freshness::Always => ListFreshness::Always,
+                crate::Freshness::Manual => ListFreshness::Manual,
+                crate::Freshness::Schedule(_) => ListFreshness::Schedule,
+            },
+            schedule: match &a.freshness {
+                crate::Freshness::Schedule(cron) => Some(cron.0.clone()),
+                _ => None,
+            },
+            next_fire: next_fire.cloned(),
+            inputs: a.inputs.clone(),
+            env: a.env.clone(),
+        }
+    }
+}
+
+/// [`ListNode`] as JSON.
 pub fn list_node_json(
     a: &crate::results::AssetSummary,
     next_fire: Option<&String>,
 ) -> serde_json::Value {
-    let mut v = serde_json::to_value(a).unwrap_or(serde_json::Value::Null);
-    if let Some(obj) = v.as_object_mut() {
-        obj.insert("freshness".into(), freshness_str(&a.freshness).into());
-        if let crate::Freshness::Schedule(cron) = &a.freshness {
-            obj.insert("schedule".into(), cron.0.clone().into());
-        }
-        if let Some(t) = next_fire {
-            obj.insert("next_fire".into(), t.clone().into());
-        }
-    }
-    v
+    serde_json::to_value(ListNode::of(a, next_fire)).unwrap_or(serde_json::Value::Null)
 }
 
 /// One row per node: NAME KIND STATE WHY LAST RUN SHAPE DEPS.
@@ -254,8 +294,8 @@ pub fn plural(n: u64, word: &str) -> String {
     }
 }
 
-/// `barca stats --json`: the node id is `id`, as on every other command. (The HTTP API's
-/// `GET /assets/<name>` keeps the engine's `node_id`.)
+/// `barca stats --json` (and `GET /stats/{name}`, `GET /assets/{name}`): the node id is `id`,
+/// as on every other command.
 pub fn stats_json(stats: &crate::db::AssetStats) -> serde_json::Value {
     let mut out = serde_json::to_value(stats).unwrap();
     if let Some(obj) = out.as_object_mut()
@@ -274,6 +314,18 @@ pub fn artifact_metadata(oref: &crate::dispatch::OutputRef) -> serde_json::Value
             "size_bytes": oref.size_bytes,
         }
     })
+}
+
+/// Read an artifact for display: a JSON artifact's value inline, metadata for binary formats.
+pub fn read_final_output(oref: &crate::dispatch::OutputRef) -> serde_json::Value {
+    if oref.format == "json" {
+        std::fs::read_to_string(&oref.path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_else(|| artifact_metadata(oref))
+    } else {
+        artifact_metadata(oref)
+    }
 }
 
 /// Keep only `fields` on each object in `items` (non-objects are left alone).

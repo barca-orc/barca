@@ -11,9 +11,12 @@ description: 'One deployed barca serve owns the record of what exists. Laptops r
 
 ---
 
-> **Implementation status (v0.24.0):** Accepted design, not shipped functionality.
-> The server URL settings, CLI `--server`/`--local` flags, shared-ledger operations and
-> parity contract below are pending #393, #394 and #402. For a working setup today,
+> **Implementation status:** Accepted design, partly shipped. The run contract and inspection
+> routes of section 3.4 are implemented (#393): `POST /runs`, `GET /runs/{run_id}` and its
+> events, output and cancel, `/list`, `/nodes`, `/history`, `/stats/{name}`, `/project`, and
+> `/health` with `api_version`. `triggered_by` is `manual` for a command typed on a machine
+> (this RFC's `cli`). The server URL settings, CLI `--server`/`--local` flags (#394), the
+> ledger routes and local runs against them (#402) are pending. For a working setup today,
 > follow [Deploying barca serve](/deploying/) and the [current HTTP API](/reference/server-api/).
 
 ## 1. Summary

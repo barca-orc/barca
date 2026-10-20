@@ -274,7 +274,7 @@ export function NodePanel({ node, nodes, nowMs, onSelect, onOpenGraph, onClose }
           </KeyValue>
         )}
         <KeyValue label="runs when">
-          {detail ? freshnessLabel(detail.asset.freshness) : <Skeleton width={72} height={12} />}
+          {detail ? freshnessLabel(detail.asset) : <Skeleton width={72} height={12} />}
         </KeyValue>
         {row?.nextRunMs != null && (
           <KeyValue label="next run">{new Date(row.nextRunMs).toLocaleString()}</KeyValue>

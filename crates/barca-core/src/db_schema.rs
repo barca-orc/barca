@@ -13,7 +13,66 @@ pub(crate) const RUN_COLUMNS: &[&str] = &[
     // and the marker it holds. It lets a reader tell a dead process from a live one
     // where pid and host cannot, in a container. NULL on rows from older versions.
     "owner TEXT",
+    // What started the run (`manual`, `api`, `schedule`, `client`), and for a scheduled run
+    // the tick and the schedule (#393). NULL on rows from older versions.
+    "triggered_by TEXT",
+    "scheduled_at TEXT",
+    "schedule_id TEXT",
+    // A run `barca serve` started: its full result, so `GET /runs/{id}` answers after a
+    // restart (#393). NULL for every other run.
+    "outcome_json TEXT",
 ];
+
+/// A schedule held back by `POST /schedule/{id}/pause` (#435): since when and until when
+/// (unix seconds; `paused_until` NULL means until it is resumed). NULL when not paused.
+pub(crate) const SCHEDULE_STATE_COLUMNS: &[&str] = &["paused_at INTEGER", "paused_until INTEGER"];
+
+/// Nullable columns added to format 1 after it was first released. A format-1 database
+/// without them is brought up to date by the same transactional additive migration as a
+/// legacy one, and stays format 1: a previous release still reads and writes it.
+pub(crate) const FORMAT_1_ADDITIONS: &[(&str, &[&str])] = &[
+    (
+        "runs",
+        &[
+            "triggered_by TEXT",
+            "scheduled_at TEXT",
+            "schedule_id TEXT",
+            "outcome_json TEXT",
+        ],
+    ),
+    ("schedule_state", SCHEDULE_STATE_COLUMNS),
+];
+
+/// Whether a format-1 database lacks one of [`FORMAT_1_ADDITIONS`].
+pub(crate) async fn lacks_additions(conn: &Connection) -> Result<bool, BarcaError> {
+    for (table, definitions) in FORMAT_1_ADDITIONS {
+        let columns = column_names(conn, table).await?;
+        // A table that is missing altogether is the schema check's to report.
+        if columns.is_empty() {
+            continue;
+        }
+        if definitions.iter().any(|definition| {
+            let name = definition.split_whitespace().next().unwrap_or_default();
+            !columns.iter().any(|column| column == name)
+        }) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+async fn column_names(conn: &Connection, table: &str) -> Result<Vec<String>, BarcaError> {
+    let failed = |e| BarcaError::Db(format!("failed to inspect `{table}`: {e}"));
+    let mut rows = conn
+        .query(&format!("PRAGMA table_info({table})"), ())
+        .await
+        .map_err(failed)?;
+    let mut columns = Vec::new();
+    while let Some(row) = rows.next().await.map_err(failed)? {
+        columns.push(row.get::<String>(1).map_err(failed)?);
+    }
+    Ok(columns)
+}
 
 pub(crate) const MATERIALIZATION_COLUMNS: &[&str] = &[
     "artifact_path TEXT",
@@ -138,9 +197,12 @@ mod tests {
         )
         .await
         .unwrap();
-        conn.execute("INSERT INTO schedule_state VALUES ('p.py:a',123)", ())
-            .await
-            .unwrap();
+        conn.execute(
+            "INSERT INTO schedule_state (node_id,last_fired_at) VALUES ('p.py:a',123)",
+            (),
+        )
+        .await
+        .unwrap();
         conn.execute(
             "INSERT INTO materializations (node_id,run_id,output_json) VALUES ('p.py:a',?1,'42')",
             [id],
@@ -182,6 +244,38 @@ mod tests {
             )
             .await,
             1
+        );
+    }
+
+    #[tokio::test]
+    async fn a_format_1_database_from_before_an_added_column_gets_it_and_keeps_its_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("format1.db").display().to_string();
+        populated(&path, "saved").await;
+        {
+            // As a 0.24 release left it: format 1 without the columns added since.
+            let (_db, conn) = raw(&path).await;
+            for (table, definitions) in FORMAT_1_ADDITIONS {
+                for definition in *definitions {
+                    let name = definition.split_whitespace().next().unwrap();
+                    conn.execute(&format!("ALTER TABLE {table} DROP COLUMN {name}"), ())
+                        .await
+                        .unwrap();
+                }
+            }
+            assert!(lacks_additions(&conn).await.unwrap());
+        }
+        db::init_db(&path).await.unwrap();
+        db::init_db(&path).await.unwrap();
+        let (_db, conn) = raw(&path).await;
+        assert!(!lacks_additions(&conn).await.unwrap());
+        assert_eq!(scalar(&conn, "PRAGMA user_version").await, VERSION);
+        let run = db::get_run(&path, "saved").await.unwrap().unwrap();
+        assert_eq!(run.status, "success");
+        assert_eq!(run.triggered_by, None, "older rows do not say");
+        assert_eq!(
+            scalar(&conn, "SELECT last_fired_at FROM schedule_state").await,
+            123
         );
     }
 

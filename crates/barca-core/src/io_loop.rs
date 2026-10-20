@@ -509,6 +509,7 @@ impl WorkerPool {
                             ev(RunEvent::StepFinished {
                                 node_id: node_id.clone(),
                                 ok: true,
+                                cached: false,
                                 elapsed_seconds: artifact.elapsed_seconds,
                                 error: None,
                                 import_seconds: artifact.import_seconds,
@@ -548,6 +549,7 @@ impl WorkerPool {
                             ev(RunEvent::StepFinished {
                                 node_id: node_id.clone(),
                                 ok: false,
+                                cached: false,
                                 elapsed_seconds: Some(elapsed),
                                 error: Some(error.clone()),
                                 import_seconds,
@@ -754,6 +756,7 @@ impl WorkerPool {
                                 ev(RunEvent::StepFinished {
                                     node_id,
                                     ok: false,
+                                    cached: false,
                                     elapsed_seconds: Some(ran_for.as_secs_f64()),
                                     error: Some(error.clone()),
                                     import_seconds: None,
@@ -792,6 +795,7 @@ impl WorkerPool {
                             ev(RunEvent::StepFinished {
                                 node_id,
                                 ok: false,
+                                cached: false,
                                 elapsed_seconds: Some(ran_for.as_secs_f64()),
                                 error: Some(error.clone()),
                                 import_seconds: None,

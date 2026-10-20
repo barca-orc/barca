@@ -59,7 +59,10 @@ pub(crate) const TABLES: &[(&str, &[&str])] = &[
             "updated_at",
         ],
     ),
-    ("schedule_state", &["node_id", "last_fired_at"]),
+    (
+        "schedule_state",
+        &["node_id", "last_fired_at", "paused_at", "paused_until"],
+    ),
 ];
 
 /// The tables whose rows are identified by an `id` row id column.
@@ -270,14 +273,19 @@ async fn schema_columns(conn: &Connection, legacy: bool) -> Result<Result<(), St
         if legacy && found.is_empty() {
             continue;
         }
+        // The additive migration adds these, so a database may lack them before it runs.
         let additions = if legacy {
             match *table {
                 "runs" => crate::db_schema::RUN_COLUMNS,
                 "materializations" => crate::db_schema::MATERIALIZATION_COLUMNS,
+                "schedule_state" => crate::db_schema::SCHEDULE_STATE_COLUMNS,
                 _ => &[],
             }
         } else {
-            &[]
+            crate::db_schema::FORMAT_1_ADDITIONS
+                .iter()
+                .find(|(name, _)| name == table)
+                .map_or(&[][..], |(_, definitions)| *definitions)
         };
         let row_id = WITH_ROW_ID.contains(table).then_some("id");
         if let Some(missing) = row_id.iter().chain(columns.iter()).find(|c| {

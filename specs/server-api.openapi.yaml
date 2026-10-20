@@ -2,18 +2,18 @@
 openapi: 3.1.0
 info:
   title: Barca current HTTP API
-  version: '2'
-  description: 'Normative current wire contract; specification version 2 is independent
-    of package versions. Scope: registered barca-server routes and fallback responses.
-    No authentication is implemented (security is empty); read-only is an operating
-    mode. No proposed RFC command routes, authorization, freshness eligibility or
-    partition retrieval API are advertised. Conformance: crates/barca-server/tests/openapi.rs
+  version: '3'
+  description: 'Normative current wire contract; specification version 3 is independent of package versions.
+    Scope: registered barca-server routes and fallback responses. No authentication is implemented (security
+    is empty); read-only is an operating mode. The run contract and inspection routes of RFC-0007 section
+    3.4 are shipped (POST /runs, GET /runs/{run_id}, its events, output and cancel; /list, /nodes, /history,
+    /stats/{name}, /project); its ledger routes (/ledger/*) are not. Every error body is the CLI error
+    envelope. Routes marked deprecated are aliases kept for one minor release. Conformance: crates/barca-server/tests/openapi.rs
     and python/tests/test_http_openapi_client.py.'
 jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
 servers:
 - url: http://127.0.0.1:8274
-  description: Default local listener; configurable host/port, reverse proxies may
-    add a prefix.
+  description: Default local listener; configurable host/port, reverse proxies may add a prefix.
 security: []
 paths:
   /health:
@@ -28,22 +28,20 @@ paths:
               schema:
                 $ref: '#/components/schemas/Health'
         '405':
-          description: Registered path with unsupported method; Allow header identifies
-            supported methods
+          description: Registered path with unsupported method; Allow header identifies supported methods
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
           headers: &id001
             Allow:
-              schema: &id002
+              schema: &id003
                 type: string
               description: Methods accepted by this route
-      description: Liveness, not readiness or authentication. The API has no authentication.
-        Read-only mode refuses mutating routes; it does not restrict inspection access.
-        load_errors reports unloaded sources and excluded dependent definitions from
-        the selected served graph. Healthy loads return an empty array; healthy
-        definitions remain inspectable beside those diagnostics.
+      description: Liveness, not readiness or authentication. The API has no authentication. Read-only
+        mode refuses mutating routes; it does not restrict inspection access. load_errors reports unloaded
+        sources and excluded dependent definitions from the selected served graph. Healthy loads return
+        an empty array; healthy definitions remain inspectable beside those diagnostics.
     head:
       summary: Server liveness and operating modes (headers only)
       operationId: head_health
@@ -51,9 +49,60 @@ paths:
         '200':
           description: Response
         '405':
-          description: Registered path with unsupported method; Allow header identifies
-            supported methods
+          description: Registered path with unsupported method; Allow header identifies supported methods
           headers: *id001
+  /project:
+    get:
+      summary: The deployed tree
+      operationId: get_project
+      responses:
+        '200':
+          description: Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+        '500':
+          description: Inspection infrastructure error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          headers: &id002
+            Allow:
+              schema:
+                type: string
+              description: Methods accepted by this route
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+            text/plain:
+              schema: &id005
+                type: string
+      description: The deployed files and their sha256, hashed on each request, the environment and the
+        commit at the root.
+    head:
+      summary: The deployed tree (headers only)
+      operationId: head_project
+      responses:
+        '200':
+          description: Response
+        '500':
+          description: Inspection infrastructure error
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          headers: *id002
+        '400':
+          description: Invalid request
   /plan:
     get:
       summary: Static plan of the served DAG
@@ -78,15 +127,14 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '405':
-          description: Registered path with unsupported method; Allow header identifies
-            supported methods
+          description: Registered path with unsupported method; Allow header identifies supported methods
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-          headers: &id003
+          headers: &id004
             Allow:
-              schema: *id002
+              schema: *id003
               description: Methods accepted by this route
     head:
       summary: Static plan of the served DAG (headers only)
@@ -99,16 +147,14 @@ paths:
         '500':
           description: Execution/inspection infrastructure error
         '405':
-          description: Registered path with unsupported method; Allow header identifies
-            supported methods
-          headers: *id003
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          headers: *id004
   /groups:
     get:
       summary: List organizational groups
-      description: Groups organize nodes without changing execution, dependencies or
-        caching. Groups reference member node or group IDs and an output node or group ID.
-        Invalid groups are omitted from the healthy served graph and reported in
-        health load_errors, while healthy executable nodes remain available.
+      description: Groups organize nodes without changing execution, dependencies or caching. Groups reference
+        member node or group IDs and an output node or group ID. Invalid groups are omitted from the healthy
+        served graph and reported in health load_errors, while healthy executable nodes remain available.
       operationId: get_groups
       responses:
         '200':
@@ -132,8 +178,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '405':
-          description: Registered path with unsupported method; Allow header identifies
-            supported methods
+          description: Registered path with unsupported method; Allow header identifies supported methods
           content:
             application/json:
               schema:
@@ -150,9 +195,275 @@ paths:
         '500':
           description: Execution/inspection infrastructure error
         '405':
-          description: Registered path with unsupported method; Allow header identifies
-            supported methods
+          description: Registered path with unsupported method; Allow header identifies supported methods
           headers: *id001
+  /list:
+    get:
+      summary: barca list --json --all
+      operationId: get_list
+      responses:
+        '200':
+          description: Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListBody'
+        '500':
+          description: Inspection infrastructure error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          headers: &id006
+            Allow:
+              schema:
+                type: string
+              description: Methods accepted by this route
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+            text/plain:
+              schema: *id005
+      description: Built by the function barca list --json uses; the client applies --limit and --fields.
+    head:
+      summary: barca list --json --all (headers only)
+      operationId: head_list
+      responses:
+        '200':
+          description: Response
+        '500':
+          description: Inspection infrastructure error
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          headers: *id006
+        '400':
+          description: Invalid request
+  /nodes:
+    get:
+      summary: barca status --json for the ledger
+      operationId: get_nodes
+      responses:
+        '200':
+          description: Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusBody'
+        '404':
+          description: Unknown target
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Ambiguous target
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Inspection infrastructure error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          headers: &id007
+            Allow:
+              schema:
+                type: string
+              description: Methods accepted by this route
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+            text/plain:
+              schema: *id005
+      description: Built by the function barca status --json uses, against a private snapshot of the metadata
+        DB.
+      parameters: &id008
+      - name: targets
+        in: query
+        required: false
+        schema: *id005
+        description: 'Comma-separated targets; absent: every node.'
+      - name: sample
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+        description: --sample N
+    head:
+      summary: barca status --json for the ledger (headers only)
+      operationId: head_nodes
+      responses:
+        '200':
+          description: Response
+        '404':
+          description: Unknown target
+        '409':
+          description: Ambiguous target
+        '500':
+          description: Inspection infrastructure error
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          headers: *id007
+        '400':
+          description: Invalid request
+      parameters: *id008
+  /history:
+    get:
+      summary: barca history --json
+      operationId: get_history
+      responses:
+        '200':
+          description: Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HistoryBody'
+        '500':
+          description: Inspection infrastructure error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          headers: &id009
+            Allow:
+              schema:
+                type: string
+              description: Methods accepted by this route
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+            text/plain:
+              schema: *id005
+      description: Newest first. Without limit, every run, as barca history --json prints without -l.
+      parameters: &id010
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+      - name: all
+        in: query
+        required: false
+        schema: *id005
+        description: 'Any value but 0 or false: every run.'
+    head:
+      summary: barca history --json (headers only)
+      operationId: head_history
+      responses:
+        '200':
+          description: Response
+        '500':
+          description: Inspection infrastructure error
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          headers: *id009
+        '400':
+          description: Invalid request
+      parameters: *id010
+  /stats/{name}:
+    get:
+      summary: barca stats --json
+      operationId: get_stats_name
+      responses:
+        '200':
+          description: Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Stats'
+        '404':
+          description: Unknown node
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Ambiguous name
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Inspection infrastructure error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          headers: &id011
+            Allow:
+              schema:
+                type: string
+              description: Methods accepted by this route
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+            text/plain:
+              schema: *id005
+      description: Timings and cache hit rate of one node, from the ledger.
+      parameters: &id012
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+    head:
+      summary: barca stats --json (headers only)
+      operationId: head_stats_name
+      responses:
+        '200':
+          description: Response
+        '404':
+          description: Unknown node
+        '409':
+          description: Ambiguous name
+        '500':
+          description: Inspection infrastructure error
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          headers: *id011
+        '400':
+          description: Invalid request
+      parameters: *id012
   /assets:
     get:
       summary: List assets, tasks and sensors
@@ -179,16 +490,16 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '405':
-          description: Registered path with unsupported method; Allow header identifies
-            supported methods
+          description: Registered path with unsupported method; Allow header identifies supported methods
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-          headers: &id004
+          headers: &id013
             Allow:
-              schema: *id002
+              schema: *id003
               description: Methods accepted by this route
+      description: Every node as barca list --json shows it.
     head:
       summary: List assets, tasks and sensors (headers only)
       operationId: head_assets
@@ -200,9 +511,8 @@ paths:
         '500':
           description: Execution/inspection infrastructure error
         '405':
-          description: Registered path with unsupported method; Allow header identifies
-            supported methods
-          headers: *id004
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          headers: *id013
   /assets/{name}:
     get:
       summary: Node summary and materialization statistics
@@ -221,7 +531,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
             text/plain:
-              schema: *id002
+              schema: *id003
         '404':
           description: Resource not found
           content:
@@ -241,21 +551,22 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '405':
-          description: Registered path with unsupported method; Allow header identifies
-            supported methods
+          description: Registered path with unsupported method; Allow header identifies supported methods
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-          headers: &id005
+          headers: &id014
             Allow:
-              schema: *id002
+              schema: *id003
               description: Methods accepted by this route
-      parameters: &id006
+      parameters: &id015
       - name: name
         in: path
         required: true
-        schema: *id002
+        schema: *id003
+      description: ' asset is the barca list --json node; stats is the barca stats --json body (id, not
+        node_id).'
     head:
       summary: Node summary and materialization statistics (headers only)
       operationId: head_assets_name
@@ -271,10 +582,9 @@ paths:
         '500':
           description: Execution/inspection infrastructure error
         '405':
-          description: Registered path with unsupported method; Allow header identifies
-            supported methods
-          headers: *id005
-      parameters: *id006
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          headers: *id014
+      parameters: *id015
   /assets/{name}/schema:
     get:
       summary: Inspect selected node and direct input artifacts
@@ -295,7 +605,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
             text/plain:
-              schema: *id002
+              schema: *id003
         '404':
           description: Resource not found
           content:
@@ -315,21 +625,20 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '405':
-          description: Registered path with unsupported method; Allow header identifies
-            supported methods
+          description: Registered path with unsupported method; Allow header identifies supported methods
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-          headers: &id007
+          headers: &id016
             Allow:
-              schema: *id002
+              schema: *id003
               description: Methods accepted by this route
-      parameters: &id008
+      parameters: &id017
       - name: name
         in: path
         required: true
-        schema: *id002
+        schema: *id003
     head:
       summary: Inspect selected node and direct input artifacts (headers only)
       operationId: head_assets_name_schema
@@ -345,10 +654,9 @@ paths:
         '500':
           description: Execution/inspection infrastructure error
         '405':
-          description: Registered path with unsupported method; Allow header identifies
-            supported methods
-          headers: *id007
-      parameters: *id008
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          headers: *id016
+      parameters: *id017
   /state:
     get:
       summary: Node cache state, durations and next scheduled execution
@@ -375,15 +683,14 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '405':
-          description: Registered path with unsupported method; Allow header identifies
-            supported methods
+          description: Registered path with unsupported method; Allow header identifies supported methods
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-          headers: &id009
+          headers: &id018
             Allow:
-              schema: *id002
+              schema: *id003
               description: Methods accepted by this route
     head:
       summary: Node cache state, durations and next scheduled execution (headers only)
@@ -396,9 +703,8 @@ paths:
         '500':
           description: Execution/inspection infrastructure error
         '405':
-          description: Registered path with unsupported method; Allow header identifies
-            supported methods
-          headers: *id009
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          headers: *id018
   /schedule:
     get:
       summary: Scheduler job registry
@@ -413,15 +719,14 @@ paths:
                 items:
                   $ref: '#/components/schemas/Job'
         '405':
-          description: Registered path with unsupported method; Allow header identifies
-            supported methods
+          description: Registered path with unsupported method; Allow header identifies supported methods
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-          headers: &id010
+          headers: &id019
             Allow:
-              schema: *id002
+              schema: *id003
               description: Methods accepted by this route
     head:
       summary: Scheduler job registry (headers only)
@@ -430,9 +735,131 @@ paths:
         '200':
           description: Response
         '405':
-          description: Registered path with unsupported method; Allow header identifies
-            supported methods
-          headers: *id010
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          headers: *id019
+  /schedule/{id}/pause:
+    post:
+      summary: Pause one schedule
+      operationId: post_schedule_id_pause
+      responses:
+        '200':
+          description: The job's schedule entry
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PauseResult'
+        '400':
+          description: until is not an RFC 3339 time in the future
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Read-only server refuses mutation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not a scheduled node
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Ambiguous name
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Metadata DB error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          headers:
+            Allow:
+              schema:
+                type: string
+              description: Methods accepted by this route
+      description: 'Its due ticks are skipped with reason paused until it is resumed or until passes.
+        Kept in schedule_state: a restart does not resume it.'
+      parameters:
+      - &id020
+        name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: 'The scheduled node: its full id (percent-encode a /) or its name.'
+      - name: until
+        in: query
+        required: false
+        schema: *id005
+        description: 'RFC 3339; absent: until resumed.'
+  /schedule/{id}/resume:
+    post:
+      summary: Resume one schedule
+      operationId: post_schedule_id_resume
+      responses:
+        '200':
+          description: The job's schedule entry
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PauseResult'
+        '400':
+          description: until is not an RFC 3339 time in the future
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Read-only server refuses mutation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not a scheduled node
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Ambiguous name
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Metadata DB error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          headers:
+            Allow:
+              schema:
+                type: string
+              description: Methods accepted by this route
+      description: It fires again from its next tick; ticks skipped while paused are not caught up. Resuming
+        a job that is not paused changes nothing.
+      parameters:
+      - *id020
   /run:
     post:
       summary: Materialize every asset and sensor
@@ -463,20 +890,20 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '405':
-          description: Registered path with unsupported method; Allow header identifies
-            supported methods
+          description: Registered path with unsupported method; Allow header identifies supported methods
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
           headers:
             Allow:
-              schema: *id002
+              schema: *id003
               description: Methods accepted by this route
-      description: Bodyless trigger; tasks are skipped. Returns HTTP 200 immediately
-        with a volatile polling handle for the healthy selected graph. An entirely
-        unloaded graph or a graph containing only tasks returns 400; inspect /health
-        load_errors for source diagnostics. There is no POST /runs command endpoint.
+      description: 'Bodyless trigger; tasks are skipped. Returns HTTP 200 immediately with the run id
+        for the healthy selected graph. An entirely unloaded graph or a graph containing only tasks returns
+        400; inspect /health load_errors for source diagnostics. Deprecated alias of POST /runs {"command":
+        "get"}, kept for one minor release.'
+      deprecated: true
   /run/{target}:
     post:
       summary: Run one task and refresh its upstream assets
@@ -495,7 +922,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
             text/plain:
-              schema: *id002
+              schema: *id003
         '403':
           description: Read-only server refuses mutation
           content:
@@ -521,23 +948,24 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '405':
-          description: Registered path with unsupported method; Allow header identifies
-            supported methods
+          description: Registered path with unsupported method; Allow header identifies supported methods
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
           headers:
             Allow:
-              schema: *id002
+              schema: *id003
               description: Methods accepted by this route
-      description: Bodyless trigger. Target may be a bare function name or full node
-        ID. This catch-all path accepts embedded slashes (encoded or unencoded).
+      description: 'Bodyless trigger. Target may be a bare function name or full node ID. This catch-all
+        path accepts embedded slashes (encoded or unencoded). Deprecated alias of POST /runs {"command":
+        "run"} and DELETE /runs/{run_id}, kept for one minor release; run_id is the database run id.'
       parameters:
       - name: target
         in: path
         required: true
-        schema: *id002
+        schema: *id003
+      deprecated: true
     delete:
       summary: Cancel an in-flight run by polling handle
       operationId: delete_run_target
@@ -567,15 +995,14 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '405':
-          description: Registered path with unsupported method; Allow header identifies
-            supported methods
+          description: Registered path with unsupported method; Allow header identifies supported methods
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
           headers:
             Allow:
-              schema: *id002
+              schema: *id003
               description: Methods accepted by this route
         '400':
           description: Invalid request
@@ -584,15 +1011,15 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
             text/plain:
-              schema: *id002
-      description: Here target is the polling handle, not a node name. Returns cancelling
-        immediately; poll /status for cancelled. A terminal run returns 409; a durable
-        ID without a retained handle cannot be cancelled.
+              schema: *id003
+      description: Here target is the run id. Deprecated alias of DELETE /runs/{run_id}, kept for one
+        minor release.
       parameters:
       - name: target
         in: path
         required: true
-        schema: *id002
+        schema: *id003
+      deprecated: true
   /get/{target}:
     post:
       summary: Materialize one asset or sensor
@@ -611,7 +1038,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
             text/plain:
-              schema: *id002
+              schema: *id003
         '403':
           description: Read-only server refuses mutation
           content:
@@ -637,23 +1064,24 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '405':
-          description: Registered path with unsupported method; Allow header identifies
-            supported methods
+          description: Registered path with unsupported method; Allow header identifies supported methods
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
           headers:
             Allow:
-              schema: *id002
+              schema: *id003
               description: Methods accepted by this route
-      description: Bodyless trigger. Same catch-all target encoding as POST /run/{target};
-        tasks are rejected.
+      description: 'Bodyless trigger. Same catch-all target encoding as POST /run/{target}; tasks are
+        rejected. Deprecated alias of POST /runs {"command": "get"}, kept for one minor release; run_id
+        is the database run id.'
       parameters:
       - name: target
         in: path
         required: true
-        schema: *id002
+        schema: *id003
+      deprecated: true
   /status/{run_id}:
     get:
       summary: Poll a retained live run handle
@@ -672,15 +1100,14 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '405':
-          description: Registered path with unsupported method; Allow header identifies
-            supported methods
+          description: Registered path with unsupported method; Allow header identifies supported methods
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-          headers: &id011
+          headers: &id021
             Allow:
-              schema: *id002
+              schema: *id003
               description: Methods accepted by this route
         '400':
           description: Invalid request
@@ -689,15 +1116,15 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
             text/plain:
-              schema: *id002
-      description: Pending/running/complete/failed/cancelled. Run handles expire and
-        do not survive restart. No fallback to durable history; use /runs/{id} for
-        durable inspection.
-      parameters: &id012
+              schema: *id003
+      description: Pending/running/complete/failed/cancelled, while the run is retained in memory. Deprecated
+        alias; GET /runs/{run_id} answers from the DB too.
+      parameters: &id022
       - name: run_id
         in: path
         required: true
-        schema: *id002
+        schema: *id003
+      deprecated: true
     head:
       summary: Poll a retained live run handle (headers only)
       operationId: head_status_run_id
@@ -707,12 +1134,14 @@ paths:
         '404':
           description: Resource not found
         '405':
-          description: Registered path with unsupported method; Allow header identifies
-            supported methods
-          headers: *id011
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          headers: *id021
         '400':
           description: Invalid request
-      parameters: *id012
+      parameters: *id022
+      deprecated: true
+      description: ' Deprecated alias of GET /runs/{run_id}, kept for one minor release; run_id is the
+        database run id.'
   /runs:
     get:
       summary: List durable history joined with retained live runs
@@ -731,33 +1160,30 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '405':
-          description: Registered path with unsupported method; Allow header identifies
-            supported methods
+          description: Registered path with unsupported method; Allow header identifies supported methods
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-          headers: &id013
+          headers: &id023
             Allow:
-              schema: *id002
+              schema: *id003
               description: Methods accepted by this route
         '400':
           description: Axum query extractor rejects malformed/non-unsigned limits
           content:
             text/plain:
-              schema: *id002
-      description: Newest first, all pipelines in this local environment. No source
-        filter. Snapshot inspection does not create/migrate the database. Limit defaults
-        to 100 and is clamped to 1–1000.
-      parameters: &id014
+              schema: *id003
+      description: Newest first, all pipelines in this local environment. No source filter. Snapshot inspection
+        does not create/migrate the database. Limit defaults to 100 and is clamped to 1–1000.
+      parameters: &id024
       - name: limit
         in: query
         required: false
         schema:
           type: integer
           minimum: 0
-        description: Unsigned integer; zero and values above 1000 are accepted and
-          clamped.
+        description: Unsigned integer; zero and values above 1000 are accepted and clamped.
     head:
       summary: List durable history joined with retained live runs (headers only)
       operationId: head_runs
@@ -767,23 +1193,89 @@ paths:
         '500':
           description: Execution/inspection infrastructure error
         '405':
-          description: Registered path with unsupported method; Allow header identifies
-            supported methods
-          headers: *id013
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          headers: *id023
         '400':
           description: Malformed limit
-      parameters: *id014
-  /runs/{id}:
+      parameters: *id024
+    post:
+      summary: Start a run on this server
+      operationId: post_runs
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RunRequest'
+      responses:
+        '202':
+          description: Accepted; stream GET /runs/{run_id}/events
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunHandle'
+        '200':
+          description: 'dry_run: the --dry-run JSON; nothing started'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Explain'
+        '400':
+          description: Not a run request, a target of the wrong kind, a file that is not deployed, or
+            nothing to run
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Read-only server refuses to run
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Unknown target
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Ambiguous target
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Source-loading infrastructure error before the run starts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          headers:
+            Allow:
+              schema:
+                type: string
+              description: Methods accepted by this route
+      description: 'The command runs here with the deployed code, as barca get / barca run would. Targets
+        are checked first: no run starts for a request the CLI would refuse. A failed step is not an HTTP
+        error: it is a run whose outcome is failed.'
+  /runs/{run_id}:
     get:
-      summary: Inspect durable ID or retained live handle
-      operationId: get_runs_id
+      summary: One run, with its outcome once finished
+      operationId: get_runs_run_id
       responses:
         '200':
           description: Response
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/RunDetail'
+                $ref: '#/components/schemas/RunView'
         '404':
           description: Resource not found
           content:
@@ -797,15 +1289,14 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '405':
-          description: Registered path with unsupported method; Allow header identifies
-            supported methods
+          description: Registered path with unsupported method; Allow header identifies supported methods
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-          headers: &id015
+          headers: &id025
             Allow:
-              schema: *id002
+              schema: *id003
               description: Methods accepted by this route
         '400':
           description: Invalid request
@@ -814,18 +1305,20 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
             text/plain:
-              schema: *id002
-      description: Durable steps and logs survive restart. Engine result/final output
-        and cached per-step reports are available only while the live handle is retained,
-        then result is null. Inspection uses a private DB snapshot.
-      parameters: &id016
-      - name: id
+              schema: *id003
+      description: Answers from the metadata DB once the run has finished, so a restart does not lose
+        it; a live run is pending or running until it has recorded its outcome. Inspection uses a private
+        DB snapshot.
+      parameters: &id026
+      - name: run_id
         in: path
         required: true
-        schema: *id002
+        schema:
+          type: string
+        description: The database run id.
     head:
-      summary: Inspect durable ID or retained live handle (headers only)
-      operationId: head_runs_id
+      summary: One run, with its outcome once finished (headers only)
+      operationId: head_runs_run_id
       responses:
         '200':
           description: Response
@@ -834,12 +1327,211 @@ paths:
         '500':
           description: Execution/inspection infrastructure error
         '405':
-          description: Registered path with unsupported method; Allow header identifies
-            supported methods
-          headers: *id015
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          headers: *id025
         '400':
           description: Invalid request
-      parameters: *id016
+      parameters: *id026
+    delete:
+      summary: Cancel a pending or running run
+      operationId: delete_runs_run_id
+      responses:
+        '200':
+          description: Cancelling; the stream ends with a cancelled outcome
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Cancellation'
+        '403':
+          description: Read-only server refuses mutation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Unknown run
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: The run already finished
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Inspection infrastructure error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          headers:
+            Allow:
+              schema:
+                type: string
+              description: Methods accepted by this route
+      parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+  /runs/{run_id}/events:
+    get:
+      summary: Stream a run's events
+      operationId: get_runs_run_id_events
+      responses:
+        '200':
+          description: Server-Sent Events stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+          headers: &id028
+            X-Accel-Buffering:
+              schema:
+                const: 'no'
+            Cache-Control:
+              schema: &id027
+                type: string
+        '404':
+          description: The run is not live on this server
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          headers: &id029
+            Allow:
+              schema: *id027
+              description: Methods accepted by this route
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+            text/plain:
+              schema: *id027
+      description: 'Server-sent events; each data frame is RunEvent JSON (x-event-schema) and each has
+        an id: its number in the run, from 0. A subscriber receives the run from its first event, every
+        event once however slowly it reads; the stream ends after run_finished. Keepalive comments every
+        15 seconds. 404 once the run is no longer live on this server (GET /runs/{run_id} answers then).
+        A connection dropped mid-run is not resumed (Last-Event-ID is future work); the run goes on.'
+      parameters: &id030
+      - name: run_id
+        in: path
+        required: true
+        schema: *id027
+      x-event-schema:
+        $ref: '#/components/schemas/RunEvent'
+    head:
+      summary: Stream a run's events (headers only)
+      operationId: head_runs_run_id_events
+      responses:
+        '200':
+          description: Server-Sent Events stream
+          headers: *id028
+        '404':
+          description: The run is not live on this server
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          headers: *id029
+        '400':
+          description: Invalid request
+      parameters: *id030
+  /runs/{run_id}/output:
+    get:
+      summary: A finished run's final artifact
+      operationId: get_runs_run_id_output
+      responses:
+        '200':
+          description: The artifact bytes; Content-Type by format
+          content:
+            application/json:
+              schema: {}
+            application/vnd.apache.parquet:
+              schema: *id005
+            application/octet-stream:
+              schema: *id005
+            text/csv:
+              schema: *id005
+        '404':
+          description: Unknown run, a run with no single final output, or an artifact missing on this
+            machine
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: The run has not finished
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Inspection infrastructure error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          headers: &id031
+            Allow:
+              schema:
+                type: string
+              description: Methods accepted by this route
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+            text/plain:
+              schema: *id005
+      description: Only a successful run of one target has a final output. Pickle is application/octet-stream.
+      parameters: &id032
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+    head:
+      summary: A finished run's final artifact (headers only)
+      operationId: head_runs_run_id_output
+      responses:
+        '200':
+          description: The artifact bytes; Content-Type by format
+        '404':
+          description: Unknown run, a run with no single final output, or an artifact missing on this
+            machine
+        '409':
+          description: The run has not finished
+        '500':
+          description: Inspection infrastructure error
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          headers: *id031
+        '400':
+          description: Invalid request
+      parameters: *id032
   /logs/{run_id}:
     get:
       summary: Read persisted output lines
@@ -858,15 +1550,14 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '405':
-          description: Registered path with unsupported method; Allow header identifies
-            supported methods
+          description: Registered path with unsupported method; Allow header identifies supported methods
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-          headers: &id017
+          headers: &id033
             Allow:
-              schema: *id002
+              schema: *id003
               description: Methods accepted by this route
         '400':
           description: Invalid request
@@ -875,15 +1566,14 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
             text/plain:
-              schema: *id002
-      description: Accepts a retained live handle or a durable DB ID. Unknown IDs
-        return an empty logs array with HTTP 200. Live lines not yet persisted are
-        available through events or run details.
-      parameters: &id018
+              schema: *id003
+      description: Accepts a retained live handle or a durable DB ID. Unknown IDs return an empty logs
+        array with HTTP 200. Live lines not yet persisted are available through events or run details.
+      parameters: &id034
       - name: run_id
         in: path
         required: true
-        schema: *id002
+        schema: *id003
     head:
       summary: Read persisted output lines (headers only)
       operationId: head_logs_run_id
@@ -893,12 +1583,11 @@ paths:
         '500':
           description: Execution/inspection infrastructure error
         '405':
-          description: Registered path with unsupported method; Allow header identifies
-            supported methods
-          headers: *id017
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          headers: *id033
         '400':
           description: Invalid request
-      parameters: *id018
+      parameters: *id034
   /events/{run_id}:
     get:
       summary: Stream lifecycle and log events for a retained handle
@@ -915,7 +1604,7 @@ paths:
               schema:
                 const: 'no'
             Cache-Control:
-              schema: *id002
+              schema: *id003
         '404':
           description: Resource not found
           content:
@@ -923,15 +1612,14 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '405':
-          description: Registered path with unsupported method; Allow header identifies
-            supported methods
+          description: Registered path with unsupported method; Allow header identifies supported methods
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-          headers: &id019
+          headers: &id035
             Allow:
-              schema: *id002
+              schema: *id003
               description: Methods accepted by this route
         '400':
           description: Invalid request
@@ -940,17 +1628,19 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
             text/plain:
-              schema: *id002
-      description: SSE data frames contain RunEvent JSON (x-event-schema). Backlog
-        then live delivery; no event names/IDs. Keepalive comments every 15 seconds.
-        Handle-only, no durable replay after restart.
-      parameters: &id020
+              schema: *id003
+      description: SSE data frames contain RunEvent JSON (x-event-schema). Backlog then live delivery;
+        no event names/IDs. Keepalive comments every 15 seconds. Handle-only, no durable replay after
+        restart. Deprecated alias of GET /runs/{run_id}/events, kept for one minor release; run_id is
+        the database run id.
+      parameters: &id036
       - name: run_id
         in: path
         required: true
-        schema: *id002
+        schema: *id003
       x-event-schema:
         $ref: '#/components/schemas/RunEvent'
+      deprecated: true
     head:
       summary: Stream lifecycle and log events for a retained handle (headers only)
       operationId: head_events_run_id
@@ -960,12 +1650,14 @@ paths:
         '404':
           description: Resource not found
         '405':
-          description: Registered path with unsupported method; Allow header identifies
-            supported methods
-          headers: *id019
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          headers: *id035
         '400':
           description: Invalid request
-      parameters: *id020
+      parameters: *id036
+      deprecated: true
+      description: ' Deprecated alias of GET /runs/{run_id}/events, kept for one minor release; run_id
+        is the database run id.'
   /:
     get:
       summary: Redirect to UI
@@ -973,7 +1665,7 @@ paths:
       responses:
         '303':
           description: Redirect
-          headers: &id021
+          headers: &id037
             Location:
               schema:
                 const: ui/
@@ -990,7 +1682,7 @@ paths:
       responses:
         '303':
           description: Redirect
-          headers: *id021
+          headers: *id037
         '405':
           description: Unsupported method
   /ui:
@@ -1000,7 +1692,7 @@ paths:
       responses:
         '303':
           description: Redirect
-          headers: &id022
+          headers: &id038
             Location:
               schema:
                 const: ui/
@@ -1017,7 +1709,7 @@ paths:
       responses:
         '303':
           description: Redirect
-          headers: *id022
+          headers: *id038
         '405':
           description: Unsupported method
   /ui/:
@@ -1029,7 +1721,7 @@ paths:
           description: Embedded UI content
           headers:
             Cache-Control:
-              schema: *id002
+              schema: *id003
           content:
             text/html:
               schema:
@@ -1069,25 +1761,23 @@ paths:
                 type: string
                 format: binary
         '405':
-          description: Registered path with unsupported method; Allow header identifies
-            supported methods
+          description: Registered path with unsupported method; Allow header identifies supported methods
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-          headers: &id023
+          headers: &id039
             Allow:
-              schema: *id002
+              schema: *id003
               description: Methods accepted by this route
         '404':
-          description: 'Missing index: plain text explanation; missing other asset:
-            empty body'
+          description: 'Missing index: plain text explanation; missing other asset: empty body'
           content:
             text/plain:
-              schema: *id002
-      description: 'No UI build in the binary: /ui/ returns explanatory text with
-        404. Missing static assets return empty 404. Fingerprinted assets use immutable
-        one-year caching; other resources use no-cache.'
+              schema: *id003
+      description: 'No UI build in the binary: /ui/ returns explanatory text with 404. Missing static
+        assets return empty 404. Fingerprinted assets use immutable one-year caching; other resources
+        use no-cache.'
     head:
       summary: Embedded UI document or static asset (headers only)
       operationId: head_ui_index
@@ -1095,9 +1785,8 @@ paths:
         '200':
           description: Response
         '405':
-          description: Registered path with unsupported method; Allow header identifies
-            supported methods
-          headers: *id023
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          headers: *id039
         '404':
           description: UI not embedded or asset missing
   /ui/{path}:
@@ -1109,7 +1798,7 @@ paths:
           description: Embedded UI content
           headers:
             Cache-Control:
-              schema: *id002
+              schema: *id003
           content:
             text/html:
               schema:
@@ -1149,15 +1838,14 @@ paths:
                 type: string
                 format: binary
         '405':
-          description: Registered path with unsupported method; Allow header identifies
-            supported methods
+          description: Registered path with unsupported method; Allow header identifies supported methods
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-          headers: &id024
+          headers: &id040
             Allow:
-              schema: *id002
+              schema: *id003
               description: Methods accepted by this route
         '400':
           description: Invalid request
@@ -1166,21 +1854,20 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
             text/plain:
-              schema: *id002
+              schema: *id003
         '404':
-          description: 'Missing index: plain text explanation; missing other asset:
-            empty body'
+          description: 'Missing index: plain text explanation; missing other asset: empty body'
           content:
             text/plain:
-              schema: *id002
-      description: 'No UI build in the binary: /ui/ returns explanatory text with
-        404. Missing static assets return empty 404. Fingerprinted assets use immutable
-        one-year caching; other resources use no-cache.'
-      parameters: &id025
+              schema: *id003
+      description: 'No UI build in the binary: /ui/ returns explanatory text with 404. Missing static
+        assets return empty 404. Fingerprinted assets use immutable one-year caching; other resources
+        use no-cache.'
+      parameters: &id041
       - name: path
         in: path
         required: true
-        schema: *id002
+        schema: *id003
     head:
       summary: Embedded UI document or static asset (headers only)
       operationId: head_ui_path
@@ -1188,23 +1875,48 @@ paths:
         '200':
           description: Response
         '405':
-          description: Registered path with unsupported method; Allow header identifies
-            supported methods
-          headers: *id024
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          headers: *id040
         '400':
           description: Invalid request
         '404':
           description: UI not embedded or asset missing
-      parameters: *id025
+      parameters: *id041
 components:
   schemas:
     Error:
       type: object
       additionalProperties: false
+      description: 'The CLI stderr error envelope (barca docs contract). HTTP status follows kind: usage
+        400 (404 not found, 409 ambiguous or conflicting with a run, 403 read-only), infra 500.'
       required:
       - error
+      - code
+      - kind
+      - remediation
       properties:
-        error: *id002
+        error: *id005
+        code:
+          type: integer
+          enum:
+          - 1
+          - 2
+          - 3
+          - 130
+        kind:
+          type: string
+          enum:
+          - step_failed
+          - usage
+          - infra
+          - cancelled
+        remediation: &id042
+          anyOf:
+          - type: string
+          - type: 'null'
+        node: *id042
+        traceback: *id042
+        artifact_dir: *id042
     Health:
       type: object
       additionalProperties: false
@@ -1214,17 +1926,29 @@ components:
       - read_only
       - scheduler
       - load_errors
+      - api_version
+      - env
+      - store_uri
       properties:
         status:
           const: ok
-        version: *id002
-        read_only: &id026
+        version: *id003
+        read_only: &id043
           type: boolean
-        scheduler: *id026
+        scheduler: *id043
         load_errors:
           type: array
           items:
             $ref: '#/components/schemas/LoadError'
+        api_version:
+          const: 1
+          description: Major version of this API; a client refuses another.
+        env: *id005
+        store_uri:
+          anyOf:
+          - *id005
+          - type: 'null'
+          description: The artifact store this server writes to; null when artifacts stay on its machine.
     LoadError:
       type: object
       additionalProperties: false
@@ -1233,18 +1957,19 @@ components:
       - error
       - affected_nodes
       properties:
-        file: *id002
-        error: *id002
+        file: *id003
+        error: *id003
         affected_nodes:
           type: array
-          items: *id002
+          items: *id003
     RunHandle:
       type: object
       additionalProperties: false
       required:
       - run_id
       properties:
-        run_id: *id002
+        run_id: *id003
+      description: run_id is the database run id, the one barca history shows.
     Cancellation:
       type: object
       additionalProperties: false
@@ -1252,7 +1977,7 @@ components:
       - run_id
       - status
       properties:
-        run_id: *id002
+        run_id: *id003
         status:
           const: cancelling
     RunStatus:
@@ -1263,31 +1988,6 @@ components:
       - complete
       - failed
       - cancelled
-    Freshness:
-      oneOf:
-      - type: object
-        additionalProperties: false
-        required:
-        - type
-        properties:
-          type:
-            const: Always
-      - type: object
-        additionalProperties: false
-        required:
-        - type
-        properties:
-          type:
-            const: Manual
-      - type: object
-        additionalProperties: false
-        required:
-        - type
-        - value
-        properties:
-          type:
-            const: Schedule
-          value: *id002
     NodeGroup:
       type: object
       additionalProperties: false
@@ -1298,16 +1998,17 @@ components:
       - members
       - output
       properties:
-        id: *id002
-        name: *id002
-        description: *id002
+        id: *id003
+        name: *id003
+        description: *id003
         members:
           type: array
-          items: *id002
-        output: *id002
+          items: *id003
+        output: *id003
     Asset:
       type: object
       additionalProperties: false
+      description: One node as barca list --json shows it.
       required:
       - id
       - kind
@@ -1315,7 +2016,7 @@ components:
       - inputs
       - env
       properties:
-        id: *id002
+        id: *id005
         kind:
           type: string
           enum:
@@ -1323,13 +2024,23 @@ components:
           - task
           - sensor
         freshness:
-          $ref: '#/components/schemas/Freshness'
+          type: string
+          enum:
+          - always
+          - manual
+          - schedule
+        schedule:
+          type: string
+          description: The cron expression of a scheduled node.
+        next_fire:
+          type: string
+          description: A scheduled node's next fire time in the server machine's local time.
         inputs:
           type: array
-          items: *id002
+          items: *id005
         env:
           type: array
-          items: *id002
+          items: *id005
     PlanWarning:
       type: object
       additionalProperties: false
@@ -1339,10 +2050,10 @@ components:
       - param
       - message
       properties:
-        kind: *id002
-        node: *id002
-        param: *id002
-        message: *id002
+        kind: *id003
+        node: *id003
+        param: *id003
+        message: *id003
     PlanReason:
       oneOf:
       - type: object
@@ -1360,7 +2071,7 @@ components:
         properties:
           type:
             const: fan_in
-          node_id: *id002
+          node_id: *id003
     PlanStream:
       type: object
       additionalProperties: false
@@ -1368,10 +2079,10 @@ components:
       - stream_id
       - steps
       properties:
-        stream_id: *id002
+        stream_id: *id003
         steps:
           type: array
-          items: *id002
+          items: *id003
     PlanPhase:
       type: object
       additionalProperties: false
@@ -1397,8 +2108,9 @@ components:
         plan_version:
           type: integer
           const: 1
-          description: Plan document format version, independent of the package, database and worker protocol versions.
-        total_steps: &id027
+          description: Plan document format version, independent of the package, database and worker protocol
+            versions.
+        total_steps: &id044
           type: integer
           minimum: 0
         phases:
@@ -1418,12 +2130,12 @@ components:
       - will_run
       - will_run_keys
       properties:
-        total: *id027
-        cached: *id027
-        will_run: *id027
+        total: *id044
+        cached: *id044
+        will_run: *id044
         will_run_keys:
           type: array
-          items: *id002
+          items: *id003
           maxItems: 20
     StepReport:
       type: object
@@ -1432,21 +2144,21 @@ components:
       - id
       - kind
       properties:
-        id: *id002
+        id: *id003
         kind:
           type: string
           enum:
           - asset
           - task
           - sensor
-        action: *id002
-        status: *id002
-        reason: *id002
-        detail: *id002
-        run_hash: *id002
-        artifact: *id002
-        warning: *id002
-        artifact_mismatch: *id026
+        action: *id003
+        status: *id003
+        reason: *id003
+        detail: *id003
+        run_hash: *id003
+        artifact: *id003
+        warning: *id003
+        artifact_mismatch: *id043
         bytes_changed:
           type: boolean
           const: true
@@ -1465,7 +2177,7 @@ components:
           type: object
           additionalProperties:
             anyOf:
-            - *id002
+            - *id003
             - type: 'null'
     ArtifactReference:
       type: object
@@ -1475,10 +2187,10 @@ components:
       - format
       - size_bytes
       properties:
-        path: *id002
-        format: *id002
-        size_bytes: *id027
-        elapsed_seconds: &id028
+        path: *id003
+        format: *id003
+        size_bytes: *id044
+        elapsed_seconds: &id045
           type: number
     Result:
       type: object
@@ -1492,16 +2204,16 @@ components:
       - steps
       - warnings
       properties:
-        run_id: *id002
-        elapsed_seconds: *id028
-        steps_executed: *id027
-        phases: *id027
+        run_id: *id003
+        elapsed_seconds: *id045
+        steps_executed: *id044
+        phases: *id044
         final_output:
           anyOf:
           - $ref: '#/components/schemas/ArtifactReference'
           - type: 'null'
-          description: Null or an artifact reference, not the CLI inline JSON rendering.
-            This endpoint does not define a partition retrieval API.
+          description: Null or an artifact reference, not the CLI inline JSON rendering. This endpoint
+            does not define a partition retrieval API.
         steps:
           type: array
           items:
@@ -1521,7 +2233,7 @@ components:
       - started_at
       - finished_at
       properties:
-        handle: *id002
+        handle: *id003
         status:
           $ref: '#/components/schemas/RunStatus'
         result:
@@ -1530,12 +2242,12 @@ components:
           - type: 'null'
         error:
           anyOf:
-          - *id002
+          - *id003
           - type: 'null'
-        started_at: *id028
+        started_at: *id045
         finished_at:
           anyOf:
-          - *id028
+          - *id045
           - type: 'null'
     Cache:
       type: object
@@ -1568,9 +2280,9 @@ components:
           - sensor_output_unknown
           - task
           - sensor
-        detail: *id002
-        run_hash: *id002
-        artifact: *id002
+        detail: *id003
+        run_hash: *id003
+        artifact: *id003
     PartitionState:
       type: object
       additionalProperties: false
@@ -1580,12 +2292,12 @@ components:
       - missing
       - missing_keys
       properties:
-        total: *id027
-        cached: *id027
-        missing: *id027
+        total: *id044
+        cached: *id044
+        missing: *id044
         missing_keys:
           type: array
-          items: *id002
+          items: *id003
           maxItems: 20
     Materialization:
       type: object
@@ -1599,35 +2311,39 @@ components:
       - format
       - size_bytes
       properties:
-        status: *id002
-        created_at: *id002
+        status: *id003
+        created_at: *id003
         elapsed_seconds:
           anyOf:
-          - *id028
+          - *id045
           - type: 'null'
-        run_hash: &id029
+        run_hash: &id046
           anyOf:
-          - *id002
+          - *id003
           - type: 'null'
-        artifact: *id029
-        format: *id029
+        artifact: *id046
+        format: *id046
         size_bytes:
           anyOf:
-          - &id037
+          - &id054
             type: integer
           - type: 'null'
-        partition: *id002
-        error: *id002
-        content_hash: *id002
+        partition: *id003
+        error: *id003
+        content_hash: *id003
     BytesChange:
       type: object
       additionalProperties: false
-      required: [node_id, run_hash, content_hash, created_at]
+      required:
+      - node_id
+      - run_hash
+      - content_hash
+      - created_at
       properties:
-        node_id: *id002
-        run_hash: *id002
-        content_hash: *id002
-        created_at: *id002
+        node_id: *id003
+        run_hash: *id003
+        content_hash: *id003
+        created_at: *id003
     NodeStatus:
       type: object
       additionalProperties: false
@@ -1642,36 +2358,35 @@ components:
       - shape
       - env
       properties:
-        id: *id002
+        id: *id003
         name:
           type: string
           description: The declared name, or function name when no explicit name is set.
-        kind: &id030
+        kind: &id047
           type: string
           enum:
           - asset
           - task
           - sensor
-        inputs: &id031
+        inputs: &id048
           type: array
-          items: *id002
-        partitioned: *id026
-        cache: &id032
+          items: *id003
+        partitioned: *id043
+        cache: &id049
           $ref: '#/components/schemas/Cache'
-        partitions: &id033
+        partitions: &id050
           $ref: '#/components/schemas/PartitionState'
         last_bytes_change:
           $ref: '#/components/schemas/BytesChange'
-        last_materialization: &id034
+        last_materialization: &id051
           anyOf:
           - $ref: '#/components/schemas/Materialization'
           - type: 'null'
-        shape: &id035
-          description: Null or the artifact inspector shape; user JSON types and keys
-            remain unconstrained.
-        env: &id036
+        shape: &id052
+          description: Null or the artifact inspector shape; user JSON types and keys remain unconstrained.
+        env: &id053
           type: array
-          items: *id002
+          items: *id003
     Durations:
       type: object
       additionalProperties: false
@@ -1680,9 +2395,9 @@ components:
       - p95_seconds
       - samples
       properties:
-        median_seconds: *id028
-        p95_seconds: *id028
-        samples: *id027
+        median_seconds: *id045
+        p95_seconds: *id045
+        samples: *id044
     NodeState:
       type: object
       additionalProperties: false
@@ -1699,25 +2414,25 @@ components:
       - durations
       - next_run
       properties:
-        id: *id002
+        id: *id003
         name:
           type: string
           description: The declared name, or function name when no explicit name is set.
-        kind: *id030
-        inputs: *id031
-        partitioned: *id026
-        cache: *id032
-        partitions: *id033
-        last_materialization: *id034
-        shape: *id035
-        env: *id036
+        kind: *id047
+        inputs: *id048
+        partitioned: *id043
+        cache: *id049
+        partitions: *id050
+        last_materialization: *id051
+        shape: *id052
+        env: *id053
         durations:
           anyOf:
           - $ref: '#/components/schemas/Durations'
           - type: 'null'
         next_run:
           anyOf:
-          - *id037
+          - *id054
           - type: 'null'
     AssetRun:
       type: object
@@ -1731,20 +2446,20 @@ components:
       properties:
         elapsed_seconds:
           anyOf:
-          - *id028
+          - *id045
           - type: 'null'
-        status: *id002
-        created_at: *id002
+        status: *id003
+        created_at: *id003
         error_message:
           anyOf:
-          - *id002
+          - *id003
           - type: 'null'
-        attempts: *id037
+        attempts: *id054
     Stats:
       type: object
       additionalProperties: false
       required:
-      - node_id
+      - id
       - total_runs
       - avg_elapsed_seconds
       - median_elapsed_seconds
@@ -1753,20 +2468,21 @@ components:
       - cache_hit_rate
       - recent_runs
       properties:
-        node_id: *id002
-        total_runs: *id037
-        avg_elapsed_seconds: &id038
+        id: *id003
+        total_runs: *id054
+        avg_elapsed_seconds: &id055
           anyOf:
-          - *id028
+          - *id045
           - type: 'null'
-        median_elapsed_seconds: *id038
-        max_elapsed_seconds: *id038
-        p95_elapsed_seconds: *id038
-        cache_hit_rate: *id028
+        median_elapsed_seconds: *id055
+        max_elapsed_seconds: *id055
+        p95_elapsed_seconds: *id055
+        cache_hit_rate: *id045
         recent_runs:
           type: array
           items:
             $ref: '#/components/schemas/AssetRun'
+      description: barca stats --json.
     AssetDetail:
       type: object
       additionalProperties: false
@@ -1791,9 +2507,12 @@ components:
       - last_status
       - last_skipped
       - skipped_for
+      - skip_reason
+      - paused
+      - paused_until
       properties:
-        id: *id002
-        cron: *id002
+        id: *id003
+        cron: *id003
         kind:
           type: string
           enum:
@@ -1802,31 +2521,48 @@ components:
           - sensor
         next_fire:
           anyOf:
-          - *id037
+          - *id054
           - type: 'null'
         last_fired:
           anyOf:
-          - *id037
+          - *id054
           - type: 'null'
         last_run:
           anyOf:
-          - *id002
+          - *id003
           - type: 'null'
         last_status:
           anyOf:
           - $ref: '#/components/schemas/RunStatus'
           - type: 'null'
         last_skipped:
-          description: Last time a due tick was skipped because a run of the node was
-            in flight (unix epoch seconds); in memory only, null after a restart
+          description: Last time a due tick was skipped (unix epoch seconds), because a run of the node
+            was in flight or the job is paused; in memory only, null after a restart
           anyOf:
-          - *id037
+          - *id054
           - type: 'null'
         skipped_for:
-          description: Handle of the in-flight run that caused last_skipped
+          description: The in-flight run that caused last_skipped; null for a paused job
           anyOf:
-          - *id002
+          - *id003
           - type: 'null'
+        skip_reason:
+          anyOf:
+          - type: string
+            enum:
+            - in_flight
+            - paused
+          - type: 'null'
+        paused:
+          type: boolean
+          description: Held back by POST /schedule/{id}/pause; kept across a restart.
+        paused_until:
+          anyOf:
+          - &id056
+            type: integer
+          - type: 'null'
+          description: When the pause ends (unix epoch seconds); null when paused until resumed, or not
+            paused.
     Log:
       type: object
       additionalProperties: false
@@ -1835,9 +2571,9 @@ components:
       - seq
       - line
       properties:
-        node_id: *id002
-        seq: *id037
-        line: *id002
+        node_id: *id003
+        seq: *id054
+        line: *id003
     Logs:
       type: object
       additionalProperties: false
@@ -1866,48 +2602,56 @@ components:
       - steps_executed
       - steps_cached
       - error
+      - triggered_by
+      - scheduled_at
+      - schedule_id
       properties:
-        id: *id002
+        id: *id003
         handle:
           anyOf:
-          - *id002
+          - *id003
           - type: 'null'
         run_id:
           anyOf:
-          - *id002
+          - *id003
           - type: 'null'
-        command: *id002
+        command: *id003
         files:
           type: array
-          items: *id002
+          items: *id003
         target:
           anyOf:
-          - *id002
+          - *id003
           - type: 'null'
         status:
           type: string
-          description: Durable running/success/failed/cancelled/interrupted; pending
-            or complete can appear for live runs without a persisted row. This differs
-            from polling RunStatus.
-        started_at: *id002
+          description: pending, running, success, failed, cancelled, error or interrupted.
+        started_at: *id003
         finished_at:
           anyOf:
-          - *id002
+          - *id003
           - type: 'null'
         elapsed_seconds:
           anyOf:
-          - *id028
+          - *id045
           - type: 'null'
         steps_total:
           anyOf:
-          - *id037
+          - *id054
           - type: 'null'
-        steps_executed: *id037
-        steps_cached: *id037
+        steps_executed: *id054
+        steps_cached: *id054
         error:
           anyOf:
-          - *id002
+          - *id003
           - type: 'null'
+        triggered_by: &id057
+          anyOf:
+          - $ref: '#/components/schemas/TriggeredBy'
+          - type: 'null'
+          description: Null for runs recorded before barca recorded it.
+        scheduled_at: *id042
+        schedule_id: *id042
     Runs:
       type: object
       additionalProperties: false
@@ -1920,8 +2664,8 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/RunSummary'
-        total: *id027
-        truncated: *id026
+        total: *id044
+        truncated: *id043
     RunStep:
       type: object
       additionalProperties: false
@@ -1931,38 +2675,15 @@ components:
       - elapsed_seconds
       - error
       properties:
-        node_id: *id002
-        status: *id002
+        node_id: *id003
+        status: *id003
         elapsed_seconds:
           anyOf:
-          - *id028
+          - *id045
           - type: 'null'
         error:
           anyOf:
-          - *id002
-          - type: 'null'
-    RunDetail:
-      type: object
-      additionalProperties: false
-      required:
-      - run
-      - steps
-      - logs
-      - result
-      properties:
-        run:
-          $ref: '#/components/schemas/RunSummary'
-        steps:
-          type: array
-          items:
-            $ref: '#/components/schemas/RunStep'
-        logs:
-          type: array
-          items:
-            $ref: '#/components/schemas/Log'
-        result:
-          anyOf:
-          - $ref: '#/components/schemas/Result'
+          - *id003
           - type: 'null'
     RunEvent:
       oneOf:
@@ -1974,7 +2695,22 @@ components:
         properties:
           type:
             const: run_started
-          run_id: *id002
+          run_id: *id003
+      - type: object
+        additionalProperties: false
+        required:
+        - type
+        - line
+        - when
+        properties:
+          type:
+            const: line
+          line: *id005
+          when:
+            type: string
+            enum:
+            - agent
+            - always
       - type: object
         additionalProperties: false
         required:
@@ -1984,8 +2720,8 @@ components:
         properties:
           type:
             const: log
-          node_id: *id002
-          line: *id002
+          node_id: *id003
+          line: *id003
       - type: object
         additionalProperties: false
         required:
@@ -1995,13 +2731,16 @@ components:
         properties:
           type:
             const: step_finished
-          node_id: *id002
-          ok: *id026
-          elapsed_seconds: *id028
+          node_id: *id003
+          ok: *id043
+          elapsed_seconds: *id045
           import_seconds:
             type: number
             exclusiveMinimum: 1
-          error: *id002
+          error: *id003
+          cached:
+            const: true
+            description: Served from cache; absent otherwise.
       - type: object
         additionalProperties: false
         required:
@@ -2011,8 +2750,349 @@ components:
         properties:
           type:
             const: run_finished
-          run_id: *id002
-          ok: *id026
+          run_id: *id003
+          ok: *id043
+          outcome:
+            $ref: '#/components/schemas/Outcome'
+    PauseResult:
+      description: The job's GET /schedule entry, or, when the scheduler has not published it (scheduling
+        is off or starting), what the pause is.
+      anyOf:
+      - $ref: '#/components/schemas/Job'
+      - type: object
+        additionalProperties: false
+        required:
+        - id
+        - paused
+        - paused_until
+        properties:
+          id: *id005
+          paused: &id059
+            type: boolean
+          paused_until: &id058
+            anyOf:
+            - type: integer
+            - type: 'null'
+    TriggeredBy:
+      type: string
+      enum:
+      - schedule
+      - api
+      - client
+      - manual
+      description: 'What started a run: a cron tick, an HTTP request, a laptop posting to the ledger,
+        or a command typed on a machine.'
+    RunRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - command
+      description: The flags of barca get / barca run.
+      properties:
+        command:
+          type: string
+          enum:
+          - get
+          - run
+        targets:
+          type: array
+          items: *id005
+          description: As given on the command line; [] means every asset and sensor (get only).
+        files:
+          type: array
+          items: *id005
+          description: Deployed files, as typed relative to the root; [] means the deployed set.
+        refresh:
+          type: array
+          items: *id005
+          description: --refresh
+        refresh_all:
+          type: boolean
+          description: --refresh-all
+        cascade:
+          type: boolean
+          default: true
+          description: false is --no-cascade
+        dry_run:
+          type: boolean
+          description: Answer at once with the --dry-run JSON; nothing starts.
+        agent:
+          type: boolean
+          description: Which stderr lines the client prints. Every line is streamed, tagged with when.
+    Explain:
+      type: object
+      required:
+      - steps
+      - summary
+      description: The barca get --dry-run --json / barca run --dry-run --json body.
+      properties:
+        steps:
+          type: array
+          items:
+            $ref: '#/components/schemas/StepReport'
+        summary:
+          type: object
+    Outcome:
+      description: 'A finished run, tagged by status. success: the exact barca get --json / barca run
+        --json body. failed: the failed-run stdout body plus envelope. cancelled and error: envelope only.'
+      oneOf:
+      - type: object
+        required:
+        - status
+        - run_id
+        - elapsed_seconds
+        - steps_executed
+        - phases
+        - steps
+        - warnings
+        properties:
+          status:
+            const: success
+          run_id: *id005
+          elapsed_seconds:
+            type: number
+          steps_executed: *id056
+          phases: *id056
+          final_output:
+            description: 'Single target: the value, or an artifact pointer for binary formats.'
+          targets:
+            type: object
+            description: 'Several targets: each target by name, in the order given.'
+          steps:
+            type: array
+            items:
+              $ref: '#/components/schemas/StepReport'
+          warnings:
+            type: array
+            items:
+              $ref: '#/components/schemas/PlanWarning'
+        not:
+          required:
+          - envelope
+      - type: object
+        required:
+        - status
+        - envelope
+        properties:
+          status:
+            const: failed
+          run_id: *id005
+          failed_node: *id005
+          error: *id005
+          steps:
+            type: array
+            items:
+              $ref: '#/components/schemas/StepReport'
+          envelope:
+            $ref: '#/components/schemas/Error'
+      - type: object
+        additionalProperties: false
+        required:
+        - status
+        - envelope
+        properties:
+          status:
+            enum:
+            - cancelled
+            - error
+          envelope:
+            $ref: '#/components/schemas/Error'
+    RunView:
+      type: object
+      additionalProperties: false
+      description: One run. A finished run is read from the metadata DB, so the answer is the same after
+        a restart.
+      required:
+      - run_id
+      - status
+      - command
+      - target
+      - files
+      - triggered_by
+      - scheduled_at
+      - schedule_id
+      - started_at
+      - finished_at
+      - elapsed_seconds
+      - steps_total
+      - steps_executed
+      - steps_cached
+      - outcome
+      - error
+      - steps
+      - logs
+      properties:
+        run_id: *id005
+        status:
+          type: string
+          enum:
+          - pending
+          - running
+          - success
+          - failed
+          - cancelled
+          - error
+          - interrupted
+        command: *id005
+        target: *id042
+        files:
+          type: array
+          items: *id005
+        triggered_by: *id057
+        scheduled_at:
+          anyOf:
+          - *id005
+          - type: 'null'
+          description: 'For a scheduled run: the tick, RFC 3339 UTC.'
+        schedule_id:
+          anyOf:
+          - *id005
+          - type: 'null'
+          description: 'For a scheduled run: the scheduled node.'
+        started_at: *id005
+        finished_at: *id042
+        elapsed_seconds: &id060
+          anyOf:
+          - type: number
+          - type: 'null'
+        steps_total: *id058
+        steps_executed: *id056
+        steps_cached: *id056
+        outcome:
+          anyOf:
+          - $ref: '#/components/schemas/Outcome'
+          - type: 'null'
+          description: Null while the run runs, and for runs not started by barca serve.
+        error: *id042
+        steps:
+          type: array
+          items:
+            $ref: '#/components/schemas/RunStep'
+        logs:
+          type: array
+          items:
+            $ref: '#/components/schemas/Log'
+    ListBody:
+      type: object
+      additionalProperties: false
+      required:
+      - nodes
+      - total
+      - truncated
+      description: barca list --json --all.
+      properties:
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/Asset'
+        total: *id056
+        truncated: *id059
+        hint: *id005
+        root: *id005
+    StatusBody:
+      type: object
+      required:
+      - nodes
+      - total
+      - truncated
+      description: barca status --json --all for the server ledger.
+      properties:
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/NodeStatus'
+        total: *id056
+        truncated: *id059
+        root: *id005
+    HistoryRun:
+      type: object
+      additionalProperties: false
+      required:
+      - run_id
+      - command
+      - files
+      - target
+      - status
+      - steps_total
+      - steps_executed
+      - steps_cached
+      - attempts
+      - started_at
+      - finished_at
+      - elapsed_seconds
+      - triggered_by
+      - scheduled_at
+      - schedule_id
+      properties:
+        run_id: *id005
+        command: *id005
+        files:
+          type: array
+          items: *id005
+        target: *id042
+        status: *id005
+        steps_total: *id058
+        steps_executed: *id056
+        steps_cached: *id056
+        attempts: *id058
+        started_at: *id005
+        finished_at: *id042
+        elapsed_seconds: *id060
+        triggered_by: *id057
+        scheduled_at: *id042
+        schedule_id: *id042
+    HistoryBody:
+      type: object
+      additionalProperties: false
+      required:
+      - runs
+      - total
+      - truncated
+      description: barca history --json.
+      properties:
+        runs:
+          type: array
+          items:
+            $ref: '#/components/schemas/HistoryRun'
+        total: *id056
+        truncated: *id059
+        hint: *id005
+    Project:
+      type: object
+      additionalProperties: false
+      required:
+      - api_version
+      - root
+      - env
+      - deployed_at
+      - commit
+      - files
+      properties:
+        api_version:
+          const: 1
+        root: *id042
+        env: *id005
+        deployed_at:
+          type: string
+          description: When this server started, RFC 3339 UTC.
+        commit:
+          anyOf:
+          - *id005
+          - type: 'null'
+          description: The commit checked out at the root; null outside a git checkout.
+        files:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required:
+            - path
+            - sha256
+            properties:
+              path: *id005
+              sha256:
+                type: string
+                pattern: ^[0-9a-f]{64}$
 x-fallback-responses:
   '404':
     description: Unregistered route

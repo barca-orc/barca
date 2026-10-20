@@ -176,10 +176,7 @@ impl StoreSync {
                 fmt_bytes(report.bytes),
                 started.elapsed().as_secs_f64()
             );
-            match pb {
-                Some(bar) if !bar.is_hidden() => bar.println(&msg),
-                _ => crate::errln!("{msg}"),
-            }
+            crate::lines::Lines::current().note(pb, &msg);
         }
         // An artifact path is `{node}/{run_hash}`, so a refresh or another machine computing
         // the same step overwrites it; the store's copy is as valid a result as the recorded
@@ -196,10 +193,7 @@ impl StoreSync {
             // The same words on stderr and, at the end of the run, in the JSON step entries.
             let finding = crate::mismatch::describe(&base, at, count - 1);
             let msg = format!("[barca] warning: {base}: {finding}");
-            match pb {
-                Some(bar) if !bar.is_hidden() => bar.println(&msg),
-                _ => crate::errln!("{msg}"),
-            }
+            crate::lines::Lines::current().note(pb, &msg);
             self.mismatched.insert(base, finding);
         }
         let (missing, failed): (Vec<_>, Vec<_>) = report.failures.iter().partition(|f| f.missing);

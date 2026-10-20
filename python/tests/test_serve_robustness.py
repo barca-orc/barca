@@ -213,7 +213,9 @@ def test_a_trigger_for_a_target_that_cannot_run_is_an_error_response(project):
         for method, path, want, says in cases:
             status, body = server.request(method, path)
             assert status == want, (path, body)
-            assert set(body) == {"error"}, (path, body)
+            # The CLI's error envelope.
+            assert {"error", "code", "kind", "remediation"} <= set(body), (path, body)
+            assert (body["kind"], body["code"]) == ("usage", 2), (path, body)
             assert body["error"].startswith(says), (path, body)
 
         # The Python client raises with the server's message.
@@ -255,7 +257,9 @@ def test_a_stop_signal_cancels_the_runs_and_exits_0(project, serve, sig):
         urllib.request.urlopen(f"{base}/events/{run}", timeout=WAIT) for run in (done, going)
     ]
     for stream in streams:
-        assert stream.readline().startswith(b"data:"), "the stream has started"
+        # Each event is numbered: `id: 0`, then its data.
+        assert stream.readline() == b"id: 0\n", "the stream has started"
+        assert stream.readline().startswith(b"data:")
 
     server.proc.send_signal(sig)
     assert server.proc.wait(timeout=WAIT) == 0, server.log.read_text()
@@ -263,7 +267,8 @@ def test_a_stop_signal_cancels_the_runs_and_exits_0(project, serve, sig):
 
     # Both streams ended, and the one of the cancelled run delivered its last event first.
     tails = [stream.read().decode() for stream in streams]
-    assert f'{{"type":"run_finished","run_id":"{going}","ok":false}}' in tails[1]
+    assert f'{{"type":"run_finished","run_id":"{going}","ok":false,' in tails[1]
+    assert '"status":"cancelled"' in tails[1], "with its outcome"
 
     # The run in flight recorded itself as cancelled; it was not left `running`.
     assert [r["status"] for r in history(project)] == ["cancelled", "success"]

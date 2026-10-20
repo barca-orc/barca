@@ -1,19 +1,20 @@
 /**
  * Schedules page logic — pure.
  *
- * A scheduled node is one whose freshness is `Schedule(cron)` (from
- * `GET /assets`); its next run, last attempt and state come from `GET /state`.
+ * A scheduled node is one whose freshness is `schedule` (from `GET /assets`,
+ * cron in `schedule`); its next run, last attempt and state come from
+ * `GET /state`, and whether the scheduler has it paused from `GET /schedule`.
  */
 
 import { formatAgo, severityOf, type Severity } from './assetTable'
 import { sourceFile } from './pipeline'
-import type { AssetSummary, NodeState } from './types'
+import type { ListNode, NodeState, ScheduleJob } from './types'
 
 export interface ScheduleRow {
   id: string
   name: string
   file: string
-  kind: AssetSummary['kind']
+  kind: ListNode['kind']
   cron: string
   /** The schedule in words, when it is a common shape; null otherwise. */
   human: string | null
@@ -22,6 +23,8 @@ export interface ScheduleRow {
   nextIn: string | null
   last: { status: string; ago: string } | null
   severity: Severity | null
+  /** The scheduler skips this node's ticks; `until` (ms) ends a timed pause. */
+  paused: { until: number | null } | null
 }
 
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
@@ -71,16 +74,21 @@ export function formatCountdown(atMs: number, nowMs: number): string {
 
 /** Every node with a cron schedule, soonest next run first. */
 export function scheduleRows(
-  assets: AssetSummary[],
+  assets: ListNode[],
   states: NodeState[],
   nowMs: number,
+  jobs: ScheduleJob[] = [],
 ): ScheduleRow[] {
   const byId = new Map(states.map((s) => [s.id, s]))
+  const jobById = new Map(jobs.map((j) => [j.id, j]))
   return assets
     .flatMap((a): ScheduleRow[] => {
-      if (a.freshness.type !== 'Schedule') return []
+      if (a.freshness !== 'schedule' || a.schedule === undefined) return []
+      const cron = a.schedule
       const st = byId.get(a.id)
-      const nextRunMs = st?.next_run != null ? st.next_run * 1000 : null
+      const job = jobById.get(a.id)
+      const nextRunSecs = st?.next_run ?? job?.next_fire ?? null
+      const nextRunMs = nextRunSecs !== null ? nextRunSecs * 1000 : null
       const last = st?.last_materialization
       return [
         {
@@ -88,12 +96,15 @@ export function scheduleRows(
           name: st?.name ?? a.id.split(':').pop() ?? a.id,
           file: sourceFile(a.id),
           kind: a.kind,
-          cron: a.freshness.value,
-          human: humanizeCron(a.freshness.value),
+          cron,
+          human: humanizeCron(cron),
           nextRunMs,
           nextIn: nextRunMs === null ? null : formatCountdown(nextRunMs, nowMs),
           last: last ? { status: last.status, ago: formatAgo(last.created_at, nowMs) } : null,
           severity: st ? severityOf(st) : null,
+          paused: job?.paused
+            ? { until: job.paused_until !== null ? job.paused_until * 1000 : null }
+            : null,
         },
       ]
     })

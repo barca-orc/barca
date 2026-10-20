@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { seedRuns } from './helpers/seed'
+import { isStartRun, seedRuns } from './helpers/seed'
 
 const inspector = (page: Page) => page.getByRole('complementary', { name: /inspector$/ })
 
@@ -8,7 +8,7 @@ test.describe('graph page', () => {
     await page.goto('/ui/#/graph')
     await page.getByText('say_hello').first().click()
 
-    const started = page.waitForRequest((r) => r.method() === 'POST' && r.url().includes('/run/'))
+    const started = page.waitForRequest((r) => isStartRun(r, 'run'))
     await inspector(page).getByRole('button', { name: 'run' }).click()
     await started
 
@@ -31,7 +31,7 @@ test.describe('topbar Run', () => {
     await page.goto('/ui/#/graph')
     await page.getByText('say_hello').first().click()
 
-    const started = page.waitForRequest((r) => r.method() === 'POST' && decodeURIComponent(r.url()).endsWith('/run/pipeline.py:say_hello'))
+    const started = page.waitForRequest((r) => isStartRun(r, 'run', 'pipeline.py:say_hello'))
     await topbarRun(page).click()
     await started
 
@@ -43,7 +43,7 @@ test.describe('topbar Run', () => {
     await page.goto('/ui/#/graph')
     await page.getByText('numbers').first().click()
 
-    const started = page.waitForRequest((r) => r.method() === 'POST' && decodeURIComponent(r.url()).endsWith('/get/pipeline.py:numbers'))
+    const started = page.waitForRequest((r) => isStartRun(r, 'get', 'pipeline.py:numbers'))
     await topbarRun(page).click()
     await started
   })

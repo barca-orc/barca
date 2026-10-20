@@ -189,5 +189,5 @@ a task).
 - [Scheduling](/scheduling/): cron syntax, time zones, keeping the server running.
 - [Sensors](/workflows/06-sensors-and-external-observations/): outside data, and what a
   scheduled sensor does.
-- [Server API](/reference/server-api/): `GET /schedule`, `POST /run/<task>`, cancelling a run.
+- [Server API](/reference/server-api/): `GET /schedule`, pausing a schedule, `POST /runs`, cancelling a run.
 - `barca docs scheduling` in the terminal.

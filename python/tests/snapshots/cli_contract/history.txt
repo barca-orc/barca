@@ -9,11 +9,14 @@ runs[].files : array
 runs[].files[] : string
 runs[].finished_at : string
 runs[].run_id : string
+runs[].schedule_id : null
+runs[].scheduled_at : null
 runs[].started_at : string
 runs[].status : string
 runs[].steps_cached : integer
 runs[].steps_executed : integer
 runs[].steps_total : integer
 runs[].target : string
+runs[].triggered_by : string
 total : integer
 truncated : boolean

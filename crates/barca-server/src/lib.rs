@@ -5,17 +5,19 @@
 //! thin caller of [`serve`]. A future UI is a separate package that consumes this
 //! same HTTP API as its contract.
 //!
-//! Runs are async: `POST /run` returns a handle immediately and the work happens
-//! in a background task; clients poll `GET /status/{run_id}` and can cancel via
-//! `DELETE /run/{run_id}`. Core commands are async-native, so handlers `.await`
-//! them directly on the server's runtime — no `spawn_blocking`, and every run
-//! future is genuinely cancellable.
+//! Runs are async: `POST /runs` answers with the run's database id at once and the work
+//! happens in a background task; clients stream `GET /runs/{run_id}/events`, read
+//! `GET /runs/{run_id}`, and can cancel with `DELETE /runs/{run_id}`. Core commands are
+//! async-native, so handlers `.await` them directly on the server's runtime — no
+//! `spawn_blocking`, and every run future is genuinely cancellable.
 
 // Print with `barca_core::outln!` / `errln!`, which cannot panic on a closed pipe (#286).
 #![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]
 
 mod error;
 mod handlers;
+mod inspect;
+mod pause;
 mod routes;
 mod runs;
 mod scheduler;
@@ -97,7 +99,7 @@ pub async fn serve(config: ServeConfig) -> Result<(), ServeError> {
     state.loaded_dag().await?;
 
     // Evict completed/failed runs older than 1 hour, checking every 5 minutes.
-    tokio::spawn(handlers::evict_finished_runs(
+    tokio::spawn(runs::evict_finished_runs(
         state.clone(),
         std::time::Duration::from_secs(300),
         std::time::Duration::from_secs(3600),

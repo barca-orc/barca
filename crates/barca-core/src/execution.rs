@@ -154,6 +154,8 @@ pub(crate) struct ExecuteRequest<'a> {
     pub(crate) command_label: &'a str,
     pub(crate) interrupt: crate::interrupt::Interrupt,
     pub(crate) event_tx: Option<UnboundedSender<crate::RunEvent>>,
+    /// The run id to use and what started the run.
+    pub(crate) options: crate::outcome::RunOptions,
 }
 
 struct Trace {
@@ -224,7 +226,11 @@ impl RunStart {
             start: Instant::now(),
             enabled: std::env::var("BARCA_TRACE_TIMING").is_ok(),
         };
-        let run_id = db::generate_run_id();
+        let run_id = request
+            .options
+            .run_id
+            .clone()
+            .unwrap_or_else(db::generate_run_id);
         let run_started = std::time::SystemTime::now();
         let telemetry = crate::telemetry::configured();
         let cfg = request.cfg;
@@ -311,7 +317,12 @@ struct RunSession<'a, 'r> {
     started: RunStart,
 }
 
-pub(crate) async fn execute(mut request: ExecuteRequest<'_>) -> Result<Executed, BarcaError> {
+pub(crate) async fn execute(request: ExecuteRequest<'_>) -> Result<Executed, BarcaError> {
+    let lines = crate::lines::Lines::new(request.event_tx.clone());
+    // Boxed: the run's future is large, and a debug build would copy it through the stack.
+    lines.scope(Box::pin(execute_run(request))).await
+}
+async fn execute_run(mut request: ExecuteRequest<'_>) -> Result<Executed, BarcaError> {
     let started = RunStart::begin(&request)?;
     let prepared = prepare_run(
         request.dag.take(),
@@ -361,15 +372,19 @@ async fn open_state(
             };
             let (state_sync::Pulled { token, carried }, took) = pulled;
             if let Some(note) = carried.note() {
-                crate::errln!("{note}");
+                crate::run_line!(Always, "{note}");
             }
             match token.0 {
-                Some(_) => crate::errln!(
+                Some(_) => crate::run_line!(
+                    Always,
                     "[barca] pulled state ({}) in {:.2}s",
                     fmt_bytes(std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0)),
                     took.as_secs_f64()
                 ),
-                None => crate::errln!("[barca] no shared state yet — this run will create it"),
+                None => crate::run_line!(
+                    Always,
+                    "[barca] no shared state yet — this run will create it"
+                ),
             }
             Some(token)
         }
@@ -383,13 +398,16 @@ async fn open_state(
     db::init_db(&db_path).await?;
     trace_point!(started.trace, "db_init");
 
-    db::create_run(
+    db::create_run_with(
         &db_path,
-        run_id,
-        command_label,
-        &db::encode_files(file_args),
-        target_label.as_deref(),
-        Some(exec_plan.total_steps),
+        db::NewRun {
+            run_id,
+            command: command_label,
+            files: &db::encode_files(file_args),
+            target: target_label.as_deref(),
+            steps_total: Some(exec_plan.total_steps),
+            trigger: &request.options.trigger,
+        },
     )
     .await?;
     if let Some(tx) = &request.event_tx {
@@ -509,7 +527,8 @@ async fn start_workers(
         let mut client = start.connect().await?;
         let limit = std::time::Duration::from_secs(cfg.transfer_timeout_secs.min(10));
         let location = crate::transfer::diagnostic_uri(&cfg.artifact_root);
-        crate::errln!(
+        crate::run_line!(
+            Always,
             "[barca] checking artifact store {location} (timeout {}s)",
             limit.as_secs()
         );
@@ -573,6 +592,7 @@ async fn start_workers(
     {
         // A step that runs for a while must not look hung: report it periodically.
         let bar = pb.clone();
+        let lines = crate::lines::Lines::current();
         pool.on_running(Box::new(move |running| match &bar {
             Some(bar) if !bar.is_hidden() => {
                 if let Some((id, secs)) = running.first() {
@@ -581,7 +601,10 @@ async fn start_workers(
             }
             _ => {
                 for (id, secs) in running {
-                    crate::errln!("[barca] still running ({}s): {id}", *secs as u64);
+                    lines.print(
+                        crate::lines::LineWhen::Always,
+                        format_args!("[barca] still running ({}s): {id}", *secs as u64),
+                    );
                 }
             }
         }));
@@ -1127,7 +1150,8 @@ async fn collect_failures(
             continue;
         }
         if session.request.agent_mode {
-            crate::errln!(
+            crate::run_line!(
+                Agent,
                 "{}{}",
                 failed_step_line(&node_id, error_msg),
                 if item.attempts > 1 {
@@ -1220,7 +1244,8 @@ fn finish_queue(session: &mut RunSession<'_, '_>, queue: &mut VecDeque<Work<'_>>
     // all is announced now.
     for id in std::mem::take(&mut session.state.held_cached_lines) {
         if session.state.cached_node_ids.contains(&id) {
-            crate::errln!("{}", cached_step_line(&session.prepared.dag, &id));
+            crate::run_line!(Agent, "{}", cached_step_line(&session.prepared.dag, &id));
+            crate::lines::Lines::current().cached_step(&id);
         }
     }
 }
@@ -1323,6 +1348,7 @@ async fn record_and_publish(session: &mut RunSession<'_, '_>) -> Result<f64, Bar
             cfg: session.request.cfg,
             state_token: &mut session.state_token,
             interrupt: &session.request.interrupt,
+            trigger: &session.request.options.trigger,
         },
         |point| trace_point!(session.started.trace, "{point}"),
     )
@@ -1372,7 +1398,8 @@ async fn return_outputs(
     let changed =
         db::changed_bytes_in_run(&session.request.cfg.db_path, &session.started.run_id).await?;
     for node in &changed {
-        crate::errln!(
+        crate::run_line!(
+            Always,
             "[barca] warning: {node} produced different bytes for the same code and inputs; the function is not deterministic"
         );
         let base = crate::StepId::parse(node).base_id().to_string();
@@ -1442,7 +1469,7 @@ async fn prepare_run(
         && target_ids.is_empty()
         && let Some(note) = skipped_tasks_note(&dag, file_args)
     {
-        crate::errln!("{note}");
+        crate::run_line!(Always, "{note}");
     }
     // Several targets: a step failure stops only what depends on it, so every target that can
     // still run does (one run reports every failure). One target keeps the stop-at-first-failure
@@ -2030,7 +2057,8 @@ async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaError> {
                     if StoreSync::known_absent(store.as_ref(), &oref.path) {
                         held_cached_lines.push(display_id.clone());
                     } else {
-                        crate::errln!("{}", cached_step_line(dag, &display_id));
+                        crate::run_line!(Agent, "{}", cached_step_line(dag, &display_id));
+                        crate::lines::Lines::current().cached_step(&display_id);
                     }
                 }
                 all_outputs.insert(display_id.clone(), oref);
@@ -2075,10 +2103,7 @@ async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaError> {
 /// (stderr is not a terminal, as when an agent or CI drives barca) silently swallows
 /// `ProgressBar::println`, which used to make warnings vanish.
 pub(crate) fn note(pb: &Option<indicatif::ProgressBar>, msg: &str) {
-    match pb {
-        Some(bar) if !bar.is_hidden() => bar.println(msg),
-        _ => crate::errln!("{msg}"),
-    }
+    crate::lines::Lines::current().note(pb.as_ref(), msg);
 }
 
 struct DispatchPhase<'a> {
@@ -2247,7 +2272,8 @@ async fn dispatch_phase(
                 }
                 bar.set_message(format!("{short_name} done"));
             } else if agent_mode {
-                crate::errln!(
+                crate::run_line!(
+                    Agent,
                     "[barca] step:{} completed {:.1}s ({}/{}){}{}",
                     node_id,
                     elapsed_s.unwrap_or(0.0),
@@ -2357,6 +2383,7 @@ struct FinalizeRun<'a> {
     cfg: &'a crate::config::ResolvedConfig,
     state_token: &'a mut Option<state_sync::StateToken>,
     interrupt: &'a crate::interrupt::Interrupt,
+    trigger: &'a crate::outcome::Trigger,
 }
 
 async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64, BarcaError> {
@@ -2402,6 +2429,7 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
         cfg,
         state_token,
         interrupt,
+        trigger,
     } = ctx;
     macro_rules! trace_point {
         ($($arg:tt)*) => { trace(&format!($($arg)*)); };
@@ -2484,7 +2512,10 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
     };
     persist_run(db_path, &ledger).await?;
     if let Some(error) = recorder_error {
-        crate::errln!("[barca] {error}; terminal results have been recorded");
+        crate::run_line!(
+            Always,
+            "[barca] {error}; terminal results have been recorded"
+        );
     }
     // Persist captured output. Rust owns persistence — logs land in the DB
     // regardless of how the run was triggered (CLI or server).
@@ -2492,7 +2523,8 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
     trace_point!("persist_run_done");
 
     if !telemetry.is_empty() {
-        let report = telemetry_report(&ledger, dag, run_started, step_clocks, job_name);
+        let mut report = telemetry_report(&ledger, dag, run_started, step_clocks, job_name);
+        report.trigger = trigger.clone();
         crate::telemetry::export(telemetry, &report).await;
         trace_point!("telemetry_exported");
     }
@@ -2567,11 +2599,12 @@ async fn stop_workers(ctx: StopProgress<'_>, trace: &impl Fn(&str)) {
     // The ten most repeated get a line each, so the summary cannot become the noise it removes.
     const SUMMARY_LINES: usize = 10;
     for (text, n) in repeated_warnings.iter().take(SUMMARY_LINES) {
-        crate::errln!("[barca] {n} more: {text}");
+        crate::run_line!(Always, "[barca] {n} more: {text}");
     }
     if repeated_warnings.len() > SUMMARY_LINES {
         let rest = &repeated_warnings[SUMMARY_LINES..];
-        crate::errln!(
+        crate::run_line!(
+            Always,
             "[barca] {} more: {} other repeated warnings",
             rest.iter().map(|(_, n)| n).sum::<u64>(),
             rest.len()
@@ -2585,7 +2618,8 @@ async fn stop_workers(ctx: StopProgress<'_>, trace: &impl Fn(&str)) {
         } else {
             RunOutcome::Done
         };
-        crate::errln!(
+        crate::run_line!(
+            Always,
             "{}",
             end_of_run_line(completed_steps, total_steps, elapsed_so_far, outcome)
         );
@@ -2627,7 +2661,8 @@ async fn drain_store(ctx: DrainStore<'_>, trace: &impl Fn(&str)) -> bool {
             let t_drain = Instant::now();
             let location = crate::transfer::diagnostic_uri(s.layout.store_root());
             if queued > 0 {
-                crate::errln!(
+                crate::run_line!(
+                    Always,
                     "[barca] uploading {queued} artifacts to {location} (timeout {timeout_secs}s per attempt); waiting for confirmation"
                 );
             }
@@ -2642,7 +2677,7 @@ async fn drain_store(ctx: DrainStore<'_>, trace: &impl Fn(&str)) -> bool {
                     biased;
                     _ = cancel.cancelled() => break None,
                     report = &mut drain => break Some(report),
-                    _ = progress.tick(), if queued > 0 => crate::errln!(
+                    _ = progress.tick(), if queued > 0 => crate::run_line!(Always,
                         "[barca] still waiting for artifact uploads to {location} ({:.0}s)",
                         t_drain.elapsed().as_secs_f64()
                     ),
@@ -2676,7 +2711,8 @@ async fn drain_store(ctx: DrainStore<'_>, trace: &impl Fn(&str)) -> bool {
             }
         }
         if report.transferred > 0 {
-            crate::errln!(
+            crate::run_line!(
+                Always,
                 "[barca] uploaded {} artifact{} ({}); waited {:.1}s at end of run",
                 report.transferred,
                 if report.transferred == 1 { "" } else { "s" },
@@ -2785,14 +2821,16 @@ async fn publish_history(
             Err(e) => Some(e.to_string().lines().next().unwrap_or_default().to_string()),
         };
         if let Some(why) = why {
-            crate::errln!(
+            crate::run_line!(
+                Always,
                 "[barca] the shared history was not updated ({why}). This run is recorded \
                      on this machine; the next barca get or barca run here uploads it."
             );
         }
     }
     if let Some(retries) = pushed {
-        crate::errln!(
+        crate::run_line!(
+            Always,
             "[barca] pushed state ({}) in {:.2}s{}",
             fmt_bytes(std::fs::metadata(db_path).map(|m| m.len()).unwrap_or(0)),
             t_push.elapsed().as_secs_f64(),

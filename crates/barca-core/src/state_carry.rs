@@ -74,6 +74,10 @@ pub(crate) const RUN_COLUMNS: &[&str] = &[
     "pid",
     "host",
     "owner",
+    "triggered_by",
+    "scheduled_at",
+    "schedule_id",
+    "outcome_json",
 ];
 
 /// Every column of `materializations` except its row id.

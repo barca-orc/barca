@@ -72,3 +72,13 @@ Materializations also carry `bytes_changed INTEGER DEFAULT 0`, an additive forma
 column. It records a byte mismatch when inserting a recompute with the same node/run
 hash; legacy rows default to 0. Shared-history carry preserves both `output_hash` and
 `bytes_changed` rather than recomputing the event. See [materialization-digests.md](materialization-digests.md).
+
+Format 1 also gains nullable columns after its first release. `runs` carries `triggered_by`
+(`manual`, `api`, `schedule`, `client`), `scheduled_at`, `schedule_id` and `outcome_json` (a
+run `barca serve` started: its full outcome, so `GET /runs/{id}` answers after a restart);
+`schedule_state` carries `paused_at` and `paused_until` for a paused schedule. They are listed
+in `FORMAT_1_ADDITIONS` (`db_schema.rs`). A format-1 database that lacks one is brought up to
+date by the same transactional additive migration as a legacy database and stays format 1, so
+a previous release still opens it; a current one is still checked without being written. Rows
+written before have `NULL` there (`triggered_by: null`). Shared-history carry copies the new
+`runs` columns like the others.

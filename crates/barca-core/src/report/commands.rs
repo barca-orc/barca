@@ -42,52 +42,70 @@ fn root_field(out: &mut Value, root: Option<&str>) {
         obj.insert("root".into(), root.into());
     }
 }
-pub fn render_get(
-    result: &GetResult,
-    target: Option<&str>,
-    final_output: Option<Value>,
+/// The stdout JSON body of a successful single-target `barca get --json` / `barca run --json`,
+/// before `--fields`. A served run's `outcome` is this body.
+pub fn run_body(result: &GetResult, final_output: Option<Value>) -> Value {
+    serde_json::json!({
+        "status": "success",
+        "run_id": result.run_id,
+        "elapsed_seconds": result.elapsed_seconds,
+        "steps_executed": result.steps_executed,
+        "phases": result.phases,
+        "final_output": final_output,
+        "steps": &result.steps,
+        "warnings": &result.warnings,
+    })
+}
+
+/// What the human summary of a single-target run says it did: `got 'x'`, `all assets` or
+/// `ran 'x'`.
+pub fn run_label(command: &str, target: Option<&str>) -> String {
+    match (command, target) {
+        ("run", Some(t)) => format!("ran '{t}'"),
+        ("run", None) => "ran ''".to_string(),
+        (_, Some(t)) => format!("got '{t}'"),
+        (_, None) => "all assets".to_string(),
+    }
+}
+
+/// Render a successful single-target run from its JSON body ([`run_body`]). The one renderer
+/// for a local run and for a served run's `outcome`. `final_output` is the value to show, or
+/// `None` when the run has none (a `get` of every asset); the body says `null` for both that
+/// and a target whose value is `None`.
+pub fn render_run_body(
+    body: &Value,
+    label: &str,
+    final_output: Option<&Value>,
     mode: ResultFormat,
     fields: Option<&[String]>,
 ) -> RenderedOutput {
     let mut rendered = RenderedOutput::default();
-
     match mode {
         ResultFormat::Json => {
-            let mut out = serde_json::json!({
-                "status": "success",
-                "run_id": result.run_id,
-                "elapsed_seconds": result.elapsed_seconds,
-                "steps_executed": result.steps_executed,
-                "phases": result.phases,
-                "final_output": final_output,
-                "steps": &result.steps,
-                "warnings": &result.warnings,
-            });
+            let mut out = body.clone();
             project_key(&mut out, "steps", fields);
             line!(rendered, "{out}");
         }
         ResultFormat::Value => {
-            if let Some(ref val) = final_output {
+            if let Some(val) = final_output {
                 line!(rendered, "{}", serde_json::to_string_pretty(val).unwrap());
             }
         }
         ResultFormat::Pretty => {
-            let label = target
-                .as_ref()
-                .map(|t| format!("got '{t}'"))
-                .unwrap_or_else(|| "all assets".to_string());
+            let count = |key: &str| body[key].as_u64().unwrap_or(0);
+            let (steps, phases) = (count("steps_executed"), count("phases"));
             line!(
                 rendered,
                 "Run {} | {} in {:.3}s ({} step{}, {} phase{})",
-                result.run_id,
+                body["run_id"].as_str().unwrap_or_default(),
                 label,
-                result.elapsed_seconds,
-                result.steps_executed,
-                if result.steps_executed == 1 { "" } else { "s" },
-                result.phases,
-                if result.phases == 1 { "" } else { "s" }
+                body["elapsed_seconds"].as_f64().unwrap_or(0.0),
+                steps,
+                if steps == 1 { "" } else { "s" },
+                phases,
+                if phases == 1 { "" } else { "s" }
             );
-            if let Some(ref val) = final_output {
+            if let Some(val) = final_output {
                 line!(
                     rendered,
                     "\nValue:\n{}",
@@ -99,6 +117,23 @@ pub fn render_get(
     rendered
 }
 
+pub fn render_get(
+    result: &GetResult,
+    target: Option<&str>,
+    final_output: Option<Value>,
+    mode: ResultFormat,
+    fields: Option<&[String]>,
+) -> RenderedOutput {
+    let body = run_body(result, final_output.clone());
+    render_run_body(
+        &body,
+        &run_label("get", target),
+        final_output.as_ref(),
+        mode,
+        fields,
+    )
+}
+
 pub fn render_run(
     result: &GetResult,
     target: &str,
@@ -106,50 +141,14 @@ pub fn render_run(
     mode: ResultFormat,
     fields: Option<&[String]>,
 ) -> RenderedOutput {
-    let mut rendered = RenderedOutput::default();
-
-    match mode {
-        ResultFormat::Json => {
-            let mut out = serde_json::json!({
-                "status": "success",
-                "run_id": result.run_id,
-                "elapsed_seconds": result.elapsed_seconds,
-                "steps_executed": result.steps_executed,
-                "phases": result.phases,
-                "final_output": final_output,
-                "steps": &result.steps,
-                "warnings": &result.warnings,
-            });
-            project_key(&mut out, "steps", fields);
-            line!(rendered, "{out}");
-        }
-        ResultFormat::Value => {
-            if let Some(ref val) = final_output {
-                line!(rendered, "{}", serde_json::to_string_pretty(val).unwrap());
-            }
-        }
-        ResultFormat::Pretty => {
-            line!(
-                rendered,
-                "Run {} | ran '{}' in {:.3}s ({} step{}, {} phase{})",
-                result.run_id,
-                target,
-                result.elapsed_seconds,
-                result.steps_executed,
-                if result.steps_executed == 1 { "" } else { "s" },
-                result.phases,
-                if result.phases == 1 { "" } else { "s" }
-            );
-            if let Some(ref val) = final_output {
-                line!(
-                    rendered,
-                    "\nValue:\n{}",
-                    serde_json::to_string_pretty(val).unwrap()
-                );
-            }
-        }
-    }
-    rendered
+    let body = run_body(result, final_output.clone());
+    render_run_body(
+        &body,
+        &run_label("run", Some(target)),
+        final_output.as_ref(),
+        mode,
+        fields,
+    )
 }
 
 pub fn render_history(
@@ -581,15 +580,13 @@ pub fn first_multi_failure(result: &MultiResult) -> Option<crate::BarcaError> {
     None
 }
 
-/// Render values supplied in the same order as `result.targets`; absent values are null.
-pub fn render_multi(
+/// The JSON of a multi-target run, in two parts: the run's own keys (sorted, without
+/// `targets`) and each target's object in the order given. Printed, they are
+/// `{...run keys...,"targets":{...}}`.
+pub fn multi_parts(
     result: &MultiResult,
     final_outputs: &[Option<Value>],
-    mode: ResultFormat,
-    verb: &str,
-    fields: Option<&[String]>,
-) -> RenderedOutput {
-    let mut rendered = RenderedOutput::default();
+) -> (Value, Vec<(String, Value)>) {
     let per_target: Vec<(String, serde_json::Value)> = result
         .targets
         .iter()
@@ -614,27 +611,56 @@ pub fn render_multi(
             (name.clone(), serde_json::Value::Object(obj))
         })
         .collect();
+    let run = serde_json::json!({
+        "status": if result.any_failed() { "failed" } else { "success" },
+        "run_id": result.run_id,
+        "elapsed_seconds": result.elapsed_seconds,
+        "steps_executed": result.steps_executed,
+        "phases": result.phases,
+        "steps": &result.steps,
+        "warnings": &result.warnings,
+    });
+    (run, per_target)
+}
 
+/// `{...run keys...,"targets":{...}}` with the targets in the order given.
+pub fn multi_json(run: &Value, per_target: &[(String, Value)]) -> String {
+    let run = run.to_string();
+    format!(
+        "{},\"targets\":{}}}",
+        &run[..run.len() - 1],
+        ordered_object(per_target)
+    )
+}
+
+/// Render values supplied in the same order as `result.targets`; absent values are null.
+pub fn render_multi(
+    result: &MultiResult,
+    final_outputs: &[Option<Value>],
+    mode: ResultFormat,
+    verb: &str,
+    fields: Option<&[String]>,
+) -> RenderedOutput {
+    let (run, per_target) = multi_parts(result, final_outputs);
+    render_multi_parts(&run, &per_target, mode, verb, fields)
+}
+
+/// Render a multi-target run from its two JSON parts ([`multi_parts`]). The one renderer for a
+/// local run and for a served run's `outcome`.
+pub fn render_multi_parts(
+    run: &Value,
+    per_target: &[(String, Value)],
+    mode: ResultFormat,
+    verb: &str,
+    fields: Option<&[String]>,
+) -> RenderedOutput {
+    let mut rendered = RenderedOutput::default();
     match mode {
         ResultFormat::Json => {
             // Keys of the run object sort before `targets`, which keeps the given order.
-            let mut run = serde_json::json!({
-                "status": if result.any_failed() { "failed" } else { "success" },
-                "run_id": result.run_id,
-                "elapsed_seconds": result.elapsed_seconds,
-                "steps_executed": result.steps_executed,
-                "phases": result.phases,
-                "steps": &result.steps,
-                "warnings": &result.warnings,
-            });
+            let mut run = run.clone();
             project_key(&mut run, "steps", fields);
-            let run = run.to_string();
-            line!(
-                rendered,
-                "{},\"targets\":{}}}",
-                &run[..run.len() - 1],
-                ordered_object(&per_target)
-            );
+            line!(rendered, "{}", multi_json(&run, per_target));
         }
         ResultFormat::Value => {
             // Each target's value (null when it failed), keyed by target name.
@@ -652,20 +678,24 @@ pub fn render_multi(
             );
         }
         ResultFormat::Pretty => {
-            let failed = result.targets.iter().filter(|(_, t)| t.status != "success");
+            let failed = per_target
+                .iter()
+                .filter(|(_, t)| t["status"].as_str() != Some("success"));
+            let count = |key: &str| run[key].as_u64().unwrap_or(0);
+            let (steps, phases) = (count("steps_executed"), count("phases"));
             line!(
                 rendered,
                 "Run {} | {verb} {} targets in {:.3}s ({} step{}, {} phase{}, {} failed)",
-                result.run_id,
-                result.targets.len(),
-                result.elapsed_seconds,
-                result.steps_executed,
-                if result.steps_executed == 1 { "" } else { "s" },
-                result.phases,
-                if result.phases == 1 { "" } else { "s" },
+                run["run_id"].as_str().unwrap_or_default(),
+                per_target.len(),
+                run["elapsed_seconds"].as_f64().unwrap_or(0.0),
+                steps,
+                if steps == 1 { "" } else { "s" },
+                phases,
+                if phases == 1 { "" } else { "s" },
                 failed.count(),
             );
-            for (name, t) in &per_target {
+            for (name, t) in per_target {
                 let status = t["status"].as_str().unwrap_or("?");
                 if status != "success" {
                     continue;
@@ -681,29 +711,33 @@ pub fn render_multi(
     rendered
 }
 
+/// The stdout JSON body of a failed single-target run: what ran before the failing step,
+/// the step and its error. `None` for any other error.
+pub fn failed_run_body(err: &crate::BarcaError) -> Option<Value> {
+    let crate::BarcaError::WorkerFailed(f) = err else {
+        return None;
+    };
+    let run = f.run.as_ref()?;
+    Some(serde_json::json!({
+        "status": "failed",
+        "run_id": run.run_id,
+        "elapsed_seconds": run.elapsed_seconds,
+        "steps_executed": run.steps_executed,
+        "phases": run.phases,
+        "failed_node": f.node,
+        "error": f.summary(),
+        "steps": &run.steps,
+        "warnings": &run.warnings,
+    }))
+}
+
 pub fn render_failed_run(err: &crate::BarcaError, mode: ResultFormat) -> RenderedOutput {
     let mut rendered = RenderedOutput::default();
-    let (crate::BarcaError::WorkerFailed(f), ResultFormat::Json) = (err, mode) else {
-        return rendered;
-    };
-    let Some(run) = &f.run else {
-        return rendered;
-    };
-    line!(
-        rendered,
-        "{}",
-        serde_json::json!({
-            "status": "failed",
-            "run_id": run.run_id,
-            "elapsed_seconds": run.elapsed_seconds,
-            "steps_executed": run.steps_executed,
-            "phases": run.phases,
-            "failed_node": f.node,
-            "error": f.summary(),
-            "steps": &run.steps,
-            "warnings": &run.warnings,
-        })
-    );
+    if mode == ResultFormat::Json
+        && let Some(body) = failed_run_body(err)
+    {
+        line!(rendered, "{body}");
+    }
     rendered
 }
 

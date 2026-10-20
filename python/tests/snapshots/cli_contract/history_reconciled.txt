@@ -7,11 +7,14 @@ runs[].elapsed_seconds : null
 runs[].files : array
 runs[].finished_at : null
 runs[].run_id : string
+runs[].schedule_id : null
+runs[].scheduled_at : null
 runs[].started_at : string
 runs[].status : string
 runs[].steps_cached : integer
 runs[].steps_executed : integer
 runs[].steps_total : integer
 runs[].target : string
+runs[].triggered_by : null
 total : integer
 truncated : boolean

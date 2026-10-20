@@ -45,7 +45,7 @@ outside the `GENERATED` blocks is written by hand.
 |---|---|
 | `barca doctor` and its JSON | prerequisite check names and provider-specific identity data may evolve; failed checks exit 3 with the report on stdout and the standard error envelope on stderr |
 | `barca plan` and its JSON | prints the planner's internal phase/stream layout, which changes with scheduling work (`reason` is an object, `{"type": "initial"}` or `{"type": "fan_in", "node_id": ...}`) |
-| `barca serve` and all its flags | the HTTP API and scheduler are young: no auth, no shared remote state, routes may change. Its JSON is the engine's own serialization (for example `GET /assets` has `freshness: {"type": "Always"}` and `stats.node_id`), not the CLI's |
+| `barca serve` and all its flags | the HTTP API and scheduler are young: no auth, no shared remote state. Its run outcomes (`GET /runs/{run_id}`, `run_finished`) and inspection routes (`/list`, `/nodes`, `/history`, `/stats/{name}`, `/assets`) are the CLI's `--json` bodies, built by the same functions, and its errors are this envelope. The older trigger routes (`POST /run`, `/run/{target}`, `/get/{target}`, `GET /status/{run_id}`, `/events/{run_id}`) are aliases until the next minor release |
 | `get -o/--output`, `run -o/--output` | kept for compatibility; `--json` / `--pretty` are the canonical spelling |
 | `status --sample` and `nodes[].shape` | read by a Python helper (`barca._inspect`) whose output may grow per format; the wording of `shape.note` (an unreadable, too large or unreachable artifact) may change |
 | `BARCA_PROGRESS_SECS`, `BARCA_POOL_SIZE`, `BARCA_COMM_COST_SECONDS`, `BARCA_TRACE_TIMING` | tuning and benchmarking knobs |
@@ -75,7 +75,7 @@ outside the `GENERATED` blocks is written by hand.
 | `barca logs` | `<RUN_ID>` | stable | Read a run's captured step stdout, without progress messages |
 | `barca history` | - | stable | Show recent run history |
 | `barca stats` | `<TARGET> [<FILES>...]` | stable | Show execution statistics for an asset |
-| `barca serve` | `[<FILES>...]` | experimental: the HTTP API and scheduler are young: no auth, no shared remote state, routes may change | Run a long-running HTTP server exposing the orchestrator as a JSON API |
+| `barca serve` | `[<FILES>...]` | experimental: the HTTP API and scheduler are young: no auth, no shared remote state; the older trigger routes are aliases until the next minor | Run a long-running HTTP server exposing the orchestrator as a JSON API |
 | `barca list` | `[<FILES>...]` | stable | List all discovered definitions (assets, tasks, sensors) with their deps |
 | `barca status` | `[<ARGS>...]` | stable | Show every node's cache state, last materialization and artifact shape (read-only) |
 | `barca sql` | `<QUERY> [<FILES>...]` | experimental: new in 0.13: the view naming and the JSON result shape may change after field use | Query cached results with SQL (DuckDB) — each asset is a named view |
@@ -182,7 +182,7 @@ default, and any aliases.
 | `--all` | - | default `false` | stable | Show every recorded run (no limit) |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
-| `--fields` | comma-separated: `run_id`, `command`, `files`, `target`, `status`, `steps_total`, `steps_executed`, `steps_cached`, `attempts`, `started_at`, `finished_at`, `elapsed_seconds` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `runs`. Implies --json. An unknown key is a usage error listing the valid ones |
+| `--fields` | comma-separated: `run_id`, `command`, `files`, `target`, `status`, `steps_total`, `steps_executed`, `steps_cached`, `attempts`, `started_at`, `finished_at`, `elapsed_seconds`, `triggered_by`, `scheduled_at`, `schedule_id` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `runs`. Implies --json. An unknown key is a usage error listing the valid ones |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
 
 #### barca stats
@@ -447,8 +447,8 @@ change it, so a dry run reports exactly what the real run will. Each item is als
 stderr as `[barca] warning: <message>` before any step runs, in every output mode. Warnings never
 change the exit code, and the error envelope on stderr never contains them. `list`, `status`,
 `history`, `stats` and `sql` have no `warnings` key. `barca serve` carries the same array in
-`GET /plan` and in `result.warnings` of `GET /status/{run_id}` (experimental with the rest of
-that API).
+`GET /plan` and in the run outcome of `GET /runs/{run_id}` (experimental with the rest of that
+API).
 
 `unused_input`: a step declares an input its function never uses (`barca docs assets`, "Unused
 inputs", has the exact rule and what is never reported). Stability: the key, its presence and the
@@ -693,7 +693,7 @@ entries:
 - `steps[].warning` on the same entries is the finding in words: the store location, and the
   `--refresh` that recomputes the step. The wording is not contract; `artifact_mismatch` is.
 - The key appears on `get` and `run`, with one target or several, in a failed run's result
-  line, with `--agent`, and in `result.steps` of `barca serve`'s `GET /status/{run_id}`.
+  line, with `--agent`, and in the `steps` of a `barca serve` run's outcome (`GET /runs/{run_id}`).
   `--fields` accepts it (`--fields id,status,artifact_mismatch`). It never appears with
   `--dry-run`, which does not contact the store, nor in `status`, `history` or `stats`, which
   describe recorded results and do not fetch.
@@ -1035,6 +1035,12 @@ recorded as `interrupted`. It refuses a proven live owner, a non-running row or 
 output selection and `--env` still apply. Successful step rows/artifacts and progress are
 preserved, and an unknown end time/duration is not invented. Ordinary history stays read-only.
 
+`runs[].triggered_by` says what started a run: `manual` (a command typed on a machine), `api`
+(an HTTP request to `barca serve`), `schedule` (a cron tick) or `client` (a run a laptop posted
+to a server's ledger); `null` for runs recorded before barca recorded it. A scheduled run also
+has `scheduled_at` (the tick, RFC 3339 in UTC) and `schedule_id` (the scheduled node); both are
+`null` on every other run. The three keys are additive.
+
 
 <!-- BEGIN GENERATED schema history -->
 | Key | Type | Present |
@@ -1049,12 +1055,15 @@ preserved, and an unknown end time/duration is not invented. Ordinary history st
 | `runs[].files[]` | string | always |
 | `runs[].finished_at` | string | always |
 | `runs[].run_id` | string | always |
+| `runs[].schedule_id` | null | always |
+| `runs[].scheduled_at` | null | always |
 | `runs[].started_at` | string | always |
 | `runs[].status` | string | always |
 | `runs[].steps_cached` | integer | always |
 | `runs[].steps_executed` | integer | always |
 | `runs[].steps_total` | integer | always |
 | `runs[].target` | string | always |
+| `runs[].triggered_by` | string | always |
 | `total` | integer | always |
 | `truncated` | boolean | always |
 <!-- END GENERATED schema history -->
@@ -1086,12 +1095,15 @@ Reconciled history (same envelope; unknown end timestamp and duration remain nul
 | `runs[].files` | array | always |
 | `runs[].finished_at` | null | always |
 | `runs[].run_id` | string | always |
+| `runs[].schedule_id` | null | always |
+| `runs[].scheduled_at` | null | always |
 | `runs[].started_at` | string | always |
 | `runs[].status` | string | always |
 | `runs[].steps_cached` | integer | always |
 | `runs[].steps_executed` | integer | always |
 | `runs[].steps_total` | integer | always |
 | `runs[].target` | string | always |
+| `runs[].triggered_by` | null | always |
 | `total` | integer | always |
 | `truncated` | boolean | always |
 <!-- END GENERATED schema history_reconciled -->

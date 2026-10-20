@@ -190,3 +190,117 @@ def test_real_client_partial_load_health_and_empty_admission_match_openapi(tmp_p
             assert result["status"] == "complete"
     finally:
         process.stop()
+
+
+def _raw(server, method, path, body=None):
+    """One request with an optional JSON body: status, content type and raw bytes."""
+    data = None if body is None else json.dumps(body).encode()
+    request = urllib.request.Request(f"http://127.0.0.1:{server.port}{path}", data=data, method=method)
+    if data is not None:
+        request.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return response.status, response.headers.get_content_type(), response.read()
+    except urllib.error.HTTPError as error:
+        return error.code, error.headers.get_content_type(), error.read()
+
+
+def _checked(server, method, path, status, body=None):
+    """A request whose answer the OpenAPI document describes: its status and validated JSON."""
+    got, content_type, raw = _raw(server, method, path, body)
+    assert got == status, (method, path, raw)
+    template, op = operation(method, f"http://x{path}")
+    assert content_type == "application/json", (method, path, content_type)
+    value = json.loads(raw)
+    validate(op["responses"][str(status)]["content"]["application/json"]["schema"], value)
+    return value, raw
+
+
+def _events(server, run_id):
+    """Every event of a run's stream, read to its end: (id, event)."""
+    request = urllib.request.Request(f"http://127.0.0.1:{server.port}/runs/{run_id}/events")
+    with urllib.request.urlopen(request, timeout=60) as response:
+        text = response.read().decode()
+    events = []
+    for frame in text.split("\n\n"):
+        lines = frame.splitlines()
+        data = [line[6:] for line in lines if line.startswith("data: ")]
+        if data:
+            event_id = next(line[4:] for line in lines if line.startswith("id: "))
+            event = json.loads(data[0])
+            validate({"$ref": "#/components/schemas/RunEvent"}, event)
+            events.append((int(event_id), event))
+    return events
+
+
+CONTRACT_PIPELINE = """from barca import asset, task
+@asset()
+def value() -> dict:
+    return {"n": 2}
+@asset()
+def broken() -> dict:
+    raise ValueError("expected contract failure")
+@task(inputs={"value": value})
+def publish(value: dict) -> None:
+    print("published", value["n"])
+"""
+
+
+def test_run_contract_and_inspection_match_openapi_and_the_cli(tmp_path):
+    (tmp_path / "barca.toml").write_text("")
+    (tmp_path / "pipeline.py").write_text(CONTRACT_PIPELINE)
+    server = Server(tmp_path, "--no-schedule")
+    try:
+        accepted, _ = _checked(server, "POST", "/runs", 202, {"command": "get", "targets": ["value"], "agent": True})
+        run_id = accepted["run_id"]
+        events = _events(server, run_id)
+        assert [n for n, _ in events] == list(range(len(events)))
+        assert events[0][1] == {"type": "run_started", "run_id": run_id}
+        assert any(e["type"] == "line" and e["when"] == "agent" for _, e in events)
+        finished = events[-1][1]
+        assert finished["type"] == "run_finished" and finished["ok"] is True
+        assert finished["outcome"]["final_output"] == {"n": 2}
+        view, _ = _checked(server, "GET", f"/runs/{run_id}", 200)
+        assert view["triggered_by"] == "api" and view["outcome"] == finished["outcome"]
+        status, content_type, raw = _raw(server, "GET", f"/runs/{run_id}/output")
+        assert (status, content_type, json.loads(raw)) == (200, "application/json", {"n": 2})
+
+        # A task, then a failure: the outcome carries the CLI's failed body and envelope.
+        task, _ = _checked(server, "POST", "/runs", 202, {"command": "run", "targets": ["publish"]})
+        logs = [e["line"] for _, e in _events(server, task["run_id"]) if e["type"] == "log"]
+        assert logs == ["published 2"]
+        failed, _ = _checked(server, "POST", "/runs", 202, {"command": "get", "targets": ["broken"]})
+        outcome = _events(server, failed["run_id"])[-1][1]["outcome"]
+        assert outcome["status"] == "failed" and outcome["envelope"]["code"] == 1
+        _checked(server, "GET", f"/runs/{failed['run_id']}/output", 404)
+        _checked(server, "DELETE", f"/runs/{failed['run_id']}", 409)
+        _checked(server, "POST", "/runs", 404, {"command": "get", "targets": ["missing"]})
+        plan, _ = _checked(server, "POST", "/runs", 200, {"command": "get", "targets": ["value"], "dry_run": True})
+        assert plan["summary"]["cached"] == 1
+
+        # Inspection bodies are the CLI's --json output, byte for byte.
+        env = {k: v for k, v in os.environ.items() if not k.startswith("BARCA_")}
+
+        def cli(*args):
+            done = subprocess.run([_find_binary(), *args], cwd=tmp_path, env=env, capture_output=True, text=True)
+            assert done.returncode == 0, done.stderr
+            return done.stdout.rstrip("\n").encode()
+
+        for path, args in [
+            ("/list", ["list", "pipeline.py", "--json", "--all"]),
+            ("/history", ["history", "--json"]),
+            ("/stats/value", ["stats", "value", "pipeline.py", "--json"]),
+        ]:
+            _, raw = _checked(server, "GET", path, 200)
+            assert raw == cli(*args), path
+        nodes, _ = _checked(server, "GET", "/nodes?targets=value", 200)
+        status = json.loads(cli("status", "value", "pipeline.py", "--json", "--all"))
+        assert nodes == status
+        history, _ = _checked(server, "GET", "/history?limit=1", 200)
+        assert history["truncated"] is True and history["runs"][0]["triggered_by"] == "api"
+        health, _ = _checked(server, "GET", "/health", 200)
+        assert health["api_version"] == 1 and health["env"] == "default"
+        project, _ = _checked(server, "GET", "/project", 200)
+        assert [f["path"] for f in project["files"]] == ["pipeline.py"]
+    finally:
+        server.stop()

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { AssetSummary, NodeState } from './types'
+import type { ListNode, NodeState, ScheduleJob } from './types'
 import { formatCountdown, humanizeCron, scheduleRows } from './schedules'
 
 describe('humanizeCron', () => {
@@ -31,13 +31,31 @@ describe('formatCountdown', () => {
   })
 })
 
-function asset(id: string, cron: string | null, kind: AssetSummary['kind'] = 'task'): AssetSummary {
+function asset(id: string, cron: string | null, kind: ListNode['kind'] = 'task'): ListNode {
   return {
     id,
     kind,
-    freshness: cron ? { type: 'Schedule', value: cron } : { type: 'Always' },
+    ...(cron ? { freshness: 'schedule' as const, schedule: cron } : { freshness: 'always' as const }),
     inputs: [],
     env: [],
+  }
+}
+
+function job(id: string, over: Partial<ScheduleJob> = {}): ScheduleJob {
+  return {
+    id,
+    cron: '*/10 * * * *',
+    kind: 'task',
+    next_fire: null,
+    last_fired: null,
+    last_run: null,
+    last_status: null,
+    last_skipped: null,
+    skipped_for: null,
+    skip_reason: null,
+    paused: false,
+    paused_until: null,
+    ...over,
   }
 }
 
@@ -103,5 +121,27 @@ describe('scheduleRows', () => {
     const rows = scheduleRows([asset('job.py:new', '0 6 * * *')], [], now)
     expect(rows).toHaveLength(1)
     expect(rows[0]).toMatchObject({ name: 'new', nextRunMs: null, nextIn: null, last: null })
+  })
+
+  it('is not paused without a scheduler entry or when the job runs', () => {
+    expect(scheduleRows(assets, states, now).every((r) => r.paused === null)).toBe(true)
+    const rows = scheduleRows(assets, states, now, [job('job.py:refresh')])
+    expect(rows.find((r) => r.name === 'refresh')?.paused).toBeNull()
+  })
+
+  it('shows a paused job, with when a timed pause ends', () => {
+    const rows = scheduleRows(assets, states, now, [
+      job('job.py:refresh', { paused: true, paused_until: now / 1000 + 3600, skip_reason: 'paused' }),
+      job('job.py:heartbeat', { paused: true }),
+    ])
+    expect(rows.find((r) => r.name === 'refresh')?.paused).toEqual({ until: now + 3_600_000 })
+    expect(rows.find((r) => r.name === 'heartbeat')?.paused).toEqual({ until: null })
+  })
+
+  it("falls back to the scheduler's next fire when /state has none", () => {
+    const rows = scheduleRows([asset('job.py:new', '0 6 * * *')], [], now, [
+      job('job.py:new', { next_fire: now / 1000 + 60 }),
+    ])
+    expect(rows[0]).toMatchObject({ nextRunMs: now + 60_000, nextIn: 'in 1m' })
   })
 })

@@ -1,14 +1,14 @@
 import { useCallback } from 'react'
 import { useTriggerGet } from '@/hooks/useTriggerGet'
 import { useTriggerRun } from '@/hooks/useTriggerRun'
-import type { AssetSummary } from '@/lib/types'
+import type { ListNode } from '@/lib/types'
 
 /**
  * The canonical barca verb for a node: `run` a task (always re-executes), `get`
  * an asset or sensor (cache-aware). No "materialize".
  */
 export function useTriggerNode(
-  asset: AssetSummary | null,
+  asset: ListNode | null,
   onTrigger: (handle: string, nodeId: string) => void,
 ) {
   const getTrigger = useTriggerGet()
