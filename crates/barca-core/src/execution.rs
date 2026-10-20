@@ -416,16 +416,17 @@ pub(crate) async fn execute(mut request: ExecuteRequest<'_>) -> Result<Executed,
 /// What a run protects from the cache size limit: everything it produced, read or returns (as
 /// recorded paths), its run hashes, and the `Manual` nodes of its DAG.
 fn cache_check_inputs(session: &RunSession<'_, '_>, executed: &Executed) -> crate::gc::Own {
+    // Every path `get` prints or returns, including each partition key of a partitioned target.
     let returned = executed
         .result
         .final_output
         .iter()
-        .chain(
-            executed
-                .targets
+        .chain(executed.result.partitions.iter().flatten().map(|(_, o)| o))
+        .chain(executed.targets.iter().flat_map(|(_, t)| {
+            t.final_output
                 .iter()
-                .filter_map(|(_, t)| t.final_output.as_ref()),
-        )
+                .chain(t.partitions.iter().flatten().map(|(_, o)| o))
+        }))
         .map(|o| o.path.clone());
     let mut read: Vec<String> = session
         .state

@@ -225,6 +225,38 @@ def test_a_get_over_the_limit_keeps_what_it_produced_read_and_returned(project):
     assert "cache" not in again
 
 
+PARTITIONED = """
+from barca import asset, partitions
+
+
+@asset(partitions={"region": partitions(["emea", "amer", "apac"])})
+def sales(region: str) -> dict:
+    return {"region": region, "rows": [1] * 50}
+
+
+@asset()
+def other() -> dict:
+    return {"other": [1] * 50}
+"""
+
+
+def test_a_get_over_the_limit_keeps_every_partition_key_it_returns(tmp_path):
+    """`get` of a partitioned target returns every key's path (#287): all of them stay, even
+    when every key came from the cache."""
+    (tmp_path / "pipeline.py").write_text(PARTITIONED)
+    (tmp_path / "barca.toml").write_text("")
+    barca(tmp_path, "get", "pipeline.py", "--json")
+    other = tmp_path / current(tmp_path, "other")
+    out = barca(tmp_path, "get", "sales", "pipeline.py", "--json", BARCA_CACHE_MAX_SIZE="1")
+    result = json.loads(out.stdout)
+    returned = result["final_output"]
+    assert sorted(returned) == ["region=amer", "region=apac", "region=emea"]
+    assert result["cache"]["evicted_files"] >= 1
+    assert not other.exists()
+    for key, pointer in returned.items():
+        assert (tmp_path / pointer["_barca_artifact"]["path"]).exists(), key
+
+
 def test_a_live_run_in_another_process_leaves_all_but_tiers_1_and_2(project):
     recompute_with_new_source(project)
     moved_aside(project)
