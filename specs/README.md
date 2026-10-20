@@ -18,7 +18,7 @@ behavior.
 | Task results and recorded stdout | [task-output.md](task-output.md) | Implemented; specification 1 | [Task/stdout conformance](../python/tests/test_task_logs.py), CLI snapshots and Rust log persistence tests |
 | Project prerequisites and credential diagnostics | [doctor.md](doctor.md) | Implemented; specification 1, experimental check data | [no-execution controls](../python/tests/test_doctor.py), [identity adapters](../python/tests/test_identity.py), CLI snapshots |
 | CLI flags, messages and JSON envelopes | [existing CLI contract](../crates/barca-cli/docs/contract.md) and native help/JSON snapshots | Current implemented contract, existing ownership retained; no separate specification version | [CLI integration tests](../python/tests/test_cli_contract.py), Rust CLI snapshot tests |
-| Worker/transfer socket protocol | [worker-protocol.md](worker-protocol.md) | Implemented on branch; specification 3 / protocol 3 | [protocol tests](../crates/barca-core/src/protocol.rs), [Python/CLI negotiation](../python/tests/test_protocol_handshake.py), [batched runtime/crash controls](../python/tests/test_compact_worker_protocol.py) |
+| Worker/transfer socket protocol | [worker-protocol.md](worker-protocol.md) | Implemented in v0.24.0; specification 3 / protocol 3 | [protocol tests](../crates/barca-core/src/protocol.rs), [Python/CLI negotiation](../python/tests/test_protocol_handshake.py), [batched runtime/crash controls](../python/tests/test_compact_worker_protocol.py) |
 
 The existing CLI normative document and snapshots remain in their established locations.
 This inventory does not duplicate or migrate them. Future boundary specifications should
