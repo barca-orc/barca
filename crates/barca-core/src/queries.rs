@@ -261,6 +261,7 @@ pub async fn explain(
     python: &std::path::Path,
     policy: CachePolicy,
     command_label: &str,
+    partition: Option<&crate::selection::PartitionSelection>,
 ) -> Result<ExplainResult, BarcaError> {
     let dag = build_dag(file_args, python).await?;
     if command_label == "get"
@@ -269,9 +270,16 @@ pub async fn explain(
     {
         crate::errln!("{note}");
     }
-    let result =
-        crate::execution::explain_dag(&dag, cfg, target_names, python, policy, command_label)
-            .await?;
+    let result = crate::execution::explain_dag(
+        &dag,
+        cfg,
+        target_names,
+        python,
+        policy,
+        command_label,
+        partition,
+    )
+    .await?;
     crate::warnings::print(&result.warnings);
     Ok(result)
 }

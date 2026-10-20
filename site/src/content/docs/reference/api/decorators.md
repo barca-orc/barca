@@ -245,7 +245,7 @@ def summary(all_sales: list[dict]) -> dict:
 ```
 
 ```
-$ barca get summary pipeline.py --json
+$ barca get summary pipeline.py -o value --json
 [barca] 4/4 steps | done in 0.2s
 {"elapsed_seconds":0.578354167,"final_output":{"total":1200},"phases":2, ...}
 ```
@@ -308,10 +308,11 @@ Up to 0.11 this passed the list without an error.
   runs once, before any key, and its run hash is part of every key's run hash, so changing it,
   or `--refresh` on it, re-runs every key.
 - Artifacts are stored per key: `.barca/artifacts/pipeline.py--sales_region_emea/<run_hash>.json`.
-- `barca get sales` on a partitioned asset prints one key's result as `final_output`, not all
-  of them, and no single key can be targeted or refreshed. To read every key, use a `collect`
-  asset or [`barca sql`](/reference/sql/) (one view with a `partition` column holding
-  `region=emea`).
+- `barca get sales` on a partitioned asset returns every key: one artifact path per key, and a
+  `final_output` object keyed by partition key (`region=emea`). `--partition region=emea`
+  selects keys, computes only those and scopes `--refresh sales` to them
+  ([CLI reference](/reference/cli/#get)). [`barca sql`](/reference/sql/) has one view with a
+  `partition` column holding `region=emea`.
 - `barca status` shows a partitioned asset as one node with `partitions: {total, cached,
   missing, missing_keys}`.
 

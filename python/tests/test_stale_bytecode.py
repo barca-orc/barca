@@ -75,17 +75,17 @@ def test_asset_in_the_target_file(project):
             return 1
         """,
     )
-    first = barca(project, "get", "val", "p.py", "--json")
+    first = barca(project, "get", "val", "p.py", "-o", "value", "--json")
     assert first["final_output"] == 1
 
     same_size_edit(p, "return 1", "return 2")
-    second = barca(project, "get", "val", "p.py", "--json")
+    second = barca(project, "get", "val", "p.py", "-o", "value", "--json")
     assert steps(second)["val"]["run_hash"] != steps(first)["val"]["run_hash"]
     assert steps(second)["val"]["status"] == "ran"
     assert second["final_output"] == 2
 
     # The value cached under the new run hash is the new code's.
-    third = barca(project, "get", "val", "p.py", "--json")
+    third = barca(project, "get", "val", "p.py", "-o", "value", "--json")
     assert steps(third)["val"]["status"] == "cached"
     assert third["final_output"] == 2
 
@@ -110,11 +110,11 @@ def test_helper_module_imported_by_the_pipeline(project):
             return compute()
         """,
     )
-    first = barca(project, "get", "val", PIPELINE, "--json")
+    first = barca(project, "get", "val", PIPELINE, "-o", "value", "--json")
     assert first["final_output"] == 1
 
     same_size_edit(project / "helpers.py", "return 1", "return 2")
-    second = barca(project, "get", "val", PIPELINE, "--json")
+    second = barca(project, "get", "val", PIPELINE, "-o", "value", "--json")
     # The helper is in the asset's dependency cone, so the edit changes the run hash...
     assert steps(second)["val"]["run_hash"] != steps(first)["val"]["run_hash"]
     # ...and the worker must run the edited helper, not its cached bytecode.
@@ -143,11 +143,11 @@ def test_root_module_imported_by_a_subdirectory_pipeline(project):
             return compute()
         """,
     )
-    first = barca(project, "get", "val", "pipelines/p.py", "--json")
+    first = barca(project, "get", "val", "pipelines/p.py", "-o", "value", "--json")
     assert first["final_output"] == 1
 
     same_size_edit(project / "shared.py", "return 1", "return 2")
-    second = barca(project, "get", "val", "pipelines/p.py", "--json")
+    second = barca(project, "get", "val", "pipelines/p.py", "-o", "value", "--json")
     assert steps(second)["val"]["run_hash"] != steps(first)["val"]["run_hash"]
     assert second["final_output"] == 2
 
@@ -173,11 +173,11 @@ def test_package_helper_with_relative_import(project):
             return compute()
         """,
     )
-    first = barca(project, "get", "val", PIPELINE, "--json")
+    first = barca(project, "get", "val", PIPELINE, "-o", "value", "--json")
     assert first["final_output"] == 1
 
     same_size_edit(project / "lib" / "core.py", "return 1", "return 2")
-    second = barca(project, "get", "val", PIPELINE, "--json")
+    second = barca(project, "get", "val", PIPELINE, "-o", "value", "--json")
     assert steps(second)["val"]["run_hash"] != steps(first)["val"]["run_hash"]
     assert second["final_output"] == 2
 
@@ -223,11 +223,11 @@ def test_sensor(project):
             return v
         """,
     )
-    first = barca(project, "get", "val", "p.py", "--json")
+    first = barca(project, "get", "val", "p.py", "-o", "value", "--json")
     assert first["final_output"] == 1
 
     same_size_edit(p, "return True, 1", "return True, 2")
-    second = barca(project, "get", "val", "p.py", "--json")
+    second = barca(project, "get", "val", "p.py", "-o", "value", "--json")
     assert second["final_output"] == 2
 
 
@@ -250,11 +250,11 @@ def test_dynamic_partition_values(project):
             return sorted(parts)
         """,
     )
-    first = barca(project, "get", "summary", "p.py", "--json")
+    first = barca(project, "get", "summary", "p.py", "-o", "value", "--json")
     assert first["final_output"] == ["a", "b"]
 
     same_size_edit(p, '["a", "b"]', '["a", "c"]')
-    second = barca(project, "get", "summary", "p.py", "--json")
+    second = barca(project, "get", "summary", "p.py", "-o", "value", "--json")
     assert second["final_output"] == ["a", "c"]
 
 

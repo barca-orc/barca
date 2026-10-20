@@ -9,12 +9,14 @@ import time
 from pathlib import Path
 
 from barca.api import _find_binary
+
+from .get_values import value_args
 from barca.client import Client
 
 
 def run(root: Path, *args: str, env=None):
     proc = subprocess.run(
-        [_find_binary(), *args],
+        [_find_binary(), *value_args(args)],
         cwd=root,
         capture_output=True,
         text=True,
@@ -50,14 +52,19 @@ def observed(): return True, "version"
         assert observed["steps_executed"] == 1 and observed["final_output"] == "version"
 
 
-def test_partition_final_output_is_first_key_while_all_keys_are_materialized(tmp_path):
+def test_a_partitioned_target_returns_every_key_sorted(tmp_path):
     (tmp_path / "barca.toml").write_text("")
     (tmp_path / "pipeline.py").write_text("""from barca import asset, partitions
 @asset(partitions={"key": partitions(["z", "a", "m"])})
 def part(key): return {"key": key}
 """)
     cold = run(tmp_path, "get", "part")
-    assert cold["steps_executed"] == 3 and cold["final_output"] == {"key": "a"}
+    assert cold["steps_executed"] == 3
+    assert list(cold["final_output"].items()) == [
+        ("key=a", {"key": "a"}),
+        ("key=m", {"key": "m"}),
+        ("key=z", {"key": "z"}),
+    ]
     assert len(list((tmp_path / ".barca/artifacts").glob("*--part_key_*/*.json"))) == 3
     assert run(tmp_path, "get", "part")["steps_executed"] == 0
 
@@ -106,7 +113,7 @@ def test_invalid_transfer_settings_are_infrastructure_errors(tmp_path):
     (tmp_path / "pipeline.py").write_text("from barca import asset\n@asset()\ndef x(): return 1\n")
     for variable in ("BARCA_TRANSFER_CONCURRENCY", "BARCA_TRANSFER_TIMEOUT"):
         proc = subprocess.run(
-            [_find_binary(), "get", "x"],
+            [_find_binary(), "get", "x", "-o", "value", "--json"],
             cwd=tmp_path,
             capture_output=True,
             text=True,

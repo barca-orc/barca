@@ -65,9 +65,9 @@ def test_every_node_except_wide_asset_runs(project):
 
 
 def test_partitioned_workflow_outputs(project):
-    summary = result(barca(project, "get", "price_summary", PIPELINE, "--json"))
+    summary = result(barca(project, "get", "price_summary", PIPELINE, "-o", "value", "--json"))
     assert summary["final_output"] == {"tickers": ["AAPL", "GOOG", "MSFT"], "total": 1200}
-    result(barca(project, "get", "normalised_price", PIPELINE, "--json"))
+    result(barca(project, "get", "normalised_price", PIPELINE, "-o", "value", "--json"))
     arts = project / ".barca" / "artifacts"
     for ticker in ("AAPL", "MSFT", "GOOG"):
         (art,) = (arts / f"example_project__assets.py--normalised_price_ticker_{ticker}").glob(
@@ -75,12 +75,16 @@ def test_partitioned_workflow_outputs(project):
         )
         assert json.loads(art.read_text()) == {"ticker": ticker, "normalized": 4.0}
 
-    result(barca(project, "get", "greeting_for_world", PIPELINE, "--json", "--refresh-all"))
+    result(
+        barca(
+            project, "get", "greeting_for_world", PIPELINE, "-o", "value", "--json", "--refresh-all"
+        )
+    )
     assert (project / "tmp" / "greeting.json").exists()
     assert (project / "tmp" / "greeting.pkl").exists()
 
 
 def test_sensor_consumer_reads_the_output(project):
-    out = result(barca(project, "get", "last_heartbeat_seen", PIPELINE, "--json"))
+    out = result(barca(project, "get", "last_heartbeat_seen", PIPELINE, "-o", "value", "--json"))
     assert out["final_output"]["healthy"] is True
     assert isinstance(out["final_output"]["last_ts"], float)

@@ -95,7 +95,7 @@ def machine(tmp_path):
         (root / "pipeline.py").write_text(PIPELINE)
         return root
 
-    produced = cli(make("producer"), store, "get", "parts", "--json")
+    produced = cli(make("producer"), store, "get", "parts", "-o", "value", "--json")
     assert produced.returncode == 0, produced.stderr
     assert len(list(store.glob("default/artifacts/*parts*/*.parquet"))) == 2
     return store, make
@@ -116,7 +116,7 @@ def targets(proc: subprocess.CompletedProcess) -> dict:
 def test_lazy_readers_alone_read_every_partition_in_place(machine):
     store, make = machine
     root = make("lazy")
-    proc = cli(root, store, "get", "lazy_report", "--json")
+    proc = cli(root, store, "get", "lazy_report", "-o", "value", "--json")
     assert targets(proc) == {"": EACH}
     assert "fetched" not in proc.stderr, proc.stderr
     assert local_copies(root) == []
@@ -125,7 +125,7 @@ def test_lazy_readers_alone_read_every_partition_in_place(machine):
 def test_an_eager_reader_in_the_same_phase_downloads_each_partition_once_for_both(machine):
     store, make = machine
     root = make("mixed")
-    proc = cli(root, store, "get", "lazy_report,eager_report", "--json")
+    proc = cli(root, store, "get", "lazy_report,eager_report", "-o", "value", "--json")
     assert targets(proc) == {"lazy_report": EACH, "eager_report": EACH}
     assert "fetched 2 cached artifacts" in proc.stderr, proc.stderr
     assert len(local_copies(root)) == 2
@@ -136,7 +136,7 @@ def test_an_eager_fan_in_in_a_later_phase_downloads_what_the_lazy_step_read_in_p
     # step reads in place, then the eager one downloads the partitions for itself.
     store, make = machine
     root = make("later")
-    proc = cli(root, store, "get", "lazy_report,eager_all", "--json")
+    proc = cli(root, store, "get", "lazy_report,eager_all", "-o", "value", "--json")
     assert targets(proc) == {"lazy_report": EACH, "eager_all": ALL}
     assert "fetched 2 cached artifacts" in proc.stderr, proc.stderr
     assert len(local_copies(root)) == 2
@@ -147,7 +147,7 @@ def test_a_lazy_fan_in_is_handed_local_copies(machine):
     # downloaded like an eager one (crates/barca-core/src/commands.rs `read_in_place`).
     store, make = machine
     root = make("fan-in")
-    proc = cli(root, store, "get", "lazy_all", "--json")
+    proc = cli(root, store, "get", "lazy_all", "-o", "value", "--json")
     assert targets(proc) == {"": ALL}
     assert "fetched 2 cached artifacts" in proc.stderr, proc.stderr
     assert len(local_copies(root)) == 2
@@ -159,7 +159,14 @@ def test_the_same_readers_agree_without_a_store(tmp_path):
     (root / "pipeline.py").write_text(PIPELINE)
     env = {k: v for k, v in os.environ.items() if not k.startswith("BARCA_")}
     proc = subprocess.run(
-        [_find_binary(), "get", "lazy_report,eager_report,eager_all,lazy_all", "--json"],
+        [
+            _find_binary(),
+            "get",
+            "lazy_report,eager_report,eager_all,lazy_all",
+            "-o",
+            "value",
+            "--json",
+        ],
         cwd=root,
         env=env,
         capture_output=True,

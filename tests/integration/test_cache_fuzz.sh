@@ -190,12 +190,12 @@ for i in $(seq 1 "$ITERATIONS"); do
     esac
 
     # First run: execute everything
-    OUT1=$($BARCA get "$TARGET" "$FILE" 2>/dev/null)
+    OUT1=$($BARCA get "$TARGET" "$FILE" -o value --json 2>/dev/null)
     S1=$(steps "$OUT1")
     V1=$(output "$OUT1")
 
     # Second run: should be fully cached
-    OUT2=$($BARCA get "$TARGET" "$FILE" 2>/dev/null)
+    OUT2=$($BARCA get "$TARGET" "$FILE" -o value --json 2>/dev/null)
     S2=$(steps "$OUT2")
     V2=$(output "$OUT2")
 
@@ -216,7 +216,7 @@ for i in $(seq 1 "$ITERATIONS"); do
     fi
 
     # Third run: should re-execute SOMETHING (mutation invalidates)
-    OUT3=$($BARCA get "$TARGET" "$FILE" 2>/dev/null)
+    OUT3=$($BARCA get "$TARGET" "$FILE" -o value --json 2>/dev/null)
     S3=$(steps "$OUT3")
     V3=$(output "$OUT3")
 
@@ -232,7 +232,7 @@ for i in $(seq 1 "$ITERATIONS"); do
     fi
 
     # Fourth run: should be cached again (mutation is stable)
-    OUT4=$($BARCA get "$TARGET" "$FILE" 2>/dev/null)
+    OUT4=$($BARCA get "$TARGET" "$FILE" -o value --json 2>/dev/null)
     S4=$(steps "$OUT4")
     V4=$(output "$OUT4")
 

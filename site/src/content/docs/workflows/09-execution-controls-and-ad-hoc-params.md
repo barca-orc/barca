@@ -56,7 +56,7 @@ barca waits `N × retry_backoff` seconds before the next one. Both are accepted 
 `@task` and `@sensor`.
 
 ```bash
-barca get flaky pipeline.py --agent
+barca get flaky pipeline.py --agent -o value --json
 ```
 
 ```

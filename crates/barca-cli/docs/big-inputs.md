@@ -64,8 +64,8 @@ barca get first_ids pipeline.py
 barca get after_events pipeline.py
 ```
 
-`first_ids` returns `{"ids": [3, 13, 23, 33, 43]}`; `per_bucket` and `bucket_3` are written as
-parquet, so `barca get` prints an `_barca_artifact` pointer for them (`barca docs types`).
+`first_ids` returns `{"ids": [3, 13, 23, 33, 43]}` (`barca get first_ids pipeline.py -o value`
+prints it); `per_bucket` and `bucket_3` are written as parquet (`barca docs types`).
 
 ## The pandas path
 

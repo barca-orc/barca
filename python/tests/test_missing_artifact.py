@@ -227,9 +227,12 @@ def test_a_task_recomputes_an_upstream_whose_artifact_was_deleted(tmp_path):
 
 def test_a_deleted_target_artifact_is_recomputed_and_its_upstream_stays_cached(tmp_path):
     root = project(tmp_path)
-    assert statuses(cli(root, "get", "report", "--json")) == {"model": "ran", "report": "ran"}
+    assert statuses(cli(root, "get", "report", "-o", "value", "--json")) == {
+        "model": "ran",
+        "report": "ran",
+    }
     drop(root, "report")
-    doc = result(cli(root, "get", "report", "--json"))
+    doc = result(cli(root, "get", "report", "-o", "value", "--json"))
     assert by_name(doc, "status") == {"model": "cached", "report": "ran"}
     assert by_name(doc, "reason")["report"] == "artifact_missing"
     assert doc["final_output"] == {"from": 1}
@@ -237,10 +240,10 @@ def test_a_deleted_target_artifact_is_recomputed_and_its_upstream_stays_cached(t
 
 def test_a_pruned_intermediate_that_nothing_reads_is_not_recomputed(tmp_path):
     root = project(tmp_path)
-    assert result(cli(root, "get", "report", "--json"))["steps_executed"] == 2
+    assert result(cli(root, "get", "report", "-o", "value", "--json"))["steps_executed"] == 2
     drop(root, "model")
 
-    doc = result(cli(root, "get", "report", "--json"))
+    doc = result(cli(root, "get", "report", "-o", "value", "--json"))
     assert doc["steps_executed"] == 0
     assert by_name(doc, "status") == {"model": "cached", "report": "cached"}
     assert doc["final_output"] == {"from": 1}
@@ -259,11 +262,11 @@ def test_a_pruned_intermediate_that_nothing_reads_is_not_recomputed(tmp_path):
 
 def test_a_recomputed_step_recomputes_its_own_missing_input(tmp_path):
     root = project(tmp_path)
-    assert result(cli(root, "get", "report", "--json"))["steps_executed"] == 2
+    assert result(cli(root, "get", "report", "-o", "value", "--json"))["steps_executed"] == 2
     drop(root, "model")
     drop(root, "report")
 
-    doc = result(cli(root, "get", "report", "--json"))
+    doc = result(cli(root, "get", "report", "-o", "value", "--json"))
     # `report` was asked for and is gone; computing it reads `model`, which is gone too.
     assert by_name(doc, "status") == {"model": "ran", "report": "ran"}
     assert by_name(doc, "reason") == {"model": "artifact_missing", "report": "artifact_missing"}
@@ -272,24 +275,24 @@ def test_a_recomputed_step_recomputes_its_own_missing_input(tmp_path):
 
 def test_without_a_target_the_returned_asset_is_recomputed(tmp_path):
     root = project(tmp_path)
-    assert result(cli(root, "get", "pipeline.py", "--json"))["steps_executed"] == 2
+    assert result(cli(root, "get", "pipeline.py", "-o", "value", "--json"))["steps_executed"] == 2
     shutil.rmtree(root / ".barca" / "artifacts")
 
-    doc = result(cli(root, "get", "pipeline.py", "--json"))
+    doc = result(cli(root, "get", "pipeline.py", "-o", "value", "--json"))
     # `report` is the value the command returns; `model` is read to compute it.
     assert by_name(doc, "status") == {"model": "ran", "report": "ran"}
     assert doc["final_output"] == {"from": 1}
-    assert result(cli(root, "get", "pipeline.py", "--json"))["steps_executed"] == 0
+    assert result(cli(root, "get", "pipeline.py", "-o", "value", "--json"))["steps_executed"] == 0
 
 
 def test_without_a_target_an_end_of_the_pipeline_that_is_not_returned_stays_cached(tmp_path):
     root = project(tmp_path, RECOVERY)
-    first = result(cli(root, "get", "pipeline.py", "--json"))
+    first = result(cli(root, "get", "pipeline.py", "-o", "value", "--json"))
     assert first["steps_executed"] == 3 and first["final_output"] == {"v": 2}
     # `side` is read by no asset, and it is not the value the command returns (`b` is).
     drop(root, "side")
 
-    doc = result(cli(root, "get", "pipeline.py", "--json"))
+    doc = result(cli(root, "get", "pipeline.py", "-o", "value", "--json"))
     assert doc["steps_executed"] == 0
     assert by_name(doc, "status") == {"a": "cached", "b": "cached", "side": "cached"}
     assert artifacts(root, "side") == []
@@ -308,10 +311,10 @@ def test_without_a_target_an_end_of_the_pipeline_that_is_not_returned_stays_cach
 
 def test_several_targets_each_get_their_artifact_back(tmp_path):
     root = project(tmp_path)
-    assert result(cli(root, "get", "model,report", "--json"))["steps_executed"] == 2
+    assert result(cli(root, "get", "model,report", "-o", "value", "--json"))["steps_executed"] == 2
     drop(root, "model")
 
-    doc = result(cli(root, "get", "model,report", "--json"))
+    doc = result(cli(root, "get", "model,report", "-o", "value", "--json"))
     # `model` is a target here, so its artifact is needed although `report` is cached.
     assert by_name(doc, "status") == {"model": "ran", "report": "cached"}
     assert doc["targets"]["model"] == {"status": "success", "final_output": {"v": 1}}
@@ -564,12 +567,12 @@ def test_a_run_killed_during_a_recompute_is_interrupted_and_the_next_one_recover
 
 def test_agent_mode_announces_a_step_once_with_its_outcome(tmp_path):
     root = project(tmp_path, RECOVERY)
-    assert result(cli(root, "get", "pipeline.py", "--json"))["steps_executed"] == 3
+    assert result(cli(root, "get", "pipeline.py", "-o", "value", "--json"))["steps_executed"] == 3
     # `b` is returned and reads `a`: both are computed again. `side` is not needed.
     for name in ("a", "b", "side"):
         drop(root, name)
 
-    proc = cli(root, "get", "pipeline.py", "--json", "--agent")
+    proc = cli(root, "get", "pipeline.py", "-o", "value", "--json", "--agent")
     assert statuses(proc) == {"a": "ran", "side": "cached", "b": "ran"}
     # Never `cached` and then `completed` for the same step.
     assert agent_steps(proc.stderr, "a") == ["completed"]
@@ -619,7 +622,7 @@ def test_status_reports_a_needed_missing_artifact_as_stale_with_the_reason(tmp_p
 
 def test_only_the_partition_key_whose_artifact_is_missing_is_recomputed(tmp_path):
     root = project(tmp_path, PARTITIONED)
-    assert result(cli(root, "get", "part", "--json"))["steps_executed"] == 3
+    assert result(cli(root, "get", "part", "-o", "value", "--json"))["steps_executed"] == 3
     drop_key(root, "part", "b")
 
     plan = result(cli(root, "get", "part", "--dry-run", "--json"))
@@ -632,32 +635,32 @@ def test_only_the_partition_key_whose_artifact_is_missing_is_recomputed(tmp_path
         "will_run_keys": ["k=b"],
     }
 
-    doc = result(cli(root, "get", "part", "--json"))
+    doc = result(cli(root, "get", "part", "-o", "value", "--json"))
     (line,) = doc["steps"]
     assert (line["status"], line["reason"]) == ("partial", "artifact_missing")
     assert line["partitions"]["will_run_keys"] == ["k=b"]
     assert doc["steps_executed"] == 1
     assert len(key_artifacts(root, "part")) == 3
-    assert result(cli(root, "get", "part", "--json"))["steps_executed"] == 0
+    assert result(cli(root, "get", "part", "-o", "value", "--json"))["steps_executed"] == 0
 
 
 def test_a_pruned_partition_that_nothing_reads_is_not_recomputed(tmp_path):
     root = project(tmp_path, PARTITIONED)
-    assert result(cli(root, "get", "double", "--json"))["steps_executed"] == 6
+    assert result(cli(root, "get", "double", "-o", "value", "--json"))["steps_executed"] == 6
     drop_key(root, "part", "b")
 
-    doc = result(cli(root, "get", "double", "--json"))
+    doc = result(cli(root, "get", "double", "-o", "value", "--json"))
     assert doc["steps_executed"] == 0
     assert len(key_artifacts(root, "part")) == 2
 
 
 def test_a_running_partition_recomputes_only_the_upstream_key_it_reads(tmp_path):
     root = project(tmp_path, PARTITIONED)
-    assert result(cli(root, "get", "double", "--json"))["steps_executed"] == 6
+    assert result(cli(root, "get", "double", "-o", "value", "--json"))["steps_executed"] == 6
     drop_key(root, "part", "b")
     drop_key(root, "double", "b")
 
-    doc = result(cli(root, "get", "double", "--json"))
+    doc = result(cli(root, "get", "double", "-o", "value", "--json"))
     # double[k=b] was asked for and is gone; it reads part[k=b], gone too. Nothing else runs.
     assert doc["steps_executed"] == 2
     lines = {s["id"].rsplit(":", 1)[1]: s for s in doc["steps"]}
@@ -668,13 +671,13 @@ def test_a_running_partition_recomputes_only_the_upstream_key_it_reads(tmp_path)
 
 def test_a_collect_consumer_gets_every_key_when_one_was_missing(tmp_path):
     root = project(tmp_path, PARTITIONED)
-    assert result(cli(root, "get", "summary", "--json"))["final_output"] == {
+    assert result(cli(root, "get", "summary", "-o", "value", "--json"))["final_output"] == {
         "keys": ["a", "b", "c"]
     }
     drop_key(root, "part", "b")
     drop(root, "summary")
 
-    doc = result(cli(root, "get", "summary", "--json"))
+    doc = result(cli(root, "get", "summary", "-o", "value", "--json"))
     # The missing key is computed before `summary` reads the list, so the list is complete.
     assert doc["final_output"] == {"keys": ["a", "b", "c"]}
     assert doc["steps_executed"] == 2
@@ -682,7 +685,7 @@ def test_a_collect_consumer_gets_every_key_when_one_was_missing(tmp_path):
 
 def test_a_missing_partitions_from_source_is_recomputed_before_expansion(tmp_path):
     root = project(tmp_path, DYNAMIC)
-    assert result(cli(root, "get", "per_key", "--json"))["steps_executed"] == 3
+    assert result(cli(root, "get", "per_key", "-o", "value", "--json"))["steps_executed"] == 3
     drop(root, "keys")
 
     # The keys are not known until the source has run again.
@@ -690,7 +693,7 @@ def test_a_missing_partitions_from_source_is_recomputed_before_expansion(tmp_pat
     assert by_name(plan, "action") == {"keys": "run", "per_key": "unknown"}
     assert by_name(plan, "reason") == {"keys": "artifact_missing", "per_key": "partitions_unknown"}
 
-    again = cli(root, "get", "per_key", "--json")
+    again = cli(root, "get", "per_key", "-o", "value", "--json")
     doc = result(again)
     assert by_name(doc, "status") == {"keys": "ran", "per_key": "cached"}
     assert by_name(doc, "reason")["keys"] == "artifact_missing"
@@ -708,9 +711,11 @@ def store_files(store: Path, node: str) -> list[Path]:
 def test_with_a_store_a_deleted_local_copy_is_fetched_not_recomputed(tmp_path):
     root = project(tmp_path)
     store = str(tmp_path / "store")
-    assert cli(root, "get", "report", "--json", BARCA_REMOTE_URI=store).returncode == 0
+    assert (
+        cli(root, "get", "report", "-o", "value", "--json", BARCA_REMOTE_URI=store).returncode == 0
+    )
     shutil.rmtree(root / ".barca" / "artifacts")
-    proc = cli(root, "get", "report", "--json", BARCA_REMOTE_URI=store)
+    proc = cli(root, "get", "report", "-o", "value", "--json", BARCA_REMOTE_URI=store)
     assert statuses(proc) == {"model": "cached", "report": "cached"}
     assert json.loads(proc.stdout)["final_output"] == {"from": 1}
 
@@ -734,7 +739,7 @@ def test_a_result_gone_from_both_disk_and_store_is_recomputed(tmp_path):
     root = project(tmp_path)
     store = tmp_path / "store"
     env = {"BARCA_REMOTE_URI": str(store)}
-    assert result(cli(root, "get", "report", "--json", **env))["steps_executed"] == 2
+    assert result(cli(root, "get", "report", "-o", "value", "--json", **env))["steps_executed"] == 2
     drop(root, "report")
     (stored,) = store_files(store, "report")
     stored.unlink()
@@ -743,7 +748,7 @@ def test_a_result_gone_from_both_disk_and_store_is_recomputed(tmp_path):
     assert by_name(plan, "action") == {"model": "cached", "report": "run"}
     assert by_name(plan, "reason")["report"] == "artifact_missing"
 
-    proc = cli(root, "get", "report", "--json", **env)
+    proc = cli(root, "get", "report", "-o", "value", "--json", **env)
     doc = result(proc)
     assert by_name(doc, "status") == {"model": "cached", "report": "ran"}
     assert by_name(doc, "reason")["report"] == "artifact_missing"
@@ -751,7 +756,7 @@ def test_a_result_gone_from_both_disk_and_store_is_recomputed(tmp_path):
     assert "could not fetch" not in proc.stderr
     # It is back in the store for every machine, and a plain hit from then on.
     assert store_files(store, "report") == [stored]
-    assert result(cli(root, "get", "report", "--json", **env))["steps_executed"] == 0
+    assert result(cli(root, "get", "report", "-o", "value", "--json", **env))["steps_executed"] == 0
 
 
 def test_an_input_gone_from_both_disk_and_store_is_recomputed_for_its_reader(tmp_path):
@@ -775,12 +780,12 @@ def test_a_result_gone_from_both_that_nothing_reads_is_not_recomputed(tmp_path):
     root = project(tmp_path)
     store = tmp_path / "store"
     env = {"BARCA_REMOTE_URI": str(store)}
-    assert result(cli(root, "get", "report", "--json", **env))["steps_executed"] == 2
+    assert result(cli(root, "get", "report", "-o", "value", "--json", **env))["steps_executed"] == 2
     drop(root, "model")
     (stored,) = store_files(store, "model")
     stored.unlink()
 
-    doc = result(cli(root, "get", "report", "--json", **env))
+    doc = result(cli(root, "get", "report", "-o", "value", "--json", **env))
     assert doc["steps_executed"] == 0
     assert doc["final_output"] == {"from": 1}
     assert store_files(store, "model") == []
@@ -823,12 +828,12 @@ def test_a_store_that_cannot_be_read_still_fails_the_run(tmp_path):
     root = project(tmp_path)
     store = tmp_path / "store"
     env = {"BARCA_REMOTE_URI": str(store)}
-    assert result(cli(root, "get", "report", "--json", **env))["steps_executed"] == 2
+    assert result(cli(root, "get", "report", "-o", "value", "--json", **env))["steps_executed"] == 2
     drop(root, "report")
     (stored,) = store_files(store, "report")
     stored.chmod(0)
     try:
-        proc = cli(root, "get", "report", "--json", **env)
+        proc = cli(root, "get", "report", "-o", "value", "--json", **env)
     finally:
         stored.chmod(0o644)
     # The object is there but unreadable: that is a store problem, not a missing result.

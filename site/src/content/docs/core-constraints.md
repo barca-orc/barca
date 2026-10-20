@@ -112,13 +112,13 @@ code, the helper code it reaches, and its inputs. If the code changes from versi
 version B and back to A, the results computed for A are cache hits again:
 
 ```
-$ barca get b prov.py --json        # a returns 1
+$ barca get b prov.py -o value --json        # a returns 1
 ... "final_output":2 ... "steps_executed":2
 $ # edit a to return 5
-$ barca get b prov.py --json
+$ barca get b prov.py -o value --json
 ... "final_output":6 ... "steps_executed":2
 $ # edit a back to return 1
-$ barca get b prov.py --json
+$ barca get b prov.py -o value --json
 ... "final_output":2 ... "id":"prov.py:a" ... "status":"cached" ... "id":"prov.py:b" ... "status":"cached" ... "steps_executed":0
 ```
 

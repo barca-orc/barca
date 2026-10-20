@@ -69,16 +69,23 @@ def big_ids(orders: pl.LazyFrame) -> pl.LazyFrame:    # same file, scanned lazil
 
 ## Reading results back
 
-`barca get` prints one JSON object on stdout (whenever stdout is not a terminal, or with `--json`). `final_output` is the value itself for json
-artifacts; for parquet and pickle it is a pointer:
+`barca get` returns the artifact's path. In a terminal it prints a summary and the path; it
+prints one JSON object on stdout whenever stdout is not a terminal, or with `--json`, where
+`final_output` is a pointer for every format:
 
 ```json
 {"final_output": {"_barca_artifact": {"path": ".barca/artifacts/...parquet", "format": "parquet", "size_bytes": 862}}}
 ```
 
-To see the data, either call the Python API, which deserializes for you
-(`import barca; barca.get("orders", "pipeline.py")` returns a pandas `DataFrame` for parquet),
-or read the `path` yourself (`duckdb.sql("select * from '<path>'")`).
+To see the data:
+
+- `barca get orders pipeline.py -o value` prints the value; a table (parquet, CSV, a pickled
+  DataFrame) prints as a list of row objects. `-o value --json` puts it in `final_output`.
+- `barca sql "select * from orders"` queries it (`barca docs sql`).
+- The Python API deserializes for you: `import barca; barca.get("orders", "pipeline.py")`
+  returns a pandas `DataFrame` for parquet.
+- Or read the `path` yourself (`duckdb.sql("select * from '<path>'")`, or
+  `barca get orders pipeline.py -o path` for just the path).
 
 ## Gotchas
 

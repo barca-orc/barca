@@ -15,8 +15,8 @@ steps[].status : string
 steps_executed : integer
 targets : object
 targets.<name> : object
-targets.<name>.final_output : <user value>|object
-targets.<name>.final_output._barca_artifact : object  (optional)
+targets.<name>.final_output : object
+targets.<name>.final_output._barca_artifact : object
 targets.<name>.final_output._barca_artifact.format : string
 targets.<name>.final_output._barca_artifact.path : string
 targets.<name>.final_output._barca_artifact.size_bytes : integer

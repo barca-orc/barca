@@ -364,10 +364,9 @@ Limits on 0.18.0:
   decorator (`partitions(["emea", "amer", "apac"])`), adding a key ran every key again. From
   0.19 a new key runs alone however the keys are written: a literal list, a module-level
   constant as above, another expression, or `partitions_from(...)`.
-- **No single key can be targeted or refreshed.** `barca get sales` and `--refresh sales`
-  act on every key.
-- **`barca get sales` prints one key's value** as `final_output`, not all of them. Read a
-  partitioned asset through `collect()` or `barca sql`.
+- **`barca get sales` returns every key**: one artifact path per key (`-o value` for the
+  values). `--partition region=emea` computes and returns only that key, and scopes
+  `--refresh sales` to it. Upstream partitioned assets are not narrowed by it.
 - **A removed key's result stays** on disk and in the `barca sql` view.
 
 [Parametrized Assets and Partitions](/workflows/03-parametrized-assets-and-partitions/) shows

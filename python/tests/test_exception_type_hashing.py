@@ -52,15 +52,15 @@ def unrelated():
         assert proc.returncode == 0, proc.stderr
         return json.loads(proc.stdout)
 
-    assert cli("get", "p.py", "--json")["steps_executed"] == 2
-    assert cli("get", "value", "p.py", "--json")["final_output"] == 1
-    assert cli("get", "p.py", "--json")["steps_executed"] == 0
+    assert cli("get", "p.py", "-o", "value", "--json")["steps_executed"] == 2
+    assert cli("get", "value", "p.py", "-o", "value", "--json")["final_output"] == 1
+    assert cli("get", "p.py", "-o", "value", "--json")["steps_executed"] == 0
     (tmp_path / "helpers.py").write_text("def handled():\n    return TypeError\n")
-    changed = cli("get", "p.py", "--json")
+    changed = cli("get", "p.py", "-o", "value", "--json")
     assert changed["steps_executed"] == 1
     assert {s["id"]: s["status"] for s in changed["steps"]} == {
         "p.py:value": "ran",
         "p.py:unrelated": "cached",
     }
-    assert cli("get", "value", "p.py", "--json")["final_output"] == 222
-    assert cli("get", "p.py", "--json")["steps_executed"] == 0
+    assert cli("get", "value", "p.py", "-o", "value", "--json")["final_output"] == 222
+    assert cli("get", "p.py", "-o", "value", "--json")["steps_executed"] == 0

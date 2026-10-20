@@ -157,7 +157,7 @@ def test_success_exits_0_and_says_so(project):
     assert proc.returncode == 0, proc.stderr
     out = last_json(proc)
     assert out["status"] == "success"
-    assert out["final_output"] == 1
+    assert out["final_output"]["_barca_artifact"]["format"] == "json"
 
 
 # ─── 1: a user step failed ───────────────────────────────────────────────────

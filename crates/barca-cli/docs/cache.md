@@ -493,10 +493,9 @@ barca run publish pipeline.py                    # model is cached again
 
 - **Needed** means one of: a step that is going to run takes the artifact as an input; a
   `partitions_from` step is expanded from it; or it is the output the command returns: the
-  targets you named, or with no target the one asset whose value is `final_output` (the last
-  asset). A partitioned target materializes every key, but `final_output` currently returns
-  only the first key's value in lexical key order. Every requested partition is still
-  checked (one file lookup per key, a few milliseconds at 5,000 keys). Every other asset at the
+  targets you named, or with no target the one asset whose artifact is `final_output` (the last
+  asset). A partitioned target returns every key (or the keys `--partition` selects), so every
+  returned partition is checked (one file lookup per key, a few milliseconds at 5,000 keys). Every other asset at the
   end of a pipeline is treated like an intermediate and is not looked at.
 - **Missing** means not on this machine's disk and, with an artifact store, not in the store
   either (`barca docs remote`). The store has to be there for that to count: if its bucket,
@@ -596,6 +595,7 @@ Known limits:
 | Recompute everything in the cone | `barca get target pipeline.py --refresh-all` |
 | Recompute chosen assets and everything downstream of them | `barca get target pipeline.py --refresh a,b` |
 | Recompute only the chosen assets | `barca get target pipeline.py --refresh a,b --no-cascade` |
+| Recompute some keys of a partitioned target | `barca get sales pipeline.py --partition region=emea --refresh sales` |
 | Run a task, cached upstream | `barca run task pipeline.py` |
 | Run a task, refresh chosen upstream assets and everything downstream of them | `barca run task pipeline.py --refresh a,b` |
 | Run a task, refresh only the chosen assets | `barca run task pipeline.py --refresh a,b --no-cascade` |
@@ -626,6 +626,9 @@ use `--refresh-all`. In Python, use `barca.get(..., refresh_all=True)`.
   refreshed data never reaches it. Barca prints
   `warning: 'mid' was served from cache but depends on refreshed 'src' ...` when this happens.
   `--no-cascade` without `--refresh` is a usage error (exit 2).
+- With `--partition`, only the selected keys of the target are planned, so refreshing the target
+  recomputes only them. An upstream partitioned asset named in `--refresh` is recomputed for
+  every key: the selection narrows the target only (`barca docs partitions`).
 
 For external data that changes in place (a blob overwritten at the same path), the canonical
 answer is a sensor (see "External data that changes in place" above). Without one, `--refresh`

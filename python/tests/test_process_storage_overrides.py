@@ -78,7 +78,7 @@ def observed_environment(root, store, **overrides):
 
 def test_remote_off_preserves_history_recomputes_locally_and_reuses_local_cache(project):
     root, store = project
-    first = succeeded(cli(root, environment(store), "get", "total", "--json"))
+    first = succeeded(cli(root, environment(store), "get", "total", "-o", "value", "--json"))
     shared_db = store / "default/state/metadata.db"
     shared_before = shared_db.read_bytes()
     env, observer = observed_environment(
@@ -94,9 +94,9 @@ def test_remote_off_preserves_history_recomputes_locally_and_reuses_local_cache(
     assert all(
         n["cache"]["state"] != "cached" and n.get("shape") is None for n in inspected["nodes"]
     )
-    local = succeeded(cli(root, env, "get", "total", "--json"))
+    local = succeeded(cli(root, env, "get", "total", "-o", "value", "--json"))
     assert local["steps_executed"] == 2 and local["final_output"] == 3
-    assert succeeded(cli(root, env, "get", "total", "--json"))["steps_executed"] == 0
+    assert succeeded(cli(root, env, "get", "total", "-o", "value", "--json"))["steps_executed"] == 0
     inspected = succeeded(cli(root, env, "status", "total", "--json"))
     assert all(".barca/artifacts/" in n["cache"]["artifact"] for n in inspected["nodes"])
     assert not list(observer.glob("*.pids")), "remote-off contacted the configured store"
@@ -112,8 +112,8 @@ def test_remote_off_uses_older_local_cache_behind_newer_remote_row_and_sql_is_lo
     pytest.importorskip("duckdb")
     root, store = project
     off = environment(store, BARCA_REMOTE="off")
-    succeeded(cli(root, off, "get", "part", "--json"))
-    succeeded(cli(root, off, "get", "total", "--json"))
+    succeeded(cli(root, off, "get", "part", "-o", "value", "--json"))
+    succeeded(cli(root, off, "get", "total", "-o", "value", "--json"))
     # A newer remote row must not hide an existing local result with the same identity.
     with sqlite3.connect(root / ".barca/metadata.db") as conn:
         columns = [
@@ -132,7 +132,7 @@ def test_remote_off_uses_older_local_cache_behind_newer_remote_row_and_sql_is_lo
         )
     conn.close()
     env, observer = observed_environment(root, store, BARCA_REMOTE="off")
-    assert succeeded(cli(root, env, "get", "total", "--json"))["steps_executed"] == 0
+    assert succeeded(cli(root, env, "get", "total", "-o", "value", "--json"))["steps_executed"] == 0
     inspected = succeeded(cli(root, env, "status", "total", "--json"))
     assert all(n.get("shape") is not None and "note" not in n["shape"] for n in inspected["nodes"])
     first = next(n for n in inspected["nodes"] if n["name"] == "first")
@@ -147,7 +147,9 @@ def test_remote_off_uses_older_local_cache_behind_newer_remote_row_and_sql_is_lo
 @pytest.mark.parametrize("remote", ["", "on"])
 def test_empty_keeps_remote_configuration_and_invalid_switch_is_usage_error(project, remote):
     root, store = project
-    result = cli(root, environment(store, BARCA_REMOTE=remote), "get", "total", "--json")
+    result = cli(
+        root, environment(store, BARCA_REMOTE=remote), "get", "total", "-o", "value", "--json"
+    )
     if remote == "":
         assert succeeded(result)["final_output"] == 3
         assert (store / "default/state/metadata.db").is_file()

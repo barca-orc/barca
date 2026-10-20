@@ -61,6 +61,18 @@ and these tags are available on the same releases page.
 
 ## 0.24.0
 
+### Breaking
+
+- **Breaking:** `barca get` prints artifact paths by default (#404). In `--json` (and whenever
+  stdout is piped) `final_output` is always the pointer `{"_barca_artifact": {"path", "format",
+  "size_bytes"}}`, for json artifacts too, and a terminal shows the path with a small json value
+  previewed under it. The old default, the value, is `-o value` (`-o value --json` for the JSON
+  line); `-o path` prints only the paths. `barca.get()` still returns the value. **Breaking:** a
+  partitioned target returns every key, sorted, never one key (#287): `final_output` is an object
+  keyed by partition key (`"region=emea"`), and `barca.get()` returns a dict of key to value.
+  `--partition region=emea,amer` (or a JSON object for compound keys) selects keys, computes only
+  those and scopes `--refresh` of the target; `barca.get(..., partition=...)` does the same.
+
 ### Bug Fixes
 
 - Follow project helper references in exception handler types, including exception tuples

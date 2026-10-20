@@ -16,7 +16,8 @@ under `.barca/`. Ask the `barca` CLI what exists, what is cached and what ran. F
 barca list                              # discover: every node in the project, its kind, inputs, env
 barca status                            # cached/stale/never_run and why, last run, rows/columns
 barca get total --dry-run               # preview: what would run or come from cache; no steps execute
-barca get total                         # execute an asset and its upstream cone
+barca get total                         # execute an asset and its upstream cone; prints its artifact path
+barca get total -o value                # ... and print the value instead
 barca run report                        # execute a task (always re-runs; upstream assets cached)
 barca sql "select * from total"         # look at a cached result with DuckDB; runs nothing
 ```
@@ -65,13 +66,17 @@ barca get total pipeline.py --refresh-all         # recompute an asset's whole c
   consumers are `unknown` (reason `sensor_output_unknown`). See `barca docs cache`.
 - Several targets: the result has `targets` (per name: `status`, then `final_output`, or
   `failed_node` and `error`) instead of `final_output`. Every target runs even if another fails.
+- A partitioned target returns every key. `--partition region=emea,amer` (a JSON object for
+  compound keys) computes and returns only those keys, and scopes `--refresh` of the target.
 
 ## Output contract
 
 - **stdout** is the result: JSON whenever stdout is not a terminal; pass `--json` in scripts
   anyway. `get`/`run` print one line: `status` (`success`/`failed`), `run_id`,
-  `steps_executed`, `steps` (each `ran`/`cached` and why), `final_output` (for parquet/pickle a
-  pointer, `{"_barca_artifact": {"path", "format", "size_bytes"}}`), and `warnings`: always an
+  `steps_executed`, `steps` (each `ran`/`cached` and why), `final_output` (on `get` the artifact
+  pointer `{"_barca_artifact": {"path", "format", "size_bytes"}}` for every format, the value
+  with `-o value --json`; for a partitioned target an object keyed by `dim=value`), and
+  `warnings`: always an
   array, `[]` or plan-time warnings such as an input a step never uses (also one
   `[barca] warning: ...` line each on stderr; fix them, they cost load time).
 - Retrieve captured step stdout with `barca logs RUN_ID --json`. JSON runs suppress captured
@@ -128,7 +133,7 @@ barca run report pipeline.py | jq '.status'
 | What exists?                      | `barca list <files>`                       |
 | What state is it in?              | `barca status [target] <files>`            |
 | What would run?                   | add `--dry-run`                            |
-| Asset value / run a task          | `barca get <asset> <files>` / `barca run <task> <files>` |
+| Asset path / value / run a task   | `barca get <asset> <files>` / add `-o value` / `barca run <task> <files>` |
 | Re-run upstream assets            | `barca run <task> <files> --refresh a,b`   |
 | Pick up data changed in place     | a `@sensor` returning its etag, read by the asset |
 | Past runs                         | `barca history`                            |

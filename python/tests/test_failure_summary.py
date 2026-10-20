@@ -56,7 +56,8 @@ def test_final_summary_and_complete_blocked_fanout(tmp_path, target, count, mode
         skipped = {s["id"] for s in result["steps"] if s["status"] == "skipped"}
         assert skipped == ({"pipeline.py:part", "pipeline.py:combined"} if count else set())
         if "," in target:
-            assert result["targets"]["independent"]["final_output"] == 42
+            pointer = result["targets"]["independent"]["final_output"]["_barca_artifact"]
+            assert json.loads((tmp_path / pointer["path"]).read_text()) == 42
             failed = result["targets"]["combined"]
         else:
             failed = result

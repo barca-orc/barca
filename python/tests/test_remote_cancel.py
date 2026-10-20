@@ -235,14 +235,14 @@ def recovers(run: Run, target: str, expected) -> subprocess.CompletedProcess:
     """The next run on the machine succeeds, and afterwards another machine has its results."""
     run.release()
     (run.root / "release-slow").write_text("")
-    again = cli(run.root, run.store, "get", target, "--json")
+    again = cli(run.root, run.store, "get", target, "-o", "value", "--json")
     assert again.returncode == 0, again.stderr
     assert json.loads(again.stdout)["final_output"] == expected
     other = run.root.parent / f"other-{run.root.name}"
     other.mkdir()
     (other / "pipeline.py").write_text(PIPELINE)
     (other / "release-slow").write_text("")
-    shared = cli(other, run.store, "get", target, "--json")
+    shared = cli(other, run.store, "get", target, "-o", "value", "--json")
     assert shared.returncode == 0, shared.stderr
     doc = json.loads(shared.stdout)
     assert doc["final_output"] == expected and doc["steps_executed"] == 0, doc
@@ -261,7 +261,7 @@ def project(tmp_path):
 
 
 def produced(store: Path, make) -> None:
-    assert cli(make("producer"), store, "get", "total", "--json").returncode == 0
+    assert cli(make("producer"), store, "get", "total", "-o", "value", "--json").returncode == 0
 
 
 GROUP = pytest.mark.parametrize("whole_group", [True, False], ids=["job", "barca-only"])
@@ -273,7 +273,7 @@ GROUP = pytest.mark.parametrize("whole_group", [True, False], ids=["job", "barca
 @GROUP
 def test_ctrl_c_during_the_end_of_run_upload_wait(project, whole_group):
     store, make = project
-    run = Run(make("m"), store, "put", "get", "numbers", "--json", "--agent")
+    run = Run(make("m"), store, "put", "get", "numbers", "-o", "value", "--json", "--agent")
     run.held_at("put").printed("1/1 steps | done")
     run.sigint(whole_group)
     run.end()
@@ -292,7 +292,7 @@ def test_ctrl_c_during_the_end_of_run_upload_wait(project, whole_group):
 def test_ctrl_c_during_a_fetch(project, whole_group):
     store, make = project
     produced(store, make)
-    run = Run(make("m"), store, "get", "get", "total", "--json", "--agent").held_at("get")
+    run = Run(make("m"), store, "get", "get", "total", "-o", "value", "--json", "--agent").held_at("get")
     # The download is under way: its temp file is there.
     assert len(temp_files(run.root)) == 1
     run.sigint(whole_group)
@@ -309,7 +309,7 @@ def test_ctrl_c_during_the_state_push(project, whole_group):
     """The steps finished and their artifacts are in the store; the push of the record is cut.
     The run is `cancelled`, and its wrap-up shares that record."""
     store, make = project
-    run = Run(make("m"), store, "push", "get", "total", "--json", "--agent").held_at("push")
+    run = Run(make("m"), store, "push", "get", "total", "-o", "value", "--json", "--agent").held_at("push")
     run.sigint(whole_group)
     run.end()
 
@@ -326,7 +326,7 @@ def test_ctrl_c_during_the_state_push(project, whole_group):
 def test_ctrl_c_while_the_shared_history_is_pulled(project, whole_group):
     store, make = project
     produced(store, make)
-    run = Run(make("m"), store, "pull", "get", "total", "--json", "--agent").held_at("pull")
+    run = Run(make("m"), store, "pull", "get", "total", "-o", "value", "--json", "--agent").held_at("pull")
     run.sigint(whole_group)
     run.end()
 
@@ -339,7 +339,7 @@ def test_ctrl_c_while_the_shared_history_is_pulled(project, whole_group):
 def test_ctrl_c_during_a_step_with_an_upload_in_flight(project, whole_group):
     """The case of #249: the interrupt arrives while steps run and the helper is uploading."""
     store, make = project
-    run = Run(make("m"), store, "put", "get", "slow", "--json", "--agent").held_at("put")
+    run = Run(make("m"), store, "put", "get", "slow", "-o", "value", "--json", "--agent").held_at("put")
     wait_until((run.root / "slow.started").exists, "the second step to start", run.proc)
     run.sigint(whole_group)
     run.end()
@@ -356,7 +356,7 @@ def test_ctrl_c_during_a_step_with_an_upload_in_flight(project, whole_group):
 def test_a_stalled_store_holds_a_cancelled_run_for_the_wrap_up_limit_and_no_longer(project):
     store, make = project
     points = "put,push"
-    run = Run(make("m"), store, points, "get", "numbers", "--json", "--agent", stall=True)
+    run = Run(make("m"), store, points, "get", "numbers", "-o", "value", "--json", "--agent", stall=True)
     run.held_at("put").printed("1/1 steps | done")
     started = time.monotonic()
     run.sigint()
@@ -379,7 +379,7 @@ def test_a_stalled_store_holds_a_cancelled_run_for_the_wrap_up_limit_and_no_long
 @GROUP
 def test_a_second_ctrl_c_abandons_the_wrap_up_at_once(project, whole_group):
     store, make = project
-    run = Run(make("m"), store, "push", "get", "total", "--json", "--agent", stall=True)
+    run = Run(make("m"), store, "push", "get", "total", "-o", "value", "--json", "--agent", stall=True)
     run.held_at("push")
     run.sigint(whole_group)
     # The first Ctrl-C cut the push and the wrap-up started another, which stalls too.
@@ -397,7 +397,7 @@ def test_a_second_ctrl_c_abandons_the_wrap_up_at_once(project, whole_group):
 
 def test_a_third_ctrl_c_changes_nothing(project):
     store, make = project
-    run = Run(make("m"), store, "push", "get", "total", "--json", "--agent", stall=True)
+    run = Run(make("m"), store, "push", "get", "total", "-o", "value", "--json", "--agent", stall=True)
     run.held_at("push")
     run.sigint()
     wait_until(lambda: len(run.arrivals("push")) == 2, "the wrap-up push", run.proc)
@@ -413,10 +413,10 @@ def test_a_cancelled_push_changes_nothing_shared_until_the_wrap_up_lands(project
     abandoned wrap-up leave the shared history byte for byte as it was."""
     store, make = project
     root = make("m")
-    assert cli(root, store, "get", "numbers", "--json").returncode == 0
+    assert cli(root, store, "get", "numbers", "-o", "value", "--json").returncode == 0
     shared = (store / "default" / "state" / "metadata.db").read_bytes()
 
-    run = Run(root, store, "push", "get", "total", "--json", "--agent", stall=True)
+    run = Run(root, store, "push", "get", "total", "-o", "value", "--json", "--agent", stall=True)
     run.held_at("push")
     run.sigint()
     wait_until(lambda: len(run.arrivals("push")) == 2, "the wrap-up push", run.proc)
@@ -433,7 +433,7 @@ def test_a_cancelled_push_changes_nothing_shared_until_the_wrap_up_lands(project
 
 def test_a_wrap_up_push_that_fails_is_a_note_and_the_exit_code_stays_130(project):
     store, make = project
-    run = Run(make("m"), store, "put", "get", "slow", "--json", "--agent").held_at("put")
+    run = Run(make("m"), store, "put", "get", "slow", "-o", "value", "--json", "--agent").held_at("put")
     wait_until((run.root / "slow.started").exists, "the second step to start", run.proc)
     # Something the push cannot get past, put there after the run's pull.
     (store / "default" / "state" / "metadata.db" / "theirs").mkdir(parents=True)
@@ -465,7 +465,7 @@ def test_a_push_that_landed_just_before_the_interrupt_is_followed_by_the_cancell
     interrupted before it hears so. The wrap-up pushes again, so every machine sees
     `cancelled`, like this one."""
     store, make = project
-    run = Run(make("m"), store, "pushed", "get", "total", "--json", "--agent").held_at("pushed")
+    run = Run(make("m"), store, "pushed", "get", "total", "-o", "value", "--json", "--agent").held_at("pushed")
     assert (store / "default" / "state" / "metadata.db").is_file()  # it landed
     run.sigint()
     run.end()
@@ -486,7 +486,7 @@ def test_abandoned_wrap_up_preserves_cancellation_on_next_pull_and_push(project,
     """
     store, make = project
     points = "pushed" if corrective_landed else "pushed,repush"
-    run = Run(make("m"), store, points, "get", "total", "--json", "--agent", stall=True)
+    run = Run(make("m"), store, points, "get", "total", "-o", "value", "--json", "--agent", stall=True)
     run.held_at("pushed")
     shared_db = store / "default" / "state" / "metadata.db"
     run_id = history(run.root, store)[0]["run_id"]
@@ -505,7 +505,7 @@ def test_abandoned_wrap_up_preserves_cancellation_on_next_pull_and_push(project,
         )
 
     unrelated = make("unrelated")
-    added = cli(unrelated, store, "get", "numbers", "--json")
+    added = cli(unrelated, store, "get", "numbers", "-o", "value", "--json")
     assert added.returncode == 0, added.stderr
     unrelated_id = json.loads(added.stdout)["run_id"]
     # Inspection pulls without uploading: the correction itself must survive the swap.
@@ -519,8 +519,8 @@ def test_abandoned_wrap_up_preserves_cancellation_on_next_pull_and_push(project,
     # Force a conflict after the repaired pull. Replay must keep cancellation and
     # both unrelated runs while retaining completed materializations exactly once.
     run.hold_dir.rename(run.hold_dir.with_name("completed-hold"))
-    recovery = Run(run.root, store, "push", "get", "total", "--json").held_at("push")
-    concurrent = cli(unrelated, store, "get", "total", "--json")
+    recovery = Run(run.root, store, "push", "get", "total", "-o", "value", "--json").held_at("push")
+    concurrent = cli(unrelated, store, "get", "total", "-o", "value", "--json")
     assert concurrent.returncode == 0, concurrent.stderr
     concurrent_id = json.loads(concurrent.stdout)["run_id"]
     recovery.release()
@@ -542,13 +542,13 @@ def test_ctrl_c_after_a_failed_run_was_shared_leaves_its_record_as_it_is(project
     """A run with a failed step is recorded and shared as `failed`, then downloads an earlier
     output to return. Interrupted there, the command is cancelled; the run already ended."""
     store, make = project
-    assert cli(make("producer"), store, "get", "numbers", "--json").returncode == 0
+    assert cli(make("producer"), store, "get", "numbers", "-o", "value", "--json").returncode == 0
     root = make("m")
     (root / "pipeline.py").write_text(
         "from barca import asset\n\n\n@asset()\ndef numbers() -> list:\n    return [1, 2, 3]\n"
         "\n\n@asset()\ndef zz_broken() -> int:\n    raise ValueError('no')\n"
     )
-    run = Run(root, store, "get", "get", "--json", "--agent").held_at("get")
+    run = Run(root, store, "get", "get", "-o", "value", "--json", "--agent").held_at("get")
     run.printed("pushed state")
     run.sigint()
     run.end()
@@ -623,7 +623,7 @@ def test_helpers_exit_on_their_own_when_barca_is_killed(project, phase):
     store, make = project
     if needs_producer:
         produced(store, make)
-    run = Run(make("m"), store, points, "get", target, "--json", "--agent")
+    run = Run(make("m"), store, points, "get", target, "-o", "value", "--json", "--agent")
     run.held_at(points)
     if printed:
         run.printed(printed)
@@ -692,7 +692,7 @@ def test_any_number_of_ctrl_c_at_any_gap_ends_cancelled(
         produced(store, make)
     if stalled and "push" not in points:
         points += ",push"  # the wrap-up push stalls as well
-    run = Run(make("m"), store, points, "get", target, "--json", "--agent", stall=stalled)
+    run = Run(make("m"), store, points, "get", target, "-o", "value", "--json", "--agent", stall=stalled)
     run.held_at(points.split(",")[0])
     if phase == "step":
         wait_until((run.root / "slow.started").exists, "the slow step to start", run.proc)
