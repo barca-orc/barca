@@ -1,6 +1,6 @@
 # Direction
 
-Last reset: 2026-10-10, at v0.22.0; re-triaged 2026-10-20, at v0.24.1. The pinned [Direction issue](https://github.com/barca-orc/barca/issues/395) mirrors this file; it replaced the roadmap issue (#344) and the adoption tracker (#108).
+Last reset: 2026-10-10, at v0.22.0; re-triaged 2026-10-20 at v0.24.1, and re-planned the same day at v0.24.2 for three new requests. The pinned [Direction issue](https://github.com/barca-orc/barca/issues/395) mirrors this file; it replaced the roadmap issue (#344) and the adoption tracker (#108).
 
 ## What barca is
 
@@ -20,28 +20,30 @@ An embedded orchestrator. You mark Python functions with `@asset`, `@sensor`, `@
 
 ## Now, in order
 
-An issue's milestone is the release it ships in; the four items below are the order.
+An issue's milestone is the release it ships in; the items below are the order.
 
-1. **Correctness and recovery.** Shipped at 0.24.1: upload receipts (#381), a killed run that stays `running` (#290). Left: the last two hash holes, re-exports and deep import chains (#295); a partitioned target that returns one key (#287); a worker killed by the kernel reported as a bare `worker disconnected` (#433); failed steps that report no duration in telemetry (#437); superlinear cold partition scaling, reproduced before it is fixed (#345); the realistic fixture, small size first (#250). The corrupt shared-history blob (#243) closes when the pull is removed (#403).
-2. **Everyday use.** Shipped at 0.24.1: per-step timings (#386), usable task output (#387), `barca doctor` (#388), the one-line failure summary (#389), sane `barca list` defaults (#391), the changed-bytes warning (#392). Left: paths by default in `barca get` output (#404), a remote store that fails soft after the work is done (#390), a metadata backup with a restore command in place of the shared-history blob (RFC-0009, #403), logs you can join to a trace under `serve` (#434), current numbers on the comparison pages (#65). Later: a limit on how many heavy workers run at once (#436).
+1. **Correctness and recovery.** Shipped at 0.24.2: the last two hash holes (#295), a worker killed by the kernel named by its signal (#433), failed steps' real duration in telemetry (#437), a tick that duplicated an API-started run (#432). Left: superlinear cold partition scaling (#345, fixed in #456), a partitioned target that returns one key (#287), and a disk that `.barca/` fills because nothing is ever deleted (#457). The corrupt shared-history blob (#243) closes when the pull is removed (#403).
+2. **Everyday use.** Left: paths by default in `barca get` output (#404), a remote store that fails soft after the work is done (#390), a metadata backup with a restore command (RFC-0009, #403), signed links to results in a bucket (RFC-0011, #452), a Slack message when a job starts failing or recovers (RFC-0010, #450), logs you can join to a trace under `serve` (#434), current numbers on the comparison pages (#65). Later: a limit on how many heavy workers run at once (#436); UI work once it is defined.
 3. **Server mode.** The server is the ledger (RFC-0007): drain on shutdown (#190), one run contract over HTTP (#393) with pause and resume for a schedule (#435), `--server` on the CLI with a parity suite (#394), and local runs that read the server's ledger and write back to it (#402).
-4. **Freshness under serve.** A tick that starts a duplicate of a run the API started (#432), then `Always` and `Manual` get their run-time meaning (RFC-0008, #253): a tick reconciles the `Always` nodes below it, `Manual` pins itself, failures retry up to `max_failures`.
+4. **Freshness under serve.** `Always` and `Manual` get their run-time meaning (RFC-0008, #253): a tick reconciles the `Always` nodes below it, `Manual` pins itself, failures retry up to `max_failures`.
 
 ### Release sequence
 
-Each release is a GitHub milestone with a due date; the milestone page is the schedule. Each minor carries one breaking theme and is followed by a cleanup release (below). Dates are targets set on 2026-10-20 at the pace of the last two releases, not promises.
+Each release is a GitHub milestone with a due date; the milestone page is the schedule. Each minor carries its breaking changes and is followed by a cleanup release (below). Dates are targets, not promises.
 
 | Milestone | Due | Theme | Issues, in order |
 |---|---|---|---|
-| 0.24.2 | 2026-10-24 | Patch: the three production reports | #437, #432, #433 |
-| 0.24.3 cleanup | 2026-10-31 | Dependabot criticals (#439), comparison numbers (#65) | |
-| 0.25.0 | 2026-11-07 | Breaking: output shape | #287 with #404 in one PR, then #295, then reproduce #345 |
-| 0.25.1 cleanup | 2026-11-14 | | |
-| 0.26.0 | 2026-11-28 | Breaking: the store is a backup, `optimistic` is gone | #390, then #403 (closes #243) |
-| 0.26.1 cleanup | 2026-12-05 | Delete the state-sync modules and optimistic paths | |
-| 0.27.0 | 2026-12-31 | The server is the ledger | #190, #393 with #435, #394, #402; #250 small fixture and #434 alongside |
-| 0.27.1 cleanup | 2027-01-08 | Drop the route aliases from #393 | |
-| 0.28.0 | 2027-01-29 | Breaking: freshness propagation | #253 |
+| 0.24.2 | shipped 2026-10-20 | Patch: the three production reports | #437, #432, #433, #295, #439 |
+| 0.24.3 cleanup | 2026-10-30 | Linear partition scaling, current comparison numbers, last Dependabot alert | #345 (#456), #65, #445, #448 |
+| 0.25.0 | 2026-11-06 | Breaking: output shape, and a size limit for `.barca` | #287 with #404 (#447), #457 |
+| 0.25.1 cleanup | 2026-11-13 | | |
+| 0.26.0 | 2026-11-27 | Breaking: the store is a backup, `optimistic` is gone; signed URLs; Slack | #390 (#444), #403 (closes #243), #452, #450 |
+| 0.26.1 cleanup | 2026-12-04 | Delete the state-sync modules and optimistic paths | |
+| 0.27.0 | 2026-12-30 | The server is the ledger | #190, #393 with #435, #394, #402; #250 small fixture and #434 alongside |
+| 0.27.1 cleanup | 2027-01-07 | Drop the route aliases from #393 | |
+| 0.28.0 | 2027-01-28 | Breaking: freshness propagation | #253 |
+
+**Why this order for the new requests.** The disk limit (#457) is a production outage, so it joins the next minor. Signed URLs (#452) read the store states #444 and #403 define, so they ship with them. Slack (#450) moves ahead of server mode into 0.26.0: it is what tells a team a deployed job is broken, and 0.27.0 is already the largest release. Whichever of #450 and #394 lands first brings the HTTPS client; the other reuses it.
 
 An open issue with no milestone is unscheduled on purpose (#436); it is scheduled when it becomes the next most important thing.
 
@@ -61,7 +63,10 @@ After every minor, a `0.x.1 cleanup` milestone: one week, no features. The check
 
 Design questions nobody has answered yet, the issue each blocks, and the release it must be decided by. Proposals in issue status lines are proposals until they appear under "Decided".
 
-- **Partial failure of a partitioned target** (#287): the exit code when some selected keys fail, and whether the JSON lists the failed keys. By 0.25.0.
+- **Partial failure of a partitioned target** (#287, #447): whether partial success gets its own exit code, and whether the JSON lists the failed keys. 0.25.0 ships exit 1 with the successful keys only, marked experimental. By 0.26.0.
+- **Cache low watermark** (RFC-0012, #457): fixed at 80% or configurable. By 0.25.0.
+- **Slack notifications** (RFC-0010, #449): the variable name, default mode, reminder interval, a post on an unclean `serve` restart, and a job filter. By 2026-10-27, the one-week rule for design PRs.
+- **Signed URLs** (RFC-0011, #451): the expiry limits, a download filename, and whether `barca.get` also returns URLs. By 2026-10-27.
 - **Drain defaults** (#190): the default grace, the config key (`[server] drain_timeout` is proposed), and the exit code after a forced stop. By 0.27.0.
 - **Pause persistence** (#435): whether a paused schedule stays paused across a server restart. Proposed yes. By 0.27.0.
 - **Route aliases and resume** (#393): how long the old routes stay as aliases, and when `Last-Event-ID` resume replaces the drop-is-infra-error rule. By 0.27.0.
@@ -80,11 +85,15 @@ The design decisions behind items 2 to 4, settled on 2026-10-14. The RFCs carry 
 
 **Logs under serve.** Structured logs are a `serve`-only opt-in, `BARCA_LOG=json`: one JSON object per line with `level`, `run_id`, `node` and the trace and span ids when telemetry is on, on stdout. The CLI contract for `get` and `run`, progress and errors on stderr, is unchanged. Settled 2026-10-20 (#434).
 
+**Cache size.** `.barca/` has a budget, `[cache] max_size` or `BARCA_CACHE_MAX_SIZE`, defaulting to 10% of its filesystem; `"off"` removes it. Past it barca evicts leftovers, superseded results, local copies the store holds, then the least recently read results, down to 80%, and never the command's own outputs, in-flight inputs, a storeless `Manual` result or a pending upload. No free-space floor. Settled 2026-10-20 (RFC-0012).
+
+**Store reasons and partial keys.** A result only on this machine is `unsynced` with `cache.reason: "local_only"` in status JSON (RFC-0009's `why` wording is amended to match). A partitioned target with failed keys exits 1 and returns only the keys that succeeded, experimentally. Settled 2026-10-20.
+
 **Server mode.** Sharing state means a server. The server owns the ledger (run hashes, artifact paths, run history, schedules), holds the deployed code and runs schedules from it, and is the only writer of metadata. `barca get` runs locally by default: it asks the server's ledger, fetches hits from the store, computes misses locally, uploads them to the store and then posts the rows; the server checks the object and its checksum before accepting a row. `--server` runs the job on the server. A configured server that cannot be reached is exit 3 naming it; `--local` runs against the local ledger with nothing pushed. A connection dropped mid-run is an infra error naming the run id. Otherwise local and server runs print the same thing.
 
 ## Heard, not planned
 
-Named refresh groups; a schema contract on sinks; OTLP export; Slack and email notifications; user-recorded metrics; TTL and code-insensitive freshness; filtered `collect()`; tag and resume-from scopes; a per-project setup hook; `barca gc`; real-cloud CI. Each has a closed issue labelled `parked` with the original write-up. Reopen one when it becomes the next most important thing, not before.
+Named refresh groups; a schema contract on sinks; OTLP export; email notifications; user-recorded metrics; TTL and code-insensitive freshness; filtered `collect()`; tag and resume-from scopes; a per-project setup hook; real-cloud CI. Each has a closed issue labelled `parked` with the original write-up. Reopen one when it becomes the next most important thing, not before.
 
 ## How work is tracked
 
