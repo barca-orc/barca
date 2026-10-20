@@ -397,7 +397,10 @@ mod tests {
             1
         );
         assert_eq!(scalar(&conn, "SELECT COUNT(*) FROM notifications").await, 0);
-        assert_eq!(scalar(&conn, "SELECT COUNT(*) FROM pending_uploads").await, 0);
+        assert_eq!(
+            scalar(&conn, "SELECT COUNT(*) FROM pending_uploads").await,
+            0
+        );
     }
 
     #[tokio::test]

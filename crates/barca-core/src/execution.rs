@@ -582,7 +582,9 @@ async fn start_workers(
             return Err(error);
         }
         // Results an earlier command computed here and could not upload go first (#390).
-        if let Err(error) = retry_pending_uploads(&mut client, db_path, cancel, &location, None).await {
+        if let Err(error) =
+            retry_pending_uploads(&mut client, db_path, cancel, &location, None).await
+        {
             client.abort().await;
             return Err(error);
         }
@@ -753,7 +755,10 @@ pub(crate) async fn upload_pending(
     }
     let wanted: std::collections::HashSet<&str> = store_paths.iter().map(String::as_str).collect();
     let pending = crate::pending_uploads::list(&cfg.db_path).await?;
-    if !pending.iter().any(|p| wanted.contains(p.store_path.as_str())) {
+    if !pending
+        .iter()
+        .any(|p| wanted.contains(p.store_path.as_str()))
+    {
         return Ok(());
     }
     let mut client = TransferClient::launch(python, cfg, &db::generate_run_id())?
@@ -1858,16 +1863,11 @@ pub(crate) async fn explain_dag(
     command_label: &str,
     partition: Option<&crate::selection::PartitionSelection>,
 ) -> Result<ExplainResult, BarcaError> {
-    Ok(explain_dag_with_membership(
-        dag,
-        cfg,
-        target_names,
-        policy,
-        command_label,
-        partition,
+    Ok(
+        explain_dag_with_membership(dag, cfg, target_names, policy, command_label, partition)
+            .await?
+            .0,
     )
-    .await?
-    .0)
 }
 
 /// Full actual prediction membership, moved without changing public reports.

@@ -237,7 +237,10 @@ async fn a_result_whose_upload_is_pending_is_never_evicted() {
         .unwrap();
     let result = f.gc(MaxSize::Bytes(1), false).await;
     let evicted: Vec<String> = paths(&result).into_iter().map(|(_, p)| p).collect();
-    assert!(!evicted.contains(&old) && !evicted.contains(&cold), "{evicted:?}");
+    assert!(
+        !evicted.contains(&old) && !evicted.contains(&cold),
+        "{evicted:?}"
+    );
     assert!(f.exists(&old) && f.exists(&cold));
     assert!(!evicted.is_empty(), "the rest is still evicted");
 }

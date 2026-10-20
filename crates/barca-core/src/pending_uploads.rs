@@ -274,7 +274,9 @@ mod tests {
         let path = fresh(&dir, "m.db").await;
         {
             let (_db, conn) = db::open_conn(&path).await.unwrap();
-            conn.execute("DROP TABLE pending_uploads", ()).await.unwrap();
+            conn.execute("DROP TABLE pending_uploads", ())
+                .await
+                .unwrap();
         }
         assert!(list(&path).await.unwrap().is_empty());
         let (_db, conn) = db::open_conn(&path).await.unwrap();
@@ -325,4 +327,3 @@ mod tests {
         assert!(list(&path).await.unwrap().is_empty());
     }
 }
-
