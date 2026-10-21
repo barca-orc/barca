@@ -259,11 +259,19 @@ def test_run_contract_and_inspection_match_openapi_and_the_cli(tmp_path):
         assert any(e["type"] == "line" and e["when"] == "agent" for _, e in events)
         finished = events[-1][1]
         assert finished["type"] == "run_finished" and finished["ok"] is True
-        assert finished["outcome"]["final_output"] == {"n": 2}
+        # As `barca get --json` prints it: the artifact pointer (paths by default, #404).
+        pointer = finished["outcome"]["final_output"]["_barca_artifact"]
+        assert pointer["format"] == "json"
+        assert json.loads((tmp_path / pointer["path"]).read_text()) == {"n": 2}
         view, _ = _checked(server, "GET", f"/runs/{run_id}", 200)
         assert view["triggered_by"] == "api" and view["outcome"] == finished["outcome"]
         status, content_type, raw = _raw(server, "GET", f"/runs/{run_id}/output")
         assert (status, content_type, json.loads(raw)) == (200, "application/json", {"n": 2})
+        # `values` (`get -o value`): the server reads the value, as `-o value --json` prints it.
+        valued, _ = _checked(
+            server, "POST", "/runs", 202, {"command": "get", "targets": ["value"], "values": True}
+        )
+        assert _events(server, valued["run_id"])[-1][1]["outcome"]["final_output"] == {"n": 2}
 
         # A task, then a failure: the outcome carries the CLI's failed body and envelope.
         task, _ = _checked(server, "POST", "/runs", 202, {"command": "run", "targets": ["publish"]})
