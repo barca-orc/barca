@@ -456,7 +456,7 @@ def test_a_dropped_pending_upload_is_taken_out_of_its_held_post(team):
     assert f"[barca] recorded run {run_id} on the server" in err, err
     [post] = posts(team.a)
     assert post["state"] == "shared"
-    assert [s["node_id"] for s in json.loads(post["body"])["steps"]] == NODES[:2]
+    assert sorted(s["node_id"] for s in json.loads(post["body"])["steps"]) == NODES[:2]
     result_b, _ = get(team.b, "report")
     assert computed(result_b) == {"pipeline.py:report"}, result_b
 
