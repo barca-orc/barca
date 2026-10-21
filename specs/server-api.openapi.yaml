@@ -663,7 +663,7 @@ paths:
       parameters: *id017
   /state:
     get:
-      summary: Node cache state, durations and next scheduled execution
+      summary: Node cache state, durations, next scheduled execution and the run working on each node now
       operationId: get_state
       responses:
         '200':
@@ -697,7 +697,7 @@ paths:
               schema: *id003
               description: Methods accepted by this route
     head:
-      summary: Node cache state, durations and next scheduled execution (headers only)
+      summary: Node cache state, durations, next scheduled execution and the run working on each node now (headers only)
       operationId: head_state
       responses:
         '200':
@@ -1390,6 +1390,8 @@ paths:
               schema: *id003
       description: Newest first, all pipelines in this local environment. No source filter. Snapshot inspection
         does not create/migrate the database. Limit defaults to 100 and is clamped to 1–1000.
+        With status=running, only the runs in flight (pending or running), this server's and the
+        CLI runs on the same metadata database whose owner is alive, each with active_steps.
       parameters: &id024
       - name: limit
         in: query
@@ -1398,6 +1400,14 @@ paths:
           type: integer
           minimum: 0
         description: Unsigned integer; zero and values above 1000 are accepted and clamped.
+      - name: status
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+          - running
+        description: running lists only the runs in flight; any other value is a 400.
     head:
       summary: List durable history joined with retained live runs (headers only)
       operationId: head_runs
@@ -2735,6 +2745,7 @@ components:
       - env
       - durations
       - next_run
+      - running
       properties:
         id: *id003
         name:
@@ -2755,6 +2766,83 @@ components:
         next_run:
           anyOf:
           - *id054
+          - type: 'null'
+        running: &id_running
+          anyOf:
+          - $ref: '#/components/schemas/NodeRunning'
+          - type: 'null'
+          description: The run working on this node now, whoever started it (the scheduler, an
+            HTTP request, a `barca get --server`, or a CLI run on the same `.barca/` whose owner is
+            alive); null when none is.
+    NodeRunning:
+      type: object
+      additionalProperties: false
+      required:
+      - run_id
+      - triggered_by
+      - started_at
+      - step
+      - partitions
+      properties:
+        run_id:
+          type: string
+          description: The run (GET /runs/{run_id}).
+        triggered_by:
+          anyOf:
+          - $ref: '#/components/schemas/TriggeredBy'
+          - type: 'null'
+          description: Null for a CLI run recorded by a barca that did not record it.
+        started_at:
+          type: string
+          description: RFC 3339, UTC.
+        step:
+          $ref: '#/components/schemas/RunningStep'
+        partitions:
+          anyOf:
+          - $ref: '#/components/schemas/PartitionProgress'
+          - type: 'null'
+          description: For a partitioned node, how many of its keys are done; null otherwise.
+    RunningStep:
+      type: string
+      enum:
+      - queued
+      - running
+      description: queued while the run waits for a run slot or for the node's upstream steps;
+        running once the node's step executes. A CLI run reports running for its targets.
+    PartitionProgress:
+      type: object
+      additionalProperties: false
+      required:
+      - running
+      - done
+      - total
+      properties:
+        running:
+          type: integer
+          minimum: 0
+          description: Keys not done yet while the step runs; 0 while it is queued.
+        done:
+          type: integer
+          minimum: 0
+          description: Keys with a result, cached or finished by this run.
+        total:
+          type: integer
+          minimum: 0
+          description: Every key of the node.
+    ActiveStep:
+      type: object
+      additionalProperties: false
+      required:
+      - node_id
+      - step
+      - partitions
+      properties:
+        node_id: *id003
+        step:
+          $ref: '#/components/schemas/RunningStep'
+        partitions:
+          anyOf:
+          - $ref: '#/components/schemas/PartitionProgress'
           - type: 'null'
     AssetRun:
       type: object
@@ -2811,11 +2899,13 @@ components:
       required:
       - asset
       - stats
+      - running
       properties:
         asset:
           $ref: '#/components/schemas/Asset'
         stats:
           $ref: '#/components/schemas/Stats'
+        running: *id_running
     Job:
       type: object
       additionalProperties: false
@@ -2989,6 +3079,11 @@ components:
           description: Null for runs recorded before barca recorded it.
         scheduled_at: *id042
         schedule_id: *id042
+        active_steps:
+          type: array
+          items:
+            $ref: '#/components/schemas/ActiveStep'
+          description: With status=running only, the nodes the run is working on now.
     Runs:
       type: object
       additionalProperties: false

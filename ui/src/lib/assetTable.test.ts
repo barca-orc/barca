@@ -41,6 +41,7 @@ function node(over: Partial<NodeState> & { id: string }): NodeState {
     env: [],
     durations: null,
     next_run: null,
+    running: null,
     ...over,
   }
 }

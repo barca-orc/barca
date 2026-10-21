@@ -581,6 +581,32 @@ async fn actual_runs_events_failure_cancel_and_restart_match_contract() {
         .as_str()
         .unwrap()
         .to_owned();
+    // While it runs: `running` on /state and the node detail, and /runs?status=running.
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let state = checked(&router, "GET", "/state", "/state", 200).await;
+            let node = state
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|n| n["name"] == "slow")
+                .unwrap()
+                .clone();
+            if node["running"]["step"] == "running" {
+                assert_eq!(node["running"]["run_id"], slow.as_str());
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("the slow run shows as running");
+    let detail = checked(&router, "GET", "/assets/slow", "/assets/{name}", 200).await;
+    assert_eq!(detail["running"]["run_id"], slow.as_str());
+    let in_flight = checked(&router, "GET", "/runs?status=running", "/runs", 200).await;
+    assert_eq!(in_flight["runs"][0]["id"], slow.as_str());
+    assert!(in_flight["runs"][0]["active_steps"].is_array());
+    checked(&router, "GET", "/runs?status=finished", "/runs", 400).await;
     checked(
         &router,
         "DELETE",
