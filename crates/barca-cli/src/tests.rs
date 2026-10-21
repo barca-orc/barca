@@ -403,3 +403,34 @@ fn tty_aware_commands_take_json_and_pretty_and_the_rule_is_documented() {
     }
     assert!(after_help(&root).contains("BARCA_OUTPUT"));
 }
+
+/// The README's Commands table names every command `barca --help` lists, and every `barca ...`
+/// line in its bash blocks parses. The README is at the repo root, outside the crate, so the
+/// check is skipped where it is absent (a packaged sdist).
+#[test]
+fn readme_commands_table_matches_the_cli() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../README.md");
+    let Ok(readme) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    let rows: Vec<&str> = readme
+        .lines()
+        .filter(|l| l.starts_with("| `barca "))
+        .collect();
+    for sub in Cli::command().get_subcommands() {
+        let name = sub.get_name();
+        if name == "help" {
+            continue;
+        }
+        let listed = rows.iter().any(|l| {
+            l.contains(&format!("`barca {name} ")) || l.contains(&format!("`barca {name}`"))
+        });
+        assert!(
+            listed,
+            "README.md's Commands table needs a `barca {name}` row"
+        );
+    }
+    for line in command_lines(&readme, true) {
+        assert_parses(&line, "README.md");
+    }
+}

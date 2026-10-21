@@ -97,6 +97,9 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   overview's Topics list and Commands table are complete (`logs`, `state`, `version`), and every
   topic but `cache` ends with its See also (#498).
 
+- The README is the pitch, install, one example, the commands table and a "More" table that
+  points at `barca docs <topic>` and the site; reference detail lives in the manual (#499).
+
 ## 0.27.0 (2026-10-20)
 
 ### Breaking
