@@ -12,6 +12,24 @@ reconciliation, and verified shared DuckDB worker lifetime. See
 upgrade and breaking-change notes. Releases between the historical entries below
 and these tags are available on the same releases page.
 
+## Pending
+
+### Performance
+
+- Small pipelines start faster (#560). Workers start together: when ready work has no idle
+  worker, every worker it can use (up to the pool size) is started at once and each joins when
+  it connects, where they started one at a time with a 30-40 ms wait for each; a one-step run
+  still starts one. A worker imports `barca._worker` in about 13 ms instead of 41 ms
+  (`barca.api`, `barca.client`, `traceback` and `concurrent.futures` load on first use). A warm
+  run (every step cached) opens the metadata DB once to start, once per phase and once to
+  record, where it opened it eleven times for a three-phase pipeline: the run's start is one
+  visit, the schema is read once per open, `last_read_at` is written in the ledger's
+  transaction, unchanged cost estimates are not written back, and a run that wrote nothing
+  skips the cache size check when the last check under the same limit passed. Pinned and
+  interleaved (median of 15): `trivial` <TRIVIAL>, `deep_diamond` <DD>, `chain_100` <CHAIN>,
+  fan-out 500 x 50 ms <FAN>. The worker's protocol hello now carries its `worker_id`
+  (additive within protocol 3); `BARCA_TRACE_TIMING` prints the DB opens.
+
 ## 0.28.1 (2026-10-21)
 
 ### Bug Fixes

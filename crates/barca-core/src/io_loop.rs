@@ -891,8 +891,11 @@ impl WorkerPool {
                     pid,
                     stream,
                 } => {
-                    self.on_connected(worker_id, pid, stream);
-                    self.assign_ready(coord, cost, cancel).await;
+                    // A connection that fails its handshake starts nobody new here: a worker
+                    // that cannot start would be started over and over.
+                    if self.on_connected(worker_id, pid, stream) {
+                        self.assign_ready(coord, cost, cancel).await;
+                    }
                 }
             }
         }
@@ -1243,13 +1246,13 @@ impl WorkerPool {
 
     /// A connection arrived: it joins the pool as the worker its hello names (or, without
     /// a `worker_id`, the one whose process it comes from). One that matches no worker still
-    /// starting (stopped already, or not barca's) is closed.
+    /// starting (stopped already, or not barca's) is closed. Returns whether a worker joined.
     fn on_connected(
         &mut self,
         worker_id: Option<usize>,
         pid: Option<u32>,
         stream: Result<UnixStream, String>,
-    ) {
+    ) -> bool {
         let wid = worker_id
             .filter(|id| self.pending.contains_key(id))
             .or_else(|| {
@@ -1265,7 +1268,7 @@ impl WorkerPool {
                     "[trace]  connection from an unknown process (worker id {worker_id:?}, pid {pid:?}) closed"
                 );
             }
-            return;
+            return false;
         };
         let pending = self.pending.remove(&wid).expect("matched above");
         let stream = match stream {
@@ -1273,7 +1276,7 @@ impl WorkerPool {
             Err(e) => {
                 crate::errln!("[barca] failed to spawn worker: worker {wid} {e}");
                 Self::reap(pending.child);
-                return;
+                return false;
             }
         };
         if self.trace_on {
@@ -1295,6 +1298,7 @@ impl WorkerPool {
                 front_since: std::time::Instant::now(),
             },
         );
+        true
     }
 
     /// Fail the starting workers whose process has exited, or that have not connected within
@@ -2303,7 +2307,7 @@ mod tests {
                 panic!("expected a connection");
             };
             assert_eq!(worker_id, wid);
-            pool.on_connected(worker_id, pid, stream);
+            assert_eq!(pool.on_connected(worker_id, pid, stream), wid != Some(7));
         }
         assert!(pool.pending.is_empty());
         assert_eq!(pool.workers.len(), 3);
