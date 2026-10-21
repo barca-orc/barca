@@ -6,6 +6,7 @@ running at once from those spans, not from wall time.
 
 import json
 import os
+import re
 import subprocess
 import textwrap
 
@@ -300,3 +301,40 @@ def test_partition_keys_and_parallel_branches_take_their_nodes_weight(tmp_path):
     got = spans(tmp_path)
     assert set(got) == {f"branch_{i}" for i in range(4)}
     assert peak(got) == 2
+
+
+def test_a_heavy_step_that_raises_keeps_its_worker_and_frees_its_capacity(tmp_path):
+    """#436 meets #523: a failed heavy key gives back its weight while its worker stays."""
+    write(
+        tmp_path,
+        """
+        from barca import asset, partitions
+
+        KEYS = [f"k{i}" for i in range(8)]
+
+        @asset(weight=2, partitions={"key": partitions(KEYS)})
+        def heavy(key: str) -> str:
+            span(key, 0.3)
+            if int(key[1:]) % 2:
+                raise ValueError(f"{key} fails on purpose")
+            return key
+        """,
+    )
+    proc = cli(
+        tmp_path, "get", "heavy", "p.py", "--json", code=1,
+        BARCA_CAPACITY="4", BARCA_TRACE_TIMING="1",
+    )
+    found = re.findall(
+        r"workers started (\d+), failed steps that kept their worker (\d+), steps dispatched (\d+)",
+        proc.stderr,
+    )
+    assert found, proc.stderr
+    started, kept, dispatched = (int(n) for n in found[-1])
+    # Every key ran, two at a time: a failed key's weight was given back, or the run would stop.
+    assert len(spans(tmp_path)) == 8
+    assert peak(spans(tmp_path)) == 2
+    # The four failures kept their workers, and nothing was sent twice.
+    assert kept == 4, proc.stderr
+    assert started <= 2, proc.stderr
+    assert dispatched == 8, proc.stderr
+    assert sorted(json.loads(proc.stdout)["final_output"]) == ["key=k0", "key=k2", "key=k4", "key=k6"]
