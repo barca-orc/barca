@@ -470,13 +470,15 @@ Examples:
   barca state restore --from 3         # the third newest (the index in barca state backups)
   barca state restore --from 2026-10-14T18-02-11.482Z-3f9a1c2e.db  # one backup, by name
   barca state backups --env dev        # another environment's backups
+  barca state reset --yes              # start over with an empty database (the old one is kept aside)
 
 With a remote store ([remote] uri), the metadata DB is backed up every minute of a run, when the
 run ends, and every minute from barca serve: to .barca/backups/ and to
 {uri}/{env}/state/backups/, five copies kept in each. Nothing is ever downloaded before a run.
 restore never runs by itself: it validates the copy, moves the current database to
 metadata.db.pre-restore and puts the copy in its place. No backup: exit 2. Refused while
-barca serve is using the environment: exit 3.
+barca serve is using the environment: exit 3. reset moves the database aside to
+metadata.db.reset-<UTC> and starts empty; nothing is deleted.
 More: barca docs remote";
 
 const STATE_BACKUPS_HELP: &str = "\
@@ -497,6 +499,7 @@ Examples:
   barca state restore --from 2         # the second newest
   barca state restore --from 2026-10-14T18-02-11.482Z-3f9a1c2e  # by name, .db optional
   barca state restore --json           # {restored, from, source, pre_restore, rows, run_id}
+  barca state restore --from .barca/metadata.db.reset-2026-10-20T18-02-11.482Z  # a file barca state reset moved aside
 
 The copy is checked first (a whole SQLite file, integrity, barca's tables, a format this barca
 can use): the local copy when there is one, else the store's. A copy that fails is a usage error
@@ -504,6 +507,24 @@ naming the next newest, and nothing changes. Then the current database moves to
 metadata.db.pre-restore (replacing an older one) and the copy takes its place; one line on
 stderr says what was restored and from where. Stop barca get/run in this project first.
 Exit 2: no backup, unknown --from, a copy that is not valid. Exit 3: barca serve is running.
+--from also takes the path of a database file (the one barca state reset moved aside), with its
+-wal beside it when there is one.
+More: barca docs remote";
+
+const STATE_RESET_HELP: &str = "\
+Examples:
+  barca state reset                    # asks first in a terminal
+  barca state reset --yes              # no question (scripts, agents)
+  barca state reset --yes --json       # {database, moved_to, moved, undo}
+  barca state reset --yes --env dev    # another environment's database
+
+Moves .barca/metadata.db and its -wal and -shm aside to metadata.db.reset-<UTC> in the same
+directory and creates an empty database in its place: run history, cache records, partition
+keys and schedule pauses start over. Nothing is deleted and artifacts are left alone (the cache
+limit evicts what nothing references). Undo: barca state restore --from <the moved file>.
+For a database that cannot be opened (corrupt, or a format this barca does not read) too.
+Without --yes and not in a terminal: exit 2. Exit 3: a run is in progress, or barca serve is
+using the environment (reset from its UI, or POST /state/reset).
 More: barca docs remote";
 
 const DOCS_HELP: &str = "\
@@ -850,7 +871,7 @@ pub(crate) enum Cli {
         #[arg(long)]
         env: Option<String>,
     },
-    /// Metadata backups: list them, or put one back in place of the local database
+    /// Metadata backups: list them, put one back in place of the local database, or start over
     ///
     /// With a remote store, the metadata DB is backed up on the minute checkpoint and at the
     /// end of each run, five copies kept locally and in the store. Nothing is restored unless
@@ -899,9 +920,22 @@ pub(crate) enum StateCommand {
     #[command(after_help = STATE_RESTORE_HELP)]
     Restore {
         /// Which backup: its index in `barca state backups` (1 = newest) or its name; default
-        /// the newest
-        #[arg(long, value_name = "N|NAME")]
+        /// the newest. Or the path of a database file, such as one `barca state reset` moved
+        /// aside
+        #[arg(long, value_name = "N|NAME|PATH")]
         from: Option<String>,
+        #[command(flatten)]
+        format: FormatFlags,
+        /// Environment name (separates cache/state per environment)
+        #[arg(long)]
+        env: Option<String>,
+    },
+    /// Start the metadata database over: move it aside and create an empty one (experimental)
+    #[command(after_help = STATE_RESET_HELP)]
+    Reset {
+        /// Do not ask: required when stdin is not a terminal
+        #[arg(long, short = 'y')]
+        yes: bool,
         #[command(flatten)]
         format: FormatFlags,
         /// Environment name (separates cache/state per environment)

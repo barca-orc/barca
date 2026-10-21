@@ -20,6 +20,7 @@ import {
   StatusBadge,
   StatusDot,
   Tag,
+  ResetDatabaseButton,
 } from '@/components'
 import {
   GraphCanvas,
@@ -367,10 +368,14 @@ export function GroupedPipelinePage() {
       </div>
 
       {error ? (
-        <p className="barca-table-empty">
-          Can't load pipeline:{' '}
-          {stateQuery.error?.message ?? assetQuery.error?.message}
-        </p>
+        <div className="barca-table-empty">
+          <p>
+            Can't load pipeline:{' '}
+            {stateQuery.error?.message ?? assetQuery.error?.message}
+          </p>
+          {/* A metadata database that cannot be read or migrated is mended by starting over. */}
+          <ResetDatabaseButton readOnly={healthQuery.data?.read_only ?? false} />
+        </div>
       ) : loading ? (
         <p className="barca-table-empty">Loading pipeline…</p>
       ) : (

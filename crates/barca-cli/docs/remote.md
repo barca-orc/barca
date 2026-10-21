@@ -232,6 +232,36 @@ mv .barca/metadata.db.pre-restore .barca/metadata.db
 rm -f .barca/metadata.db-wal .barca/metadata.db-shm
 ```
 
+**Start over (`barca state reset`, experimental).** When the metadata database cannot be used
+(the UI says `Can't load pipeline: Database error: ...`, a format this barca cannot migrate, a
+corrupt file), or you want an empty history, reset it. Nothing is deleted:
+
+```bash
+barca state reset                    # asks first in a terminal
+barca state reset --yes              # no question; required when stdin is not a terminal
+barca state reset --yes --json       # {database, moved_to, moved, undo}
+```
+
+The database and its `-wal` and `-shm` move to `.barca/metadata.db.reset-<UTC>` (and
+`<that>-wal`, `<that>-shm`) in the same directory, and an empty database takes its place. Run
+history, cache records, partition keys and schedule pauses start over, so the next `get`
+recomputes what it needs; artifacts are left alone, and the cache limit (`barca gc`) evicts the
+ones nothing references. A database that cannot be opened moves as it is. One line on stderr
+says what moved and how to undo it:
+`[barca] reset the metadata database: the old one is .barca/metadata.db.reset-2026-10-20T18-02-11.482Z, .barca/metadata.db is new and empty. Undo: barca state restore --from .barca/metadata.db.reset-2026-10-20T18-02-11.482Z`.
+
+- Not in a terminal without `--yes`: exit 2, nothing changed.
+- A run in progress on this machine (`running` in `barca history`, its process alive): exit 3,
+  naming the run.
+- `barca serve` running on this environment: exit 3. Reset from its UI instead (the **Reset
+  database** button, on the error panel and in the sidebar), or `POST /state/reset`: the server
+  refuses it with 409 while one of its runs is pending or running, and with 403 under
+  `--read-only`.
+
+To undo, with `barca serve` stopped, restore the moved file: `barca state restore --from
+.barca/metadata.db.reset-<UTC>` checks it and puts it back (the empty database it replaces moves
+to `metadata.db.pre-restore`). `--from` takes the path of any barca database file.
+
 **A wiped laptop or a fresh container.** Clone the project, set the same `BARCA_REMOTE_URI`
 and credentials, and run `barca state restore`: it lists the store's backups (shown as `store`)
 and fetches the chosen one. That is the only time a database comes down from the store. After

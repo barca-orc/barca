@@ -441,6 +441,7 @@ output, so the next `--dry-run` or `barca status` shows its consumers as stale.
 .barca/metadata.db                          run history and materialization records (local DB)
 .barca/backups/<name>.db, <name>.json        with a store: the five newest backups of the metadata DB (`barca docs remote`)
 .barca/metadata.db.pre-restore              the database `barca state restore` replaced
+.barca/metadata.db.reset-<UTC>              a database `barca state reset` moved aside (with its -wal, -shm)
 .barca/serve.lock                           held by a running `barca serve`, so `barca state restore` refuses to run under it
 .barca/run-owners/<token>.fifo              a marker a barca process holds open while it has a run in flight ("While a run is going, and after one is killed")
 .barca/artifacts/<node>/<run_hash>.<ext>    one file per result
