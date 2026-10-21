@@ -31,6 +31,16 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Bug Fixes
 
+- Naming one file of a package project works (#551): `barca run notify pipelines/reports.py`
+  also reads the pipeline files the named file takes inputs from (`from pipelines.transforms
+  import daily_revenue`, `asset_ref(...)`), transitively, and keeps only the nodes the named file
+  needs from them, so `barca get pipelines/reports.py` does not run `transforms.py`'s other
+  assets. Node ids and cache entries match a whole-project run. An absolute import in a file
+  inside a package resolves from the project root, and an "is imported from" error names the
+  file the import reaches, never a path like `pipelines/pipelines/transforms.py`. An input only
+  the whole project can resolve (a bare name, a re-export through `__init__.py`) says to name
+  the defining file or drop the file arguments.
+
 - Usage errors point at `barca list` only when the target is the problem (#492): an unknown or
   ambiguous target (and `barca run` without one) ends with ``Run `barca list <files>` ...``;
   every other usage error (positionals in the wrong order, `get` on a task, an unknown
