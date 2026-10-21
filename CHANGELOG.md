@@ -12,6 +12,14 @@ reconciliation, and verified shared DuckDB worker lifetime. See
 upgrade and breaking-change notes. Releases between the historical entries below
 and these tags are available on the same releases page.
 
+## Pending
+
+### Documentation
+
+- Benchmarks re-run on barca 0.28.0, Dagster 1.13.26, Prefect 3.9.0 and Airflow 3.3.2 on one
+  Linux machine; `benchmarks/RESULTS.md` and the comparison pages carry the new numbers in place
+  of the June ones, plus barca's trend across 0.1.5, 0.2.0, 0.24.2, 0.26.1 and 0.27.0 (#65).
+
 ## 0.28.1 (2026-10-21)
 
 ### Bug Fixes

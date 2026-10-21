@@ -1,28 +1,26 @@
 ---
 title: "Barca vs Prefect"
-description: Install size, steps to a first result, run output, error output and caching for the same pipeline, measured on 2026-06-10 with barca 0.2.0 and Prefect 3.7.4.
+description: Install size, import time, steps to a first result, run time, run output, error output and caching for the same pipeline, measured on 2026-10-21 with barca 0.28.0 and Prefect 3.9.0.
 ---
 
-Last measured: 2026-06-10, with barca 0.2.0 and Prefect 3.7.4, on macOS (Apple Silicon), Python 3.14, both installed from PyPI with `uv`. Not re-run since. Re-run tracked in [#277](https://github.com/barca-orc/barca/issues/277).
-
-Everything on this page describes those two versions on that date unless a note says otherwise.
-Prefect has had releases since, and so has barca: where barca's behavior has changed, a note
-dated 2026-10-07 says how.
+Last measured: 2026-10-21, with barca 0.28.0 and Prefect 3.9.0, both from PyPI with `uv`,
+Python 3.13, on Linux (AMD Ryzen AI MAX+ 395). Setup and commands are in
+[`benchmarks/RESULTS.md`](https://github.com/barca-orc/barca/blob/main/benchmarks/RESULTS.md).
+It replaces the first comparison, made on 2026-06-10 with barca 0.2.0 and Prefect 3.7.4 on
+macOS.
 
 ## Install footprint
 
-| Metric | barca 0.2.0 | Prefect 3.7.4 |
+| Metric | barca 0.28.0 | Prefect 3.9.0 |
 |--------|-------|---------|
-| Packages installed | 1 | 104 |
-| Venv size | 16 MB | 163 MB |
-| Import time | 22ms | 400ms |
+| Packages installed | 1 | 103 |
+| Venv size (`du -sm`) | 31 MB | 147 MB |
+| Lockfile entries | 2 | 106 |
+| Import time (`python -c "import X"`) | 42 ms | 502 ms |
 
-The barca wheel declared no dependencies. Installing Prefect installed 104 packages, among them
-fastapi, sqlalchemy, pydantic, cryptography, docker, redis, opentelemetry and graphviz.
-
-Note, 2026-10-07: the barca wheel now also embeds the web UI that `barca serve` shows. barca
-0.18.0 is still one package with no dependencies; a fresh Python 3.12 virtualenv with only barca
-installed is 21 MB (`du -sh`). The Prefect column and the import times were not re-measured.
+Each column is `uv pip install X` into an empty venv. Import times are medians of 20 runs;
+`python -c pass` took 13 ms. The barca wheel contains the Rust binary, the web UI that
+`barca serve` shows and the Python decorator stubs, and declares no dependencies.
 
 ## Steps to first output
 
@@ -38,95 +36,106 @@ barca get pipeline.py
 
 ```python
 # pipeline.py
-from prefect import flow
+from prefect import flow, task
+
+@task
+def raw_data() -> list[dict]:
+    return [{"x": 1}, {"x": 2}, {"x": 3}]
+
+@task
+def summary(data: list[dict]) -> dict:
+    return {"count": len(data), "total": sum(d["x"] for d in data)}
 
 @flow
-def hello():
-    return {"message": "Hello!"}
+def pipeline():
+    return summary(raw_data())
 
 if __name__ == "__main__":
-    print(hello())
+    print(pipeline())
 ```
 
 ```bash
 python pipeline.py
 ```
 
-Prefect needs no separate command: the flow runs with `python pipeline.py`. In the test each run
-started a temporary HTTP server first, and the run took about 6 seconds in total, of which 2 to 3
-seconds passed before any user code executed.
+Prefect needs no separate command: the flow runs with `python pipeline.py`. Each run starts a
+temporary local server first; in the logged run below, 1.6 seconds passed between "Starting
+temporary server" and the start of the flow.
 
 ## Running the same pipeline
 
 The pipeline is two steps: one returns three rows, the other counts and sums them.
 
-### Barca 0.2.0: 240ms, 2 output lines
+| Metric | barca 0.28.0 | Prefect 3.9.0 |
+|--------|-------|---------|
+| Command | `barca get pipeline.py` | `python pipeline.py` |
+| Time, nothing cached | 73 ms (67–76) | 4.59 s (4.37–4.91) |
+| Output | 1 JSON line on stdout, 2 progress lines on stderr | the result on stdout, 7 log lines on stderr |
+| Error output | 1 JSON line on stdout, 4 lines on stderr | 111 lines on stderr |
+
+Times are medians of 10 runs, the two tools taking turns run by run; the range is the fastest
+and slowest run. barca's `.barca/` was deleted before each run.
+
+### Barca 0.28.0
 
 ```
-[barca] 2/2 steps done in 0.0s
-{"elapsed_seconds":0.241,"final_output":{"count":3,"total":6},...}
+[barca] importing pipeline.py
+[barca] 2/2 steps | done in 0.0s
+{"elapsed_seconds":0.0609,"final_output":{"_barca_artifact":{"format":"json","path":".barca/artifacts/pipeline.py--summary/2d10c4….json","size_bytes":24}},"phases":1,"run_id":"…","status":"success","steps":[…],"steps_executed":2,"warnings":[]}
 ```
 
-Note, 2026-10-07: barca 0.18.0 prints more keys in this JSON object (`status`, a `steps` array,
-`warnings`). The current shape is in the [CLI contract](/reference/cli-contract/).
+`barca get pipeline.py -o value` prints the value itself. The JSON shape is in the
+[CLI contract](/reference/cli-contract/).
 
-### Prefect 3.7.4: 5.5 seconds, 7 log lines and the result
+### Prefect 3.9.0
 
 ```
-21:00:00 | INFO | prefect - Starting temporary server on http://127.0.0.1:8966
-See https://docs.prefect.io/... for more information on running a dedicated Prefect server.
-21:00:03 | INFO | Flow run 'illustrious-moth' - Beginning flow run ...
-21:00:03 | INFO | Task run 'raw_data-d46' - Finished in state Completed()
-21:00:03 | INFO | Task run 'summary-eed' - Finished in state Completed()
-21:00:04 | INFO | Flow run 'illustrious-moth' - Finished in state Completed()
+03:53:34.483 | INFO    | prefect - Starting temporary server on http://127.0.0.1:8235
+See https://docs.prefect.io/v3/concepts/server#how-to-guides for more information on running a dedicated Prefect server.
+03:53:36.095 | INFO    | Flow run 'fantastic-clam' - Beginning flow run 'fantastic-clam' for flow 'pipeline'
+03:53:36.109 | INFO    | Task run 'raw_data-c2b' - Finished in state Completed()
+03:53:36.111 | INFO    | Task run 'summary-72d' - Finished in state Completed()
+03:53:37.106 | INFO    | Flow run 'fantastic-clam' - Finished in state Completed()
 {'count': 3, 'total': 6}
-21:00:04 | INFO | prefect - Stopping temporary server on http://127.0.0.1:8966
+03:53:37.121 | INFO    | prefect - Stopping temporary server on http://127.0.0.1:8235
 ```
-
-The log shows 3 seconds between "Starting temporary server" and the first task. Each time on
-this page is one run, not an average.
 
 ## Error output
 
 The same step raising `ValueError("something went wrong")`.
 
-### Barca 0.2.0: 2 lines
+### Barca 0.28.0
 
-```
-[barca] 0/1 steps done in 0.0s
-Worker failed: something went wrong
-```
+Exit code 1. On stdout, one JSON object with `"status": "failed"`, `"error": "ValueError:
+something went wrong"` and `"failed_node"`. On stderr, a progress line, one JSON line with the
+error, a remediation and the traceback frames from the user's file, and a `[barca] run failed:
+...` line. See the [CLI contract](/reference/cli-contract/).
 
-Note, 2026-10-07: barca 0.18.0 prints more than this: a JSON result with `"status": "failed"`
-on stdout, and on stderr a `[barca] run failed: ...` line and one JSON line with the error, a
-remediation and the traceback frames from the user's file. See the
-[CLI contract](/reference/cli-contract/).
+### Prefect 3.9.0: 111 lines
 
-### Prefect 3.7.4: about 75 lines
+Exit code 1. The error was printed three times:
 
-The error was printed three times:
+1. a task-level ERROR with a traceback (`task_engine.py`, `call_task_fn`, ...);
+2. a flow-level ERROR with a traceback;
+3. the unhandled exception with a traceback, starting at `broken.py`, line 15.
 
-1. a task-level ERROR with a traceback (`task_engine.py`, `run_context`, `call_task_fn`, ...);
-2. a flow-level ERROR with a traceback (`flow_engine.py`, `run_context`, `call_flow_fn`, ...);
-3. the unhandled exception with a traceback (`flows.py`, `run_flow`, ...).
-
-Each traceback had more than ten Prefect frames, with the frame from the user's file
-(`broken.py:6`) six frames down.
+The frame from the user's file (`broken.py`, line 6) comes after the Prefect frames in each.
 
 ## Caching
 
 Barca caches every asset by its run hash, a hash of the function's code and its inputs, with no
-option to set. A second run of the same pipeline on barca 0.2.0 finished in 2ms and reported
-`steps_executed: 0`. `barca docs cache` says what the hash covers.
+option to set. A second run of the same pipeline on barca 0.28.0 took 13 ms (median of 10) and
+ran no step. `barca docs cache` says what the hash covers.
 
-Prefect has `cache_policy=INPUTS`. In the test it did not carry a result from one
-`python pipeline.py` run to the next under the temporary server: every run executed every task.
-A persistent `prefect server start` instance was not tested.
+Prefect has `cache_policy=INPUTS`. With both tasks set to it and two `python pipeline.py` runs
+on Prefect 3.9.0 under the temporary server, the second run reported `summary` as
+`Cached(type=COMPLETED)` and ran `raw_data`, which takes no inputs, again. On 2026-06-10, with
+Prefect 3.7.4, neither task was cached on the second run.
 
-## Other things observed in the same session
+## Other things observed on 2026-06-10
 
 These are notes from using Prefect 3.7.4 on 2026-06-10. They have not been checked against a
-later Prefect release.
+later Prefect release, except where a note dated 2026-10-21 says so.
 
 - `process_customer.map(customer_ids)` fans one task out over a list in one call. barca's
   equivalents are `parallel_map` inside a task and `partitions` on an asset
@@ -138,7 +147,9 @@ later Prefect release.
   long-running process. barca's equivalent is `Schedule("0 8 * * *")` on the function and
   `barca serve` ([Scheduling](/scheduling/)).
 - Every `python file.py` run and every `prefect` CLI command started a temporary HTTP server,
-  which took 2 to 3 seconds. A flow computing `1 + 2` took 3.5 seconds.
+  which took 2 to 3 seconds. A flow computing `1 + 2` took 3.5 seconds. Note, 2026-10-21: with
+  Prefect 3.9.0 on the Linux machine, the two-task pipeline above took 4.6 seconds and the
+  server start 1.6 seconds of it.
 - `prefect --help` listed 31 subcommands. The names recorded were: api, artifact, automation,
   block, cloud, concurrency-limit, config, dashboard, deploy, deployment, dev, events,
   experimental, flow, flow-run, global-concurrency-limit, init, plugins, profile, sdk, server,

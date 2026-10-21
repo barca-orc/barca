@@ -1,4 +1,10 @@
-"""Run Airflow DAG with LocalExecutor: deep_diamond."""
+"""Run the Airflow DAG with `airflow dags test`: deep_diamond.
+
+`dags test` runs every task in this process, one after another: without `--use-executor` it
+uses no executor, so the AIRFLOW__CORE__EXECUTOR setting below has no effect on it. Only the
+`dags test` call is timed; `airflow db migrate` runs first, untimed. Set AIRFLOW_BIN to an
+airflow executable outside the repository (default: ./.venv/bin/airflow).
+"""
 
 import json
 import os
@@ -8,7 +14,7 @@ import tempfile
 import time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-AIRFLOW_BIN = os.path.join(SCRIPT_DIR, ".venv", "bin", "airflow")
+AIRFLOW_BIN = os.environ.get("AIRFLOW_BIN") or os.path.join(SCRIPT_DIR, ".venv", "bin", "airflow")
 
 
 def run():
@@ -49,7 +55,7 @@ def run():
                 "elapsed_seconds": round(elapsed, 6),
                 "steps_executed": 18,
                 "success": result.returncode == 0,
-                "executor": "LocalExecutor",
+                "executor": "dags test (in process)",
             },
             indent=2,
         )

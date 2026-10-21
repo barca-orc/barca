@@ -1,49 +1,66 @@
-"""Run all framework benchmarks sequentially: 10 steps × 1000 partitions.
+"""10 steps × 1000 partitions = 10,000 steps, each framework in its idiomatic pattern.
 
-Each framework uses its idiomatic partition/map pattern.
-Timeout: 2 minutes per framework.
+    python run_all.py                      # barca, dagster, prefect in this interpreter (Docker)
+    python run_all.py dagster              # one framework; run it with that framework's venv
+    python run_all.py airflow              # needs AIRFLOW_BIN and AIRFLOW_SQL_ALCHEMY_CONN (PostgreSQL)
+
+Each framework runs in a child process that is killed after BENCH_TIMEOUT seconds (default 600,
+10 minutes); a killed run is reported as "timeout". barca is the `barca` on PATH, or $BARCA.
+Results go to $BENCH_RESULTS (default results.json next to this script).
 """
 
 import json
+import multiprocessing
 import os
+import queue as queue_mod
 import shutil
 import signal
 import subprocess
+import sys
+import tempfile
 import time
 
 TICKERS = [f"T{i:04d}" for i in range(1000)]
-TIMEOUT = 120  # 2 minutes
+TIMEOUT = int(os.environ.get("BENCH_TIMEOUT", "600"))  # 10 minutes
 
 
-class TimeoutError(Exception):
-    pass
-
-
-def timeout_handler(signum, frame):
-    raise TimeoutError()
+def _child(fn, queue):
+    os.setsid()  # own process group, so a timeout also kills servers the framework started
+    try:
+        queue.put(("ok", fn()))
+    except Exception as e:  # noqa: BLE001 -- reported, not raised: the parent prints the table
+        queue.put(("error", str(e)[:300]))
 
 
 def timed_run(name, fn):
-    """Run a benchmark function with a timeout."""
+    """Run a benchmark function in a child process, killed after TIMEOUT seconds."""
     print(f"\n{'=' * 60}")
     print(f"  {name}")
-    print(f"{'=' * 60}")
-    signal.signal(signal.SIGALRM, timeout_handler)
-    signal.alarm(TIMEOUT)
-    try:
-        t0 = time.perf_counter()
-        result = fn()
-        elapsed = time.perf_counter() - t0
-        signal.alarm(0)
-        print(f"  Result: {elapsed:.3f}s")
-        return {"framework": name, "elapsed_seconds": round(elapsed, 3), "status": "ok", **result}
-    except TimeoutError:
-        print(f"  TIMEOUT (>{TIMEOUT}s)")
+    print(f"{'=' * 60}", flush=True)
+    queue = multiprocessing.Queue()
+    proc = multiprocessing.Process(target=_child, args=(fn, queue))
+    t0 = time.perf_counter()
+    proc.start()
+    proc.join(TIMEOUT)
+    elapsed = time.perf_counter() - t0
+    if proc.is_alive():
+        os.killpg(proc.pid, signal.SIGKILL)
+        proc.join()
+        print(f"  TIMEOUT (killed after {TIMEOUT}s)")
         return {"framework": name, "elapsed_seconds": TIMEOUT, "status": "timeout"}
-    except Exception as e:
-        signal.alarm(0)
-        print(f"  ERROR: {e}")
-        return {"framework": name, "elapsed_seconds": 0, "status": f"error: {e}"}
+    try:
+        status, payload = queue.get(timeout=5)
+    except queue_mod.Empty:
+        status, payload = "error", f"exit {proc.exitcode}"
+    if status != "ok":
+        print(f"  ERROR: {payload}")
+        return {
+            "framework": name,
+            "elapsed_seconds": round(elapsed, 3),
+            "status": f"error: {payload}",
+        }
+    print(f"  Result: {elapsed:.3f}s")
+    return {"framework": name, "elapsed_seconds": round(elapsed, 3), "status": "ok", **payload}
 
 
 # ─── Barca ────────────────────────────────────────────────────────────────────
@@ -66,23 +83,25 @@ def run_barca():
         lines.append(f'    return {{"ticker": ticker, "v": data["v"] + {i}}}')
         lines.append("")
 
-    f = "/tmp/barca_bench.py"
+    work = tempfile.mkdtemp(prefix="barca_10k_")
+    f = os.path.join(work, "barca_bench.py")
     with open(f, "w") as fh:
         fh.write("\n".join(lines))
-
-    shutil.rmtree("/tmp/.barca", ignore_errors=True)
     os.environ.pop("BARCA_HOME", None)
 
-    r = subprocess.run(
-        ["barca", "get", "step_9", f, "--refresh-all", "-o", "json"],
-        capture_output=True,
-        text=True,
-        cwd="/tmp",
-    )
+    try:
+        r = subprocess.run(
+            [os.environ.get("BARCA", "barca"), "get", "step_9", f, "--refresh-all", "--json"],
+            capture_output=True,
+            text=True,
+            cwd=work,
+            check=False,
+        )
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
     if r.returncode != 0:
-        raise RuntimeError(r.stderr[:200])
-    last = [line for line in r.stdout.strip().splitlines() if line.startswith("{")][-1]
-    d = json.loads(last)
+        raise RuntimeError(r.stderr[-300:])
+    d = json.loads(r.stdout)
     return {"steps": d["steps_executed"], "pattern": "partitions()"}
 
 
@@ -90,7 +109,8 @@ def run_barca():
 
 
 def run_dagster():
-    from dagster import asset, StaticPartitionsDefinition, materialize
+    os.environ.setdefault("DAGSTER_HOME", tempfile.mkdtemp(prefix="dagster_10k_"))
+    from dagster import StaticPartitionsDefinition, asset, materialize
 
     ticker_partitions = StaticPartitionsDefinition(TICKERS)
 
@@ -145,6 +165,8 @@ def run_dagster():
 
 
 def run_prefect():
+    os.environ.setdefault("PREFECT_HOME", tempfile.mkdtemp(prefix="prefect_10k_"))
+    os.environ.setdefault("PREFECT_LOGGING_LEVEL", "CRITICAL")
     from prefect import flow, task
 
     @task
@@ -204,13 +226,52 @@ def run_prefect():
     return {"steps": 10000, "pattern": "task.map()"}
 
 
+# ─── Airflow ──────────────────────────────────────────────────────────────────
+
+
+def run_airflow():
+    """`airflow dags test` on ../airflow/dags/partitioned_chain.py (expand()), PostgreSQL metadata.
+
+    `dags test` without --use-executor runs the mapped task instances in process, one after
+    another. `airflow db migrate` runs first and is included in the time.
+    """
+    airflow = os.environ["AIRFLOW_BIN"]
+    home = tempfile.mkdtemp(prefix="airflow_10k_")
+    dags = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "airflow", "dags")
+    env = {
+        **os.environ,
+        "AIRFLOW_HOME": home,
+        "AIRFLOW__CORE__DAGS_FOLDER": os.path.abspath(dags),
+        "AIRFLOW__CORE__LOAD_EXAMPLES": "False",
+        "AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG": "10000",
+        "AIRFLOW__DATABASE__SQL_ALCHEMY_CONN": os.environ["AIRFLOW_SQL_ALCHEMY_CONN"],
+        "AIRFLOW__LOGGING__LOGGING_LEVEL": "ERROR",
+    }
+    try:
+        for cmd in (["db", "migrate"], ["dags", "test", "partitioned_chain", "2024-01-01"]):
+            r = subprocess.run(
+                [airflow, *cmd], env=env, capture_output=True, text=True, check=False
+            )
+            if r.returncode != 0:
+                raise RuntimeError(f"airflow {' '.join(cmd)}: {r.stderr[-300:]}")
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+    return {"steps": 10000, "pattern": "expand() + PostgreSQL"}
+
+
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
+FRAMEWORKS = {
+    "barca": ("Barca (partitions())", run_barca),
+    "dagster": ("Dagster (StaticPartitionsDefinition)", run_dagster),
+    "prefect": ("Prefect (task.map())", run_prefect),
+    "airflow": ("Airflow (expand())", run_airflow),
+}
+
 if __name__ == "__main__":
-    results = []
-    results.append(timed_run("Barca (partitions())", run_barca))
-    results.append(timed_run("Dagster (StaticPartitionsDefinition)", run_dagster))
-    results.append(timed_run("Prefect (task.map())", run_prefect))
+    multiprocessing.set_start_method("fork")
+    chosen = sys.argv[1:] or ["barca", "dagster", "prefect"]
+    results = [timed_run(*FRAMEWORKS[name]) for name in chosen]
 
     print(f"\n{'=' * 60}")
     print("  RESULTS: 10 steps × 1000 partitions = 10,000 steps")
@@ -221,6 +282,9 @@ if __name__ == "__main__":
         t = f"{r['elapsed_seconds']:.1f}s" if r["status"] == "ok" else r["status"]
         print(f"  {r['framework']:<40} {t:>10} {r.get('pattern', '')}")
 
-    with open("/bench/results.json", "w") as f:
+    out = os.environ.get(
+        "BENCH_RESULTS", os.path.join(os.path.dirname(os.path.abspath(__file__)), "results.json")
+    )
+    with open(out, "w") as f:
         json.dump(results, f, indent=2)
-    print("\nResults saved to /bench/results.json")
+    print(f"\nResults saved to {out}")

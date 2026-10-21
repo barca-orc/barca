@@ -1,15 +1,17 @@
 ---
 title: "Framework Comparison: Code, Features and Overhead"
-description: The same small pipelines written for barca, Dagster, Prefect and Airflow, a feature list, and run times measured on 2026-06-05 with barca 0.1.5.
+description: The same small pipelines written for barca, Dagster, Prefect and Airflow, a feature list, and run times measured on 2026-10-21 with barca 0.28.0, Dagster 1.13.26, Prefect 3.9.0 and Airflow 3.3.2.
 ---
 
-Last measured: 2026-06-05, with barca 0.1.5 and Dagster (version not recorded), Prefect (version not recorded) and Airflow 3.2.2, on an Apple Silicon (M-series) Mac. Not re-run since. Re-run tracked in [#277](https://github.com/barca-orc/barca/issues/277).
+Run times last measured: 2026-10-21, with barca 0.28.0, Dagster 1.13.26, Prefect 3.9.0 and
+Airflow 3.3.2 under Python 3.13, on one Linux machine (AMD Ryzen AI MAX+ 395). The setup,
+commands, spread and load are in
+[`benchmarks/RESULTS.md`](https://github.com/barca-orc/barca/blob/main/benchmarks/RESULTS.md).
 
-The Dagster and Prefect versions were whatever PyPI served as latest on that date, under Python
-3.12; barca ran under Python 3.14. The code samples for the other tools are the benchmark sources
-as written then. Statements about Dagster, Prefect and Airflow on this page were recorded on
-2026-06-05 and have not been checked against their current documentation, except where a note
-says so. Notes dated 2026-10-07 say where barca itself has changed.
+The code samples for the other tools are the benchmark sources. The feature descriptions of
+Dagster, Prefect and Airflow were recorded on 2026-06-05 and have not been checked against their
+current documentation, except where a note says so. Notes dated 2026-10-07 say where barca
+itself has changed.
 
 ## One function that returns a dict
 
@@ -169,21 +171,22 @@ def merge(f0, f1, f2, f3, f4):
 
 **Prefect:**
 ```python
-@flow(task_runner=ConcurrentTaskRunner())
-def pipeline():
-    s = [src_0(), src_1(), src_2(), src_3(), src_4()]
-    p = [prep(s[i]) for i in range(5)]
-    f = [feat(p[i]) for i in range(5)]
-    m = merge(f[0], f[1], f[2], f[3], f[4])
+@flow(task_runner=ConcurrentTaskRunner(max_workers=BENCH_WORKERS))
+def deep_diamond_flow():
+    s0, s1, s2, s3, s4 = src_0.submit(), src_1.submit(), src_2.submit(), src_3.submit(), src_4.submit()
+    p0, p1, p2, p3, p4 = prep_0.submit(s0), prep_1.submit(s1), ...
+    f0, f1, f2, f3, f4 = feat_0.submit(p0), feat_1.submit(p1), ...
+    merged = merge.submit(f0, f1, f2, f3, f4)
     ...
 ```
 
 Checked 2026-10-07: Prefect's current
 [task runners](https://docs.prefect.io/v3/concepts/task-runners) page names the default runner
-`ThreadPoolTaskRunner` and does not mention `ConcurrentTaskRunner`. It also says a task called
-directly, as in this sample, runs in the main thread and blocks until it completes; concurrent
-execution needs `.submit()` or `.map()`. The sample above therefore ran its tasks one after
-another, which affects the Prefect times at the end of this page.
+`ThreadPoolTaskRunner` and does not mention `ConcurrentTaskRunner`. Checked 2026-10-21: in
+Prefect 3.9.0, `ConcurrentTaskRunner` imports as `ThreadPoolTaskRunner`. A task called directly
+runs in the main thread and blocks until it completes; concurrent execution needs `.submit()` or
+`.map()`, which the benchmark source above uses. The June version of this sample called the
+tasks directly, so the June Prefect times ran them one after another.
 
 **Airflow:**
 ```python
@@ -247,43 +250,44 @@ each project's documentation.
 Barca is pre-1.0 and runs on one machine at a time: it has no remote executor, no access
 control and no integrations library. If you need those, the other three tools have them.
 
-## Run times, single run, nothing cached
+## Run times, nothing cached
 
-Measured 2026-06-05 with barca 0.1.5.
+Measured 2026-10-21. Medians of 10 runs (fan-out 5; Airflow 5 on chain 100 and 3 on fan-out),
+the frameworks taking turns run by run. The range is the fastest and slowest run.
 
-| Benchmark | Barca | Dagster | Prefect | Airflow |
+| Benchmark | Barca 0.28.0 | Dagster 1.13.26 | Prefect 3.9.0 | Airflow 3.3.2 |
 |-----------|-------|---------|---------|---------|
-| Trivial (1 asset) | 25ms | 378ms | 3.8s | 2.2s |
-| Chain 100 | 77ms | 887ms | 3.6s | 79.5s |
-| Deep diamond (18) | 66ms | 453ms | 3.6s | 15.6s |
-| Fan-out 500×50ms | 2.4s | 29.7s | 30.7s | 417s |
+| Trivial (1 asset) | 64 ms (61–74) | 1.07 s (0.90–1.26) | 5.09 s (4.81–5.34) | 5.05 s (4.80–5.84) |
+| Chain 100 | 112 ms (103–124) | 1.88 s (1.57–2.09) | 5.16 s (4.80–7.78) | 10.3 s (9.7–12.9) |
+| Deep diamond (18) | 310 ms (265–342) | 1.19 s (1.05–1.31) | 5.13 s (4.68–5.70) | 6.45 s (5.97–7.35) |
+| Fan-out 500×50ms | 2.24 s (2.22–2.44) | 30.2 s (29.7–30.8) | 6.53 s (6.19–10.03) | 54.6 s (53.5–56.1) |
 
 How to read these:
 
 - The pipelines do almost no work, so the times are close to each tool's fixed cost per run and
   per step. For a pipeline whose steps take minutes, a difference of a few hundred milliseconds
   is small.
-- The benchmark harness was changed after these numbers were taken. `benchmarks/RESULTS.md` in
-  the repository records, on 2026-07-16, that worker counts were not matched between tools in
-  this run and that most Prefect scripts called tasks directly instead of through `.submit()`,
-  so the Prefect numbers here are a worst case on the parallel benchmarks (fan-out, deep
-  diamond). It also records why Dagster ran its steps sequentially in process. Later passes
-  under the corrected harness are in
-  [`benchmarks/RESULTS.md`](https://github.com/barca-orc/barca/blob/main/benchmarks/RESULTS.md);
-  they ran on different hardware and are not comparable with this table.
-- According to the results file of that week, Airflow ran through `airflow dags test`.
+- Each run is a new process: `barca get file.py --refresh-all`, a script calling Dagster's
+  `materialize()`, a script calling a Prefect `@flow`, and `airflow dags test`. The Airflow time
+  leaves out `airflow db migrate`, which runs first.
+- barca and Prefect ran up to 16 steps at once (16 worker processes, a 16-thread task runner).
+  Dagster's `materialize()` and Airflow's `dags test` run one step at a time, which is why
+  their fan-out times are close to 500 × 50 ms plus overhead.
+- barca starts its worker processes one at a time, each after the previous one has connected
+  (30 to 40 ms each on this machine). That is most of barca's time on deep diamond and about a
+  quarter of it on fan-out.
+- The machine was shared with other work during the run; the trivial barca time was 64 ms in
+  this pass and 79 to 99 ms in later passes on the same build.
 
 ### Partitioned workload: 10 steps × 1000 partitions = 10,000 steps
 
-| Benchmark | Barca | Dagster | Prefect | Airflow |
+| | Barca 0.28.0 | Dagster 1.13.26 | Prefect 3.9.0 | Airflow 3.3.2 |
 |-----------|-------|---------|---------|---------|
-| 10k partitioned steps | 0.7s | 95s | >9min (killed) | >22min (killed) |
-| Pattern used | `partitions()` | `StaticPartitionsDefinition` | `task.map()` | `expand()` + PostgreSQL |
+| Time | 2.27 s (2.14–2.40), 5 runs | 141 s (137–144), 3 runs | stopped at 10 min, 1 run | stopped at 10 min, 1 run |
+| Done when stopped | | | 3,050 of 10,000 task runs | 1,000 of 10,000 task instances |
+| Pattern used | `partitions()` | `StaticPartitionsDefinition`, one `materialize()` per key | `task.map()` | `expand()`, `dags test`, PostgreSQL |
 
-The Prefect and Airflow runs were stopped before they finished. In barca 0.1.5 the plan for this
-workload had 10 entries, one per node, and the workers expanded the partitions. In the same
-session barca ran 200,000 steps (100,000 partitions × 2 steps) in 14s; the other tools were not
-run at that size.
-
-Note, 2026-10-07: partition handling has changed since 0.1.5; barca 0.18.0 caches each partition
-key on its own (`barca docs partitions`). The barca times above were not re-measured on 0.18.0.
+The Prefect and Airflow runs were killed after 10 minutes. barca records a result for each of
+the 10,000 partition steps, so a later run reruns only keys whose code or inputs changed. In
+June, barca 0.1.5 ran this workload in 0.7 s without recording per-key results; on the machine
+used for the table above, 0.1.5 takes 0.42 s.

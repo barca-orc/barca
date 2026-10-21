@@ -7,7 +7,7 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-BARCA="$REPO_ROOT/.venv/bin/barca"
+BARCA="${BARCA:-$REPO_ROOT/.venv/bin/barca}"
 
 JOB_FILE="${1:?usage: start.sh <job_file> <port>}"
 PORT="${2:?usage: start.sh <job_file> <port>}"
