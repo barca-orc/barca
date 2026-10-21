@@ -136,11 +136,23 @@ async fn check_target_as(
                 files: Vec::new(),
             },
         )),
-        Err(e @ barca_core::targets::TargetError::Ambiguous { .. }) => {
-            Err(ApiError::Conflict(e.to_string()))
-        }
+        // The CLI's error and remediation: `barca list` for an ambiguous name, `barca <cmd>
+        // --help` for the wrong kind (#492).
+        Err(e @ barca_core::targets::TargetError::Ambiguous { .. }) => Err(ApiError::run(
+            BarcaError::from(e),
+            Context {
+                command: verb_command(verb),
+                files: Vec::new(),
+            },
+        )),
         Err(e @ barca_core::targets::TargetError::WrongKind { .. }) if wording == Wording::Cli => {
-            Err(ApiError::BadRequest(e.to_string()))
+            Err(ApiError::run(
+                BarcaError::from(e),
+                Context {
+                    command: verb_command(verb),
+                    files: Vec::new(),
+                },
+            ))
         }
         Err(barca_core::targets::TargetError::WrongKind { name, kind }) => {
             let (what, endpoint) = match kind {

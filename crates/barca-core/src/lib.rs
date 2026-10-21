@@ -79,6 +79,11 @@ pub enum BarcaError {
     #[error("Asset '{0}' not found. Available: {1}")]
     AssetNotFound(String, String),
 
+    /// A target name that several nodes have (the same function name in two files). Like
+    /// [`BarcaError::AssetNotFound`], a usage error whose remediation is `barca list`.
+    #[error("{0}")]
+    AmbiguousTarget(String),
+
     #[error("DAG error: {0}")]
     Dag(#[from] dag::DagError),
 
