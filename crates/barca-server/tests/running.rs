@@ -24,6 +24,10 @@ def slow(first: dict) -> dict:
     time.sleep(4)
     return {"n": first["n"] + 1}
 
+@asset(inputs={"slow": slow})
+def after(slow: dict) -> dict:
+    return slow
+
 @asset(partitions={"k": partitions(["a", "b", "c", "d"])})
 def keyed(k: str) -> str:
     time.sleep(1.5)
@@ -144,14 +148,17 @@ async fn a_post_runs_run_shows_as_running_with_its_steps_and_clears_when_it_ends
         &app,
         "POST",
         "/runs",
-        Some(json!({"command": "get", "targets": ["slow"]})),
+        Some(json!({"command": "get", "targets": ["after"]})),
     )
     .await;
     assert_eq!(status, StatusCode::ACCEPTED, "{body}");
     let run_id = body["run_id"].as_str().unwrap().to_string();
 
-    // `first` finishes at once; `slow` then runs for seconds.
+    // `first` finishes at once; `slow` then runs for seconds, and `after` waits for it.
     let running = wait_for(&app, "slow", "ran", |r| r["step"] == "running").await;
+    let after = running_of(&app, "after").await;
+    assert_eq!(after["step"], "queued", "{after}");
+    assert_eq!(after["run_id"], run_id.as_str(), "{after}");
     assert_eq!(running["run_id"], run_id.as_str(), "{running}");
     assert_eq!(running["triggered_by"], "api", "{running}");
     assert!(running["partitions"].is_null(), "{running}");
@@ -186,7 +193,8 @@ async fn a_post_runs_run_shows_as_running_with_its_steps_and_clears_when_it_ends
         "{history}"
     );
 
-    wait_for(&app, "slow", "cleared", Value::is_null).await;
+    wait_for(&app, "after", "cleared", Value::is_null).await;
+    assert!(running_of(&app, "slow").await.is_null());
     assert!(in_flight(&app).await.is_empty());
     let (_, detail) = send(&app, "GET", "/assets/slow", None).await;
     assert!(detail["running"].is_null(), "{detail}");

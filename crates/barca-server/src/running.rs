@@ -232,9 +232,15 @@ pub(crate) fn by_node(
                 return true;
             };
             match &progress {
+                // A partitioned step reports each key it runs, not the keys served from cache:
+                // it is finished once its downstream steps have started, once this run has
+                // run every key, or once every key has a result and this run ran some of them
+                // (a node whose keys were all cached reports nothing, and counts as running
+                // until the run gets past it).
                 Some(p) if n.partitioned => {
                     let (done, total) = keys(n);
-                    (total > 0 && done >= total)
+                    let mine = p.keys_done.get(id).map_or(0, HashSet::len);
+                    (total > 0 && (mine >= total || (mine > 0 && done >= total)))
                         || dag
                             .downstream(id)
                             .iter()
