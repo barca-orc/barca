@@ -398,7 +398,11 @@ impl Integration for Datadog {
         })
     }
 
-    fn export<'a>(&'a self, run: &'a RunReport) -> super::Export<'a> {
+    fn export<'a>(
+        &'a self,
+        run: &'a RunReport,
+        _history: &'a super::JobHistory,
+    ) -> super::Export<'a> {
         Box::pin(async move {
             let body = serde_json::to_vec(&self.trace(run)).map_err(|e| e.to_string())?;
             self.send(&body).await
@@ -501,6 +505,7 @@ mod tests {
             command: "run".to_string(),
             target: Some("p.py:publish".to_string()),
             job: "p.py:publish".to_string(),
+            env: None,
             status: status.to_string(),
             reason: None,
             in_flight_run: None,

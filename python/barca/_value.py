@@ -7,6 +7,12 @@ becomes its `repr`. Unpickling runs the pickled classes' code, exactly as `barca
 
 Protocol: one JSON document on stdin, {"artifacts": [{"path", "format"}, ...]}; one JSON array
 on stdout with {"value": ...} or {"error": "..."} per artifact, in order.
+
+`barca get -o url` sends a sign request instead (version 1, specs/worker-protocol.md):
+{"op": "sign", "version": 1, "objects": [{"uri", "expires", "filename"}, ...]}, answered with
+{"url", "expires_at"} (and a "note" when the link ends sooner than asked) or {"error", "kind"}
+per object, in order. A signed URL is written to
+stdout only, for the coordinator; errors never contain one.
 """
 
 import base64
@@ -74,9 +80,43 @@ def value(path: str, fmt: str) -> dict:
         return {"error": f"{type(e).__name__}: {first}".rstrip(": ")}
 
 
+SIGN_VERSION = 1
+
+
+def sign(obj: dict) -> dict:
+    """One object as {"url", "expires_at"}, or {"error", "kind"}. Never raises."""
+    from barca import _storage
+
+    try:
+        url, expires_at = _storage.sign_url(obj["uri"], obj["expires"], obj.get("filename"))
+    except _storage.SignError as e:
+        return {"error": str(e), "kind": e.kind}
+    except Exception as e:  # noqa: BLE001 — reported per object, as the coordinator decides
+        message = _storage.safe_error(f"{type(e).__name__}: {e}")
+        return {"error": message, "kind": "store"}
+    answer = {"url": url, "expires_at": expires_at.isoformat().replace("+00:00", "Z")}
+    asked = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(
+        seconds=obj["expires"]
+    )
+    if expires_at < asked - datetime.timedelta(seconds=60):
+        answer["note"] = (
+            f"the credentials that signed it expire at {answer['expires_at']}, so the link "
+            "stops working then, sooner than --expires asked"
+        )
+    return answer
+
+
 def main() -> None:
     request = json.load(sys.stdin)
-    answers = [value(a["path"], a["format"]) for a in request.get("artifacts", [])]
+    if request.get("op") == "sign":
+        if request.get("version") != SIGN_VERSION:
+            raise SystemExit(
+                f"barca._value: sign request version {request.get('version')!r} is not "
+                f"{SIGN_VERSION}; reinstall matching barca packages"
+            )
+        answers = [sign(o) for o in request.get("objects", [])]
+    else:
+        answers = [value(a["path"], a["format"]) for a in request.get("artifacts", [])]
     json.dump(answers, sys.stdout)
 
 

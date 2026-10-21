@@ -3,7 +3,7 @@ use clap::CommandFactory;
 
 /// Subcommands that must carry runnable examples in their `--help`.
 const DOCUMENTED: &[&str] = &[
-    "get", "run", "plan", "history", "stats", "serve", "list", "status", "docs",
+    "get", "run", "plan", "history", "stats", "serve", "list", "status", "state", "docs",
 ];
 
 fn after_help(cmd: &clap::Command) -> String {
@@ -89,9 +89,23 @@ fn top_level_help_points_at_the_manual() {
 fn every_help_example_parses_against_the_real_cli() {
     let root = Cli::command();
     for name in DOCUMENTED {
-        let help = after_help(root.find_subcommand(name).unwrap());
+        let sub = root.find_subcommand(name).unwrap();
+        let help = after_help(sub);
         for line in command_lines(&help, false) {
             assert_parses(&line, &format!("`barca {name} --help` example"));
+        }
+        // `barca state backups`: each nested command carries its own examples.
+        for nested in sub.get_subcommands() {
+            let inner = nested.get_name();
+            let help = after_help(nested);
+            let lines = command_lines(&help, false);
+            assert!(
+                help.contains("Examples:") && !lines.is_empty(),
+                "`barca {name} {inner} --help` needs `barca ...` examples"
+            );
+            for line in lines {
+                assert_parses(&line, &format!("`barca {name} {inner} --help` example"));
+            }
         }
     }
     for line in command_lines(&after_help(&root), false) {

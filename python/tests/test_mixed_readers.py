@@ -86,16 +86,21 @@ def cli(root: Path, store: Path, *args: str) -> subprocess.CompletedProcess:
 
 @pytest.fixture
 def machine(tmp_path):
-    """Factory for working directories that share one store; `parts` is already in it."""
+    """Factory for working directories that share one store; `parts` is already in it, and
+    each new directory starts from the history the producer backed up there (RFC-0009:
+    `barca state restore`), with none of its artifacts on disk."""
     store = tmp_path / "store"
 
-    def make(name: str) -> Path:
+    def make(name: str, restore: bool = True) -> Path:
         root = tmp_path / name
         root.mkdir()
         (root / "pipeline.py").write_text(PIPELINE)
+        if restore:
+            restored = cli(root, store, "state", "restore", "--json")
+            assert restored.returncode == 0, restored.stderr
         return root
 
-    produced = cli(make("producer"), store, "get", "parts", "-o", "value", "--json")
+    produced = cli(make("producer", restore=False), store, "get", "parts", "--json")
     assert produced.returncode == 0, produced.stderr
     assert len(list(store.glob("default/artifacts/*parts*/*.parquet"))) == 2
     return store, make

@@ -55,6 +55,8 @@ barca status [target[,target...]] [file.py|dir/ ...] [--json] [--sample N]
 barca sql "<query>" [file.py|dir/ ...] [--json] [-l N | --all]
                                                Query cached results with DuckDB (experimental)
                                                (install: uv add 'barca[sql]')
+barca state backups [--json]                  List the metadata backups, local and in the store
+barca state restore [--from N|NAME]           Put a metadata backup back (the current DB is kept aside)
 barca docs [topic] [--all] [--json]           Built-in manual
 barca version                                 Print version
 barca --help                                  Show help
@@ -143,12 +145,16 @@ To read the result:
 barca get summary pipeline.py -o value           # only the value, pretty-printed
 barca get summary pipeline.py -o value --json    # the JSON result with the value in final_output
 barca get summary pipeline.py -o path | xargs cat   # only the path, one line per artifact
+barca get summary pipeline.py -o url --expires 12h  # a signed HTTPS link to the result in the store
 ```
 
 `-o value` reads json, parquet, CSV and pickle with the reader `barca.get()` uses; a table
 prints as a list of row objects. `-o path` is the default spelled out: with `--json` it prints
 the default JSON. Up to 0.24 `final_output` was the value of a json result and a terminal
-printed the value; `-o value` prints it now.
+printed the value; `-o value` prints it now. `-o url` (experimental) prints a signed HTTPS link to
+each result in a cloud store, valid for `--expires` (default `1h`, at most `7d`); with `--json`
+each `_barca_artifact` pointer gains `url` and `url_expires_at`. See
+[Remote storage: signed URLs](/reference/remote-storage/#sharing-a-result-signed-urls).
 
 **Partitioned targets.** A partitioned asset returns every key, sorted: `final_output` is an
 object keyed by partition key (`"region=emea"`; a compound key is `"day=d1,region=emea"`), each a
@@ -457,14 +463,9 @@ barca serve --timezone utc              # every file in the project; cron evalua
 | `--read-only` | off | Refuse runs, never schedule, read the metadata DB from copies. |
 | `--env <name>` | `default` | Use a named environment's cache and history. |
 
-`barca serve` does not support shared history. With a remote store and
-`state = "optimistic"` (the default with a remote store) it exits 2:
-
-```
-barca serve does not support shared remote state yet — set state = "off" in barca.toml (or BARCA_STATE=off) to serve with a local metadata DB
-```
-
-See [Configuration](/reference/config/).
+With a remote store, `barca serve` backs its metadata DB up every minute it changed (not with
+`--read-only`), and `barca state restore` refuses to run while it is up. See
+[Remote storage](/reference/remote-storage/).
 
 ## list
 
@@ -552,6 +553,7 @@ spells it in snake_case, exactly like the `summary` keys; the table prints `neve
 | state | meaning | reasons |
 |---|---|---|
 | `cached` | a successful result matches this code and these inputs | `materialized` |
+| `unsynced` | cached and computed here, but its upload to the artifact store failed after the step succeeded; the next `get` or `run` uploads it ([remote storage](/reference/remote-storage/)) | `local_only` (table: `local only`) |
 | `stale` | ran before, but would run again | `changed`, `upstream_stale`, `failed`, `artifact_missing`, `evicted` |
 | `never_run` | no successful materialization recorded | `no_record`, `failed` |
 | `partial` | partitioned, some keys cached | `partitions_missing` |
@@ -583,12 +585,14 @@ status returns every node in JSON unless `--limit N` is explicit. Its human tabl
 100 nodes unless you pass `--limit N` or `--all`; the `summary` still counts
 every node, and the JSON reports `total` and `truncated` (see [Bounded output](#bounded-output)).
 
-With [shared history](/reference/remote-storage/), status first pulls it, as a run does.
+With an [artifact store](/reference/remote-storage/), a cached unpartitioned node is `cached`
+only when this machine's copy, the store's object and the recorded digest agree; otherwise it is
+`unsynced` with `cache.reason` `local_only`, `store_only` or `mismatch`, and `barca get` repairs
+it without running a step.
 Status reads the metadata DB as it is at that moment: while a `barca get` is running, the
 steps it has finished already show as `cached` (a partitioned asset as `partial`).
 
-Status executes no pipeline step and records no new run. Optimistic shared history may
-create or update local metadata; `partitions(<expression>)` may evaluate Python while
+Status executes no pipeline step and records no new run; `partitions(<expression>)` may evaluate Python while
 resolving keys. An unknown target
 is a usage error (exit 2). See `barca docs status`.
 
@@ -598,7 +602,7 @@ Query cached results with DuckDB. Every asset, sensor and task with a result on 
 named after its declared `name=`, or its function when unset; a partitioned asset is one
 view with a `partition` column. No step
 runs, your code is not imported, and no run is recorded. Only parquet, CSV and json results are
-views; a pickled result cannot be queried. Install SQL support with `uv add 'barca[sql]'`. With a remote store it first pulls the shared history into `.barca/`, and the
+views; a pickled result cannot be queried. Install SQL support with `uv add 'barca[sql]'`. With a remote store the
 artifacts of the views a query names are downloaded into `.barca/sql-cache/` and reused.
 Experimental.
 
@@ -617,6 +621,29 @@ emea    10.0
 | `--env <name>` | `default` | Query a named environment's results. |
 
 See [barca sql](/reference/sql/) for views, errors and limits.
+
+## state
+
+With a remote store (`[remote] uri` or `BARCA_REMOTE_URI`), `get` and `run` back the metadata
+DB up on a one-minute checkpoint and when they end, and `serve` every minute it changed: to
+`.barca/backups/<UTC>.db` and `<uri>/<env>/state/backups/<UTC>.db`, five copies kept in each,
+each with a `<UTC>.json` sidecar (`run_id`, `rows`, `digest`, `barca_version`, `db_format`).
+Nothing is downloaded before a run.
+
+```bash
+barca state backups                  # newest first: # NAME WHERE SIZE ROWS RUN
+barca state backups --json           # {backups: [{index, name, where, size_bytes, run_id, rows, digest, agree, barca_version, db_format}], local_dir, store}
+barca state restore                  # put the newest backup back
+barca state restore --from 2         # by index; or --from 2026-10-14T18-02-11Z
+```
+
+`restore` checks the copy first (a whole SQLite file, integrity, barca's tables, a usable
+format), the local copy before the store's, then moves the current database to
+`.barca/metadata.db.pre-restore` and puts the copy in place; one line on stderr says what it
+restored and from where, and `--json` adds `{restored, from, source, pre_restore, rows, run_id}`
+on stdout. It never runs by itself. Exit 2: no backup, an unknown `--from`, or a copy that fails
+the check (nothing is changed). Exit 3: `barca serve` is running on the environment. See
+[Remote storage](/reference/remote-storage/#backups-and-restore).
 
 ## docs
 
@@ -714,7 +741,7 @@ barca 0.18.0
 
 ## --env
 
-`get`, `run`, `status`, `sql`, `history`, `stats` and `serve` accept `--env <name>` (default:
+`get`, `run`, `status`, `sql`, `history`, `stats`, `serve`, `state backups` and `state restore` accept `--env <name>` (default:
 `BARCA_ENV`, then `default_env` in `barca.toml`, then `default`). `plan` and `list` read no
 state and reject it. Each environment has its own cache, artifacts, history and remote
 location. `get`, `run` and `serve` print the environment and artifact store once at startup
@@ -743,6 +770,10 @@ on stderr when `default_env` or an artifact store is in effect. See
 - From 0.20.0: `POST /run/{target}` and `POST /get/{target}` answer 404, 409 or 400 for a
   target that cannot run; they used to answer 200 with a `run_id` of a run that then failed.
 - From 0.20.0: the `barca list` table column `NEXT FIRE` is `NEXT FIRE (LOCAL TIME)`.
+- From 0.26.0: the shared history (`optimistic` mode) is gone. `[remote] state`, `state_uri`,
+  `push_retries`, `BARCA_STATE`, `BARCA_STATE_URI` and `BARCA_PUSH_RETRIES` are usage errors;
+  nothing is pulled before a run, and the store holds backups instead
+  ([Remote storage](/reference/remote-storage/)). `barca serve` works with a store.
 
 ## Recorded stdout
 

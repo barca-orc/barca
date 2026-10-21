@@ -19,6 +19,10 @@ dashmap = "6"
 notify = "8"
 tower = { version = "0.5", features = ["util"] }
 toml = "0.8"
+# Outgoing HTTPS (Slack webhooks; the `--server` client). rustls with the ring provider, never
+# native-tls; no default features, so no HTTP/2, proxy discovery, cookies or decompression.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 
 [profile.release]
 strip = true

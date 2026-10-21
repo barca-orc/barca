@@ -35,26 +35,27 @@ For example, three ways to select the `staging` environment:
 ## Where things live
 
 Barca keeps its cache and run history in `.barca/`, in the project root. Results are always
-written there first. A remote store, when configured, is a shared copy of the same files.
+written there first. A remote store, when configured, holds a copy of the result files and
+backups of the metadata database.
 
 | Path | What it is | Safe to delete |
 |---|---|---|
-| `.barca/metadata.db` | Run history and the record of every cached result (a SQLite file). | Only to discard local history: every asset then recomputes on the next run, or, with shared history, the history is pulled again. Delete `metadata.db-wal` and `metadata.db-shm` with it, with no barca command running. |
+| `.barca/metadata.db` | Run history and the record of every cached result (a SQLite file). | Only to discard local history: every asset then recomputes on the next run (with a store, `barca state restore` puts a backup back instead). Delete `metadata.db-wal` and `metadata.db-shm` with it, with no barca command running. |
 | `.barca/metadata.db-wal`, `.barca/metadata.db-shm` | SQLite's write-ahead log for `metadata.db`. | Not on their own: they belong to `metadata.db` and can hold rows not yet in it. |
 | `.barca/metadata.db.lock` | A lock file held briefly while a barca process reads or writes the database. | Yes, when no barca command is running. |
 | `.barca/artifacts/<node>/<run_hash>.<ext>` | One file per cached result: `.json`, `.pkl` or `.parquet`. A partitioned asset has one directory per key (`pipeline.py--sales_region_emea/`). | Yes. A result whose file is gone is computed again when a run needs to read it, or downloaded again if it is in a remote store. Prefer `--refresh <asset>` to force a recompute. |
 | `.barca/envs/<name>/` | The same `metadata.db` and `artifacts/` for a named environment (`--env <name>`). | As above, per environment. |
-| `.barca/metadata.db.base` | With shared history: a counter that changes each time the local database is replaced by a pull or uploaded. | Yes, when no barca command is running. |
-| `.barca/metadata.db.prev` | With shared history: the local database as it was before the last pull that changed it. One generation. barca never reads it. | Yes. |
-| `.barca/metadata.db.pull-<host>-<pid>-<n>`, `.push-<host>-<pid>-<n>`, `.prev.tmp` | With shared history: a download or upload in progress. Leftovers of a killed command are removed by a later pull. | Yes, when no barca command is running. |
+| `.barca/backups/<UTC>.db`, `<UTC>.json`, `<UTC>.unsent` | With a store (`[remote] uri`): the five newest backups of `metadata.db`, each with its sidecar, and a marker on one the store has not confirmed yet. Under `.barca/envs/<name>/backups/` for a named environment. | Yes; then only the store's copies are left to restore from. |
+| `.barca/metadata.db.pre-restore` | The database `barca state restore` replaced. barca never reads it. | Yes. |
+| `.barca/serve.lock` | Held by a running `barca serve`, so `barca state restore` refuses to run under it. | Yes, when no server is running. |
+| `.barca/metadata.db.base`, `.prev`, `.pull-*`, `.push-*` | Left by barca 0.25 and earlier, which shared history through the store. Not used. | Yes. |
 | `.barca/run-owners/<token>.fifo` | From 0.20.0: a marker (a named pipe, no data) that a barca process holds open while it has a run in flight. A killed run is recognised by its marker having nobody at the other end. The process removes it when its runs have ended; one left by a killed process is removed by a later run an hour after no `running` run names it. | When `barca history` shows no `running` run. While one does, its marker is what can show that it was killed. |
 | `.barca/sql-cache/` | With remote storage: copies of remote results that `barca sql` downloaded, laid out by URI (`sql-cache/s3/<bucket>/...`), each with a `.version` file. The first thing the cache size limit evicts, least recently used first. | Yes, always. |
 | `.barca/staging/<pid>/` | Temporary files of a running worker writing to a remote `@sink` or fetching a remote input. Directories of dead workers are removed when a worker starts. | Yes, when no barca command is running. |
 | `.barca/gc-state.json` | From 0.25: what the last full measurement of `.barca/` found, so the check after each command does not walk the artifact directories ([Cache size](#cache-size)). | Yes; the next check measures again. |
 | `.barca/.gitignore` | Written by barca, containing `*`, so git ignores everything under `.barca/`. | It is written again. |
 
-The table lists what 0.18.0 creates; the last five rows appear only in the situations named.
-For the shared-history files see `barca docs remote`; for a missing artifact see
+Some rows appear only in the situations named. For backups see `barca docs remote`; for a missing artifact see
 `barca docs cache`, "A cached result whose artifact is missing".
 
 Do not edit files under `.barca/`, and do not open `metadata.db` with another program while
@@ -92,21 +93,13 @@ max_size = "20GB"
 
 [remote]
 # Root of the remote store. Setting it turns remote storage on:
-# artifacts at {uri}/{env}/artifacts, shared history at {uri}/{env}/state/metadata.db.
+# artifacts at {uri}/{env}/artifacts, backups of the history at {uri}/{env}/state/backups/.
 # A plain directory (a shared mount) also works.
 uri = "s3://my-bucket/barca/my-project"
 
 # Optional overrides, used as written (the environment name is not added):
 # artifacts_uri = "s3://my-bucket/custom-artifacts"
-# state_uri = "s3://my-bucket/custom/state.db"
 
-# Shared history:
-#   "optimistic"  pull before a run, conditional upload after it, merge on conflict
-#                 (the default when a state location resolves)
-#   "off"         artifacts in the store, history local only
-state = "optimistic"
-
-push_retries = 5            # conflict retries for the history upload
 transfer_concurrency = 4    # artifact uploads and downloads in flight at once (at least 1)
 transfer_timeout = 600      # seconds one transfer attempt may run (at least 1)
 
@@ -123,9 +116,6 @@ endpoint_url = "https://<account-id>.r2.cloudflarestorage.com"
 | `[cache].max_size` | 10% of the filesystem | Size limit for `.barca/`; past it barca evicts down to 80% of it. `"off"` for no limit. See [Cache size](#cache-size). |
 | `[remote].uri` | none | Root of the remote store. |
 | `[remote].artifacts_uri` | `{uri}/{env}/artifacts` | Artifact location, used as written. |
-| `[remote].state_uri` | `{uri}/{env}/state/metadata.db` | Shared history location, used as written. |
-| `[remote].state` | `optimistic` if a state location resolves, else `off` | `optimistic` or `off`. |
-| `[remote].push_retries` | 5 | Conflict retries for the history upload. |
 | `[remote].transfer_concurrency` | 4 | Transfers in flight at once. |
 | `[remote].transfer_timeout` | 600 | Seconds one transfer attempt may run. |
 | `[remote.storage_options.<protocol>]` | none | Options for the fsspec filesystem of that protocol. |
@@ -177,6 +167,10 @@ eviction on demand (`--dry-run` to see it first, `--max-size` for a one-off limi
 `barca doctor` reports the size against the limit and the free space. The full description is
 in `barca docs cache`, "Disk use".
 
+`[remote].state`, `[remote].state_uri` and `[remote].push_retries` were removed in 0.26.0 with
+the shared history (RFC-0009). A file that still sets one is a usage error (exit 2) naming it,
+even under `BARCA_REMOTE=off`: remove the key. Backups need no setting.
+
 ## Environment variables
 
 Variables that override `barca.toml`:
@@ -185,22 +179,18 @@ Variables that override `barca.toml`:
 |---|---|---|
 | `BARCA_ENV` | `default_env` | Overridden by `--env`. |
 | `BARCA_CACHE_MAX_SIZE` | `[cache].max_size` | Same values; an invalid one exits 2. For a container that sets its limit when it is deployed. |
-| `BARCA_REMOTE` | process override | `off` uses local artifacts/history and overrides all remote settings. Unset/empty keeps normal resolution; other values exit 2. |
-| `BARCA_REMOTE_URI` | `[remote].uri` | Enough on its own to turn remote storage on. |
-| `BARCA_STATE_URI` | `[remote].state_uri` | Used as written. |
-| `BARCA_STATE` | `[remote].state` | `optimistic` or `off`; any other value exits 2. |
-| `BARCA_PUSH_RETRIES` | `[remote].push_retries` | An integer; anything else exits 2. |
+| `BARCA_REMOTE` | process override | `off` uses local artifacts/history, takes no backups and overrides all remote settings. Unset/empty keeps normal resolution; other values exit 2. |
+| `BARCA_REMOTE_URI` | `[remote].uri` | Enough on its own to turn remote storage and history backups on. |
 | `BARCA_TRANSFER_CONCURRENCY` | `[remote].transfer_concurrency` | A positive integer. In 0.18.0 an invalid value exits 3, not 2. |
 | `BARCA_TRANSFER_TIMEOUT` | `[remote].transfer_timeout` | Positive integer seconds, per attempt. In 0.18.0 an invalid value exits 3, not 2. |
 | `BARCA_STORAGE_OPTIONS` | `[remote.storage_options.*]` | JSON keyed by protocol, merged over the toml tables key by key. |
 | `FSSPEC_<PROTOCOL>_<OPTION>` | one storage option | fsspec's own convention (`FSSPEC_S3_ENDPOINT_URL`, `FSSPEC_GCS_PROJECT`). Overridden by both of the above. |
-| `BARCA_ARTIFACT_URI` | the artifact location | Used as written, with no environment name added, and history stays local. Kept from 0.4.0. Warns when combined with a non-default environment. Prefer `BARCA_REMOTE_URI` with `BARCA_STATE=off`. |
+| `BARCA_ARTIFACT_URI` | the artifact location | Used as written, with no environment name added, and history stays local. Kept from 0.4.0. Warns when combined with a non-default environment. No backups are taken. Prefer `BARCA_REMOTE_URI`. |
 
-An empty value counts as unset. `BARCA_REMOTE=off` overrides the URI, state,
-transfer and storage-options settings above while preserving the selected local
-environment. `BARCA_STATE=off` disables only shared metadata and keeps artifact
-sharing; use it to start `barca serve` with a shared project configuration. Serve
-still refuses optimistic shared state unless explicitly disabled.
+An empty value counts as unset. `BARCA_REMOTE=off` overrides the URI, transfer and
+storage-options settings above while preserving the selected local environment.
+`BARCA_STATE`, `BARCA_STATE_URI` and `BARCA_PUSH_RETRIES` were removed in 0.26.0: setting one
+is a usage error (exit 2) naming it.
 
 Variables with no `barca.toml` key:
 

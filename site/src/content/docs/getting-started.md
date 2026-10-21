@@ -172,7 +172,7 @@ edited `raw_data` instead, both would have run: `raw_data` is an input of `summa
 - **Large inputs.** An unannotated DataFrame input is read in full with pandas:
   [Large inputs](/patterns/08-large-inputs/).
 - **Environments and remote stores.** `--env prod` keeps a separate cache and history, and a
-  remote store shares results between machines: [Configuration](/reference/config/),
+  remote store keeps results and backups of the history: [Configuration](/reference/config/),
   [Remote storage](/reference/remote-storage/).
 - **Schedules and the HTTP API.** [Scheduling](/scheduling/).
 - **Everything else.** The [Guide](/guide/), the [CLI reference](/reference/cli/), and

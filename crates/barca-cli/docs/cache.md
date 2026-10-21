@@ -301,10 +301,9 @@ full run.
 
 - Results written by 0.18 stay in `.barca/metadata.db` and their artifacts stay on disk, under
   their old run hashes. Barca 0.19 does not read them and does not delete them.
-- With a shared history and artifact store (`barca docs remote`), the first machine that runs
-  0.19 computes every step once and the other machines on 0.19 reuse those results. A machine
-  still on 0.18 keeps finding its 0.18 results in the same store. The two versions do not
-  reuse each other's results, so upgrade the machines that share a store together.
+- With an artifact store (`barca docs remote`), 0.19 computes every step once and writes the
+  results under their new run hashes; 0.18 results in the same store are left alone. The two
+  versions do not reuse each other's results.
 - Run hashes appear in the JSON of `barca get`, `barca run` (also with `--dry-run`) and
   `barca status`; their values change with this upgrade. No command, flag or JSON key changed.
 
@@ -440,9 +439,9 @@ output, so the next `--dry-run` or `barca status` shows its consumers as stale.
 
 ```
 .barca/metadata.db                          run history and materialization records (local DB)
-.barca/metadata.db.base                     with shared history: a counter of pulls and uploads (`barca docs remote`)
-.barca/metadata.db.prev                     with shared history: the local DB as it was before the last pull that changed it
-.barca/metadata.db.pull-*, .push-*          with shared history: a download or upload in progress; what a killed command left is removed by the next pull
+.barca/backups/<UTC>.db, <UTC>.json        with a store: the five newest backups of the metadata DB (`barca docs remote`)
+.barca/metadata.db.pre-restore              the database `barca state restore` replaced
+.barca/serve.lock                           held by a running `barca serve`, so `barca state restore` refuses to run under it
 .barca/run-owners/<token>.fifo              a marker a barca process holds open while it has a run in flight ("While a run is going, and after one is killed")
 .barca/artifacts/<node>/<run_hash>.<ext>    one file per result
 .barca/staging/<pid>/                       a process's files in transit (uploads, downloads, result batches)
@@ -458,10 +457,10 @@ code and inputs (what changes outside comes in through a sensor, whose output is
 run hash), so computing it again is expected to write the same bytes.
 Barca does not enforce that. Computing the result again (`--refresh`, `--refresh-all`, or a
 missing artifact that something needs) overwrites the file, and a function that is not
-deterministic then leaves different bytes at the same path; with an artifact store, a machine
-whose history still has the earlier hash is warned (`barca docs remote`, "Checking a local copy
-against the store"). Because the path is the same on every machine, artifacts can be shared:
-set `BARCA_REMOTE_URI` and your cloud's credentials (`barca docs remote`).
+deterministic then leaves different bytes at the same path; with an artifact store, a copy
+that differs from the recorded hash is reported (`barca docs remote`, "Checking a local copy
+against the store"). To keep artifacts and a backup of the history in a bucket, set
+`BARCA_REMOTE_URI` and your cloud's credentials (`barca docs remote`).
 
 `.barca/` lives in the **project root**: the nearest directory at or above the one you run barca
 from that holds a `barca.toml`. Without a `barca.toml` above you, the current directory is the
@@ -570,8 +569,9 @@ renames and replaces nothing anywhere else:
   and a symlink is written through (the file it points to is written, the link stays). The
   asset itself succeeds either way (`barca docs sinks`);
 - a directory at an object's path in an artifact store that is a shared directory fails the
-  fetch or the upload with exit 3, naming the path, and is left as it is. The error says to
-  remove or rename it there; `--refresh-all` does not help (`barca docs remote`).
+  fetch (exit 3) or the upload (a warning; the result stays a pending upload), naming the
+  path, and is left as it is. The message says to remove or rename it there; `--refresh-all`
+  does not help (`barca docs remote`).
 
 Known limits:
 
@@ -639,6 +639,8 @@ the limit:
   person recomputes a `Manual` node. Barca finds `Manual` nodes by reading the project's source
   files (no import); if one of them does not parse, no current result without a store copy is
   evicted;
+- a result whose upload to the artifact store is still pending (`unsynced`, `local only` in
+  `barca status`): its local copy is the only one until the next command uploads it;
 - the metadata DBs, their logs, locks and backups, and any file under `.barca/artifacts/` that no
   result names (written by hand, or by another tool): counted, never deleted. Nothing outside
   `.barca/` is ever deleted, and the artifact store is never touched.
@@ -860,21 +862,21 @@ completed results that the mid-run recorder has not saved.
   `.barca` (see the limits below). Ctrl-C and SIGTERM (a supervisor, `docker stop`) are
   different: the run stops its workers, records itself and is `cancelled` (exit 130).
   With an artifact store that also holds while
-  artifacts upload, download or the shared history is pushed, and the cancelled run then shares
-  its record for at most 10 seconds; a second Ctrl-C ends that (`barca docs remote`, "Ctrl-C").
+  artifacts upload or download or the history is backed up, and the cancelled run then backs
+  its record up for at most 10 seconds; a second Ctrl-C ends that (`barca docs remote`, "Ctrl-C").
 
 Known limits:
 
-- With shared remote state (`barca docs remote`) all of this holds on the machine the run is on:
-  the pull at the start of a command keeps what a run recorded locally, so progress and resume
-  work whatever other machines upload in the meantime. Newly committed progress is shared
-  every minute in healthy operation, without ending the run; the final outcome is shared
-  when it ends. Other machines can reuse confirmed results already checkpointed after a kill.
-- With a remote artifact store, a failed or unfinished upload is never recorded as reusable
-  progress. Confirmed uploads are recorded locally while other steps are still running;
-  shared history publishes new committed progress every minute. Database and storage failures
-  can delay that cadence; a failed checkpoint retains local history for a later retry. Clean
-  ticks do not upload another snapshot.
+- With a store (`barca docs remote`) all of this holds on the machine the run is on. Newly
+  committed progress is backed up every minute in healthy operation, without ending the run,
+  and the final outcome when it ends; a backup is restored only by `barca state restore`.
+- With a remote artifact store, an unfinished upload is never recorded as reusable progress.
+  A failed upload is recorded at the end of the run as a pending upload, `unsynced` in
+  `barca status` and uploaded by the next command (`barca docs remote`, "When an upload fails
+  after the steps succeeded"). Confirmed uploads are recorded locally while other steps are still running;
+  the minute backup copies new committed progress. Database and storage failures can delay
+  that cadence; a failed backup leaves local history intact and is retried. Ticks with nothing
+  new take no backup.
 - **When a run is `interrupted`.** For runs started with 0.20.0 or later, only on an observation
   that can only be made when the run's process is gone; whenever barca cannot make one, the run stays `running`. A run
   records which kernel its process ran on (the boot id), its pid namespace, its start time,
@@ -904,7 +906,7 @@ Known limits:
   processes): if they share a project directory, a run killed on one is shown as
   `interrupted` there while its twin on the other is still going.
 - What stays `running` although its process is gone:
-  - a run another machine started (it came with the shared history), until that machine
+  - a run another machine started (its row came with a restored backup), until that machine
     records it;
   - with Docker Desktop, a run killed on the host as seen from a container, and a run
     killed in a container as seen from the host: they are different kernels and the
@@ -943,7 +945,7 @@ The change is local to the selected environment's metadata database.
 ## Environments
 
 `--env <name>` (or `BARCA_ENV`, or `default_env` in `barca.toml`, else `default`) fully
-separates cache, artifacts and shared state. Use it for dev/staging/prod isolation.
+separates cache, artifacts, history and its backups. Use it for dev/staging/prod isolation.
 
 `get`, `run` and `serve` print the environment and artifact store they use once at startup, on
 stderr, when the environment comes from `default_env` in `barca.toml` or an artifact store is
@@ -968,7 +970,7 @@ happens; a mismatch never automatically deletes or rebuilds your metadata.
 Existing unversioned metadata is upgraded with additive changes in one
 transaction, preserving its rows. A failed or interrupted upgrade can be retried.
 Read-only inspection does not migrate your source database. The same checks apply
-to shared history before it replaces a local copy.
+to a backup before `barca state restore` puts it in place.
 
 ## Seeing what happened
 
@@ -990,8 +992,9 @@ invalidate the node; this preserves cache safety when discovery proves its liter
 An upload pins the serializing run's bytes before publishing the reusable local artifact
 path. Its confirmed hash and byte count describe those uploaded bytes, even when another
 run replaces that path before the transfer starts. Sensor content hashes keep their existing
-meaning; ordinary asset rows use the confirmed upload hash. Failed or cancelled uploads do
-not record a successful remote materialization. Staging is removed at confirmation or run
+meaning; ordinary asset rows use the confirmed upload hash. Cancelled uploads do not record
+a successful remote materialization; a failed upload records the result with the worker's
+digest and keeps the upload pending (`barca docs remote`). Staging is removed at confirmation or run
 shutdown, with dead-process cleanup as the crash backstop.
 
 Paths still identify code and inputs, so a later refresh can replace local and remote bytes.

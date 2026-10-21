@@ -43,8 +43,7 @@ notify  task   always-runs  task          -                                  -  
 2 cached, 0 stale, 0 never run, 0 partial, 0 unknown, 1 always run
 ```
 
-Status executes no pipeline step and records no new run. Without shared state it does not
-create `.barca/`; optimistic shared-history synchronization may create or update local metadata.
+Status executes no pipeline step and records no new run, and it does not create `.barca/`.
 Source parsing is static, but `partitions(<expression>)` may evaluate Python and import its
 module while resolving keys. Like every inspection command, the result goes to stdout (a table in a terminal, JSON
 when piped; `--json` / `--pretty` override) and errors to stderr; an unknown target is a usage
@@ -53,9 +52,9 @@ the same remediation as `get` and `run`. A target is one name or several, comma-
 spaces (`a,b`), parsed exactly as `get` and `run` parse them; the JSON names them in `targets`
 (and the single one in `target`).
 
-With shared remote state (`barca docs remote`), status first pulls the shared history, as a run
-does, so it also shows what other machines computed. A pull keeps what was recorded only on this
-machine, so this is safe while a run is going: its finished steps still show.
+With an artifact store (`barca docs remote`), status also asks the store about every cached
+unpartitioned node, with one `python -m barca._state stat` for all of them, and reports a node
+whose copies do not agree as `unsynced` (below). Nothing is downloaded or uploaded.
 
 Status reads the metadata DB as it is at that moment, and a run records each step as it
 finishes. So while a `barca get` is running, status in another terminal already shows the steps
@@ -77,6 +76,7 @@ two cannot disagree. In JSON the states are snake_case, spelled exactly like the
 | state | meaning | `reason` |
 |---|---|---|
 | `cached` | a successful result matches this code and these inputs; `get` serves it | `materialized` |
+| `unsynced` | cached, but with an artifact store this machine's copy, the store's object and the recorded digest do not all agree (`barca docs remote`, "`cached` and `unsynced` with a store"). `get` on it repairs that without running a step | `local_only`, `store_only`, `mismatch` (the table prints `local only`, `store only`, `mismatch`) |
 | `stale` | it ran before, but `get` would run it again | `changed`, `upstream_stale`, `failed`, `artifact_missing`, `evicted` |
 | `never_run` | no successful materialization is recorded | `no_record`, `failed` |
 | `partial` | a partitioned asset with some keys cached | `partitions_missing` |
@@ -104,8 +104,20 @@ two cannot disagree. In JSON the states are snake_case, spelled exactly like the
 - `evicted`: the same, because the cache size limit deleted the artifact file (`barca docs cache`,
   "Disk use"). A result the artifact store holds is not stale: a run downloads it again.
 
+- `local_only`, `store_only`, `mismatch`: only with an artifact store. `local_only`: the result
+  is on this machine and not in the store, or its upload is pending (`detail` then carries the
+  upload's last error); the next `get` or `run` uploads it. `store_only`: in the store, not on
+  this machine; `get` fetches it. `mismatch`: both copies are there and differ in size (or in
+  bytes, for a store that is a plain directory), or this machine's copy is not the one
+  recorded; `get` keeps the recorded copy and uploads it again, with the changed-bytes warning.
+  A result in neither place is `stale` with `artifact_missing`. Object stores give no checksum,
+  so a same-size object with other bytes is not noticed there. A partitioned asset is
+  `unsynced` (`local_only`) only when one of its keys has a pending upload. A store that cannot
+  be asked leaves the state as it is, with a note in `detail`. The summary line counts these
+  nodes (`1 cached, 1 unsynced, 0 stale, ...`) and `summary.unsynced` is always present.
+
 `cache.run_hash` is the cache key for the current code and inputs; `cache.artifact` is the file a
-`get` would serve (only when `cached`).
+`get` would serve (only when `cached` or `unsynced`).
 
 ## Last materialization
 
@@ -116,6 +128,15 @@ does not change it. It is `null` when the node never ran.
 For a partitioned node it is one key's row from the latest run, the first key in sort order
 (`partition` names it), so two identical runs report the same key whatever order the keys
 finished in.
+
+## Last changed bytes
+
+`last_bytes_change` is the most recent recompute of the node that produced different bytes for
+the same code and inputs (the same run hash): `{node_id, run_hash, content_hash, created_at}`,
+with the exact node id (a partition key included). It is absent when that never happened. The
+table prints one line per such node under the rows:
+`total: different bytes for the same code and inputs at 2026-10-02 11:56:43 (pipeline.py:total)`.
+It means the function is not deterministic (`barca docs cache`).
 
 ## Artifact shape
 
@@ -191,7 +212,7 @@ sort order), named in its `partition` field (for example `k=a`), and `shape` des
       "shape": {"type": "table", "rows": 3, "columns": [{"name": "id", "type": "int64"}, {"name": "amount", "type": "double"}]}
     }
   ],
-  "summary": {"cached": 2, "stale": 0, "never_run": 0, "partial": 0, "unknown": 0, "always_runs": 0}
+  "summary": {"cached": 2, "unsynced": 0, "stale": 0, "never_run": 0, "partial": 0, "unknown": 0, "always_runs": 0}
 }
 ```
 
@@ -227,7 +248,7 @@ visible under `--json`; task prints remain accessible through `barca logs`.
 `--agent` completion and final failure lines append `attempts=N` when N exceeds one.
 Completion lines retain their existing final-attempt duration. `history --json` adds
 `attempts`, the total attempts in recorded materialization rows (zero for an all-cached
-run; upload-failure rows retain their existing transfer-attempt counts). `stats` shows
+run; upload-failure rows from earlier versions retain their transfer-attempt counts). `stats` shows
 attempts per recorded materialization and its stored final-attempt duration.
 Timeout errors name the step id, including its partition key.
 

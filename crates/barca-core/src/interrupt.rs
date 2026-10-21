@@ -15,12 +15,12 @@
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
-/// How long a cancelled run may spend pushing its record to the shared history.
+/// How long a cancelled run may spend backing its history up to the store (RFC-0009).
 ///
-/// A push of the metadata database takes tens of milliseconds to a directory store and well
-/// under two seconds to an object store, so ten seconds covers a slow link and one conflict
-/// retry (a pull and a second push). It is also about as long as someone who pressed Ctrl-C
-/// will wait before pressing it again, which ends the wait anyway.
+/// A backup of the metadata database takes tens of milliseconds to a directory store and well
+/// under two seconds to an object store, so ten seconds covers a slow link. It is also about
+/// as long as someone who pressed Ctrl-C will wait before pressing it again, which ends the
+/// wait anyway.
 pub const WRAP_UP_LIMIT: Duration = Duration::from_secs(10);
 
 /// The two stop signals of a run. A plain [`CancellationToken`] converts into one whose

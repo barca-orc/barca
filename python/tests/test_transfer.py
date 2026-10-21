@@ -462,8 +462,15 @@ class ProcessHelper:
         finally:
             server.close()
         self.peer.settimeout(30)
-        assert _recv(self.peer) == {"type": "hello", "role": "transfer", "protocol_version": _runtime.PROTOCOL_VERSION}
-        _send(self.peer, {"type": "hello", "role": "coordinator", "protocol_version": _runtime.PROTOCOL_VERSION})
+        assert _recv(self.peer) == {
+            "type": "hello",
+            "role": "transfer",
+            "protocol_version": _runtime.PROTOCOL_VERSION,
+        }
+        _send(
+            self.peer,
+            {"type": "hello", "role": "coordinator", "protocol_version": _runtime.PROTOCOL_VERSION},
+        )
 
     def request(self, msg: dict) -> None:
         _send(self.peer, msg)
@@ -892,16 +899,27 @@ class TestCoordinatorGone:
     def test_the_state_helper_leaves_when_its_lifeline_closes(self, tmp_path):
         hold_dir = tmp_path / "hold"
         hold_dir.mkdir()
-        db = tmp_path / "metadata.db"
+        db = tmp_path / "2026-10-14T18-02-11Z.db"
         db.write_bytes(b"not looked at")
+        sidecar = tmp_path / "2026-10-14T18-02-11Z.json"
+        sidecar.write_text("{}")
         env = {
             **os.environ,
             "BARCA_LIFELINE": "stdin",
             "PYTHONPATH": HOLD_SHIM + os.pathsep + os.environ.get("PYTHONPATH", ""),
-            "BARCA_TEST_HOLD": f"push:{hold_dir}",
+            "BARCA_TEST_HOLD": f"backup:{hold_dir}",
         }
         proc = subprocess.Popen(
-            [sys.executable, "-m", "barca._state", "push", str(tmp_path / "s" / "m.db"), str(db)],
+            [
+                sys.executable,
+                "-m",
+                "barca._state",
+                "backup",
+                str(db),
+                str(sidecar),
+                str(tmp_path / "s" / "backups"),
+                "5",
+            ],
             env=env,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -910,7 +928,7 @@ class TestCoordinatorGone:
         )
         try:
             deadline = time.monotonic() + 30
-            while not (hold_dir / "push.started").exists():
+            while not (hold_dir / "backup.started").exists():
                 assert proc.poll() is None and time.monotonic() < deadline
                 time.sleep(0.02)
             proc.stdin.close()
@@ -919,7 +937,7 @@ class TestCoordinatorGone:
         finally:
             proc.kill()
         assert (out, err) == ("", "")
-        assert not (tmp_path / "s" / "m.db").exists()
+        assert not (tmp_path / "s" / "backups").exists()
 
 
 class TestCrossProcess:

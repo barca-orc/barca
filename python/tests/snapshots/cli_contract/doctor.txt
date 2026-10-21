@@ -13,6 +13,7 @@ checks[].data.files[] : string
 checks[].data.filesystem_bytes : integer  (optional)
 checks[].data.found : boolean  (optional)
 checks[].data.limit_bytes : integer  (optional)
+checks[].data.local_backups : string  (optional)
 checks[].data.max_size : string  (optional)
 checks[].data.metadata : string  (optional)
 checks[].data.mode : string  (optional)

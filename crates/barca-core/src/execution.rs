@@ -33,36 +33,10 @@ use crate::results::{
 };
 
 use crate::persist::{
-    ProgressPublication, RunLedger, SharedPush, StepRecorder, StepRow, cancel_recorded_run,
-    canonical_job, persist_run, telemetry_report,
+    BackupCheckpoints, RunLedger, StepRecorder, StepRow, cancel_recorded_run, canonical_job,
+    persist_run, telemetry_report,
 };
 use crate::store_sync::{StoreSync, transfer_remedy};
-
-/// A spawned task that is aborted if dropped before it is joined, so an early
-/// return never leaves background work running (e.g. a state pull that
-/// would overwrite the local DB after the run gave up).
-pub(crate) struct Background<T>(Option<tokio::task::JoinHandle<T>>);
-
-impl<T: Send + 'static> Background<T> {
-    pub(crate) fn spawn(fut: impl std::future::Future<Output = T> + Send + 'static) -> Self {
-        Self(Some(tokio::spawn(fut)))
-    }
-
-    pub(crate) async fn join(mut self) -> Result<T, BarcaError> {
-        let handle = self.0.take().expect("joined once");
-        handle
-            .await
-            .map_err(|e| BarcaError::Other(format!("background task failed: {e}")))
-    }
-}
-
-impl<T> Drop for Background<T> {
-    fn drop(&mut self) {
-        if let Some(h) = &self.0 {
-            h.abort();
-        }
-    }
-}
 
 /// Total schedulable steps in a phase: 1 per unpartitioned step, `partition_keys.len()`
 /// for late-expanded ones. Used to keep the live progress-bar total in sync with
@@ -177,6 +151,7 @@ impl Executed {
             warnings: r.warnings,
             targets: self.targets,
             cache: r.cache,
+            uploads: r.uploads,
         }
     }
 }
@@ -252,9 +227,7 @@ struct RunStart {
     run_id: String,
     run_started: std::time::SystemTime,
     telemetry: Vec<(String, Box<dyn crate::telemetry::Integration>)>,
-    state_sync_on: bool,
     transfer_start: Option<crate::transfer::Launching>,
-    pull: Option<Background<Result<(state_sync::Pulled, std::time::Duration), BarcaError>>>,
     upload_snapshots: Option<UploadSnapshots>,
 }
 impl RunStart {
@@ -269,22 +242,9 @@ impl RunStart {
         let telemetry = crate::telemetry::configured();
         let cfg = request.cfg;
         let python = request.python;
-        // Start remote I/O first so it overlaps parsing and planning: the shared
-        // state pull (joined just before the metadata DB is opened) and the
-        // artifact transfer helper's startup (joined before workers start).
-        let state_sync_on =
-            cfg.state == crate::config::StateMode::Optimistic && cfg.state_uri.is_some();
-        let pull = state_sync_on.then(|| {
-            let (python, cfg, cancel) = (python.to_path_buf(), cfg.clone(), cancel.clone());
-            Background::spawn(async move {
-                let started = Instant::now();
-                // Ctrl-C while the shared state is still being pulled ends the command here:
-                // nothing has run and no run has been created yet.
-                let until = state_sync::Until::cancelled(&cancel);
-                let pulled = state_sync::pull_state(&python, &cfg, until).await?;
-                Ok::<_, BarcaError>((pulled, started.elapsed()))
-            })
-        });
+        // Start remote I/O first so it overlaps parsing and planning: the artifact transfer
+        // helper's startup (joined before workers start). Nothing is pulled: this machine's
+        // database is the truth for this machine (RFC-0009).
         // Not a task: the helper connects on its own while this function goes on, and the value
         // stops it if this function returns before using it (see `transfer::Launching`).
         let upload_snapshots = cfg
@@ -302,8 +262,6 @@ impl RunStart {
             run_id,
             run_started,
             telemetry,
-            state_sync_on,
-            pull,
             transfer_start,
             upload_snapshots,
         })
@@ -334,6 +292,11 @@ struct RunState {
     completed_steps: usize,
     store_paths: HashMap<String, String>,
     transfer_error: Option<String>,
+    /// What this run left unpublished in the artifact store (#390), for the run JSON.
+    uploads: Option<crate::results::UploadsReport>,
+    /// Targets whose copy here and copy in the store differed, re-uploaded from here without
+    /// a step running (RFC-0009 `mismatch`); each gets the changed-bytes warning.
+    repaired_mismatches: Vec<String>,
     cached_steps: recover::CachedSteps,
     held_cached_lines: Vec<String>,
     /// The results this run holds while it is in flight (the cache size limit leaves them).
@@ -351,7 +314,6 @@ struct RunSession<'a, 'r> {
     store: Option<StoreSync>,
     pb: Option<indicatif::ProgressBar>,
     cost_model: crate::cost::CostModel,
-    state_token: Option<state_sync::StateToken>,
     started: RunStart,
 }
 
@@ -464,53 +426,15 @@ async fn open_state(
     request: &ExecuteRequest<'_>,
     prepared: &Prepared,
     started: &mut RunStart,
-) -> Result<(Option<state_sync::StateToken>, crate::cost::CostModel), BarcaError> {
+) -> Result<crate::cost::CostModel, BarcaError> {
     let cfg = request.cfg;
     let run_id = &started.run_id;
     let command_label = request.command_label;
     let file_args = request.file_args;
     let target_label = &prepared.target_label;
     let exec_plan = &prepared.exec_plan;
-    let state_sync_on = started.state_sync_on;
     db::ensure_env_dirs(&cfg.env)?;
     let db_path = cfg.db_path.clone();
-
-    // Shared remote state: the pull must land before the DB is opened, so
-    // cache checks below see every machine's materializations. Pull failure
-    // is a hard error — silently diverging local runs are worse than stopping.
-    let state_token = match started.pull.take() {
-        Some(pull) => {
-            let pulled = match pull.join().await.and_then(|pulled| pulled) {
-                Ok(pulled) => pulled,
-                Err(e) => {
-                    // The command ends here (the pull failed, or Ctrl-C cancelled it). It
-                    // does not return before the transfer helper it started is gone.
-                    if let Some(start) = started.transfer_start.take() {
-                        start.stop().await;
-                    }
-                    return Err(e);
-                }
-            };
-            let (state_sync::Pulled { token, carried }, took) = pulled;
-            if let Some(note) = carried.note() {
-                crate::errln!("{note}");
-            }
-            match token.0 {
-                Some(_) => crate::errln!(
-                    "[barca] pulled state ({}) in {:.2}s",
-                    fmt_bytes(std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0)),
-                    took.as_secs_f64()
-                ),
-                None => crate::errln!("[barca] no shared state yet — this run will create it"),
-            }
-            Some(token)
-        }
-        None => None,
-    };
-    trace_point!(
-        started.trace,
-        "state_sync_pull_joined (enabled={state_sync_on})"
-    );
 
     db::init_db(&db_path).await?;
     trace_point!(started.trace, "db_init");
@@ -538,7 +462,7 @@ async fn open_state(
     cost_model.seed(db::load_cost_estimates(&db_path).await?);
     trace_point!(started.trace, "cost_model_seeded");
 
-    Ok((state_token, cost_model))
+    Ok(cost_model)
 }
 async fn prepare_progress(
     exec_plan: &ExecutionPlan,
@@ -624,7 +548,6 @@ async fn start_workers(
     prepared: &Prepared,
     started: &mut RunStart,
     pb: &Option<indicatif::ProgressBar>,
-    state_token: &mut Option<state_sync::StateToken>,
 ) -> Result<(Option<StoreSync>, crate::io_loop::WorkerPool, StepRecorder), BarcaError> {
     let cfg = request.cfg;
     let python = request.python;
@@ -655,6 +578,13 @@ async fn start_workers(
             },
         };
         if let Err(error) = checked {
+            client.abort().await;
+            return Err(error);
+        }
+        // Results an earlier command computed here and could not upload go first (#390).
+        if let Err(error) =
+            retry_pending_uploads(&mut client, db_path, cancel, &location, None).await
+        {
             client.abort().await;
             return Err(error);
         }
@@ -693,15 +623,14 @@ async fn start_workers(
         storage_options_json: cfg.storage_options_json.clone(),
     };
     let mut pool = crate::io_loop::WorkerPool::start(io_config).map_err(BarcaError::Other)?;
-    // Finished steps are written to the local metadata DB while the run goes on (#214).
-    let publication = state_token.as_ref().map(|token| ProgressPublication {
+    // Finished steps are written to the local metadata DB while the run goes on (#214), and,
+    // with a store, backed up on the minute checkpoint (RFC-0009).
+    let backups = cfg.backup_uri.is_some().then(|| BackupCheckpoints {
         python: python.to_path_buf(),
         cfg: cfg.clone(),
-        token: token.clone(),
         cancel: cancel.clone(),
     });
-    let recorder =
-        StepRecorder::start_with_publication(db_path.clone(), run_id.clone(), publication);
+    let recorder = StepRecorder::start_with_backups(db_path.clone(), run_id.clone(), backups);
     {
         // A step that runs for a while must not look hung: report it periodically.
         let bar = pb.clone();
@@ -722,12 +651,136 @@ async fn start_workers(
 
     Ok((store, pool, recorder))
 }
+/// Upload what earlier commands on this machine left pending (#390), before this command's own
+/// work, and wait for it. One that fails again stays pending with its new error; the run goes
+/// on either way, and reports what is still pending when it ends. A pending result whose local
+/// file is gone has nothing left to upload and is dropped.
+async fn retry_pending_uploads(
+    client: &mut TransferClient,
+    db_path: &str,
+    cancel: &CancellationToken,
+    location: &str,
+    only: Option<&std::collections::HashSet<&str>>,
+) -> Result<(), BarcaError> {
+    use crate::pending_uploads::Settled;
+    let mut pending = crate::pending_uploads::list(db_path).await?;
+    if let Some(only) = only {
+        pending.retain(|p| only.contains(p.store_path.as_str()));
+    }
+    if pending.is_empty() {
+        return Ok(());
+    }
+    let mut settled = Vec::new();
+    let mut queued: Vec<&str> = Vec::new();
+    for p in &pending {
+        let here = std::path::Path::new(&p.local_path).is_file();
+        // The store moved (another `[remote] uri`): this object no longer belongs anywhere.
+        let same_store = client.layout().store_for(&p.local_path).as_deref() == Some(&p.store_path);
+        if !here || !same_store {
+            crate::errln!(
+                "[barca] warning: dropped the pending upload of {}: {}",
+                p.node_id,
+                if !here {
+                    format!("its local file {} is gone", p.local_path)
+                } else {
+                    format!(
+                        "it belongs to another store ({})",
+                        crate::transfer::diagnostic_uri(&p.store_path)
+                    )
+                }
+            );
+            settled.push((p.store_path.clone(), Settled::Dropped));
+            continue;
+        }
+        if client.upload(&p.store_path, &p.local_path).is_some() {
+            queued.push(&p.store_path);
+        }
+    }
+    if !queued.is_empty() {
+        crate::errln!(
+            "[barca] uploading {} pending result{} to {location} from an earlier run",
+            queued.len(),
+            if queued.len() == 1 { "" } else { "s" }
+        );
+        let report = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Err(BarcaError::Cancelled),
+            report = client.drain() => report,
+        };
+        let failed = report.failures.len();
+        for store_path in &queued {
+            if !report.failures.iter().any(|f| f.key == *store_path) {
+                let sha256 = report.hashes.get(*store_path).cloned();
+                settled.push((store_path.to_string(), Settled::Uploaded(sha256)));
+            }
+        }
+        let mut first_error = None;
+        for f in report.failures {
+            let error = format!(
+                "upload to {} failed ({} attempt{}): {}",
+                crate::transfer::diagnostic_uri(&f.store),
+                f.attempts,
+                if f.attempts == 1 { "" } else { "s" },
+                f.message
+            );
+            first_error.get_or_insert_with(|| f.message.clone());
+            settled.push((f.key, Settled::Failed(error)));
+        }
+        let uploaded = queued.len() - failed;
+        match first_error {
+            None => crate::errln!(
+                "[barca] uploaded {uploaded} pending result{}",
+                if uploaded == 1 { "" } else { "s" }
+            ),
+            Some(why) => crate::errln!(
+                "[barca] {failed} pending result{} still not uploaded ({uploaded} uploaded): {why}",
+                if failed == 1 { "" } else { "s" }
+            ),
+        }
+    }
+    crate::pending_uploads::settle(db_path, &settled).await
+}
+/// Upload this host's pending results (#390) among `store_paths` (artifact-store locations) now,
+/// before something needs them in the store: `barca get -o url` signs only objects the store
+/// holds. Starts the transfer helper only when one of them is pending; one that fails again
+/// stays pending with its new error, and the caller finds it still missing from the store.
+pub(crate) async fn upload_pending(
+    python: &std::path::Path,
+    cfg: &crate::config::ResolvedConfig,
+    store_paths: &[String],
+    cancel: &CancellationToken,
+) -> Result<(), BarcaError> {
+    if !cfg.remote_artifacts() {
+        return Ok(());
+    }
+    let wanted: std::collections::HashSet<&str> = store_paths.iter().map(String::as_str).collect();
+    let pending = crate::pending_uploads::list(&cfg.db_path).await?;
+    if !pending
+        .iter()
+        .any(|p| wanted.contains(p.store_path.as_str()))
+    {
+        return Ok(());
+    }
+    let mut client = TransferClient::launch(python, cfg, &db::generate_run_id())?
+        .connect()
+        .await?;
+    let location = crate::transfer::diagnostic_uri(&cfg.artifact_root);
+    let retried =
+        retry_pending_uploads(&mut client, &cfg.db_path, cancel, &location, Some(&wanted)).await;
+    match retried {
+        Ok(()) => client.shutdown().await,
+        Err(_) => {
+            client.abort().await;
+        }
+    }
+    retried
+}
 async fn open_run<'a, 'r>(
     request: &'a ExecuteRequest<'r>,
     prepared: &'a Prepared,
     mut started: RunStart,
 ) -> Result<RunSession<'a, 'r>, BarcaError> {
-    let (mut state_token, cost_model) = open_state(request, prepared, &mut started).await?;
+    let cost_model = open_state(request, prepared, &mut started).await?;
     let (pb, total_estimated) = prepare_progress(
         &prepared.exec_plan,
         &request.cfg.db_path,
@@ -735,36 +788,35 @@ async fn open_run<'a, 'r>(
         &started.trace,
     )
     .await?;
-    let (store, pool, recorder) =
-        match start_workers(request, prepared, &mut started, &pb, &mut state_token).await {
-            Ok(workers) => workers,
-            Err(error) => {
-                if let Some(bar) = &pb {
-                    bar.finish_and_clear();
-                }
-                let status = if matches!(error, BarcaError::Cancelled) {
-                    "cancelled"
-                } else {
-                    "failed"
-                };
-                db::insert_logs(
-                    &request.cfg.db_path,
-                    &started.run_id,
-                    &[(String::new(), format!("[barca] {error}"))],
-                )
-                .await?;
-                db::finish_run(
-                    &request.cfg.db_path,
-                    &started.run_id,
-                    status,
-                    0,
-                    0,
-                    started.trace.start.elapsed().as_secs_f64(),
-                )
-                .await?;
-                return Err(error);
+    let (store, pool, recorder) = match start_workers(request, prepared, &mut started, &pb).await {
+        Ok(workers) => workers,
+        Err(error) => {
+            if let Some(bar) = &pb {
+                bar.finish_and_clear();
             }
-        };
+            let status = if matches!(error, BarcaError::Cancelled) {
+                "cancelled"
+            } else {
+                "failed"
+            };
+            db::insert_logs(
+                &request.cfg.db_path,
+                &started.run_id,
+                &[(String::new(), format!("[barca] {error}"))],
+            )
+            .await?;
+            db::finish_run(
+                &request.cfg.db_path,
+                &started.run_id,
+                status,
+                0,
+                0,
+                started.trace.start.elapsed().as_secs_f64(),
+            )
+            .await?;
+            return Err(error);
+        }
+    };
     let state = RunState {
         total_steps: prepared.exec_plan.total_steps,
         total_estimated,
@@ -775,7 +827,6 @@ async fn open_run<'a, 'r>(
         prepared,
         started,
         state,
-        state_token,
         cost_model,
         pb,
         store,
@@ -1469,9 +1520,9 @@ async fn record_and_publish(session: &mut RunSession<'_, '_>) -> Result<f64, Bar
             store: &mut session.store,
             all_outputs: &mut session.state.all_outputs,
             store_paths: &mut session.state.store_paths,
-            failed_bases: &mut session.state.failed_bases,
             all_failures: &mut session.state.all_failures,
             transfer_error: &mut session.state.transfer_error,
+            uploads: &mut session.state.uploads,
             cached_node_ids: &session.state.cached_node_ids,
             t0: session.started.trace.start,
             cost_model: &session.cost_model,
@@ -1491,10 +1542,10 @@ async fn record_and_publish(session: &mut RunSession<'_, '_>) -> Result<f64, Bar
             run_started: session.started.run_started,
             step_clocks: &session.state.step_clocks,
             job_name: &session.prepared.job_name,
-            state_sync_on: session.started.state_sync_on,
+            targets: &session.prepared.targets,
+            repaired_mismatches: &mut session.state.repaired_mismatches,
             python: session.request.python,
             cfg: session.request.cfg,
-            state_token: &mut session.state_token,
             interrupt: &session.request.interrupt,
         },
         |point| trace_point!(session.started.trace, "{point}"),
@@ -1545,7 +1596,7 @@ async fn return_outputs(
 
     let changed =
         db::changed_bytes_in_run(&session.request.cfg.db_path, &session.started.run_id).await?;
-    for node in &changed {
+    for node in changed.iter().chain(&session.state.repaired_mismatches) {
         crate::errln!(
             "[barca] warning: {node} produced different bytes for the same code and inputs; the function is not deterministic"
         );
@@ -1566,6 +1617,7 @@ async fn return_outputs(
             warnings: session.prepared.plan_warnings.clone(),
             partitions,
             cache: None,
+            uploads: session.state.uploads.take(),
         },
         targets: outcomes,
         step_failure: session
@@ -1766,8 +1818,8 @@ async fn finalize_outputs(
         let fetched = s.ensure_local(paths.iter().map(String::as_str), None).await;
         if fetched.is_err() && cancel.is_cancelled() {
             // Ctrl-C while the returned output was being fetched. The run itself is over:
-            // its record is written and, with shared history, uploaded, and it stays as it
-            // is, the same on every machine. Only the command is cancelled.
+            // its record is written (and, with a store, backed up), and it stays as it is.
+            // Only the command is cancelled.
             s.client.abort().await;
             return Err(BarcaError::Cancelled);
         }
@@ -1807,22 +1859,15 @@ pub(crate) async fn explain_dag(
     dag: &Dag,
     cfg: &crate::config::ResolvedConfig,
     target_names: &[String],
-    python: &std::path::Path,
     policy: CachePolicy,
     command_label: &str,
     partition: Option<&crate::selection::PartitionSelection>,
 ) -> Result<ExplainResult, BarcaError> {
-    Ok(explain_dag_with_membership(
-        dag,
-        cfg,
-        target_names,
-        python,
-        policy,
-        command_label,
-        partition,
+    Ok(
+        explain_dag_with_membership(dag, cfg, target_names, policy, command_label, partition)
+            .await?
+            .0,
     )
-    .await?
-    .0)
 }
 
 /// Full actual prediction membership, moved without changing public reports.
@@ -1830,7 +1875,6 @@ pub(crate) async fn explain_dag_with_membership(
     dag: &Dag,
     cfg: &crate::config::ResolvedConfig,
     target_names: &[String],
-    python: &std::path::Path,
     policy: CachePolicy,
     command_label: &str,
     partition: Option<&crate::selection::PartitionSelection>,
@@ -1851,17 +1895,6 @@ pub(crate) async fn explain_dag_with_membership(
         validate_refresh_names(dag, &target_ids, names, command_label == "get")?;
     }
     let warnings = crate::warnings::for_plan(dag, &exec_plan);
-
-    // Shared remote state: pull it like a real run, so the cache check sees every machine's
-    // materializations. A pull keeps the local rows that were never pushed, so this is safe
-    // while a run is going in the same project: what that run has recorded so far is still
-    // there afterwards, next to what other machines pushed.
-    if cfg.state == crate::config::StateMode::Optimistic && cfg.state_uri.is_some() {
-        let pulled = state_sync::pull_state(python, cfg, state_sync::Until::done()).await?;
-        if let Some(note) = pulled.carried.note() {
-            crate::errln!("{note}");
-        }
-    }
 
     // No metadata DB yet means nothing is cached. Do not create one just to look.
     let cache = if std::path::Path::new(&cfg.db_path).exists() {
@@ -1943,6 +1976,12 @@ pub(crate) async fn explain_dag_with_membership(
     );
 
     let steps = merge_partition_reports(steps);
+    // Results of an earlier run still waiting for the store: the real run uploads them first.
+    let uploads = if cfg.remote_artifacts() {
+        crate::pending_uploads::report(&crate::pending_uploads::list(&cfg.db_path).await?, None)
+    } else {
+        None
+    };
     // Per-target predictions: the same step lines, counted over each target's cone.
     let per_target = if targets.len() > 1 {
         targets
@@ -1971,6 +2010,7 @@ pub(crate) async fn explain_dag_with_membership(
             steps,
             summary,
             warnings,
+            uploads,
         },
         state.into_membership(),
     ))
@@ -2581,9 +2621,9 @@ struct FinalizeRun<'a> {
     store: &'a mut Option<StoreSync>,
     all_outputs: &'a mut HashMap<String, OutputRef>,
     store_paths: &'a mut HashMap<String, String>,
-    failed_bases: &'a mut std::collections::HashSet<String>,
     all_failures: &'a mut Vec<dispatch::StepFailure>,
     transfer_error: &'a mut Option<String>,
+    uploads: &'a mut Option<crate::results::UploadsReport>,
     cached_node_ids: &'a std::collections::HashSet<String>,
     t0: Instant,
     cost_model: &'a crate::cost::CostModel,
@@ -2603,10 +2643,11 @@ struct FinalizeRun<'a> {
     run_started: std::time::SystemTime,
     step_clocks: &'a HashMap<String, (f64, f64)>,
     job_name: &'a str,
-    state_sync_on: bool,
+    /// The command's targets, (name, node id): what a `get` repairs in the store.
+    targets: &'a [(String, String)],
+    repaired_mismatches: &'a mut Vec<String>,
     python: &'a std::path::Path,
     cfg: &'a crate::config::ResolvedConfig,
-    state_token: &'a mut Option<state_sync::StateToken>,
     interrupt: &'a crate::interrupt::Interrupt,
 }
 
@@ -2626,9 +2667,9 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
         store,
         all_outputs,
         store_paths,
-        failed_bases,
         all_failures,
         transfer_error,
+        uploads,
         cached_node_ids,
         t0,
         cost_model,
@@ -2648,10 +2689,10 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
         run_started,
         step_clocks,
         job_name,
-        state_sync_on,
+        targets,
+        repaired_mismatches,
         python,
         cfg,
-        state_token,
         interrupt,
     } = ctx;
     macro_rules! trace_point {
@@ -2673,6 +2714,34 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
         &trace,
     )
     .await;
+    // A `get` of a target that is cached here but missing from the store, or different there,
+    // repairs the store from this machine's copy without a step running (RFC-0009). The
+    // uploads are drained, and kept pending on failure, with the run's own below.
+    if !cancel.is_cancelled()
+        && let Some(s) = store.as_mut()
+    {
+        // What is already pending was retried before the run; it is not repaired twice.
+        let pending: std::collections::HashSet<String> = crate::pending_uploads::list(db_path)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|p| p.store_path)
+            .collect();
+        repair_targets(
+            s,
+            targets,
+            cached_node_ids,
+            all_outputs,
+            &pending,
+            repaired_mismatches,
+        )
+        .await;
+    }
+    let mut pending = Vec::new();
+    let mut upload_error = None;
+    let store_location = store
+        .as_ref()
+        .map(|s| crate::transfer::diagnostic_uri(s.layout.store_root()));
     let mut was_cancelled = drain_store(
         DrainStore {
             store,
@@ -2680,28 +2749,31 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
             cancel,
             all_outputs,
             store_paths,
-            failed_bases,
-            all_failures,
-            transfer_error,
+            pending: &mut pending,
+            upload_error: &mut upload_error,
         },
         &trace,
     )
     .await;
+    // Before the rows: a result recorded with a store location whose upload failed is always
+    // known to be pending. (A crash in between leaves a pending upload with no row, which the
+    // next command uploads harmlessly.)
+    for p in &mut pending {
+        p.run_hash = decide_state.run_hashes().get(&p.node_id).cloned();
+        p.run_id = Some(run_id.to_string());
+    }
+    crate::pending_uploads::record(db_path, &pending).await?;
 
     let steps_cached = cached_node_ids.len();
     let elapsed = t0.elapsed().as_secs_f64();
 
     // Stop the step recorder before persistence: the ledger below writes whatever it had not
-    // written yet, and the state push checkpoints the WAL, which requires no other open handle
+    // written yet, and the backup checkpoints the WAL, which requires no other open handle
     // on the file.
-    // Keep the startup token as a conflict-safe fallback if the task ends unexpectedly.
-    // Its stale CAS token cannot overwrite a newer acknowledged checkpoint.
-    let recorder_error = recorder.finish_with_token(state_token).await.err();
+    let recorder_error = recorder.finish().await.err();
     trace_point!("recorder_stopped");
 
-    // Persist all executed outputs (including partial results on failure) —
-    // held in a ledger so a state-push conflict can replay this run's rows
-    // onto a freshly pulled database.
+    // Persist all executed outputs (including partial results on failure).
     let cost_snapshot: Vec<(String, crate::cost::NodeEstimate)> = cost_model
         .snapshot()
         .map(|(node_id, est)| (node_id.clone(), *est))
@@ -2718,6 +2790,7 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
         command: command_label,
         files: db::encode_files(file_args),
         target: target_label.as_deref(),
+        job: job_name,
         steps_total: exec_plan.total_steps,
         steps_executed,
         steps_cached,
@@ -2743,23 +2816,79 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
     trace_point!("persist_run_done");
 
     if !telemetry.is_empty() {
-        let report = telemetry_report(&ledger, dag, run_started, step_clocks, job_name);
-        crate::telemetry::export(telemetry, &report).await;
+        let report = telemetry_report(&ledger, dag, run_started, step_clocks, Some(&cfg.env));
+        let history = crate::telemetry::JobHistory::new(db_path);
+        crate::telemetry::export(telemetry, &report, &history).await;
         trace_point!("telemetry_exported");
     }
 
-    // Shared remote state: upload the local history (`push_state` folds the WAL in and copies
-    // it under the database lock). See `SharedPush::run` for conflicts.
-    if state_sync_on {
-        let push = SharedPush {
+    // With a store: back the history up, here and in the store (RFC-0009). Only the local
+    // copy failing, or Ctrl-C, can change the command's outcome; a failed upload is a warning
+    // (#390), and the next backup sends the copy.
+    let mut publish_error = None;
+    if cfg.backup_uri.is_some() {
+        match final_backup(
             python,
             cfg,
-            db_path,
             run_id,
-            logs: logs_buffer,
-            token: state_token.take().expect("pulled when state sync is on"),
+            &mut ledger,
+            interrupt,
+            &mut was_cancelled,
+            &trace,
+        )
+        .await
+        {
+            Ok(None) => {}
+            Ok(Some(why)) => {
+                crate::errln!(
+                    "[barca] warning: the metadata backup was not uploaded: {why}; the run is \
+                     recorded on this machine, a copy is in {}, and the next backup uploads it",
+                    cfg.local_backup_dir().display()
+                );
+                publish_error = Some(why);
+            }
+            Err(e @ (BarcaError::Cancelled | BarcaError::Db(_))) => return Err(e),
+            Err(e) => {
+                let e = e.to_string();
+                let e = e.lines().next().unwrap_or_default().to_string();
+                crate::errln!(
+                    "[barca] warning: the metadata backup failed: {e}; the run is recorded on \
+                     this machine and the next backup tries again"
+                );
+                publish_error = Some(format!("metadata backup failed: {e}"));
+            }
+        }
+    }
+    if store_location.is_some() || publish_error.is_some() {
+        let left = crate::pending_uploads::list(db_path).await?;
+        if !pending.is_empty() {
+            let mut nodes: Vec<&str> = pending.iter().map(|p| p.node_id.as_str()).collect();
+            nodes.sort_unstable();
+            let shown = nodes
+                .iter()
+                .take(10)
+                .copied()
+                .collect::<Vec<_>>()
+                .join(", ");
+            let more = match nodes.len().saturating_sub(10) {
+                0 => String::new(),
+                n => format!(" and {n} more"),
+            };
+            crate::errln!(
+                "[barca] warning: {} result{} not uploaded to {} ({shown}{more}): {}; every step \
+                 succeeded, the results are kept on this machine (`unsynced`, local only) and the \
+                 next command that uses the store uploads them",
+                pending.len(),
+                if pending.len() == 1 { "" } else { "s" },
+                store_location.as_deref().unwrap_or_default(),
+                upload_error.as_deref().unwrap_or("upload failed"),
+            );
+        }
+        let error = match (upload_error, publish_error) {
+            (Some(u), Some(p)) => Some(format!("{u}; {p}")),
+            (u, p) => u.or(p),
         };
-        publish_history(push, &mut ledger, interrupt, &mut was_cancelled, &trace).await?;
+        *uploads = crate::pending_uploads::report(&left, error);
     }
 
     // Propagate cancellation/worker error after persisting partial results.
@@ -2848,9 +2977,10 @@ struct DrainStore<'a> {
     cancel: &'a CancellationToken,
     all_outputs: &'a mut HashMap<String, OutputRef>,
     store_paths: &'a mut HashMap<String, String>,
-    failed_bases: &'a mut std::collections::HashSet<String>,
-    all_failures: &'a mut Vec<dispatch::StepFailure>,
-    transfer_error: &'a mut Option<String>,
+    /// Uploads that failed: kept pending, their steps recorded (#390).
+    pending: &'a mut Vec<crate::pending_uploads::PendingUpload>,
+    /// The first upload failure's message, for the run's warning and `uploads.error`.
+    upload_error: &'a mut Option<String>,
 }
 async fn drain_store(ctx: DrainStore<'_>, trace: &impl Fn(&str)) -> bool {
     let DrainStore {
@@ -2859,9 +2989,8 @@ async fn drain_store(ctx: DrainStore<'_>, trace: &impl Fn(&str)) -> bool {
         cancel,
         all_outputs,
         store_paths,
-        failed_bases,
-        all_failures,
-        transfer_error,
+        pending,
+        upload_error,
     } = ctx;
     macro_rules! trace_point { ($($arg:tt)*) => { trace(&format!($($arg)*)); }; }
     let mut was_cancelled = cancel.is_cancelled();
@@ -2935,128 +3064,189 @@ async fn drain_store(ctx: DrainStore<'_>, trace: &impl Fn(&str)) -> bool {
                 t_drain.elapsed().as_secs_f64()
             );
         }
+        // Every step that reached here succeeded; a failed upload does not undo that (#390).
+        // The row is recorded with its store location like any other, and the upload is kept
+        // pending: the next command that opens the store uploads it before its own work.
         if !report.failures.is_empty() {
-            let mut detail = Vec::new();
+            let messages: Vec<&str> = report.failures.iter().map(|f| f.message.as_str()).collect();
+            let remedy = transfer_remedy(&messages, "");
             for f in &report.failures {
-                all_outputs.remove(&f.key);
-                store_paths.remove(&f.key);
-                failed_bases.insert(crate::StepId::parse(&f.key).base_id().to_string());
-                all_failures.push(dispatch::StepFailure {
-                    node_id: f.key.clone(),
-                    error: dispatch::StepError {
-                        error_type: "UploadError".to_string(),
-                        message: format!(
-                            "upload to {} failed: {}",
-                            crate::transfer::diagnostic_uri(&f.store),
-                            f.message
-                        ),
-                        traceback: String::new(),
-                        attempts: f.attempts,
-                        started_unix_ns: None,
-                        elapsed_seconds: None,
-                    },
-                });
-                detail.push(format!(
-                    "  {} ({}; {} attempt(s)): {}",
-                    f.key,
+                let error = format!(
+                    "upload to {} failed ({} attempt{}): {}",
                     crate::transfer::diagnostic_uri(&f.store),
                     f.attempts,
+                    if f.attempts == 1 { "" } else { "s" },
                     f.message
-                ));
-            }
-            let messages: Vec<&str> = report.failures.iter().map(|f| f.message.as_str()).collect();
-            transfer_error.get_or_insert(format!(
-                "{} artifact upload(s) failed — those steps were not recorded and \
-                 will recompute next run:\n{}{}",
-                report.failures.len(),
-                detail.join("\n"),
-                match transfer_remedy(&messages, "") {
-                    remedy if remedy.is_empty() => remedy,
-                    remedy => format!("\n{remedy}"),
+                );
+                if upload_error.is_none() {
+                    *upload_error = Some(match remedy.as_str() {
+                        "" => error.clone(),
+                        remedy => format!("{error} {remedy}"),
+                    });
                 }
-            ));
+                let Some(oref) = all_outputs.get(&f.key) else {
+                    continue;
+                };
+                pending.push(crate::pending_uploads::PendingUpload {
+                    store_path: f.store.clone(),
+                    node_id: f.key.clone(),
+                    run_hash: None,
+                    run_id: None,
+                    local_path: oref.path.clone(),
+                    error: Some(error),
+                });
+            }
         }
     }
 
     was_cancelled
 }
-async fn publish_history(
-    mut push: SharedPush<'_>,
+/// The backup at the end of a run. `Ok(Some(why))` when only its upload failed. Ctrl-C during it
+/// cancels the command (the run is recorded as cancelled); a cancelled run's wrap-up backup
+/// gets [`crate::interrupt::WRAP_UP_LIMIT`], and a second Ctrl-C ends it at once.
+async fn final_backup(
+    python: &std::path::Path,
+    cfg: &crate::config::ResolvedConfig,
+    run_id: &str,
     ledger: &mut RunLedger<'_>,
     interrupt: &crate::interrupt::Interrupt,
     cancelled: &mut bool,
     trace: &impl Fn(&str),
-) -> Result<(), BarcaError> {
-    let cancel = &interrupt.cancel;
-    let db_path = push.db_path;
-    let mut was_cancelled = *cancelled;
+) -> Result<Option<String>, BarcaError> {
     macro_rules! trace_point { ($($arg:tt)*) => { trace(&format!($($arg)*)); }; }
-    let t_push = Instant::now();
-    let mut pushed: Option<u32> = None;
-    if !was_cancelled {
-        // Ctrl-C stops the push. The run's work is done and recorded, but the command is
-        // cancelled before its record was shared, so the record says `cancelled`; the
-        // wrap-up below then tries to share that.
-        match push.run(ledger, state_sync::Until::cancelled(cancel)).await {
-            Ok(retries) => pushed = Some(retries),
-            Err(BarcaError::Cancelled) => {
-                // The ledger too, so that a replay after a conflict keeps the mark.
-                ledger.status = "cancelled";
-                cancel_recorded_run(db_path, ledger).await?;
-                was_cancelled = true;
-            }
-            Err(e) => return Err(e),
-        }
-    }
-    if was_cancelled && pushed.is_none() {
-        // Wrap-up of a cancelled run: what it finished is worth sharing, so that other
-        // machines do not compute it again, but nobody who pressed Ctrl-C should wait on
-        // a slow store. The push gets `WRAP_UP_LIMIT`, and a second Ctrl-C ends it at
-        // once. Nothing is lost when it does not finish: the record is in the local
-        // history, a pull keeps what was recorded only here, and the next run on this
-        // machine uploads it.
-        let limit = crate::interrupt::WRAP_UP_LIMIT;
-        let until = state_sync::Until {
+    let started = Instant::now();
+    let until = if *cancelled {
+        state_sync::Until {
             cancel: Some(&interrupt.abandon),
-            deadline: Some(Instant::now() + limit),
-        };
-        let why = match push.run(ledger, until).await {
-            Ok(retries) => {
-                pushed = Some(retries);
-                None
+            deadline: Some(Instant::now() + crate::interrupt::WRAP_UP_LIMIT),
+        }
+    } else {
+        state_sync::Until::cancelled(&interrupt.cancel)
+    };
+    let wrap_up = *cancelled;
+    // Whether `until` fired: the backup (its copy, or the upload of a copy already taken) was
+    // stopped, which is not a store failure.
+    let stopped = || {
+        if wrap_up {
+            interrupt.abandon.is_cancelled() || started.elapsed() >= crate::interrupt::WRAP_UP_LIMIT
+        } else {
+            interrupt.cancel.is_cancelled()
+        }
+    };
+    let taken = match crate::backup::take(python, cfg, Some(run_id), until).await {
+        Ok(taken) if !(matches!(taken.upload, Some(Err(_))) && stopped()) => taken,
+        Ok(_) | Err(BarcaError::Cancelled) => {
+            if !wrap_up {
+                // The run's work is done and recorded; the command was stopped during its
+                // backup, so it is cancelled.
+                ledger.status = "cancelled";
+                cancel_recorded_run(&cfg.db_path, ledger).await?;
+                *cancelled = true;
+                crate::errln!(
+                    "[barca] the metadata backup was stopped; the run is recorded on this \
+                     machine and the next backup takes it"
+                );
+            } else {
+                crate::errln!(
+                    "[barca] the metadata backup did not finish ({}); the run is recorded on \
+                     this machine and the next backup takes it",
+                    if interrupt.abandon.is_cancelled() {
+                        "stopped by a second interrupt".to_string()
+                    } else {
+                        format!("not within {}s", crate::interrupt::WRAP_UP_LIMIT.as_secs())
+                    }
+                );
             }
-            Err(BarcaError::Cancelled) if interrupt.abandon.is_cancelled() => {
-                Some("stopped by a second interrupt".to_string())
-            }
-            Err(BarcaError::Cancelled) => Some(format!(
-                "the upload did not finish within {}s",
-                limit.as_secs()
-            )),
-            // The run is cancelled whatever became of the push: say why, do not fail.
-            Err(e) => Some(e.to_string().lines().next().unwrap_or_default().to_string()),
-        };
-        if let Some(why) = why {
+            return Ok(None);
+        }
+        Err(e) => return Err(e),
+    };
+    trace_point!("backup_done (written={})", taken.name.is_some());
+    match taken.upload {
+        Some(Ok(at)) if taken.name.is_some() => {
             crate::errln!(
-                "[barca] the shared history was not updated ({why}). This run is recorded \
-                     on this machine; the next barca get or barca run here uploads it."
+                "[barca] backed up the metadata DB ({}) to {at} in {:.2}s",
+                fmt_bytes(taken.size_bytes),
+                started.elapsed().as_secs_f64()
             );
+            Ok(None)
+        }
+        Some(Err(why)) if wrap_up => {
+            crate::errln!(
+                "[barca] the metadata backup was not uploaded ({why}); the next backup uploads it"
+            );
+            Ok(None)
+        }
+        Some(Err(why)) => Ok(Some(why)),
+        _ => Ok(None),
+    }
+}
+
+/// For each target served from cache with a copy on this machine: ask the store for its
+/// object, and upload this machine's copy when the store has none (`local_only`) or a
+/// different one (`mismatch`, recorded in `repaired` for the changed-bytes warning). A local
+/// copy that is not the one recorded is left to the fetch, which replaces it with the store's
+/// (#247). A target with no copy here is fetched when its output is returned (`store_only`).
+/// Only unpartitioned targets are checked.
+async fn repair_targets(
+    s: &mut StoreSync,
+    targets: &[(String, String)],
+    cached: &std::collections::HashSet<String>,
+    outputs: &HashMap<String, OutputRef>,
+    pending: &std::collections::HashSet<String>,
+    repaired: &mut Vec<String>,
+) {
+    for (_, id) in targets {
+        if !cached.contains(id) {
+            continue;
+        }
+        let Some(oref) = outputs.get(id) else {
+            continue;
+        };
+        let local = std::path::Path::new(&oref.path);
+        let Ok(meta) = std::fs::metadata(local) else {
+            continue;
+        };
+        if !meta.is_file() {
+            continue;
+        }
+        let Some(store) = s.layout.store_for(&oref.path) else {
+            continue;
+        };
+        if pending.contains(&store) {
+            continue;
+        }
+        let Ok(local_sha) = db::file_sha256(local) else {
+            continue;
+        };
+        if oref.content_hash.as_deref().is_some_and(|h| h != local_sha) {
+            continue;
+        }
+        let differs = match s.client.stat(&store).await {
+            Ok(None) => false,
+            Ok(Some((size, sha))) => {
+                if size == meta.len() && sha.as_deref().is_none_or(|h| h == local_sha) {
+                    continue;
+                }
+                true
+            }
+            // The store cannot say: leave it. `barca status` reports what it finds.
+            Err(_) => continue,
+        };
+        crate::errln!(
+            "[barca] {id}: {}; uploading this machine's copy to {}",
+            if differs {
+                "the artifact store holds different bytes"
+            } else {
+                "not in the artifact store"
+            },
+            crate::transfer::diagnostic_uri(&store)
+        );
+        s.client.upload(id, &oref.path);
+        if differs {
+            repaired.push(id.clone());
         }
     }
-    if let Some(retries) = pushed {
-        crate::errln!(
-            "[barca] pushed state ({}) in {:.2}s{}",
-            fmt_bytes(std::fs::metadata(db_path).map(|m| m.len()).unwrap_or(0)),
-            t_push.elapsed().as_secs_f64(),
-            match retries {
-                0 => String::new(),
-                1 => " after 1 conflict retry".to_string(),
-                n => format!(" after {n} conflict retries"),
-            }
-        );
-        trace_point!("state_sync_pushed (attempts={})", retries + 1);
-    }
-    *cancelled = was_cancelled;
-    Ok(())
 }
 #[cfg(test)]
 mod store_tests {
@@ -3093,25 +3283,6 @@ mod store_tests {
             elapsed_seconds: None,
             content_hash: None,
         }
-    }
-
-    #[tokio::test]
-    async fn background_task_is_aborted_when_dropped_unjoined() {
-        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
-        let task = Background::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-            let _ = tx.send(());
-        });
-        drop(task);
-        // Aborting drops the future, and with it the sender.
-        let r = tokio::time::timeout(std::time::Duration::from_secs(2), rx).await;
-        assert!(matches!(r, Ok(Err(_))), "task kept running after drop");
-    }
-
-    #[tokio::test]
-    async fn background_task_join_returns_its_output() {
-        let task = Background::spawn(async { 7 });
-        assert_eq!(task.join().await.unwrap(), 7);
     }
 
     #[test]
@@ -3185,6 +3356,7 @@ mod store_tests {
             command: "get",
             files: "f.py".to_string(),
             target: None,
+            job: "f:a",
             steps_total: 1,
             steps_executed: 1,
             steps_cached: 0,
@@ -3240,6 +3412,7 @@ mod store_tests {
             command: "get",
             files: "f.py".to_string(),
             target: None,
+            job: "f:a",
             steps_total: 2,
             steps_executed: 2,
             steps_cached: 0,

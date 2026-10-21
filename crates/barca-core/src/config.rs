@@ -50,9 +50,12 @@ pub struct DiscoveryToml {
 pub struct RemoteToml {
     pub uri: Option<String>,
     pub artifacts_uri: Option<String>,
-    pub state_uri: Option<String>,
-    pub state: Option<String>,
-    pub push_retries: Option<u32>,
+    /// Removed in 0.26.0 with the shared history (RFC-0009); read only to refuse it by name.
+    pub state_uri: Option<toml::Value>,
+    /// Removed in 0.26.0 with `optimistic` mode (RFC-0009); read only to refuse it by name.
+    pub state: Option<toml::Value>,
+    /// Removed in 0.26.0 with the conditional push (RFC-0009); read only to refuse it by name.
+    pub push_retries: Option<toml::Value>,
     /// Concurrent artifact uploads/downloads by the transfer helper.
     pub transfer_concurrency: Option<usize>,
     /// Seconds one transfer attempt may run before it is failed as stalled.
@@ -63,13 +66,12 @@ pub struct RemoteToml {
 
 // ─── Resolved configuration ──────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StateMode {
-    /// Pull at run start, etag/generation-conditional push at run end.
-    Optimistic,
-    /// Metadata stays local (0.4.0 behavior).
-    Off,
-}
+/// The release that removed the shared history: `optimistic` mode, `[remote] state`,
+/// `BARCA_STATE` and the settings that went with them (RFC-0009).
+pub const SHARED_HISTORY_REMOVED_IN: &str = "0.26.0";
+
+/// How many metadata backups are kept, in the store and in the local backup directory each.
+pub const BACKUPS_KEPT: usize = 5;
 
 /// Where the environment name came from (`--env` > `BARCA_ENV` > `default_env` > built-in).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,7 +102,7 @@ pub struct ResolvedConfig {
     pub env: String,
     /// Which setting chose [`Self::env`].
     pub env_source: EnvSource,
-    /// Local metadata DB path for this env (state sync overwrites this file).
+    /// Local metadata DB path for this env. Only `barca state restore` ever replaces it.
     pub db_path: String,
     /// Artifact store root: the local artifact dir, or a remote URI / shared
     /// directory. Recorded in the metadata DB; see [`Self::remote_artifacts`].
@@ -112,10 +114,10 @@ pub struct ResolvedConfig {
     pub transfer_concurrency: usize,
     /// Per-attempt transfer limit, from when the attempt starts.
     pub transfer_timeout_secs: u64,
-    /// Remote location of the shared metadata blob, when remote mode is on.
-    pub state_uri: Option<String>,
-    pub state: StateMode,
-    pub push_retries: u32,
+    /// Where this environment's metadata backups go in the store (`{uri}/{env}/state/backups`),
+    /// when a remote store is configured with `[remote] uri` / `BARCA_REMOTE_URI` (RFC-0009).
+    /// Backups are taken only when this is set.
+    pub backup_uri: Option<String>,
     /// Merged storage options (toml ⊕ env, env keys win), serialized as the
     /// JSON that `BARCA_STORAGE_OPTIONS` carries to child processes.
     pub storage_options_json: Option<String>,
@@ -127,6 +129,14 @@ pub struct ResolvedConfig {
 }
 
 impl ResolvedConfig {
+    /// This environment's local backup directory: `backups/` beside the metadata DB
+    /// (`.barca/backups`, or `.barca/envs/<env>/backups` for a named environment).
+    pub fn local_backup_dir(&self) -> PathBuf {
+        Path::new(&self.db_path)
+            .parent()
+            .map_or_else(|| PathBuf::from("backups"), |dir| dir.join("backups"))
+    }
+
     pub(crate) fn allows_artifact(&self, path: &str) -> bool {
         !self.remote_off || local_artifact(path, &self.local_artifact_dir)
     }
@@ -288,6 +298,7 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
     }
 
     let (cache_max_size, cache_max_size_source) = cache_max_size(file.cache.as_ref())?;
+    removed_settings(&remote)?;
 
     match env_var("BARCA_REMOTE").as_deref() {
         Some("off") => {
@@ -301,9 +312,7 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
                 local_artifact_dir: local.artifact_dir,
                 transfer_concurrency: 4,
                 transfer_timeout_secs: 600,
-                state_uri: None,
-                state: StateMode::Off,
-                push_retries: 5,
+                backup_uri: None,
                 storage_options_json: None,
                 cache_max_size,
                 cache_max_size_source,
@@ -341,40 +350,10 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
         })
         .unwrap_or_else(|| local.artifact_dir.clone());
 
-    // state uri: BARCA_STATE_URI > [remote].state_uri > {uri}/{env}/state/metadata.db
-    let state_uri = env_var("BARCA_STATE_URI").or(remote.state_uri).or_else(|| {
-        remote_uri
-            .as_deref()
-            .map(|u| join_uri(u, &format!("{env}/state/metadata.db")))
-    });
-
-    // state mode: BARCA_STATE > [remote].state > optimistic-if-state-uri-else-off
-    let mode_str = env_var("BARCA_STATE").or(remote.state);
-    let state = match mode_str.as_deref() {
-        Some("optimistic") => StateMode::Optimistic,
-        Some("off") => StateMode::Off,
-        Some(other) => {
-            return Err(BarcaError::Usage(format!(
-                "invalid state mode '{other}' (expected \"optimistic\" or \"off\")"
-            )));
-        }
-        None => {
-            if state_uri.is_some() {
-                StateMode::Optimistic
-            } else {
-                StateMode::Off
-            }
-        }
-    };
-
-    let push_retries = match env_var("BARCA_PUSH_RETRIES") {
-        Some(v) => v.parse::<u32>().map_err(|_| {
-            BarcaError::Usage(format!(
-                "invalid BARCA_PUSH_RETRIES '{v}' (expected integer)"
-            ))
-        })?,
-        None => remote.push_retries.unwrap_or(5),
-    };
+    // metadata backups: {uri}/{env}/state/backups, only with a remote root (RFC-0009).
+    let backup_uri = remote_uri
+        .as_deref()
+        .map(|u| join_uri(u, &format!("{env}/state/backups")));
 
     let transfer_concurrency = match env_var("BARCA_TRANSFER_CONCURRENCY") {
         Some(v) => v.parse::<usize>().ok().filter(|&n| n > 0).ok_or_else(|| {
@@ -421,9 +400,7 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
         local_artifact_dir: local.artifact_dir,
         transfer_concurrency,
         transfer_timeout_secs,
-        state_uri,
-        state,
-        push_retries,
+        backup_uri,
         storage_options_json,
         cache_max_size,
         cache_max_size_source,
@@ -450,6 +427,38 @@ fn cache_max_size(
         Some(other) => Err(BarcaError::Usage(format!(
             "[cache] max_size: expected a string such as \"20GB\", \"10%\" or \"off\", or a \
              number of bytes, got {other}"
+        ))),
+    }
+}
+
+/// Refuse the settings of the shared history, which 0.26.0 removed (RFC-0009), by name: a
+/// project that still sets one must learn that it no longer shares anything, rather than have
+/// it silently ignored.
+fn removed_settings(remote: &RemoteToml) -> Result<(), BarcaError> {
+    let toml_keys = [
+        ("state", remote.state.is_some()),
+        ("state_uri", remote.state_uri.is_some()),
+        ("push_retries", remote.push_retries.is_some()),
+    ];
+    let env_vars = ["BARCA_STATE", "BARCA_STATE_URI", "BARCA_PUSH_RETRIES"];
+    let what = toml_keys
+        .iter()
+        .find(|(_, set)| *set)
+        .map(|(key, _)| format!("`[remote] {key}` in {CONFIG_FILE}"))
+        .or_else(|| {
+            env_vars
+                .iter()
+                .find(|var| env_var(var).is_some())
+                .map(|var| format!("the environment variable {var}"))
+        });
+    match what {
+        None => Ok(()),
+        Some(what) => Err(BarcaError::Usage(format!(
+            "{what} is no longer supported: barca {SHARED_HISTORY_REMOVED_IN} removed the shared \
+             history (`optimistic` mode, pull-before-run and the conditional push; RFC-0009). A \
+             remote store is now this machine's backup and read-through cache, with no setting: \
+             remove it. To share state between machines, use a server (RFC-0007). See barca docs \
+             remote."
         ))),
     }
 }
@@ -607,22 +616,19 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_toml(
             dir.path(),
-            "[remote]\nuri = \"s3://toml/p\"\nstate = \"optimistic\"\ntransfer_concurrency = 0\n",
+            "[remote]\nuri = \"s3://toml/p\"\ntransfer_concurrency = 0\n",
         );
         unsafe {
             std::env::set_var("BARCA_REMOTE", "off");
             std::env::set_var("BARCA_REMOTE_URI", "s3://env/p");
             std::env::set_var("BARCA_ARTIFACT_URI", "s3://literal/artifacts");
-            std::env::set_var("BARCA_STATE_URI", "s3://literal/state.db");
-            std::env::set_var("BARCA_STATE", "optimistic");
             std::env::set_var("BARCA_STORAGE_OPTIONS", "invalid JSON");
             std::env::set_var("BARCA_TRANSFER_TIMEOUT", "invalid");
         }
         let cfg = resolve_in(Some("dev"), dir.path()).unwrap();
         assert!(cfg.remote_off);
         assert!(!cfg.remote_artifacts());
-        assert!(cfg.state_uri.is_none());
-        assert_eq!(cfg.state, StateMode::Off);
+        assert!(cfg.backup_uri.is_none());
         assert!(cfg.storage_options_json.is_none());
         assert!(cfg.artifact_root.contains(".barca/envs/dev/artifacts"));
         assert!(cfg.db_path.contains(".barca/envs/dev/metadata.db"));
@@ -643,7 +649,10 @@ mod tests {
         let cfg = resolve_in(None, dir.path()).unwrap();
         assert!(!cfg.remote_off);
         assert!(cfg.artifact_root.starts_with("s3://toml/p/"));
-        assert_eq!(cfg.state, StateMode::Optimistic);
+        assert_eq!(
+            cfg.backup_uri.as_deref(),
+            Some("s3://toml/p/default/state/backups")
+        );
     }
 
     #[test]
@@ -684,9 +693,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cfg = resolve_in(None, dir.path()).unwrap();
         assert_eq!(cfg.env, "default");
-        assert_eq!(cfg.state, StateMode::Off);
-        assert!(cfg.state_uri.is_none());
-        assert_eq!(cfg.push_retries, 5);
+        assert!(cfg.backup_uri.is_none());
+        assert_eq!(cfg.local_backup_dir(), Path::new(".barca/backups"));
         assert!(cfg.storage_options_json.is_none());
         assert!(cfg.artifact_root.ends_with(".barca/artifacts"));
         assert!(cfg.db_path.ends_with(".barca/metadata.db"));
@@ -711,12 +719,12 @@ uri = "abfss://cont@acct.dfs.core.windows.net/proj"
             "abfss://cont@acct.dfs.core.windows.net/proj/dev/artifacts"
         );
         assert_eq!(
-            cfg.state_uri.as_deref(),
-            Some("abfss://cont@acct.dfs.core.windows.net/proj/dev/state/metadata.db")
+            cfg.backup_uri.as_deref(),
+            Some("abfss://cont@acct.dfs.core.windows.net/proj/dev/state/backups")
         );
-        assert_eq!(cfg.state, StateMode::Optimistic);
-        // named env uses env-scoped local db
+        // named env uses env-scoped local db and backups
         assert!(cfg.db_path.contains(".barca/envs/dev/"));
+        assert_eq!(cfg.local_backup_dir(), Path::new(".barca/envs/dev/backups"));
     }
 
     #[test]
@@ -759,7 +767,7 @@ uri = "abfss://cont@acct.dfs.core.windows.net/proj"
 
         write_toml(
             dir.path(),
-            "[remote]\nuri = \"s3://user:secret@bucket/proj\"\nstate = \"off\"\n",
+            "[remote]\nuri = \"s3://user:secret@bucket/proj\"\n",
         );
         let cfg = resolve_in(Some("dev"), dir.path()).unwrap();
         assert_eq!(
@@ -769,27 +777,60 @@ uri = "abfss://cont@acct.dfs.core.windows.net/proj"
     }
 
     #[test]
-    fn env_var_overrides_toml_uri_and_state() {
+    fn env_var_overrides_toml_uri() {
         let _e = clean_env();
         let dir = tempfile::tempdir().unwrap();
-        write_toml(
-            dir.path(),
-            r#"
-[remote]
-uri = "s3://toml-bucket/proj"
-state = "optimistic"
-push_retries = 2
-"#,
-        );
-        unsafe {
-            std::env::set_var("BARCA_REMOTE_URI", "s3://env-bucket/proj");
-            std::env::set_var("BARCA_STATE", "off");
-            std::env::set_var("BARCA_PUSH_RETRIES", "9");
-        }
+        write_toml(dir.path(), "[remote]\nuri = \"s3://toml-bucket/proj\"\n");
+        unsafe { std::env::set_var("BARCA_REMOTE_URI", "s3://env-bucket/proj") };
         let cfg = resolve_in(None, dir.path()).unwrap();
         assert!(cfg.artifact_root.starts_with("s3://env-bucket/proj/"));
-        assert_eq!(cfg.state, StateMode::Off);
-        assert_eq!(cfg.push_retries, 9);
+        assert!(
+            cfg.backup_uri
+                .as_deref()
+                .is_some_and(|u| u.starts_with("s3://env-bucket/proj/"))
+        );
+    }
+
+    /// The shared history's settings are refused by name, with the release that removed them,
+    /// even under BARCA_REMOTE=off (RFC-0009).
+    #[test]
+    fn removed_shared_history_settings_are_usage_errors_naming_the_release() {
+        let _e = clean_env();
+        let dir = tempfile::tempdir().unwrap();
+        for key in [
+            "state = \"optimistic\"",
+            "state = \"off\"",
+            "state_uri = \"s3://b/h.db\"",
+            "push_retries = 3",
+        ] {
+            write_toml(
+                dir.path(),
+                &format!("[remote]\nuri = \"s3://b/p\"\n{key}\n"),
+            );
+            let name = key.split(' ').next().unwrap();
+            for remote in [None, Some("off")] {
+                match remote {
+                    Some(v) => unsafe { std::env::set_var("BARCA_REMOTE", v) },
+                    None => unsafe { std::env::remove_var("BARCA_REMOTE") },
+                }
+                let err = resolve_in(None, dir.path()).unwrap_err();
+                assert!(matches!(err, BarcaError::Usage(_)), "{key}");
+                let msg = err.to_string();
+                assert!(msg.contains(&format!("`[remote] {name}`")), "{msg}");
+                assert!(msg.contains(SHARED_HISTORY_REMOVED_IN), "{msg}");
+            }
+        }
+        unsafe { std::env::remove_var("BARCA_REMOTE") };
+        write_toml(dir.path(), "[remote]\nuri = \"s3://b/p\"\n");
+        for var in ["BARCA_STATE", "BARCA_STATE_URI", "BARCA_PUSH_RETRIES"] {
+            unsafe { std::env::set_var(var, "off") };
+            let msg = resolve_in(None, dir.path()).unwrap_err().to_string();
+            assert!(
+                msg.contains(var) && msg.contains(SHARED_HISTORY_REMOVED_IN),
+                "{msg}"
+            );
+            unsafe { std::env::remove_var(var) };
+        }
     }
 
     #[test]
@@ -920,8 +961,7 @@ push_retries = 2
         unsafe { std::env::set_var("BARCA_ARTIFACT_URI", "memory://arts") };
         let cfg = resolve_in(None, dir.path()).unwrap();
         assert_eq!(cfg.artifact_root, "memory://arts"); // no env prefix
-        assert!(cfg.state_uri.is_none());
-        assert_eq!(cfg.state, StateMode::Off);
+        assert!(cfg.backup_uri.is_none());
     }
 
     #[test]
@@ -961,15 +1001,6 @@ region = "us-east-1"
     }
 
     #[test]
-    fn invalid_state_mode_rejected() {
-        let _e = clean_env();
-        let dir = tempfile::tempdir().unwrap();
-        unsafe { std::env::set_var("BARCA_STATE", "pessimistic") };
-        let err = resolve_in(None, dir.path()).unwrap_err();
-        assert!(err.to_string().contains("invalid state mode"));
-    }
-
-    #[test]
     fn malformed_toml_is_hard_error() {
         let _e = clean_env();
         let dir = tempfile::tempdir().unwrap();
@@ -984,18 +1015,5 @@ region = "us-east-1"
         let dir = tempfile::tempdir().unwrap();
         write_toml(dir.path(), "[remote]\nurii = \"typo\"\n");
         assert!(resolve_in(None, dir.path()).is_err());
-    }
-
-    #[test]
-    fn explicit_state_uri_without_root_enables_optimistic() {
-        let _e = clean_env();
-        let dir = tempfile::tempdir().unwrap();
-        unsafe { std::env::set_var("BARCA_STATE_URI", "s3://bucket/custom/state.db") };
-        let cfg = resolve_in(None, dir.path()).unwrap();
-        assert_eq!(
-            cfg.state_uri.as_deref(),
-            Some("s3://bucket/custom/state.db")
-        );
-        assert_eq!(cfg.state, StateMode::Optimistic);
     }
 }

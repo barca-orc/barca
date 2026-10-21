@@ -97,6 +97,7 @@ mod tests {
         fn export<'a>(
             &'a self,
             _: &'a RunReport,
+            _: &'a barca_core::telemetry::JobHistory,
         ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>> {
             Box::pin(async { panic!("lifecycle must not export a run") })
         }

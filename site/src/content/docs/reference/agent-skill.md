@@ -53,6 +53,6 @@ The skill is short on purpose. Three things an agent working with data should al
 - `barca sql` runs the statement you give it in DuckDB. A statement that writes files, such as
   `COPY ... TO 'file.csv'`, writes them, relative to the project root. Use `select`.
 
-Inspection and previews can synchronize optimistic shared history. Evaluated partition
+Inspection and previews record no run and download no history. Evaluated partition
 expressions can import a pipeline while resolving keys; SQL `COPY ... TO` can explicitly
 write files. The skill distinguishes these effects from executing pipeline steps.

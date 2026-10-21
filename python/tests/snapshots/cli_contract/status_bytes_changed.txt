@@ -37,6 +37,7 @@ summary.never_run : integer
 summary.partial : integer
 summary.stale : integer
 summary.unknown : integer
+summary.unsynced : integer
 target : null
 targets : array
 total : integer

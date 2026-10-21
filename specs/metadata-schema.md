@@ -30,31 +30,34 @@ commit it leaves version 1. An already-current schema is checked without writing
 to it. Inspection of an unversioned database does not migrate the source.
 
 These additive changes need no new backup file: the transaction preserves the
-original data on failure, while existing shared-state replacement keeps the
-previous local copy. A future destructive migration must separately define and
+original data on failure, and `barca state restore` keeps the database it
+replaces as `metadata.db.pre-restore`. A future destructive migration must separately define and
 test a recoverable backup before it is accepted; this policy does not authorize
 one. Unsupported versions are refused in place and are never automatically
 restored, downgraded or reset. Upgrade to a compatible Barca release to open them.
 
-## Shared history and older binaries
+## Backups, restore and older binaries
 
-Downloaded state is checked before migration or replacement. Both the local and
-downloaded database must be compatible before their rows are merged. A refused
-download leaves the local history intact. Compatible unknown nullable/defaulted
-columns remain untouched; incompatible required columns are still rejected.
+The shared history (download, merge, replace) was removed in 0.26.0 (RFC-0009).
+A backup restored by `barca state restore` is checked before migration or
+replacement: a staged copy must pass the same validation, its schema version must
+be supported, and only the staged copy is migrated. A refused copy leaves the
+local history intact. Each backup's sidecar records its `db_format` (the
+`PRAGMA user_version` of the copy). Compatible unknown nullable/defaulted columns
+remain untouched; incompatible required columns are still rejected.
 
 Version checks cannot make an already-published older binary enforce a marker it
 does not understand. Version 1 therefore remains additive and compatible with
-the previous release's schema. Later format changes must account for older
-shared-state writers and may need a deployment upgrade boundary.
+the previous release's schema. Later format changes must account for backups
+written by older binaries and may need a deployment upgrade boundary.
 
 ## Verification and remaining scope
 
 Regression tests cover legacy run/log/schedule/materialization preservation,
 transaction rollback and reopening after an interrupted migration, negative and
-future versions, refusal through inspection and cache readers, and refusal of
-download/local merges without losing either history. Existing remote-state,
-snapshot and older-schema migration tests remain part of the acceptance suite.
+future versions, refusal through inspection and cache readers, and refusal of an invalid backup
+by `barca state restore` without touching the local history. Snapshot and
+older-schema migration tests remain part of the acceptance suite.
 
 Process protocol handshakes, plan JSON versioning and wire/batch conformance are
 separate slices of issue #82. This change does not complete that entire issue or
@@ -78,15 +81,37 @@ hash; legacy rows default to 0. Shared-history carry preserves both `output_hash
 Format 1 is additive: a release may add a nullable column or a table to it without a new
 version number. A format-1 database written by an earlier release that lacks one gets the
 same additive migration as a legacy database, in one transaction, keeping every row; an older
-release keeps reading the result, because it leaves unknown nullable columns alone. Downloaded
-shared state is accepted on the same terms before it is migrated. `barca status`, which reads
-the newer columns, completes the schema first.
+release keeps reading the result, because it leaves unknown nullable columns and unknown
+tables alone. A backup being restored is accepted on the same terms before it is migrated.
+`barca status`, which reads the newer columns, completes the schema first.
 
-`materializations.bytes_changed` (0.24.0) is the first such addition; 0.24.0 to 0.24.2 refused
-format-1 databases without it.
+What format 1 gained since it first shipped, all listed in `db_schema.rs`
+(`MATERIALIZATION_COLUMNS`, `RUN_COLUMNS`, `INDEXES`, `ADDED_TABLES`), which both `init_db` and the
+additive migration (`additions_missing` / `add_to_current_schema`) read:
 
-Conformance: `a_format_1_database_from_before_bytes_changed_gains_it_in_place` in
-`db_schema.rs` and `python/tests/test_upgrade_format1_columns.py`.
+- `materializations.bytes_changed` (0.24.0), the first such addition; 0.24.0 to 0.24.2 refused
+  format-1 databases without it.
+- `materializations.evicted_at`, `materializations.last_read_at` and the index `idx_mat_path`
+  (0.25.0, the cache size limit; see below).
+- `runs.job` (TEXT, nullable, 0.26.0): the canonical resolved job ids of a finished run, written
+  with its outcome, and the index `idx_runs_job (job, id)`. Rows from earlier releases, and runs
+  that never finished, keep `NULL`.
+- `notifications (job, integration, posted_at, state, message_ref)` (0.26.0), primary key
+  `(job, integration)`: the last post a notification integration (Slack, RFC-0010) made about
+  a job. `posted_at` is UTC text in SQLite's `datetime('now')` format; `state` is `failing`,
+  `still_failing`, `recovered` or `succeeded`; `message_ref` is empty for a webhook post and
+  reserved for an integration whose posts have ids.
+- `pending_uploads` (0.26.0, #390): one row per artifact-store object whose upload failed after
+  its step succeeded (`store_path` primary key, `node_id`, `run_hash`, `run_id`, `local_path`,
+  `host`, `error`, `attempts`, timestamps). A database without it (opened read-only, or a copy
+  being validated) reads as having no pending uploads. Only rows of this host are read, retried
+  or shown. Older binaries ignore the table.
+
+Conformance: `a_format_1_database_from_before_bytes_changed_gains_it_in_place` and
+`a_format_1_database_from_0_24_3_gains_everything_added_since` in `db_schema.rs`,
+`the_table_list_is_exactly_the_schema_init_db_creates` in `state_validate.rs`, the job history
+tests in `crates/barca-core/src/telemetry/history.rs`, and
+`python/tests/test_upgrade_format1_columns.py`.
 
 ## Cache size limit columns (RFC-0012)
 
@@ -94,7 +119,7 @@ Materializations carry `evicted_at TEXT` and `last_read_at TEXT`, additive forma
 the index `idx_mat_path` on `artifact_path`. `evicted_at` records when this machine deleted the
 artifact file to stay under `[cache] max_size` (NULL while the file is kept); `last_read_at`
 records when a step, `barca get` or `barca sql` last read the result. Both describe this
-machine's disk: shared-history carry does not copy them (they are not in `STEP_COLUMNS`), and
+machine's disk: they are not in `STEP_COLUMNS` (a backup need not have them), and
 schema validation treats them as nullable columns an older barca may lack. Rows are never deleted
 by eviction.
 

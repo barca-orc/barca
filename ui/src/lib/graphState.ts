@@ -11,6 +11,7 @@ export function graphState(node: NodeState): GraphState {
   const state = match(severityOf(node))
     .with('failed', () => ({ status: 'failed' as const, label: 'Last attempt failed' }))
     .with('cached', () => ({ status: 'success' as const, label: 'Cached' }))
+    .with('unsynced', () => ({ status: 'warning' as const, label: 'Not in the store yet' }))
     .with('stale', () => ({ status: 'warning' as const, label: 'Stale' }))
     .with('partial', () => ({ status: 'warning' as const, label: 'Partial cache' }))
     .with('never_run', () => ({ status: 'skipped' as const, label: 'Never run' }))

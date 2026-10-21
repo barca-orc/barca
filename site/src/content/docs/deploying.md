@@ -52,8 +52,8 @@ The broader [server-ledger design (RFC-0007)](/rfcs/0007-server-mode/) is accept
 **not implemented in v0.24.0**. `[server] url`, `BARCA_SERVER`, the CLI `--server`/`--local`
 flags and laptop runs sharing the server's ledger are pending #393, #394 and #402.
 Ordinary `barca get` and `barca.get()` still run locally. A remote artifact store does
-not give another machine access to this server's cache/history; use `BARCA_STATE=off`
-when serving with a remote store, as described below.
+not give another machine access to this server's cache/history; with a remote store the
+server backs its history up there, as described below.
 
 ## Listen on another interface
 
@@ -239,27 +239,22 @@ The legacy override is unnecessary for the verified v0.24.0 Linux targets above.
 
 ### With a remote store
 
-With a remote store configured (`BARCA_REMOTE_URI` or `[remote]` in `barca.toml`), barca by
-default also keeps a shared history in the store. `barca serve` does not support that and
-refuses to start:
-
-```
-$ BARCA_REMOTE_URI=s3://my-bucket/barca/orders barca serve
-barca serve does not support shared remote state yet — set state = "off" in barca.toml (or BARCA_STATE=off) to serve with a local metadata DB
-
-See `barca serve --help`.
-```
-
-The exit code is 2. Set `BARCA_STATE=off` in the service's environment:
+With a remote store configured (`BARCA_REMOTE_URI` or `[remote] uri` in `barca.toml`), the
+server uploads artifacts to it and backs its metadata DB up there every minute it changed
+(and once on shutdown), keeping the five newest copies:
 
 ```yaml
     environment:
       BARCA_REMOTE_URI: s3://my-bucket/barca/orders
-      BARCA_STATE: "off"
 ```
 
-Artifacts are then written locally and uploaded to the store, and the run history stays in
-the `.barca` volume. Other machines that use the same store do not see this server's runs in
+The run history stays in the `.barca` volume. If that volume is lost, start a container with an
+empty one, run `barca state restore` in it before `barca serve`, and the newest backup comes
+back from the store (`barca state restore` refuses to run while a server is using the
+environment). Barca 0.25 and earlier needed `BARCA_STATE=off` here; 0.26.0 removed that
+variable, and setting it is now a usage error.
+
+Other machines that use the same store do not see this server's runs in
 `barca history` and do not get cache hits from its results: a cache hit is found through
 the history, and theirs has no row for it. Credentials and the store's other settings are in
 [Remote storage](/reference/remote-storage/).

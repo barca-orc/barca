@@ -1520,6 +1520,8 @@ components:
             $ref: '#/components/schemas/PlanWarning'
         cache:
           $ref: '#/components/schemas/CacheReport'
+        uploads:
+          $ref: '#/components/schemas/Uploads'
     CacheReport:
       type: object
       additionalProperties: false
@@ -1546,6 +1548,28 @@ components:
       properties:
         size_bytes: *id027
         limit_bytes: *id027
+    Uploads:
+      type: object
+      additionalProperties: false
+      description: Results computed by this run's machine and not yet in the artifact store,
+        present only when something is pending or failed to publish. Every step succeeded;
+        the next run that opens the store uploads them first.
+      required:
+      - pending
+      - error
+      - nodes
+      properties:
+        pending:
+          type: integer
+          minimum: 0
+        error:
+          anyOf:
+          - type: string
+          - type: 'null'
+        nodes:
+          type: array
+          items:
+            type: string
     RunState:
       type: object
       additionalProperties: false
@@ -1585,6 +1609,7 @@ components:
           type: string
           enum:
           - cached
+          - unsynced
           - stale
           - never_run
           - partial
@@ -1594,6 +1619,9 @@ components:
           type: string
           enum:
           - materialized
+          - local_only
+          - store_only
+          - mismatch
           - changed
           - upstream_stale
           - failed

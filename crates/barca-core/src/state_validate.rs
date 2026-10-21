@@ -1,45 +1,83 @@
-//! What a downloaded copy of the shared state must be before it may replace the local
-//! database (RFC-0006 §4.1, #243).
+//! What a metadata backup must be before `barca state restore` puts it in place of the local
+//! database (RFC-0009 section 4.1, #243).
 //!
-//! The shared state is one object that every machine downloads and puts in the place of its
-//! own history. An object that is not a database barca can use (cut short in transit,
-//! overwritten with something else, damaged in the store, another program's file) must stop
-//! there: the command fails and the local database stays as it was.
+//! A backup is a copy of the database in `.barca/backups/` or in the store. One that is not a
+//! database barca can use (cut short in transit, overwritten with something else, damaged in
+//! the store, another program's file) must stop there: the restore fails and the local
+//! database stays as it was.
 //!
-//! A download is **valid** when all of these hold. They are checked in this order, on the
-//! downloaded file itself and before anything is written to it:
+//! A copy is **valid** when all of these hold. They are checked in this order, on a staged
+//! copy of the backup and before anything is written to the local database:
 //!
 //! 1. **It is a whole SQLite file** ([`whole_file`]): not empty, starts with the SQLite header,
-//!    and its length is a whole number of pages. barca never uploads an empty file (a push
-//!    folds the write-ahead log into the main file first), so an empty object is not "no
-//!    history yet"; that is the object being absent.
+//!    and its length is a whole number of pages. barca never writes an empty backup (the
+//!    write-ahead log is folded into the main file before the copy), so an empty file is damage.
 //! 2. **The engine can read every page of it** ([`open`]): it opens, its schema can be read, and
 //!    `PRAGMA integrity_check` answers `ok`. This is what finds a file cut short at a page
 //!    boundary, pages overwritten in the middle, and an index that no longer matches its table.
-//!    It reads the whole file, so it is skipped in exactly one case: the download is
-//!    byte-for-byte the local database ([`same_bytes`]), where putting it in place changes
-//!    nothing.
 //! 3. **It holds barca's history** ([`open`]): it has both the `runs` and the `materializations`
-//!    table. Every version of barca that could upload a shared state created both before it
-//!    did, so a database without them was not written by barca.
+//!    table. Every version of barca creates both before it records anything, so a database
+//!    without them was not written by barca.
 //! 4. **This version of barca can use it** ([`usable_schema`]), checked after barca's own
-//!    additive migrations have been applied to the download (never to the local database):
-//!    each of barca's tables has every column this version reads or writes ([`TABLES`]), and no
-//!    other column that an insert by this version could not fill (`NOT NULL` without a default).
-//!    A database written by an older barca passes, because the migrations bring it up to date.
-//!    One written by a newer barca passes exactly when this version can still read and write
-//!    it: tables and nullable columns this version does not know are left alone, which is how
-//!    machines on compatible versions share one history. A schema-version marker is checked
-//!    before migrations; unsupported or malformed versions are refused without replacement.
+//!    additive migrations have been applied to the copy (never to the local database): each of
+//!    barca's tables has every column this version reads or writes ([`TABLES`]), and no other
+//!    column that an insert by this version could not fill (`NOT NULL` without a default). A
+//!    database written by an older barca passes, because the migrations bring it up to date.
+//!    One written by a newer barca passes exactly when this version can still read and write it.
+//!    A schema-version marker is checked before migrations; unsupported or malformed versions
+//!    are refused.
 //!
 //! Anything else that goes wrong while checking (the disk is full, the file cannot be written)
 //! is an error of this machine, not a verdict on the object, and is reported as such.
 
 use crate::BarcaError;
-use crate::state_carry::{LOG_COLUMNS, RUN_COLUMNS, STEP_COLUMNS};
 use std::fs;
-use std::io::Read;
 use turso::{Connection, Database, Value};
+
+/// Every column of `runs` except its row id.
+pub(crate) const RUN_COLUMNS: &[&str] = &[
+    "run_id",
+    "command",
+    "files",
+    "target",
+    "status",
+    "steps_total",
+    "steps_executed",
+    "steps_cached",
+    "started_at",
+    "finished_at",
+    "elapsed_seconds",
+    "pid",
+    "host",
+    "owner",
+    "job",
+];
+
+/// Every column of `materializations` except its row id.
+pub(crate) const STEP_COLUMNS: &[&str] = &[
+    "node_id",
+    "run_hash",
+    "output_json",
+    "artifact_path",
+    "artifact_format",
+    "artifact_size_bytes",
+    "elapsed_seconds",
+    "status",
+    "error_message",
+    "error_traceback",
+    "attempts",
+    "sinks_json",
+    "created_at",
+    "cpu_seconds",
+    "max_rss_bytes",
+    "output_hash",
+    "bytes_changed",
+    "run_id",
+    "error_type",
+];
+
+/// Every column of `logs` except its row id.
+pub(crate) const LOG_COLUMNS: &[&str] = &["run_id", "node_id", "seq", "line", "created_at"];
 
 /// barca's tables and the columns this version reads or writes, besides the `id` row id of
 /// the first three. [`crate::db::init_db`] creates exactly these (a test holds the two together).
@@ -60,6 +98,25 @@ pub(crate) const TABLES: &[(&str, &[&str])] = &[
         ],
     ),
     ("schedule_state", &["node_id", "last_fired_at"]),
+    (
+        "notifications",
+        &["job", "integration", "posted_at", "state", "message_ref"],
+    ),
+    (
+        "pending_uploads",
+        &[
+            "store_path",
+            "node_id",
+            "run_hash",
+            "run_id",
+            "local_path",
+            "host",
+            "error",
+            "attempts",
+            "created_at",
+            "updated_at",
+        ],
+    ),
 ];
 
 /// The tables whose rows are identified by an `id` row id column.
@@ -80,41 +137,17 @@ pub(crate) fn whole_file(path: &str) -> Result<(), String> {
     }
 }
 
-/// True when the two files hold the same bytes. False when either cannot be read.
-pub(crate) fn same_bytes(a: &str, b: &str) -> bool {
-    let same = || -> std::io::Result<bool> {
-        if fs::metadata(a)?.len() != fs::metadata(b)?.len() {
-            return Ok(false);
-        }
-        let (mut a, mut b) = (fs::File::open(a)?, fs::File::open(b)?);
-        let (mut x, mut y) = (vec![0u8; 1 << 16], vec![0u8; 1 << 16]);
-        loop {
-            let n = a.read(&mut x)?;
-            if n == 0 {
-                return Ok(b.read(&mut y)? == 0);
-            }
-            b.read_exact(&mut y[..n])?;
-            if x[..n] != y[..n] {
-                return Ok(false);
-            }
-        }
-    };
-    same().unwrap_or(false)
-}
-
 /// Whether [`open`] reads every page of the file (rule 2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Pages {
     /// Run `PRAGMA integrity_check`.
     Check,
-    /// The file is byte-for-byte the local database: nothing to find that is not already there.
-    SameAsLocal,
 }
 
-/// A downloaded shared state that passed every rule, open for the carry.
+/// A copy that passed every rule, open.
 pub(crate) type Valid = (Database, Connection);
 
-/// Why a download is not valid.
+/// Why a copy is not valid.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Invalid {
     pub kind: InvalidKind,
@@ -161,8 +194,8 @@ fn integrity_problems(rows: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// Rules 1 to 4 on the downloaded file at `path`. The outer error is this machine failing to
-/// check; the inner `Err` says why the download is not valid. Afterwards the file has barca's
+/// Rules 1 to 4 on the file at `path`. The outer error is this machine failing to
+/// check; the inner `Err` says why the copy is not valid. Afterwards the file has barca's
 /// current schema (the migrations are applied to it between rules 3 and 4).
 pub(crate) async fn open(path: &str, pages: Pages) -> Result<Result<Valid, Invalid>, BarcaError> {
     if let Err(why) = whole_file(path) {
@@ -233,8 +266,7 @@ pub(crate) async fn open(path: &str, pages: Pages) -> Result<Result<Valid, Inval
     }
     crate::db::init_schema(&conn).await.map_err(|e| {
         BarcaError::Db(format!(
-            "could not migrate the downloaded shared state {path}; local/shared histories \
-             were not replaced: {e}"
+            "could not migrate the backup copy {path}; the local history was not replaced: {e}"
         ))
     })?;
     Ok(Ok((db, conn)))
@@ -250,7 +282,7 @@ pub(crate) async fn legacy_schema(conn: &Connection) -> Result<Result<(), String
 }
 
 async fn schema_columns(conn: &Connection, legacy: bool) -> Result<Result<(), String>, BarcaError> {
-    let failed = |e| BarcaError::Db(format!("failed to read the downloaded schema: {e}"));
+    let failed = |e| BarcaError::Db(format!("failed to read the schema of the copy: {e}"));
     for (table, columns) in TABLES {
         // (name, must be given a value by every insert)
         let mut found: Vec<(String, bool)> = Vec::new();
@@ -376,9 +408,7 @@ mod tests {
         history(&path, 3).await;
         crate::db::remove_sidecars(&path).unwrap();
         let before = fs::read(&path).unwrap();
-        for pages in [Pages::SameAsLocal, Pages::Check] {
-            assert!(open(&path, pages).await.unwrap().is_ok());
-        }
+        assert!(open(&path, Pages::Check).await.unwrap().is_ok());
         // Nothing was written to a database that is current: the log holds no frame (the
         // engine writes its 32-byte header on open).
         let log = fs::metadata(format!("{path}-wal")).map_or(0, |m| m.len());
@@ -387,7 +417,7 @@ mod tests {
     }
 
     /// `TABLES` is exactly what `init_db` creates: a column added to one and not the other
-    /// would make every machine refuse (or wrongly accept) the shared state.
+    /// would make every restore refuse (or wrongly accept) a backup.
     #[tokio::test]
     async fn the_table_list_is_exactly_the_schema_init_db_creates() {
         let (_dir, path) = tmp();
@@ -577,22 +607,5 @@ mod tests {
             refused.contains("`tenant`") && refused.contains("newer barca"),
             "{refused}"
         );
-    }
-
-    #[test]
-    fn same_bytes_compares_content_not_names() {
-        let dir = tempfile::tempdir().unwrap();
-        let p = |n: &str| dir.path().join(n).to_string_lossy().to_string();
-        let big = vec![7u8; 200_000];
-        fs::write(p("a"), &big).unwrap();
-        fs::write(p("b"), &big).unwrap();
-        assert!(same_bytes(&p("a"), &p("b")));
-        let mut other = big.clone();
-        *other.last_mut().unwrap() = 8;
-        fs::write(p("b"), &other).unwrap();
-        assert!(!same_bytes(&p("a"), &p("b")));
-        fs::write(p("b"), &big[..big.len() - 1]).unwrap();
-        assert!(!same_bytes(&p("a"), &p("b")));
-        assert!(!same_bytes(&p("a"), &p("missing")));
     }
 }

@@ -188,8 +188,8 @@ last run id and last status ([Server API](/reference/server-api/#scheduling)), a
 - **New files and edits.** A run reads the source again each time, so an edit to a function
   takes effect at the next tick. A changed cron expression or a new scheduled node needs a
   restart, or `--watch`. A file added after startup needs a restart either way.
-- **Remote stores.** `barca serve` does not support shared history. With a remote store
-  configured, set `BARCA_STATE=off`; see
+- **Remote stores.** With a remote store configured, `barca serve` uploads artifacts and backs
+  its metadata DB up every minute it changed; see
   [Deploying](/deploying/#with-a-remote-store).
 
 [Freshness and Schedules](/workflows/05-schedule-driven-reconciliation-and-effects/) shows

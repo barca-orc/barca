@@ -79,7 +79,7 @@ pub const TOPICS: &[Topic] = &[
     ),
     topic!(
         "telemetry",
-        "Report runs and steps to Datadog: one trace per run, a span per step",
+        "Report runs and steps to Datadog; post to Slack when a job starts failing or recovers",
         "telemetry.md"
     ),
     topic!(

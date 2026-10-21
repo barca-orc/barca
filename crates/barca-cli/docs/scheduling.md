@@ -151,13 +151,15 @@ result = run.wait(timeout=600)
 print(result["status"])
 ```
 
-With a remote artifact store configured, serving requires local metadata:
+With a remote store configured, `barca serve` uploads artifacts and backs its metadata DB up
+every minute it changed (`barca docs remote`, "Backups and restore"); `barca state restore`
+refuses to run while it is up:
 
 ```bash
-BARCA_STATE=off barca serve pipeline.py  # local ledger; artifact uploads still enabled
+barca serve pipeline.py                  # local ledger; artifact uploads and backups enabled
 ```
 
-Other machines do not get cache/history sharing from that artifact store. CLI `--server`,
+Other machines do not get cache or history sharing from that store. CLI `--server`,
 `[server] url`, `BARCA_SERVER` and local runs posting results to the server's ledger belong
 to the unimplemented RFC-0007 design. `barca.get()` starts a local CLI process; use
 `Client.get()` for the HTTP request above.

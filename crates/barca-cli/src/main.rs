@@ -120,6 +120,7 @@ async fn run_cli(cli: Cli, ctx: &Context) -> Result<(), CliError> {
         Cli::Get {
             args,
             output,
+            expires,
             format,
             partition,
             refresh,
@@ -131,7 +132,7 @@ async fn run_cli(cli: Cli, ctx: &Context) -> Result<(), CliError> {
             env,
         } => {
             check_order("get", &args)?;
-            let output = get_mode(output, format, fields.as_deref())?;
+            let output = get_mode(output, expires.as_deref(), format, fields.as_deref())?;
             let partition = partition
                 .as_deref()
                 .map(barca_core::selection::PartitionSelection::parse)
@@ -214,6 +215,18 @@ async fn run_cli(cli: Cli, ctx: &Context) -> Result<(), CliError> {
             .map_err(|e| get_run_error(e, ctx, &hint_files))
         }
         Cli::Plan { files } => plan_cmd(files, &python).await.map_err(engine),
+        Cli::State { command } => match command {
+            StateCommand::Backups { format, env } => {
+                state_backups_cmd(env.as_deref(), &python, is_json(format))
+                    .await
+                    .map_err(engine)
+            }
+            StateCommand::Restore { from, format, env } => {
+                state_restore_cmd(env.as_deref(), from.as_deref(), &python, is_json(format))
+                    .await
+                    .map_err(engine)
+            }
+        },
         Cli::Doctor { files, format, env } => {
             doctor_cmd(files, env.as_deref(), &python, is_json(format)).await
         }

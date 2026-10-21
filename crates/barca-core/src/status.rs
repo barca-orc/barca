@@ -63,21 +63,21 @@ pub struct NodeStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct CacheStatus {
-    /// `cached`, `stale`, `never_run`, `partial`, `unknown` or `always_runs`.
+    /// `cached`, `unsynced`, `stale`, `never_run`, `partial`, `unknown` or `always_runs`.
     #[cfg_attr(
         feature = "ts",
         ts(
-            type = "\"cached\" | \"stale\" | \"never_run\" | \"partial\" | \"unknown\" | \"always_runs\""
+            type = "\"cached\" | \"unsynced\" | \"stale\" | \"never_run\" | \"partial\" | \"unknown\" | \"always_runs\""
         )
     )]
     pub state: String,
-    /// Machine-readable reason: `materialized`, `changed`, `upstream_stale`, `failed`,
-    /// `artifact_missing`, `evicted`, `no_record`, `partitions_missing`, `partitions_unknown`,
-    /// `sensor_output_unknown`, `task` or `sensor`.
+    /// Machine-readable reason: `materialized`, `local_only`, `store_only`, `mismatch`, `changed`,
+    /// `upstream_stale`, `failed`, `artifact_missing`, `evicted`, `no_record`, `partitions_missing`,
+    /// `partitions_unknown`, `sensor_output_unknown`, `task` or `sensor`.
     #[cfg_attr(
         feature = "ts",
         ts(
-            type = "\"materialized\" | \"changed\" | \"upstream_stale\" | \"failed\" | \"artifact_missing\" | \"evicted\" | \"no_record\" | \"partitions_missing\" | \"partitions_unknown\" | \"sensor_output_unknown\" | \"task\" | \"sensor\""
+            type = "\"materialized\" | \"local_only\" | \"store_only\" | \"mismatch\" | \"changed\" | \"upstream_stale\" | \"failed\" | \"artifact_missing\" | \"evicted\" | \"no_record\" | \"partitions_missing\" | \"partitions_unknown\" | \"sensor_output_unknown\" | \"task\" | \"sensor\""
         )
     )]
     pub reason: String,
@@ -134,6 +134,9 @@ pub struct StatusSummary {
     pub partial: usize,
     pub unknown: usize,
     pub always_runs: usize,
+    /// Cached, but this machine's copy and the artifact store's do not agree (RFC-0009).
+    #[serde(default)]
+    pub unsynced: usize,
 }
 
 /// Gather status for every node in scope (the targets' upstream cones, or the whole DAG when
@@ -196,7 +199,6 @@ async fn status_from_dag_with_membership(
         dag,
         cfg,
         target_names,
-        python,
         CachePolicy::CacheAware,
         "status",
         None,
@@ -224,6 +226,13 @@ async fn status_from_dag_with_membership(
         HashMap::new()
     };
 
+    // Results computed here whose upload to the store is still pending (#390).
+    let pending = if cfg.remote_artifacts() {
+        crate::pending_uploads::list(&cfg.db_path).await?
+    } else {
+        Vec::new()
+    };
+
     let mut nodes: Vec<NodeStatus> = Vec::new();
     let mut states: HashMap<String, String> = HashMap::new();
     for id in ids {
@@ -248,7 +257,13 @@ async fn status_from_dag_with_membership(
                 missing: p.will_run,
                 missing_keys: p.will_run_keys.clone(),
             });
-        let cache = cache_status(report, &inputs, &states, &history);
+        let mut cache = cache_status(report, &inputs, &states, &history);
+        local_only(
+            &mut cache,
+            id,
+            !node.extracted.partitions.is_empty(),
+            &pending,
+        );
         states.insert(id.to_string(), cache.state.clone());
 
         let last_materialization = history.latest.map(|m| LastMaterialization {
@@ -286,6 +301,12 @@ async fn status_from_dag_with_membership(
         });
     }
 
+    // With a store, `cached` means this machine's copy, the store's object and the recorded
+    // digest all agree (RFC-0009); anything else is `unsynced` with its reason.
+    if cfg.remote_artifacts() && Path::new(&cfg.db_path).exists() {
+        check_store_copies(python, cfg, &mut nodes).await;
+    }
+
     if shape {
         read_shapes(python, cfg, &mut nodes, sample).await;
     }
@@ -298,6 +319,7 @@ async fn status_from_dag_with_membership(
             "never_run" => summary.never_run += 1,
             "partial" => summary.partial += 1,
             "always_runs" => summary.always_runs += 1,
+            "unsynced" => summary.unsynced += 1,
             _ => summary.unknown += 1,
         }
     }
@@ -310,6 +332,228 @@ async fn status_from_dag_with_membership(
         },
         membership,
     ))
+}
+
+/// A cached node whose result was computed here and whose upload is still pending is
+/// `unsynced`, `local_only` (RFC-0009 section 4.1). A `get` serves it from this machine; the
+/// next command that opens the store uploads it. A partitioned node is unsynced when any of
+/// its keys is pending.
+fn local_only(
+    cache: &mut CacheStatus,
+    id: &str,
+    partitioned: bool,
+    pending: &[crate::pending_uploads::PendingUpload],
+) {
+    if cache.state != "cached" {
+        return;
+    }
+    let mine = pending.iter().find(|p| {
+        let base = p.node_id.split('[').next().unwrap_or(&p.node_id);
+        base == id && (partitioned || cache.run_hash.is_none() || p.run_hash == cache.run_hash)
+    });
+    let Some(p) = mine else {
+        return;
+    };
+    cache.state = "unsynced".to_string();
+    cache.reason = "local_only".to_string();
+    cache.detail = format!(
+        "computed here and not in the artifact store yet: {}; the next get or run uploads it",
+        p.error.as_deref().unwrap_or("its upload is pending")
+    );
+}
+
+/// Where a cached result's copies are, against what was recorded for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Copies {
+    /// This machine's copy, the store's object and the recorded digest agree.
+    InSync,
+    /// Here, not in the store.
+    LocalOnly,
+    /// In the store, not here.
+    StoreOnly,
+    /// Both are there and differ (or this machine's copy is not the recorded one): why.
+    Mismatch(String),
+    /// Neither copy is anywhere.
+    Missing,
+}
+
+/// What the store said about one object.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub(crate) struct StoreObject {
+    pub exists: bool,
+    pub size_bytes: Option<u64>,
+    /// Only for a store that is a plain directory: object stores give no content checksum to
+    /// compare.
+    pub sha256: Option<String>,
+}
+
+/// Classify a result's copies. `local` is this machine's copy (size, SHA-256) when there is
+/// one; `recorded` the digest its row was recorded with. Without a checksum from the store,
+/// copies of the same size are taken to agree.
+pub(crate) fn classify(
+    local: Option<(u64, &str)>,
+    store: &StoreObject,
+    recorded: Option<&str>,
+) -> Copies {
+    match (local, store.exists) {
+        (None, false) => Copies::Missing,
+        (None, true) => Copies::StoreOnly,
+        (Some(_), false) => Copies::LocalOnly,
+        (Some((size, sha)), true) => {
+            if recorded.is_some_and(|r| r != sha) {
+                Copies::Mismatch(
+                    "this machine's copy is not the one recorded; get fetches the store's copy"
+                        .to_string(),
+                )
+            } else if store.size_bytes.is_some_and(|s| s != size) {
+                Copies::Mismatch(format!(
+                    "this machine's copy ({size} bytes) and the store's ({} bytes) differ; get \
+                     keeps this machine's copy and uploads it again",
+                    store.size_bytes.unwrap_or_default()
+                ))
+            } else if store.sha256.as_deref().is_some_and(|s| s != sha) {
+                Copies::Mismatch(
+                    "this machine's copy and the store's have different bytes; get keeps this \
+                     machine's copy and uploads it again"
+                        .to_string(),
+                )
+            } else {
+                Copies::InSync
+            }
+        }
+    }
+}
+
+/// For every `cached` unpartitioned node: compare this machine's copy, the store's object (one
+/// `python -m barca._state stat` for all of them) and the recorded digest, and turn the node
+/// `unsynced` (`local_only`, `store_only`, `mismatch`) or `stale` (`artifact_missing`) when they
+/// do not agree. A store that cannot be asked leaves the states as they are, with a note.
+async fn check_store_copies(
+    python: &Path,
+    cfg: &crate::config::ResolvedConfig,
+    nodes: &mut [NodeStatus],
+) {
+    let layout = crate::transfer::ArtifactLayout::new(&cfg.local_artifact_dir, &cfg.artifact_root);
+    let Ok(cache) = db::CacheReader::for_config(cfg).await else {
+        return;
+    };
+    // (node index, store path, local path, recorded digest)
+    let mut wanted: Vec<(usize, String, std::path::PathBuf, Option<String>)> = Vec::new();
+    for (i, n) in nodes.iter().enumerate() {
+        if n.cache.state != "cached" || n.partitioned {
+            continue;
+        }
+        let Some(hash) = n.cache.run_hash.as_deref() else {
+            continue;
+        };
+        let Some(row) = crate::cache::lookup_cached(&cache, &n.id, hash).await else {
+            continue;
+        };
+        let Some(local) = layout.local_for(&row.path) else {
+            continue;
+        };
+        wanted.push((i, row.path, local, row.content_hash));
+    }
+    drop(cache);
+    if wanted.is_empty() {
+        return;
+    }
+    let paths: Vec<&str> = wanted.iter().map(|(_, p, _, _)| p.as_str()).collect();
+    let objects = match stat_objects(python, cfg, &paths).await {
+        Ok(objects) if objects.len() == wanted.len() => objects,
+        Ok(_) => return,
+        Err(why) => {
+            for (i, ..) in &wanted {
+                let c = &mut nodes[*i].cache;
+                c.detail = format!(
+                    "{} (the artifact store could not be checked: {why})",
+                    c.detail
+                );
+            }
+            return;
+        }
+    };
+    for ((i, store, local, recorded), object) in wanted.into_iter().zip(objects) {
+        let here = std::fs::metadata(&local)
+            .ok()
+            .filter(|m| m.is_file())
+            .and_then(|m| db::file_sha256(&local).ok().map(|sha| (m.len(), sha)));
+        let copies = classify(
+            here.as_ref().map(|(size, sha)| (*size, sha.as_str())),
+            &object,
+            recorded.as_deref(),
+        );
+        let at = crate::transfer::diagnostic_uri(&store);
+        let c = &mut nodes[i].cache;
+        let (state, reason, detail) = match copies {
+            Copies::InSync => continue,
+            Copies::LocalOnly => (
+                "unsynced",
+                "local_only",
+                format!(
+                    "computed here and not in the artifact store ({at}); the next get uploads it"
+                ),
+            ),
+            Copies::StoreOnly => (
+                "unsynced",
+                "store_only",
+                format!("in the artifact store ({at}), not on this machine; get fetches it"),
+            ),
+            Copies::Mismatch(why) => ("unsynced", "mismatch", format!("{why} ({at})")),
+            Copies::Missing => (
+                "stale",
+                "artifact_missing",
+                format!(
+                    "the artifact is neither on this machine nor in the store ({at}); a run computes it again"
+                ),
+            ),
+        };
+        c.state = state.to_string();
+        c.reason = reason.to_string();
+        c.detail = detail;
+        if state != "cached" && state != "unsynced" {
+            c.artifact = None;
+        }
+    }
+}
+
+/// Ask the store about each of `paths` with one `python -m barca._state stat`.
+pub(crate) async fn stat_objects(
+    python: &Path,
+    cfg: &crate::config::ResolvedConfig,
+    paths: &[&str],
+) -> Result<Vec<StoreObject>, String> {
+    use tokio::io::AsyncWriteExt;
+    #[derive(Deserialize)]
+    struct Reply {
+        objects: Vec<StoreObject>,
+    }
+    let mut cmd = crate::backup::state_helper(python, cfg);
+    cmd.arg("stat")
+        .kill_on_drop(true)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut child =
+        crate::helper_proc::spawn(&mut cmd).map_err(|e| format!("{}: {e}", python.display()))?;
+    let mut stdin = child.stdin.take().ok_or("no stdin")?;
+    let request = serde_json::json!({ "paths": paths }).to_string();
+    stdin
+        .write_all(request.as_bytes())
+        .await
+        .map_err(|e| e.to_string())?;
+    drop(stdin);
+    let limit = std::time::Duration::from_secs(cfg.transfer_timeout_secs.min(60));
+    let out = tokio::time::timeout(limit, child.wait_with_output())
+        .await
+        .map_err(|_| format!("no answer within {}s", limit.as_secs()))?
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(crate::state_sync::helper_cause(&out.stderr));
+    }
+    serde_json::from_slice::<Reply>(&out.stdout)
+        .map(|r| r.objects)
+        .map_err(|e| e.to_string())
 }
 
 fn cache(state: &str, reason: &str, detail: impl Into<String>) -> CacheStatus {
@@ -519,6 +763,15 @@ async fn read_shapes_inner(
             if selected.path == *path {
                 wanted.push((i, selected.path, selected.format));
             }
+        } else if n.cache.state == "unsynced" && n.cache.reason != "store_only" {
+            // Not in the store, or not the same there (#390, RFC-0009): read this machine's
+            // copy. A `store_only` result is read from the store like a cached one.
+            let layout =
+                crate::transfer::ArtifactLayout::new(&cfg.local_artifact_dir, &cfg.artifact_root);
+            let local = layout
+                .local_for(path)
+                .map_or_else(|| path.clone(), |p| p.to_string_lossy().into_owned());
+            wanted.push((i, local, m.format.clone().unwrap_or_default()));
         } else {
             wanted.push((i, path.clone(), m.format.clone().unwrap_or_default()));
         }
@@ -684,6 +937,46 @@ mod tests {
         assert_eq!(c.state, "always_runs");
         let c = cache_status(Some(&report("cached", None)), &[], &none, &h);
         assert_eq!(c.state, "cached");
+    }
+
+    #[test]
+    fn copies_here_in_the_store_and_on_record() {
+        let there = |size: u64, sha: Option<&str>| StoreObject {
+            exists: true,
+            size_bytes: Some(size),
+            sha256: sha.map(str::to_string),
+        };
+        let gone = StoreObject::default();
+        assert_eq!(classify(None, &gone, Some("d")), Copies::Missing);
+        assert_eq!(
+            classify(None, &there(3, None), Some("d")),
+            Copies::StoreOnly
+        );
+        assert_eq!(
+            classify(Some((3, "d")), &gone, Some("d")),
+            Copies::LocalOnly
+        );
+        // Agree: same size (an object store has no checksum to compare) or same digest.
+        assert_eq!(
+            classify(Some((3, "d")), &there(3, None), Some("d")),
+            Copies::InSync
+        );
+        assert_eq!(
+            classify(Some((3, "d")), &there(3, Some("d")), None),
+            Copies::InSync
+        );
+        // Differ: by size, by digest where the store gives one, or this copy is not the
+        // recorded one.
+        for (local, store, recorded) in [
+            ((3, "d"), there(4, None), Some("d")),
+            ((3, "d"), there(3, Some("e")), Some("d")),
+            ((3, "e"), there(3, None), Some("d")),
+        ] {
+            assert!(
+                matches!(classify(Some(local), &store, recorded), Copies::Mismatch(_)),
+                "{local:?} {store:?} {recorded:?}"
+            );
+        }
     }
 
     #[test]

@@ -1,0 +1,27 @@
+# barca get summary pipeline.py --json  (stdout, exit 0)
+elapsed_seconds : number
+final_output : object
+final_output._barca_artifact : object
+final_output._barca_artifact.format : string
+final_output._barca_artifact.path : string
+final_output._barca_artifact.size_bytes : integer
+phases : integer
+run_id : string
+status : string
+steps : array
+steps[] : object
+steps[].attempts : integer
+steps[].detail : string
+steps[].elapsed_seconds : number
+steps[].id : string
+steps[].kind : string
+steps[].reason : string
+steps[].run_hash : string
+steps[].status : string
+steps_executed : integer
+uploads : object
+uploads.error : string
+uploads.nodes : array
+uploads.nodes[] : string
+uploads.pending : integer
+warnings : array

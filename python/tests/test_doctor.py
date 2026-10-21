@@ -101,17 +101,14 @@ def test_shared_directory_store_is_read_only_and_identity_is_visible(tmp_path):
     )
     store = tmp_path / "store"
     store.mkdir()
-    state = store / "state.db"
-    state.write_bytes(b"remote content is not downloaded")
-    report, by_name = checks(
-        cli(tmp_path, "--json", BARCA_REMOTE_URI=str(store), BARCA_STATE_URI=str(state))
-    )
+    report, by_name = checks(cli(tmp_path, "--json", BARCA_REMOTE_URI=str(store)))
     assert report["ok"]
-    assert by_name["state"]["data"]["mode"] == "shared"
+    # With a store, the metadata DB is backed up to it (RFC-0009); doctor creates nothing there.
+    assert by_name["state"]["data"]["mode"] == "backup"
+    assert by_name["state"]["data"]["uri"] == f"{store}/default/state/backups"
     assert by_name["store:artifacts"]["data"]["identity"]["provider"] == "local"
-    assert by_name["store:state"]["ok"]
-    assert state.read_bytes() == b"remote content is not downloaded"
-    assert list(store.iterdir()) == [state]
+    assert by_name["store:backups"]["ok"]
+    assert list(store.iterdir()) == []
     pretty = cli(tmp_path, "--pretty")
     assert all(line.startswith("[ok] ") for line in pretty.stdout.splitlines())
     assert "found from cwd" in pretty.stdout

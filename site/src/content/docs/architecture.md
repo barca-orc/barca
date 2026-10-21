@@ -27,9 +27,9 @@ crates/
     cost.rs                   measured step cost and batch sizing
     db.rs, config.rs          the metadata database; project root, barca.toml, environment, flags
     run_owner.rs              conservative process-liveness evidence for interrupted runs
-    transfer.rs, state_*.rs   remote store: artifact transfer, and shared history as one blob
+    transfer.rs, backup.rs    remote store: artifact transfer, and backups of the metadata DB
     store_sync.rs             a run's link to the store: upload results, fetch remote inputs, wait at the end
-    persist.rs                recording a run: run and step rows, the final write, the shared-history push
+    persist.rs                recording a run: run and step rows, the final write, the minute backup
     commands.rs               get and run entry points
     targets.rs                target resolution, refresh-name checks and target planning
     execution.rs              prepare, decide, dispatch and finalize a run
@@ -81,7 +81,7 @@ pyproject.toml                maturin build: binary and Python package in one wh
 6. **Record.** Each finished step is written to the metadata database as it finishes, and the
    run row is closed at the end. With a remote store, artifacts are uploaded in the background
    by the transfer helper, a step is recorded once its upload is confirmed (when the run
-   ends), and the shared history is pushed after that.
+   ends), and the metadata database is backed up to the store after that.
 
 Planning happens on every command. There is no stored plan to go stale between commands.
 
@@ -140,8 +140,8 @@ and its inputs, not the bytes of the result. A step's result is always written t
 the next step reads that file.
 
 With a remote store configured, artifacts are still written locally first and then uploaded,
-and the metadata database is shared as one object in the store (shared history). See
-[Remote storage](/reference/remote-storage/).
+and the metadata database is backed up to the store, five copies kept; `barca state restore`
+puts one back. See [Remote storage](/reference/remote-storage/).
 
 ## Dependencies
 

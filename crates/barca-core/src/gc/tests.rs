@@ -219,6 +219,59 @@ async fn the_check_after_a_command_keeps_what_the_command_produced_and_read() {
 }
 
 #[tokio::test]
+async fn a_result_whose_upload_is_pending_is_never_evicted() {
+    // The local copy of a result whose upload failed (#390) is the only copy: neither a
+    // superseded nor a current one is evicted while its upload is pending.
+    let (f, files) = project().await;
+    let [old, _current, cold, _hot] = files.try_into().unwrap();
+    let pending = |rel: &str, node: &str| crate::pending_uploads::PendingUpload {
+        store_path: rel.to_string(),
+        node_id: node.to_string(),
+        run_hash: None,
+        run_id: None,
+        local_path: f.root().join(rel).display().to_string(),
+        error: Some("upload failed".into()),
+    };
+    crate::pending_uploads::record(&f.db, &[pending(&old, "p.py:a"), pending(&cold, "p.py:b")])
+        .await
+        .unwrap();
+    let result = f.gc(MaxSize::Bytes(1), false).await;
+    let evicted: Vec<String> = paths(&result).into_iter().map(|(_, p)| p).collect();
+    assert!(
+        !evicted.contains(&old) && !evicted.contains(&cold),
+        "{evicted:?}"
+    );
+    assert!(f.exists(&old) && f.exists(&cold));
+    assert!(!evicted.is_empty(), "the rest is still evicted");
+}
+
+#[tokio::test]
+async fn metadata_backups_are_counted_and_never_evicted() {
+    // `barca state restore` (#471) needs its copies: `.barca/backups/` and a named
+    // environment's `backups/` count toward the limit but are never deleted.
+    let (f, _files) = project().await;
+    let before = f.total().await;
+    let backups = [
+        ".barca/backups/2026-10-20T00-00-00Z.db",
+        ".barca/backups/2026-10-20T00-00-00Z.json",
+        ".barca/backups/2026-10-20T00-01-00Z.db.unsent",
+        ".barca/envs/dev/backups/2026-10-20T00-00-00Z.db",
+    ];
+    for rel in backups {
+        let path = f.root().join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, vec![b'x'; 500]).unwrap();
+    }
+    assert_eq!(f.total().await, before + 2000);
+    let result = f.gc(MaxSize::Bytes(1), false).await;
+    assert!(!result.evicted.is_empty());
+    for rel in backups {
+        assert!(f.exists(rel), "{rel} was evicted");
+        assert!(paths(&result).iter().all(|(_, p)| !p.contains("backups")));
+    }
+}
+
+#[tokio::test]
 async fn runs_in_flight_in_this_process_hold_their_results() {
     let (f, files) = project().await;
     let pin = pin_at("other-run", f.root());

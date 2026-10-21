@@ -24,7 +24,7 @@ barca sql "select * from total"         # look at a cached result with DuckDB; r
 
 - `get` is for assets, `run` for tasks; the wrong one exits 2 and names the right one.
 - A second identical `get` reports `steps_executed: 0` (all cached).
-- `--dry-run`, status and SQL may synchronize optimistic shared history. Source parsing
+- `--dry-run`, status and SQL record no run and download no history. Source parsing
   is static; `partitions(<expression>)` can evaluate Python and import its module while
   resolving keys. SQL can write files when explicitly asked through `COPY ... TO`.
 - No file arguments needed: barca reads every `.py` file in the project that imports barca.

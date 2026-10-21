@@ -19,7 +19,7 @@ def project(tmp_path):
         'Path("user.imported").touch()\n@asset()\ndef quick():\n    Path("user.started").touch()\n    return 1\n'
     )
     (tmp_path / "barca.toml").write_text(
-        '[remote]\nuri = "s3://bucket/project"\nstate = "off"\ntransfer_timeout = 1\n'
+        '[remote]\nartifacts_uri = "s3://bucket/project/default/artifacts"\ntransfer_timeout = 1\n'
     )
     shim = tmp_path / "shim"
     shim.mkdir()
@@ -77,7 +77,7 @@ def run(root, env):
         ),
     ],
 )
-def test_state_off_rejects_bad_store_before_importing_user_code(project, mode, details):
+def test_a_bad_store_is_rejected_before_importing_user_code(project, mode, details):
     root, env = project
     env["PREFLIGHT_MODE"] = mode
     started = time.monotonic()
@@ -92,7 +92,9 @@ def test_state_off_rejects_bad_store_before_importing_user_code(project, mode, d
     assert not (root / "user.imported").exists()
     with pytest.raises(ProcessLookupError):
         os.kill(int((root / "helper.pid").read_text()), 0)
-    envelope = json.loads(next(line for line in reversed(out.stderr.splitlines()) if line.startswith("{")))
+    envelope = json.loads(
+        next(line for line in reversed(out.stderr.splitlines()) if line.startswith("{"))
+    )
     assert envelope["kind"] == "infra"
     with sqlite3.connect(root / ".barca/metadata.db") as db:
         assert db.execute("SELECT status, steps_executed FROM runs").fetchall() == [("failed", 0)]
@@ -123,17 +125,19 @@ def test_upload_wait_and_failure_attempts_are_reported(project):
     root, env = project
     env["UPLOAD_FAIL"] = "1"
     out = run(root, env)
-    assert out.returncode == 3, out.stderr
+    # The step succeeded; only its upload failed: a warning, not a failed run (#390).
+    assert out.returncode == 0, out.stderr
     assert "[barca] uploading 1 artifacts to s3://bucket/project" in out.stderr
     assert "timeout 1s per attempt" in out.stderr
-    assert "1 attempt(s)" in out.stderr
+    assert "[barca] warning: 1 result not uploaded to s3://bucket/project" in out.stderr
+    assert "(1 attempt)" in out.stderr
     assert "upload denied" in out.stderr
     assert (root / "user.started").exists()
 
 
 def test_first_run_can_create_a_directory_store(project):
     root, env = project
-    (root / "barca.toml").write_text('[remote]\nuri = "store"\nstate = "off"\n')
+    (root / "barca.toml").write_text('[remote]\nuri = "store"\n')
     # No probe shim: exercise actual local storage operations.
     env["PYTHONPATH"] = os.environ.get("PYTHONPATH", "")
     out = run(root, env)
@@ -153,8 +157,9 @@ def test_transfer_errors_redact_uri_and_storage_secrets(monkeypatch):
 def test_transfer_trace_redacts_uri_passwords_and_signed_queries(project):
     root, env = project
     (root / "barca.toml").write_text(
-        '[remote]\nuri = "s3://user:TRACE_PASSWORD@bucket/project?token=TRACE_SIGNATURE"\n'
-        'state = "off"\ntransfer_timeout = 1\n'
+        "[remote]\nartifacts_uri = "
+        '"s3://user:TRACE_PASSWORD@bucket/project?token=TRACE_SIGNATURE/default/artifacts"\n'
+        "transfer_timeout = 1\n"
     )
     env["BARCA_TRACE_TIMING"] = "1"
     out = run(root, env)
@@ -168,7 +173,7 @@ def test_transfer_trace_redacts_uri_passwords_and_signed_queries(project):
 def test_upload_progress_is_visible_while_the_drain_is_still_running(project):
     root, env = project
     (root / "barca.toml").write_text(
-        '[remote]\nuri = "s3://bucket/project"\nstate = "off"\ntransfer_timeout = 15\n'
+        '[remote]\nartifacts_uri = "s3://bucket/project/default/artifacts"\ntransfer_timeout = 15\n'
     )
     env["UPLOAD_DELAY"] = "11"
     with subprocess.Popen(

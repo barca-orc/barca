@@ -19,6 +19,8 @@ mod stats;
 pub(crate) use stats::*;
 mod serve;
 pub(crate) use serve::*;
+mod state;
+pub(crate) use state::*;
 mod get;
 pub(crate) use get::*;
 mod run;

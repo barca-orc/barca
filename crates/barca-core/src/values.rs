@@ -3,6 +3,9 @@
 //! A json artifact is read here. Parquet, CSV and pickle artifacts are read by
 //! `python -m barca._value` with the reader `barca.get()` uses (`barca._artifacts.deserialize`),
 //! all in one process, and converted to JSON there: a table becomes a list of row objects.
+//!
+//! `barca get -o url` signs each returned artifact's store object through the same helper
+//! ([`sign_urls`]).
 
 use crate::dispatch::OutputRef;
 use serde_json::Value;
@@ -25,19 +28,15 @@ pub async fn read_values(
                 .map(|i| serde_json::json!({"path": refs[*i].path, "format": refs[*i].format}))
                 .collect::<Vec<_>>(),
         });
-        let reader = crate::helper_proc::python_module(
-            python,
-            "barca._value",
-            cfg.storage_options_json.as_deref(),
-        );
-        let answers = match crate::status::run_json_helper(reader, python, &request).await {
-            Ok(a) if a.len() == others.len() => a.into_iter().map(answer).collect(),
-            Ok(_) => vec![
-                Err("the value reader returned an unexpected result".to_string());
-                others.len()
-            ],
-            Err(e) => vec![Err(format!("could not run the value reader: {e}")); others.len()],
-        };
+        let answers =
+            match crate::status::run_json_helper(helper(python, cfg), python, &request).await {
+                Ok(a) if a.len() == others.len() => a.into_iter().map(answer).collect(),
+                Ok(_) => vec![
+                    Err("the value reader returned an unexpected result".to_string());
+                    others.len()
+                ],
+                Err(e) => vec![Err(format!("could not run the value reader: {e}")); others.len()],
+            };
         for (i, answer) in others.into_iter().zip(answers) {
             out[i] = Some(answer);
         }
@@ -45,6 +44,100 @@ pub async fn read_values(
     out.into_iter()
         .map(|v| v.expect("every artifact read"))
         .collect()
+}
+
+/// `python -m barca._value`, with the resolved storage options (reads and signing alike).
+fn helper(
+    python: &std::path::Path,
+    cfg: &crate::config::ResolvedConfig,
+) -> tokio::process::Command {
+    crate::helper_proc::python_module(python, "barca._value", cfg.storage_options_json.as_deref())
+}
+
+/// Version of the `sign` request to `barca._value` (`specs/worker-protocol.md`).
+pub const SIGN_VERSION: u32 = 1;
+
+/// One object to sign: its store URI and the name a browser downloads it as.
+#[derive(Debug, Clone)]
+pub struct SignRequest {
+    pub uri: String,
+    pub filename: String,
+}
+
+/// A signed URL and when it stops working (RFC 3339, UTC). The URL is a bearer credential:
+/// print it to stdout and nowhere else.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Signed {
+    pub url: String,
+    pub expires_at: String,
+    /// Why the link ends sooner than asked (temporary credentials); never contains the URL.
+    pub note: Option<String>,
+}
+
+/// Why one object could not be signed: `kind` is `usage`, `missing`, `credentials` or `store`
+/// (see `barca._storage.SignError`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SignFailure {
+    pub kind: String,
+    pub message: String,
+}
+
+/// Sign each object for `expires_secs` seconds, in order, with one `barca._value` process.
+pub async fn sign_urls(
+    python: &std::path::Path,
+    cfg: &crate::config::ResolvedConfig,
+    objects: &[SignRequest],
+    expires_secs: u64,
+) -> Vec<Result<Signed, SignFailure>> {
+    if objects.is_empty() {
+        return Vec::new();
+    }
+    let request = serde_json::json!({
+        "op": "sign",
+        "version": SIGN_VERSION,
+        "objects": objects
+            .iter()
+            .map(|o| serde_json::json!({
+                "uri": o.uri,
+                "expires": expires_secs,
+                "filename": o.filename,
+            }))
+            .collect::<Vec<_>>(),
+    });
+    let failure = |message: String| SignFailure {
+        kind: "store".to_string(),
+        message,
+    };
+    match crate::status::run_json_helper(helper(python, cfg), python, &request).await {
+        Ok(a) if a.len() == objects.len() => a.into_iter().map(signed).collect(),
+        Ok(_) => vec![
+            Err(failure(
+                "the URL signer returned an unexpected result".into()
+            ));
+            objects.len()
+        ],
+        Err(e) => vec![Err(failure(format!("could not run the URL signer: {e}"))); objects.len()],
+    }
+}
+
+/// `{"url", "expires_at"}` or `{"error", "kind"}` from `barca._value`.
+fn signed(item: Value) -> Result<Signed, SignFailure> {
+    let get = |k: &str| item.get(k).and_then(Value::as_str).map(str::to_string);
+    match (get("url"), get("expires_at"), get("error")) {
+        (_, _, Some(message)) => Err(SignFailure {
+            kind: get("kind").unwrap_or_else(|| "store".to_string()),
+            message,
+        }),
+        (Some(url), Some(expires_at), None) => Ok(Signed {
+            url,
+            expires_at,
+            note: get("note"),
+        }),
+        _ => Err(SignFailure {
+            kind: "store".to_string(),
+            message: "the URL signer returned an unexpected result".to_string(),
+        }),
+    }
 }
 
 fn read_json(path: &str) -> Result<Value, String> {
@@ -80,5 +173,30 @@ mod tests {
             Err("ImportError: pyarrow".to_string())
         );
         assert!(answer(serde_json::json!(3)).is_err());
+    }
+
+    #[test]
+    fn signer_answers_are_urls_or_failures() {
+        assert_eq!(
+            signed(
+                serde_json::json!({"url": "https://x/y?sig", "expires_at": "2026-10-20T10:00:00Z"})
+            ),
+            Ok(Signed {
+                url: "https://x/y?sig".into(),
+                expires_at: "2026-10-20T10:00:00Z".into(),
+                note: None,
+            })
+        );
+        assert_eq!(
+            signed(serde_json::json!({"error": "s3://b/k is not in the store", "kind": "missing"})),
+            Err(SignFailure {
+                kind: "missing".into(),
+                message: "s3://b/k is not in the store".into()
+            })
+        );
+        assert_eq!(
+            signed(serde_json::json!({"url": "u"})).unwrap_err().kind,
+            "store"
+        );
     }
 }

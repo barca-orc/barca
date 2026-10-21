@@ -28,8 +28,11 @@ on reports with no event. The diagnostic does not change the run's exit code.
 `barca status --json` exposes the latest materialization's `content_hash` when available, and
 `last_bytes_change: {node_id, run_hash, content_hash, created_at}` for the last mismatch event.
 That event remains visible after later unchanged recomputes. The human status table prints the
-last event's timestamp and exact node id. Carried shared history preserves the stored flag;
-receiving history does not reclassify an old materialization against a new row order.
+last event's timestamp and exact node id. A restored backup preserves the stored flag.
 
-Store mismatch repair and server posts must produce the same diagnostic when implemented
-under RFC-0009 and RFC-0007. This specification does not claim those proposed paths are shipped.
+Store mismatch repair (RFC-0009) produces the same diagnostic: a `barca get` that re-uploads a
+target whose store copy differs from this machine's (status `unsynced`, `cache.reason`
+`mismatch`) prints the changed-bytes warning and sets `steps[].bytes_changed: true` on that
+step, without a step running and without a new materialization row, so `last_bytes_change` is
+not changed by it. Server posts (RFC-0007) must produce the same diagnostic when implemented;
+this specification does not claim that path is shipped.

@@ -25,11 +25,8 @@ Points:
 - ``partial-get`` the concrete artifact stage has a flushed prefix of actual SDK bytes,
               before that first write completes; other files and downloads are untouched
 - ``copied``  a copy into a directory store has written its temp file and not yet renamed it
-- ``push``    the state helper is about to push the metadata DB (``python -m barca._state push``)
-- ``repush``  a corrective state upload after an earlier upload reached ``pushed``
-- ``pull``    the state helper is about to pull it (``python -m barca._state pull``)
-- ``pushed``  the state helper has put the metadata DB in a directory store and has not said so
-              yet (after the rename, before it prints the new token)
+- ``backup``  the state helper is about to upload a metadata backup
+              (``python -m barca._state backup``)
 - ``worker-start``    a worker's interpreter is starting: nothing of barca is imported yet
 - ``worker-connect``  a worker has imported barca and is about to connect to the coordinator
 """
@@ -109,6 +106,7 @@ def _install(point: str, directory: Path) -> None:
         wrap("get_file", transferring)
     elif point == "consume-input":
         from barca import _artifacts
+
         real_deserialize = _artifacts.deserialize
 
         def read_after_hold(path, *args, **kwargs):
@@ -223,27 +221,8 @@ def _install(point: str, directory: Path) -> None:
 
         # Only `_storage`'s view of shutil: the rest of the process is untouched.
         _storage.shutil = types.SimpleNamespace(copyfile=copy_then_hold)
-    elif point == "pushed":
-        from contextlib import contextmanager
-
-        real_staged = _storage.staged_beside
-
-        @contextmanager
-        def staged_then_hold(dest):
-            with real_staged(dest) as tmp:
-                yield tmp
-            if sys.argv[1:2] == ["push"]:
-                _hold(point, directory)
-
-        _storage.staged_beside = staged_then_hold
-    elif point == "repush":
-        wrap(
-            "local_path_of",
-            lambda *a: sys.argv[1:2] == ["push"] and (directory / "pushed.started").exists(),
-        )
-    elif point in ("push", "pull"):
-        # `_state.push` and `_state.pull` resolve their target through `_storage` first,
-        # whatever the backend. Both points can be installed at once: each wraps the other.
+    elif point == "backup":
+        # `_state.backup` resolves its target through `_storage` first, whatever the backend.
         wrap("local_path_of", lambda *a: sys.argv[1:2] == [point])
 
 

@@ -46,9 +46,8 @@ prints a startup warning; use a private network or an authenticating proxy.
 without a restart. Files added after the server started are not picked up until a restart, with
 or without `--watch`.
 
-`barca serve` does not support shared history. With a remote store configured it exits 2
-unless `state = "off"` is set in `barca.toml` or `BARCA_STATE=off` in the environment. See
-[Deploying](/deploying/#with-a-remote-store).
+With a remote store configured, `barca serve` backs its metadata DB up to the store every
+minute it changed. See [Deploying](/deploying/#with-a-remote-store).
 
 ## Endpoints (v1)
 
@@ -262,7 +261,7 @@ GET /state             → [NodeState, ...]   (dependency order)
 Each `NodeState` is a `barca status --json` node (`id`, `name`, `kind`, `inputs`, `partitioned`,
 `cache`, `partitions`, `last_materialization`, `shape`, `env`) plus `durations` — `{ median_seconds,
 p95_seconds, samples }` over the last 20 successful runs, or `null` — and `next_run`, the next cron
-fire time in unix seconds for scheduled nodes. `cache` is the `barca status` cache entry: `state` is `cached`, `stale`, `never_run`, `partial`,
+fire time in unix seconds for scheduled nodes. `cache` is the `barca status` cache entry: `state` is `cached`, `unsynced`, `stale`, `never_run`, `partial`,
 `unknown` or `always_runs`, with a machine-readable `reason` and a `detail` in words (see
 [`barca status`](/reference/cli/#status)). `shape` is always `null` here:
 reading artifact shapes starts a reader process, too slow for an endpoint the UI polls. The cache
@@ -411,7 +410,7 @@ failures. The Python client raises
 
 - No authentication and no TLS. The server listens on `127.0.0.1` by default; `--host` can
   make it reachable from other machines. Authenticate at a proxy.
-- No shared history: `BARCA_STATE=off` is required with a remote store.
+- No shared ledger yet: other machines do not see this server's history (RFC-0007).
 - Runs in progress are not persisted. After a restart their handles return `404`; finished runs
   remain in `barca history`.
 - One machine: steps run in worker processes on the host that runs the server.

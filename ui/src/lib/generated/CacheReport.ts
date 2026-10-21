@@ -2,7 +2,7 @@
 
 /**
  * The `cache` object of a `get`/`run` result: present when the check after the run found the
- * cache over its limit and evicted.
+ * cache over its limit (with nothing evicted when nothing more could go).
  */
 export type CacheReport = {
 /**

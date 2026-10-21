@@ -161,14 +161,16 @@ pub async fn doctor(files: &[PathBuf], env: Option<&str>, python: &Path) -> Doct
                 cfg.env.clone(),
                 json!({"name":cfg.env}),
             );
+            // Where the metadata DB is backed up (RFC-0009): `backup` with a store, `local`
+            // (no backups) without one, `remote_off` under BARCA_REMOTE=off.
             let mode = if cfg.remote_off {
                 "remote_off"
-            } else if cfg.state == config::StateMode::Off {
-                "off"
+            } else if cfg.backup_uri.is_some() {
+                "backup"
             } else {
-                "shared"
+                "local"
             };
-            report.add("state", true, mode, json!({"mode":mode,"uri":cfg.state_uri.as_deref().map(crate::transfer::diagnostic_uri)}));
+            report.add("state", true, mode, json!({"mode":mode,"uri":cfg.backup_uri.as_deref().map(crate::transfer::diagnostic_uri),"local_backups":cfg.local_backup_dir()}));
             let local = Path::new(&cfg.local_artifact_dir);
             let writable = std::fs::create_dir_all(local)
                 .and_then(|_| tempfile::NamedTempFile::new_in(local).map(drop));
@@ -253,10 +255,8 @@ pub async fn doctor(files: &[PathBuf], env: Option<&str>, python: &Path) -> Doct
         if cfg.remote_artifacts() {
             stores.push(json!({"name":"artifacts", "uri":cfg.artifact_root}));
         }
-        if cfg.state == config::StateMode::Optimistic
-            && let Some(uri) = &cfg.state_uri
-        {
-            stores.push(json!({"name":"state", "uri":uri}));
+        if let Some(uri) = &cfg.backup_uri {
+            stores.push(json!({"name":"backups", "uri":uri}));
         }
         stores
     });

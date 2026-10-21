@@ -1,7 +1,9 @@
 """A local copy of a stored result is checked against the hash recorded when it was uploaded.
 
-Two working directories share one plain-directory store, so this needs no emulator: the checks
-are the same for every backend, since they hash the local file.
+Working directories share one plain-directory store, so this needs no emulator: the checks are
+the same for every backend, since they hash the local file. A second directory gets the history
+the way a new container does (RFC-0009): `barca state restore` from the store's newest backup,
+with none of the artifacts on its disk.
 """
 
 import json
@@ -45,16 +47,20 @@ def cli(cwd: Path, store: Path, *args: str) -> subprocess.CompletedProcess:
 
 @pytest.fixture
 def shared(tmp_path):
-    """(store, machine factory); `numbers` and `total` are already in the store."""
+    """(store, machine factory); `numbers` and `total` are already in the store, and every
+    machine the factory makes starts from the store's newest backup of the history."""
     store = tmp_path / "store"
 
-    def make(name: str) -> Path:
+    def make(name: str, restore: bool = True) -> Path:
         root = tmp_path / name
         root.mkdir()
         (root / "pipeline.py").write_text(PIPELINE)
+        if restore:
+            restored = cli(root, store, "state", "restore", "--json")
+            assert restored.returncode == 0, restored.stderr
         return root
 
-    first = cli(make("producer"), store, "get", "total", "-o", "value", "--json")
+    first = cli(make("producer", restore=False), store, "get", "total", "-o", "value", "--json")
     assert first.returncode == 0, first.stderr
     return store, make
 
@@ -258,8 +264,8 @@ def test_barca_serve_reports_the_marker_in_the_run_result(tmp_path):
     root.mkdir()
     (root / "pipeline.py").write_text(PIPELINE)
     env = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
-    # `barca serve` does not share history: results are shared, history stays local.
-    env.update(BARCA_REMOTE_URI=str(store), BARCA_STATE="off")
+    # Results are shared through the store; history stays on each machine.
+    env.update(BARCA_REMOTE_URI=str(store))
     first = subprocess.run(
         [_find_binary(), "get", "total", "-o", "value", "--json"],
         cwd=root,
@@ -376,7 +382,8 @@ def _finish(proc: subprocess.Popen) -> subprocess.CompletedProcess:
 
 
 def test_overlapping_runs_of_the_same_step_leave_other_machines_working(tmp_path):
-    """Two machines compute `up` at once: the store holds one result, the newest row the other."""
+    """Two machines compute `up` at once, each with its own history: the store holds one
+    result, and both machines (and a third) go on working."""
     store = tmp_path / "store"
     b = _start(_machine(tmp_path, "b"), store, "get", "slow", "-o", "value", "--json", SLOW="6")
     time.sleep(2.5)
@@ -384,7 +391,6 @@ def test_overlapping_runs_of_the_same_step_leave_other_machines_working(tmp_path
     assert a.returncode == 0, a.stderr
     b = _finish(b)
     assert b.returncode == 0, b.stderr
-    assert "conflict" in b.stderr, "the runs did not overlap: " + b.stderr
 
     for root in (tmp_path / "a", _machine(tmp_path, "c")):
         proc = cli(root, store, "get", "up", "-o", "value", "--json")
@@ -413,9 +419,7 @@ def test_independent_histories_sharing_a_store_survive_a_deleted_local_copy(tmp_
     b, a = _machine(tmp_path, "b"), _machine(tmp_path, "a")
 
     def get(root: Path, target: str) -> subprocess.CompletedProcess:
-        return _finish(
-            _start(root, store, "get", target, "-o", "value", "--json", BARCA_STATE="off")
-        )
+        return _finish(_start(root, store, "get", target, "-o", "value", "--json"))
 
     assert get(b, "up").returncode == 0
     assert get(a, "up").returncode == 0

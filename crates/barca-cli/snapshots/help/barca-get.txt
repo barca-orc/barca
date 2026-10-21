@@ -12,13 +12,17 @@ Arguments:
 
 Options:
   -o, --output <OUTPUT>
-          What to print: artifact paths (the default) or values. Alone, -o path|value prints only that; with --json, it chooses what `final_output` holds
+          What to print: artifact paths (the default), values, or signed URLs. Alone, -o path|value|url prints only that; with --json, it chooses what `final_output` holds
 
           Possible values:
           - path:   Artifact paths, one per line (one per selected partition key); the default
           - value:  The value, pretty-printed (a mapping of key to value for a partitioned target)
+          - url:    A signed HTTPS URL to each artifact in the store, one per line (experimental)
           - json:   One-line JSON, as --json
           - pretty: Summary and paths for people, as --pretty
+
+      --expires <DURATION>
+          With -o url: how long the links work, as 30m, 12h, 7d or seconds (default 1h, at most 7d). Experimental
 
       --json
           Emit JSON on stdout (the default when stdout is not a terminal)
@@ -39,7 +43,7 @@ Options:
           Force re-materialize EVERY asset in the target's cone (nothing comes from cache)
 
       --dry-run
-          Show what this command would do (each step cached or will-run, and why) without executing steps or recording a run (shared history may synchronize)
+          Show what this command would do (each step cached or will-run, and why) without executing steps or recording a run
 
       --agent
           Agent-friendly output: plain structured progress lines instead of visual progress bar
@@ -70,11 +74,15 @@ Examples:
   barca get total pipeline.py --refresh clean      # recompute clean and everything downstream of it
   barca get total pipeline.py --refresh clean --no-cascade   # recompute only clean
   barca get total pipeline.py --dry-run    # what would run vs come from cache; no steps execute
+  barca get total pipeline.py --dry-run --json   # also `uploads`: results still waiting for the store
   barca get total pipeline.py --json       # JSON even in a terminal (the default when piped)
   barca get total pipeline.py --pretty     # summary and artifact path for humans (the default in a terminal)
   barca get total pipeline.py -o path      # only the artifact path, one per line (pipe it to xargs cat)
   barca get total pipeline.py -o value     # only the value, pretty-printed (json, parquet, CSV, pickle)
   barca get total pipeline.py -o value --json   # the JSON result with the value in final_output
+  barca get total pipeline.py -o url       # a signed HTTPS link to the result in the store (1 hour)
+  barca get total pipeline.py -o url --expires 7d   # a link that works for 7 days (the maximum)
+  barca get sales pipeline.py -o url --partition region=emea --expires 30m   # one key's link
   barca get sales pipeline.py              # a partitioned target: one path per key
   barca get sales pipeline.py --partition region=emea,amer   # only these keys: computed and returned
   barca get sales pipeline.py --partition region=emea --refresh sales   # recompute only that key
@@ -90,6 +98,12 @@ small json value is previewed under it in a terminal), and in JSON final_output 
 {"_barca_artifact": {"path", "format", "size_bytes"}} for every format. -o path prints only
 the paths, one per line; -o value prints only the value. With --json, -o path|value choose what
 final_output holds (-o path is the default). -o json|pretty are older spellings of --json|--pretty.
+-o url (experimental) prints a signed HTTPS URL per result instead of its path: anyone with the
+link can download the artifact from the store until it expires (--expires, default 1h, at most
+7d; it cannot be revoked sooner). With --json each _barca_artifact pointer gains url and
+url_expires_at. It needs a cloud store (s3://, gs://, abfs://; a local store is exit 2). A result
+whose upload is pending (`local only`) is uploaded first; one that still is not in the store, or
+credentials that cannot sign, is exit 3 (barca docs remote).
 A partitioned target returns every key, sorted: final_output is an object keyed by partition key
 ("region=emea") and -o path prints one path per key. --partition region=emea,amer (or a JSON
 object for compound keys) selects keys of the target: only they run, are returned and are
@@ -117,8 +131,13 @@ After the run, if .barca/ is over [cache] max_size (default 10% of the filesyste
 BARCA_CACHE_MAX_SIZE), barca evicts what is least needed down to 80% of it, never this command's
 own results; stderr says what, and JSON gains `cache` (barca gc, barca docs cache "Disk use").
 Completed steps are recorded during the run; remote results require confirmed upload.
-Use `barca status pipeline.py` in another terminal to inspect recorded progress. Shared history
-is published when the run ends (barca docs remote).
+With an artifact store, an upload that fails after every step succeeded is a warning, not a
+failure: exit 0, JSON `uploads` {pending, error, nodes}, the result is kept on this machine
+(`unsynced` in barca status) and the next get or run uploads it first (barca docs remote).
+Use `barca status pipeline.py` in another terminal to inspect recorded progress. With a store
+([remote] uri), the metadata DB is backed up there every minute and when the run ends; a failed
+backup upload is a warning (barca docs remote). A cached target that is missing from the store, or
+different there, is uploaded from this machine without a step running.
 Targets must be assets; use `barca run` for tasks. With no target, get materializes every asset and
 sensor and skips tasks (previously it ran tasks too); stderr names the skipped tasks and the
 `barca run` command. A file with only tasks gets nothing: exit 0, empty `steps`.

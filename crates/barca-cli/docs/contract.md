@@ -45,11 +45,13 @@ outside the `GENERATED` blocks is written by hand.
 |---|---|
 | `barca doctor` and its JSON | prerequisite check names and provider-specific identity data may evolve; failed checks exit 3 with the report on stdout and the standard error envelope on stderr |
 | `barca plan` and its JSON | prints the planner's internal phase/stream layout, which changes with scheduling work (`reason` is an object, `{"type": "initial"}` or `{"type": "fan_in", "node_id": ...}`) |
-| `barca serve` and all its flags | the HTTP API and scheduler are young: no auth, no shared remote state, routes may change. Its JSON is the engine's own serialization (for example `GET /assets` has `freshness: {"type": "Always"}` and `stats.node_id`), not the CLI's |
+| `barca serve` and all its flags | the HTTP API and scheduler are young: no auth, routes may change. Its JSON is the engine's own serialization (for example `GET /assets` has `freshness: {"type": "Always"}` and `stats.node_id`), not the CLI's |
 | `get -o json\|pretty`, `run -o/--output` | kept for compatibility; `--json` / `--pretty` are the canonical spelling. `get -o path\|value` is stable |
+| `get -o url`, `get --expires`, and `url` / `url_expires_at` in a `_barca_artifact` pointer | new (RFC-0011): signed HTTPS links to results in a cloud store. The URL's form is the cloud's own (SigV4, GCS V4, Azure SAS); `url_expires_at` is RFC 3339 UTC. `get -o url` with no cloud store, or an `--expires` over `7d`, is exit 2; a result missing from the store or credentials that cannot sign is exit 3 |
 | `status --sample` and `nodes[].shape` | read by a Python helper (`barca._inspect`) whose output may grow per format; the wording of `shape.note` (an unreadable, too large or unreachable artifact) may change |
 | `BARCA_PROGRESS_SECS`, `BARCA_POOL_SIZE`, `BARCA_COMM_COST_SECONDS`, `BARCA_TRACE_TIMING` | tuning and benchmarking knobs |
 | `BARCA_TELEMETRY` and the spans it sends | new: span names, tags and metrics may change |
+| `BARCA_SLACK_WEBHOOK_URL`, `BARCA_SLACK_NOTIFY`, `BARCA_UI_URL` and the Slack posts | new: the message text and layout are not a contract and may change in any release |
 | the `[barca] <n> more: ...` line | collapsing repeated library warnings is new; which output counts as a warning may change |
 | `BARCA_ARTIFACT_URI` | 0.4.0 back-compat override, superseded by `BARCA_REMOTE_URI` / `[remote].artifacts_uri` |
 | `barca gc` and its JSON, `[cache] max_size`, `BARCA_CACHE_MAX_SIZE`, the `cache` key of `get`/`run` results, the step and status reason `evicted`, the `cache_size` doctor check | new in 0.25 (RFC-0012): the low watermark, the eviction order and the JSON shapes may change after field use |
@@ -77,10 +79,13 @@ outside the `GENERATED` blocks is written by hand.
 | `barca history` | - | stable | Show recent run history |
 | `barca gc` | - | experimental: new in 0.25 (RFC-0012): the eviction order, the low watermark and the JSON shape may change after field use | Evict cached results to keep .barca/ under its size limit |
 | `barca stats` | `<TARGET> [<FILES>...]` | stable | Show execution statistics for an asset |
-| `barca serve` | `[<FILES>...]` | experimental: the HTTP API and scheduler are young: no auth, no shared remote state, routes may change | Run a long-running HTTP server exposing the orchestrator as a JSON API |
+| `barca serve` | `[<FILES>...]` | experimental: the HTTP API and scheduler are young: no auth, routes may change | Run a long-running HTTP server exposing the orchestrator as a JSON API |
 | `barca list` | `[<FILES>...]` | stable | List all discovered definitions (assets, tasks, sensors) with their deps |
 | `barca status` | `[<ARGS>...]` | stable | Show every node's cache state, last materialization and artifact shape (read-only) |
 | `barca sql` | `<QUERY> [<FILES>...]` | experimental: new in 0.13: the view naming and the JSON result shape may change after field use | Query cached results with SQL (DuckDB) — each asset is a named view |
+| `barca state` | - | stable | Metadata backups: list them, or put one back in place of the local database |
+| `barca state backups` | - | stable | List the metadata backups, local and in the store, newest first |
+| `barca state restore` | - | stable | Put a metadata backup in place of the local database (the current one is kept aside) |
 | `barca docs` | `[<TOPIC>]` | stable | Show the built-in manual: concepts, output formats, examples, agent conventions |
 | `barca version` | - | stable | Print version information |
 | `barca help` | - | stable | Print this message or the help of the given subcommand(s) |
@@ -123,14 +128,15 @@ default, and any aliases.
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
 | `<ARGS>...` | - | - | stable | [TARGET[,TARGET...]] [file.py\|dir/ ...] — both optional: no target gets every asset and sensor; no files reads the whole project (`barca docs discovery`) |
-| `-o, --output` | `path\|value\|json\|pretty` | - | stable | What to print: artifact paths (the default) or values. Alone, -o path\|value prints only that; with --json, it chooses what `final_output` holds |
+| `-o, --output` | `path\|value\|url\|json\|pretty` | - | stable | What to print: artifact paths (the default), values, or signed URLs. Alone, -o path\|value\|url prints only that; with --json, it chooses what `final_output` holds |
+| `--expires` | `DURATION` | - | experimental: new with -o url (signed links to results in a cloud store); the link format is the cloud's | With -o url: how long the links work, as 30m, 12h, 7d or seconds (default 1h, at most 7d). Experimental |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `--partition` | `KEY=VALUE[,VALUE]\|JSON` | - | stable | Select keys of a partitioned target: `region=emea,amer`, or a JSON object for compound keys (`{"region": "emea", "day": "2026-10-14"}`). Only those keys are computed and returned, and --refresh of the target refreshes only them |
 | `--refresh` | comma-separated names | - | stable | Assets to force re-materialize, as ONE comma-separated list (`--refresh a,b`, not `--refresh a b`); the target itself may be named. Every asset downstream of them in the target's cone re-materializes too (see --no-cascade) |
 | `--no-cascade` | - | default `false` | stable | With --refresh: re-materialize only the named assets, not what is downstream of them. Cached downstream assets then do not reflect the refresh; barca warns |
 | `--refresh-all` | - | default `false` | stable | Force re-materialize EVERY asset in the target's cone (nothing comes from cache) |
-| `--dry-run` | - | default `false` | stable | Show what this command would do (each step cached or will-run, and why) without executing steps or recording a run (shared history may synchronize) |
+| `--dry-run` | - | default `false` | stable | Show what this command would do (each step cached or will-run, and why) without executing steps or recording a run |
 | `--agent` | - | default `false` | stable | Agent-friendly output: plain structured progress lines instead of visual progress bar |
 | `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `partitions`, `env` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Implies --json; not valid with --pretty or -o pretty. An unknown key is a usage error listing the valid ones |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
@@ -143,7 +149,7 @@ default, and any aliases.
 | `--refresh` | comma-separated names | - | stable | Upstream assets to force re-materialize, as ONE comma-separated list (`--refresh a,b`, not `--refresh a b`). Every asset downstream of them in the task's cone re-materializes too (see --no-cascade) |
 | `--no-cascade` | - | default `false` | stable | With --refresh: re-materialize only the named assets, not what is downstream of them. Cached downstream assets then do not reflect the refresh; barca warns |
 | `--refresh-all` | - | default `false` | stable | Force re-materialize EVERY asset in the task's cone (nothing comes from cache) |
-| `--dry-run` | - | default `false` | stable | Show what this command would do (each step cached or will-run, and why) without executing steps or recording a run (shared history may synchronize) |
+| `--dry-run` | - | default `false` | stable | Show what this command would do (each step cached or will-run, and why) without executing steps or recording a run |
 | `-o, --output` | `json\|value\|pretty` | - | experimental: kept for compatibility; --json / --pretty are the canonical spelling | Output format (kept for compatibility; --json / --pretty are the canonical spelling) |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
@@ -259,6 +265,29 @@ default, and any aliases.
 | `--all` | - | default `false` | experimental (with the command) | Return every row (no limit) |
 | `--env` | `ENV` | - | experimental (with the command) | Environment name (separates cache/state per environment) |
 
+#### barca state
+
+| Argument | Value | Notes | Stability | Description |
+|---|---|---|---|---|
+| - | - | - | - | no arguments besides `-h, --help` |
+
+#### barca state backups
+
+| Argument | Value | Notes | Stability | Description |
+|---|---|---|---|---|
+| `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
+| `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
+| `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
+
+#### barca state restore
+
+| Argument | Value | Notes | Stability | Description |
+|---|---|---|---|---|
+| `--from` | `N\|NAME` | - | stable | Which backup: its index in `barca state backups` (1 = newest) or its name; default the newest |
+| `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
+| `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
+| `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
+
 #### barca docs
 
 | Argument | Value | Notes | Stability | Description |
@@ -331,11 +360,8 @@ value of its first key only.
 |---|---|---|
 | `BARCA_OUTPUT` | `json` or `pretty`: output format when no flag is given; any other value is a usage error (exit 2) | stable |
 | `BARCA_ENV` | environment name when `--env` is not given (beats `default_env` in `barca.toml`) | stable |
-| `BARCA_REMOTE` | `off` disables remote artifacts/history for this process; unset/empty retains normal config; other values are usage errors | stable |
-| `BARCA_REMOTE_URI` | remote root for artifacts and shared state (`[remote].uri`) | stable |
-| `BARCA_STATE_URI` | shared metadata DB location (`[remote].state_uri`) | stable |
-| `BARCA_STATE` | `optimistic` or `off` (`[remote].state`); any other value is a usage error | stable |
-| `BARCA_PUSH_RETRIES` | integer: retries when pushing shared state (`[remote].push_retries`, default 5) | stable |
+| `BARCA_REMOTE` | `off` disables remote artifacts and history backups for this process; unset/empty retains normal config; other values are usage errors | stable |
+| `BARCA_REMOTE_URI` | remote root for artifacts and metadata backups (`[remote].uri`) | stable |
 | `BARCA_TRANSFER_CONCURRENCY` | positive integer: concurrent artifact transfers (`[remote].transfer_concurrency`, default 4); invalid values exit 3 | stable |
 | `BARCA_TRANSFER_TIMEOUT` | positive integer seconds per transfer attempt (`[remote].transfer_timeout`, default 600); invalid values exit 3 | stable |
 | `BARCA_STORAGE_OPTIONS` | JSON object keyed by protocol, merged over `[remote.storage_options.*]` | stable |
@@ -346,10 +372,18 @@ value of its first key only.
 | `BARCA_TRACE_TIMING` | when set, prints a timing waterfall on stderr | experimental |
 | `BARCA_CACHE_MAX_SIZE` | size limit for `.barca/` (`[cache] max_size`): `20GB`, `500MB`, `20GiB`, bytes, `10%` of the filesystem or `off`; default 10% of the filesystem; an invalid value is a usage error (exit 2) | experimental |
 | `BARCA_TELEMETRY` | comma-separated telemetry integrations to send finished runs to; `datadog` is the only one (`barca docs telemetry`) | experimental |
+| `BARCA_SLACK_WEBHOOK_URL` | a Slack incoming webhook (`https://`); set and non-empty, barca posts when a job starts failing, recovers, or is still failing a day later (`barca docs telemetry`). Never printed. `SLACK_WEBHOOK_URL` is ignored | experimental |
+| `BARCA_SLACK_NOTIFY` | `changes` (default), `failures` or `all`: which finished runs post to Slack; any other value is a warning and `changes` applies | experimental |
+| `BARCA_UI_URL` | base URL of the web UI; Slack posts link the run id to it | experimental |
 
 barca sets `BARCA_SOCKET`, `BARCA_WORKER`, `BARCA_WORKER_ID` (and passes `BARCA_ARTIFACT_URI`,
 `BARCA_STORAGE_OPTIONS`) for its own worker processes; these are internal, not part of the
+contract. `BARCA_TEST_*` variables are hooks for barca's own test suite, also not part of the
 contract. Variables your nodes declare with `@asset(env=[...])` are yours (`barca docs assets`).
+
+Removed in 0.26.0 (breaking, RFC-0009): `BARCA_STATE`, `BARCA_STATE_URI`, `BARCA_PUSH_RETRIES`
+and the `barca.toml` keys `[remote] state`, `[remote] state_uri`, `[remote] push_retries`. Any of
+them set is a usage error (exit 2) naming it and the release, even under `BARCA_REMOTE=off`.
 
 ## Exit codes
 
@@ -371,13 +405,18 @@ not define (`@asset(after=x)`, `input=` for `inputs=`, `@asset(**options)`; `bar
 "Accepted arguments"), a DAG that cannot be built (an input that
 names no definition, a cycle, a partitioned asset in an unpartitioned asset's `inputs=` without
 `collect()`, a `partitions_from()` the asset cannot mirror), invalid `--env` or `barca.toml`. `infra`:
-barca or its environment failed (metadata DB, workers, remote state, I/O); retrying may help.
+barca or its environment failed (metadata DB, workers, the store, I/O); retrying may help.
 `cancelled`: stopped by Ctrl-C (SIGINT) or by SIGTERM (what a supervisor, a CI timeout or
 `docker stop` sends), at any point of a `get` or `run`: while steps run, and
-with an artifact store also while artifacts upload or download or the shared history is pulled
-or pushed. The exit code is 130 whatever the store does: a cancelled run spends at most 10
-seconds sharing its record, a second Ctrl-C or SIGTERM ends that at once, and a push that fails
-then is a line on stderr, not exit 3 (`barca docs remote`, "Ctrl-C").
+with an artifact store also while artifacts upload or download or the history is backed up.
+The exit code is 130 whatever the store does: a cancelled run spends at most 10 seconds backing
+its record up, a second Ctrl-C or SIGTERM ends that at once, and a backup that fails then is a
+line on stderr, not exit 3 (`barca docs remote`, "Ctrl-C").
+
+An artifact upload or history-backup upload that fails after every step succeeded is not exit 3
+either: the run exits 0 with a warning and an `uploads` object, and the results are uploaded
+by the next command that opens the store (see "get and run: results the store did not
+receive").
 
 The exit code is 130 for SIGTERM as well as for SIGINT. Barca handles both signals the same way
 (it stops the workers, records the run as `cancelled` and exits), and the exit code follows the
@@ -894,6 +933,141 @@ In the fixture run above, the store's copy of one asset was overwritten after it
 that asset and the step recomputed from it carry the key, and the two other steps do not.
 Stability: stable.
 
+### get and run: results the store did not receive
+
+With an artifact store, a run whose steps all succeeded and whose only failure is an upload of
+an artifact (or of the end-of-run history backup) is a success: exit 0, the usual
+result, one `[barca] warning: <n> result(s) not uploaded to <store> (<ids>): <why>; ...` line
+on stderr, and an `uploads` object (#390). The results are recorded and kept on this machine;
+the next `get` or `run` that opens the store uploads them before its own work and says so on
+stderr (`[barca] uploading <n> pending results ...`). There is no flag to give up on them.
+A store that fails before any step runs (the startup check, a cached artifact that cannot be
+fetched) is still exit 3.
+
+<!-- BEGIN GENERATED schema get_uploads_pending -->
+| Key | Type | Present |
+|---|---|---|
+| `elapsed_seconds` | number | always |
+| `final_output` | object | always |
+| `final_output._barca_artifact` | object | always |
+| `final_output._barca_artifact.format` | string | always |
+| `final_output._barca_artifact.path` | string | always |
+| `final_output._barca_artifact.size_bytes` | integer | always |
+| `phases` | integer | always |
+| `run_id` | string | always |
+| `status` | string | always |
+| `steps` | array | always |
+| `steps[]` | object | always |
+| `steps[].attempts` | integer | always |
+| `steps[].detail` | string | always |
+| `steps[].elapsed_seconds` | number | always |
+| `steps[].id` | string | always |
+| `steps[].kind` | string | always |
+| `steps[].reason` | string | always |
+| `steps[].run_hash` | string | always |
+| `steps[].status` | string | always |
+| `steps_executed` | integer | always |
+| `uploads` | object | always |
+| `uploads.error` | string | always |
+| `uploads.nodes` | array | always |
+| `uploads.nodes[]` | string | always |
+| `uploads.pending` | integer | always |
+| `warnings` | array | always |
+<!-- END GENERATED schema get_uploads_pending -->
+
+- `uploads.pending` counts this machine's results not yet in the store after the run,
+  including earlier runs' that failed again; `uploads.nodes` names them (step ids, partition
+  keys included, sorted); `uploads.error` is why, in words (`null` only when nothing says).
+  A failed backup upload alone gives `pending: 0` and its error (`backup to <store> failed: ...`). The key is absent when nothing
+  is pending: test for the key. It is on `get` and `run`, with one target or several, and on
+  `result` of `barca serve`'s run status.
+- `barca status` shows each such node with `cache.state` `unsynced` and `cache.reason`
+  `local_only` (the table prints `unsynced  local only`), and `summary.unsynced` counts them:
+
+<!-- BEGIN GENERATED schema status_unsynced -->
+| Key | Type | Present |
+|---|---|---|
+| `nodes` | array | always |
+| `nodes[]` | object | always |
+| `nodes[].cache` | object | always |
+| `nodes[].cache.artifact` | string | always |
+| `nodes[].cache.detail` | string | always |
+| `nodes[].cache.reason` | string | always |
+| `nodes[].cache.run_hash` | string | always |
+| `nodes[].cache.state` | string | always |
+| `nodes[].env` | array | always |
+| `nodes[].id` | string | always |
+| `nodes[].inputs` | array | always |
+| `nodes[].inputs[]` | string | always |
+| `nodes[].kind` | string | always |
+| `nodes[].last_materialization` | object | always |
+| `nodes[].last_materialization.artifact` | string | always |
+| `nodes[].last_materialization.content_hash` | string | always |
+| `nodes[].last_materialization.created_at` | string | always |
+| `nodes[].last_materialization.elapsed_seconds` | number | always |
+| `nodes[].last_materialization.format` | string | always |
+| `nodes[].last_materialization.run_hash` | string | always |
+| `nodes[].last_materialization.size_bytes` | integer | always |
+| `nodes[].last_materialization.status` | string | always |
+| `nodes[].name` | string | always |
+| `nodes[].partitioned` | boolean | always |
+| `nodes[].shape` | object | always |
+| `nodes[].shape.keys` | array | sometimes |
+| `nodes[].shape.keys[]` | string | always |
+| `nodes[].shape.rows` | integer | sometimes |
+| `nodes[].shape.type` | string | always |
+| `root` | string | always |
+| `summary` | object | always |
+| `summary.always_runs` | integer | always |
+| `summary.cached` | integer | always |
+| `summary.never_run` | integer | always |
+| `summary.partial` | integer | always |
+| `summary.stale` | integer | always |
+| `summary.unknown` | integer | always |
+| `summary.unsynced` | integer | always |
+| `target` | null | always |
+| `targets` | array | always |
+| `total` | integer | always |
+| `truncated` | boolean | always |
+<!-- END GENERATED schema status_unsynced -->
+
+- `--dry-run` has the same `uploads` object when results are pending, and predicts them
+  `cached`; the human dry run adds a line naming them:
+
+<!-- BEGIN GENERATED schema get_dry_run_uploads_pending -->
+| Key | Type | Present |
+|---|---|---|
+| `command` | string | always |
+| `dry_run` | boolean | always |
+| `steps` | array | always |
+| `steps[]` | object | always |
+| `steps[].action` | string | always |
+| `steps[].artifact` | string | always |
+| `steps[].id` | string | always |
+| `steps[].kind` | string | always |
+| `steps[].run_hash` | string | always |
+| `summary` | object | always |
+| `summary.cached` | integer | always |
+| `summary.unknown` | integer | always |
+| `summary.will_run` | integer | always |
+| `target` | string | always |
+| `uploads` | object | always |
+| `uploads.error` | string | always |
+| `uploads.nodes` | array | always |
+| `uploads.nodes[]` | string | always |
+| `uploads.pending` | integer | always |
+| `warnings` | array | always |
+<!-- END GENERATED schema get_dry_run_uploads_pending -->
+
+With an artifact store, `barca status` also reports `unsynced` with `cache.reason` `store_only`
+(in the store, not on this machine) and `mismatch` (the two copies differ in size, or in bytes
+for a plain-directory store, or this machine's copy is not the recorded one) for unpartitioned
+cached nodes; a result in neither place is `stale` / `artifact_missing` (RFC-0009 section 4.1,
+reasons spelled as `cache.reason` snake_case values). `barca get` on such a target repairs it
+without running a step: it uploads a `local_only` or `mismatch` copy (a `mismatch` also prints
+the changed-bytes warning and sets `steps[].bytes_changed: true` on that step) and fetches a
+`store_only` one; the exit code does not change. Stability: stable.
+
 ### get and run: several targets
 
 With `a,b`, `final_output` is replaced by `targets`, keyed by target name in the order given.
@@ -970,8 +1144,7 @@ failed, and the exit code is then 1. Steps skipped because an upstream failed ha
 ### Dry run
 
 `--dry-run` on `get` or `run` executes no steps and records no new run; it prints what
-would happen. Optimistic shared-history synchronization may update local metadata, and
-`partitions(<expression>)` may evaluate Python while resolving keys. `steps[].action` is
+would happen. `partitions(<expression>)` may evaluate Python while resolving keys. `steps[].action` is
 `cached`, `run`, `partial` or `unknown` (in place of `status`). An `unknown` step has `reason`
 `partitions_unknown` (dynamic partitions whose source has not run) or `sensor_output_unknown` (it,
 or a step upstream of it, reads a sensor with no recorded output). A step that reads a sensor is
@@ -1191,15 +1364,17 @@ counts every node even when `nodes` is truncated.
 | `summary.partial` | integer | always |
 | `summary.stale` | integer | always |
 | `summary.unknown` | integer | always |
+| `summary.unsynced` | integer | always |
 | `target` | null | always |
 | `targets` | array | always |
 | `total` | integer | always |
 | `truncated` | boolean | always |
 <!-- END GENERATED schema status -->
 
-- `cache.state` is `cached`, `stale`, `never_run`, `partial`, `unknown` or `always_runs`: the
-  same snake_case spelling as the `summary` keys (the human table prints `never-run`);
-  `cache.reason` is `materialized`, `changed`, `upstream_stale`, `failed`, `artifact_missing`,
+- `cache.state` is `cached`, `unsynced`, `stale`, `never_run`, `partial`, `unknown` or
+  `always_runs`: the same snake_case spelling as the `summary` keys (the human table prints
+  `never-run`; `summary.unsynced` is always present);
+  `cache.reason` is `materialized`, `local_only`, `store_only`, `mismatch`, `changed`, `upstream_stale`, `failed`, `artifact_missing`,
   `evicted` (experimental), `no_record`, `partitions_missing`, `partitions_unknown`,
   `sensor_output_unknown`, `task` or `sensor`.
   `cache.run_hash` and `cache.artifact` appear when known (`artifact` only when cached).
@@ -1209,11 +1384,32 @@ counts every node even when `nodes` is truncated.
   by format `rows`, `columns[]`, `keys`, `key_count`, `sample` (with `--sample`), or only `note`
   when it cannot be read.
 
+### state backups and state restore
+
+`barca state backups` prints `{backups, local_dir, store}` and, when the store could not be
+listed, `store_error` (a string; the local backups are still listed and stderr has a warning).
+`store` is the store's backup prefix with credentials redacted, or `null` without a store.
+Each entry of `backups`, newest first: `index` (integer, 1 = newest), `name`
+(`2026-10-14T18-02-11Z.db`), `where` (`local`, `store` or `both`), `size_bytes` (integer),
+`run_id` (string or `null`), `rows` and `db_format` (integers or `null`), `digest` and
+`barca_version` (strings or `null`; from the backup's sidecar), and `agree` (boolean when the
+backup is in both places, else `null`). No backups is an empty array, exit 0.
+
+`barca state restore [--from N|NAME]` puts a backup in place of the metadata DB and moves the
+current one to `metadata.db.pre-restore`. One `[barca] restored ...` line on stderr (not
+contract); with `--json` (or piped), stdout has `{restored, from, source, pre_restore, rows,
+run_id}`: `from` is `local` or `store`, `source` the copy's path or redacted URI,
+`pre_restore` the path of the replaced database or `null`. Exit 2 (`usage`): no backup, an
+unknown `--from`, a copy that fails validation (the message names the next newest), a copy in a
+format this barca cannot use. Exit 3 (`infra`): a `barca serve` holds the environment, or no
+local backup exists and the store cannot be listed. Nothing is changed on any error.
+Stability: stable.
+
 ### history
 
 `runs[].attempts` is the sum of attempts in its recorded materialization rows, including
-executed partition keys; an all-cached run has zero. Upload-failure rows retain their
-existing transfer-attempt counts. `stats.recent_runs[].attempts` continues to report
+executed partition keys; an all-cached run has zero. Upload-failure rows recorded by
+earlier versions (a failed upload no longer fails its step) retain their transfer-attempt counts. `stats.recent_runs[].attempts` continues to report
 attempts per materialization, with the stored final-attempt duration.
 
 Experimental `--reconcile RUN_ID` is an explicit write after the operator verifies the run
@@ -1466,13 +1662,10 @@ contract.
 
 stderr carries progress, warnings, your steps' own `print` output and errors. Only the error
 envelope and the `--agent` lines below are contract. Other `[barca] ...` lines, such as
-`[barca] pulled state ...` and the `[barca] kept ...` line a pull prints when it keeps history
-recorded only on this machine (`barca docs remote`), and the warning a pull prints when it
-could not keep the database it replaced as `metadata.db.prev`, are informational and not
-contract. The
-same goes for the wording of an error: a shared history that fails its check on download is
-exit 3 with `kind` `infra` like any other failure of the store, and the text that names the
-object and says how to repair it is for people.
+`[barca] backed up the metadata DB ...` and `[barca] restored ...` (`barca docs remote`), are
+informational and not contract. The same goes for the wording of an error: a backup that fails
+its check in `barca state restore` is exit 2 with `kind` `usage`, and the text that names it and
+the next newest backup is for people.
 
 ### Error envelope (stable)
 
@@ -1539,7 +1732,9 @@ placeholders:
 [barca] step:pipeline.py:report completed <secs>s (<n>/<total>)
 [barca] step:pipeline.py:total cached env CONTRACT_API_TOKEN=<unset> CONTRACT_REGION=eu
 [barca] step:pipeline.py:value completed <secs>s (<n>/<total>) attempts=2
+[barca] uploaded <n> pending results
 [barca] uploading <n> artifacts to <store>/default/artifacts (timeout <secs>s per attempt); waiting for confirmation
+[barca] uploading <n> pending results to <store>/default/artifacts from an earlier run
 [barca] warning: pipeline.py:report never uses its input `rows`. It is still loaded in full each time the step runs, and it counts toward the step's cache key. Use it, remove it from inputs=, or rename the parameter `_rows` if it is there for ordering only (a `_` input is not loaded and never flagged)
 ```
 <!-- END GENERATED agent-lines -->
@@ -1550,10 +1745,11 @@ placeholders:
 | `[barca] step:<id> cached[ env NAME=VALUE ...]` | a step was served from cache. Printed when the step is decided, or, when its artifact is not on disk, at the end of the run once it is settled that nothing needed it (if something did, the step prints `completed` or `failed` instead, never both). Exception: a result in a remote artifact store whose object proves to be deleted when it is fetched has already printed `cached`; a `[barca] warning: <id>: the artifact of its cached result is missing ...` line and then `completed` or `failed` for the same step follow | stable |
 | `[barca] step:<id> failed: <first line of the error>` | a step raised | stable |
 | `[barca] run failed: step '<id>' failed: <first error line>; <n> downstream steps skipped (exit <code>)` | last stderr line of a failed run, after the error envelope (every mode) | stable |
-| `[barca] <n>/<total> steps \| done in <secs>s` | end of a run that executed steps, with or without `--agent`; `failed in` when a step failed, `cancelled after` on a Ctrl-C that arrives while steps are running (never `done` then). The line is about the steps: with an artifact store, a Ctrl-C after the last step finished (while artifacts upload or the shared history is pushed) follows a `done` line, and the exit code (130) and the error envelope still say `cancelled` (`barca docs remote`, "Ctrl-C") | stable |
+| `[barca] <n>/<total> steps \| done in <secs>s` | end of a run that executed steps, with or without `--agent`; `failed in` when a step failed, `cancelled after` on a Ctrl-C that arrives while steps are running (never `done` then). The line is about the steps: with an artifact store, a Ctrl-C after the last step finished (while artifacts upload or the history is backed up) follows a `done` line, and the exit code (130) and the error envelope still say `cancelled` (`barca docs remote`, "Ctrl-C") | stable |
 | `[barca] env <env> (<source>); artifact store <store>` | once at startup of `get`, `run` and `serve` (every mode) when the environment comes from `default_env` in `barca.toml` or a separate artifact store is configured. `<source>` is `--env`, `BARCA_ENV`, `default_env in barca.toml` or `built-in default`; `<store>` is the store URI with credentials redacted, or `local (<dir>)` | experimental |
 | `[barca] checking artifact store <store> (timeout <secs>s)` | before workers start whenever a separate artifact store is configured, including state-off runs; requires bucket/container-root listing and backend existence access, verifies reachability rather than write permission | experimental |
 | `[barca] uploading <n> artifacts to <store> (timeout <secs>s per attempt); waiting for confirmation` | before awaiting queued artifact uploads (every mode) | experimental |
+| `[barca] uploading <n> pending results to <store> from an earlier run` | before workers start, when results an earlier run could not upload are retried (every mode); followed by `[barca] uploaded <n> pending results` or `[barca] <n> pending results still not uploaded (<k> uploaded): <why>` | experimental |
 | `[barca] still waiting for artifact uploads to <store> (<secs>s)` | every 10 seconds while the upload drain waits (every mode); destinations omit URI passwords and signed query parameters | experimental |
 | `[barca] progress checkpoint failed; recorded results remain local: <cause>` | a mid-run shared-state publication failed; committed local results are retained and retried at the next minute tick, without changing successful user work into a failed step | experimental |
 | `[barca] still running (<n>s): <id>` | a step in flight for `BARCA_PROGRESS_SECS` (every mode) | experimental |
@@ -1617,7 +1813,8 @@ that flag, and stderr identifies each changed key. This warning does not change 
 Status nodes optionally expose `last_bytes_change: {node_id, run_hash, content_hash, created_at}`,
 retained after later unchanged recomputes; latest materializations expose `content_hash`
 when known. These additive keys are stable. See `barca docs cache` and
-`specs/materialization-digests.md`. Server-post and store-repair semantics remain proposed.
+`specs/materialization-digests.md`. A `barca get` that re-uploads a `mismatch` target (no step
+runs) prints the same warning and sets the same flag. Server-post semantics remain proposed.
 
 #### Recomputed output with changed bytes
 
@@ -1691,6 +1888,7 @@ when known. These additive keys are stable. See `barca docs cache` and
 | `summary.partial` | integer | always |
 | `summary.stale` | integer | always |
 | `summary.unknown` | integer | always |
+| `summary.unsynced` | integer | always |
 | `target` | null | always |
 | `targets` | array | always |
 | `total` | integer | always |
@@ -1752,6 +1950,7 @@ Older read-only snapshots without attempt metadata report a null history attempt
 | `checks[].data.filesystem_bytes` | integer | sometimes |
 | `checks[].data.found` | boolean | sometimes |
 | `checks[].data.limit_bytes` | integer | sometimes |
+| `checks[].data.local_backups` | string | sometimes |
 | `checks[].data.max_size` | string | sometimes |
 | `checks[].data.metadata` | string | sometimes |
 | `checks[].data.mode` | string | sometimes |
