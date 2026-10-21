@@ -2133,6 +2133,33 @@ pub(crate) async fn touch_read(db_path: &str, paths: &[String]) {
     touch_read_on(&conn, paths).await;
 }
 
+/// Record the digest of the store's copy as the digest of the result stored at each location
+/// (store location, SHA-256), on its latest successful row. A fetch found that copy without the
+/// recorded digest and the run used it (`barca docs remote`, "Checking a local copy against the
+/// store"): an artifact's path names the computation, so the store's copy is the result, and
+/// the recorded digest names bytes that may exist nowhere (a `--refresh` killed between its
+/// upload and its row, #576). Once recorded, this machine's copy, the store's and the row agree
+/// and the next `get` or `status` finds nothing to report. Best effort.
+pub(crate) async fn adopt_store_digests(db_path: &str, adopted: &[(String, String)]) {
+    if adopted.is_empty() || !Path::new(db_path).exists() {
+        return;
+    }
+    let _g = db_guard().await;
+    let Ok((_db, conn)) = open_conn(db_path).await else {
+        return;
+    };
+    for (store, sha256) in adopted {
+        let _ = conn
+            .execute(
+                "UPDATE materializations SET output_hash = ?2 WHERE id = (SELECT id FROM \
+                 materializations WHERE artifact_path = ?1 AND status = 'success' \
+                 ORDER BY id DESC LIMIT 1)",
+                [store.clone(), sha256.clone()],
+            )
+            .await;
+    }
+}
+
 /// [`touch_read`] on an open connection, in a transaction of its own. Best effort.
 pub(crate) async fn touch_read_on(conn: &turso::Connection, paths: &[String]) {
     if paths.is_empty() || conn.execute("BEGIN IMMEDIATE", ()).await.is_err() {
@@ -2966,6 +2993,50 @@ mod tests {
         assert!(matches!(work.await, Err(crate::BarcaError::Cancelled)));
         assert_eq!(std::fs::metadata(&source).unwrap().len(), 4 * 1024 * 1024);
     }
+    /// #576: the store copy's digest is recorded on the latest successful row at its location,
+    /// and on no other row.
+    #[tokio::test]
+    async fn an_adopted_store_digest_is_recorded_on_the_latest_row_at_that_location() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metadata.db").display().to_string();
+        super::init_db(&path).await.unwrap();
+        let rows = [
+            ("s3://b/a/n/h.json", "success", "first"),
+            ("s3://b/a/n/h.json", "success", "second"),
+            ("s3://b/a/n/h.json", "failed", ""),
+            ("s3://b/a/m/h.json", "success", "other"),
+        ];
+        {
+            let _guard = super::db_guard().await;
+            let (_db, conn) = super::open_conn(&path).await.unwrap();
+            for (at, status, hash) in rows {
+                conn.execute(
+                    "INSERT INTO materializations (node_id, run_hash, artifact_path, status, \
+                     output_hash) VALUES ('p.py:n', 'h', ?1, ?2, NULLIF(?3, ''))",
+                    [at, status, hash],
+                )
+                .await
+                .unwrap();
+            }
+        }
+        let adopted = [("s3://b/a/n/h.json".to_string(), "new".to_string())];
+        super::adopt_store_digests(&path, &adopted).await;
+        let _guard = super::db_guard().await;
+        let (_db, conn) = super::open_conn(&path).await.unwrap();
+        let mut found = conn
+            .query(
+                "SELECT COALESCE(output_hash, '') FROM materializations ORDER BY id",
+                (),
+            )
+            .await
+            .unwrap();
+        let mut hashes = Vec::new();
+        while let Some(row) = found.next().await.unwrap() {
+            hashes.push(row.get::<String>(0).unwrap());
+        }
+        assert_eq!(hashes, ["first", "new", "", "other"]);
+    }
+
     /// #475: the keys of one run finish in any order, so the row id alone picks an arbitrary key
     /// as a partitioned node's last materialization. The rule: the latest run (by row id), and
     /// within it the first key in sort order; rows without a run id fall back to the row id.

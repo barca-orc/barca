@@ -12,7 +12,7 @@ shared history, so each scenario is one machine with a store.
   machine whose local copy was deleted, which fetches the store's.
 
 After each, the next `barca get` succeeds and the result is `cached` with this machine's copy,
-the store's object and the recorded digest in agreement.
+the store's object and the recorded digest in agreement, without a `--refresh` (#576).
 
 #243 was a shared-history blob corrupted part-way; the blob is gone (0.26.0). Its successor is a
 backup, and a corrupt backup is refused by `barca state restore`, which names an older one.
@@ -89,27 +89,37 @@ def refresh(machine: Machine, version: int, target: str = REGISTRY) -> subproces
     )
 
 
-def settle(machine: Machine, version: int) -> None:
-    """Bring the registry back to `cached` with today's semantics.
+MISMATCH = "is not the one this result was recorded with"
 
-    When the store and this machine hold bytes the record does not name (a run's upload landed
-    after another run's row, or a run was killed between its upload and its row), barca uses the
-    copy, warns on every get, and leaves the result `unsynced` (`mismatch`) until a `--refresh`
-    (#576). Otherwise there is nothing to do."""
+
+def settle(machine: Machine) -> None:
+    """The next `get` brings the registry back to `cached`, without a `--refresh` (#576).
+
+    When the store holds bytes the record does not name (a run's upload landed after another
+    run's row, or a run was killed between its upload and its row), the store's copy wins:
+    `get` fetches it, warns once, and records its digest. When this machine's copy is the
+    recorded one and the store's differs, `get` uploads this machine's copy with the
+    changed-bytes warning (`barca docs remote`). Otherwise there is nothing to do."""
     node = machine.status()[REGISTRY]
     if node["cache"]["state"] == "cached":
         return
     assert node["cache"]["reason"] == "mismatch", node["cache"]
     local = machine.local_copy(node).read_bytes()
     stored = machine.bucket.cat(node["cache"]["artifact"])
-    assert node["last_materialization"]["content_hash"] not in (sha(local), sha(stored))
+    recorded = node["last_materialization"]["content_hash"]
     proc = machine.cli("get", REGISTRY, "assets.py", "--json")
     assert proc.returncode == 0, proc.stderr
-    assert f"Recompute with --refresh assets.py:{REGISTRY}" in proc.stderr
-    assert machine.status()[REGISTRY]["cache"]["reason"] == "mismatch"
-    refreshed = refresh(machine, version)
-    _, err = refreshed.communicate(timeout=300)
-    assert refreshed.returncode == 0, err
+    if recorded == sha(local):
+        assert f"{REGISTRY} produced different bytes for the same code and inputs" in proc.stderr
+        kept = local
+    else:
+        assert proc.stderr.count(MISMATCH) == 1, proc.stderr
+        kept = stored
+    assert assert_consistent(machine, REGISTRY) == kept
+    # Repaired once: the next get finds nothing to say.
+    again = machine.cli("get", REGISTRY, "assets.py", "--json")
+    assert again.returncode == 0, again.stderr
+    assert "warning" not in again.stderr, again.stderr
 
 
 def test_overlapping_refreshes_leave_one_consistent_result(machine):
@@ -121,7 +131,7 @@ def test_overlapping_refreshes_leave_one_consistent_result(machine):
         # Each run's bytes differ from what was recorded before it, for the same run hash.
         assert f"assets.py:{REGISTRY} produced different bytes for the same code and inputs" in err
     # Whichever run's upload landed last holds the store; whichever recorded last holds the row.
-    settle(machine, 3)
+    settle(machine)
     after = assert_consistent(machine, REGISTRY)
     assert after != before
 
@@ -136,8 +146,9 @@ def test_overlapping_refreshes_leave_one_consistent_result(machine):
 
 def test_a_refresh_killed_once_its_upload_lands_is_recoverable(machine):
     """Killed between its upload and its row (most attempts), the store and this machine hold
-    the new bytes and the record names the old ones (`settle`, #576). When the kill lands after
-    the row instead, nothing is left to repair."""
+    the new bytes and the record names the old ones; the next `get` that returns or reads the
+    registry records the new ones (`settle`, #576). When the kill lands after the row instead,
+    nothing is left to repair."""
     node = machine.status()[REGISTRY]
     artifact = node["cache"]["artifact"]
     before = machine.bucket.cat(artifact)
@@ -157,10 +168,15 @@ def test_a_refresh_killed_once_its_upload_lands_is_recoverable(machine):
 
     stored = machine.bucket.cat(artifact)
     assert stored != before
-    if machine.status()[REGISTRY]["cache"]["state"] != "cached":
-        # Its worker wrote this machine's copy before the upload: both hold the new bytes.
+    node = machine.status()[REGISTRY]
+    if node["cache"]["state"] != "cached":
+        # Its worker wrote this machine's copy before the upload: both hold the new bytes, and
+        # the record names neither.
+        assert node["cache"]["reason"] == "mismatch", node["cache"]
         assert machine.local_copy(node).read_bytes() == stored
-    settle(machine, 4)
+        assert node["last_materialization"]["content_hash"] != sha(stored)
+    settle(machine)
+    assert assert_consistent(machine, REGISTRY) == stored
     assert_consistent(machine, REGISTRY)
     assert_consistent(machine, DRIVER)
 

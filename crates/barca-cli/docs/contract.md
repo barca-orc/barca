@@ -985,6 +985,8 @@ entries:
   `ran`, `partial` or `failed`). A step that only depends on such a reader does not have it.
 - `steps[].warning` on the same entries is the finding in words: the store location, and the
   `--refresh` that recomputes the step. The wording is not contract; `artifact_mismatch` is.
+- Without a server, the run records the store copy's digest as the result's, so the finding is
+  reported by the run that made it and not by later ones (`barca docs remote`).
 - The key appears on `get` and `run`, with one target or several, in a failed run's result
   line, with `--agent`, and in the `steps` of a `barca serve` run's outcome (`GET /runs/{run_id}`).
   `--fields` accepts it (`--fields id,status,artifact_mismatch`). It never appears with
@@ -1133,9 +1135,11 @@ With an artifact store, `barca status` also reports `unsynced` with `cache.reaso
 for a plain-directory store, or this machine's copy is not the recorded one) for unpartitioned
 cached nodes; a result in neither place is `stale` / `artifact_missing` (RFC-0009 section 4.1,
 reasons spelled as `cache.reason` snake_case values). `barca get` on such a target repairs it
-without running a step: it uploads a `local_only` or `mismatch` copy (a `mismatch` also prints
-the changed-bytes warning and sets `steps[].bytes_changed: true` on that step) and fetches a
-`store_only` one; the exit code does not change. Stability: stable.
+without running a step: it uploads a `local_only` copy, uploads a `mismatch` copy that is the
+recorded one (and prints the changed-bytes warning and sets `steps[].bytes_changed: true` on
+that step), and fetches a `store_only` one, or the store's copy for a `mismatch` whose local
+copy is not the recorded one (`steps[].artifact_mismatch`; without a server its digest is then
+recorded, so the next `get` reports nothing); the exit code does not change. Stability: stable.
 
 ### get and run: several targets
 

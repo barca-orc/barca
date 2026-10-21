@@ -127,9 +127,17 @@ def test_a_store_copy_that_differs_from_the_recorded_hash_is_used_with_a_warning
     assert "--refresh pipeline.py:total" in steps["pipeline.py:total"]["warning"]
     assert "artifact_mismatch" not in steps.get("pipeline.py:numbers", {})
 
+    # The store's copy wins and its digest is recorded (#576): the finding is this run's only,
+    # and the result is `cached` afterwards.
     again = cli(root, store, "get", "total", "-o", "value", "--json")
     assert again.returncode == 0, again.stderr
     assert "fetched" not in again.stderr, again.stderr
+    assert "warning" not in again.stderr, again.stderr
+    assert all("artifact_mismatch" not in st for st in json.loads(again.stdout)["steps"])
+    status = cli(root, store, "status", "--json")
+    assert status.returncode == 0, status.stderr
+    (node,) = [n for n in json.loads(status.stdout)["nodes"] if n["name"] == "total"]
+    assert node["cache"]["state"] == "cached", node["cache"]
 
 
 def test_a_step_that_read_a_differing_input_reports_it_too(shared):

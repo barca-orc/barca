@@ -110,7 +110,9 @@ two cannot disagree. In JSON the states are snake_case, spelled exactly like the
   upload's last error); the next `get` or `run` uploads it. `store_only`: in the store, not on
   this machine; `get` fetches it. `mismatch`: both copies are there and differ in size (or in
   bytes, for a store that is a plain directory), or this machine's copy is not the one
-  recorded; `get` keeps the recorded copy and uploads it again, with the changed-bytes warning.
+  recorded. When this machine's copy is the recorded one, `get` uploads it again, with the
+  changed-bytes warning; otherwise `get` fetches the store's copy, warns once and records its
+  digest, so the result is `cached` afterwards (`barca docs remote`).
   A result in neither place is `stale` with `artifact_missing`. Object stores give no checksum,
   so a same-size object with other bytes is not noticed there. A partitioned asset is
   `unsynced` (`local_only`) only when one of its keys has a pending upload. A store that cannot

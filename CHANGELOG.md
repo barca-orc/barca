@@ -6,6 +6,17 @@ released yet collect under `## Pending`. Releases 0.1.2 to 0.23.x have their not
 GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; the "0.1.2 to
 0.8.0" summary below lists what the earlier of them shipped.
 
+## Pending
+
+### Bug Fixes
+
+- With an artifact store, a `--refresh` killed after its upload and before its result was
+  recorded no longer leaves the result `unsynced` (`mismatch`) with a warning on every `get`
+  until another `--refresh` (#576). When a run fetches a store copy that is not the recorded one,
+  the store's copy wins as before, and the run now also records its digest: the warning is
+  printed once, and the next `get` and `barca status` find the result `cached`. With a server,
+  its ledger keeps its record as before.
+
 ## 0.28.3 (2026-10-21)
 
 ### Features
