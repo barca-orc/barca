@@ -485,7 +485,8 @@ const STATE_HELP: &str = "\
 Examples:
   barca state backups                  # the metadata backups, local and in the store, newest first
   barca state backups --json           # {backups: [{index, name, where, size_bytes, run_id, rows, ...}], local_dir, store}
-  barca state restore                  # put the newest backup back in place of .barca/metadata.db
+  barca state restore                  # put this machine's newest backup back in place of .barca/metadata.db
+  barca state restore --from 1         # the newest, whichever machine took it
   barca state restore --from 3         # the third newest (the index in barca state backups)
   barca state restore --from 2026-10-14T18-02-11.482Z-3f9a1c2e.db  # one backup, by name
   barca state backups --env dev        # another environment's backups
@@ -508,16 +509,20 @@ Examples:
   barca state backups --env dev        # another environment's backups
 
 Newest first. `where` is local, store or both; `agree` says whether the two copies of a backup
-match (null with one copy). A store that cannot be listed is a warning on stderr and
-`store_error` in JSON; the local copies are still listed.
+match (null with one copy). `host` and `project` name the machine and project directory that
+took it, `mine` whether it was this one (null for a backup from barca 0.28 or earlier). A store
+that cannot be listed is a warning on stderr and `store_error` in JSON; the local copies are
+still listed. A backup another machine took after this one's newest is a warning on stderr:
+two machines on one store are not supported (use a server).
 More: barca docs remote";
 
 const STATE_RESTORE_HELP: &str = "\
 Examples:
-  barca state restore                  # the newest backup
+  barca state restore                  # this machine's newest backup (the newest if it has none)
+  barca state restore --from 1         # the newest, whichever machine took it
   barca state restore --from 2         # the second newest
   barca state restore --from 2026-10-14T18-02-11.482Z-3f9a1c2e  # by name, .db optional
-  barca state restore --json           # {restored, from, source, pre_restore, rows, run_id}
+  barca state restore --json           # {restored, from, source, pre_restore, rows, run_id, host, project}
   barca state restore --from .barca/metadata.db.reset-2026-10-20T18-02-11.482Z  # a file barca state reset moved aside
 
 The copy is checked first (a whole SQLite file, integrity, barca's tables, a format this barca
