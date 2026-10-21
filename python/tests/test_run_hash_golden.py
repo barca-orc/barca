@@ -8,7 +8,7 @@ these moves, every cache entry of projects like this one is recomputed after upg
 them only on purpose, with a release note.
 
 They were pinned to the values barca 0.17.0 computed until 0.19.0, which changed all of them on
-purpose (#283, "After upgrading to 0.19" in `barca docs cache`). See `RUN_HASHES_0_19_0`.
+purpose (#283, 0.19.0 in CHANGELOG.md). See `RUN_HASHES_0_19_0`.
 """
 
 import json

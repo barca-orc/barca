@@ -140,6 +140,14 @@ and these tags are available on the same releases page.
   reads CSV and evicts its `.barca/sql-cache/` copies; `get --json` always returns a pointer), adds
   Server Mode and Groups to the sidebar, and lists the Reference pages alphabetically.
 
+
+### Documentation
+
+- `barca docs cache` reads concept, behaviour, reference: what a run hash covers, what is not
+  followed, the cached/stale/evicted/unsynced states, forcing a recompute, the size limit. Its
+  0.18/0.19 upgrade notes moved to this file; its implementation guarantees to
+  `specs/cache-decisions.md` (#500).
+
 ## 0.26.1 (2026-10-20)
 
 ### Removed
@@ -347,6 +355,71 @@ and these tags are available on the same releases page.
 - **Breaking:** removed `barca get|run --no-cache` and `barca.get(no_cache=...)`.
   Use `--refresh-all` and `refresh_all=True`, respectively. The CLI alias is now an
   unknown-flag usage error (exit 2); Python rejects the removed keyword.
+
+## 0.20.0 (2026-10-08)
+
+### Bug Fixes
+
+- A run records the kernel it ran on (boot id), its pid namespace, its start time and a marker
+  in `.barca/run-owners/`, and `barca history` reports it `interrupted` only on an observation
+  that its process is gone (`specs/cache-decisions.md`); otherwise it stays `running`. A run
+  started by 0.19.0 or earlier is still judged by its process id and host name, so in a
+  container, on another machine or once its process id is reused it can stay `running`. 0.18.1
+  reported a run killed by a restart of a machine whose project is on a network filesystem as
+  `interrupted`, from the host name and process id; from 0.20.0 such a run stays `running`.
+
+## 0.19.0 (2026-10-08)
+
+### Breaking
+
+- **Breaking:** the definition part of the run hash covers the decorator arguments that count
+  (`barca docs cache`, "Which decorator arguments count") instead of the decorators' text as
+  written. Up to 0.18 any edit there (a new partition key, a description, a comment, a
+  reformat) re-ran the step for every key, and everything downstream (#283). Every step's hash
+  is computed differently, so **every step recomputes once** on the first run after upgrading,
+  in every project and every environment (`--env`); the run after that is served from cache.
+  Results written by 0.18 stay in `.barca/metadata.db` and on disk under their old run hashes;
+  0.19 neither reads nor deletes them. With an artifact store, 0.19 writes every result under
+  its new run hash and leaves 0.18 results in the store alone; the two versions do not reuse
+  each other's results. Run hashes in the JSON of `get`, `run` (also `--dry-run`) and `status`
+  change value; no command, flag or JSON key changed.
+
+## 0.18.0 (2026-10-07)
+
+### Bug Fixes
+
+- The run hash follows classes, imports inside function bodies, aliased `from` imports, modules
+  used as values, and root modules imported from a subdirectory (#194). A step recomputes once
+  after upgrading, with its downstream steps, if its function or a helper it reaches uses: a
+  class defined in the project; a project module imported inside a function or class body;
+  `from module import name as alias` of a project module; a project module as a value
+  (`getattr(helpers, name)`, passing `helpers` along); from a pipeline in a subdirectory, a
+  module in the project root; a helper module named like a pipeline file in another directory
+  (both are hashed now); or, for a pipeline file inside a package, project modules imported as
+  `from .helpers import f` or `from pkg.helpers import f` (these now resolve from the root, as
+  they do when the step runs). A step whose helpers import the same name from two different
+  modules outside the project (`from numpy import array` and `from jax.numpy import array`) had
+  two possible hashes, picked at random on every run, and missed its cache about half the time;
+  it now has one, and recomputes once if its last result was recorded under the other. Every
+  other step keeps its hash and its cached results.
+
+## 0.12.0
+
+### Features
+
+- A sensor's output is part of the run hash of every asset that reads it (#188). Previously an
+  asset reading a sensor was served from cache whatever the sensor returned. Assets that read a
+  sensor re-run once after upgrading; pipelines without sensors keep their run hashes and
+  caches. `--dry-run` and `barca status` predict from the sensor's last recorded output, and a
+  sensor recorded before this version has none, so its consumers are `unknown` until it runs.
+
+## 0.10.0
+
+### Features
+
+- **Breaking:** `--refresh` cascades downstream by default: it re-runs the named assets and
+  every asset downstream of them in the target's cone (#168). Previously it re-ran only the
+  named assets and left their downstream assets cached; `--no-cascade` keeps that behaviour.
 
 The older notes below are preserved as historical records. Their former
 "Unreleased" section describes work that has already shipped; it is not the
