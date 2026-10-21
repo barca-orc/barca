@@ -259,7 +259,6 @@ tracebacks, SQL and HTTP metadata; the Rust exporter's error truncation does not
   counted per step, not per key. A partition that failed does carry its own count.
 - Calls made through `parallel()` are not in `barca.steps.total` and have no synthetic
   `barca.step` span; the optional Python SDK reports their executions as described above.
-- Whether a run was started by a schedule, the API or a person is not on `barca.run` yet.
 - The traceback of a chained exception (`raise ... from e`) does not include its cause.
 - A failed upload to a remote store is not in the trace: the step shows as succeeded, and
   the upload is retried by the next command (`barca docs remote`).
