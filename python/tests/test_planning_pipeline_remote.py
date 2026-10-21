@@ -36,10 +36,12 @@ CENTRAL = "forecast_reconciled"  # 34 consumers
 LAZY_CONSUMER = "validate_conversion_factors_item_week"  # counts the input's rows
 PANDAS_CONSUMER = "validate_plan_grid"  # takes it as pd.DataFrame
 # Peak resident memory of A's full run (4 workers, each importing duckdb, pandas, polars and
-# pyarrow), measured at about 1.6 GB for the tree and 450 MB for the largest process. The
-# bounds leave room for runner noise and catch a worker that holds frames it should not (#232).
-TREE_RSS_BOUND = 3 * 1024**3
-PROCESS_RSS_BOUND = 1024**3
+# pyarrow): measured at about 1.6 GB for the tree and 450 MB for the largest process on a
+# laptop, and up to 1.4 GB and 1.25 GB on the CI runner (DuckDB sizes its buffers by the
+# machine). The bounds leave room for that spread and catch a worker that holds frames it
+# should not (#232).
+TREE_RSS_BOUND = 4 * 1024**3
+PROCESS_RSS_BOUND = 2 * 1024**3
 
 
 @pytest.fixture(scope="module")

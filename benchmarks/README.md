@@ -224,7 +224,8 @@ same 22.3M rows. Its synthetic keys compress well, so the artifact is 106 MB, no
 store tests, `test_planning_pipeline_remote.py`), never this size.
 
 Measured 2026-10-21 on an AMD Ryzen AI Max+ 395 (32 threads), pool 4, duckdb 1.5.6,
-polars 2.0.0, pandas 3.0.6:
+polars 2.0.0, pandas 3.0.6, while other builds were running on the machine (rough numbers;
+rerun on an idle machine before quoting them):
 
 | Scale 67 | Artifacts | Wall | Peak RSS, tree | Peak RSS, largest process |
 |---|---|---|---|---|

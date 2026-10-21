@@ -89,6 +89,29 @@ def refresh(machine: Machine, version: int, target: str = REGISTRY) -> subproces
     )
 
 
+def settle(machine: Machine, version: int) -> None:
+    """Bring the registry back to `cached` with today's semantics.
+
+    When the store and this machine hold bytes the record does not name (a run's upload landed
+    after another run's row, or a run was killed between its upload and its row), barca uses the
+    copy, warns on every get, and leaves the result `unsynced` (`mismatch`) until a `--refresh`
+    (#576). Otherwise there is nothing to do."""
+    node = machine.status()[REGISTRY]
+    if node["cache"]["state"] == "cached":
+        return
+    assert node["cache"]["reason"] == "mismatch", node["cache"]
+    local = machine.local_copy(node).read_bytes()
+    stored = machine.bucket.cat(node["cache"]["artifact"])
+    assert node["last_materialization"]["content_hash"] not in (sha(local), sha(stored))
+    proc = machine.cli("get", REGISTRY, "assets.py", "--json")
+    assert proc.returncode == 0, proc.stderr
+    assert f"Recompute with --refresh assets.py:{REGISTRY}" in proc.stderr
+    assert machine.status()[REGISTRY]["cache"]["reason"] == "mismatch"
+    refreshed = refresh(machine, version)
+    _, err = refreshed.communicate(timeout=300)
+    assert refreshed.returncode == 0, err
+
+
 def test_overlapping_refreshes_leave_one_consistent_result(machine):
     before = assert_consistent(machine, REGISTRY)
     runs = [refresh(machine, 2), refresh(machine, 3)]
@@ -97,6 +120,8 @@ def test_overlapping_refreshes_leave_one_consistent_result(machine):
         assert run.returncode == 0, err
         # Each run's bytes differ from what was recorded before it, for the same run hash.
         assert f"assets.py:{REGISTRY} produced different bytes for the same code and inputs" in err
+    # Whichever run's upload landed last holds the store; whichever recorded last holds the row.
+    settle(machine, 3)
     after = assert_consistent(machine, REGISTRY)
     assert after != before
 
@@ -110,9 +135,8 @@ def test_overlapping_refreshes_leave_one_consistent_result(machine):
 
 
 def test_a_refresh_killed_once_its_upload_lands_is_recoverable(machine):
-    """Killed between its upload and its row: the store and this machine hold the new bytes and
-    the record names the old ones. Today barca uses the copy, warns on every get and leaves the
-    result `unsynced` (`mismatch`) until a `--refresh` (#576). When the kill lands after
+    """Killed between its upload and its row (most attempts), the store and this machine hold
+    the new bytes and the record names the old ones (`settle`, #576). When the kill lands after
     the row instead, nothing is left to repair."""
     node = machine.status()[REGISTRY]
     artifact = node["cache"]["artifact"]
@@ -131,19 +155,12 @@ def test_a_refresh_killed_once_its_upload_lands_is_recoverable(machine):
     out = machine.ok("get", DRIVER, "assets.py", "--json")
     assert out["status"] == "success"
 
-    node = machine.status()[REGISTRY]
-    if node["cache"]["state"] != "cached":
-        assert node["cache"]["reason"] == "mismatch", node["cache"]
-        local = machine.local_copy(node).read_bytes()
-        assert local == machine.bucket.cat(artifact) != before
-        assert sha(local) != node["last_materialization"]["content_hash"]
-        proc = machine.cli("get", REGISTRY, "assets.py", "--json")
-        assert proc.returncode == 0, proc.stderr
-        assert f"Recompute with --refresh assets.py:{REGISTRY}" in proc.stderr
-        assert machine.status()[REGISTRY]["cache"]["reason"] == "mismatch"
-        refreshed = refresh(machine, 4, target=DRIVER)
-        _, err = refreshed.communicate(timeout=300)
-        assert refreshed.returncode == 0, err
+    stored = machine.bucket.cat(artifact)
+    assert stored != before
+    if machine.status()[REGISTRY]["cache"]["state"] != "cached":
+        # Its worker wrote this machine's copy before the upload: both hold the new bytes.
+        assert machine.local_copy(node).read_bytes() == stored
+    settle(machine, 4)
     assert_consistent(machine, REGISTRY)
     assert_consistent(machine, DRIVER)
 
