@@ -181,8 +181,10 @@ command. A sensor nothing depends on still runs. A file with only tasks gets not
 
 Every `get`/`run` usage error (wrong order, unknown target, `get` on a task or `run` on an
 asset, an unknown `--refresh` name) exits 2 and ends with
-``Run `barca list <files>` to see available assets and tasks.`` There is no "did you mean"
-matching.
+``Run `barca list <files>` to see available assets and tasks.`` A name close to one barca knows
+(a target, a `--refresh` name, a flag or a subcommand) is preceded by `Did you mean '...'?`: the
+best match within one edit (two for a name longer than four characters), or two that tie. The
+exit code is still 2 and nothing runs.
 
 | Flag | Meaning |
 |---|---|

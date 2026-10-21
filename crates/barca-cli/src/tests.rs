@@ -233,7 +233,7 @@ fn correct_order_and_files_only_are_not_wrong_order() {
 /// barca never offers fuzzy suggestions (`barca docs agents`): a guess can read as
 /// confirmation. clap is built without its `suggestions` feature.
 /// The usage error for `argv` as JSON, by the same path `main` takes.
-fn clap_error_json(argv: &str) -> Value {
+fn clap_error_json(argv: &str) -> serde_json::Value {
     let argv: Vec<String> = argv.split_whitespace().map(str::to_string).collect();
     let Err(e) = Cli::try_parse_from(&argv) else {
         panic!("`{argv:?}` must not parse");
@@ -261,7 +261,9 @@ fn a_mistyped_flag_or_subcommand_gets_did_you_mean() {
         assert!(!json.to_string().contains("as a value"), "{argv}: {json}");
         // The human output has it on its own line, after the error line.
         let argv: Vec<String> = argv.split_whitespace().map(str::to_string).collect();
-        let e = Cli::try_parse_from(&argv).unwrap_err();
+        let Err(e) = Cli::try_parse_from(&argv) else {
+            unreachable!()
+        };
         let human = CliError::from_clap(&e, &argv).render(false);
         assert!(human.contains(&format!("\n\n{meant}\n")), "{human}");
     }
@@ -300,7 +302,7 @@ fn an_unknown_target_suggests_the_closest_node() {
         )
     );
     // The `barca list` pointer replaces the remediation and keeps the suggestion.
-    let e = e.with_final_hint(list_hint(&files));
+    let e = e.with_final_hint(barca_core::envelope::list_hint(&files));
     assert_eq!(
         e.remediation.as_deref(),
         Some(

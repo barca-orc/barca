@@ -12,6 +12,19 @@ reconciliation, and verified shared DuckDB worker lifetime. See
 upgrade and breaking-change notes. Releases between the historical entries below
 and these tags are available on the same releases page.
 
+## Pending
+
+### Features
+
+- A mistyped name gets "Did you mean ...?" (#556): a flag (`--refesh` -> `--refresh`), a
+  subcommand (`statsu` -> `stats` or `status`), a target (`barca get amount` -> `amounts`), a
+  `--refresh` name, a `barca sql` view and a `barca docs` topic, by the rule decorator arguments
+  already used: the closest names within one edit (two for a name longer than four characters),
+  the best match only, or two that tie. The suggestion starts the JSON envelope's `remediation`
+  and has its own line in human mode; `error` and the exit code (2) are unchanged, and barca
+  never acts on it. clap's misleading `use '-- --refesh'` tip is gone. This reverses the "no
+  fuzzy suggestions" rule in `barca docs agents`.
+
 ## 0.28.1 (2026-10-21)
 
 ### Bug Fixes
