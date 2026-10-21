@@ -305,7 +305,7 @@ impl WorkerPool {
     /// Bind the coordination socket. Workers spawn on demand during phases.
     /// Must be called from within a tokio runtime context.
     pub fn start(config: IoConfig) -> Result<Self, String> {
-        let socket_path = crate::protocol::socket_path(&config.run_id, "main");
+        let socket_path = crate::protocol::socket_path(&config.run_id, "main")?;
         std::fs::remove_file(&socket_path).ok();
         let listener = UnixListener::bind(&socket_path).map_err(|e| format!("socket bind: {e}"))?;
         // Best effort: without the directory each worker prints a repeated warning once

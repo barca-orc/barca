@@ -352,7 +352,7 @@ impl TransferClient {
         );
         Launching::start(
             cmd,
-            crate::protocol::socket_path(run_id, "transfer"),
+            crate::protocol::socket_path(run_id, "transfer").map_err(BarcaError::Other)?,
             layout,
         )
     }
@@ -901,7 +901,8 @@ for t in threads: t.join()
             let sock = crate::protocol::socket_path(
                 &format!("xfer-test-{}-{}", std::process::id(), rand_suffix()),
                 "transfer",
-            );
+            )
+            .unwrap();
             TransferClient::spawn(cmd, sock, self.layout())
                 .await
                 .unwrap()
@@ -1245,7 +1246,8 @@ for t in threads: t.join()
             let sock = crate::protocol::socket_path(
                 &format!("xfer-test-idle-{}-{}", std::process::id(), rand_suffix()),
                 "transfer",
-            );
+            )
+            .unwrap();
             let launching = Launching::start(cmd, sock.clone(), fx.layout()).unwrap();
             let deadline = Instant::now() + Duration::from_secs(10);
             let pid: i64 = loop {
@@ -1284,7 +1286,8 @@ for t in threads: t.join()
         let sock = crate::protocol::socket_path(
             &format!("xfer-test-dead-{}", std::process::id()),
             "transfer",
-        );
+        )
+        .unwrap();
         let started = Instant::now();
         let err = match TransferClient::spawn(cmd, sock, fx.layout()).await {
             Ok(_) => panic!("spawn should fail"),
@@ -1323,7 +1326,8 @@ for t in threads: t.join()
         let sock = crate::protocol::socket_path(
             &format!("xfer-test-real-{}", std::process::id()),
             "transfer",
-        );
+        )
+        .unwrap();
         let mut c = TransferClient::spawn(cmd, sock, fx.layout()).await.unwrap();
 
         let local = fx.write_local("m.py__a/h1.json", b"[1,2,3]");
