@@ -184,8 +184,7 @@ fn files_before_target_prints_the_corrected_command() {
     .expect("wrong order must be an error");
     assert_eq!(
         msg,
-        "error: the target comes before the files\n\n  barca run validate_foo pipeline.py\n\n\
-             Run `barca list pipeline.py` to see available assets and tasks."
+        "error: the target comes before the files\n\n  barca run validate_foo pipeline.py"
     );
 }
 
@@ -198,10 +197,11 @@ fn corrected_command_keeps_flags_and_handles_the_shorthand() {
     )
     .unwrap();
     assert!(
-        msg.contains("\n  barca get total a.py b.py --env dev -o value\n"),
+        msg.ends_with("\n  barca get total a.py b.py --env dev -o value"),
         "{msg}"
     );
-    assert!(msg.ends_with("Run `barca list a.py b.py` to see available assets and tasks."));
+    // The corrected command is the remediation: no `barca list` pointer (#492).
+    assert!(!msg.contains("barca list"), "{msg}");
 }
 
 #[test]
@@ -264,6 +264,31 @@ fn unknown_target_remediation_is_one_wording_on_every_command() {
             Some("Run `barca list pipeline.py` to see available assets and tasks."),
             "{command}"
         );
+    }
+}
+
+/// Only an unknown or ambiguous target points at `barca list` (#492).
+#[test]
+fn only_target_errors_end_with_the_list_hint() {
+    let ctx = Context {
+        command: "get",
+        files: vec!["pipeline.py".to_string()],
+    };
+    let hint = "Run `barca list pipeline.py` to see available assets and tasks.";
+    let remediation = |e: barca_core::BarcaError| CliError::from_barca(e, &ctx).remediation;
+    assert_eq!(
+        remediation(barca_core::BarcaError::AmbiguousTarget(
+            "'x' matches more than one node".into()
+        ))
+        .as_deref(),
+        Some(hint)
+    );
+    for e in [
+        barca_core::BarcaError::Usage("'report' is a task — use `barca run` instead".into()),
+        barca_core::BarcaError::Usage("-o url needs a cloud artifact store\nUse -o path.".into()),
+    ] {
+        let r = remediation(e).unwrap_or_default();
+        assert!(!r.contains("barca list"), "{r}");
     }
 }
 

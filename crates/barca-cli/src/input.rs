@@ -15,8 +15,15 @@ pub(crate) fn list_hint(files: &[PathBuf]) -> String {
     error::list_hint(&files)
 }
 
-/// A `get`/`run` usage error (exit 2), ending with the `barca list` pointer.
-pub(crate) fn usage_error(msg: &str, files: &[PathBuf]) -> CliError {
+/// A `get`/`run` usage error (exit 2). `msg` carries its own remediation after the first line,
+/// if it has one: the `barca list` pointer belongs only to target errors (#492).
+pub(crate) fn usage_error(msg: &str) -> CliError {
+    CliError::from_prose(ErrorKind::Usage, msg)
+}
+
+/// A missing target (`barca run` without one): which targets exist is the fix, so it ends with
+/// the `barca list` pointer, like an unknown target.
+pub(crate) fn missing_target_error(msg: &str, files: &[PathBuf]) -> CliError {
     CliError::from_prose(ErrorKind::Usage, format!("{msg}\n\n{}", list_hint(files)))
 }
 
@@ -62,7 +69,6 @@ pub(crate) fn wrong_order_error(sub: &str, args: &[String], raw: &[String]) -> O
         .filter(|a| a.ends_with(".py"))
         .map(PathBuf::from)
         .collect();
-    let hint = list_hint(&files);
     match targets.as_slice() {
         [] => None,
         [target] => {
@@ -88,14 +94,14 @@ pub(crate) fn wrong_order_error(sub: &str, args: &[String], raw: &[String]) -> O
             cmd.extend(files.iter().map(|f| shell_quote(&f.to_string_lossy())));
             cmd.extend(flags);
             Some(format!(
-                "error: the target comes before the files\n\n  {}\n\n{hint}",
+                "error: the target comes before the files\n\n  {}",
                 cmd.join(" ")
             ))
         }
         several => {
             let names: Vec<String> = several.iter().map(|t| format!("'{t}'")).collect();
             Some(format!(
-                "error: the target comes before the files (found {} after '{first}')\n\n{}\n\n{hint}",
+                "error: the target comes before the files (found {} after '{first}')\n\n{}",
                 names.join(", "),
                 usage_line(sub)
             ))
@@ -118,6 +124,7 @@ pub(crate) fn check_order(sub: &str, args: &[String]) -> Result<(), CliError> {
 /// passing several assets to `--refresh` separated by spaces instead of commas.
 #[allow(clippy::result_large_err)] // cold path: built once, right before exiting
 pub(crate) fn check_py_files(
+    sub: &str,
     files: &[PathBuf],
     refresh: Option<&[String]>,
 ) -> Result<(), CliError> {
@@ -133,13 +140,10 @@ pub(crate) fn check_py_files(
             "\n\nIf you meant to refresh several assets, join them with commas: --refresh {}",
             all.join(",")
         ));
+    } else {
+        msg.push_str(&format!("\n\nSee `barca {sub} --help`."));
     }
-    let py: Vec<PathBuf> = files
-        .iter()
-        .filter(|f| f.to_string_lossy().ends_with(".py"))
-        .cloned()
-        .collect();
-    Err(usage_error(&msg, &py))
+    Err(usage_error(&msg))
 }
 
 pub(crate) const GET_USAGE: &str =
@@ -148,20 +152,17 @@ pub(crate) const STATUS_USAGE: &str = "Usage: barca status [TARGET] <FILES>...";
 pub(crate) const RUN_USAGE: &str =
     "Usage: barca run <TARGET> <FILES>... [--refresh a,b | --refresh-all]";
 
-/// Errors from a `get`/`run` that are the caller's mistake (unknown target, task/asset misuse,
-/// unknown `--refresh` name) end with the `barca list` pointer, like every other get/run usage
-/// error.
+/// An error from a `get`/`run`. An unknown or ambiguous target ends with the `barca list`
+/// pointer naming `files`; every other error (task/asset misuse, an unknown `--refresh` name,
+/// `-o url` without a cloud store, a removed setting) carries its own remediation (#492).
 pub(crate) fn get_run_error(
     e: barca_core::BarcaError,
     ctx: &Context,
     files: &[PathBuf],
 ) -> CliError {
-    let usage = matches!(
-        e,
-        barca_core::BarcaError::Usage(_) | barca_core::BarcaError::AssetNotFound(..)
-    );
+    let target = error::names_a_target(&e);
     let err = CliError::from_barca(e, ctx);
-    if usage {
+    if target {
         err.with_final_hint(list_hint(files))
     } else {
         err
@@ -544,14 +545,11 @@ pub(crate) fn parse_targets(raw: &str) -> Result<Vec<String>, String> {
 /// The target list of `get`/`run` (empty when no target was given); a malformed list is a
 /// usage error (exit 2).
 #[allow(clippy::result_large_err)] // cold path: built once, right before exiting
-pub(crate) fn targets_arg(
-    target: Option<&str>,
-    files: &[PathBuf],
-) -> Result<Vec<String>, CliError> {
+pub(crate) fn targets_arg(target: Option<&str>) -> Result<Vec<String>, CliError> {
     match target.map(parse_targets) {
         None => Ok(Vec::new()),
         Some(Ok(names)) => Ok(names),
-        Some(Err(msg)) => Err(usage_error(&msg, files)),
+        Some(Err(msg)) => Err(usage_error(&msg)),
     }
 }
 

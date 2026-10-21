@@ -124,13 +124,7 @@ fn main() {
     // Run from the project root (the nearest barca.toml at or above the cwd), so `.barca/`,
     // node ids and relative paths inside steps are the same wherever barca is invoked.
     if let Err(e) = enter_project_root(&mut cli) {
-        let usage = matches!(e, barca_core::BarcaError::Usage(_));
-        let err = CliError::from_barca(e, &ctx);
-        if usage {
-            err.with_final_hint(list_hint(&[])).emit(json)
-        } else {
-            err.emit(json)
-        }
+        CliError::from_barca(e, &ctx).emit(json)
     }
 
     // A configured server without `--server` (and without `--local`): `get` and `run` run here
@@ -199,7 +193,7 @@ fn server_flags(cli: &Cli) -> Option<&ServerFlags> {
 /// File arguments of a `--server` command: `.py` files and directories, checked as a local
 /// command checks them (a directory selects the deployed files under it).
 #[allow(clippy::result_large_err)] // cold path: one CliError per process, right before exiting
-fn server_files(files: &[PathBuf], refresh: Option<&[String]>) -> Result<(), CliError> {
+fn server_files(sub: &str, files: &[PathBuf], refresh: Option<&[String]>) -> Result<(), CliError> {
     let not_dirs: Vec<PathBuf> = files
         .iter()
         .filter(|f| {
@@ -208,13 +202,12 @@ fn server_files(files: &[PathBuf], refresh: Option<&[String]>) -> Result<(), Cli
         })
         .cloned()
         .collect();
-    check_py_files(&not_dirs, refresh)
+    check_py_files(sub, &not_dirs, refresh)
 }
 
 /// Run a `--server` command: the same argument checks as a local run, then the server.
 #[allow(clippy::result_large_err)] // cold path: one CliError per process, right before exiting
 async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Result<(), CliError> {
-    let hint_files: Vec<PathBuf> = ctx.files.iter().map(PathBuf::from).collect();
     match cli {
         Cli::Get {
             args,
@@ -255,8 +248,8 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
                 barca_core::report::GetShape::Bare => barca_core::report::ResultFormat::Value,
             };
             let (target, files) = split_target_files(args);
-            server_files(&files, refresh.as_deref())?;
-            let targets = targets_arg(target.as_deref(), &hint_files)?;
+            server_files("get", &files, refresh.as_deref())?;
+            let targets = targets_arg(target.as_deref())?;
             client::run(
                 server,
                 client::RunArgs {
@@ -294,14 +287,14 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
             check_order("run", &args)?;
             let mode = get_run_mode(output, format, fields.as_deref())?;
             let (target, files) = split_target_files(args);
-            server_files(&files, refresh.as_deref())?;
+            server_files("run", &files, refresh.as_deref())?;
             if target.is_none() {
-                return Err(usage_error(
+                return Err(missing_target_error(
                     &format!("error: a target task is required\n\n{RUN_USAGE}"),
                     &files,
                 ));
             }
-            let targets = targets_arg(target.as_deref(), &hint_files)?;
+            let targets = targets_arg(target.as_deref())?;
             client::run(
                 server,
                 client::RunArgs {
@@ -336,8 +329,8 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
             let json = fields_json(format, fields.as_deref())?;
             check_order("status", &args)?;
             let (target, files) = split_target_files(args);
-            server_files(&files, None)?;
-            let targets = targets_arg(target.as_deref(), &hint_files)?;
+            server_files("status", &files, None)?;
+            let targets = targets_arg(target.as_deref())?;
             let limit = inspection_limit(limit, all, json, bounded::LIST_DEFAULT_LIMIT);
             let opts = StatusOpts {
                 json,
@@ -357,7 +350,7 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
             ..
         } => {
             let json = fields_json(format, fields.as_deref())?;
-            server_files(&files, None)?;
+            server_files("list", &files, None)?;
             let limit = inspection_limit(limit, all, json, bounded::LIST_DEFAULT_LIMIT);
             client::list(server, &files, groups, json, limit, fields.as_deref()).await
         }
@@ -390,7 +383,7 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
             ..
         } => {
             let json = fields_json(format, fields.as_deref())?;
-            server_files(&files, None)?;
+            server_files("stats", &files, None)?;
             client::stats(
                 server,
                 &target,
@@ -438,20 +431,19 @@ async fn run_cli(
                 .transpose()
                 .map_err(|msg| CliError::from_prose(ErrorKind::Usage, format!("error: {msg}")))?;
             let (target, files) = split_target_files(args);
-            check_py_files(&files, refresh.as_deref())?;
+            check_py_files("get", &files, refresh.as_deref())?;
             if files.is_empty() {
                 let what = if target.is_none() {
                     "files"
                 } else {
                     ".py files"
                 };
-                return Err(usage_error(
-                    &format!("error: no {what} provided\n\n{GET_USAGE}"),
-                    &files,
-                ));
+                return Err(usage_error(&format!(
+                    "error: no {what} provided\n\n{GET_USAGE}"
+                )));
             }
             let hint_files: Vec<PathBuf> = ctx.files.iter().map(PathBuf::from).collect();
-            let targets = targets_arg(target.as_deref(), &hint_files)?;
+            let targets = targets_arg(target.as_deref())?;
             let policy = cache_policy(refresh, no_cascade, refresh_all);
             get_cmd(
                 env.as_deref(),
@@ -485,22 +477,21 @@ async fn run_cli(
             check_order("run", &args)?;
             let output = get_run_mode(output, format, fields.as_deref())?;
             let (target, files) = split_target_files(args);
-            check_py_files(&files, refresh.as_deref())?;
+            check_py_files("run", &files, refresh.as_deref())?;
             let Some(target) = target else {
-                return Err(usage_error(
+                return Err(missing_target_error(
                     &format!("error: a target task is required\n\n{RUN_USAGE}"),
                     &files,
                 ));
             };
             if files.is_empty() {
-                return Err(usage_error(
-                    &format!("error: no .py files provided\n\n{RUN_USAGE}"),
-                    &files,
-                ));
+                return Err(usage_error(&format!(
+                    "error: no .py files provided\n\n{RUN_USAGE}"
+                )));
             }
             let hint_files: Vec<PathBuf> = ctx.files.iter().map(PathBuf::from).collect();
             let policy = cache_policy(refresh, no_cascade, refresh_all);
-            let targets = targets_arg(Some(&target), &hint_files)?;
+            let targets = targets_arg(Some(&target))?;
             run_cmd(
                 env.as_deref(),
                 targets,
@@ -648,15 +639,14 @@ async fn run_cli(
             let json = fields_json(format, fields.as_deref())?;
             check_order("status", &args)?;
             let (target, files) = split_target_files(args);
-            check_py_files(&files, None)?;
+            check_py_files("status", &files, None)?;
             if files.is_empty() {
-                return Err(usage_error(
-                    &format!("error: no .py files provided\n\n{STATUS_USAGE}"),
-                    &files,
-                ));
+                return Err(usage_error(&format!(
+                    "error: no .py files provided\n\n{STATUS_USAGE}"
+                )));
             }
             let hint_files: Vec<PathBuf> = ctx.files.iter().map(PathBuf::from).collect();
-            let targets = targets_arg(target.as_deref(), &hint_files)?;
+            let targets = targets_arg(target.as_deref())?;
             let limit = inspection_limit(limit, all, json, bounded::LIST_DEFAULT_LIMIT);
             status_cmd(
                 env.as_deref(),

@@ -67,7 +67,10 @@ impl From<TargetError> for BarcaError {
             TargetError::NotFound { name, available } => {
                 BarcaError::AssetNotFound(name, available.join(", "))
             }
-            other => BarcaError::Usage(other.to_string()),
+            ambiguous @ TargetError::Ambiguous { .. } => {
+                BarcaError::AmbiguousTarget(ambiguous.to_string())
+            }
+            wrong @ TargetError::WrongKind { .. } => BarcaError::Usage(wrong.to_string()),
         }
     }
 }
@@ -854,7 +857,7 @@ mod resolve_target_tests {
                     Name one by its full id, e.g. `a.py:orders`";
         assert_eq!(err.to_string(), text);
         let cli = BarcaError::from(err);
-        assert!(matches!(cli, BarcaError::Usage(_)));
+        assert!(matches!(cli, BarcaError::AmbiguousTarget(_)));
         assert_eq!(cli.to_string(), text);
     }
 

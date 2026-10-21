@@ -494,15 +494,14 @@ step or imports user code. To recompute first, use `--refresh`; never delete fil
   error: the target comes before the files
 
     barca run report pipeline.py
-
-  Run `barca list pipeline.py` to see available assets and tasks.
   ```
 
   With more than one non-`.py` name after a file it states the rule and does not guess. barca
   never offers fuzzy "did you mean" suggestions, because a guess can read as confirmation: an
-  unknown target ends with ``Run `barca list <files>` to see available assets and tasks.`` on
-  every command, a mistyped flag is just an error, and an unknown `barca docs` topic lists every
-  valid topic.
+  unknown or ambiguous target ends with ``Run `barca list <files>` to see available assets and
+  tasks.`` on every command, a mistyped flag is just an error, and an unknown `barca docs` topic
+  lists every valid topic. Other usage errors carry their own fix (the corrected command, `barca
+  run` for a task, the valid `--refresh` names) and no `barca list` pointer.
 
 ## Editing a barca project: a safe loop
 

@@ -767,3 +767,45 @@ def test_inspection_contract_over_one_hundred_nodes(tmp_path, command):
     bounded = invoke("--limit", "100")
     assert len(bounded["nodes"]) == 100 and bounded["total"] == 121
     assert bounded["truncated"] is True and "--all" in bounded["hint"]
+
+
+REMEDIATION_PIPELINE = "from barca import asset\n\n@asset()\ndef good() -> int:\n    return 1\n"
+LIST_HINT = "Run `barca list pipeline.py` to see available assets and tasks."
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["unknown_target", "url_on_a_directory_store", "removed_setting"],
+)
+def test_only_a_target_error_carries_the_barca_list_remediation(tmp_path, case):
+    """`barca docs contract`, "Positional rules": the `barca list` remediation belongs to an
+    unknown (or ambiguous) target; any other usage error states its own fix (#492)."""
+    (tmp_path / "pipeline.py").write_text(REMEDIATION_PIPELINE)
+    env = _env()
+    argv = ["get", "good", "pipeline.py", "--json"]
+    if case == "unknown_target":
+        argv[1] = "nope"
+    elif case == "url_on_a_directory_store":
+        (tmp_path / "barca.toml").write_text(f'[remote]\nuri = "{tmp_path / "store"}"\n')
+        argv += ["-o", "url"]
+    else:
+        env["BARCA_STATE"] = "optimistic"
+    proc = subprocess.run(
+        [_find_binary(), *argv], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=120
+    )
+    assert proc.returncode == 2, proc.stderr
+    envelope = json.loads(
+        next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{"))
+    )
+    assert envelope["kind"] == "usage", envelope
+    remediation = envelope["remediation"]
+    if case == "unknown_target":
+        assert remediation == LIST_HINT, envelope
+    elif case == "url_on_a_directory_store":
+        assert "barca list" not in remediation, envelope
+        assert remediation.startswith("Set [remote] uri in barca.toml"), envelope
+        assert remediation.endswith("or use -o path."), envelope
+    else:
+        assert "barca list" not in remediation, envelope
+        assert remediation.startswith("Remove it:"), envelope
+        assert "BARCA_STATE" in envelope["error"], envelope

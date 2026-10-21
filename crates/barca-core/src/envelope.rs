@@ -52,6 +52,7 @@ impl ErrorKind {
         match e {
             BarcaError::WorkerFailed(_) => ErrorKind::StepFailed,
             BarcaError::AssetNotFound(..)
+            | BarcaError::AmbiguousTarget(_)
             | BarcaError::Usage(_)
             | BarcaError::Parse(_)
             | BarcaError::Dag(_) => ErrorKind::Usage,
@@ -96,12 +97,22 @@ pub fn list_cmd(files: &[String]) -> String {
     }
 }
 
-/// The one remediation for an unknown target or a misused name, on every command: `barca list`
-/// is how you discover the assets, tasks and sensors a project defines.
+/// The one remediation for an unknown or ambiguous target, on every command: `barca list` is how
+/// you discover the assets, tasks and sensors a project defines. Other usage errors carry their
+/// own remediation (#492).
 pub fn list_hint(files: &[String]) -> String {
     format!(
         "Run `{}` to see available assets and tasks.",
         list_cmd(files)
+    )
+}
+
+/// Whether `e` is about which node a target names (unknown or ambiguous), the one kind of
+/// error the `barca list` hint fixes.
+pub fn names_a_target(e: &BarcaError) -> bool {
+    matches!(
+        e,
+        BarcaError::AssetNotFound(..) | BarcaError::AmbiguousTarget(_)
     )
 }
 
@@ -291,7 +302,7 @@ impl ErrorEnvelope {
             };
         }
         let fallback = match &e {
-            BarcaError::AssetNotFound(..) => list_hint(&ctx.files),
+            BarcaError::AssetNotFound(..) | BarcaError::AmbiguousTarget(_) => list_hint(&ctx.files),
             BarcaError::Parse(_) => format!(
                 "Fix the Python syntax error, then run `{}` to confirm discovery.",
                 ctx.list_cmd()

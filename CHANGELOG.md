@@ -8,6 +8,15 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Bug Fixes
+
+- Usage errors point at `barca list` only when the target is the problem (#492): an unknown or
+  ambiguous target (and `barca run` without one) ends with ``Run `barca list <files>` ...``;
+  every other usage error (positionals in the wrong order, `get` on a task, an unknown
+  `--refresh` name, `-o url` without a cloud store, a removed setting such as `BARCA_STATE`, an
+  invalid `barca.toml`) carries its own remediation instead. Through `--server` an ambiguous
+  target's envelope now has the same remediation as a local one.
+
 ### Removed
 
 - Committed junk and two broken examples (#497): the three `benchmarks/*/airflow/.venv`

@@ -115,7 +115,11 @@ Positional rules (stable), for `get`, `run` and `status`:
   never selects `prod_deploy`). A function name defined in more than one file, or an empty name
   (`a,,b`), is a usage error.
 - An unknown target is a usage error (exit 2) on every command, with one remediation:
-  ``Run `barca list <files>` to see available assets and tasks.``
+  ``Run `barca list <files>` to see available assets and tasks.`` So is a name that several
+  nodes have, and `barca run` without a target. No other usage error carries that remediation:
+  each states its own fix (the corrected command for positionals in the wrong order, the valid
+  names for an unknown `--refresh` name, what to set for `-o url` without a cloud store, what to
+  remove for a removed setting) or, with nothing more to say, `See barca <command> --help`.
 - barca never offers fuzzy suggestions on the command line: no "did you mean" for targets or
   `barca docs` topics (an unknown topic lists every valid topic), and argument errors carry no
   "a similar argument exists" tip. A guess can read as confirmation. The one place a guess is
