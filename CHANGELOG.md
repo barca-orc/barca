@@ -12,6 +12,16 @@ reconciliation, and verified shared DuckDB worker lifetime. See
 upgrade and breaking-change notes. Releases between the historical entries below
 and these tags are available on the same releases page.
 
+## Pending
+
+### Bug Fixes
+
+- `barca[sql]` and `barca[test]` require `duckdb>=1.1,<2`. duckdb 2.0.0 (released 2026-10-21)
+  removed `DuckDBPyRelation.fetchone()`, which `barca sql` uses to count rows, and refuses new work
+  on a connection that has an unfinished result, which barca's shared worker connection and many
+  pipelines that return DuckDB relations rely on. A fresh `pip install 'barca[sql]'` picked up 2.0.0
+  and `barca sql` failed. Support for duckdb 2 is tracked separately.
+
 ## 0.28.1 (2026-10-21)
 
 ### Bug Fixes
