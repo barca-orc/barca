@@ -72,7 +72,8 @@ def slow():
     assert step["attempts"] == 1
     assert step["import_seconds"] >= 1
     assert step["elapsed_seconds"] >= step["import_seconds"] + 0.9
-    assert "[barca] importing " in proc.stderr
+    # The worker's import notice is an `--agent` line (#496); the timing is in the JSON.
+    assert "[barca] importing " not in proc.stderr
     assert "p.py:slow" in doc["error"] and "<lambda>" not in doc["error"]
 
 

@@ -15,6 +15,9 @@ Options:
       --json
           Emit JSON instead of markdown
 
+      --pretty
+          Print markdown, the default even when piped (accepted like every read command's --pretty)
+
       --fields <FIELDS>
           Output JSON with only these keys (comma-separated) on each entry of `topics`, or on the one topic. Implies --json. An unknown key is a usage error listing the valid ones
 
@@ -32,5 +35,6 @@ Examples:
   barca docs --json             # topic index as JSON
   barca docs cache --json       # one topic as JSON {name, summary, content}
   barca docs --fields name      # JSON index with only topic names
+  barca docs cache --pretty     # markdown, the default even when piped
 
 Topics are compiled into the binary: offline, and always matching this version.

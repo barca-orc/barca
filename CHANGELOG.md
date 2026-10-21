@@ -17,6 +17,14 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   invalid `barca.toml`) carries its own remediation instead. Through `--server` an ambiguous
   target's envelope now has the same remediation as a local one.
 
+- Quieter first run (#496): the worker's `[barca] importing <module>` line is printed only under
+  `--agent` (and in `barca serve`); the import time stays in the run JSON as `import_seconds`.
+  The human tables of `status`, `history` and `stats` mark their timestamps `UTC`.
+  `barca docs --pretty` is accepted (markdown, the default). `barca stats` labels its rate
+  "Re-executed with unchanged inputs" and counts only the executions that repeated an earlier
+  run hash; it was labelled "Cache hit rate" though cache hits are never recorded per asset. The
+  JSON key is still `cache_hit_rate`.
+
 ### Performance
 
 - Recording a run in the metadata database prepares each per-row statement once instead of

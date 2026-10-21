@@ -326,7 +326,7 @@ More: barca docs cache (\"Disk use\")";
 const STATS_HELP: &str = "\
 Examples:
   barca stats total                         # find `total` anywhere in the project
-  barca stats total pipeline.py             # timing percentiles and cache hit rate
+  barca stats total pipeline.py             # timing percentiles and re-executions
   barca stats total pipeline.py --json      # {id, total_runs, cache_hit_rate, ..., recent_runs}, even in a terminal
   barca stats total pipeline.py --pretty    # the text report, even when piped
   barca stats total pipeline.py --fields status,error_message   # JSON; trims recent_runs entries
@@ -516,6 +516,7 @@ Examples:
   barca docs --json             # topic index as JSON
   barca docs cache --json       # one topic as JSON {name, summary, content}
   barca docs --fields name      # JSON index with only topic names
+  barca docs cache --pretty     # markdown, the default even when piped
 
 Topics are compiled into the binary: offline, and always matching this version.";
 
@@ -874,6 +875,10 @@ pub(crate) enum Cli {
         /// Emit JSON instead of markdown
         #[arg(long)]
         json: bool,
+        /// Print markdown, the default even when piped (accepted like every read command's
+        /// --pretty)
+        #[arg(long, conflicts_with_all = ["json", "fields"])]
+        pretty: bool,
         /// Output JSON with only these keys (comma-separated) on each entry of `topics`, or on
         /// the one topic. Implies --json. An unknown key is a usage error listing the valid ones
         #[arg(long, value_delimiter = ',', value_parser = PossibleValuesParser::new(bounded::DOCS_FIELDS))]
