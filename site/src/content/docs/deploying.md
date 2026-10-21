@@ -32,7 +32,7 @@ HTTP API or the CLI's `--server` flag; the work executes on that server's machin
 
 ```bash
 # On the server, from the project directory; install the pipeline's dependencies too.
-uv add 'barca==0.24.0'
+uv add 'barca==0.27.0'
 uv run barca serve pipeline.py --timezone utc
 ```
 
@@ -104,13 +104,13 @@ network. An nginx upstream can then be `http://barca:8274/`, with no shared netw
 
 ## In a container
 
-This example pins barca 0.24.0. It has two services: barca, and an nginx that shares
+This example pins barca 0.27.0. It has two services: barca, and an nginx that shares
 barca's network namespace so that it can reach `127.0.0.1:8274`.
 
 ```dockerfile
 # Dockerfile
 FROM python:3.13-slim
-RUN pip install --no-cache-dir --only-binary=:all: 'barca==0.24.0'
+RUN pip install --no-cache-dir --only-binary=:all: 'barca==0.27.0'
 WORKDIR /project
 CMD ["barca", "serve", "--timezone", "utc"]
 ```
@@ -160,7 +160,7 @@ server {
 ```
 $ docker compose up -d
 $ curl -s http://127.0.0.1:8080/health
-{"read_only":false,"scheduler":true,"status":"ok","version":"0.24.0","load_errors":[]}
+{"api_version":1,"cache":{"limit_bytes":3351192780,"size_bytes":284484},"env":"default","load_errors":[],"read_only":false,"scheduler":true,"status":"ok","store_uri":null,"version":"0.27.0"}
 ```
 
 `docker compose ps` shows the `barca` service as `healthy` once the first check passes, and
@@ -168,8 +168,8 @@ the proxy starts after that.
 
 What each part is for:
 
-- **The image.** v0.24.0 publishes core wheels and native archives for both x86-64 and
-  arm64 Linux with glibc or musl. Debian slim selects the native GNU wheel; Alpine selects
+- **The image.** Every release from 0.24.0 publishes core wheels and native archives for both
+  x86-64 and arm64 Linux with glibc or musl. Debian slim selects the native GNU wheel; Alpine selects
   the native musl wheel. The example needs no `platform: linux/amd64` override or Rust
   compiler. Add your pipeline's own dependencies separately; their wheels and Barca's
   optional SQL/parquet/cloud extras have their own platform requirements.
@@ -211,7 +211,7 @@ before you bind it to anything wider, add [authentication](#authentication) at t
 
 ### Native Debian and Alpine targets
 
-The v0.24.0 release verifies fresh official PyPI wheel installations and downloaded
+Every release from 0.24.0 verifies fresh official PyPI wheel installations and downloaded
 GitHub native archives on native x86-64 and arm64 runners. Each target runs a core
 pipeline, reuses its cache, serves `/health`, and serves the embedded UI without a
 compiler or a source checkout.
@@ -227,7 +227,7 @@ For an Alpine core deployment, use the same Compose configuration with this imag
 
 ```dockerfile
 FROM python:3.13-alpine
-RUN pip install --no-cache-dir --only-binary=:all: 'barca==0.24.0'
+RUN pip install --no-cache-dir --only-binary=:all: 'barca==0.27.0'
 WORKDIR /project
 CMD ["barca", "serve", "--timezone", "utc"]
 ```
@@ -250,7 +250,8 @@ services:
 
 Pin `barca==0.21.0` in that image. Without a compatible wheel, pip can fall back to a
 source build requiring Rust; `--only-binary=:all:` makes an unavailable wheel explicit.
-The legacy override is unnecessary for the verified v0.24.0 Linux targets above.
+The legacy override is unnecessary for the Linux targets above, verified on every release
+from 0.24.0.
 
 ### Logs
 

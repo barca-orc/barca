@@ -12,6 +12,18 @@ reconciliation, and verified shared DuckDB worker lifetime. See
 upgrade and breaking-change notes. Releases between the historical entries below
 and these tags are available on the same releases page.
 
+## Pending
+
+### Documentation
+
+- RFC statuses say what shipped (#502): the RFC template gains `Implemented (X.Y.Z)` and
+  `Partially implemented (X.Y.Z)`; RFC-0007 is Implemented (0.27.0), with the route aliases'
+  removal left; RFC-0008 is Accepted, implementation in 0.28.0; RFC-0009, 0010 and 0011 are
+  Implemented (0.26.0) and RFC-0012 Implemented (0.25.0); RFC-0006 is Superseded in part.
+  `deploying.md` pins 0.27.0, the guide, scheduling and core-constraints pages lose their
+  0.18.0 stamps (re-checked, including a multi-file example that needed a qualified import),
+  and the comparison pages say their numbers are from 2026-06 and point at #65.
+
 ## 0.27.0 (2026-10-20)
 
 ### Breaking

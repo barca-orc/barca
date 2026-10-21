@@ -1,13 +1,11 @@
 ---
 title: Scheduling
-description: Run assets, tasks and sensors on a cron schedule with barca serve, what a tick does, and the limits of scheduling in 0.18.0.
+description: Run assets, tasks and sensors on a cron schedule with barca serve, what a tick does, and the limits of scheduling.
 ---
 
 A node declared with `freshness=Schedule("<cron>")` runs on that cron schedule while
 `barca serve` is running. The scheduler is part of the server and is on unless you pass
 `--no-schedule`. `barca get` and `barca run` never fire schedules.
-
-Output on this page is from barca 0.18.0.
 
 ## Run a function every 10 minutes
 
@@ -29,9 +27,9 @@ barca serve job.py
 ```
 
 ```
-[barca] serving on http://127.0.0.1:8274  (1 file)
 [barca] scheduling 1 task:
-  job.py:refresh — */10 * * * * (next 2026-10-07 14:30:00)
+  job.py:refresh — */10 * * * * (next 2026-10-20 22:50:00)
+[barca] serving on http://127.0.0.1:8274  (1 file)
 ```
 
 `refresh` now runs every ten minutes for as long as the server is up.
@@ -61,8 +59,8 @@ upstream asset. `POST /runs` with `{"command": "run"}` behaves like a tick.
 
 Only `Schedule` causes runs. `Always` (the default for assets and tasks) and `Manual` (the
 default for sensors) are recorded and shown by `barca list`, and nothing acts on them. What
-they should do in `barca serve` is proposed in RFC-0008
-([PR #276](https://github.com/barca-orc/barca/pull/276)).
+they do in `barca serve` is decided in [RFC-0008](/rfcs/0008-freshness-propagation/) (accepted;
+implementation in 0.28.0).
 
 ## Example: one scheduled task below a sensor
 
@@ -95,19 +93,27 @@ tick below `orders` is computed. In the second the sensor's value is unchanged, 
 is a cache hit and only the sensor and the task run:
 
 ```
-[barca] scheduled run pipeline.py:publish → 52f9c9c52e70
+[barca] scheduled run pipeline.py:publish → 14ca5c7b3768
+[barca] importing /srv/project/pipeline.py
 [barca] step:pipeline.py:inbox completed 0.0s (1/3)
-computing orders for version 89569899
 [barca] step:pipeline.py:orders completed 0.0s (2/3)
-publishing {'rows': 3}
 [barca] step:pipeline.py:publish completed 0.0s (3/3)
 [barca] 3/3 steps | done in 0.0s
-[barca] scheduled run pipeline.py:publish → 52fa627180a8
+[barca] scheduled run pipeline.py:publish → 14cd98ec4433
+[barca] importing /srv/project/pipeline.py
 [barca] step:pipeline.py:inbox completed 0.0s (1/3)
 [barca] step:pipeline.py:orders cached
-publishing {'rows': 3}
 [barca] step:pipeline.py:publish completed 0.0s (2/3)
 [barca] 2/3 steps | done in 0.0s
+```
+
+What the steps print is recorded with the run, not written to the server's stderr. `barca logs`
+reads it back by run id:
+
+```
+$ barca logs 14ca5c7b3768 --pretty
+computing orders for version 89627531
+publishing {'rows': 3}
 ```
 
 ### Two scheduled nodes that share an upstream

@@ -3,7 +3,7 @@ title: 'RFC-0010: Slack Notifications'
 description: 'Setting BARCA_SLACK_WEBHOOK_URL posts to a Slack incoming webhook when a job starts failing, when it recovers, and once a day while it keeps failing. No new config file, no hooks system.'
 ---
 
-- **Status:** Accepted
+- **Status:** Implemented (0.26.0)
 - **Date:** 2026-10-20 (accepted 2026-10-20)
 - **Touches:** barca-core | HTTP server
 - **Supersedes / Related:** Reopens parked issue #52 (Resend email and Slack webhook hooks), with a smaller design. Builds on the telemetry integration layer (the `telemetry` manual topic). Related: #434 (trigger and skip reasons on run spans), #393 (`triggered_by`).
@@ -247,7 +247,9 @@ RFC takes Prefect's state-change default and Dagster's single-hook simplicity.
 
 ## 10. Unresolved Questions
 
-Decided 2026-10-20 (maintainer, taking each proposal): the variable is `BARCA_SLACK_WEBHOOK_URL`; the default mode is `changes`; the reminder is fixed at 24 hours; no post on an unclean `serve` restart; no job filter in v1; it ships in 0.26.0, ahead of server mode, and whichever of it and #394 lands first brings `reqwest` with `rustls`.
+Decided 2026-10-20 (maintainer, taking each proposal): the variable is `BARCA_SLACK_WEBHOOK_URL`; the default mode is `changes`; the reminder is fixed at 24 hours; no post on an unclean `serve` restart; no job filter in v1; it ships in 0.26.0, ahead of server mode, and whichever of it and #394 lands first brings `reqwest` with `rustls`. It shipped in 0.26.0 as decided.
+
+The options as they were put to the maintainer, kept for the record:
 
 1. **Variable name:** `BARCA_SLACK_WEBHOOK_URL` (proposed), or the generic `SLACK_WEBHOOK_URL`,
    which would also switch it on wherever another tool already set that name.

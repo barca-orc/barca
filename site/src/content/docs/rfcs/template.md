@@ -5,9 +5,9 @@ description: How barca RFCs work, and the template to copy for a new one.
 
 An RFC is how a change to barca's design gets written down and reviewed *before*
 it's built, so the tradeoffs get argued about on paper instead of discovered in
-review. Every RFC in this section either shipped as a real change (`Accepted`)
-or documents a piece of barca's current surface as a retroactive baseline —
-see [RFC-0001](/rfcs/0001-node-kinds-and-freshness/) onward.
+review. RFC-0001 to RFC-0006 document barca's surface as a retroactive baseline;
+from RFC-0007 on, each RFC is a design written before it was built, and its status
+says whether it has shipped yet (see [Statuses](#statuses)).
 
 ## When to write one
 
@@ -29,14 +29,31 @@ one; that kind of decision belongs in
 4. On merge, set `Status: Accepted` (or `Rejected`, if the PR closes without
    merging the design) and add the page to the `RFCs` group in
    `site/astro.config.mjs`.
-5. If a later RFC replaces this one, set this one's `Status` to `Superseded`
-   and link forward in `Supersedes / Related`; link back from the new one.
+5. When the implementation ships, set `Status: Implemented (X.Y.Z)`, naming the
+   release. If only part of it has shipped, set `Status: Partially implemented
+   (X.Y.Z)` and say on the next line what shipped and what is left, with issue
+   numbers.
+6. If a later RFC replaces this one, set this one's `Status` to `Superseded`
+   (or `Superseded in part`) and link forward in `Supersedes / Related`; link
+   back from the new one.
+
+## Statuses
+
+| Status | Meaning |
+|---|---|
+| `Draft` | Being written; not yet reviewed. |
+| `Under Review` | Open as a PR; the design is being argued. |
+| `Accepted` | The design is agreed and merged. Nothing of it has shipped yet; say which release is planned, if one is. `Accepted (retroactive baseline …)` on RFC-0001 to RFC-0006 is the exception: those document what had already shipped in the version named. |
+| `Partially implemented (X.Y.Z)` | Some of it shipped, in the release named. The next line says what is left. |
+| `Implemented (X.Y.Z)` | All of it shipped, in the release named. The RFC is a record; the manual (`barca docs`) and the reference pages describe current behaviour. |
+| `Rejected` | Closed without merging the design. |
+| `Superseded` | Replaced by a later RFC, linked in `Supersedes / Related`. `Superseded in part` names the half that was replaced. |
 
 ---
 
 # RFC-NNNN: [Title]
 
-- **Status:** Draft | Under Review | Accepted | Rejected | Superseded
+- **Status:** Draft | Under Review | Accepted | Partially implemented (X.Y.Z) | Implemented (X.Y.Z) | Rejected | Superseded
 - **Date:**
 - **Touches:** barca-core | barca-cli | python/barca | HTTP server | dev server/UI (check all that apply)
 - **Supersedes / Related:**

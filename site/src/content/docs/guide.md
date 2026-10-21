@@ -4,7 +4,7 @@ description: Where results live, how to see what is cached and why, and how sens
 ---
 
 This guide follows [Getting Started](/getting-started/), which installs barca and runs two
-assets. Every example here was run with barca 0.18.0. Each section names the manual topic
+assets. The examples here were checked against barca 0.27.0. Each section names the manual topic
 (`barca docs <topic>`) that has the full rules.
 
 ## 1. Assets and inputs
@@ -28,7 +28,7 @@ def summary(data: list[dict]) -> dict:
 ```
 
 ```bash
-barca get pipeline.py             # every asset in the file; prints the last asset's value
+barca get pipeline.py             # every asset in the file; prints the last asset's artifact path
 barca get summary pipeline.py     # one asset and what it depends on
 ```
 
@@ -266,9 +266,13 @@ def notify(report: dict) -> None:
 
 ```
 $ barca run notify pipeline.py
-Daily revenue: 42000
+[barca] importing /home/you/project/pipeline.py
+[pipeline.py:notify] Daily revenue: 42000
 [barca] 1/2 steps | done in 0.0s
-Run 523e748a8d00 | ran 'notify' in 0.093s (1 step, 2 phases)
+Run 14d08771a6ca | ran 'notify' in 0.167s (1 step, 1 phase)
+
+Value:
+null
 ```
 
 | | `barca get <asset> [files]` | `barca run <task> [files]` |
@@ -358,16 +362,16 @@ region=emea   emea    400
 region=latam  latam   500
 ```
 
-Limits on 0.18.0:
+Limits:
 
-- **Up to 0.18, where the keys were written mattered.** With a literal list inside the
-  decorator (`partitions(["emea", "amer", "apac"])`), adding a key ran every key again. From
-  0.19 a new key runs alone however the keys are written: a literal list, a module-level
-  constant as above, another expression, or `partitions_from(...)`.
+- **A new key runs alone however the keys are written:** a literal list inside the decorator,
+  a module-level constant as above, another expression, or `partitions_from(...)`.
 - **`barca get sales` returns every key**: one artifact path per key (`-o value` for the
   values). `--partition region=emea` computes and returns only that key, and scopes
   `--refresh sales` to it. Upstream partitioned assets are not narrowed by it.
-- **A removed key's result stays** on disk and in the `barca sql` view.
+- **A removed key's result stays on disk** until the cache size limit evicts it, and its runs stay
+  in the history. `barca sql` shows only the current keys: with `latam` removed again, the view
+  above has three rows.
 
 [Parametrized Assets and Partitions](/workflows/03-parametrized-assets-and-partitions/) shows
 each of these with output. More: `barca docs partitions`.
@@ -402,7 +406,7 @@ def rows() -> list:
 # pipelines/report.py
 from barca import asset
 
-from sources import rows
+from pipelines.sources import rows
 
 
 @asset(inputs={"rows": rows})
@@ -415,8 +419,10 @@ barca get total                 # from the root or any directory below it
 barca get total pipelines/      # read only the files under pipelines/
 ```
 
-- An input from another file is imported the way Python imports it and then named in
-  `inputs=`. Barca resolves the import from the source.
+- An input from another file is imported by its path from the project root
+  (`from pipelines.sources import rows`) and then named in `inputs=`. Barca resolves the import
+  from the source. A bare `from sources import rows` next to it is a usage error (exit 2) that
+  names the qualified import to use, because the same file would have two module names.
 - A node's id is `<file>:<function>`, with the file relative to the project root
   (`pipelines/report.py:total`). A bare name such as `total` works as a target when only one
   file defines it.
