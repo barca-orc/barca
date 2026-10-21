@@ -96,8 +96,9 @@ pub enum BarcaError {
     #[error("Database error: {0}")]
     Db(String),
 
-    /// The metadata DB at `path` is there but this barca cannot use it: it is empty, not a
-    /// SQLite file, written by a newer release, or its schema is malformed. Infra (exit 3);
+    /// The metadata DB at `path` is there but this barca cannot use it: it is a directory, not
+    /// a SQLite file, written by a newer release, or its schema is malformed (an empty file is
+    /// initialized instead, [`db::init_db_as`]). Infra (exit 3);
     /// its envelope's `reason` is `metadata_unusable`. A lock or I/O failure stays [`Db`].
     ///
     /// [`Db`]: BarcaError::Db

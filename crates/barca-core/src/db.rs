@@ -618,15 +618,28 @@ pub async fn init_db(db_path: &str) -> Result<(), BarcaError> {
 /// snapshot names the database it copies). Returns the format version (`PRAGMA user_version`,
 /// [`crate::db_schema::VERSION`] once initialized).
 ///
-/// A database this release cannot use is [`BarcaError::MetadataUnusable`]: an empty file, a file
-/// that is not SQLite, a newer format, or a malformed schema. A lock or I/O failure is
-/// [`BarcaError::Db`].
+/// An empty file (0 bytes, no write-ahead log) holds no history, so it is initialized as a new
+/// database, with a note naming it: a `touch`, a backup tool or a reader that opened the path
+/// before barca created the database leaves one (#537). A database this release cannot use is
+/// [`BarcaError::MetadataUnusable`]: a file that is not SQLite, a newer format, or a malformed
+/// schema. A lock or I/O failure is [`BarcaError::Db`].
 pub async fn init_db_as(path: &str, shown: &str) -> Result<i64, BarcaError> {
     let _g = db_guard().await;
     let initialized = async {
         // Under the lock: a database another process is creating is empty until it commits.
         let lock = acquire_file_lock(path, DB_FILE_LOCK_WAIT).await?;
-        if let Some(why) = unusable_file(path) {
+        if empty_file(path) {
+            // Replaced rather than opened in place: nothing in it, and a new file is what a
+            // missing database gets.
+            fs::remove_file(path)?;
+            // A snapshot's copy is initialized silently: the note is for the file itself.
+            if path == shown {
+                crate::errln!(
+                    "[barca] note: the metadata DB {shown} was empty (0 bytes); initialized it \
+                     as a new database"
+                );
+            }
+        } else if let Some(why) = unusable_file(path) {
             return Err(unusable(why));
         }
         let (db, conn) = connect(path).await?;
@@ -668,7 +681,12 @@ pub async fn probe_metadata(path: &str) -> Result<Option<i64>, BarcaError> {
     let Some(snapshot) = DbSnapshot::take(path).await? else {
         return Ok(None);
     };
-    // The copy is private, so it can be judged without a lock.
+    // The copy is private, so it can be judged without a lock. An empty file holds no history:
+    // the same as none, which a writer initializes ([`init_db_as`]).
+    if empty_file(snapshot.path()) {
+        crate::errln!("[barca] note: the metadata DB {path} is empty (0 bytes): no history yet");
+        return Ok(None);
+    }
     if let Some(why) = unusable_file(snapshot.path()) {
         return Err(BarcaError::MetadataUnusable {
             path: path.to_string(),

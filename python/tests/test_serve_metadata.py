@@ -61,7 +61,7 @@ def serve(project: Path, *args: str):
     )
 
 
-@pytest.mark.parametrize("how", ["empty", "junk", "future"])
+@pytest.mark.parametrize("how", ["junk", "future"])
 def test_a_writer_serve_on_a_database_it_cannot_use_exits_3_before_binding(project, how):
     db = broken(project, how)
     before = db.read_bytes()
@@ -83,11 +83,42 @@ def test_a_writer_serve_on_a_database_it_cannot_use_exits_3_before_binding(proje
         assert db.read_bytes() == before, "the database is left as it was"
 
 
-def test_the_empty_file_is_named_as_empty(project):
-    broken(project, "empty")
-    out = serve(project)
-    assert out.returncode == 3
-    assert "the metadata DB .barca/metadata.db cannot be used: it is empty (0 bytes)" in out.stderr
+NOTE_EMPTY = (
+    "[barca] note: the metadata DB .barca/metadata.db was empty (0 bytes); "
+    "initialized it as a new database"
+)
+
+
+def test_a_writer_serve_initializes_an_empty_database(project):
+    # An empty file holds no history: a `touch`, a backup tool or a reader that opened the
+    # path first leaves one, and the server starts on it as on a new database (#537).
+    db = broken(project, "empty")
+    server = Server(project, "--no-schedule")
+    try:
+        log = server.log.read_text()
+        assert log.splitlines().count(NOTE_EMPTY) == 1, log
+        assert "metadata .barca/metadata.db (db format 1)" in log, log
+        assert server.request("GET", "/health")[1]["metadata_error"] is None
+        assert server.request("GET", "/state")[0] == 200
+    finally:
+        server.stop()
+    assert db.stat().st_size > 0
+
+
+def test_a_read_only_server_reads_an_empty_database_as_no_history(project):
+    db = broken(project, "empty")
+    server = Server(project, "--read-only")
+    try:
+        log = server.log.read_text()
+        assert "metadata .barca/metadata.db (not created yet)" in log, log
+        assert (
+            "[barca] note: the metadata DB .barca/metadata.db is empty (0 bytes): no history yet"
+        ) in log, log
+        assert server.request("GET", "/health")[1]["metadata_error"] is None
+        assert server.request("GET", "/state")[0] == 200
+    finally:
+        server.stop()
+    assert db.read_bytes() == b"", "a read-only server writes nothing"
 
 
 def test_a_future_format_says_so(project):
@@ -200,10 +231,20 @@ def test_a_valid_root_database_beside_a_named_env_is_not_warned_about(project):
         server.stop()
 
 
-def test_get_on_an_empty_database_names_it(project):
-    broken(project, "empty")
+def test_get_on_a_database_it_cannot_use_names_it(project):
+    broken(project, "junk")
     out = barca(project, "get", "quick", "pipeline.py", "--json")
     assert out.returncode == 3, out.stderr
     error = envelope(out.stderr)
     assert error["reason"] == "metadata_unusable"
     assert error["error"].startswith("the metadata DB .barca/metadata.db cannot be used")
+
+
+def test_get_on_an_empty_database_initializes_it(project):
+    broken(project, "empty")
+    out = barca(project, "get", "quick", "pipeline.py", "--json")
+    assert out.returncode == 0, out.stderr
+    assert out.stderr.splitlines().count(NOTE_EMPTY) == 1, out.stderr
+    again = barca(project, "get", "quick", "pipeline.py", "--json")
+    assert again.returncode == 0, again.stderr
+    assert "was empty" not in again.stderr

@@ -484,10 +484,12 @@ scheduling`, "Stopping the server"). Exit 1 from `serve` means a forced stop, no
 of yours.
 
 A writer `barca serve` (not `--read-only`) sets its metadata DB up before it binds the port. When
-it cannot (the file is empty, not SQLite, in a newer format or has a malformed schema, or cannot be
+it cannot (the file is not SQLite, in a newer format or has a malformed schema, or cannot be
 opened) it exits 3 with the error naming the file and the remediation, and serves nothing. A
 `--read-only` server keeps serving and reports the error in `GET /health` `metadata_error`
-([`barca docs scheduling`](/scheduling/), "The metadata DB at startup").
+([`barca docs scheduling`](/scheduling/), "The metadata DB at startup"). An empty file (0 bytes) is not an
+error: it holds no history, and a writer initializes it as a new database with one note line on
+stderr naming it.
 
 With `BARCA_LOG=json`, `barca serve` writes its lines, an error that stops it included, as JSON
 objects on stdout instead of text on stderr. Exit codes do not change. `get`, `run` and every
