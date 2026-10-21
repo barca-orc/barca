@@ -115,18 +115,17 @@ Positional rules (stable), for `get`, `run` and `status`:
   never selects `prod_deploy`). A function name defined in more than one file, or an empty name
   (`a,,b`), is a usage error.
 - An unknown target is a usage error (exit 2) on every command, with one remediation:
-  ``Run `barca list <files>` to see available assets and tasks.`` So is a name that several
-  nodes have, and `barca run` without a target. No other usage error carries that remediation:
-  each states its own fix (the corrected command for positionals in the wrong order, the valid
-  names for an unknown `--refresh` name, what to set for `-o url` without a cloud store, what to
-  remove for a removed setting) or, with nothing more to say, `See barca <command> --help`.
-- barca never offers fuzzy suggestions on the command line: no "did you mean" for targets or
-  `barca docs` topics (an unknown topic lists every valid topic), and argument errors carry no
-  "a similar argument exists" tip. A guess can read as confirmation. The one place a guess is
-  made is a misspelt decorator argument in a pipeline file (`input=` for `inputs=`): the error
-  names the accepted argument when exactly one is within one edit of what was written (two for
-  a name longer than four characters), always next to the full list of accepted arguments
-  (`barca docs assets`, "Accepted arguments").
+  ``Run `barca list <files>` to see available assets and tasks.``, preceded by a suggestion when
+  a node name is close (below).
+- A mistyped name gets one "did you mean" rule: a flag, a subcommand, a target, a `--refresh`
+  name, a `barca sql` view, a `barca docs` topic and a decorator argument (`input=` for
+  `inputs=`). barca suggests the closest names within one edit of what was written (two for a
+  name longer than four characters): the best match only, or two when they tie, and nothing
+  when none is that close or more than two tie. It reads `Did you mean 'amounts'?` (or
+  `Did you mean 'stats' or 'status'?`) and starts the envelope's `remediation`, or follows the
+  error line in human mode; `error` is unchanged. A suggestion never changes the exit code (a
+  usage error stays 2) and barca never acts on one. clap's own tips are not used: a mistyped
+  flag gets no "to pass '--x' as a value, use '-- --x'" tip.
 - `--refresh` and `--fields` take one comma-separated list (`--refresh a,b`).
 
 ## Arguments

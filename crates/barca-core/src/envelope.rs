@@ -326,7 +326,14 @@ impl ErrorEnvelope {
             };
         }
         let fallback = match &e {
-            BarcaError::AssetNotFound(..) | BarcaError::AmbiguousTarget(_) => list_hint(&ctx.files),
+            BarcaError::AssetNotFound(name, available) => {
+                let ids: Vec<&str> = available.split(", ").collect();
+                match crate::targets::target_suggestion(name, &ids) {
+                    Some(meant) => format!("{meant} {}", list_hint(&ctx.files)),
+                    None => list_hint(&ctx.files),
+                }
+            }
+            BarcaError::AmbiguousTarget(_) => list_hint(&ctx.files),
             BarcaError::Parse(_) => format!(
                 "Fix the Python syntax error, then run `{}` to confirm discovery.",
                 ctx.list_cmd()
@@ -396,9 +403,17 @@ impl ErrorEnvelope {
         {
             return self;
         }
-        // A generic fallback remediation is replaced, not repeated, by the more specific hint.
+        // A generic fallback remediation is replaced, not repeated, by the more specific hint;
+        // a leading "Did you mean ...?" stays in front of it.
         if !self.prose_has_remediation {
-            self.remediation = Some(hint);
+            let meant = self
+                .remediation
+                .as_deref()
+                .filter(|r| r.starts_with("Did you mean "))
+                .and_then(|r| r.split_once("? "))
+                .map(|(meant, _)| format!("{meant}? "))
+                .unwrap_or_default();
+            self.remediation = Some(format!("{meant}{hint}"));
             return self;
         }
         self.remediation = Some(match self.remediation.take() {

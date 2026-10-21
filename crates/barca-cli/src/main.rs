@@ -47,16 +47,16 @@ fn main() {
             // Insert "get" after the program name so clap handles all flags.
             let mut rewritten = vec![args[0].clone(), "get".to_string()];
             rewritten.extend_from_slice(&args[1..]);
-            Cli::try_parse_from(rewritten)
+            Cli::try_parse_from(&rewritten).map_err(|e| (e, rewritten))
         } else {
-            Err(first)
+            Err((first, args.clone()))
         }
     });
     let mut cli = match parsed {
         Ok(cli) => cli,
         // `--help` / `--version` are not errors: clap prints them to stdout and exits 0.
-        Err(e) if !e.use_stderr() => e.exit(),
-        Err(e) => CliError::from_clap(&e).emit(error::json_mode_from_argv(&args)),
+        Err((e, _)) if !e.use_stderr() => e.exit(),
+        Err((e, argv)) => CliError::from_clap(&e, &argv).emit(error::json_mode_from_argv(&args)),
     };
     let json = json_output(&cli);
 

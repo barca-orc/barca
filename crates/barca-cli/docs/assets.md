@@ -128,9 +128,10 @@ In JSON mode the first line is the envelope's `error` and the second its `remedi
 (`barca docs contract`).
 
 - The error names the node (`file.py:function`), the line of the argument, the argument and
-  everything the call accepts. "Did you mean" appears only when exactly one accepted argument
-  is one edit away from what was written (two edits for a name longer than four characters):
-  `input`, `partition`, `serialiser`. `after` or `when` get the list and no guess.
+  everything the call accepts. "Did you mean" names the closest accepted argument within one
+  edit of what was written (two edits for a name longer than four characters), or two that
+  tie: `input`, `partition`, `serialiser`. `after` or `when` get the list and no guess. It is
+  the rule every mistyped name follows (`barca docs agents`).
 - The helpers and `@sink` take exactly one argument by position. Passing it by keyword
   (`partitions(values=[...])`, `collect(asset_fn=x)`, `Schedule(cron="...")`,
   `@sink(path="...")`) is rejected, and the error says to pass the value as the first argument.

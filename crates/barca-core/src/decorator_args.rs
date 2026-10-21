@@ -258,44 +258,12 @@ impl Signature {
         format!("| `{}` | {positional} | {keywords} |", self.display())
     }
 
-    /// The accepted keyword the user most likely meant, when exactly one is close enough for
-    /// the guess to be safe: one edit away, or two for a name longer than four characters
-    /// (`input` -> `inputs`, `serialiser` -> `serializer`). Two candidates give no suggestion.
-    pub fn closest(&self, unknown: &str) -> Option<&'static str> {
-        let limit = if unknown.chars().count() > 4 { 2 } else { 1 };
-        let mut close = self
-            .keywords
-            .iter()
-            .filter(|k| edit_distance(unknown, k) <= limit);
-        match (close.next(), close.next()) {
-            (Some(only), None) => Some(only),
-            _ => None,
-        }
+    /// The accepted keywords the user most likely meant (`input` -> `inputs`, `serialiser` ->
+    /// `serializer`), by the one "did you mean" rule ([`crate::suggest::closest`]): the best
+    /// match, or two that tie.
+    pub fn closest(&self, unknown: &str) -> Vec<&'static str> {
+        crate::suggest::closest(unknown, self.keywords.iter().copied())
     }
-}
-
-/// Optimal string alignment distance: insertions, deletions, substitutions and swaps of two
-/// neighbouring characters each count one.
-fn edit_distance(a: &str, b: &str) -> usize {
-    let a: Vec<char> = a.chars().collect();
-    let b: Vec<char> = b.chars().collect();
-    let mut d = vec![vec![0usize; b.len() + 1]; a.len() + 1];
-    for (i, row) in d.iter_mut().enumerate() {
-        row[0] = i;
-    }
-    d[0] = (0..=b.len()).collect();
-    for i in 1..=a.len() {
-        for j in 1..=b.len() {
-            let cost = usize::from(a[i - 1] != b[j - 1]);
-            d[i][j] = (d[i - 1][j] + 1)
-                .min(d[i][j - 1] + 1)
-                .min(d[i - 1][j - 1] + cost);
-            if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
-                d[i][j] = d[i][j].min(d[i - 2][j - 2] + 1);
-            }
-        }
-    }
-    d[a.len()][b.len()]
 }
 
 /// One argument a barca call does not take.
@@ -431,15 +399,16 @@ pub(crate) fn check_call(call: &ast::ExprCall, sig: &Signature) -> Option<Proble
             });
         }
         let guess = sig.closest(name);
-        let meant = guess
-            .map(|g| format!(" Did you mean `{g}`?"))
+        let meant = crate::suggest::did_you_mean(&guess, '`')
+            .map(|m| format!(" {m}"))
             .unwrap_or_default();
-        let fix = match guess {
-            Some(g) => format!("Rename `{name}` to `{g}`, or remove it. {see}"),
-            None if sig.keywords.is_empty() => {
+        let fix = match guess.as_slice() {
+            [g] => format!("Rename `{name}` to `{g}`, or remove it. {see}"),
+            [a, b, ..] => format!("Rename `{name}` to `{a}` or `{b}`, or remove it. {see}"),
+            [] if sig.keywords.is_empty() => {
                 format!("Remove `{name}`: write it like `{}`. {see}", sig.usage)
             }
-            None => {
+            [] => {
                 format!("Remove `{name}`, or replace it with an argument {shown} accepts. {see}")
             }
         };
@@ -1122,24 +1091,27 @@ mod tests {
     }
 
     #[test]
-    fn suggestions_are_offered_only_when_one_name_is_close() {
+    fn suggestions_are_offered_only_when_a_name_is_close() {
         let asset = Signature::named("asset").unwrap();
-        assert_eq!(asset.closest("input"), Some("inputs"));
-        assert_eq!(asset.closest("partition"), Some("partitions"));
-        assert_eq!(asset.closest("serialiser"), Some("serializer"));
-        assert_eq!(asset.closest("freshnes"), Some("freshness"));
-        assert_eq!(asset.closest("tag"), Some("tags"));
-        assert_eq!(asset.closest("evn"), Some("env")); // two neighbours swapped
+        assert_eq!(asset.closest("input"), ["inputs"]);
+        assert_eq!(asset.closest("partition"), ["partitions"]);
+        assert_eq!(asset.closest("serialiser"), ["serializer"]);
+        assert_eq!(asset.closest("freshnes"), ["freshness"]);
+        assert_eq!(asset.closest("tag"), ["tags"]);
+        assert_eq!(asset.closest("evn"), ["env"]); // two neighbours swapped
         // Nothing close: no guess.
-        assert_eq!(asset.closest("after"), None);
-        assert_eq!(asset.closest("when"), None);
-        assert_eq!(asset.closest("timeout"), None);
+        assert_eq!(asset.closest("after"), Vec::<&str>::new());
+        assert_eq!(asset.closest("when"), Vec::<&str>::new());
+        assert_eq!(asset.closest("timeout"), Vec::<&str>::new());
         // `retry` is as far from `retries` as from nothing else, but three edits: no guess.
-        assert_eq!(asset.closest("retry"), None);
+        assert_eq!(asset.closest("retry"), Vec::<&str>::new());
         // A short name gets one edit only: `tab` is two from `tags`.
-        assert_eq!(asset.closest("tab"), None);
+        assert_eq!(asset.closest("tab"), Vec::<&str>::new());
         // The helpers take no keywords, so there is nothing to suggest.
-        assert_eq!(Signature::named("collect").unwrap().closest("asset"), None);
+        assert_eq!(
+            Signature::named("collect").unwrap().closest("asset"),
+            Vec::<&str>::new()
+        );
     }
 
     /// The flat form other tables are meant to be keyed to: one row per argument, with no
@@ -1180,17 +1152,25 @@ mod tests {
     }
 
     #[test]
-    fn two_close_names_give_no_suggestion() {
-        let sig = Signature {
+    fn the_closest_name_wins_and_a_tie_gives_both() {
+        let sig = |keywords: &'static [&'static str]| Signature {
             name: "x",
             decorator: true,
             positional: &[],
-            keywords: &["inputs", "input_s"],
+            keywords,
             deferred: &[],
             usage: "",
             topic: "",
         };
-        assert_eq!(sig.closest("input"), None);
+        assert_eq!(sig(&["inputs", "input_s"]).closest("input"), ["inputs"]);
+        assert_eq!(
+            sig(&["inputs", "inputz"]).closest("input"),
+            ["inputs", "inputz"]
+        );
+        assert_eq!(
+            sig(&["inputs", "inputz", "inputy"]).closest("input"),
+            Vec::<&str>::new()
+        );
     }
 
     /// Parameters of a stub: (positional-only, accepted by keyword), `self` and the decorated

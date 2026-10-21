@@ -1,10 +1,12 @@
 """get/run usage errors state the fix (issue #148).
 
 Positionals in the wrong order have exactly one valid reading, so barca prints the corrected
-command instead of guessing. There is deliberately no fuzzy "did you mean" matching: an agent
-could read a guess as confirmation. Every get/run usage error exits 2. Only an unknown or
-ambiguous target (and `run` without one) ends with `barca list <files>`, the discovery entry
-point; every other usage error carries its own fix and no `barca list` pointer (#492).
+command instead of guessing. A mistyped name (target, `--refresh` name, flag, subcommand) gets
+one "Did you mean" rule (#556): the closest name within one or two edits, at the start of the
+remediation, never in `error` and never changing the exit code. Every get/run usage error exits 2.
+Only an unknown or ambiguous target (and `run` without one) ends with `barca list <files>`, the
+discovery entry point; every other usage error carries its own fix and no `barca list` pointer
+(#492).
 
 `get`/`run` default to JSON output, so their errors are a JSON envelope on stderr (#154); these
 tests read `error` and `remediation` from it. One test checks the human-mode prose.
@@ -142,6 +144,51 @@ def test_unknown_target(project):
         err = usage_error(barca(project, cmd, "nope", "pipeline.py"))
         assert "'nope' not found" in err
         assert last_line(err) == "Run `barca list pipeline.py` to see available assets and tasks."
+
+
+def test_a_mistyped_target_suggests_the_closest_node(project):
+    for cmd, name, meant in (("get", "midd", "mid"), ("run", "reprt", "report")):
+        proc = barca(project, cmd, name, "pipeline.py")
+        err = usage_error(proc)
+        env = json.loads(proc.stderr.strip().splitlines()[-1])
+        assert f"'{name}' not found" in env["error"]
+        assert "did you mean" not in env["error"].lower()
+        assert env["remediation"] == (
+            f"Did you mean '{meant}'? Run `barca list pipeline.py` to see available assets and tasks."
+        ), env
+        assert "Run `barca list pipeline.py`" in last_line(err)
+
+
+def test_a_far_off_target_gets_no_guess(project):
+    err = usage_error(barca(project, "get", "nope", "pipeline.py"))
+    assert "did you mean" not in err.lower()
+
+
+def test_a_mistyped_refresh_name_suggests_the_closest_upstream_asset(project):
+    err = usage_error(barca(project, "run", "report", "pipeline.py", "--refresh", "srcc"))
+    assert "no upstream asset named 'srcc'" in err
+    assert "\nDid you mean 'src'?\n" in err
+    assert last_line(err) == "Run `barca list pipeline.py` to see available assets and tasks."
+
+
+def test_a_mistyped_flag_or_subcommand_suggests_the_closest(project):
+    proc = barca(project, "get", "mid", "pipeline.py", "--refesh", "src")
+    env = json.loads(proc.stderr.strip().splitlines()[-1])
+    assert proc.returncode == 2 and env["kind"] == "usage", proc.stderr
+    assert env["remediation"].startswith("Did you mean '--refresh'?"), env
+    assert "as a value" not in proc.stderr  # clap's `-- --refesh` tip is gone
+    proc = barca(project, "statsu")
+    assert proc.returncode == 2
+    assert "\n\nDid you mean 'stats' or 'status'?\n" in proc.stderr, proc.stderr
+
+
+def test_human_mode_puts_the_suggestion_on_its_own_line(project):
+    proc = barca(project, "get", "midd", "pipeline.py", "-o", "pretty")
+    assert proc.returncode == 2
+    assert proc.stderr.startswith("Asset 'midd' not found. Available: "), proc.stderr
+    assert last_line(proc.stderr) == (
+        "Did you mean 'mid'? Run `barca list pipeline.py` to see available assets and tasks."
+    )
 
 
 def test_task_asset_misuse(project):

@@ -497,12 +497,31 @@ step or imports user code. To recompute first, use `--refresh`; never delete fil
     barca run report pipeline.py
   ```
 
-  With more than one non-`.py` name after a file it states the rule and does not guess. barca
-  never offers fuzzy "did you mean" suggestions, because a guess can read as confirmation: an
-  unknown or ambiguous target ends with ``Run `barca list <files>` to see available assets and
-  tasks.`` on every command, a mistyped flag is just an error, and an unknown `barca docs` topic
-  lists every valid topic. Other usage errors carry their own fix (the corrected command, `barca
-  run` for a task, the valid `--refresh` names) and no `barca list` pointer.
+  With more than one non-`.py` name after a file it states the rule and does not guess. An unknown
+  or ambiguous target ends with ``Run `barca list <files>` to see available assets and tasks.``
+  on every command; other usage errors carry their own fix (the corrected command, `barca run`
+  for a task, the valid `--refresh` names) and no `barca list` pointer.
+- A mistyped name gets "Did you mean ...?": a flag, a subcommand, a target, a `--refresh` name,
+  a `barca sql` view, a `barca docs` topic and a decorator argument. The rule is the same
+  everywhere: the closest names within one edit of what was written (two for a name longer than
+  four characters), the best match only, or two when they tie; nothing when no name is that
+  close. The suggestion is in the `remediation` (and on its own line in human mode), never in
+  `error`, and it never changes the exit code: the command still exits 2 and runs nothing.
+  barca does not act on a guess; check it before you retry, since a near name can be a
+  different node.
+
+  ```
+  $ barca get amount pipeline.py --pretty
+  Asset 'amount' not found. Available: pipeline.py:amounts, pipeline.py:report
+
+  Did you mean 'amounts'? Run `barca list pipeline.py` to see available assets and tasks.
+
+  $ barca statsu
+  error: unrecognized subcommand 'statsu'
+
+  Did you mean 'stats' or 'status'?
+  ...
+  ```
 
 ## Editing a barca project: a safe loop
 

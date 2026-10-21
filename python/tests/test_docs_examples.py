@@ -151,8 +151,8 @@ def test_docs_command_surface(binary, tmp_path):
     one = result(barca(binary, tmp_path, "docs", "types", "--json"))
     assert one["name"] == "types" and one["content"].startswith("# ")
     bad = barca(binary, tmp_path, "docs", "typs")
-    # No fuzzy guess (#180): the error lists every valid topic instead.
-    assert bad.returncode == 2 and "did you mean" not in bad.stderr.lower()
+    # The closest topic (#556), then every valid topic.
+    assert bad.returncode == 2 and "Did you mean 'types'?" in bad.stderr
     assert all(f"\n  {n}\n" in bad.stderr + "\n" for n in names), bad.stderr
     assert bad.stdout == ""
 

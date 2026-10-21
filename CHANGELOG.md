@@ -20,6 +20,15 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   lists the runs in flight with their `active_steps`. The UI polls `/state` every 2 s while
   anything runs (#534).
 
+- A mistyped name gets "Did you mean ...?" (#556): a flag (`--refesh` -> `--refresh`), a
+  subcommand (`statsu` -> `stats` or `status`), a target (`barca get amount` -> `amounts`), a
+  `--refresh` name, a `barca sql` view and a `barca docs` topic, by the rule decorator arguments
+  already used: the closest names within one edit (two for a name longer than four characters),
+  the best match only, or two that tie. The suggestion starts the JSON envelope's `remediation`
+  and has its own line in human mode; `error` and the exit code (2) are unchanged, and barca
+  never acts on it. clap's misleading `use '-- --refesh'` tip is gone. This reverses the "no
+  fuzzy suggestions" rule in `barca docs agents`.
+
 ### Bug Fixes
 
 - Usage errors point at `barca list` only when the target is the problem (#492): an unknown or

@@ -336,6 +336,16 @@ pub(crate) fn refresh_name_matches(node_id: &str, name: &str) -> bool {
     node_id == name || node_id.ends_with(&format!(":{name}"))
 }
 
+/// "Did you mean ...?" for an unknown target `name` among node ids `available`: compared with
+/// the function names, or with the full ids when `name` is one (`pipeline.py:amount`).
+pub fn target_suggestion(name: &str, available: &[&str]) -> Option<String> {
+    if name.contains(':') {
+        crate::suggest::suggestion(name, available.iter().copied())
+    } else {
+        crate::suggest::suggestion(name, available.iter().map(|id| short_name(id)))
+    }
+}
+
 /// The function name of a node id (`pipeline.py:src` -> `src`, `pipeline.py:p[k=v]` -> `p`).
 pub(crate) fn short_name(node_id: &str) -> &str {
     let base = node_id.split('[').next().unwrap_or(node_id);
@@ -370,9 +380,12 @@ pub(crate) fn validate_refresh_names(
     for name in names {
         if !assets.iter().any(|id| refresh_name_matches(id, name)) {
             let valid: Vec<&str> = assets.iter().map(|id| short_name(id)).collect();
+            let meant = target_suggestion(name, &assets)
+                .map(|m| format!("{m}\n"))
+                .unwrap_or_default();
             return Err(BarcaError::Usage(format!(
                 "--refresh: no upstream asset named '{name}'{}.\n\
-                 Upstream assets you can refresh: {}\n\
+                 {meant}Upstream assets you can refresh: {}\n\
                  Pass several as a comma-separated list: --refresh {}",
                 match target_ids {
                     [] => String::new(),
@@ -650,6 +663,39 @@ def lone() -> int:
             validate_refresh_names(&dag, &["p.py:check_a"], &names(&["deeper"]), false, None)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn a_mistyped_refresh_name_suggests_the_closest_upstream_asset() {
+        let dag = dag();
+        let msg = validate_refresh_names(&dag, &["p.py:check_a"], &names(&["sorc"]), false, None)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            msg.contains("\nDid you mean 'src'?\nUpstream assets"),
+            "{msg}"
+        );
+        let msg = validate_refresh_names(&dag, &["p.py:check_a"], &names(&["zzzzzz"]), false, None)
+            .unwrap_err()
+            .to_string();
+        assert!(!msg.contains("Did you mean"), "{msg}");
+    }
+
+    #[test]
+    fn an_unknown_target_suggests_by_function_name_or_full_id() {
+        let ids = ["p.py:raw", "p.py:amounts", "q.py:amounts", "p.py:report"];
+        assert_eq!(
+            target_suggestion("amount", &ids).as_deref(),
+            Some("Did you mean 'amounts'?")
+        );
+        assert_eq!(
+            target_suggestion("q.py:amount", &ids).as_deref(),
+            Some("Did you mean 'q.py:amounts'?")
+        );
+        assert_eq!(target_suggestion("orders", &ids), None);
+        let err = resolve_target_among([("p.py:amounts", crate::NodeKind::Asset)], "amount", "get")
+            .unwrap_err();
+        assert!(matches!(err, TargetError::NotFound { .. }));
     }
 
     #[test]
