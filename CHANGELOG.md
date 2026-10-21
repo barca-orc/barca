@@ -143,14 +143,17 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   from about 1.4 s to 0.5 s on a loaded machine (0.13 s without a store). What is left is the
   transfer helper's start and the startup check, which a `get` of a cached target still needs.
 - A warm run with a store checks the store at most every 5 minutes (#593). A successful startup
-  check is remembered in `.barca/gc-state.json`, per store URI and environment, and a `get` or
-  `run` within 5 minutes of it that uploads and fetches nothing starts no transfer helper: no
-  startup check and no check of its cached targets against the store. A run that does upload
-  or fetch starts the helper when it first needs it. A different store or environment, pending
-  uploads, `--refresh`, `--refresh-all`, `barca doctor` and `barca gc` always check, and a
-  failed transfer ends the window. A store object deleted behind barca's back is now noticed
-  within 5 minutes instead of on the next run (`barca docs remote`, "How often the store is
-  checked"). NUMBERS
+  check is remembered in `.barca/gc-state.json`, per environment, store URI and storage
+  options, and a `get` or `run` within 5 minutes of it starts no transfer helper unless it
+  uploads or fetches something: no startup check and no check of its cached targets against
+  the store. A run that does transfer starts the helper when it first needs it, and checks the
+  store before its first fetch. A run after the window, another store or environment, pending
+  uploads, `--refresh`, `--refresh-all` and `get -o url` check at startup as before, and a failed
+  transfer ends the window. So a store object deleted behind barca's back is noticed within 5
+  minutes rather than by the next run (`barca docs remote`, "How often the store is checked").
+  On a 9-node project with two file sensors and a MinIO store on localhost (under `taskset`), a
+  warm `barca get` took 216 ms with the store and 54 ms without before this change, and 43 ms
+  and 42 ms after it: the store adds about 1 ms instead of 160 ms, with no helper started.
 
 ### Testing
 

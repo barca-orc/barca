@@ -362,14 +362,16 @@ check is remembered for 5 minutes, per store URI and environment, in `.barca/gc-
   returned what the store already holds, starts none and does not ask the store about its
   targets;
 - once it uploads or fetches, starts the helper then, and a `get` asks the store about its
-  cached targets as usual. The startup check is not repeated: a store that stopped answering in
-  the meantime shows up as a failed transfer (a failed upload is kept pending, a failed fetch is
-  an error, exit 3).
+  cached targets as usual. Before its first fetch it makes the startup check (the `checking
+  artifact store` line), so a store that is gone fails the run (exit 3) rather than reading as
+  missing results to compute again. Uploads do not wait for a check: a failed one is kept
+  pending ("When an upload fails after the steps succeeded").
 
-These always check the store: the first run after the window ends, a different store URI or
-environment, a run with results pending upload from an earlier run, `--refresh` and
-`--refresh-all`, `barca doctor` and `barca gc`. A failed transfer ends the window, so the next
-run checks. Only a startup check starts a window; runs within it do not extend it.
+These always check the store at startup: the first run after the window ends, a different
+store URI, environment or storage options, a run with results pending upload from an earlier
+run, `--refresh`, `--refresh-all` and `get -o url`. `barca doctor` and `barca gc` look at the
+store whenever they run. A failed transfer ends the window, so the next run checks. Only a
+startup check starts a window; runs within it do not extend it.
 
 So a store object deleted or changed behind barca's back is noticed within 5 minutes, by the
 first run that checks, rather than by the very next run. `barca state reset` and
