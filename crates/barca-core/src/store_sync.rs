@@ -229,7 +229,8 @@ impl StoreSync {
         // started only if a local copy is missing or is not the recorded one; the store is
         // checked first.
         if !self.client.started() {
-            wanted.retain(|(_, store, sha256)| !self.client.has_local_copy(store, sha256.as_deref()));
+            wanted
+                .retain(|(_, store, sha256)| !self.client.has_local_copy(store, sha256.as_deref()));
             if !wanted.is_empty() {
                 self.check_now().await?;
             }

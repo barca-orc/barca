@@ -784,9 +784,14 @@ async fn a_survey_keeps_the_store_checks_and_each_store_has_its_own() {
     let checks = read_state(&f.project).unwrap().store_checks;
     assert_eq!(checks.iter().map(|c| c.at).collect::<Vec<_>>(), [200, 300]);
 
-    check_in(&f.project, MaxSize::Bytes(u64::MAX / 2), &Own::default(), None)
-        .await
-        .unwrap();
+    check_in(
+        &f.project,
+        MaxSize::Bytes(u64::MAX / 2),
+        &Own::default(),
+        None,
+    )
+    .await
+    .unwrap();
     let state = read_state(&f.project).unwrap();
     assert!(state.surveyed_at > 0);
     assert_eq!(state.store_checks, checks);

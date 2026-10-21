@@ -17,13 +17,13 @@ from contextlib import closing
 from pathlib import Path
 
 import pytest
-
 from barca.api import _find_binary
+
+from .store_window import age_store_checks, store_checks
 
 SCRUB = ("BARCA_", "FSSPEC_", "AWS_", "AZURE_", "GOOGLE_", "GCSFS_", "STORAGE_EMULATOR_HOST")
 CHECKING = "[barca] checking artifact store "
 STARTED = "[trace]  transfer helper started"
-WINDOW = 300
 
 PIPELINE = """
 from pathlib import Path
@@ -91,22 +91,6 @@ def requests(stderr: str, kind: str) -> list[str]:
     return [line.split(marker, 1)[1] for line in stderr.splitlines() if marker in line]
 
 
-def checks(root: Path) -> list[dict]:
-    path = root / ".barca" / "gc-state.json"
-    if not path.exists():
-        return []
-    return json.loads(path.read_text()).get("store_checks", [])
-
-
-def age_checks(root: Path, seconds: int) -> None:
-    """Move every remembered store check `seconds` into the past."""
-    path = root / ".barca" / "gc-state.json"
-    state = json.loads(path.read_text())
-    for check in state["store_checks"]:
-        check["at"] -= seconds
-    path.write_text(json.dumps(state))
-
-
 def store_object(root: Path, node: str) -> Path:
     [found] = (root / "store").rglob(f"pipeline.py--{node}/*.json")
     return found
@@ -115,7 +99,7 @@ def store_object(root: Path, node: str) -> Path:
 def test_a_warm_run_within_5_minutes_of_a_check_starts_no_helper(project):
     _, cold = get(project)
     assert helpers(cold) == 1 and CHECKING in cold, cold
-    [check] = checks(project)
+    [check] = store_checks(project)
     assert check["env"] == "default" and check["uri"].startswith(str(project / "store")), check
 
     result, warm = get(project)
@@ -126,7 +110,7 @@ def test_a_warm_run_within_5_minutes_of_a_check_starts_no_helper(project):
     assert "backup_skipped (no new result)" in warm, warm
     assert {s["id"] for s in result["steps"] if s["status"] == "ran"} == {"pipeline.py:feed"}
     # A run within the window does not extend it.
-    assert checks(project) == [check]
+    assert store_checks(project) == [check]
 
     # A get of a target that is cached here, with no sensor upstream: no helper either.
     _, cached = get(project, "constant")
@@ -142,17 +126,17 @@ def test_a_deleted_store_object_is_noticed_once_the_window_ends(project):
     assert helpers(inside) == 0, inside
     assert not report.exists()
 
-    age_checks(project, WINDOW + 1)
+    age_store_checks(project)
     _, after = get(project)
     assert helpers(after) == 1 and CHECKING in after, after
     assert len(requests(after, "stat")) == 1, after
     assert "pipeline.py:report: not in the artifact store; uploading" in after, after
     assert report.exists()
     # The check starts a new window.
-    [check] = checks(project)
+    [check] = store_checks(project)
     _, again = get(project)
     assert helpers(again) == 0, again
-    assert checks(project) == [check]
+    assert store_checks(project) == [check]
 
 
 def test_a_run_that_uploads_within_the_window_starts_the_helper_when_it_needs_it(project):
@@ -189,7 +173,7 @@ def test_these_runs_check_the_store_within_the_window(project, case):
     get(project)
     args: tuple[str, ...] = ("report",)
     if case == "expired":
-        age_checks(project, WINDOW + 1)
+        age_store_checks(project)
     elif case == "other_store":
         (project / "barca.toml").write_text(f'[remote]\nuri = "{project / "store2"}"\n')
     elif case == "other_env":
@@ -233,19 +217,19 @@ def test_a_failed_upload_ends_the_window(project):
         result, err = get(project)
         assert helpers(err) == 1, err
         assert result["uploads"]["pending"] >= 1, result
-        assert checks(project) == [], err
+        assert store_checks(project) == [], err
     finally:
         for p, mode in modes.items():
             p.chmod(mode)
     _, retry = get(project)
     assert CHECKING in retry, retry
     assert "[barca] uploaded" in retry, retry
-    assert len(checks(project)) == 1
+    assert len(store_checks(project)) == 1
 
 
 def test_doctor_and_gc_check_the_store_within_the_window(project):
     get(project)
-    assert len(checks(project)) == 1
+    assert len(store_checks(project)) == 1
 
     doctor = json.loads(barca(project, "doctor", "--json").stdout)
     names = json.dumps(doctor)
@@ -255,8 +239,6 @@ def test_doctor_and_gc_check_the_store_within_the_window(project):
     # store holds, so it is not evicted as such.
     store_object(project, "report").unlink()
     gc = json.loads(barca(project, "gc", "--dry-run", "--max-size", "1", "--json").stdout)
-    held = [
-        e["path"] for e in gc["evicted"] if e.get("tier") == "store_held"
-    ]
+    held = [e["path"] for e in gc["evicted"] if e.get("tier") == "store_held"]
     assert not any("pipeline.py--report" in p for p in held), gc
     assert any("pipeline.py--constant" in p for p in held), gc
