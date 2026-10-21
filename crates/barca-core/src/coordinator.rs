@@ -195,6 +195,16 @@ impl ReadyQueue {
     fn len(&self) -> usize {
         self.queued.len()
     }
+
+    /// The queued items in pop order. An item removed and queued again has a stale entry
+    /// ahead of its live one; `pop_front` takes it at the first, so this yields it there.
+    fn iter(&self) -> impl Iterator<Item = ItemId> + '_ {
+        let mut seen = HashSet::new();
+        self.order
+            .iter()
+            .copied()
+            .filter(move |id| self.queued.contains(id) && seen.insert(*id))
+    }
 }
 
 // ─── Coordinator ──────────────────────────────────────────────────────────────
@@ -384,6 +394,11 @@ impl Coordinator {
             }
             self.ready.push_front(item_id);
         }
+    }
+
+    /// The ready items in the order `next_ready` hands them out, left in the queue.
+    pub fn ready_items(&self) -> impl Iterator<Item = ItemId> + '_ {
+        self.ready.iter()
     }
 
     /// How many items are ready to be assigned.

@@ -47,7 +47,12 @@ def connect(role: str = "worker") -> socket.socket | None:
         sock.settimeout(10)
         sock.connect(path)
         _socket = sock
-        send_message({"type": "hello", "role": role, "protocol_version": PROTOCOL_VERSION})
+        hello = {"type": "hello", "role": role, "protocol_version": PROTOCOL_VERSION}
+        # Workers start together and connect in any order: the id names which process this is.
+        worker_id = os.environ.get("BARCA_WORKER_ID", "")
+        if role == "worker" and worker_id.isdigit():
+            hello["worker_id"] = int(worker_id)
+        send_message(hello)
         try:
             reply = recv_message()
         except (RuntimeError, ValueError) as error:

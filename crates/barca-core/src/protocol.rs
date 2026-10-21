@@ -17,7 +17,9 @@ pub const PROTOCOL_VERSION: u32 = 3;
 
 /// Negotiate before a helper can receive work. The caller bounds this together
 /// with connection startup and owns reaping the child on every error path.
-pub(crate) async fn accept_hello<S>(stream: &mut S, role: &str) -> io::Result<()>
+/// Returns the helper's hello: a worker's carries its `worker_id`, which pairs the
+/// connection with the process the coordinator started.
+pub(crate) async fn accept_hello<S>(stream: &mut S, role: &str) -> io::Result<serde_json::Value>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
@@ -44,7 +46,8 @@ where
         let _ = write_frame(stream, &serde_json::json!({"type": "protocol_error", "message": message, "protocol_version": PROTOCOL_VERSION})).await;
         return Err(io::Error::new(io::ErrorKind::InvalidData, message));
     }
-    write_frame(stream, &serde_json::json!({"type": "hello", "role": "coordinator", "protocol_version": PROTOCOL_VERSION})).await
+    write_frame(stream, &serde_json::json!({"type": "hello", "role": "coordinator", "protocol_version": PROTOCOL_VERSION})).await?;
+    Ok(hello.unwrap_or_default())
 }
 
 // ─── Worker → Coordinator ────────────────────────────────────────────────────

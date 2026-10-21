@@ -15,6 +15,14 @@ A missing/mismatched version or role gets `protocol_error` with `message` and th
 expected version, then connection refusal. The error says to reinstall matching
 Barca packages. Connection and negotiation share the ten-second startup deadline.
 Rejected, exited and cancelled helpers are reaped; no work precedes acknowledgement.
+
+A worker's hello also carries `worker_id`, the integer from its `BARCA_WORKER_ID`
+environment variable. The coordinator starts every worker a wave of work needs
+before waiting on any, and workers connect in whatever order they finish starting:
+the id pairs each connection with the process the coordinator started (the
+peer's process id, `SO_PEERCRED`, when a hello has none). A connection that
+matches no worker still starting is closed. A coordinator ignores unknown hello
+fields, so the key is additive within version 3.
 The historical standalone stderr batch protocol is independently version 2.
 
 ## Compact tables
