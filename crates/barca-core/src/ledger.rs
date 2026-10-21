@@ -16,7 +16,9 @@
 //!    the run and its step rows. The server verifies each object before it writes anything. A
 //!    rejected post (`409`) or a server that cannot be reached leaves the run a success here:
 //!    a warning names what was not recorded, and the post is kept in this machine's database
-//!    (`ledger_posts`, `unsynced`) until a later command sends it.
+//!    (`ledger_posts`, `unsynced`) until a later command sends it. A run with a result whose
+//!    upload is pending (#390) is held there unsent, and [`Ledger::post_uploaded`] sends it
+//!    once a retry has uploaded it (#507).
 //!
 //! The HTTP transport is behind [`LedgerTransport`], so the command decides how to reach the
 //! server (the CLI's client) and this module stays free of HTTP.
@@ -286,7 +288,7 @@ impl Ledger {
                 }
                 self.check_health(cfg).await?;
                 if retry {
-                    self.retry_unsynced(cfg).await;
+                    self.retry_unsynced(cfg, None).await;
                 }
                 Ok::<(), BarcaError>(())
             })
@@ -390,21 +392,9 @@ impl Ledger {
         dag: &crate::dag::Dag,
     ) -> Vec<String> {
         // A run some of whose results are not in the store yet (#390: their upload failed and
-        // is pending) is not posted: the server would refuse objects it cannot find, and the
-        // team must not be told of results only this machine holds.
-        match crate::pending_uploads::list(&cfg.db_path).await {
-            Ok(pending) if pending.iter().any(|p| p.run_id.as_deref() == Some(run_id)) => {
-                crate::run_line!(
-                    Always,
-                    "[barca] warning: run {run_id} is not recorded on the server {}: some of its \
-                     results are not in the artifact store yet (barca status shows them \
-                     unsynced, local only); they stay on this machine",
-                    self.url()
-                );
-                return Vec::new();
-            }
-            _ => {}
-        }
+        // is pending) is not posted now: the server would refuse objects it cannot find, and
+        // the team must not be told of results only this machine holds. Its post is kept
+        // `unsynced`, and the command whose retry uploads them sends it (#507).
         let post = match build_post(&cfg.db_path, run_id, dag).await {
             Ok(Some(post)) => post,
             Ok(None) => return Vec::new(),
@@ -417,6 +407,20 @@ impl Ledger {
                 return Vec::new();
             }
         };
+        if is_held(&post, &pending_paths(cfg).await) {
+            let kept = posts::record(&cfg.db_path, self.url(), &post, Err(NOT_UPLOADED)).await;
+            crate::run_line!(
+                Always,
+                "[barca] warning: run {run_id} is not recorded on the server {} yet: some of its \
+                 results are not in the artifact store yet (barca status shows them unsynced); \
+                 the next command that uploads them sends it{}",
+                self.url(),
+                kept.err()
+                    .map(|e| format!(" (could not keep the post: {e})"))
+                    .unwrap_or_default()
+            );
+            return Vec::new();
+        }
         match self.send(cfg, &post).await {
             Ok(accepted) => accepted.bytes_changed,
             Err(e) => {
@@ -440,6 +444,9 @@ impl Ledger {
         post: &LedgerPost,
     ) -> Result<PostAccepted, LedgerError> {
         let result = self.transport().post_run(post).await;
+        if let Ok(accepted) = &result {
+            self.remember(post, &accepted.bytes_changed);
+        }
         let outcome = match &result {
             Ok(accepted) => Ok(accepted.run_id.clone()),
             Err(e) => Err(e.describe()),
@@ -461,13 +468,56 @@ impl Ledger {
         result
     }
 
-    /// Post again every run this machine could not post to this server before.
-    async fn retry_unsynced(&self, cfg: &crate::config::ResolvedConfig) {
+    /// The steps of an accepted post are hits for the rest of this command: a run whose post
+    /// was held for its uploads, posted once the retry uploaded them, is not computed again.
+    fn remember(&self, post: &LedgerPost, bytes_changed: &[String]) {
+        let mut answers = self.inner.answers.lock().unwrap();
+        for step in &post.steps {
+            if step.status != "success" || bytes_changed.contains(&step.node_id) {
+                continue;
+            }
+            let (Some(path), Some(format)) = (&step.path, &step.format) else {
+                continue;
+            };
+            answers.insert(
+                (step.node_id.clone(), step.run_hash.clone()),
+                Some(OutputRef {
+                    path: path.clone(),
+                    format: format.clone(),
+                    size_bytes: step.size_bytes.unwrap_or(0),
+                    elapsed_seconds: None,
+                    content_hash: step.digest.clone().filter(|d| !d.is_empty()),
+                }),
+            );
+        }
+    }
+
+    /// Post the held runs with a result at one of `store_paths`, whose pending uploads a retry
+    /// has just settled (#507), after the retry and before this command's own steps are
+    /// decided.
+    pub(crate) async fn post_uploaded(
+        &self,
+        cfg: &crate::config::ResolvedConfig,
+        store_paths: &HashSet<String>,
+    ) {
+        if !store_paths.is_empty() {
+            self.retry_unsynced(cfg, Some(store_paths)).await;
+        }
+    }
+
+    /// Post again every run this machine could not post to this server before (those with a
+    /// result at one of `only`, when given). A run with a result still pending upload stays
+    /// held: the server would refuse it.
+    async fn retry_unsynced(
+        &self,
+        cfg: &crate::config::ResolvedConfig,
+        only: Option<&HashSet<String>>,
+    ) {
         if !std::path::Path::new(&cfg.db_path).exists() {
             return;
         }
-        let pending = match posts::unsynced(&cfg.db_path, self.url()).await {
-            Ok(pending) => pending,
+        let unsynced = match posts::unsynced(&cfg.db_path, self.url()).await {
+            Ok(unsynced) => unsynced,
             Err(e) => {
                 crate::run_line!(
                     Always,
@@ -476,8 +526,19 @@ impl Ledger {
                 return;
             }
         };
-        for post in pending {
+        let pending = pending_paths(cfg).await;
+        for mut post in unsynced {
             let run_id = post.run.run_id.clone();
+            if is_held(&post, &pending) || only.is_some_and(|only| !is_held(&post, only)) {
+                continue;
+            }
+            // A held post was built before its uploads, which record the digests they confirm.
+            if let Err(e) = posts::refresh_digests(&cfg.db_path, &mut post).await {
+                crate::run_line!(
+                    Always,
+                    "[barca] warning: could not read the digests of run {run_id}: {e}"
+                );
+            }
             match self.send(cfg, &post).await {
                 Ok(accepted) => {
                     crate::run_line!(
@@ -498,6 +559,26 @@ impl Ledger {
             }
         }
     }
+}
+
+/// Why a held post (#507) is `unsynced`: the run's uploads are pending.
+const NOT_UPLOADED: &str = "some of its results are not in the artifact store yet";
+
+/// The store locations of this host's results whose upload is pending (#390).
+async fn pending_paths(cfg: &crate::config::ResolvedConfig) -> HashSet<String> {
+    crate::pending_uploads::list(&cfg.db_path)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|p| p.store_path)
+        .collect()
+}
+
+/// Whether one of `post`'s results is at one of `paths`.
+fn is_held(post: &LedgerPost, paths: &HashSet<String>) -> bool {
+    post.steps
+        .iter()
+        .any(|s| s.path.as_ref().is_some_and(|p| paths.contains(p)))
 }
 
 /// The warning for a step whose bytes differ from what was recorded for the same run hash
@@ -595,6 +676,7 @@ pub mod posts {
     use super::{LedgerPost, LedgerStep};
     use crate::BarcaError;
     use crate::db;
+    use std::collections::HashSet;
 
     const CREATE: &str = "CREATE TABLE IF NOT EXISTS ledger_posts (
         client_run_id TEXT PRIMARY KEY,
@@ -748,6 +830,86 @@ pub mod posts {
             });
         }
         Ok(out)
+    }
+
+    /// Fill in the digest of each successful step of `post` that has none from this
+    /// machine's rows: a retried upload records the digest it confirmed (#507).
+    pub(crate) async fn refresh_digests(
+        db_path: &str,
+        post: &mut LedgerPost,
+    ) -> Result<(), BarcaError> {
+        if !post
+            .steps
+            .iter()
+            .any(|s| s.status == "success" && s.digest.is_none())
+        {
+            return Ok(());
+        }
+        let recorded = run_steps(db_path, &post.run.run_id).await?;
+        for step in &mut post.steps {
+            if step.digest.is_none()
+                && let Some(row) = recorded.iter().find(|r| r.node_id == step.node_id)
+            {
+                step.digest.clone_from(&row.digest);
+            }
+        }
+        Ok(())
+    }
+
+    /// Take the steps whose result is at one of `store_paths` out of the posts still waiting
+    /// to be sent: a pending upload that was dropped (its local file is gone) leaves an object
+    /// the server would never find. A post with no step left is removed.
+    pub(crate) async fn forget_steps(
+        db_path: &str,
+        store_paths: &HashSet<String>,
+    ) -> Result<(), BarcaError> {
+        if store_paths.is_empty() {
+            return Ok(());
+        }
+        let _g = db::db_guard().await;
+        let (_db, conn) = db::open_conn(db_path).await?;
+        if !has_table(&conn).await? {
+            return Ok(());
+        }
+        let mut rows = conn
+            .query("SELECT body FROM ledger_posts WHERE state = ?1", [UNSYNCED])
+            .await
+            .map_err(failed("reading posts"))?;
+        let mut waiting: Vec<LedgerPost> = Vec::new();
+        while let Some(row) = rows.next().await.map_err(failed("reading posts"))? {
+            if let Some(post) = row
+                .get::<String>(0)
+                .ok()
+                .and_then(|b| serde_json::from_str(&b).ok())
+            {
+                waiting.push(post);
+            }
+        }
+        for mut post in waiting {
+            let before = post.steps.len();
+            post.steps
+                .retain(|s| !s.path.as_ref().is_some_and(|p| store_paths.contains(p)));
+            if post.steps.len() == before {
+                continue;
+            }
+            let run = post.run.run_id.clone();
+            if post.steps.is_empty() {
+                conn.execute("DELETE FROM ledger_posts WHERE client_run_id = ?1", [run])
+                    .await
+                    .map_err(failed("removing a post"))?;
+            } else {
+                let body = serde_json::to_string(&post)
+                    .map_err(|e| BarcaError::Other(format!("ledger post: {e}")))?;
+                conn.execute(
+                    "UPDATE ledger_posts SET body = ?2, updated_at = datetime('now') \
+                     WHERE client_run_id = ?1",
+                    [run, body],
+                )
+                .await
+                .map_err(failed("updating a post"))?;
+            }
+        }
+        Ok(())
     }
 
     /// The step rows `run_id` recorded, as a ledger post carries them.

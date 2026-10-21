@@ -621,12 +621,18 @@ async fn start_workers(
             client.abort().await;
             return Err(error);
         }
-        // Results an earlier command computed here and could not upload go first (#390).
-        if let Err(error) =
-            retry_pending_uploads(&mut client, db_path, cancel, &location, None).await
-        {
-            client.abort().await;
-            return Err(error);
+        // Results an earlier command computed here and could not upload go first (#390), and
+        // with a server, the runs they held back are posted to its ledger (#507).
+        match retry_pending_uploads(&mut client, db_path, cancel, &location, None).await {
+            Ok(settled) => {
+                if let Some(ledger) = &cfg.ledger {
+                    ledger.post_uploaded(cfg, &settled).await;
+                }
+            }
+            Err(error) => {
+                client.abort().await;
+                return Err(error);
+            }
         }
         Some(StoreSync::new(client, cancel.clone()))
     } else {
@@ -703,21 +709,22 @@ async fn start_workers(
 /// Upload what earlier commands on this machine left pending (#390), before this command's own
 /// work, and wait for it. One that fails again stays pending with its new error; the run goes
 /// on either way, and reports what is still pending when it ends. A pending result whose local
-/// file is gone has nothing left to upload and is dropped.
+/// file is gone has nothing left to upload and is dropped, and taken out of its run's held
+/// ledger post. Returns the store locations of the pending results uploaded or dropped.
 async fn retry_pending_uploads(
     client: &mut TransferClient,
     db_path: &str,
     cancel: &CancellationToken,
     location: &str,
     only: Option<&std::collections::HashSet<&str>>,
-) -> Result<(), BarcaError> {
+) -> Result<std::collections::HashSet<String>, BarcaError> {
     use crate::pending_uploads::Settled;
     let mut pending = crate::pending_uploads::list(db_path).await?;
     if let Some(only) = only {
         pending.retain(|p| only.contains(p.store_path.as_str()));
     }
     if pending.is_empty() {
-        return Ok(());
+        return Ok(Default::default());
     }
     let mut settled = Vec::new();
     let mut queued: Vec<&str> = Vec::new();
@@ -791,7 +798,18 @@ async fn retry_pending_uploads(
             ),
         }
     }
-    crate::pending_uploads::settle(db_path, &settled).await
+    crate::pending_uploads::settle(db_path, &settled).await?;
+    let dropped: std::collections::HashSet<String> = settled
+        .iter()
+        .filter(|(_, s)| matches!(s, Settled::Dropped))
+        .map(|(at, _)| at.clone())
+        .collect();
+    crate::ledger::posts::forget_steps(db_path, &dropped).await?;
+    Ok(settled
+        .into_iter()
+        .filter(|(_, s)| !matches!(s, Settled::Failed(_)))
+        .map(|(at, _)| at)
+        .collect())
 }
 /// Upload this host's pending results (#390) among `store_paths` (artifact-store locations) now,
 /// before something needs them in the store: `barca get -o url` signs only objects the store
@@ -821,12 +839,18 @@ pub(crate) async fn upload_pending(
     let retried =
         retry_pending_uploads(&mut client, &cfg.db_path, cancel, &location, Some(&wanted)).await;
     match retried {
-        Ok(()) => client.shutdown().await,
-        Err(_) => {
+        Ok(settled) => {
+            client.shutdown().await;
+            if let Some(ledger) = &cfg.ledger {
+                ledger.post_uploaded(cfg, &settled).await;
+            }
+            Ok(())
+        }
+        Err(error) => {
             client.abort().await;
+            Err(error)
         }
     }
-    retried
 }
 async fn open_run<'a, 'r>(
     request: &'a ExecuteRequest<'r>,

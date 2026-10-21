@@ -109,10 +109,15 @@ object went missing is a miss on the ledger, so the next `get` that needs it com
 it again, after which the refused post is accepted too.
 
 Only successful runs are posted. A run that failed keeps the steps that succeeded on this
-machine; they are computed again by the next machine that needs them. So does a run some of
-whose results could not be uploaded to the store (their upload is pending, `barca docs remote`):
-it prints `[barca] warning: run <id> is not recorded on the server <url>: some of its results
-are not in the artifact store yet ...` and is not posted, now or later.
+machine; they are computed again by the next machine that needs them. A run some of whose
+results could not be uploaded to the store (their upload is pending, `barca docs remote`) is
+held: it prints `[barca] warning: run <id> is not recorded on the server <url> yet: some of its
+results are not in the artifact store yet ...`, and its post is kept `unsynced` (`barca status`
+shows its results `not_in_ledger`) without being sent, since the server would refuse it. The
+next command that opens the store uploads the pending results first and then posts the run
+(`[barca] recorded run <id> on the server ...`), before it decides its own steps, which are
+then hits; other machines get hits from then on. A pending result whose local file is gone is
+dropped (`barca docs remote`) and taken out of the post, and the rest of the run is posted.
 
 A server that is draining before it stops (SIGTERM, `barca docs scheduling`) refuses posts with
 `503`; the run stays `unsynced` here and the next command against the server sends it again.
