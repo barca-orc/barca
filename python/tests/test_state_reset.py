@@ -104,7 +104,9 @@ def test_the_artifacts_a_reset_leaves_are_leftovers_gc_can_delete(project):
     """#552: the reset deletes nothing and says how much stays; the files it leaves are named by
     no record, so the cache size limit evicts them first and `gc` reports them."""
     root = project
-    path = root / ok(cli(root, "get", "numbers", "--json"))["final_output"]["_barca_artifact"]["path"]
+    path = (
+        root / ok(cli(root, "get", "numbers", "--json"))["final_output"]["_barca_artifact"]["path"]
+    )
     assert path.is_file()
     proc = cli(root, "state", "reset", "--yes", "--json")
     moved = ok(proc)["moved_to"]
