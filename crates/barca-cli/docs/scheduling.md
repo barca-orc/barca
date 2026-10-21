@@ -251,3 +251,5 @@ and graph-dependent nodes while retaining healthy definitions, even in a file wi
 blocked sibling node. Startup logs and the UI report unloaded sources and affected
 node IDs; `GET /health` exposes the same `load_errors`. With `--watch`, repaired
 configured sources and schedules rejoin automatically. One-shot commands stay strict.
+
+See also: `barca docs server-mode`, `barca docs telemetry`, `barca docs assets`.

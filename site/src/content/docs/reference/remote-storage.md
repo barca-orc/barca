@@ -650,3 +650,5 @@ Know before sharing:
 
 Run `barca doctor --pretty` before a run to check configured stores and credential identity.
 See [`barca docs doctor`](/reference/doctor/) for check limits and a copyable local-only debugging profile.
+
+See also: `barca docs cache`, [`barca docs server-mode`](/reference/server-mode/), [`barca docs doctor`](/reference/doctor/).

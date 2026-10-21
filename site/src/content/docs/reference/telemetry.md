@@ -280,9 +280,6 @@ tracebacks, SQL and HTTP metadata; the Rust exporter's error truncation does not
 - `https://` Agent URLs and URLs with credentials are not supported. An IPv6 address goes in
   brackets: `http://[::1]:8126`.
 
-See also: [`barca docs scheduling`](/scheduling/), [`barca docs groups`](/reference/groups/), `barca docs partitions`,
-[`barca docs contract`](/reference/cli-contract/).
-
 ## Metrics from `barca serve`
 
 With the Datadog integration on, `barca serve` reports itself as DogStatsD metrics, not traces,
@@ -419,3 +416,6 @@ Limits:
 - A run without targets is the job `all`, whatever files it reads.
 - The reminder interval is fixed at 24 hours. There is no job filter and no per-job channel.
 - Runs recorded before this version have no job and do not count as a previous run.
+
+See also: [`barca docs scheduling`](/scheduling/), [`barca docs groups`](/reference/groups/), `barca docs partitions`,
+[`barca docs contract`](/reference/cli-contract/).

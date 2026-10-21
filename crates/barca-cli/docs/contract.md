@@ -1842,31 +1842,7 @@ The change to the stable `run failed:` line and its position ships in the next m
 `*_SECRET`, `*_KEY`, `*_PASSWORD`), double quotes around values with spaces. With several targets
 the first failed step is summarized once; each target's error remains in JSON.
 
-## Changing the surface
-
-A pull request that changes a command, flag, environment variable, exit code, JSON output, the
-error envelope or an `--agent` line updates, in the same PR:
-
-1. the snapshots, with one command from the repository root (it rebuilds barca first):
-
-   ```
-   scripts/update-cli-snapshots.sh
-   ```
-
-   This runs `BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca` (help snapshots in
-   `crates/barca-cli/snapshots/help/`, the command, argument and exit-code tables here) and
-   `BARCA_UPDATE_SNAPSHOTS=1 pytest python/tests/test_cli_contract.py` (JSON schemas in
-   `python/tests/snapshots/cli_contract/` and the schema tables here), then copies this page to
-   the site (`site/src/content/docs/reference/cli-contract.md`). Review the diff: it is the
-   change to the contract.
-2. this page's hand-written parts (stability, the experimental table, notes), and the
-   classification in `EXPERIMENTAL` in `crates/barca-cli/src/contract.rs` for a new experimental
-   flag or command;
-3. pre-1.0, for a breaking change: plan a minor bump and add a "Breaking" line to the release
-   notes. From 1.0: keep the old spelling working for at least one minor release, with a stderr
-   warning.
-
-See also: `barca docs agents` (how to drive barca from scripts and agents), `barca docs skill`.
+## Notes by feature
 
 ### Static decorator bindings
 
@@ -2041,3 +2017,29 @@ Older read-only snapshots without attempt metadata report a null history attempt
 | `checks[].ok` | boolean | always |
 | `ok` | boolean | always |
 <!-- END GENERATED schema doctor -->
+
+## Changing the surface
+
+A pull request that changes a command, flag, environment variable, exit code, JSON output, the
+error envelope or an `--agent` line updates, in the same PR:
+
+1. the snapshots, with one command from the repository root (it rebuilds barca first):
+
+   ```
+   scripts/update-cli-snapshots.sh
+   ```
+
+   This runs `BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca` (help snapshots in
+   `crates/barca-cli/snapshots/help/`, the command, argument and exit-code tables here) and
+   `BARCA_UPDATE_SNAPSHOTS=1 pytest python/tests/test_cli_contract.py` (JSON schemas in
+   `python/tests/snapshots/cli_contract/` and the schema tables here), then copies this page to
+   the site (`site/src/content/docs/reference/cli-contract.md`). Review the diff: it is the
+   change to the contract.
+2. this page's hand-written parts (stability, the experimental table, notes), and the
+   classification in `EXPERIMENTAL` in `crates/barca-cli/src/contract.rs` for a new experimental
+   flag or command;
+3. pre-1.0, for a breaking change: plan a minor bump and add a "Breaking" line to the release
+   notes. From 1.0: keep the old spelling working for at least one minor release, with a stderr
+   warning.
+
+See also: `barca docs agents` (how to drive barca from scripts and agents), `barca docs skill`.

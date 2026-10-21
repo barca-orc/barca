@@ -63,5 +63,7 @@ barca doctor --pretty
 barca get --refresh-all
 ```
 
-`--env` overrides `BARCA_ENV` for an individual command. See [`barca docs remote`](/reference/remote-storage/) for store
-configuration and [`barca docs discovery`](/reference/discovery/) for project roots and source selection.
+`--env` overrides `BARCA_ENV` for an individual command.
+
+See also: [`barca docs remote`](/reference/remote-storage/) (store configuration), [`barca docs discovery`](/reference/discovery/) (project roots and
+source selection).

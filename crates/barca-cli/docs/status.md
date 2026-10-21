@@ -280,3 +280,5 @@ carries the tick it was started for in `scheduled_at` (RFC 3339, UTC) and the sc
 ```bash
 barca history --json --fields run_id,triggered_by,scheduled_at,schedule_id
 ```
+
+See also: `barca docs cache`, `barca docs logs`, `barca docs sql`, `barca docs agents`.

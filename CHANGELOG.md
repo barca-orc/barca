@@ -80,8 +80,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 - First-run pages show what barca prints today (#495): Getting Started, the Patterns pages and
   the CLI reference were re-captured on 0.27.0 (artifact paths with a small json preview,
-  prefixed step output, no `importing` line outside `--agent`), their "run with barca 0.18.0" stamps are
-  gone, `after=` and `when=` are documented as the usage errors they now are, and the remote
+  prefixed step output, no `importing` line outside `--agent`), their "run with barca 0.18.0"
+  stamps are gone, `after=` and `when=` are documented as the usage errors they now are, and the remote
   store is described everywhere as this machine's backup and read-through cache, with sharing
   through a server.
 
@@ -92,6 +92,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   `deploying.md` pins 0.27.0, the guide, scheduling and core-constraints pages lose their
   0.18.0 stamps (re-checked, including a multi-file example that needed a qualified import),
   and the comparison pages say their numbers are from 2026-06 and point at #65.
+
+- `barca docs` lists the manual in reading order (overview first, the contract last); the
+  overview's Topics list and Commands table are complete (`logs`, `state`, `version`), and every
+  topic but `cache` ends with its See also (#498).
 
 ## 0.27.0 (2026-10-20)
 
@@ -212,6 +216,7 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   `barca.serve.schedules`, `barca.serve.files` and `barca.serve.nodes` as DogStatsD gauges
   (`DD_DOGSTATSD_URL`, `DD_DOGSTATSD_SOCKET`, or `DD_AGENT_HOST`:`DD_DOGSTATSD_PORT`), with a
   Datadog event on start and stop.
+
 ## 0.26.1 (2026-10-20)
 
 ### Bug Fixes
