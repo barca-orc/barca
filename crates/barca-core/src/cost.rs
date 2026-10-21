@@ -202,6 +202,21 @@ impl CostModel {
     /// `floor = 1`, so heavy work is pulled one-at-a-time, fully parallel —
     /// the batching machinery stays dormant and only wakes for light nodes.
     pub fn batch_size(&self, node_id: &str, remaining_tasks: usize, workers: usize) -> usize {
+        self.batch_size_with_backlog(node_id, remaining_tasks, 0, workers)
+    }
+
+    /// [`Self::batch_size`], with `backlog` more tasks of the phase waiting behind the ready
+    /// ones (on upstreams, or later in their stream). They count toward whether the workload
+    /// is trivial, never toward the ceiling: 16 ready heads of streams 31 steps long are not a
+    /// trivial 16 steps to pack into two pulls, which left most of the pool idle while each
+    /// pull ran its steps in turn (#560).
+    pub fn batch_size_with_backlog(
+        &self,
+        node_id: &str,
+        remaining_tasks: usize,
+        backlog: usize,
+        workers: usize,
+    ) -> usize {
         if remaining_tasks == 0 {
             return 0;
         }
@@ -215,7 +230,7 @@ impl CostModel {
         let k = if floor <= ceiling {
             floor
         } else {
-            let total_cost = per_task * remaining_tasks as f64;
+            let total_cost = per_task * (remaining_tasks + backlog) as f64;
             if total_cost < TRIVIAL_TOTAL_SECONDS {
                 // Trivial workload: parallelism is moot — collapse to ~2 pulls.
                 remaining_tasks.div_ceil(2)
@@ -397,6 +412,17 @@ mod tests {
             k_after_probe > 1,
             "estimate should decay after probe, got K={k_after_probe}"
         );
+    }
+
+    /// #560: ready heads of long streams are not a trivial workload.
+    #[test]
+    fn work_waiting_behind_the_ready_steps_is_not_trivial() {
+        let mut m = model();
+        m.observe("f.py:a", 0.05, 0.05, 0);
+        // 16 ready steps of 50 ms: 0.8 s in all, trivial, packed into two pulls.
+        assert_eq!(m.batch_size("f.py:a", 16, 16), 8);
+        // The same 16 at the heads of streams holding 484 more: one at a time.
+        assert_eq!(m.batch_size_with_backlog("f.py:a", 16, 484, 16), 1);
     }
 
     #[test]

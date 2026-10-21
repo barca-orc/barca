@@ -1170,8 +1170,11 @@ impl WorkerPool {
             return 0;
         };
         let head_node = coord.item(first).step_id.display();
+        // The phase's other steps (waiting on upstreams or on their stream) count toward
+        // whether the work is trivial, not toward the ceiling.
+        let backlog = coord.remaining_count().saturating_sub(coord.ready_count());
         let k = cost
-            .batch_size(&head_node, remaining, self.config.pool_size.max(1))
+            .batch_size_with_backlog(&head_node, remaining, backlog, self.config.pool_size.max(1))
             .max(1);
         let head_est = cost.estimate(&head_node);
         let budget = head_est * k as f64 * 1.5;
