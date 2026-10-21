@@ -136,8 +136,8 @@ from barca import asset, sensor, task
 def version(): return True, Path("data.txt").read_text()
 @asset(inputs={"version": version})
 def rows(version): return {"version": version}
-@task(inputs={"rows": rows})
-def stamp(rows): return time.time_ns()
+@task(inputs={"_rows": rows})
+def stamp(_rows): return time.time_ns()
 """)
     # a -> b: the sensor's bytes change under its run hash; b -> b: the task's do.
     for value in ["a", "b", "b"]:
