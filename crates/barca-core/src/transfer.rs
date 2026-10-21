@@ -242,6 +242,10 @@ impl Launching {
             std::fs::remove_file(&socket_path).ok();
             BarcaError::Other(format!("failed to spawn transfer helper: {e}"))
         })?;
+        // One line per helper process, so a test can count them (#593).
+        if std::env::var_os("BARCA_TRACE_TIMING").is_some() {
+            crate::errln!("[trace]  transfer helper started");
+        }
         Ok(Self {
             lifeline: child.stdin.take(),
             child,
@@ -254,17 +258,7 @@ impl Launching {
     /// Wait for the helper to connect (it has 10 seconds from this call).
     pub async fn connect(mut self) -> Result<TransferClient, BarcaError> {
         let accepted = tokio::select! {
-            accepted = tokio::time::timeout(Duration::from_secs(10), async {
-                let (mut stream, _) = self.listener.accept().await?;
-                crate::protocol::accept_hello(&mut stream, "transfer").await?;
-                Ok::<_, std::io::Error>(stream)
-            }) => {
-                match accepted {
-                    Ok(Ok(stream)) => Ok(stream),
-                    Ok(Err(e)) => Err(format!("transfer helper connection/protocol: {e}")),
-                    Err(_) => Err(format!("timeout waiting for transfer helper to connect and announce protocol v{}; reinstall barca in this Python environment", crate::protocol::PROTOCOL_VERSION)),
-                }
-            }
+            accepted = accept(&self.listener) => accepted,
             status = self.child.wait() => Err(format!(
                 "transfer helper exited before connecting ({}) — is barca installed \
                  with the extras for this artifact store?",
@@ -282,10 +276,11 @@ impl Launching {
         let io_task = tokio::spawn(io_task(stream, req_rx));
         Ok(TransferClient {
             layout: self.layout,
-            child: self.child,
+            child: Some(self.child),
             _lifeline: self.lifeline,
             req_tx,
-            io_task,
+            io_task: Some(io_task),
+            deferred: None,
             socket_path: self.socket_path,
             next_id: 0,
             uploads_queued: 0,
@@ -302,14 +297,54 @@ impl Launching {
     }
 }
 
+/// Take the helper's connection from `listener` and check its hello (10 seconds at most).
+async fn accept(listener: &UnixListener) -> Result<tokio::net::UnixStream, String> {
+    let accepted = tokio::time::timeout(Duration::from_secs(10), async {
+        let (mut stream, _) = listener.accept().await?;
+        crate::protocol::accept_hello(&mut stream, "transfer").await?;
+        Ok::<_, std::io::Error>(stream)
+    })
+    .await;
+    match accepted {
+        Ok(Ok(stream)) => Ok(stream),
+        Ok(Err(e)) => Err(format!("transfer helper connection/protocol: {e}")),
+        Err(_) => Err(format!(
+            "timeout waiting for transfer helper to connect and announce protocol v{}; \
+             reinstall barca in this Python environment",
+            crate::protocol::PROTOCOL_VERSION
+        )),
+    }
+}
+
+/// Answer every request, now and later, with `message`: the helper could not be started.
+async fn fail_all(mut req_rx: mpsc::UnboundedReceiver<Request>, message: String) {
+    req_rx.close();
+    while let Some(Request { reply, .. }) = req_rx.recv().await {
+        let _ = reply.send(Err(Failed {
+            message: message.clone(),
+            attempts: 0,
+            missing: false,
+        }));
+    }
+}
+
+/// A helper that is not started yet: the first request starts it (#593).
+struct Deferred {
+    cmd: Command,
+    req_rx: mpsc::UnboundedReceiver<Request>,
+}
+
 /// Handle to the transfer helper process.
 pub struct TransferClient {
     layout: ArtifactLayout,
-    child: Child,
+    /// The helper process; `None` until a deferred client sends its first request.
+    child: Option<Child>,
     /// Open for as long as the helper should live (see [`Launching`]).
     _lifeline: Option<tokio::process::ChildStdin>,
     req_tx: mpsc::UnboundedSender<Request>,
-    io_task: JoinHandle<()>,
+    io_task: Option<JoinHandle<()>>,
+    /// Set by [`Self::deferred`] until the first request starts the helper.
+    deferred: Option<Deferred>,
     socket_path: PathBuf,
     next_id: u64,
     /// Uploads queued since the helper started ([`Self::uploads_queued`]).
@@ -332,6 +367,78 @@ impl TransferClient {
         cfg: &ResolvedConfig,
         run_id: &str,
     ) -> Result<Launching, BarcaError> {
+        let (cmd, socket_path, layout) = Self::command(python, cfg, run_id)?;
+        Launching::start(cmd, socket_path, layout)
+    }
+
+    /// A client whose helper is started only when the first request is sent: a run that
+    /// transfers nothing starts no helper (#593). Unlike [`Self::launch`], a helper that fails
+    /// to start is reported by the requests, each failing with the reason.
+    pub(crate) fn deferred(
+        python: &Path,
+        cfg: &ResolvedConfig,
+        run_id: &str,
+    ) -> Result<Self, BarcaError> {
+        let (cmd, socket_path, layout) = Self::command(python, cfg, run_id)?;
+        Ok(Self::deferred_with(cmd, socket_path, layout))
+    }
+
+    /// A client that starts `cmd` as its helper at its first request (see [`Self::deferred`]).
+    fn deferred_with(cmd: Command, socket_path: PathBuf, layout: ArtifactLayout) -> Self {
+        let (req_tx, req_rx) = mpsc::unbounded_channel();
+        Self {
+            layout,
+            child: None,
+            _lifeline: None,
+            req_tx,
+            io_task: None,
+            deferred: Some(Deferred { cmd, req_rx }),
+            socket_path,
+            next_id: 0,
+            uploads_queued: 0,
+            uploads: VecDeque::new(),
+            settled: Vec::new(),
+            fetches: HashMap::new(),
+        }
+    }
+
+    /// Whether the helper process was started (a deferred client's starts on its first request).
+    pub(crate) fn started(&self) -> bool {
+        self.child.is_some()
+    }
+
+    /// Start a deferred client's helper: it connects in the background, and the requests
+    /// queued meanwhile wait for it.
+    fn start_deferred(&mut self) {
+        let Some(Deferred { cmd, req_rx }) = self.deferred.take() else {
+            return;
+        };
+        match Launching::start(cmd, self.socket_path.clone(), self.layout.clone()) {
+            Ok(Launching {
+                child,
+                lifeline,
+                listener,
+                ..
+            }) => {
+                self.child = Some(child);
+                self._lifeline = lifeline;
+                self.io_task = Some(tokio::spawn(async move {
+                    match accept(&listener).await {
+                        Ok(stream) => io_task(stream, req_rx).await,
+                        Err(why) => fail_all(req_rx, why).await,
+                    }
+                }));
+            }
+            Err(e) => self.io_task = Some(tokio::spawn(fail_all(req_rx, e.to_string()))),
+        }
+    }
+
+    /// The helper's command line, socket and path layout for this run's artifact store.
+    fn command(
+        python: &Path,
+        cfg: &ResolvedConfig,
+        run_id: &str,
+    ) -> Result<(Command, PathBuf, ArtifactLayout), BarcaError> {
         std::fs::create_dir_all(&cfg.local_artifact_dir)?;
         let local_root = std::fs::canonicalize(&cfg.local_artifact_dir)?;
         let layout = ArtifactLayout::new(local_root, &cfg.artifact_root);
@@ -353,11 +460,9 @@ impl TransferClient {
             "BARCA_TRANSFER_TIMEOUT",
             cfg.transfer_timeout_secs.to_string(),
         );
-        Launching::start(
-            cmd,
-            crate::protocol::socket_path(run_id, "transfer").map_err(BarcaError::Other)?,
-            layout,
-        )
+        let socket_path =
+            crate::protocol::socket_path(run_id, "transfer").map_err(BarcaError::Other)?;
+        Ok((cmd, socket_path, layout))
     }
 
     /// Start `cmd` as the helper (it receives `BARCA_SOCKET`) and wait for it
@@ -383,6 +488,7 @@ impl TransferClient {
         build: impl FnOnce(u64) -> TransferRequest,
         uploaded: Option<UploadNotice>,
     ) -> ReplyRx {
+        self.start_deferred();
         self.next_id += 1;
         let (tx, rx) = oneshot::channel();
         let request = Request {
@@ -470,6 +576,15 @@ impl TransferClient {
             },
         );
         Some(local)
+    }
+
+    /// Whether the local mirror of `store` is there and, when `sha256` is given, has that hash:
+    /// what a fetch would find without downloading. Hashed here, without the helper (#593).
+    pub(crate) fn has_local_copy(&self, store: &str, sha256: Option<&str>) -> bool {
+        self.layout.local_for(store).is_some_and(|local| {
+            local.is_file()
+                && sha256.is_none_or(|h| crate::db::file_sha256(&local).is_ok_and(|l| l == h))
+        })
     }
 
     /// Wait for the fetches of `locals` (paths not being fetched are ready).
@@ -606,18 +721,23 @@ impl TransferClient {
 
     /// Finish in-flight transfers and stop the helper.
     pub async fn shutdown(mut self) {
+        let Some(child) = self.child.as_mut() else {
+            return; // never started
+        };
         let _ = self.req_tx.send(Request {
             frame: TransferRequest::Shutdown,
             reply: oneshot::channel().0,
             uploaded: None,
         });
-        if tokio::time::timeout(Duration::from_secs(30), self.child.wait())
+        if tokio::time::timeout(Duration::from_secs(30), child.wait())
             .await
             .is_err()
         {
-            let _ = self.child.kill().await;
+            let _ = child.kill().await;
         }
-        self.io_task.abort();
+        if let Some(task) = &self.io_task {
+            task.abort();
+        }
         std::fs::remove_file(&self.socket_path).ok();
     }
 
@@ -627,12 +747,16 @@ impl TransferClient {
     /// complete — their artifacts may be missing from the store, so they
     /// must not be recorded — and the hash of each upload that was confirmed.
     pub async fn abort(mut self) -> (Vec<String>, HashMap<String, String>) {
-        crate::helper_proc::stop(&mut self.child).await;
+        if let Some(child) = self.child.as_mut() {
+            crate::helper_proc::stop(child).await;
+        }
         // The socket owner may be finishing a successful notification as the helper
         // stops. Await its cancellation before inspecting receipts, so every row it
         // queued has its matching outcome available to terminal accounting.
-        self.io_task.abort();
-        let _ = (&mut self.io_task).await;
+        if let Some(task) = self.io_task.as_mut() {
+            task.abort();
+            let _ = task.await;
+        }
         let mut unconfirmed = Vec::new();
         let mut hashes = HashMap::new();
         let collected = self
@@ -942,6 +1066,70 @@ for t in threads: t.join()
             .expect("transfer client hung")
     }
 
+    fn fresh_socket() -> PathBuf {
+        crate::protocol::socket_path(
+            &format!("xfer-test-{}-{}", std::process::id(), rand_suffix()),
+            "transfer",
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_deferred_client_starts_its_helper_at_the_first_request() {
+        let fx = Fixture::new();
+        let mut cmd = Command::new("python3");
+        cmd.args(["-c", FAKE_HELPER]).env("FAKE_LOG", &fx.log);
+        let mut c = TransferClient::deferred_with(cmd, fresh_socket(), fx.layout());
+        // A local copy with the recorded hash is checked here, with no helper.
+        let local = fx.write_local("n/h.json", b"same");
+        let store = fx.layout().store_for(&local).unwrap();
+        let sha = crate::db::file_sha256(Path::new(&local)).unwrap();
+        assert!(c.has_local_copy(&store, Some(&sha)));
+        assert!(c.has_local_copy(&store, None));
+        assert!(!c.has_local_copy(&store, Some("other")));
+        assert!(!c.started());
+        assert_eq!(within(c.drain()).await.transferred, 0);
+        assert!(!c.started() && fx.requests().is_empty());
+
+        c.upload("node", &local).unwrap();
+        assert!(c.started());
+        let report = within(c.drain()).await;
+        assert!(report.failures.is_empty(), "{:?}", report.failures);
+        assert_eq!(std::fs::read(fx.store.join("n/h.json")).unwrap(), b"same");
+        within(c.shutdown()).await;
+        assert_eq!(fx.requests(), ["put", "shutdown"]);
+    }
+
+    #[tokio::test]
+    async fn a_deferred_client_never_used_stops_at_once() {
+        let fx = Fixture::new();
+        let c = TransferClient::deferred_with(Command::new("python3"), fresh_socket(), fx.layout());
+        within(c.shutdown()).await;
+        let c = TransferClient::deferred_with(Command::new("python3"), fresh_socket(), fx.layout());
+        let (unconfirmed, _) = within(c.abort()).await;
+        assert!(unconfirmed.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_deferred_helper_that_cannot_start_fails_its_requests_with_the_reason() {
+        let fx = Fixture::new();
+        let cmd = Command::new(fx.local.join("no-such-python"));
+        let mut c = TransferClient::deferred_with(cmd, fresh_socket(), fx.layout());
+        let local = fx.write_local("n/h.json", b"x");
+        c.upload("node", &local).unwrap();
+        let report = within(c.drain()).await;
+        assert_eq!(report.failures.len(), 1);
+        assert!(
+            report.failures[0]
+                .message
+                .contains("failed to spawn transfer helper"),
+            "{:?}",
+            report.failures
+        );
+        // Later requests fail the same way rather than hang.
+        assert!(within(c.probe()).await.is_err());
+    }
+
     #[tokio::test]
     async fn uploads_drain_clean_and_land_in_the_store() {
         let fx = Fixture::new();
@@ -1125,7 +1313,7 @@ for t in threads: t.join()
     async fn abort_includes_a_success_notified_before_its_reply_was_delivered() {
         let fx = Fixture::new();
         let mut c = fx.client().await;
-        let pid = c.child.id().unwrap();
+        let pid = c.child.as_ref().unwrap().id().unwrap();
         let done = fx.write_local("hashed/h.json", b"42");
         let (started_tx, started_rx) = oneshot::channel();
         let (release_tx, release_rx) = std::sync::mpsc::channel();

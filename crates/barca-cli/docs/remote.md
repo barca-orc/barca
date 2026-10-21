@@ -67,7 +67,8 @@ convention, so other fsspec tools on the machine read the same settings.
    the same `barca get` then reports `steps_executed: 0`, served from the bucket.
 
 Every execution checks the artifact store before starting workers, including runs triggered
-through `barca serve`. The read-only startup
+through `barca serve`, unless the store was checked in the last 5 minutes (see "How often the
+store is checked"). The read-only startup
 probe is limited to 10 seconds, or `transfer_timeout` when shorter. Cloud stores
 must allow listing the bucket/container root and its backend's existence check;
 object read/write access or prefix-only listing is insufficient. This check
@@ -334,6 +335,8 @@ that copy. A final output that is only in the store is downloaded first.
   after the steps succeeded"); every other row points at an object that is in the store.
 - The metadata DB is backed up on the minute checkpoint and at the end, unless the run
   recorded no new result (see "Backups and restore").
+- Within 5 minutes of a successful startup check of the same store, a run that uploads and
+  fetches nothing starts no transfer helper at all (next section).
 
 stderr reports each part, so remote cost is visible. The first line names the environment
 and the store, printed once at startup by `get`, `run` and `serve` whenever a store is
@@ -345,6 +348,34 @@ configured (`barca docs cache`, "Environments"):
 [barca] uploaded 2 artifacts (688.9 KB); waited 0.0s at end of run
 [barca] backed up the metadata DB (49.2 KB) to s3://my-bucket/barca/my-project/default/state/backups/2026-10-14T18-02-11.482Z-3f9a1c2e.db in 0.31s
 ```
+
+## How often the store is checked
+
+A run checks the store at startup (`[barca] checking artifact store`), and a `get` asks it about
+each cached target ("`cached` and `unsynced` with a store"). Both need the transfer helper,
+whose start costs a few hundred milliseconds even when nothing moves. A successful startup
+check is remembered for 5 minutes, per store URI and environment, in `.barca/gc-state.json`. A
+`get` or `run` within that window:
+
+- prints no `checking artifact store` line, and starts no transfer helper until it has
+  something to upload or fetch. A warm `get` whose targets are cached here, or whose sensors
+  returned what the store already holds, starts none and does not ask the store about its
+  targets;
+- once it uploads or fetches, starts the helper then, and a `get` asks the store about its
+  cached targets as usual. Before its first fetch it makes the startup check (the `checking
+  artifact store` line), so a store that is gone fails the run (exit 3) rather than reading as
+  missing results to compute again. Uploads do not wait for a check: a failed one is kept
+  pending ("When an upload fails after the steps succeeded").
+
+These always check the store at startup: the first run after the window ends, a different
+store URI, environment or storage options, a run with results pending upload from an earlier
+run, `--refresh`, `--refresh-all` and `get -o url`. `barca doctor` and `barca gc` look at the
+store whenever they run. A failed transfer ends the window, so the next run checks. Only a
+startup check starts a window; runs within it do not extend it.
+
+So a store object deleted or changed behind barca's back is noticed within 5 minutes, by the
+first run that checks, rather than by the very next run. `barca state reset` and
+`barca state restore` end the window too (they clear `.barca/gc-state.json`).
 
 ## When an upload fails after the steps succeeded
 
@@ -396,7 +427,8 @@ A result in neither place is `stale` with reason `artifact_missing`. A store tha
 asked leaves the states as they are, with a note in `cache.detail`.
 
 `barca get` repairs an `unsynced` target without running a step and without changing the exit
-code. For each unpartitioned target served from cache whose local copy has the recorded digest,
+code (a `get` within 5 minutes of a store check that transfers nothing does not ask; see "How
+often the store is checked"). For each unpartitioned target served from cache whose local copy has the recorded digest,
 the transfer helper asks the store for the object: when it is missing, stderr says
 `[barca] pipeline.py:total: not in the artifact store; uploading this machine's copy to <path>`;
 when it has another size (or other bytes, for a store that is a plain directory),
@@ -706,6 +738,8 @@ Know before sharing:
   the store but no backup is taken.
 - `barca status` compares a store object's size, not its bytes, except in a store that is a
   plain directory; partitioned nodes are checked only for pending uploads.
+- A store object deleted behind barca's back is noticed within 5 minutes, not by the next run
+  (see "How often the store is checked").
 - `barca status` does not describe a remote json or pickle result larger than 16 MB, and
   `barca sql` downloads a whole artifact before querying it.
 - `.barca/artifacts/` has no size cap (see Failures).

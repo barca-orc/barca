@@ -15,8 +15,9 @@ from contextlib import closing
 from pathlib import Path
 
 import pytest
-
 from barca.api import _find_binary
+
+from .store_window import age_store_checks
 
 SCRUB = ("BARCA_", "FSSPEC_", "AWS_", "AZURE_", "GOOGLE_", "GCSFS_", "STORAGE_EMULATOR_HOST")
 
@@ -94,6 +95,9 @@ def test_a_warm_run_with_unchanged_sensors_uploads_nothing_and_takes_no_backup(p
     assert len(requests(cold, "put")) == 4, cold
     assert "[barca] backed up the metadata DB" in cold, cold
 
+    # Past the 5-minute store check window (#593), so this run checks the store as it would
+    # after a while: the window's own savings are tested in test_store_check_window.py.
+    age_store_checks(project)
     warm_result, warm = get(project)
     assert ran(warm_result) == {"pipeline.py:feed", "pipeline.py:other"}, warm_result
     assert requests(warm, "put") == [], warm

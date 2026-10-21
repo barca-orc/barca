@@ -24,6 +24,21 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   The environment still wins over the file. Barca reads the file statically and does not set its
   values for the step.
 
+### Performance
+
+- A warm run with a store checks the store at most every 5 minutes (#593). A successful startup
+  check is remembered in `.barca/gc-state.json`, per environment, store URI and storage
+  options, and a `get` or `run` within 5 minutes of it starts no transfer helper unless it
+  uploads or fetches something: no startup check and no check of its cached targets against
+  the store. A run that does transfer starts the helper when it first needs it, and checks the
+  store before its first fetch. A run after the window, another store or environment, pending
+  uploads, `--refresh`, `--refresh-all` and `get -o url` check at startup as before, and a failed
+  transfer ends the window. So a store object deleted behind barca's back is noticed within 5
+  minutes rather than by the next run (`barca docs remote`, "How often the store is checked").
+  On a 9-node project with two file sensors and a MinIO store on localhost (under `taskset`), a
+  warm `barca get` took 216 ms with the store and 54 ms without before this change, and 43 ms
+  and 42 ms after it: the store adds about 1 ms instead of 160 ms, with no helper started.
+
 ### Testing
 
 - The remote planning-pipeline test reads the whole-tree and largest-process peak RSS from the

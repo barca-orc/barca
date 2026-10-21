@@ -196,6 +196,9 @@ pub struct ResolvedConfig {
     /// The ledger this command runs against: attached by the CLI's `get` and `run` from the
     /// configured server unless `--local`, never by `barca serve`, which is the ledger.
     pub ledger: Option<crate::ledger::Ledger>,
+    /// Check the artifact store at the start of a run even when it was checked in the last 5
+    /// minutes (#593): set by `get -o url`, which signs objects the store must hold.
+    pub check_store: bool,
 }
 
 impl ResolvedConfig {
@@ -422,6 +425,7 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
                 }),
                 capacity,
                 ledger: None,
+                check_store: false,
             });
         }
         Some(other) => {
@@ -521,6 +525,7 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
         server_url,
         capacity,
         ledger: None,
+        check_store: false,
     })
 }
 
