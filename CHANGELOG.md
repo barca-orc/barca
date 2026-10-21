@@ -12,6 +12,35 @@ reconciliation, and verified shared DuckDB worker lifetime. See
 upgrade and breaking-change notes. Releases between the historical entries below
 and these tags are available on the same releases page.
 
+## Pending
+
+### Breaking
+
+- **Breaking:** unscheduled `Always` nodes below a scheduled node, tasks included, now run at its
+  ticks under `barca serve` (RFC-0008, #253): a tick of a scheduled node is one run that brings it
+  and every `Always` node below it up to date. To keep a node out of its ticks, make it `Manual` or
+  give it its own `Schedule`.
+- **Breaking:** `barca get`, `barca run`, `POST /runs` (so `--server` too) and ticks no longer
+  recompute a stale `Manual` node, upstream or the target of `barca get`, unless `--refresh` names
+  it (RFC-0008, #253): they read its latest result and print
+  `[barca] note: <name> is Manual and stale; ...`. Name it in `--refresh` (or use
+  `--refresh-all`) to recompute it. A `Manual` node that has never been computed is a usage error
+  (exit 2) naming that command. A `Manual` task named as the target of `barca run` runs. The older
+  `POST /get/{target}`, `POST /run/{target}` and `POST /run` aliases are unchanged.
+
+### Features
+
+- `barca serve` gives `Always` and `Manual` their run-time meaning (RFC-0008, #253). A tick of a
+  scheduled node is one run with several targets: an asset is computed when it has no result for
+  its current code and inputs, a task fires when its last successful run used other inputs (or a
+  task it reads ran since, or it never ran). The tick's run keeps `triggered_by: schedule` and
+  `scheduled_at`, and its `barca.run` span names every target. A failing scheduled node retries at
+  every tick up to the new `Schedule(cron, max_failures=N)` (default 5), then is skipped and
+  reported `failing` (`failures`, `max_failures`, `failing` in `GET /schedule`) until an explicit
+  request or an input change; ticks skipped while a job is paused or still in flight do not count.
+  Consecutive failures are kept in a new `schedule_failures` table, added in place within metadata
+  format 1.
+
 ## 0.27.0 (2026-10-20)
 
 ### Breaking

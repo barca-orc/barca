@@ -65,6 +65,9 @@ barca.run        get daily_revenue        the run; error.message names the first
   short names, `run publish` or `get daily_revenue,orders`; a run of everything in its files
   is `get pipeline.py`, and one with no file named `get all`. `publish` and
   `pipeline.py:publish` are the same resource. The target as typed stays in `barca.target`.
+  A scheduled tick is one run with several targets, the scheduled node and the `Always` nodes
+  below it ([`barca docs scheduling`](/scheduling/)): its resource names all of them (`get inbox,orders`), its
+  `barca.job` is the scheduled node and its `barca.trigger` is `schedule`.
 - **A step** is a child span, `barca.step`, one per node, whose resource is the node's short
   name (`orders`). Short names are unique in a project; when two files define a node of the same
   name, both are named by their id (`a.py:orders`, `b.py:orders`).

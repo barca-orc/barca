@@ -121,14 +121,15 @@ where
 impl MultiResult {
     /// True when any target failed.
     pub fn any_failed(&self) -> bool {
-        self.targets.iter().any(|(_, t)| t.status != "success")
+        self.targets.iter().any(|(_, t)| t.failed())
     }
 }
 
 /// How one target of a multi-target run ended.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TargetOutcome {
-    /// `success` or `failed`.
+    /// `success` or `failed`; under a scheduled tick also `blocked` (it reads a `Manual` node
+    /// that has never been computed, so it was not run; not a failure of the tick).
     pub status: String,
     /// The target's output, when it succeeded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -144,6 +145,13 @@ pub struct TargetOutcome {
     /// on a failed target, the keys that succeeded.
     #[serde(skip)]
     pub partitions: Option<Vec<(String, OutputRef)>>,
+}
+
+impl TargetOutcome {
+    /// Whether this target failed: neither `success` nor `blocked`.
+    pub fn failed(&self) -> bool {
+        self.status != "success" && self.status != "blocked"
+    }
 }
 
 /// How a step was (or, in a dry run, will be) treated.

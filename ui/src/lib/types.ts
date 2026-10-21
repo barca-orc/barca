@@ -112,6 +112,12 @@ export interface ScheduleJob {
   paused: boolean
   /** Unix seconds when a timed pause ends; null for an open-ended pause. */
   paused_until: number | null
+  /** Consecutive failed ticks (RFC-0008); kept across restarts. */
+  failures: number
+  /** `Schedule(cron, max_failures=N)`, default 5. */
+  max_failures: number
+  /** `failures >= max_failures`: ticks are skipped until an explicit request or an input change. */
+  failing: boolean
 }
 
 /** POST /runs — `202 { run_id }`, the database run id. */

@@ -96,6 +96,19 @@ pub(crate) const ADDED_TABLES: &[(&str, &str)] = &[
             PRIMARY KEY (job, integration)
         )",
     ),
+    // Consecutive failed ticks per scheduled node (RFC-0008 rule 9): how many, which nodes
+    // failed in the last one, and the highest materialization id when it was counted. A
+    // success recorded after `mark` for one of those nodes, for one of their direct inputs or
+    // for the scheduled node itself (an explicit request, or an input change) resets it.
+    (
+        "schedule_failures",
+        "CREATE TABLE IF NOT EXISTS schedule_failures (
+            node_id TEXT PRIMARY KEY,
+            failures INTEGER NOT NULL,
+            failed_nodes TEXT NOT NULL,
+            mark INTEGER NOT NULL
+        )",
+    ),
 ];
 
 /// Create every table of [`ADDED_TABLES`] that is missing.
@@ -376,7 +389,8 @@ mod tests {
 
     /// A format-1 database last written by 0.24.3 lacks everything format 1 gained since: the
     /// cache size limit's columns and index (0.25.0), and `runs.job`, `idx_runs_job`,
-    /// `notifications` and `pending_uploads` (0.26.0). Opening it adds all of them in place,
+    /// `notifications` and `pending_uploads` (0.26.0), and `schedule_failures` (0.28.0). Opening
+    /// it adds all of them in place,
     /// keeps its rows, and leaves exactly the schema a new database gets.
     #[tokio::test]
     async fn a_format_1_database_from_0_24_3_gains_everything_added_since() {
@@ -390,6 +404,7 @@ mod tests {
             for statement in [
                 "DROP TABLE pending_uploads",
                 "DROP TABLE notifications",
+                "DROP TABLE schedule_failures",
                 "DROP INDEX idx_runs_job",
                 "DROP INDEX idx_mat_path",
                 "ALTER TABLE runs DROP COLUMN job",
@@ -419,6 +434,10 @@ mod tests {
         assert_eq!(scalar(&conn, "SELECT COUNT(*) FROM notifications").await, 0);
         assert_eq!(
             scalar(&conn, "SELECT COUNT(*) FROM pending_uploads").await,
+            0
+        );
+        assert_eq!(
+            scalar(&conn, "SELECT COUNT(*) FROM schedule_failures").await,
             0
         );
     }

@@ -353,6 +353,58 @@ def test_scheduled_runs_under_serve_are_reported(tmp_path, agent):
     assert all(r["service"] == "scheduler" and r["resource"] == "run heartbeat" for r in roots)
 
 
+def test_a_tick_run_names_every_target_and_is_triggered_by_the_schedule(tmp_path, agent):
+    """A tick is one run with the scheduled node and the `Always` nodes below it (RFC-0008)."""
+    import signal
+    import socket
+
+    (tmp_path / "pipeline.py").write_text(
+        "from barca import asset, sensor, task, Schedule\n\n\n"
+        '@sensor(freshness=Schedule("* * * * * *"))\n'
+        "def inbox() -> tuple[bool, str]:\n"
+        '    return True, "a"\n\n\n'
+        '@asset(inputs={"v": inbox})\n'
+        "def orders(v: str) -> dict:\n"
+        '    return {"v": v}\n\n\n'
+        '@task(inputs={"orders": orders})\n'
+        "def send(orders: dict) -> None:\n"
+        "    pass\n"
+    )
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    base = {k: v for k, v in os.environ.items() if not k.startswith(SCRUB)}
+    serve = subprocess.Popen(
+        [_find_binary(), "serve", "pipeline.py", "--port", str(port)],
+        cwd=tmp_path,
+        env={**base, **datadog(agent)},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    def roots():
+        return [s for r in agent.requests for s in r["body"][0] if s["name"] == "barca.run"]
+
+    try:
+        deadline = time.monotonic() + 60
+        while not roots() and time.monotonic() < deadline:
+            time.sleep(0.25)
+    finally:
+        serve.send_signal(signal.SIGTERM)
+        try:
+            serve.communicate(timeout=30)
+        except subprocess.TimeoutExpired:
+            serve.kill()
+            serve.communicate()
+
+    root = roots()[0]
+    assert root["resource"] == "get inbox,orders,send", root
+    assert root["meta"]["barca.trigger"] == "schedule", root
+    assert root["meta"]["barca.job"] == "pipeline.py:inbox", root
+    assert root["meta"]["barca.schedule_id"] == "pipeline.py:inbox", root
+
+
 def test_a_run_cancelled_by_a_stopping_server_says_why(tmp_path, agent):
     """#190, #434 item 3: a run the drain did not finish is `cancelled` with a reason."""
     import signal

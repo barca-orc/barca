@@ -765,6 +765,7 @@ mod tests {
                     } else {
                         Freshness::Always
                     },
+                    max_failures: None,
                     inputs,
                     partitions: HashMap::new(),
                     sinks: SmallVec::new(),
@@ -821,6 +822,7 @@ mod tests {
             function_name: "a".to_string(),
             explicit_name: None,
             freshness: Freshness::Always,
+            max_failures: None,
             inputs: SmallVec::new(),
             partitions: HashMap::new(),
             sinks: SmallVec::new(),
@@ -1249,6 +1251,7 @@ mod tests {
                 function_name: format!("n{i:03}"),
                 explicit_name: None,
                 freshness: Freshness::Always,
+                max_failures: None,
                 inputs: SmallVec::new(),
                 partitions: HashMap::new(),
                 sinks: SmallVec::new(),
@@ -1392,6 +1395,7 @@ mod tests {
                     function_name: name.to_string(),
                     explicit_name: None,
                     freshness: Freshness::Always,
+                    max_failures: None,
                     inputs,
                     partitions: partition_map,
                     sinks: SmallVec::new(),
@@ -1652,6 +1656,7 @@ mod tests {
             function_name: "source".to_string(),
             explicit_name: None,
             freshness: Freshness::Always,
+            max_failures: None,
             inputs: SmallVec::new(),
             partitions: HashMap::from([(
                 "key".to_string(),
@@ -1685,6 +1690,7 @@ mod tests {
             function_name: "sink".to_string(),
             explicit_name: None,
             freshness: Freshness::Always,
+            max_failures: None,
             inputs: SmallVec::from_vec(vec![DeclaredInput {
                 param_name: "data".to_string(),
                 upstream: NodeRef::FunctionName("source".to_string()),
@@ -1769,6 +1775,7 @@ mod tests {
             function_name: "tickers".to_string(),
             explicit_name: None,
             freshness: Freshness::Always,
+            max_failures: None,
             inputs: SmallVec::new(),
             partitions: HashMap::new(),
             sinks: SmallVec::new(),
@@ -1794,6 +1801,7 @@ mod tests {
             function_name: "fetch_prices".to_string(),
             explicit_name: None,
             freshness: Freshness::Always,
+            max_failures: None,
             inputs: SmallVec::new(),
             partitions: HashMap::from([(
                 "ticker".to_string(),
@@ -1824,6 +1832,7 @@ mod tests {
             function_name: "aggregate".to_string(),
             explicit_name: None,
             freshness: Freshness::Always,
+            max_failures: None,
             inputs: SmallVec::from_vec(vec![DeclaredInput {
                 param_name: "reports".to_string(),
                 upstream: NodeRef::FunctionName("fetch_prices".to_string()),

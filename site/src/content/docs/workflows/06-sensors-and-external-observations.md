@@ -283,8 +283,9 @@ recent materialization, which here is the four-row one (`4 rows x 2 cols` for `o
 
 ## A scheduled sensor under `barca serve`
 
-`@sensor(freshness=Schedule("<cron>"))` makes `barca serve` run the sensor on each tick. The tick
-runs the sensor and records its value. It does not run the assets that read the sensor.
+`@sensor(freshness=Schedule("<cron>"))` makes `barca serve` poll the sensor on each tick. The
+same tick, in the same run, brings up to date every `Always` asset and task below the sensor
+(`Always` is the default for both).
 
 ```python
 @sensor(freshness=Schedule("*/5 * * * * *"))      # every 5 seconds, for the demonstration
@@ -292,37 +293,30 @@ def orders_version() -> tuple[bool, str]:
     return True, hashlib.sha256(Path("orders.csv").read_bytes()).hexdigest()[:12]
 ```
 
-With `orders` and `total` unscheduled, the server log shows one step per tick, before and after
-`orders.csv` changes:
+With `orders` and `total` left at their default freshness, each tick polls `orders_version`.
+When `orders.csv` is unchanged, the sensor returns the value it returned last time, `orders` and
+`total` have cached results for their run hashes, and nothing else runs. When the file changes,
+the same run computes `orders` and then `total`. A task below them would fire in that run too,
+because an asset it reads has a new result.
 
-```
-[barca] scheduling 1 sensor:
-  pipeline.py:orders_version — */5 * * * * * (next 2026-10-07 14:14:00)
-[barca] scheduled run pipeline.py:orders_version → 51ee21bc84b0
-[barca] step:pipeline.py:orders_version completed 0.0s (1/1)
-[barca] 1/1 steps | done in 0.0s
-[barca] scheduled run pipeline.py:orders_version → 51f1182a1560
-[barca] step:pipeline.py:orders_version completed 0.0s (1/1)
-[barca] 1/1 steps | done in 0.0s
-```
+A node marked `Manual` below the sensor is not updated by its ticks, and what reads it reads its
+last result; a node with a `Schedule` of its own follows its own ticks
+([Scheduling](/scheduling/#what-a-tick-does)).
 
-Afterwards `barca status` reports `orders` and `total` as `stale`; nothing recomputed them.
-
-To have the server recompute when the data changes, put the schedule on the asset or task at the
-end of the chain. Each tick of a scheduled asset runs the sensors upstream of it and then
-computes only what has no cached result. [Scheduling](/scheduling/#example-one-scheduled-task-below-a-sensor)
-shows the log of such a server.
-
-Triggering downstream nodes from a sensor tick is proposed in RFC-0008
-([PR #276](https://github.com/barca-orc/barca/pull/276)) and is not implemented.
+Before RFC-0008 a scheduled sensor's tick ran only the sensor, and the schedule had to go on the
+asset or task at the end of the chain. That still works: a tick of a scheduled asset or task
+polls the sensors upstream of it and computes only what has no cached result. Scheduling the
+sensor once is better when several nodes read it, because two separately scheduled nodes whose
+ticks coincide may both compute a shared upstream.
 
 ## Rules and limits
 
 - A sensor cannot have inputs. `@sensor(inputs={...})` is a usage error (exit 2):
   `DAG error: sensor 'pipeline.py:s' cannot have inputs`.
 - Assets and tasks may read sensors. A task cannot be an input to a sensor or an asset.
-- A sensor's default freshness is `Manual`. barca 0.18.0 accepts `@sensor(freshness=Always)`
-  without an error. Only `Schedule(...)` changes what happens, and only under `barca serve`.
+- A sensor's default freshness is `Manual`. `@sensor(freshness=Always)` is accepted without an
+  error. A sensor is never pinned: it is polled whenever a run needs it, whatever its freshness.
+  `Schedule(...)` makes `barca serve` poll it on a cron.
 - A sensor is never served from cache. Keep it cheap: it runs on every command that includes it.
 - Only assets that read the sensor directly have its value in their run hash. Assets further
   downstream change because their upstream's run hash changed.

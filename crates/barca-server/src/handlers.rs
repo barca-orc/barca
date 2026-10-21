@@ -333,6 +333,9 @@ pub(crate) fn schedule_at(state: &AppState, now: chrono::DateTime<chrono::Utc>) 
                 "skip_reason": j.skip_reason,
                 "paused": pause.is_some(),
                 "paused_until": pause.and_then(|p| p.until),
+                "failures": j.failures,
+                "max_failures": j.max_failures,
+                "failing": j.failures >= j.max_failures,
             })
         })
         .collect();

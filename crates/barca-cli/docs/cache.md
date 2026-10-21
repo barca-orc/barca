@@ -399,6 +399,34 @@ the asset that reads it, and everything built from it re-runs.
 Never delete files under `.barca/` to force a recompute: `--refresh` also keeps the metadata DB
 consistent. To look at a cached result, use `barca sql` (`barca docs sql`).
 
+### A `Manual` upstream is read as it is
+
+A `Manual` asset or task (`@asset(freshness=Manual)`) is refreshed by hand only. When
+`barca get` or `barca run` reads one on the way to the target, it is not recomputed, even when
+its inputs or code changed: the run reads its latest successful result, and does not plan
+anything above it. Its step is `cached` with a `detail` saying so (`Manual: its last result is
+read as it is`, or `Manual and stale: ...`). Nodes below it are hashed against that result, so
+they are served from cache until it changes. When it is stale, stderr says how to recompute it:
+
+```text
+[barca] note: baseline is Manual and stale; barca get baseline pipeline.py --refresh baseline to recompute
+```
+
+- Only naming it in `--refresh` recomputes it: `--refresh baseline` (with the cascade,
+  everything below it in the cone too) or `--refresh-all`. That holds when it is the target too:
+  `barca get baseline` without `--refresh baseline` returns its current result, with the same
+  note when it is stale. A `Manual` task named as the target of `barca run` runs, since
+  `--refresh` names assets only.
+- `--refresh` cannot name an asset behind it: the run does not plan it, so the name is a usage
+  error that lists the assets you can refresh.
+- A `Manual` node that has never been computed cannot be read: the command exits 2 and the
+  remediation is the command that computes it. `--dry-run` predicts the same.
+- Sensors are polled whenever a run needs them, whatever their freshness. A partitioned `Manual`
+  node is not pinned yet: it is checked like any other asset.
+- On `barca serve`, `POST /runs` (what `--server` sends) and ticks read them as they are, as
+  `barca get` does (`barca docs scheduling`); the older aliases `POST /get/{target}`,
+  `POST /run/{target}` and `POST /run` compute `Manual` upstreams as before.
+
 ## Seeing what will happen: `--dry-run`
 
 `barca get` and `barca run` take `--dry-run`. It reports, for exactly that command and flags, which

@@ -2,8 +2,8 @@
 openapi: 3.1.0
 info:
   title: Barca current HTTP API
-  version: '4'
-  description: 'Normative current wire contract; specification version 4 is independent of package versions.
+  version: '5'
+  description: 'Normative current wire contract; specification version 5 is independent of package versions.
     Scope: registered barca-server routes and fallback responses. No authentication is implemented (security
     is empty); read-only is an operating mode. The run contract and inspection routes of RFC-0007 section
     3.4 are shipped (POST /runs, GET /runs/{run_id}, its events, output and cancel; /list, /nodes, /history,
@@ -2750,6 +2750,9 @@ components:
       - skip_reason
       - paused
       - paused_until
+      - failures
+      - max_failures
+      - failing
       properties:
         id: *id003
         cron: *id003
@@ -2803,6 +2806,18 @@ components:
           - type: 'null'
           description: When the pause ends (unix epoch seconds); null when paused until resumed, or not
             paused.
+        failures:
+          description: Consecutive failed ticks (RFC-0008); persisted across restarts
+          type: integer
+          minimum: 0
+        max_failures:
+          description: Schedule(..., max_failures=N), default 5
+          type: integer
+          minimum: 1
+        failing:
+          description: failures >= max_failures; ticks are skipped until an explicit request
+            or an input change
+          type: boolean
     Log:
       type: object
       additionalProperties: false
