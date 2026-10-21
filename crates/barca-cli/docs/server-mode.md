@@ -203,8 +203,8 @@ normalized output with exactly these differences.
 server=True)` reads the value from `GET /runs/{run_id}/output` (an unpartitioned target only;
 `partition=` with `server=` is an error).
 
-A draining server answers a new `--server` run with `503`: the client exits 3 naming the
-server, and runs nothing here.
+A draining server answers a new `--server` run with `503`: the client prints the server's
+error (`this server is shutting down: ...`, kind `infra`) and exits 3; nothing runs here.
 
 Ctrl-C (or SIGTERM) asks the server to cancel the run (`DELETE /runs/<run_id>`) and keeps
 printing until the run has stopped; it then exits 130. A second Ctrl-C exits 130 at once, and
