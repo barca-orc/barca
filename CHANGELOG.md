@@ -174,7 +174,7 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   Linux machine; `benchmarks/RESULTS.md` and the comparison pages carry the new numbers in place
   of the June ones, plus barca's trend across 0.1.5, 0.2.0, 0.24.2, 0.26.1 and 0.27.0 (#65).
 
-## Pending
+## 0.28.2 (2026-10-21)
 
 ### Bug Fixes
 
