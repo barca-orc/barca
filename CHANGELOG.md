@@ -12,6 +12,125 @@ reconciliation, and verified shared DuckDB worker lifetime. See
 upgrade and breaking-change notes. Releases between the historical entries below
 and these tags are available on the same releases page.
 
+## Pending
+
+### Breaking
+
+- **Breaking:** `barca serve` drains on SIGTERM or SIGINT instead of cancelling its runs at once
+  (#190). New runs get `503` with `Retry-After`, the scheduler stops, `GET /health` reports
+  `"status": "draining"`, and runs in flight finish, uploads included, for up to
+  `--drain-timeout` seconds (new flag; `[server] drain_timeout` in `barca.toml`; default 30). The
+  server then exits 0. When the deadline passes or a second signal arrives first, the runs left
+  are cancelled with reason `server shutdown` (in their logs, in `/status` `error`, and as
+  `barca.reason` on the `barca.run` span) and the server exits 1, where it used to exit 0.
+  For the old immediate cancel use `--drain-timeout 0` (it exits 1 when it cancels a run). Give
+  the supervisor a stop grace period longer than the drain timeout (Docker's default is 10 s).
+- **Breaking (HTTP API):** every error body is the CLI error envelope (`error`, `code`, `kind`,
+  `remediation`, ...) instead of `{"error"}` alone (`error` is still there). `GET /assets` and
+  `GET /assets/{name}` return the `barca list --json` node shape (`freshness` a lowercase word,
+  cron in `schedule`) and the `barca stats --json` body (`id` instead of `node_id`).
+  `GET /runs/{id}` returns the flat run view with its `outcome` instead of `{run, steps, logs,
+  result}`. Run ids returned by the trigger routes are the database run ids. `POST /run`,
+  `POST /run/{target}`, `POST /get/{target}`, `DELETE /run/{run_id}`, `GET /status/{run_id}` and
+  `GET /events/{run_id}` stay as aliases for one minor release; use `POST /runs`,
+  `DELETE /runs/{run_id}`, `GET /runs/{run_id}` and `GET /runs/{run_id}/events`. Event streams
+  now end after `run_finished` and carry an `id:` per event.
+- **Breaking:** Datadog dashboards and monitors need updating. The `<DD_SERVICE>-python` service
+  is gone: `barca.execute` and library spans are in `DD_SERVICE`, and libraries are no longer
+  patched unless opted in (`DD_PATCH_MODULES=<lib>:true` or `BARCA_TRACE_LIBRARIES=1`).
+  `barca.run` resources use short names (`run publish`, was `run pipeline.py:publish`);
+  `barca.step` and `barca.execute` resources are the node's short name (was the node id, with
+  the partition key, and the job for `barca.execute`): filter by `@barca.node_id` or
+  `@barca.partition` instead. The step tag `barca.node` is `barca.node_id`. Partition keys are
+  `barca.partition` child spans of one `barca.step` per node. The `barca.serve.start`,
+  `barca.serve.heartbeat` and `barca.serve.stop` traces are replaced by the `barca.serve.up`
+  gauge (1, and 0 on stop) and its siblings: move monitors on those traces to the metric.
+  Span `type` is `worker` (was `custom`).
+
+### Features
+
+- `barca serve` runs the server half of the `--server` run contract (RFC-0007 §3.4, #393).
+  `POST /runs` takes the flags of `barca get` / `barca run` as JSON and answers with the run's
+  database id at once (`dry_run` answers with the `--dry-run` JSON); targets are checked first,
+  in the CLI's words. `GET /runs/{run_id}/events` streams every stderr line a local run prints
+  (`line`, tagged `when: agent | always`), step output (`log`), step results (`step_finished`,
+  with `cached: true` for cache hits) and `run_finished` with the outcome, each event numbered
+  (`id:`); a slow or reconnecting reader receives every event once, and the stream ends after
+  `run_finished`. `GET /runs/{run_id}` answers with the outcome (the exact `--json` body, or the
+  failed-run body and error envelope) from the metadata DB, so it survives a restart;
+  `DELETE /runs/{run_id}` cancels; `GET /runs/{run_id}/output` serves the final artifact.
+  `GET /list`, `/nodes`, `/history` and `/stats/{name}` return the CLI's `--json` bodies byte
+  for byte, `GET /project` describes the deployed tree, and `GET /health` adds `api_version`,
+  `env` and `store_uri`. Runs record `triggered_by` (`manual`, `api`, `schedule`, `client`) and,
+  for scheduled runs, `scheduled_at` and `schedule_id`, in `barca history --json`, `GET /runs`
+  and the `barca.run` span (`barca.trigger`, `barca.scheduled_at`, `barca.schedule_id`, #434).
+  The web UI uses the new routes and shows what started each run.
+- `POST /schedule/{id}/pause` (optionally `?until=<RFC 3339>`) and `POST /schedule/{id}/resume`
+  hold one schedule back without `--no-schedule` (#435). `GET /schedule` reports `paused`,
+  `paused_until` and `skip_reason`; a paused job's ticks are skipped with reason `paused` (also
+  on the telemetry span) and are not caught up. Pauses are kept in `schedule_state`, so a restart
+  does not resume a paused job.
+- `--server [<url>]` runs `get`, `run`, `status`, `list`, `history` and `stats` on a
+  `barca serve` and prints the answer as the local command prints it: the same stdout JSON, the
+  same stderr lines, the same exit codes, rendered by the same functions (#394, experimental).
+  With no URL it uses `BARCA_SERVER`, then `[server] url` in `barca.toml`, and says so once on
+  stderr; nothing configured is a usage error. `--local` ignores a configured server (and is a
+  usage error with `--server`); `--server` on `serve`, `plan`, `sql`, `doctor`, `logs`, `docs`
+  and `version` is a usage error. A run streams its progress and step output, and Ctrl-C cancels
+  it on the server (a second Ctrl-C exits 130 at once). A server that cannot be reached, is not
+  barca or speaks another API version is exit 3 naming its URL; a stream that drops mid-run is
+  exit 3 naming the run id. A named file that differs from the deployed one prints a note.
+  `get --server` prints the server's artifact paths (paths by default); `-o value` and
+  `--partition` work as locally (`RunRequest.values`, `RunRequest.partition`), and `-o url` is a
+  usage error with `--server`.
+  `barca.get(..., server=True)` and `barca.run(..., server=True)` do the same from Python.
+  `barca.Client` is deprecated in favour of them and warns when constructed. The binary now
+  carries an HTTPS client (`reqwest` with `rustls`); `POST /runs` with `files` now reads only
+  those files, as the CLI does. See `barca docs server-mode`.
+- Server mode's ledger (RFC-0007 §3.4 and §4.1, #402), experimental. With `[server] url` in
+  `barca.toml` (and `[remote]` pointing at the server's store), `barca get` and `barca run`
+  still run on this machine but ask the server's ledger which run hashes exist
+  (`POST /ledger/lookup`, one request for the plan), fetch the hits from the store, compute the
+  misses here and, once their uploads are confirmed, post the run (`POST /ledger/runs`). The
+  server checks every object in its store (a directory store by SHA-256, an object store by
+  size) before it records the run as `triggered_by: client` with the laptop's run id in the new
+  `client_run_id` (also in `barca history --json`); a missing or mismatched object is `409`
+  naming the node and records nothing. A refused or undelivered post leaves the run a success:
+  a warning names it, it stays `unsynced` in the new `ledger_posts` table and the next command
+  against the server sends it again. A run some of whose uploads are pending (#390) is not
+  posted. A run hash the ledger holds with other bytes prints the
+  non-determinism warning once. A server that cannot be reached is exit 3; a different or
+  missing store is exit 2. The ledger is reached over `http://` or `https://` with the
+  `--server` client, from `[server] url` or `BARCA_SERVER`; `--local` runs against this
+  machine's ledger and touches nothing on the server (error remediations name it). With a
+  server configured, `barca status`, `barca history` and `barca stats` answer from the server
+  (`[barca] server <url> (<source>)` once); `barca status` adds `local` per node (this machine
+  has a copy) and shows a result whose post is pending as `unsynced` with
+  `cache.reason: "not_in_ledger"` (`summary.unsynced` counts them). New manual topic:
+  `barca docs server-mode`.
+- `barca serve`: `BARCA_LOG=json` writes every line as one JSON object on stdout, with `ts`, a
+  real `level` (`info`, `warning`, `error`), `msg`, the `run_id` and `node` it is about, and
+  `dd.trace_id`/`dd.span_id` when the Datadog integration is on, so a container's logs join the
+  run's trace and are no longer all filed as errors. A step's printed output becomes `info` lines
+  of its run. Experimental; without it nothing changes, and `get`/`run` keep progress and errors
+  on stderr (`BARCA_LOG` on another command prints a warning). `barca.step` spans gain
+  `barca.upstream` (direct upstream ids) and, on a step that ran, `barca.digest` (#434).
+- Datadog traces show the pipeline (#482). Every span reports as one service, `DD_SERVICE`
+  (default `barca`), `type: worker`, `span.kind: internal`, with `env`, `version`,
+  `barca.version` and `barca.project`. `barca.run` is named by the command and the targets' short
+  names (`get daily_revenue`) and, on a failure, names the first failed asset and its error
+  (`barca.failed_asset`, `error.type`, `error.message`). `barca.step` is one span per node, named
+  by the node, with `barca.asset`, `barca.node_id`, `barca.file`, `barca.group` (nested `group()`
+  path), `barca.freshness`, `barca.schedule`, `barca.cached` and outcome `skipped` for a planned
+  step that did not run. A partitioned node is one step with `barca.partitions.total/executed/
+  cached/failed` and a `barca.partition` child per key that ran (up to 200 per node, 2,000 per
+  run) and per failed key. Python `barca.execute` spans are named by the node too. Library spans
+  are opt-in: `DD_PATCH_MODULES`, `DD_TRACE_<LIB>_ENABLED`, or `BARCA_TRACE_LIBRARIES=1`
+  (experimental). Trace ids are 128-bit (`_dd.p.tid`); traces go to the Agent's `/v0.4/traces`
+  as JSON and are kept with sampling priority 2. `barca serve` reports `barca.serve.up`,
+  `barca.serve.schedules`, `barca.serve.files` and `barca.serve.nodes` as DogStatsD gauges
+  (`DD_DOGSTATSD_URL`, `DD_DOGSTATSD_SOCKET`, or `DD_AGENT_HOST`:`DD_DOGSTATSD_PORT`), with a
+  Datadog event on start and stop.
 ## 0.26.1 (2026-10-20)
 
 ### Removed
@@ -40,15 +159,6 @@ and these tags are available on the same releases page.
   `--dry-run`, and record the results; `barca status` shows them `unsynced` / `local_only`
   (`summary.unsynced`) until the next command that opens the store uploads them first. Read
   `uploads` instead of exit 3 to detect unpublished results.
-- **Breaking:** `barca serve` drains on SIGTERM or SIGINT instead of cancelling its runs at once
-  (#190). New runs get `503` with `Retry-After`, the scheduler stops, `GET /health` reports
-  `"status": "draining"`, and runs in flight finish, uploads included, for up to
-  `--drain-timeout` seconds (new flag; `[server] drain_timeout` in `barca.toml`; default 30). The
-  server then exits 0. When the deadline passes or a second signal arrives first, the runs left
-  are cancelled with reason `server shutdown` (in their logs, in `/status` `error`, and as
-  `barca.reason` on the `barca.run` span) and the server exits 1, where it used to exit 0.
-  For the old immediate cancel use `--drain-timeout 0` (it exits 1 when it cancels a run). Give the supervisor a stop grace period
-  longer than the drain timeout (Docker's default is 10 s).
 
 ### Removed
 
@@ -94,13 +204,6 @@ and these tags are available on the same releases page.
 - A cached result whose upload is pending is never evicted by the cache size limit, and
   `.barca/backups/` counts toward it but is never evicted. `barca get -o url` uploads a
   `local only` result before signing it.
-- `barca serve`: `BARCA_LOG=json` writes every line as one JSON object on stdout, with `ts`, a
-  real `level` (`info`, `warning`, `error`), `msg`, the `run_id` and `node` it is about, and
-  `dd.trace_id`/`dd.span_id` when the Datadog integration is on, so a container's logs join the
-  run's trace and are no longer all filed as errors. A step's printed output becomes `info` lines
-  of its run. Experimental; without it nothing changes, and `get`/`run` keep progress and errors
-  on stderr (`BARCA_LOG` on another command prints a warning). `barca.step` spans gain
-  `barca.upstream` (direct upstream ids) and, on a step that ran, `barca.digest` (#434).
 
 ## 0.25.1 (2026-10-20)
 
@@ -162,105 +265,6 @@ and these tags are available on the same releases page.
   the previous step in its stream through its own edge; one shared gate per step now keeps the
   same ordering. Dispatch also finds an upstream's output by id instead of scanning every
   output, and the end-of-run check no longer scans every item on each event.
-
-### Features
-
-- Server mode's ledger (RFC-0007 §3.4 and §4.1, #402), experimental. With `[server] url` in
-  `barca.toml` (and `[remote]` pointing at the server's store), `barca get` and `barca run`
-  still run on this machine but ask the server's ledger which run hashes exist
-  (`POST /ledger/lookup`, one request for the plan), fetch the hits from the store, compute the
-  misses here and, once their uploads are confirmed, post the run (`POST /ledger/runs`). The
-  server checks every object in its store (a directory store by SHA-256, an object store by
-  size) before it records the run as `triggered_by: client` with the laptop's run id in the new
-  `client_run_id` (also in `barca history --json`); a missing or mismatched object is `409`
-  naming the node and records nothing. A refused or undelivered post leaves the run a success:
-  a warning names it, it stays `unsynced` in the new `ledger_posts` table and the next command
-  against the server sends it again. A run hash the ledger holds with other bytes prints the
-  non-determinism warning once. A server that cannot be reached is exit 3; a different or
-  missing store is exit 2. The ledger is reached over `http://` or `https://` with the
-  `--server` client, from `[server] url` or `BARCA_SERVER`; `--local` runs against this
-  machine's ledger and touches nothing on the server (error remediations name it). With a
-  server configured, `barca status`, `barca history` and `barca stats` answer from the server
-  (`[barca] server <url> (<source>)` once); `barca status` adds `local` per node (this machine
-  has a copy) and shows a result whose post is pending as `unsynced` with
-  `cache.reason: "not_in_ledger"` (`summary.unsynced` counts them). New manual topic:
-  `barca docs server-mode`.
-- `barca serve` runs the server half of the `--server` run contract (RFC-0007 §3.4, #393).
-  `POST /runs` takes the flags of `barca get` / `barca run` as JSON and answers with the run's
-  database id at once (`dry_run` answers with the `--dry-run` JSON); targets are checked first,
-  in the CLI's words. `GET /runs/{run_id}/events` streams every stderr line a local run prints
-  (`line`, tagged `when: agent | always`), step output (`log`), step results (`step_finished`,
-  with `cached: true` for cache hits) and `run_finished` with the outcome, each event numbered
-  (`id:`); a slow or reconnecting reader receives every event once, and the stream ends after
-  `run_finished`. `GET /runs/{run_id}` answers with the outcome (the exact `--json` body, or the
-  failed-run body and error envelope) from the metadata DB, so it survives a restart;
-  `DELETE /runs/{run_id}` cancels; `GET /runs/{run_id}/output` serves the final artifact.
-  `GET /list`, `/nodes`, `/history` and `/stats/{name}` return the CLI's `--json` bodies byte
-  for byte, `GET /project` describes the deployed tree, and `GET /health` adds `api_version`,
-  `env` and `store_uri`. Runs record `triggered_by` (`manual`, `api`, `schedule`, `client`) and,
-  for scheduled runs, `scheduled_at` and `schedule_id`, in `barca history --json`, `GET /runs`
-  and the `barca.run` span (`barca.trigger`, `barca.scheduled_at`, `barca.schedule_id`, #434).
-  The web UI uses the new routes and shows what started each run.
-- `--server [<url>]` runs `get`, `run`, `status`, `list`, `history` and `stats` on a
-  `barca serve` and prints the answer as the local command prints it: the same stdout JSON, the
-  same stderr lines, the same exit codes, rendered by the same functions (#394, experimental).
-  With no URL it uses `BARCA_SERVER`, then `[server] url` in `barca.toml`, and says so once on
-  stderr; nothing configured is a usage error. `--local` ignores a configured server (and is a
-  usage error with `--server`); `--server` on `serve`, `plan`, `sql`, `doctor`, `logs`, `docs`
-  and `version` is a usage error. A run streams its progress and step output, and Ctrl-C cancels
-  it on the server (a second Ctrl-C exits 130 at once). A server that cannot be reached, is not
-  barca or speaks another API version is exit 3 naming its URL; a stream that drops mid-run is
-  exit 3 naming the run id. A named file that differs from the deployed one prints a note.
-  `barca.get(..., server=True)` and `barca.run(..., server=True)` do the same from Python.
-  `barca.Client` is deprecated in favour of them and warns when constructed. The binary now
-  carries an HTTPS client (`reqwest` with `rustls`); `POST /runs` with `files` now reads only
-  those files, as the CLI does. See `barca docs server-mode`.
-- `POST /schedule/{id}/pause` (optionally `?until=<RFC 3339>`) and `POST /schedule/{id}/resume`
-  hold one schedule back without `--no-schedule` (#435). `GET /schedule` reports `paused`,
-  `paused_until` and `skip_reason`; a paused job's ticks are skipped with reason `paused` (also
-  on the telemetry span) and are not caught up. Pauses are kept in `schedule_state`, so a restart
-  does not resume a paused job.
-- **Breaking (HTTP API):** every error body is the CLI error envelope (`error`, `code`, `kind`,
-  `remediation`, ...) instead of `{"error"}` alone (`error` is still there). `GET /assets` and
-  `GET /assets/{name}` return the `barca list --json` node shape (`freshness` a lowercase word,
-  cron in `schedule`) and the `barca stats --json` body (`id` instead of `node_id`).
-  `GET /runs/{id}` returns the flat run view with its `outcome` instead of `{run, steps, logs,
-  result}`. Run ids returned by the trigger routes are the database run ids. `POST /run`,
-  `POST /run/{target}`, `POST /get/{target}`, `DELETE /run/{run_id}`, `GET /status/{run_id}` and
-  `GET /events/{run_id}` stay as aliases for one minor release; use `POST /runs`,
-  `DELETE /runs/{run_id}`, `GET /runs/{run_id}` and `GET /runs/{run_id}/events`. Event streams
-  now end after `run_finished` and carry an `id:` per event.
-
-### Datadog telemetry
-
-- Datadog traces show the pipeline (#482). Every span reports as one service, `DD_SERVICE`
-  (default `barca`), `type: worker`, `span.kind: internal`, with `env`, `version`,
-  `barca.version` and `barca.project`. `barca.run` is named by the command and the targets' short
-  names (`get daily_revenue`) and, on a failure, names the first failed asset and its error
-  (`barca.failed_asset`, `error.type`, `error.message`). `barca.step` is one span per node, named
-  by the node, with `barca.asset`, `barca.node_id`, `barca.file`, `barca.group` (nested `group()`
-  path), `barca.freshness`, `barca.schedule`, `barca.cached` and outcome `skipped` for a planned
-  step that did not run. A partitioned node is one step with `barca.partitions.total/executed/
-  cached/failed` and a `barca.partition` child per key that ran (up to 200 per node, 2,000 per
-  run) and per failed key. Python `barca.execute` spans are named by the node too. Library spans
-  are opt-in: `DD_PATCH_MODULES`, `DD_TRACE_<LIB>_ENABLED`, or `BARCA_TRACE_LIBRARIES=1`
-  (experimental). Trace ids are 128-bit (`_dd.p.tid`); traces go to the Agent's `/v0.4/traces`
-  as JSON and are kept with sampling priority 2. `barca serve` reports `barca.serve.up`,
-  `barca.serve.schedules`, `barca.serve.files` and `barca.serve.nodes` as DogStatsD gauges
-  (`DD_DOGSTATSD_URL`, `DD_DOGSTATSD_SOCKET`, or `DD_AGENT_HOST`:`DD_DOGSTATSD_PORT`), with a
-  Datadog event on start and stop.
-
-- **Breaking:** Datadog dashboards and monitors need updating. The `<DD_SERVICE>-python` service
-  is gone: `barca.execute` and library spans are in `DD_SERVICE`, and libraries are no longer
-  patched unless opted in (`DD_PATCH_MODULES=<lib>:true` or `BARCA_TRACE_LIBRARIES=1`).
-  `barca.run` resources use short names (`run publish`, was `run pipeline.py:publish`);
-  `barca.step` and `barca.execute` resources are the node's short name (was the node id, with
-  the partition key, and the job for `barca.execute`): filter by `@barca.node_id` or
-  `@barca.partition` instead. The step tag `barca.node` is `barca.node_id`. Partition keys are
-  `barca.partition` child spans of one `barca.step` per node. The `barca.serve.start`,
-  `barca.serve.heartbeat` and `barca.serve.stop` traces are replaced by the `barca.serve.up`
-  gauge (1, and 0 on stop) and its siblings: move monitors on those traces to the metric.
-  Span `type` is `worker` (was `custom`).
 
 ## 0.24.2 (2026-10-20)
 
