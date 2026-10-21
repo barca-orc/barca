@@ -18,6 +18,9 @@ environment variable and the hash changes, so only the affected subgraph re-runs
 - Environment variables a function reads **without** declaring them are not part of the hash:
   changing one does not invalidate anything. Declare them with `@asset(env=["NAME"])`
   (`barca docs assets`). Nodes that declare no env hash exactly as if `env=` did not exist.
+  A declared variable is read from barca's environment, and when it is not set there, from the
+  project's `.env`, so a value a pipeline loads from `.env` at import is the one hashed:
+  editing it in `.env` re-runs the asset.
 - Barca runs exactly the source it hashed. It never runs stale bytecode for your pipeline files
   or the project modules they import: their `__pycache__` .pyc files are checked against a hash
   of the source, not its mtime and size, so an edit that keeps both (a same-size edit within one

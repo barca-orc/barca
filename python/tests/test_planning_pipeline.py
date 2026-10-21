@@ -252,9 +252,9 @@ def test_a_registry_source_switch_is_seen_only_when_declared(planning_pipeline):
     Undeclared, as in the original pipeline: switching the variable changes nothing barca sees.
     The step stays cached with the old rows, and no output names the variable (#574).
     Operators re-read with `--refresh`. Declared with `env=[...]`, the switch re-runs the
-    registry and its consumer, and the step reports the value. But barca reads the variable from
-    its own environment: a value the pipeline loads from its `.env` at import is not the one
-    hashed or reported (#575)."""
+    registry and its consumer, and the step reports the value. A value the pipeline loads from
+    its `.env` at import is the one hashed and reported, since barca reads the project's `.env`
+    for a declared variable its environment does not set (#575)."""
     root = planning_pipeline.root
     (root / V2_CSV).write_text("account_id,item_id,week,rate,kind\n1,,2,1.0,exit\n2,,3,1.0,exit\n")
     first = get_exited(root)
@@ -299,13 +299,28 @@ def test_a_registry_source_switch_is_seen_only_when_declared(planning_pipeline):
     assert back["account_exit_registry"]["status"] == "ran"
     assert exited(root, "registries/account_exit.csv") == original
 
-    # Declared, but switched in `.env`, which only the pipeline reads: barca hashes and reports
-    # the variable as unset, and serves the result computed from the other CSV.
-    unset = get_exited(root)
-    assert unset["account_exit_registry"]["env"] == {"ACCOUNT_EXIT_REGISTRY_CSV": None}
+    # Declared, and switched in `.env`, which the pipeline loads at import: barca reads the value
+    # from `.env` too. Unchanged, it is the value of the last run, which is served from cache.
+    from_file = get_exited(root)
+    assert {s["status"] for s in from_file.values()} == {"cached"}
+    assert from_file["account_exit_registry"]["env"] == {
+        "ACCOUNT_EXIT_REGISTRY_CSV": "registries/account_exit.csv"
+    }
     dotenv = root / ".env"
     dotenv.write_text(dotenv.read_text().replace("registries/account_exit.csv", V2_CSV))
     after_edit = get_exited(root)
+    # The v2 result computed above, with the variable exported, is the one for this value.
     assert {s["status"] for s in after_edit.values()} == {"cached"}
-    assert after_edit["account_exit_registry"]["env"] == {"ACCOUNT_EXIT_REGISTRY_CSV": None}
-    assert exited(root) == original  # the `.env` now names the v2 CSV
+    assert after_edit["account_exit_registry"]["env"] == {"ACCOUNT_EXIT_REGISTRY_CSV": V2_CSV}
+    assert exited(root) == {1, 2}
+    # A value never computed before re-runs the registry and its consumer.
+    v3 = "registries/account_exit_v3.csv"
+    (root / v3).write_text("account_id,item_id,week,rate,kind\n3,,2,1.0,exit\n")
+    dotenv.write_text(dotenv.read_text().replace(V2_CSV, v3))
+    edited = get_exited(root)
+    assert {s: edited[s]["status"] for s in edited} == {
+        "account_exit_registry": "ran",
+        "exited_accounts": "ran",
+    }
+    assert edited["account_exit_registry"]["env"] == {"ACCOUNT_EXIT_REGISTRY_CSV": v3}
+    assert exited(root) == {3}

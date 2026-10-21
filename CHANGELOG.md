@@ -6,6 +6,17 @@ released yet collect under `## Pending`. Releases 0.1.2 to 0.23.x have their not
 GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; the "0.1.2 to
 0.8.0" summary below lists what the earlier of them shipped.
 
+## Pending
+
+### Bug Fixes
+
+- A variable declared with `env=[...]` that is not set in barca's environment is now read from
+  the project's `.env` (#575). A pipeline that loads `.env` at import (`load_dotenv()`) was
+  hashed with the variable unset, so editing the value in `.env` served the old result; now the
+  edit re-runs the asset, and `steps[].env` and the `--agent` line report the value from `.env`.
+  The environment still wins over the file. Barca reads the file statically and does not set its
+  values for the step.
+
 ## 0.28.3 (2026-10-21)
 
 ### Features

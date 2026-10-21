@@ -206,8 +206,8 @@ def raw() -> dict:
 
 `env=` must be a literal list of string literals; barca reads it statically (a variable, tuple or
 computed name is a parse error). When it plans a run, barca reads each declared variable from its
-own environment (the workers inherit the same environment) and folds the name and value into
-the step's run hash:
+own environment (the workers inherit the same environment), or when it is not set there from the
+project's `.env`, and folds the name and value into the step's run hash:
 
 - Changing a declared variable re-materializes the asset and everything downstream of it. An
   unset variable is its own value, distinct from an empty string.
@@ -217,6 +217,15 @@ the step's run hash:
   hashed but shown as `<redacted>` in every output.
 - `barca list` shows declared names in an ENV column, and as `env` in `--json`.
 - Nodes that declare no `env` hash exactly as before, so existing caches stay valid.
+- A declared variable that is not set in barca's environment is read from the project's `.env`
+  (in the project root, next to `barca.toml`), so a pipeline that loads `.env` at import
+  (`load_dotenv()`, before a settings class reads the environment) is hashed with the value it
+  runs with: editing `SOURCE_CSV=b.csv` in `.env` re-runs `raw` like an `export` does. The
+  environment wins over the file, as with `load_dotenv()`'s default. Barca reads the file
+  without importing anything, understands `KEY=VALUE` lines, `export `, `#` comments, single and
+  double quotes and `${NAME}` / `${NAME:-default}`, and does not set its values for the step:
+  a pipeline that uses them loads the file itself. Another dotenv file (`.env.local`, a path
+  given to `load_dotenv(...)`) is not read; declare such variables by exporting them.
 
 `env=` is also accepted on `@task` and `@sensor`. Those always run, so there it only records the
 values each run used.
