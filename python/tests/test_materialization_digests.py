@@ -126,6 +126,29 @@ def result(): return Path("external.txt").read_text()
     assert _rows(tmp_path)[-1][3]
 
 
+def test_sensor_and_task_with_new_values_do_not_warn(tmp_path):
+    """A sensor's new value under its unchanged run hash is what it is for, not nondeterminism."""
+    (tmp_path / "pipeline.py").write_text("""
+from pathlib import Path
+import time
+from barca import asset, sensor, task
+@sensor()
+def version(): return True, Path("data.txt").read_text()
+@asset(inputs={"version": version})
+def rows(version): return {"version": version}
+@task(inputs={"rows": rows})
+def stamp(rows): return time.time_ns()
+""")
+    # a -> b: the sensor's bytes change under its run hash; b -> b: the task's do.
+    for value in ["a", "b", "b"]:
+        (tmp_path / "data.txt").write_text(value)
+        result, err = _cli(tmp_path, "run", "stamp", "pipeline.py", "--json")
+        assert "not deterministic" not in err, err
+        assert not any(step.get("bytes_changed") for step in result["steps"]), result["steps"]
+    status, _ = _cli(tmp_path, "status", "pipeline.py", "--json")
+    assert all(node.get("last_bytes_change") is None for node in status["nodes"]), status
+
+
 def test_sensor_returning_to_earlier_value_compares_earlier_run_hash(tmp_path):
     (tmp_path / "pipeline.py").write_text("""
 from pathlib import Path

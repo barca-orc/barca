@@ -493,7 +493,9 @@ differ, barca warns that the function is not deterministic and sets `steps[].byt
 in run JSON. A new run hash is an expected change and does not warn; a result recorded without a
 digest sets the baseline. The check is on serialized bytes, so a serializer that writes variable
 metadata can also warn. Artifact paths and exit codes are unchanged. Partitioned steps are
-compared per key; the run's step is marked if any key changed.
+compared per key; the run's step is marked if any key changed. Only assets are checked: a sensor
+returns a new value under the same run hash whenever the data it watches changes, and a task runs
+every time, so new bytes from either are expected and never warn.
 
 `barca status` shows the last such event even after a later unchanged recompute: its JSON has
 `last_bytes_change` (node id, run hash, digest, UTC timestamp) and

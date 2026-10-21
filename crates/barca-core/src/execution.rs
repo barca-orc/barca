@@ -1742,6 +1742,18 @@ async fn return_outputs(
             }
         }
     }
+    // Only an asset promises the same bytes for the same code and inputs. A sensor returns a
+    // new value under the same run hash whenever the data it watches changes, and a task runs
+    // every time: neither is a nondeterministic function.
+    let is_asset = |node: &String| {
+        let base = crate::StepId::parse(node).base_id().to_string();
+        session
+            .prepared
+            .dag
+            .get_node(&base)
+            .is_none_or(|n| n.kind() == crate::model::NodeKind::Asset)
+    };
+    changed.retain(is_asset);
     for node in changed.iter().chain(&session.state.repaired_mismatches) {
         crate::run_line!(Always, "{}", crate::ledger::bytes_changed_warning(node));
         let base = crate::StepId::parse(node).base_id().to_string();

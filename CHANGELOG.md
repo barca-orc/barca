@@ -12,6 +12,14 @@ reconciliation, and verified shared DuckDB worker lifetime. See
 upgrade and breaking-change notes. Releases between the historical entries below
 and these tags are available on the same releases page.
 
+## Pending
+
+### Bug Fixes
+
+- A sensor that returns a new value, or a task whose output changes, no longer prints "produced
+  different bytes for the same code and inputs; the function is not deterministic", and
+  `barca status` no longer keeps that event for it. The byte check now applies to assets only.
+
 ## 0.28.1 (2026-10-21)
 
 ### Bug Fixes

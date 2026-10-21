@@ -364,7 +364,11 @@ async fn status_from_dag_with_membership(
             cache,
             partitions: partitions.filter(|_| !node.extracted.partitions.is_empty()),
             last_materialization,
-            last_bytes_change: history.last_bytes_change,
+            // Sensors and tasks run every time: new bytes under the same run hash are what
+            // they are for, not a sign of a nondeterministic function.
+            last_bytes_change: history
+                .last_bytes_change
+                .filter(|_| node.kind() == crate::model::NodeKind::Asset),
             shape: None,
             env: node.extracted.env.clone(),
             local: None,
