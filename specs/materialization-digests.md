@@ -1,9 +1,11 @@
 # Materialization digests
 
 Status: implemented for producer serialization and recompute detection. Specification version: 1.
-Scope: local and confirmed-upload materializations; server ledger acceptance and the RFC-0009
-store repair policy are separate boundaries under development.
-Conformance: `python/tests/test_materialization_digests.py`, persistence and state-carry Rust tests.
+Scope: local and confirmed-upload materializations, and server ledger acceptance (RFC-0007,
+`barca_core::ledger`); the RFC-0009 store repair policy is a separate boundary under
+development.
+Conformance: `python/tests/test_materialization_digests.py`, persistence and state-carry Rust
+tests, and for the ledger `crates/barca-server/tests/api.rs` and `python/tests/test_server_ledger.py`.
 
 Each newly recorded successful materialization stores the SHA-256 of its serialized artifact
 bytes in `output_hash`. It is calculated while the producer owns the staged file, before
@@ -34,5 +36,9 @@ Store mismatch repair (RFC-0009) produces the same diagnostic: a `barca get` tha
 target whose store copy differs from this machine's (status `unsynced`, `cache.reason`
 `mismatch`) prints the changed-bytes warning and sets `steps[].bytes_changed: true` on that
 step, without a step running and without a new materialization row, so `last_bytes_change` is
-not changed by it. Server posts (RFC-0007) must produce the same diagnostic when implemented;
-this specification does not claim that path is shipped.
+not changed by it.
+
+A server ledger post (RFC-0007) whose run hash the ledger already holds with another digest is
+not recorded for that step: the ledger keeps its row, answers `bytes_changed: [<node>]`, and the
+posting machine prints the warning above once and sets `bytes_changed: true` on that step's
+report.

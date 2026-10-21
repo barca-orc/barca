@@ -11,10 +11,12 @@ start and cancel runs. To reach it from another machine, put a reverse proxy tha
 in front of it (see [Deploying](/deploying/)).
 
 **Scope:** this is the implemented `barca serve` API, including the run contract and
-inspection routes of the [server-mode RFC](/rfcs/0007-server-mode/) (section 3.4). The rest of
-that RFC is still awaiting implementation: CLI `--server` (#394) and local runs against the
-server's ledger, with its `/ledger/*` routes (#402). Until then, use this API, or
-`barca.Client`, to run deployed code remotely.
+inspection routes of the [server-mode RFC](/rfcs/0007-server-mode/) (section 3.4), and its
+[ledger](#the-ledger) (#402). The CLI is a client of these routes: `barca get daily_report
+--server <url>` runs on the server and prints what a local run prints
+([Deploying](/deploying/#running-commands-on-the-server-from-another-machine)), and with a
+server configured (`[server] url` or `BARCA_SERVER`) a laptop's `barca get` reads and posts to
+the ledger routes over `http://` or `https://`.
 
 Runs execute inside the server process, in the background. `POST /runs` answers at once with the
 run's id, which is its database run id (the one `barca history` shows); the run's events stream
@@ -75,6 +77,13 @@ return the corresponding headers without a body.
 | `GET`  | `/runs?limit=100` | Recent durable runs, joined with queued and live server runs. |
 | `GET`  | `/logs/{run_id}` | A run's captured output lines, persisted after it finishes. |
 
+<a id="the-ledger"></a>**The ledger.** What a local `barca get` on another machine talks to (`barca docs server-mode`).
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/ledger/lookup` | Body `{"hashes": [{"node_id", "run_hash"}]}`. Answer `{"results": [...]}`, one per pair in order: `{"node_id", "run_hash", "exists": true, "path", "format", "size_bytes", "digest"}` for the latest successful result the ledger holds, or `exists: false`. By run hash only. |
+| `POST` | `/ledger/runs` | Body: one finished run, `{"run": {run_id, command, files, target, status, steps_*, started_at, finished_at, elapsed_seconds, host}, "steps": [{node_id, run_hash, status, path, format, size_bytes, digest, ...}]}`. Every successful step must name an object in this server's store with its SHA-256 `digest`; the server checks each (a directory store by digest, an object store by size), then records the run as `triggered_by: client` with `client_run_id` and answers `201 {"run_id", "bytes_changed"}`. A missing, foreign or mismatched object is `409` with the envelope naming the node, and nothing is recorded. A run hash the ledger already holds with the same digest adds nothing; with another digest the ledger keeps its row and lists the step in `bytes_changed`. A repeated post of the same `run.run_id` answers with the run already recorded. `400` without a store, `403` read-only, `503` while shutting down. |
+
 **Inspection.** The body is the CLI command's `--json` output, built by the same function, so a
 client prints it as it would print the local command's.
 
@@ -125,7 +134,7 @@ Content-Type: application/json
 {
   "command": "get",             // "get" | "run"
   "targets": ["daily_report"],  // as given on the command line; [] means every asset and sensor
-  "files": [],                  // deployed files, as typed relative to the root; [] means all of them
+  "files": [],                  // deployed files, as typed relative to the root; the run reads only these. [] means all of them
   "refresh": [], "refresh_all": false, "cascade": true,
   "dry_run": false,
   "agent": true                 // which stderr lines the client will print
@@ -493,7 +502,13 @@ When the scheduler has not published the job (`--no-schedule`, or still starting
 
 ## Python client
 
-The `barca.Client` SDK (standard-library only) wraps this API:
+`barca.get(..., server=True)` and `barca.run(..., server=True)` (or `server="<url>"`) run a
+command on the server through the CLI's `--server` and return the value, as a local call does.
+A parquet or pickle result is read from `GET /runs/{run_id}/output`.
+
+`barca.Client` is **deprecated** in favour of them: constructing one emits a
+`DeprecationWarning`, and it will be removed in a later minor release. The standard-library SDK
+wraps this API:
 
 ```python
 from barca import Client

@@ -296,11 +296,16 @@ dependencies = [
 name = "barca"
 version = "0.26.1"
 dependencies = [
+ "axum",
  "barca-core",
  "barca-server",
  "chrono",
  "clap",
+ "reqwest",
+ "serde",
  "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
  "tokio",
 ]
 

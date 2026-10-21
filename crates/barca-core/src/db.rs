@@ -85,6 +85,10 @@ pub struct RunRecord {
     /// For a scheduled run: the schedule's id (the scheduled node).
     #[serde(default)]
     pub schedule_id: Option<String>,
+    /// For a run a laptop posted to a server's ledger (`triggered_by: client`): the run id it
+    /// had on that laptop. `null` for every other run.
+    #[serde(default)]
+    pub client_run_id: Option<String>,
 }
 
 /// Aggregated statistics for a single asset node.
@@ -407,6 +411,8 @@ fn db_open_error(detail: impl std::fmt::Display) -> BarcaError {
 /// then the in-process guard.)
 pub struct CacheReader {
     local_artifact_dir: Option<String>,
+    /// A server's ledger, which answers cache lookups in place of this database.
+    ledger: Option<crate::ledger::Ledger>,
     conn: turso::Connection,
     _handle: DbHandle,
     _guard: MutexGuard<'static, ()>,
@@ -419,6 +425,7 @@ impl CacheReader {
         let (handle, conn) = open_conn(db_path).await?;
         Ok(Self {
             local_artifact_dir: None,
+            ledger: None,
             conn,
             _handle: handle,
             _guard: guard,
@@ -430,7 +437,13 @@ impl CacheReader {
     ) -> Result<Self, BarcaError> {
         let mut cache = Self::open(&cfg.db_path).await?;
         cache.local_artifact_dir = cfg.remote_off.then(|| cfg.local_artifact_dir.clone());
+        cache.ledger = cfg.ledger.clone();
         Ok(cache)
+    }
+
+    /// The server's ledger, when this command runs against one.
+    pub(crate) fn ledger(&self) -> Option<&crate::ledger::Ledger> {
+        self.ledger.as_ref()
     }
 
     pub(crate) fn allows_artifact(&self, path: &str) -> bool {
@@ -1785,9 +1798,14 @@ async fn read_runs(
     } else {
         "NULL, NULL, NULL"
     };
+    let client = if has_column(&conn, "runs", "client_run_id").await? {
+        "client_run_id"
+    } else {
+        "NULL"
+    };
     let mut rows = conn
         .query(
-            &format!("SELECT run_id, command, files, target, status, steps_total, steps_executed, steps_cached, started_at, finished_at, elapsed_seconds, {attempts}, {trigger} FROM runs WHERE (?1 = '' OR run_id = ?1) ORDER BY id DESC LIMIT ?2"),
+            &format!("SELECT run_id, command, files, target, status, steps_total, steps_executed, steps_cached, started_at, finished_at, elapsed_seconds, {attempts}, {trigger}, {client} FROM runs WHERE (?1 = '' OR run_id = ?1) ORDER BY id DESC LIMIT ?2"),
             [run_id.unwrap_or_default().to_string(), limit.to_string()],
         )
         .await
@@ -1829,6 +1847,7 @@ async fn read_runs(
                 .and_then(|t| crate::outcome::TriggeredBy::parse(&t)),
             scheduled_at: row.get::<String>(13).ok().filter(|t| !t.is_empty()),
             schedule_id: row.get::<String>(14).ok().filter(|t| !t.is_empty()),
+            client_run_id: row.get::<String>(15).ok().filter(|t| !t.is_empty()),
         });
     }
     Ok(records)

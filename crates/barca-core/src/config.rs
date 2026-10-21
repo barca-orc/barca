@@ -36,10 +36,13 @@ pub struct CacheToml {
     pub max_size: Option<toml::Value>,
 }
 
-/// `[server]`: how `barca serve` behaves.
+/// `[server]`: the `barca serve` this project's commands talk to (RFC-0007), and how
+/// `barca serve` behaves.
 #[derive(Debug, Deserialize, Default, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct ServerToml {
+    /// The server's base URL, `http://` or `https://`, with any proxy prefix.
+    pub url: Option<String>,
     /// Seconds a stopping server waits for in-flight runs before it cancels them
     /// (`--drain-timeout` overrides it). 0 cancels them at once.
     pub drain_timeout: Option<u64>,
@@ -143,6 +146,12 @@ pub struct ResolvedConfig {
     /// `[server] drain_timeout`: seconds `barca serve` waits for in-flight runs once told to
     /// stop, before it cancels them. Only `serve` reads it.
     pub drain_timeout_secs: u64,
+    /// The configured server (`BARCA_SERVER`, else `[server] url`): its ledger is what `get` and
+    /// `run` use unless `--local` (RFC-0007 section 4.1). `None` when none is configured.
+    pub server_url: Option<String>,
+    /// The ledger this command runs against: attached by the CLI's `get` and `run` from the
+    /// configured server unless `--local`, never by `barca serve`, which is the ledger.
+    pub ledger: Option<crate::ledger::Ledger>,
 }
 
 impl ResolvedConfig {
@@ -339,6 +348,13 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
                 cache_max_size,
                 cache_max_size_source,
                 drain_timeout_secs,
+                server_url: env_var("BARCA_SERVER").or_else(|| {
+                    file.server
+                        .as_ref()
+                        .and_then(|s| s.url.clone())
+                        .filter(|u| !u.is_empty())
+                }),
+                ledger: None,
             });
         }
         Some(other) => {
@@ -377,6 +393,13 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
     let backup_uri = remote_uri
         .as_deref()
         .map(|u| join_uri(u, &format!("{env}/state/backups")));
+
+    let server_url = env_var("BARCA_SERVER").or_else(|| {
+        file.server
+            .as_ref()
+            .and_then(|s| s.url.clone())
+            .filter(|u| !u.is_empty())
+    });
 
     let transfer_concurrency = match env_var("BARCA_TRANSFER_CONCURRENCY") {
         Some(v) => v.parse::<usize>().ok().filter(|&n| n > 0).ok_or_else(|| {
@@ -428,6 +451,8 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
         cache_max_size,
         cache_max_size_source,
         drain_timeout_secs,
+        server_url,
+        ledger: None,
     })
 }
 
@@ -540,6 +565,56 @@ fn merge_storage_options(from_toml: Option<&toml::Table>) -> Result<Option<Strin
     })?))
 }
 
+// ─── Server ──────────────────────────────────────────────────────────────────
+
+/// Where a configured server URL came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServerSource {
+    /// `BARCA_SERVER`.
+    EnvVar,
+    /// `[server] url` in barca.toml.
+    Toml,
+}
+
+impl ServerSource {
+    pub fn describe(self) -> &'static str {
+        match self {
+            ServerSource::EnvVar => "BARCA_SERVER",
+            ServerSource::Toml => "[server] url in barca.toml",
+        }
+    }
+}
+
+/// The configured server: `BARCA_SERVER` (non-empty) > `[server] url` in the barca.toml at the
+/// project root above `cwd`. `None` when neither is set. The URL is not checked here; see
+/// [`check_server_url`].
+pub fn configured_server(cwd: &Path) -> Result<Option<(String, ServerSource)>, BarcaError> {
+    if let Some(url) = env_var("BARCA_SERVER") {
+        return Ok(Some((url, ServerSource::EnvVar)));
+    }
+    let root = find_root(cwd).unwrap_or_else(|| cwd.to_path_buf());
+    let url = load_toml(&root)?
+        .and_then(|t| t.server)
+        .and_then(|s| s.url)
+        .filter(|u| !u.is_empty());
+    Ok(url.map(|u| (u, ServerSource::Toml)))
+}
+
+/// A server URL as barca uses it: `http://` or `https://`, without a trailing `/` (a proxy
+/// prefix such as `https://host/barca` is kept). `what` names where it came from, for the error.
+pub fn check_server_url(url: &str, what: &str) -> Result<String, BarcaError> {
+    let trimmed = url.trim().trim_end_matches('/');
+    let rest = trimmed
+        .strip_prefix("http://")
+        .or_else(|| trimmed.strip_prefix("https://"));
+    match rest {
+        Some(host) if !host.is_empty() && !host.starts_with('/') => Ok(trimmed.to_string()),
+        _ => Err(BarcaError::Usage(format!(
+            "{what}: '{url}' is not a server URL\nGive the URL of a running `barca serve`, starting with http:// or https://, e.g. https://barca.example.com."
+        ))),
+    }
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -604,6 +679,7 @@ mod tests {
         "BARCA_TRANSFER_CONCURRENCY",
         "BARCA_TRANSFER_TIMEOUT",
         "BARCA_CACHE_MAX_SIZE",
+        "BARCA_SERVER",
     ];
 
     fn clean_env() -> EnvGuard {
@@ -656,6 +732,63 @@ mod tests {
         assert!(cfg.storage_options_json.is_none());
         assert!(cfg.artifact_root.contains(".barca/envs/dev/artifacts"));
         assert!(cfg.db_path.contains(".barca/envs/dev/metadata.db"));
+    }
+
+    #[test]
+    fn the_server_resolves_env_over_toml_and_an_empty_env_is_unset() {
+        let _e = clean_env();
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        assert!(configured_server(&sub).unwrap().is_none());
+        std::fs::write(
+            dir.path().join(CONFIG_FILE),
+            "[server]\nurl = \"https://toml.example.com/\"\n",
+        )
+        .unwrap();
+        let (url, source) = configured_server(&sub).unwrap().unwrap();
+        assert_eq!(
+            (url.as_str(), source),
+            ("https://toml.example.com/", ServerSource::Toml)
+        );
+        unsafe { std::env::set_var("BARCA_SERVER", "") };
+        assert_eq!(
+            configured_server(&sub).unwrap().unwrap().1,
+            ServerSource::Toml
+        );
+        unsafe { std::env::set_var("BARCA_SERVER", "http://env:8274") };
+        let (url, source) = configured_server(&sub).unwrap().unwrap();
+        assert_eq!(
+            (url.as_str(), source),
+            ("http://env:8274", ServerSource::EnvVar)
+        );
+        std::fs::write(dir.path().join(CONFIG_FILE), "[server]\nport = 1\n").unwrap();
+        unsafe { std::env::remove_var("BARCA_SERVER") };
+        assert!(
+            configured_server(&sub).is_err(),
+            "unknown [server] keys are refused"
+        );
+    }
+
+    #[test]
+    fn server_urls_are_http_or_https_and_keep_a_proxy_prefix() {
+        assert_eq!(
+            check_server_url("https://host.example.com/barca/", "--server").unwrap(),
+            "https://host.example.com/barca"
+        );
+        assert_eq!(
+            check_server_url("http://127.0.0.1:8274", "--server").unwrap(),
+            "http://127.0.0.1:8274"
+        );
+        for bad in ["host:8274", "ftp://x", "http://", "https:///x", ""] {
+            let err = check_server_url(bad, "BARCA_SERVER")
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains("BARCA_SERVER") && err.contains("not a server URL"),
+                "{err}"
+            );
+        }
     }
 
     #[test]

@@ -1911,3 +1911,263 @@ async fn every_error_body_is_the_cli_envelope() {
         assert!(body.get("remediation").is_some(), "{method} {uri}: {body}");
     }
 }
+
+// ─── the ledger (#402) ──────────────────────────────────────────────────────
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    format!("{:x}", sha2::Sha256::digest(bytes))
+}
+
+/// A server whose store is a directory beside its local artifact directory, as a deployment
+/// with `[remote] uri` has.
+fn ledger_config(dir: &std::path::Path) -> ServeConfig {
+    let mut config = runnable_config(dir);
+    config.resolved.artifact_root = dir.join("store/default/artifacts").display().to_string();
+    config.resolved.local_artifact_dir = dir.join("local").display().to_string();
+    config
+}
+
+/// Put `bytes` in the store at `{node}/{run_hash}.json` and return its store path.
+fn store_object(config: &ServeConfig, node: &str, run_hash: &str, bytes: &[u8]) -> String {
+    let dir =
+        std::path::Path::new(&config.resolved.artifact_root).join(node.replace([':', '/'], "_"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(format!("{run_hash}.json"));
+    std::fs::write(&path, bytes).unwrap();
+    path.display().to_string()
+}
+
+fn ledger_post(
+    client_run_id: &str,
+    node: &str,
+    run_hash: &str,
+    path: &str,
+    bytes: &[u8],
+) -> serde_json::Value {
+    serde_json::json!({
+        "run": {
+            "run_id": client_run_id,
+            "command": "get",
+            "files": ["pipeline.py"],
+            "target": "first",
+            "status": "success",
+            "steps_total": 1,
+            "steps_executed": 1,
+            "steps_cached": 0,
+            "started_at": "2026-10-20 12:00:00",
+            "finished_at": "2026-10-20 12:00:01",
+            "elapsed_seconds": 1.0,
+            "host": "laptop-a"
+        },
+        "steps": [{
+            "node_id": node,
+            "run_hash": run_hash,
+            "status": "success",
+            "path": path,
+            "format": "json",
+            "size_bytes": bytes.len(),
+            "digest": sha256_hex(bytes),
+            "elapsed_seconds": 0.5,
+            "attempts": 1
+        }]
+    })
+}
+
+async fn lookup_one(app: &axum::Router, node: &str, run_hash: &str) -> serde_json::Value {
+    let (status, body) = send_json(
+        app,
+        "POST",
+        "/ledger/lookup",
+        serde_json::json!({"hashes": [{"node_id": node, "run_hash": run_hash}]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["results"].as_array().unwrap().len(), 1, "{body}");
+    body["results"][0].clone()
+}
+
+#[tokio::test]
+async fn the_ledger_records_only_posts_whose_objects_are_in_the_store() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = ledger_config(dir.path());
+    let app = app(config.clone());
+    let node = "pipeline.py:first";
+    let hash = "a1b2c3d4e5f60718";
+
+    // Nothing recorded yet.
+    let miss = lookup_one(&app, node, hash).await;
+    assert_eq!(miss["exists"], false, "{miss}");
+    assert!(miss.get("path").is_none(), "{miss}");
+
+    // The object is not in the store: 409 naming the node, and nothing recorded.
+    let bytes = br#"{"n": 1}"#;
+    let path = std::path::Path::new(&config.resolved.artifact_root)
+        .join("pipeline.py_first")
+        .join(format!("{hash}.json"))
+        .display()
+        .to_string();
+    let (status, error) = send_json(
+        &app,
+        "POST",
+        "/ledger/runs",
+        ledger_post("c-1", node, hash, &path, bytes),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{error}");
+    assert_eq!(error["kind"], "usage");
+    assert_eq!(error["code"], 2);
+    assert!(
+        error["error"].as_str().unwrap().starts_with(node),
+        "{error}"
+    );
+    assert!(
+        error["error"].as_str().unwrap().contains("no object"),
+        "{error}"
+    );
+    assert!(error["remediation"].is_string(), "{error}");
+    assert_eq!(lookup_one(&app, node, hash).await["exists"], false);
+    let (_, history) = send(&app, "GET", "/history?limit=5").await;
+    assert_eq!(
+        history["total"], 0,
+        "a refused post records nothing: {history}"
+    );
+
+    // The same post once the object is there: 201, and the ledger has it.
+    let path = store_object(&config, node, hash, bytes);
+    let (status, accepted) = send_json(
+        &app,
+        "POST",
+        "/ledger/runs",
+        ledger_post("c-1", node, hash, &path, bytes),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{accepted}");
+    let run_id = accepted["run_id"].as_str().unwrap().to_string();
+    assert_eq!(accepted["bytes_changed"], serde_json::json!([]));
+    let hit = lookup_one(&app, node, hash).await;
+    assert_eq!(hit["exists"], true, "{hit}");
+    assert_eq!(hit["path"], path.as_str());
+    assert_eq!(hit["format"], "json");
+    assert_eq!(hit["size_bytes"], bytes.len());
+    assert_eq!(hit["digest"], sha256_hex(bytes).as_str());
+
+    // The run is in the server's history, posted by a client, under the server's run id.
+    let (_, history) = send(&app, "GET", "/history?limit=5").await;
+    assert_eq!(history["total"], 1, "{history}");
+    assert_eq!(history["runs"][0]["run_id"], run_id.as_str());
+    assert_eq!(history["runs"][0]["triggered_by"], "client");
+    assert_eq!(history["runs"][0]["client_run_id"], "c-1");
+    assert_eq!(history["runs"][0]["status"], "success");
+
+    // A repeated post of the same run (its answer was lost) is the run already recorded.
+    let (status, again) = send_json(
+        &app,
+        "POST",
+        "/ledger/runs",
+        ledger_post("c-1", node, hash, &path, bytes),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(again["run_id"], run_id.as_str());
+    let (_, history) = send(&app, "GET", "/history?limit=5").await;
+    assert_eq!(history["total"], 1, "{history}");
+
+    // A second machine posts the same run hash with other bytes: the ledger keeps its row and
+    // says so.
+    let other = br#"{"n": 2}"#;
+    store_object(&config, node, hash, other);
+    let (status, changed) = send_json(
+        &app,
+        "POST",
+        "/ledger/runs",
+        ledger_post("c-2", node, hash, &path, other),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{changed}");
+    assert_eq!(changed["bytes_changed"], serde_json::json!([node]));
+    assert_eq!(
+        lookup_one(&app, node, hash).await["digest"],
+        sha256_hex(bytes).as_str()
+    );
+
+    // A digest that does not match the object is refused.
+    let (status, error) = send_json(
+        &app,
+        "POST",
+        "/ledger/runs",
+        ledger_post("c-3", node, hash, &path, bytes),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{error}");
+    assert!(
+        error["error"].as_str().unwrap().contains("digest"),
+        "{error}"
+    );
+
+    // An object outside the server's store is refused.
+    let outside = dir.path().join("elsewhere.json");
+    std::fs::write(&outside, bytes).unwrap();
+    let (status, error) = send_json(
+        &app,
+        "POST",
+        "/ledger/runs",
+        ledger_post("c-4", node, hash, &outside.display().to_string(), bytes),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{error}");
+    assert!(
+        error["error"]
+            .as_str()
+            .unwrap()
+            .contains("not in this server's artifact store"),
+        "{error}"
+    );
+
+    // Not a post at all.
+    let (status, error) =
+        send_json(&app, "POST", "/ledger/runs", serde_json::json!({"run": 1})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    assert_eq!(error["kind"], "usage");
+}
+
+#[tokio::test]
+async fn a_server_without_a_store_or_a_read_only_one_takes_no_posts() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = runnable_config(dir.path());
+    let app = app(config.clone());
+    let (status, error) = send_json(
+        &app,
+        "POST",
+        "/ledger/runs",
+        ledger_post("c-1", "pipeline.py:first", "h", "/x.json", b"1"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    assert!(
+        error["error"]
+            .as_str()
+            .unwrap()
+            .contains("no artifact store"),
+        "{error}"
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = ledger_config(dir.path());
+    config.read_only = true;
+    let app = barca_server::app(config);
+    let (status, error) = send_json(
+        &app,
+        "POST",
+        "/ledger/runs",
+        ledger_post("c-1", "pipeline.py:first", "h", "/x.json", b"1"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{error}");
+    // A read-only server answers lookups from a snapshot, and creates no database.
+    assert_eq!(
+        lookup_one(&app, "pipeline.py:first", "h").await["exists"],
+        false
+    );
+    assert!(!dir.path().join("metadata.db").exists());
+}

@@ -316,6 +316,7 @@ error (exit 2) that names the right one. `barca pipeline.py` is short for
 | `barca history` | Every run in JSON, 10 in a human table. `--limit N`, `--all`, `--json`, `--pretty`, `--fields`, `--env`; `--reconcile RUN_ID` explicitly records a verified-stopped run as interrupted |
 | `barca stats <target> [files...]` | Timing and cache statistics for one asset. `--json`, `--pretty`, `--fields`, `--env` |
 | `barca serve [files...]` | HTTP API, cron scheduler and web UI. `--port N`, `--host IP`, `--watch`, `--no-schedule`, `--timezone`, `--read-only`, `--drain-timeout`, `--env`. SIGTERM drains runs in flight; `BARCA_LOG=json` writes its lines as JSON on stdout |
+| &nbsp;&nbsp;`--server [<url>]`, `--local` | On `get`, `run`, `status`, `list`, `history`, `stats` (experimental): `--server` runs the command on a `barca serve` and prints it here as a local run would; with no URL it uses `BARCA_SERVER` or `[server] url` in `barca.toml`. `--local` ignores a configured server. See `barca docs server-mode` |
 | `barca state backups` | The metadata backups, local and in the store, newest first. `--json`, `--pretty`, `--env` |
 | `barca state restore` | Put a backup in place of the metadata DB; the current one is kept as `metadata.db.pre-restore`. `--from N\|NAME`, `--json`, `--env` |
 | `barca docs [topic]` | The manual, compiled into the binary. `--all`, `--json`, `--fields` |
@@ -387,10 +388,24 @@ has to come in through a sensor. A scheduled sensor's tick runs the sensor and d
 trigger the assets that read it. The other freshness values, `Always` (the default) and
 `Manual`, are recorded and shown by `barca list` and have no effect at run time today.
 
-The server half of the server-mode RFC (RFC-0007) is implemented: the run contract over HTTP.
-CLI `--server`, server URL configuration and laptop runs against the shared ledger are
-still pending. Use HTTP or `barca.Client` to run deployed code on the server;
-ordinary `barca get` and `barca.get()` execute locally.
+Server mode (RFC-0007, experimental) makes the server the team's ledger. With
+`[server] url` (or `BARCA_SERVER`) and the server's `[remote]` store in `barca.toml`, `barca get`
+on a laptop still runs locally but reads cache hits from the server's ledger and posts what it
+computes; `barca status`, `history` and `stats` answer from the server. `--server` runs a command
+on the server and prints what the same command prints locally; Ctrl-C cancels it there.
+`--local` leaves the server untouched.
+
+```bash
+barca get summary                                       # here, against the server's ledger
+barca get summary --server https://barca.example.com    # runs there, prints here
+export BARCA_SERVER=https://barca.example.com           # or [server] url in barca.toml
+barca run publish --server --agent                      # the configured server
+barca history -l 5                                      # its runs
+barca get summary --local                               # this machine only
+```
+
+In Python, `barca.get("summary", server=True)`. `barca.Client` is deprecated in favour of
+`barca.api` (`barca docs server-mode`).
 
 Runs started over HTTP are asynchronous: `POST /runs` returns the run's database id at once,
 its events stream as they happen, and `GET /runs/<run_id>` answers with its outcome, also after

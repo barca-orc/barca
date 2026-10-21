@@ -276,6 +276,9 @@ fn spec_matches_router_paths_and_methods_and_all_schemas_compile() {
     assert!(!outcome.is_valid(&json!({"status":"invented","envelope":envelope})));
     let request = validator(&json!({"$ref":"#/components/schemas/RunRequest"}));
     assert!(request.is_valid(&json!({"command":"get","targets":["a"]})));
+    assert!(
+        request.is_valid(&json!({"command":"get","targets":["a"],"values":true,"partition":"k=a"}))
+    );
     assert!(!request.is_valid(&json!({"command":"sql"})));
     assert!(!request.is_valid(&json!({"command":"get","invented":1})));
     let load_error = validator(&json!({"$ref":"#/components/schemas/LoadError"}));
@@ -1011,4 +1014,81 @@ async fn schedule_pause_and_resume_match_contract() {
     .await;
     checked(&router, "PUT", "/runs", "/runs", 405).await;
     checked(&router, "PUT", "/runs/x", "/runs/{run_id}", 405).await;
+}
+
+#[tokio::test]
+async fn ledger_lookup_and_post_match_contract() {
+    use sha2::Digest;
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = config(dir.path(), false);
+    config.resolved.artifact_root = dir
+        .path()
+        .join("store/default/artifacts")
+        .display()
+        .to_string();
+    config.resolved.local_artifact_dir = dir.path().join("local").display().to_string();
+    let router = barca_server::app(config.clone());
+    let response = |path: &str, status: u16| {
+        contract()["paths"][path]["post"]["responses"][status.to_string()]["content"]["application/json"]
+            ["schema"]
+            .clone()
+    };
+    let lookup = json!({"hashes": [{"node_id": "pipeline.py:first", "run_hash": "h1"}]});
+    validate(
+        &contract()["paths"]["/ledger/lookup"]["post"]["requestBody"]["content"]["application/json"]
+            ["schema"],
+        &lookup,
+    );
+    let (status, body) = request_json(&router, "POST", "/ledger/lookup", lookup.clone()).await;
+    assert_eq!(status, 200, "{body}");
+    validate(&response("/ledger/lookup", 200), &body);
+    let (status, body) =
+        request_json(&router, "POST", "/ledger/lookup", json!({"hashes": 1})).await;
+    assert_eq!(status, 400);
+    validate(&response("/ledger/lookup", 400), &body);
+
+    let bytes = br#"{"n": 1}"#;
+    let object = Path::new(&config.resolved.artifact_root).join("first/h1.json");
+    let post = json!({
+        "run": {"run_id": "c-1", "command": "get", "files": ["pipeline.py"], "target": "first",
+                "status": "success", "steps_total": 1, "steps_executed": 1, "steps_cached": 0,
+                "started_at": "2026-10-20 12:00:00", "finished_at": "2026-10-20 12:00:01",
+                "elapsed_seconds": 1.0, "host": "laptop"},
+        "steps": [{"node_id": "pipeline.py:first", "run_hash": "h1", "status": "success",
+                   "path": object.display().to_string(), "format": "json",
+                   "size_bytes": bytes.len(), "digest": format!("{:x}", sha2::Sha256::digest(bytes)),
+                   "elapsed_seconds": 0.1, "attempts": 1, "error": null}]
+    });
+    validate(
+        &contract()["paths"]["/ledger/runs"]["post"]["requestBody"]["content"]["application/json"]
+            ["schema"],
+        &post,
+    );
+    let (status, body) = request_json(&router, "POST", "/ledger/runs", post.clone()).await;
+    assert_eq!(status, 409, "{body}");
+    validate(&response("/ledger/runs", 409), &body);
+    std::fs::create_dir_all(object.parent().unwrap()).unwrap();
+    std::fs::write(&object, bytes).unwrap();
+    let (status, body) = request_json(&router, "POST", "/ledger/runs", post.clone()).await;
+    assert_eq!(status, 201, "{body}");
+    validate(&response("/ledger/runs", 201), &body);
+    let (status, body) = request_json(&router, "POST", "/ledger/lookup", lookup).await;
+    assert_eq!(status, 200);
+    validate(&response("/ledger/lookup", 200), &body);
+    assert_eq!(body["results"][0]["exists"], true);
+    let (status, body) = request_json(&router, "POST", "/ledger/runs", json!([])).await;
+    assert_eq!(status, 400);
+    validate(&response("/ledger/runs", 400), &body);
+    // History rows carry client_run_id.
+    let history = checked(&router, "GET", "/history?limit=5", "/history", 200).await;
+    assert_eq!(history["runs"][0]["client_run_id"], "c-1");
+    assert_eq!(history["runs"][0]["triggered_by"], "client");
+
+    let mut read_only = config.clone();
+    read_only.read_only = true;
+    let (status, body) =
+        request_json(&barca_server::app(read_only), "POST", "/ledger/runs", post).await;
+    assert_eq!(status, 403);
+    validate(&response("/ledger/runs", 403), &body);
+    checked(&router, "GET", "/ledger/runs", "/ledger/runs", 405).await;
 }

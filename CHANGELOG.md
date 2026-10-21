@@ -165,6 +165,26 @@ and these tags are available on the same releases page.
 
 ### Features
 
+- Server mode's ledger (RFC-0007 §3.4 and §4.1, #402), experimental. With `[server] url` in
+  `barca.toml` (and `[remote]` pointing at the server's store), `barca get` and `barca run`
+  still run on this machine but ask the server's ledger which run hashes exist
+  (`POST /ledger/lookup`, one request for the plan), fetch the hits from the store, compute the
+  misses here and, once their uploads are confirmed, post the run (`POST /ledger/runs`). The
+  server checks every object in its store (a directory store by SHA-256, an object store by
+  size) before it records the run as `triggered_by: client` with the laptop's run id in the new
+  `client_run_id` (also in `barca history --json`); a missing or mismatched object is `409`
+  naming the node and records nothing. A refused or undelivered post leaves the run a success:
+  a warning names it, it stays `unsynced` in the new `ledger_posts` table and the next command
+  against the server sends it again. A run hash the ledger holds with other bytes prints the
+  non-determinism warning once. A server that cannot be reached is exit 3; a different or
+  missing store is exit 2. The ledger is reached over `http://` or `https://` with the
+  `--server` client, from `[server] url` or `BARCA_SERVER`; `--local` runs against this
+  machine's ledger and touches nothing on the server (error remediations name it). With a
+  server configured, `barca status`, `barca history` and `barca stats` answer from the server
+  (`[barca] server <url> (<source>)` once); `barca status` adds `local` per node (this machine
+  has a copy) and shows a result whose post is pending as `unsynced` with
+  `cache.reason: "not_in_ledger"` (`summary.unsynced` counts them). New manual topic:
+  `barca docs server-mode`.
 - `barca serve` runs the server half of the `--server` run contract (RFC-0007 §3.4, #393).
   `POST /runs` takes the flags of `barca get` / `barca run` as JSON and answers with the run's
   database id at once (`dry_run` answers with the `--dry-run` JSON); targets are checked first,
@@ -181,6 +201,20 @@ and these tags are available on the same releases page.
   for scheduled runs, `scheduled_at` and `schedule_id`, in `barca history --json`, `GET /runs`
   and the `barca.run` span (`barca.trigger`, `barca.scheduled_at`, `barca.schedule_id`, #434).
   The web UI uses the new routes and shows what started each run.
+- `--server [<url>]` runs `get`, `run`, `status`, `list`, `history` and `stats` on a
+  `barca serve` and prints the answer as the local command prints it: the same stdout JSON, the
+  same stderr lines, the same exit codes, rendered by the same functions (#394, experimental).
+  With no URL it uses `BARCA_SERVER`, then `[server] url` in `barca.toml`, and says so once on
+  stderr; nothing configured is a usage error. `--local` ignores a configured server (and is a
+  usage error with `--server`); `--server` on `serve`, `plan`, `sql`, `doctor`, `logs`, `docs`
+  and `version` is a usage error. A run streams its progress and step output, and Ctrl-C cancels
+  it on the server (a second Ctrl-C exits 130 at once). A server that cannot be reached, is not
+  barca or speaks another API version is exit 3 naming its URL; a stream that drops mid-run is
+  exit 3 naming the run id. A named file that differs from the deployed one prints a note.
+  `barca.get(..., server=True)` and `barca.run(..., server=True)` do the same from Python.
+  `barca.Client` is deprecated in favour of them and warns when constructed. The binary now
+  carries an HTTPS client (`reqwest` with `rustls`); `POST /runs` with `files` now reads only
+  those files, as the CLI does. See `barca docs server-mode`.
 - `POST /schedule/{id}/pause` (optionally `?until=<RFC 3339>`) and `POST /schedule/{id}/resume`
   hold one schedule back without `--no-schedule` (#435). `GET /schedule` reports `paused`,
   `paused_until` and `skip_reason`; a paused job's ticks are skipped with reason `paused` (also

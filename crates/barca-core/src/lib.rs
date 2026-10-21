@@ -29,6 +29,7 @@ pub mod http;
 pub mod interrupt;
 pub mod io_loop;
 pub mod jsonlog;
+pub mod ledger;
 pub mod lines;
 pub mod load;
 mod mismatch;

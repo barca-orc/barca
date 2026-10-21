@@ -171,7 +171,7 @@ pub fn render_status_table(result: &crate::status::StatusResult) -> String {
                         p.cached, p.total, n.cache.reason
                     )
                 }
-                // Human form of an `unsynced` reason (RFC-0009): `local only`.
+                // Human form of an `unsynced` reason: `local only`, `not in ledger`.
                 _ if n.cache.state == "unsynced" => n.cache.reason.replace('_', " "),
                 _ => n.cache.reason.clone(),
             };

@@ -234,6 +234,8 @@ fn trigger(state: &AppState, job: &ScheduledJob, epoch: i64) -> String {
             files: Vec::new(),
             policy: barca_core::cache::CachePolicy::CacheAware,
             trigger: barca_core::outcome::Trigger::schedule(&job.id, epoch),
+            values: false,
+            partition: None,
         },
     )
 }

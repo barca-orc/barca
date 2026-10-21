@@ -110,6 +110,15 @@ additive migration (`additions_missing` / `add_to_current_schema`) read:
   run, the tick and schedule of a scheduled run, and the full outcome of a run `barca serve`
   started, so `GET /runs/{id}` answers after a restart. Rows written before have `NULL` there
   (`triggered_by: null`).
+- `runs.client_run_id` (TEXT, nullable, 0.27.0, RFC-0007 §4.1): on a server, the run id a laptop
+  gave a run it posted to the ledger (`triggered_by: client`); a repeated post of that run is
+  recognised by it.
+- `ledger_posts` (0.27.0, RFC-0007): on a machine that runs against a server's ledger, one row per
+  run it posted or has yet to post (`client_run_id` primary key, `server`, the post `body` as
+  JSON, `state` `unsynced` or `shared`, `server_run_id`, the last `error`, `attempts`,
+  `created_at`, `updated_at`). Unlike the tables above it is created the first time a run is
+  posted, never by a reader or by `init_db`; a database without it has posted nothing, and
+  readers treat that as empty.
 - `schedule_state.paused_at` and `schedule_state.paused_until` (INTEGER unix seconds, nullable,
   0.27.0, #435): a schedule paused with `POST /schedule/{id}/pause`; `paused_until` NULL means
   until it is resumed.

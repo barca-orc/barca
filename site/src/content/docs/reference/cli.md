@@ -62,6 +62,11 @@ barca version                                 Print version
 barca --help                                  Show help
 ```
 
+`get`, `run`, `status`, `list`, `history` and `stats` also take `--server [<url>]`, which runs
+the command on a `barca serve` and prints it here as the local command would, and `--local`,
+which ignores a configured server (experimental; [Server mode](/reference/config/#server-mode),
+`barca docs server-mode`).
+
 `barca pipeline.py` is read as `barca get pipeline.py`. It is kept for compatibility; write
 `barca get`.
 

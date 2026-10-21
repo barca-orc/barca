@@ -29,6 +29,12 @@ Options:
 
           [possible values: id, kind, freshness, schedule, inputs, env, next_fire]
 
+      --server [<URL>]
+          Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger) and status, history and stats are answered by a configured server
+
+      --local
+          Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server
+
   -h, --help
           Print help (see a summary with '-h')
 
@@ -44,6 +50,7 @@ Examples:
   barca list big.py --limit 20       # first 20 nodes (topological order)
   barca list big.py --all            # every node in the human table (default: at most 100)
   barca list a.py b.py               # several files form one DAG
+  barca list --server --json         # the nodes deployed on the configured barca server
 
 An ENV column (and `env` in JSON) lists the environment variables each node declares with
 @asset(env=[...]); their values are part of the run hash. `freshness` is `always`, `manual` or

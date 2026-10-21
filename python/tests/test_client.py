@@ -19,6 +19,15 @@ import pytest
 from barca.api import BarcaError
 from barca.client import Client, Run
 
+# The deprecation is asserted once below; the other tests use the client as before.
+pytestmark = pytest.mark.filterwarnings("ignore:barca.Client is deprecated:DeprecationWarning")
+
+
+def test_constructing_a_client_warns_that_it_is_deprecated():
+    with pytest.warns(DeprecationWarning, match=r"barca\.Client is deprecated.*server=True"):
+        Client("http://127.0.0.1:1")
+
+
 # ─── transport unit tests (mocked urllib) ────────────────────────────────────
 
 

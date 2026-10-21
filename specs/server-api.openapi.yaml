@@ -2,12 +2,12 @@
 openapi: 3.1.0
 info:
   title: Barca current HTTP API
-  version: '3'
-  description: 'Normative current wire contract; specification version 3 is independent of package versions.
+  version: '4'
+  description: 'Normative current wire contract; specification version 4 is independent of package versions.
     Scope: registered barca-server routes and fallback responses. No authentication is implemented (security
     is empty); read-only is an operating mode. The run contract and inspection routes of RFC-0007 section
     3.4 are shipped (POST /runs, GET /runs/{run_id}, its events, output and cancel; /list, /nodes, /history,
-    /stats/{name}, /project); its ledger routes (/ledger/*) are not. Every error body is the CLI error
+    /stats/{name}, /project), and so are its ledger routes (POST /ledger/lookup, POST /ledger/runs). Every error body is the CLI error
     envelope. Routes marked deprecated are aliases kept for one minor release. Conformance: crates/barca-server/tests/openapi.rs
     and python/tests/test_http_openapi_client.py.'
 jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
@@ -1186,6 +1186,115 @@ paths:
       deprecated: true
       description: ' Deprecated alias of GET /runs/{run_id}, kept for one minor release; run_id is the
         database run id.'
+  /ledger/lookup:
+    post:
+      summary: Ask the ledger which run hashes it holds
+      operationId: post_ledger_lookup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LedgerLookup'
+      responses:
+        '200':
+          description: One entry per pair asked, in the order asked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LedgerLookupResult'
+        '400':
+          description: Not a ledger lookup
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Metadata DB error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          headers:
+            Allow:
+              schema:
+                type: string
+              description: Methods accepted by this route
+      description: 'What a local barca get on another machine asks before it runs (RFC-0007 section 4.1):
+        for each node id and run hash, the latest successful result the ledger holds, by run hash only.
+        A read-only server answers from a snapshot.'
+  /ledger/runs:
+    post:
+      summary: Record a run another machine computed
+      operationId: post_ledger_runs
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LedgerPost'
+      responses:
+        '201':
+          description: Recorded (or already recorded for this client run id)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LedgerAccepted'
+        '400':
+          description: Not a ledger post, or this server has no artifact store
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Read-only server records nothing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: An object the post names is missing from the store, outside it, or does not have
+            the posted digest (or size, for an object store); the error names the node. Nothing from the
+            run is recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: The store could not be asked, or a metadata DB error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: The server is shutting down
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          headers:
+            Allow:
+              schema:
+                type: string
+              description: Methods accepted by this route
+      description: 'Posted by barca get after its uploads are confirmed. Every successful step must name
+        an object in this server''s store with its SHA-256 digest; the server checks each (a directory
+        store by digest, an object store by size) before it writes the run (triggered_by client, with
+        client_run_id) and its steps in one transaction. A run hash the ledger already holds with the
+        same digest adds nothing; with another digest the ledger keeps its row and names the step in
+        bytes_changed.'
   /runs:
     get:
       summary: List durable history joined with retained live runs
@@ -2399,6 +2508,7 @@ components:
           - local_only
           - store_only
           - mismatch
+          - not_in_ledger
           - changed
           - upstream_stale
           - failed
@@ -2931,7 +3041,7 @@ components:
         files:
           type: array
           items: *id005
-          description: Deployed files, as typed relative to the root; [] means the deployed set.
+          description: Deployed files, as typed relative to the root; the run reads only these, as `barca get <target> <files>` does. [] means the deployed set.
         refresh:
           type: array
           items: *id005
@@ -2949,6 +3059,14 @@ components:
         agent:
           type: boolean
           description: Which stderr lines the client prints. Every line is streamed, tagged with when.
+        values:
+          type: boolean
+          description: get -o value. The outcome's final_output holds the values, read on the server as
+            barca get -o value --json prints them, instead of the artifact pointers.
+        partition:
+          type: string
+          description: get --partition, as the flag takes it (region=emea,amer, or a JSON object for compound
+            keys). 400 when it does not parse, or with command run.
     Explain:
       type: object
       required:
@@ -3134,6 +3252,180 @@ components:
         total: *id056
         truncated: *id059
         root: *id005
+    LedgerKey:
+      type: object
+      additionalProperties: false
+      required:
+      - node_id
+      - run_hash
+      properties:
+        node_id:
+          type: string
+          description: A node id, with a partition suffix for one key.
+        run_hash:
+          type: string
+    LedgerLookup:
+      type: object
+      additionalProperties: false
+      required:
+      - hashes
+      properties:
+        hashes:
+          type: array
+          items:
+            $ref: '#/components/schemas/LedgerKey'
+    LedgerEntry:
+      type: object
+      additionalProperties: false
+      required:
+      - node_id
+      - run_hash
+      - exists
+      properties:
+        node_id:
+          type: string
+        run_hash:
+          type: string
+        exists:
+          type: boolean
+        path:
+          type: string
+          description: The artifact's location in the store; only when exists.
+        format:
+          type: string
+        size_bytes:
+          type: integer
+          minimum: 0
+        digest:
+          type: string
+          description: SHA-256 of the artifact's bytes; absent for a row recorded before digests were.
+    LedgerLookupResult:
+      type: object
+      additionalProperties: false
+      required:
+      - results
+      properties:
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/LedgerEntry'
+    LedgerRun:
+      type: object
+      required:
+      - run_id
+      - command
+      - status
+      - started_at
+      properties:
+        run_id:
+          type: string
+          description: The run id on the posting machine; recorded as client_run_id.
+        command:
+          type: string
+        files:
+          type: array
+          items:
+            type: string
+        target:
+          type:
+          - string
+          - 'null'
+        status:
+          type: string
+        steps_total:
+          type:
+          - integer
+          - 'null'
+        steps_executed:
+          type: integer
+        steps_cached:
+          type: integer
+        started_at:
+          type: string
+        finished_at:
+          type:
+          - string
+          - 'null'
+        elapsed_seconds:
+          type:
+          - number
+          - 'null'
+        host:
+          type:
+          - string
+          - 'null'
+    LedgerStep:
+      type: object
+      required:
+      - node_id
+      - run_hash
+      - status
+      properties:
+        node_id:
+          type: string
+        run_hash:
+          type: string
+        status:
+          type: string
+        path:
+          type:
+          - string
+          - 'null'
+          description: The artifact's location in the store; required for a successful step.
+        format:
+          type:
+          - string
+          - 'null'
+        size_bytes:
+          type:
+          - integer
+          - 'null'
+          minimum: 0
+        digest:
+          type:
+          - string
+          - 'null'
+          description: SHA-256 of the artifact's bytes; required for a successful step.
+        elapsed_seconds:
+          type:
+          - number
+          - 'null'
+        attempts:
+          type:
+          - integer
+          - 'null'
+        error:
+          type:
+          - string
+          - 'null'
+    LedgerPost:
+      type: object
+      required:
+      - run
+      - steps
+      description: One finished run on the posting machine and its step rows.
+      properties:
+        run:
+          $ref: '#/components/schemas/LedgerRun'
+        steps:
+          type: array
+          items:
+            $ref: '#/components/schemas/LedgerStep'
+    LedgerAccepted:
+      type: object
+      additionalProperties: false
+      required:
+      - run_id
+      - bytes_changed
+      properties:
+        run_id:
+          type: string
+          description: The run id this server recorded the run under.
+        bytes_changed:
+          type: array
+          items:
+            type: string
+          description: Steps whose run hash the ledger already held with another digest; it kept its row.
     HistoryRun:
       type: object
       additionalProperties: false
@@ -3153,6 +3445,7 @@ components:
       - triggered_by
       - scheduled_at
       - schedule_id
+      - client_run_id
       properties:
         run_id: *id005
         command: *id005
@@ -3171,6 +3464,12 @@ components:
         triggered_by: *id057
         scheduled_at: *id042
         schedule_id: *id042
+        client_run_id:
+          type:
+          - string
+          - 'null'
+          description: For a run a laptop posted to the ledger (triggered_by client), its run id on that
+            laptop; null otherwise.
     HistoryBody:
       type: object
       additionalProperties: false

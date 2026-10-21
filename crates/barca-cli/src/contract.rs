@@ -75,6 +75,54 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
         "status --sample",
         "sample rows come from a Python helper whose output may grow",
     ),
+    (
+        "get --server",
+        "server mode is new (RFC-0007): how the server is chosen and the client's messages may change",
+    ),
+    (
+        "get --local",
+        "server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history and stats)",
+    ),
+    (
+        "run --server",
+        "server mode is new (RFC-0007): how the server is chosen and the client's messages may change",
+    ),
+    (
+        "run --local",
+        "server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history and stats)",
+    ),
+    (
+        "status --server",
+        "server mode is new (RFC-0007): how the server is chosen and the client's messages may change",
+    ),
+    (
+        "status --local",
+        "server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history and stats)",
+    ),
+    (
+        "list --server",
+        "server mode is new (RFC-0007): how the server is chosen and the client's messages may change",
+    ),
+    (
+        "list --local",
+        "server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history and stats)",
+    ),
+    (
+        "history --server",
+        "server mode is new (RFC-0007): how the server is chosen and the client's messages may change",
+    ),
+    (
+        "history --local",
+        "server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history and stats)",
+    ),
+    (
+        "stats --server",
+        "server mode is new (RFC-0007): how the server is chosen and the client's messages may change",
+    ),
+    (
+        "stats --local",
+        "server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history and stats)",
+    ),
 ];
 
 fn updating() -> bool {

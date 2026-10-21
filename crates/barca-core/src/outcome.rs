@@ -130,7 +130,8 @@ pub struct RunRequest {
     #[serde(default)]
     #[cfg_attr(feature = "ts", ts(optional, as = "Option<Vec<String>>"))]
     pub targets: Vec<String>,
-    /// As typed, relative to the server's project root; `[]` means the deployed set.
+    /// As typed, relative to the server's project root: the run reads only these deployed
+    /// files. `[]` means the deployed set.
     #[serde(default)]
     #[cfg_attr(feature = "ts", ts(optional, as = "Option<Vec<String>>"))]
     pub files: Vec<String>,
@@ -155,6 +156,16 @@ pub struct RunRequest {
     #[serde(default)]
     #[cfg_attr(feature = "ts", ts(optional, as = "Option<bool>"))]
     pub agent: bool,
+    /// `get -o value`: the outcome's `final_output` holds the values (read on the server, as
+    /// `barca get -o value --json` prints them) instead of the artifact pointers.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(optional, as = "Option<bool>"))]
+    pub values: bool,
+    /// `get --partition`: the keys of the targets to compute and return, as the flag takes
+    /// them (`"region=emea,amer"`, or a JSON object for compound keys).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub partition: Option<String>,
 }
 
 impl RunRequest {
@@ -176,6 +187,8 @@ impl RunRequest {
             cascade: true,
             dry_run: false,
             agent: false,
+            values: false,
+            partition: None,
         }
     }
 
@@ -191,6 +204,16 @@ impl RunRequest {
         } else {
             CachePolicy::CacheAware
         }
+    }
+
+    /// `partition`, parsed as `--partition` is.
+    pub fn partition_selection(
+        &self,
+    ) -> Result<Option<crate::selection::PartitionSelection>, String> {
+        self.partition
+            .as_deref()
+            .map(crate::selection::PartitionSelection::parse)
+            .transpose()
     }
 
     /// The target label `barca history` shows for this run: the targets, comma-separated.
@@ -284,7 +307,13 @@ impl Outcome {
             }
             RunCommand::Run => result.final_output.as_ref().map(report::read_final_output),
         };
-        Self::of_text(report::run_body(result, output).to_string())
+        Self::success_with(result, output)
+    }
+
+    /// A successful single-target run whose `final_output` the caller read (a `get` asked for
+    /// values, `RunRequest.values`).
+    pub fn success_with(result: &GetResult, final_output: Option<Value>) -> Self {
+        Self::of_text(report::run_body(result, final_output).to_string())
     }
 
     /// A multi-target run: `success`, or `failed` with the envelope of its first failure.
@@ -299,7 +328,12 @@ impl Outcome {
                 RunCommand::Run => t.final_output.as_ref().map(report::read_final_output),
             })
             .collect();
-        let (run, per_target) = report::multi_parts(result, &values);
+        Self::multi_with(result, &values, ctx)
+    }
+
+    /// A multi-target run whose targets' `final_output`s the caller read, in target order.
+    pub fn multi_with(result: &MultiResult, values: &[Option<Value>], ctx: &Context) -> Self {
+        let (run, per_target) = report::multi_parts(result, values);
         let mut body = report::multi_json(&run, &per_target);
         if let Some(error) = report::first_multi_failure(result) {
             body = with_envelope(body, &envelope_of(error, ctx));
@@ -310,7 +344,16 @@ impl Outcome {
     /// A run that ended with `error`: a failed step (`failed`, with the stdout body when the
     /// run got that far), a cancel, or any other error.
     pub fn of_error(error: BarcaError, ctx: &Context) -> Self {
-        let body = report::failed_run_body(&error);
+        Self::of_failed(error, ctx, None)
+    }
+
+    /// [`Self::of_error`], with the `final_output` a failed partitioned `get` returns: the keys
+    /// that succeeded (as pointers, or values when the request asked for them).
+    pub fn of_failed(error: BarcaError, ctx: &Context, final_output: Option<Value>) -> Self {
+        let mut body = report::failed_run_body(&error);
+        if let (Some(Value::Object(obj)), Some(out)) = (body.as_mut(), final_output) {
+            obj.insert("final_output".into(), out);
+        }
         let envelope = envelope_of(error, ctx);
         match (envelope.kind, body) {
             (ErrorKind::StepFailed, Some(body)) => {
@@ -360,18 +403,43 @@ impl Outcome {
         }
     }
 
-    /// What a local run that ended this way prints on stdout, and the error it ends with.
+    /// What a local run that ended this way prints on stdout, and the error it ends with
+    /// (with the one-line run summary a failed step ends with, as a local run prints it).
     /// `command` and `targets` are those of the request; `mode` and `fields` are the client's.
     pub fn render(
         &self,
         command: RunCommand,
         targets: &[String],
         mode: ResultFormat,
+        values: bool,
         fields: Option<&[String]>,
     ) -> Result<(RenderedOutput, Option<ErrorEnvelope>), String> {
         let mut value = self.parsed()?;
+        // What a `get` returned: values when the request asked for them (`-o value`), else
+        // the pointers, whose paths print.
+        let returned_of = |output: Option<&Value>| {
+            if values {
+                report::Returned {
+                    final_output: output.filter(|v| !v.is_null()).cloned(),
+                    values: true,
+                    shown: Vec::new(),
+                }
+            } else {
+                report::returned_from_pointers(output)
+            }
+        };
+        let skipped = value["steps"].as_array().map_or(0, |steps| {
+            steps
+                .iter()
+                .filter(|s| s["status"].as_str() == Some("skipped"))
+                .count()
+        });
         let envelope = match value.as_object_mut().and_then(|o| o.remove("envelope")) {
-            Some(e) => Some(serde_json::from_value::<ErrorEnvelope>(e).map_err(|e| e.to_string())?),
+            Some(e) => Some(
+                serde_json::from_value::<ErrorEnvelope>(e)
+                    .map_err(|e| e.to_string())?
+                    .with_failed_run_summary(skipped),
+            ),
             None => None,
         };
         let status = self.status();
@@ -393,7 +461,7 @@ impl Outcome {
                         let returned: Vec<report::Returned> = targets
                             .0
                             .iter()
-                            .map(|(_, t)| report::returned_from_pointers(t.get("final_output")))
+                            .map(|(_, t)| returned_of(t.get("final_output")))
                             .collect();
                         let returned: Vec<&report::Returned> = returned.iter().collect();
                         report::render_get_multi_parts(
@@ -411,8 +479,7 @@ impl Outcome {
             }
             OutcomeStatus::Success if command == RunCommand::Get => {
                 let target = targets.first().map(String::as_str);
-                let returned =
-                    report::returned_from_pointers(target.and(value.get("final_output")));
+                let returned = returned_of(target.and(value.get("final_output")));
                 report::render_get_body(&value, target, &returned, get_shape(mode), fields)
             }
             OutcomeStatus::Success => {
@@ -433,6 +500,14 @@ impl Outcome {
                 if mode == ResultFormat::Json && value.get("run_id").is_some() {
                     out.chunks
                         .push(report::OutputChunk::Stdout(format!("{value}\n")));
+                } else if command == RunCommand::Get
+                    && let Some(output) = value.get("final_output")
+                {
+                    // A partitioned target that stopped at a failed key: the keys that succeeded.
+                    out = report::render_failed_get_returned(
+                        &returned_of(Some(output)),
+                        get_shape(mode),
+                    );
                 }
                 out
             }
@@ -583,7 +658,9 @@ mod tests {
             for fields in [None, Some(fields.as_slice())] {
                 let local =
                     report::render_get(&r, None, &report::Returned::default(), shape, fields);
-                let (served, error) = outcome.render(RunCommand::Get, &[], mode, fields).unwrap();
+                let (served, error) = outcome
+                    .render(RunCommand::Get, &[], mode, false, fields)
+                    .unwrap();
                 assert_eq!(rendered(&served), rendered(&local), "{mode:?}");
                 assert!(error.is_none());
             }
@@ -640,7 +717,7 @@ mod tests {
         ] {
             let local = report::render_get_multi(&multi, &[], shape, None);
             let (served, error) = outcome
-                .render(RunCommand::Get, &targets, mode, None)
+                .render(RunCommand::Get, &targets, mode, false, None)
                 .unwrap();
             assert_eq!(rendered(&served), rendered(&local), "{mode:?}");
             assert_eq!(error.unwrap().node.as_deref(), Some("p.py:alpha"));
@@ -672,7 +749,13 @@ mod tests {
         assert_eq!(outcome.status(), OutcomeStatus::Failed);
         assert_eq!(outcome.exit_code(), 1);
         let (served, envelope) = outcome
-            .render(RunCommand::Get, &["a".into()], ResultFormat::Json, None)
+            .render(
+                RunCommand::Get,
+                &["a".into()],
+                ResultFormat::Json,
+                false,
+                None,
+            )
             .unwrap();
         assert_eq!(rendered(&served), rendered(&local));
         let envelope = envelope.unwrap();
@@ -701,7 +784,7 @@ mod tests {
                 .contains("barca list")
         );
         let (out, _) = usage
-            .render(RunCommand::Get, &[], ResultFormat::Json, None)
+            .render(RunCommand::Get, &[], ResultFormat::Json, false, None)
             .unwrap();
         assert!(out.chunks.is_empty());
         assert!(Outcome::from_text(r#"{"status":"invented"}"#).is_err());

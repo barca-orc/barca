@@ -10,7 +10,8 @@ export type RunRequest = { command: RunCommand,
  */
 targets?: Array<string>,
 /**
- * As typed, relative to the server's project root; `[]` means the deployed set.
+ * As typed, relative to the server's project root: the run reads only these deployed
+ * files. `[]` means the deployed set.
  */
 files?: Array<string>,
 /**
@@ -33,4 +34,14 @@ dry_run?: boolean,
  * `--agent`: which stderr lines the client will print. The server streams every line,
  * tagged with `when`, whatever this says.
  */
-agent?: boolean, };
+agent?: boolean,
+/**
+ * `get -o value`: the outcome's `final_output` holds the values (read on the server, as
+ * `barca get -o value --json` prints them) instead of the artifact pointers.
+ */
+values?: boolean,
+/**
+ * `get --partition`: the keys of the targets to compute and return, as the flag takes
+ * them (`"region=emea,amer"`, or a JSON object for compound keys).
+ */
+partition?: string, };

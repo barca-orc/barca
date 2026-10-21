@@ -293,6 +293,8 @@ pub struct ServedRun<'a> {
     pub cancel: CancellationToken,
     pub event_tx: Option<UnboundedSender<crate::RunEvent>>,
     pub options: crate::outcome::RunOptions,
+    /// `--partition`: the keys of the targets to compute and return (all keys when `None`).
+    pub partition: Option<crate::selection::PartitionSelection>,
 }
 
 /// Execute a [`ServedRun`]. A single-target run that stops at a failed step is an `Err`, as
@@ -309,7 +311,7 @@ pub async fn serve_run(run: ServedRun<'_>) -> Result<RunResult, BarcaError> {
         command_label: run.command.as_str(),
         interrupt: run.cancel.into(),
         event_tx: run.event_tx,
-        partition: None,
+        partition: run.partition,
         options: run.options,
     })
     .await?;

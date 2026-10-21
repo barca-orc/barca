@@ -13,48 +13,7 @@ pub(crate) async fn list_cmd(
     let file_args: Vec<String> = files.iter().map(|p| p.display().to_string()).collect();
     if groups {
         let dag = barca_core::load::build_dag(&file_args, python).await?;
-        if json {
-            barca_core::outln!(
-                "{}",
-                serde_json::to_string_pretty(&serde_json::json!({"groups": dag.groups})).unwrap()
-            );
-        } else {
-            let by_id: std::collections::HashMap<_, _> =
-                dag.groups.iter().map(|g| (g.id.as_str(), g)).collect();
-            let nested: std::collections::HashSet<_> = dag
-                .groups
-                .iter()
-                .flat_map(|g| g.members.iter().map(String::as_str))
-                .collect();
-            fn show(
-                id: &str,
-                depth: usize,
-                groups: &std::collections::HashMap<&str, &barca_core::groups::NodeGroup>,
-            ) {
-                if let Some(g) = groups.get(id) {
-                    barca_core::outln!(
-                        "{}{} [{}] → {}",
-                        "  ".repeat(depth),
-                        g.name,
-                        g.id,
-                        g.output
-                    );
-                    for m in &g.members {
-                        show(m, depth + 1, groups);
-                    }
-                } else {
-                    barca_core::outln!("{}{}", "  ".repeat(depth), id);
-                }
-            }
-            if dag.groups.is_empty() {
-                barca_core::outln!("No groups declared.");
-            }
-            for g in &dag.groups {
-                if !nested.contains(g.id.as_str()) {
-                    show(&g.id, 0, &by_id);
-                }
-            }
-        }
+        print_groups(&dag.groups, json);
         return Ok(());
     }
     let mut assets = barca_core::queries::list_assets(&file_args, python).await?;
@@ -80,4 +39,43 @@ pub(crate) async fn list_cmd(
         root.as_deref(),
     ));
     Ok(())
+}
+
+/// `barca list --groups`: the group hierarchy, as JSON `{"groups": [...]}` or as a tree.
+pub(crate) fn print_groups(groups: &[barca_core::groups::NodeGroup], json: bool) {
+    if json {
+        barca_core::outln!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({"groups": groups})).unwrap()
+        );
+        return;
+    }
+    let by_id: std::collections::HashMap<_, _> =
+        groups.iter().map(|g| (g.id.as_str(), g)).collect();
+    let nested: std::collections::HashSet<_> = groups
+        .iter()
+        .flat_map(|g| g.members.iter().map(String::as_str))
+        .collect();
+    fn show(
+        id: &str,
+        depth: usize,
+        groups: &std::collections::HashMap<&str, &barca_core::groups::NodeGroup>,
+    ) {
+        if let Some(g) = groups.get(id) {
+            barca_core::outln!("{}{} [{}] → {}", "  ".repeat(depth), g.name, g.id, g.output);
+            for m in &g.members {
+                show(m, depth + 1, groups);
+            }
+        } else {
+            barca_core::outln!("{}{}", "  ".repeat(depth), id);
+        }
+    }
+    if groups.is_empty() {
+        barca_core::outln!("No groups declared.");
+    }
+    for g in groups {
+        if !nested.contains(g.id.as_str()) {
+            show(&g.id, 0, &by_id);
+        }
+    }
 }

@@ -412,17 +412,23 @@ pub fn render_failed_get(
             line!(rendered, "{out}");
         }
         _ => {
-            let Some(r) = returned else {
-                return rendered;
-            };
-            if r.values {
-                if let Some(v) = &r.final_output {
-                    line!(rendered, "{}", serde_json::to_string_pretty(v).unwrap());
-                }
-            } else {
-                shown_lines(&mut rendered, &r.shown, shape);
+            if let Some(r) = returned {
+                rendered = render_failed_get_returned(r, shape);
             }
         }
+    }
+    rendered
+}
+
+/// What a failed `get` prints outside JSON: the paths (or values) of the keys that succeeded.
+pub fn render_failed_get_returned(r: &Returned, shape: GetShape) -> RenderedOutput {
+    let mut rendered = RenderedOutput::default();
+    if r.values {
+        if let Some(v) = &r.final_output {
+            line!(rendered, "{}", serde_json::to_string_pretty(v).unwrap());
+        }
+    } else {
+        shown_lines(&mut rendered, &r.shown, shape);
     }
     rendered
 }
