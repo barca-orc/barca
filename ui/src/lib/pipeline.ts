@@ -42,6 +42,8 @@ export interface PipelineSummary extends Pipeline {
   total: number
   /** The most urgent state among them (what its status dot shows). */
   worst: Severity
+  /** How many of them a run is working on now. */
+  running: number
 }
 
 /** One summary per source file, sorted by file path, from `GET /state`. */
@@ -51,10 +53,12 @@ export function pipelineSummaries(nodes: NodeState[]): PipelineSummary[] {
     const file = sourceFile(n.id)
     const severity = severityOf(n)
     const p = byFile.get(file)
+    const running = n.running ? 1 : 0
     if (!p) {
-      byFile.set(file, { file, name: pipelineName(file), total: 1, worst: severity })
+      byFile.set(file, { file, name: pipelineName(file), total: 1, worst: severity, running })
     } else {
       p.total += 1
+      p.running += running
       if (SEVERITIES.indexOf(severity) < SEVERITIES.indexOf(p.worst)) p.worst = severity
     }
   }

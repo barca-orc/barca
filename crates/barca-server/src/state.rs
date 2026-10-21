@@ -238,6 +238,8 @@ pub struct NodeState {
     /// Next cron fire time (unix epoch seconds) in the server's `--timezone`, if scheduled.
     #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub next_run: Option<i64>,
+    /// The run working on this node now, whoever started it (`null` when none is).
+    pub running: Option<crate::running::NodeRunning>,
 }
 
 /// Median and p95 wall time over a node's most recent successful materializations.

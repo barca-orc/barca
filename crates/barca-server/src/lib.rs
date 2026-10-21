@@ -21,6 +21,7 @@ mod ledger;
 mod pause;
 mod reset;
 mod routes;
+mod running;
 mod runs;
 mod scheduler;
 mod state;
@@ -29,6 +30,7 @@ mod ui;
 mod watch;
 
 pub use handlers::node_states;
+pub use running::{NodeRunning, PartitionProgress, RunningStep};
 pub use state::{NodeState, ServeConfig};
 
 use state::AppState;

@@ -522,3 +522,29 @@
 
 .barca-graph-tools { display: flex; align-items: center; gap: 14px; padding: 12px 24px; min-height: 50px; flex-wrap: wrap; border-bottom: 1px solid var(--border-default); }
 .barca-graph-tools > span { color: var(--text-muted); font-size: var(--text-xs); }
+
+/* work in progress, whoever started it (GET /state `running`) */
+.barca-runs-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 24px; padding: 0 10px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--status-running-line);
+  background: var(--status-running-bg);
+  color: var(--status-running);
+  font-family: var(--font-sans);
+  font-size: var(--text-2xs);
+  font-weight: 500;
+  white-space: nowrap;
+  text-decoration: none;
+}
+.barca-runs-chip:hover, .barca-runs-chip:focus-visible { border-color: var(--status-running); outline: none; }
+.barca-running-badge { display: inline-flex; text-decoration: none; }
+.barca-running-badge:focus-visible { outline: 1px solid var(--status-running); outline-offset: 2px; border-radius: var(--radius-pill); }
+.barca-pipe-running {
+  margin-left: auto;
+  font-family: var(--font-sans);
+  font-size: var(--text-2xs);
+  color: var(--status-running);
+}
+.barca-pipe-running + .barca-pipe-count { margin-left: 6px; }
+.barca-count-running { display: inline-flex; align-items: center; gap: 5px; color: var(--status-running); }

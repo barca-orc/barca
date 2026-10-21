@@ -38,6 +38,10 @@ export type { PartitionState } from './generated/PartitionState'
 export type { LastMaterialization } from './generated/LastMaterialization'
 export type { Durations } from './generated/Durations'
 export type { ResetResult } from './generated/ResetResult'
+export type { NodeRunning } from './generated/NodeRunning'
+export type { RunningStep } from './generated/RunningStep'
+export type { PartitionProgress } from './generated/PartitionProgress'
+export type { ActiveStep } from './generated/ActiveStep'
 
 import type { LoadError } from './generated/LoadError'
 
