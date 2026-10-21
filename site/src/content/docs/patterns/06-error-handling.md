@@ -60,15 +60,17 @@ Value:
 ```
 
 ```
-attempt 1 at 1792550324.0 pid 188387
-attempt 2 at 1792550325.0 pid 188431
-attempt 3 at 1792550327.1 pid 188716
+attempt 1 at 1792600016.6 pid 2036400
+attempt 2 at 1792600017.6 pid 2036400
+attempt 3 at 1792600019.6 pid 2036400
 ```
 
 The second attempt starts one second after the first and the third two seconds after the
-second. Each attempt runs in a new worker process (three process ids), so nothing in memory
-carries over from a failed attempt. The run reports success and exits 0; the failed attempts
-are not shown in the summary.
+second. All three ran in the same worker process (one process id): a step that raises an
+exception leaves its worker running, and the worker takes the next step or the retry. What the
+module holds in memory (a global, a cache, an open client) carries over from a failed attempt
+to the next. The run reports success and exits 0; the failed attempts are not shown in the
+summary.
 
 ## When every attempt fails
 
@@ -141,3 +143,7 @@ Step 'pipeline.py:slow' failed: TimeoutError: Step 'pipeline.py:slow' exceeded t
 - **A failed asset is not cached.** `barca status` shows it as `never-run` with `failed` under
   WHY, and the next `barca get` tries it again.
 - `sys.exit()` in a step, with any code, fails the step (`barca docs tasks`).
+- **A failed attempt keeps its worker only when the interpreter is still sound.** After an
+  exception the worker goes on to its next step. It is replaced by a fresh one when the step
+  called `sys.exit()`, ran out of memory (`MemoryError`), was still running at its
+  `timeout_seconds`, failed while its module was imported, or crashed the interpreter.

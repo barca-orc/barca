@@ -484,7 +484,8 @@ def runs(tmp_path_factory) -> dict:
     assert timing.returncode == code, timing.stderr
     timing_doc = json.loads(timing.stdout)
     assert timing_doc["steps"][0]["attempts"] == 2
-    assert timing_doc["steps"][0]["import_seconds"] > 2
+    # The retry ran in the same worker (#523), so the module was imported once.
+    assert timing_doc["steps"][0]["import_seconds"] > 1
     s = command_schema(timing_doc, slow_import=True)
     out[TIMING_CASE[0]] = (s, render_snapshot(argv, stream, code, s), timing)
 

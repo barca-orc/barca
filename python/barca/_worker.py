@@ -421,7 +421,12 @@ def _run_with_timeout(fn, kwargs, timeout_seconds, *, label=None):
     thread.join(timeout=timeout_seconds)
 
     if thread.is_alive():
-        raise TimeoutError(f"Step '{label or fn.__name__}' exceeded timeout of {timeout_seconds}s")
+        error = TimeoutError(
+            f"Step '{label or fn.__name__}' exceeded timeout of {timeout_seconds}s"
+        )
+        # The step is still running in its thread: this interpreter is not free for more work.
+        error._barca_still_running = True  # ty: ignore[unresolved-attribute]
+        raise error
     if exception is not None:
         raise exception
     return result
@@ -930,11 +935,34 @@ def _join_the_job() -> None:
         pass  # the coordinator's group is gone; so is the coordinator, and the socket says so
 
 
+def _worker_survives(exc, imported: bool) -> bool:
+    """Whether this worker may take more work after a step failed with `exc` (#523).
+
+    An exception raised by user code (or while reading its inputs or writing its result)
+    unwinds cleanly: the worker reports it and goes on, as it does after a success. It stops,
+    and the coordinator starts a fresh worker, when this interpreter may not be sound: the
+    module failed to import (a half-run module body), the step called sys.exit() or was
+    interrupted, it ran out of memory, it is still running past its timeout, or a parallel()
+    exchange with the coordinator was left unfinished.
+    """
+    from barca import _runtime
+
+    return (
+        imported
+        and isinstance(exc, Exception)
+        and not isinstance(exc, MemoryError)
+        and not getattr(exc, "_barca_still_running", False)
+        and not _runtime.exchange_broken
+    )
+
+
 def _run_daemon_step(step, modules, art_dir, lru):
     """Execute one step in daemon mode and emit its result or error.
 
-    Returns True on success, False on step failure. Socket errors raised while
-    emitting propagate to the caller (the connection is gone — exit the loop).
+    Returns True when this worker may go on to its next step (the step succeeded, or failed
+    with an exception that left the interpreter sound), False when it must stop. Socket
+    errors raised while emitting propagate to the caller (the connection is gone — exit the
+    loop).
     Per-task self-timing: CPU time (`process_time`, the truest measure of
     work), wall time, and peak RSS ride back on the completion message.
     """
@@ -952,6 +980,9 @@ def _run_daemon_step(step, modules, art_dir, lru):
     # Set when this step is a parallel() branch whose return value could not be written.
     unwritable = False
     import_seconds = None
+    # Whether the step's module is imported and its function found: a failure before that
+    # stops the worker (`_worker_survives`).
+    imported = False
 
     try:
         source = str(Path(step["source_file"]).resolve())
@@ -970,6 +1001,7 @@ def _run_daemon_step(step, modules, art_dir, lru):
                 import_seconds = time.perf_counter() - import_start
                 emitter.flush()
         fn = getattr(modules[source], step["function_name"])
+        imported = True
 
         # From here until the result is written, Ctrl-C interrupts the step.
         _ctrl_c_interrupts_the_step()
@@ -1113,6 +1145,7 @@ def _run_daemon_step(step, modules, art_dir, lru):
         tracing.finish(exc)
         from barca import _branches
 
+        survives = _worker_survives(exc, imported)
         _runtime.emit_step_error(
             node_id=node_id,
             # Only this branch's own return value that could not be written is reported as
@@ -1123,8 +1156,9 @@ def _run_daemon_step(step, modules, art_dir, lru):
             traceback=_user_traceback(exc),
             elapsed=wall,
             import_seconds=import_seconds if import_seconds and import_seconds > 1 else None,
+            worker_continues=survives,
         )
-        return False
+        return survives
 
     finally:
         _ctrl_c_does_nothing()
@@ -1189,9 +1223,10 @@ def run_daemon():
             break
 
         # Batch pull: K steps per round-trip. The lease closes per-step as
-        # each result message goes back; a failure stops the batch (the
-        # coordinator kills this worker for a fresh interpreter and re-queues
-        # the unstarted remainder).
+        # each result message goes back. A step that raised does not stop the
+        # batch; one that left this interpreter unsound does (the coordinator
+        # stops this worker, starts a fresh one and re-queues the unstarted
+        # remainder; see `_worker_survives`).
         if msg.get("type") == "execute_batch":
             from barca import _wire
 

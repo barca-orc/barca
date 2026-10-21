@@ -326,6 +326,13 @@ pub struct WorkerPool {
     next_branch_group: u64,
     /// The result directories of the groups each step started, removed when the step ends.
     branch_dirs: HashMap<ItemId, Vec<PathBuf>>,
+    /// Failed steps whose worker went on to its next step instead of being replaced (#523).
+    failures_survived: usize,
+    /// Steps encoded and sent to a worker, counting a step again each time it is re-sent
+    /// after its worker stopped with it still leased. Each failed step used to stop its
+    /// worker and re-send the rest of its batch, so with many failures this grew with keys
+    /// × batch size (#523).
+    steps_dispatched: usize,
 }
 
 /// The directory that holds branch results, under the project's `.barca`.
@@ -421,6 +428,8 @@ impl WorkerPool {
             branch_root,
             next_branch_group: 0,
             branch_dirs: HashMap::new(),
+            failures_survived: 0,
+            steps_dispatched: 0,
         })
     }
 
@@ -624,6 +633,7 @@ impl WorkerPool {
                         traceback,
                         elapsed,
                         import_seconds,
+                        worker_continues,
                     } => {
                         let Some(item_id) = self.take_lease(worker_id, node_id, coord) else {
                             crate::errln!(
@@ -659,12 +669,15 @@ impl WorkerPool {
                         }
                         self.drop_branch_results(item_id);
 
-                        // User code failed (or hung past its timeout) in this
-                        // process — kill it so retries and remaining work get a
-                        // fresh interpreter. Unstarted leases go back to the
-                        // queue front; the 200ms SIGTERM grace runs off the
-                        // event loop.
-                        if let Some(mut handle) = self.workers.remove(&worker_id) {
+                        // A step that raised leaves its worker sound, and the worker goes on
+                        // with its batch (#523). One that may not be sound (a failed import,
+                        // `sys.exit()`, still running past its timeout) is stopped so retries
+                        // and remaining work get a fresh interpreter: unstarted leases go back
+                        // to the queue front, and the 200ms SIGTERM grace runs off the event
+                        // loop.
+                        if worker_continues {
+                            self.failures_survived += 1;
+                        } else if let Some(mut handle) = self.workers.remove(&worker_id) {
                             Self::return_leases(&mut handle, coord);
                             tokio::task::spawn_blocking(move || {
                                 graceful_kill(&mut handle.child);
@@ -930,6 +943,18 @@ impl WorkerPool {
     /// `BARCA_TRACE_TIMING=1` — see benchmarks/RESULTS.md's docker-harness
     /// re-run notes).
     pub async fn shutdown(self) {
+        if self.trace_on {
+            // How many workers the run started, against the failed steps that kept theirs (a
+            // failing step costs no worker start), and how many steps were sent to workers,
+            // re-sends included (#523).
+            crate::errln!(
+                "[trace]  {:>8.1}ms  workers started {}, failed steps that kept their worker {}, steps dispatched {}",
+                self.trace_start.elapsed().as_secs_f64() * 1000.0,
+                self.next_worker_id,
+                self.failures_survived,
+                self.steps_dispatched
+            );
+        }
         drop(self.acceptor);
         let workers = self.workers;
         let frozen = self.frozen;
@@ -1101,6 +1126,7 @@ impl WorkerPool {
                 );
             }
 
+            self.steps_dispatched += batch.len();
             let handle = self
                 .workers
                 .get_mut(&wid)
@@ -2502,6 +2528,8 @@ mod tests {
                 branch_root: branch_root.clone(),
                 next_branch_group: 0,
                 branch_dirs: HashMap::new(),
+                failures_survived: 0,
+                steps_dispatched: 0,
             };
 
             let start = std::time::Instant::now();

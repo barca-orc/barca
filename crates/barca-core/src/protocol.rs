@@ -70,6 +70,12 @@ pub enum WorkerMessage {
         elapsed: f64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         import_seconds: Option<f64>,
+        /// The worker is still sound and goes on with its batch: the step raised an
+        /// exception that unwound cleanly. Absent (an older worker, or one that may not be
+        /// sound: a failed import, `sys.exit()`, a step still running past its timeout), the
+        /// coordinator stops the worker and starts a fresh one (#523).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        worker_continues: bool,
     },
     /// A step was blocked because an upstream failed.
     Blocked { node_id: String, reason: String },
@@ -734,6 +740,7 @@ mod tests {
             traceback: "Traceback (most recent call last):\n  ...".to_string(),
             elapsed: 1.5,
             import_seconds: Some(1.1),
+            worker_continues: true,
         };
 
         let mut buffer = Vec::new();
@@ -751,7 +758,9 @@ mod tests {
                 traceback,
                 elapsed,
                 import_seconds,
+                worker_continues,
             } => {
+                assert!(worker_continues);
                 assert_eq!(node_id, "transform");
                 assert_eq!(error_type, "ValueError");
                 assert_eq!(message, "invalid input");

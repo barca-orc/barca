@@ -8,7 +8,8 @@ failures" worker behavior, asserting *observable* facts:
   - **Process-count probe**: the fixture module appends `os.getpid()` to
     ``$BARCA_PROC_LOG`` at import time. Each worker process imports the user
     module exactly once, so the number of *distinct PIDs* in that file equals the
-    number of worker processes Rust spawned. Workers inherit the test's env, so we
+    number of worker processes Rust spawned. A step that raises keeps its worker
+    (#523), so its retries run in the same process. Workers inherit the test's env, so we
     just set the var before invoking barca.
 """
 
@@ -118,8 +119,8 @@ def test_retry_succeeds_after_transient_failures(tmp_path, state):
 
     # Flaky fn ran 3 times (2 failures + 1 success).
     assert int((state["counter_dir"] / "flaky").read_text()) == 3
-    # 1 initial dispatch + 2 retries = 3 worker processes.
-    assert distinct_pids(state["proc_log"]) == 3
+    # A step that raises keeps its worker (#523): the retries ran in the same process.
+    assert distinct_pids(state["proc_log"]) == 1
 
     status, attempts, _ = query_db(f, "flaky")
     assert status == "success"
@@ -146,9 +147,9 @@ def test_retry_exhausted_records_failure(tmp_path, state):
     assert "ValueError" in msg
     assert "_worker.py" not in msg  # internal frames filtered
 
-    # 1 initial + 1 retry = 2 processes; the function ran twice.
+    # 1 initial + 1 retry; the function ran twice, in one worker (#523).
     assert int((state["counter_dir"] / "always_fails").read_text()) == 2
-    assert distinct_pids(state["proc_log"]) == 2
+    assert distinct_pids(state["proc_log"]) == 1
 
     status, attempts, error_message = query_db(f, "always_fails")
     assert status == "failed"

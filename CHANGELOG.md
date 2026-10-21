@@ -24,6 +24,19 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   Python file hash, identifier quoting and JSON conversion each have one copy; five unused
   functions are gone.
 
+### Performance
+
+- A step that raises an exception no longer stops its worker (#523). The worker reports the
+  failure with its traceback and takes its next step, so a failed partition key no longer costs
+  a worker start (about 45 ms) and the rest of its batch is not sent again. With half of 10,000
+  keys failing (`benchmarks/partition_scaling/`, `FAIL_HALF=1`, pool 8) a cold run takes 3.3 s
+  instead of failing with "no workers available" after 96 s, and the coordinator sends 20,000
+  steps instead of re-sending batches (570,000 by the time it gave up). A retry after an
+  exception may now run in the same process, so module state carries over from the failed
+  attempt. A worker is still replaced after `sys.exit()`, `MemoryError`, a timeout, a failed
+  module import, an unfinished `parallel()` exchange or a crash, and a crash still names the
+  exit signal.
+
 ## 0.28.3 (2026-10-21)
 
 ### Features
