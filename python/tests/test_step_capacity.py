@@ -321,8 +321,14 @@ def test_a_heavy_step_that_raises_keeps_its_worker_and_frees_its_capacity(tmp_pa
         """,
     )
     proc = cli(
-        tmp_path, "get", "heavy", "p.py", "--json", code=1,
-        BARCA_CAPACITY="4", BARCA_TRACE_TIMING="1",
+        tmp_path,
+        "get",
+        "heavy",
+        "p.py",
+        "--json",
+        code=1,
+        BARCA_CAPACITY="4",
+        BARCA_TRACE_TIMING="1",
     )
     found = re.findall(
         r"workers started (\d+), failed steps that kept their worker (\d+), steps dispatched (\d+)",
@@ -337,4 +343,9 @@ def test_a_heavy_step_that_raises_keeps_its_worker_and_frees_its_capacity(tmp_pa
     assert kept == 4, proc.stderr
     assert started <= 2, proc.stderr
     assert dispatched == 8, proc.stderr
-    assert sorted(json.loads(proc.stdout)["final_output"]) == ["key=k0", "key=k2", "key=k4", "key=k6"]
+    assert sorted(json.loads(proc.stdout)["final_output"]) == [
+        "key=k0",
+        "key=k2",
+        "key=k4",
+        "key=k6",
+    ]
