@@ -508,7 +508,7 @@ mod wire_tests {
     fn explanations_roundtrip_whole_file_single_target_and_ordered_multiple_targets() {
         for target in [None, Some("p.py:z")] {
             let result: ExplainResult = roundtrip(json!({
-                "dry_run": true, "command": "get", "target": target,
+                "dry_run": true, "command": "get", "target": target, "capacity": 4,
                 "steps": [{"id":"p.py:z", "kind":"asset", "action":"run", "reason":"not_materialized"}],
                 "summary": {"will_run":1,"cached":0,"unknown":0}, "warnings":[]
             }));

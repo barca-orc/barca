@@ -115,7 +115,8 @@ worker for pipeline.py:train exited with code 3
 
 SIGKILL is what the out-of-memory killer sends, so check the container's or host's memory
 limit (`dmesg`, `docker inspect`, the pod's `OOMKilled` status) when you see it; several heavy
-steps running at once in separate workers add up. A worker that was frozen waiting for its
+steps running at once in separate workers add up. Give those steps a `weight=` so fewer run at
+once (`barca docs assets`, "Heavy steps"). A worker that was frozen waiting for its
 `parallel()` branches adds `while it waited for its parallel() branches`. When the exit
 status is not available within a few hundred milliseconds of the connection closing, the
 error is the plain `worker disconnected`. There is no traceback, since the process could not

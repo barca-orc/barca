@@ -189,6 +189,9 @@ happen on every run belongs in a task.
   takes no such options). A branch that runs longer than 300 seconds comes back as a
   `ParallelError` holding a `TimeoutError`. The calling step's own `timeout_seconds` keeps
   counting while it waits for its branches.
+- Each branch takes the `weight=` of the step that called `parallel()` (experimental,
+  `barca docs assets`, "Heavy steps"): with `@task(weight=2)` and a capacity of 4, two branches
+  run at a time. The calling step is not counted while it waits for its branches.
 - What a branch returns belongs to the run and is not a cached artifact. Every result,
   including small JSON values, is a file,
   `.barca/branches/<run>-<pid>/<group>/<branch>.<ext>`, one directory per `parallel()` call, so

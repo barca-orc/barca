@@ -6,6 +6,24 @@ released yet collect under `## Pending`. Releases 0.1.2 to 0.23.x have their not
 GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; the "0.1.2 to
 0.8.0" summary below lists what the earlier of them shipped.
 
+## Pending
+
+### Features
+
+- Heavy steps can be kept from running all at once (experimental, #436). A new decorator
+  argument `weight=N` (a whole number, default 1) on `@asset`, `@task` and `@sensor` says how
+  much of the pool's capacity a step takes while it runs, and the steps running at once add up
+  to at most the capacity: the pool size unless `[execution] capacity` in barca.toml or
+  `BARCA_CAPACITY` sets it (the variable wins). Under a container's memory limit, three heavy
+  assets with `weight=2` and a capacity of 4 run two at a time instead of three, and light steps
+  still use what is left; outputs and cache decisions do not change (`weight=` is not part of
+  the run hash). A step heavier than the capacity runs alone, with a warning. A heavy step
+  waiting for room is not overtaken by lighter steps that became ready after it. Partition keys
+  and `parallel()` branches take their node's weight. `barca plan` gains `pool_size`,
+  `capacity`, `capacity_source` and `weights`, `--dry-run` gains `capacity` and `steps[].weight`,
+  and `barca doctor` a `capacity` check. See `barca docs assets`, "Heavy steps", and
+  `barca docs scheduling`, "Containers with a memory limit".
+
 ## 0.28.3 (2026-10-21)
 
 ### Features

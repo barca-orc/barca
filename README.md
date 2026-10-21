@@ -136,8 +136,8 @@ examples.
 | `barca history` | Recent runs. |
 | `barca stats <target> [files...]` | Timing and re-execution statistics for one asset. |
 | `barca sql "<query>" [files...]` | Query cached results with DuckDB; each asset is a view (experimental). |
-| `barca doctor [files...]` | Check the project, Python, cache, metadata and stores without running steps. |
-| `barca plan [files...]` | The execution plan as JSON (experimental). |
+| `barca doctor [files...]` | Check the project, Python, cache, metadata, stores and capacity without running steps. |
+| `barca plan [files...]` | The execution plan as JSON, with the capacity and step weights (experimental). |
 | `barca gc` | Evict cached results to keep `.barca/` under its size limit (barca also does this after every run). |
 | `barca serve [files...]` | Cron scheduler, HTTP API and web UI; `--server` on other commands runs them there. |
 | `barca state backups` / `barca state restore` / `barca state reset` | List the metadata backups, put one back in place of the local database, or start it over (experimental; nothing is deleted). |

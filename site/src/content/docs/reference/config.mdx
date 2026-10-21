@@ -95,6 +95,11 @@ max_size = "20GB"
 # Seconds `barca serve` waits for runs in flight on SIGTERM or SIGINT before cancelling them.
 drain_timeout = 30
 
+[execution]
+# The most the weight= of the steps running at once may add up to (experimental).
+# Default: the pool size. See "Heavy steps" on the Decorators page.
+capacity = 4
+
 [remote]
 # Root of the remote store. Setting it turns remote storage on:
 # artifacts at {uri}/{env}/artifacts, backups of the history at {uri}/{env}/state/backups/.
@@ -124,6 +129,7 @@ url = "https://barca.internal.example.com"
 | `[discovery].include` | none | Glob patterns; only matching files are discovered. See [Discovery](/reference/discovery/). |
 | `[discovery].exclude` | none | Glob patterns skipped in addition to the built-in list. |
 | `[cache].max_size` | 10% of the filesystem | Size limit for `.barca/`; past it barca evicts down to 80% of it. `"off"` for no limit. See [Cache size](#cache-size). |
+| `[execution].capacity` | the pool size | Experimental. The most the `weight=` of the steps running at once may add up to; a whole number of at least 1. A step heavier than it runs alone. See [Heavy steps](/reference/api/decorators/#heavy-steps-weight). |
 | `[server].drain_timeout` | 30 | Seconds `barca serve` waits for runs in flight once stopped with SIGTERM or SIGINT, before it cancels them and exits 1. `0` cancels at once. `--drain-timeout` overrides it. |
 | `[remote].uri` | none | Root of the remote store. |
 | `[remote].artifacts_uri` | `{uri}/{env}/artifacts` | Artifact location, used as written. |
@@ -137,7 +143,7 @@ valid ones:
 
 ```
 invalid ./barca.toml: TOML parse error at line 1, column 1
-unknown field `defualt_env`, expected one of `default_env`, `remote`, `discovery`, `cache`, `server`
+unknown field `defualt_env`, expected one of `default_env`, `remote`, `discovery`, `cache`, `server`, `execution`
 ```
 
 Keep credentials out of `barca.toml`; they come from the environment.
@@ -190,6 +196,7 @@ Variables that override `barca.toml`:
 | Variable | Overrides | Notes |
 |---|---|---|
 | `BARCA_ENV` | `default_env` | Overridden by `--env`. |
+| `BARCA_CAPACITY` | `[execution].capacity` | Experimental. A whole number of at least 1; anything else exits 2. |
 | `BARCA_CACHE_MAX_SIZE` | `[cache].max_size` | Same values; an invalid one exits 2. For a container that sets its limit when it is deployed. |
 | `BARCA_REMOTE` | process override | `off` uses local artifacts/history, takes no backups and overrides all remote settings. Unset/empty keeps normal resolution; other values exit 2. |
 | `BARCA_REMOTE_URI` | `[remote].uri` | Enough on its own to turn remote storage and history backups on. |

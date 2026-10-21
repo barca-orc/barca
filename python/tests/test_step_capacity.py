@@ -1,0 +1,310 @@
+"""`weight=` and the pool's capacity: how many heavy steps run at once (#436).
+
+Each step records when it started and ended; the assertions read the peak number of steps
+running at once from those spans, not from wall time.
+"""
+
+import json
+import os
+import subprocess
+import textwrap
+
+from barca.api import _find_binary
+
+# Every step appends `name start end` to spans.txt in the project directory.
+SPAN = """
+import os, time
+from pathlib import Path
+
+def span(name, seconds):
+    start = time.time()
+    time.sleep(seconds)
+    with open(Path(__file__).parent / "spans.txt", "a") as f:
+        f.write(f"{name} {start} {time.time()}\\n")
+"""
+
+
+def cli(root, *args, code=0, **env):
+    proc = subprocess.run(
+        [_find_binary(), *args],
+        cwd=root,
+        env={**os.environ, "BARCA_REMOTE": "off", "BARCA_POOL_SIZE": "4", **env},
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == code, proc.stderr
+    return proc
+
+
+def write(root, body):
+    (root / "p.py").write_text(SPAN + textwrap.dedent(body))
+    (root / "spans.txt").unlink(missing_ok=True)
+
+
+def spans(root):
+    out = {}
+    for line in (root / "spans.txt").read_text().splitlines():
+        name, start, end = line.split()
+        out[name] = (float(start), float(end))
+    return out
+
+
+def peak(spans, names=None):
+    """The most spans (of `names`, or all) open at one instant."""
+    events = []
+    for name, (start, end) in spans.items():
+        if names is None or name in names:
+            events += [(start, 1), (end, -1)]
+    # Ends sort before starts at the same instant: touching spans do not overlap.
+    events.sort(key=lambda e: (e[0], e[1]))
+    running = best = 0
+    for _, delta in events:
+        running += delta
+        best = max(best, running)
+    return best
+
+
+THREE_HEAVY = """
+from barca import asset
+
+@asset(weight=2)
+def heavy_a() -> int:
+    span("heavy_a", 0.6)
+    return 1
+
+@asset(weight=2)
+def heavy_b() -> int:
+    span("heavy_b", 0.6)
+    return 2
+
+@asset(weight=2)
+def heavy_c() -> int:
+    span("heavy_c", 0.6)
+    return 3
+
+@asset(inputs={"a": heavy_a, "b": heavy_b, "c": heavy_c})
+def total(a: int, b: int, c: int) -> int:
+    return a + b + c
+"""
+
+
+def run_hashes(doc):
+    return {s["id"]: s.get("run_hash") for s in doc["steps"]}
+
+
+def test_three_heavy_roots_run_two_at_a_time_with_the_same_outputs_and_cache(tmp_path):
+    limited, free = tmp_path / "limited", tmp_path / "free"
+    for root in (limited, free):
+        root.mkdir()
+        write(root, THREE_HEAVY)
+
+    got = json.loads(
+        cli(limited, "get", "total", "p.py", "-o", "json", BARCA_CAPACITY="4").stdout
+    )
+    assert peak(spans(limited)) == 2
+    # The same pipeline with room for all three runs them together.
+    unlimited = json.loads(
+        cli(free, "get", "total", "p.py", "-o", "json", BARCA_CAPACITY="100").stdout
+    )
+    assert peak(spans(free)) == 3
+
+    assert got["final_output"] == unlimited["final_output"] == 6
+    assert run_hashes(got) == run_hashes(unlimited)
+    assert {s["status"] for s in got["steps"]} == {"ran"}
+
+    # Cached the same way under either capacity, and at another weight.
+    again = json.loads(
+        cli(limited, "get", "total", "p.py", "-o", "json", BARCA_CAPACITY="100").stdout
+    )
+    assert {s["status"] for s in again["steps"]} == {"cached"}
+    (limited / "p.py").write_text((limited / "p.py").read_text().replace("weight=2", "weight=3"))
+    reweighed = json.loads(
+        cli(limited, "get", "total", "p.py", "-o", "json", BARCA_CAPACITY="4").stdout
+    )
+    assert {s["status"] for s in reweighed["steps"]} == {"cached"}
+    assert run_hashes(reweighed) == run_hashes(got)
+
+
+def test_plan_dry_run_and_doctor_show_the_capacity_and_the_weights(tmp_path):
+    write(tmp_path, THREE_HEAVY)
+    (tmp_path / "barca.toml").write_text("[execution]\ncapacity = 4\n")
+
+    plan = json.loads(cli(tmp_path, "plan", "p.py").stdout)
+    assert plan["capacity"] == 4
+    assert plan["capacity_source"] == "[execution] capacity"
+    assert plan["pool_size"] == 4
+    assert plan["weights"] == {"p.py:heavy_a": 2, "p.py:heavy_b": 2, "p.py:heavy_c": 2}
+
+    plan = json.loads(cli(tmp_path, "plan", "p.py", BARCA_CAPACITY="6").stdout)
+    assert (plan["capacity"], plan["capacity_source"]) == (6, "BARCA_CAPACITY")
+
+    dry = json.loads(cli(tmp_path, "get", "total", "p.py", "--dry-run", "--json").stdout)
+    assert dry["capacity"] == 4
+    weights = {s["id"]: s.get("weight") for s in dry["steps"]}
+    assert weights == {
+        "p.py:heavy_a": 2,
+        "p.py:heavy_b": 2,
+        "p.py:heavy_c": 2,
+        "p.py:total": None,
+    }
+    pretty = cli(tmp_path, "get", "total", "p.py", "--dry-run", "--pretty").stdout
+    assert "Steps running at once total at most weight 4" in pretty
+
+    doctor = json.loads(cli(tmp_path, "doctor", "p.py", "--json").stdout)
+    check = next(c for c in doctor["checks"] if c["name"] == "capacity")
+    assert check["data"] == {"capacity": 4, "pool_size": 4, "source": "[execution] capacity"}
+
+
+def test_a_bad_capacity_or_weight_is_a_usage_error(tmp_path):
+    write(tmp_path, THREE_HEAVY)
+    proc = cli(tmp_path, "get", "total", "p.py", code=2, BARCA_CAPACITY="0")
+    assert "BARCA_CAPACITY" in proc.stderr
+    write(tmp_path, THREE_HEAVY.replace("weight=2", "weight=0", 1))
+    proc = cli(tmp_path, "plan", "p.py", code=2)
+    assert "weight= must be a whole number of at least 1" in proc.stderr
+
+
+def test_a_step_heavier_than_the_capacity_runs_alone_with_a_warning(tmp_path):
+    write(
+        tmp_path,
+        """
+        from barca import asset
+
+        @asset(weight=5)
+        def huge() -> int:
+            span("huge", 0.5)
+            return 1
+
+        @asset()
+        def light_a() -> int:
+            span("light_a", 0.5)
+            return 2
+
+        @asset()
+        def light_b() -> int:
+            span("light_b", 0.5)
+            return 3
+
+        @asset(inputs={"h": huge, "a": light_a, "b": light_b})
+        def total(h: int, a: int, b: int) -> int:
+            return h + a + b
+        """,
+    )
+    proc = cli(tmp_path, "get", "total", "p.py", "-o", "json", BARCA_CAPACITY="2")
+    assert json.loads(proc.stdout)["final_output"] == 6
+    assert (
+        "[barca] warning: 'huge' has weight=5, more than the capacity 2 (BARCA_CAPACITY); "
+        "it runs alone" in proc.stderr
+    )
+    got = spans(tmp_path)
+    start, end = got["huge"]
+    for other in ("light_a", "light_b"):
+        o_start, o_end = got[other]
+        assert o_end <= start or o_start >= end, f"{other} overlapped huge: {got}"
+    # The two light ones still ran together.
+    assert peak(got, {"light_a", "light_b"}) == 2
+    plan = cli(tmp_path, "plan", "p.py", BARCA_CAPACITY="2")
+    assert "more than the capacity 2" in plan.stderr
+
+
+def test_a_heavy_step_is_not_overtaken_by_light_steps_ready_after_it(tmp_path):
+    """Two chains of light steps keep one slot busy at any time. Were light steps let past a
+    heavy one waiting for room, the heavy step would wait for both chains to end."""
+    write(
+        tmp_path,
+        """
+        from barca import asset, task
+
+        @task()
+        def a1() -> int:
+            span("a1", 0.2)
+            return 1
+
+        @task(inputs={"x": a1})
+        def a2(x: int) -> int:
+            span("a2", 0.2)
+            return x
+
+        @task(inputs={"x": a2})
+        def a3(x: int) -> int:
+            span("a3", 0.2)
+            return x
+
+        @task(inputs={"x": a3})
+        def a4(x: int) -> int:
+            span("a4", 0.2)
+            return x
+
+        @task()
+        def b1() -> int:
+            span("b1", 0.35)
+            return 1
+
+        @task(inputs={"x": b1})
+        def b2(x: int) -> int:
+            span("b2", 0.35)
+            return x
+
+        @task(inputs={"x": b2})
+        def b3(x: int) -> int:
+            span("b3", 0.35)
+            return x
+
+        @task(inputs={"x": b3})
+        def b4(x: int) -> int:
+            span("b4", 0.35)
+            return x
+
+        @task(inputs={"x": a1}, weight=2)
+        def heavy(x: int) -> int:
+            span("heavy", 0.2)
+            return x
+        """,
+    )
+    cli(tmp_path, "run", "p.py", BARCA_CAPACITY="2", BARCA_POOL_SIZE="2")
+    got = spans(tmp_path)
+    assert len(got) == 9
+    heavy_start, heavy_end = got["heavy"]
+    assert heavy_start < min(got["a3"][0], got["b3"][0]), got
+    for name, (start, end) in got.items():
+        if name != "heavy":
+            assert end <= heavy_start or start >= heavy_end, f"{name} overlapped heavy: {got}"
+    assert peak(got) <= 2
+
+
+def test_partition_keys_and_parallel_branches_take_their_nodes_weight(tmp_path):
+    write(
+        tmp_path,
+        """
+        from functools import partial
+        from barca import asset, task, parallel, partitions
+
+        @asset(partitions={"k": partitions(["a", "b", "c", "d"])}, weight=2)
+        def per_key(k: str) -> str:
+            span(f"key_{k}", 0.5)
+            return k
+
+        @task()
+        def branch(i: int) -> int:
+            span(f"branch_{i}", 0.5)
+            return i
+
+        @task(weight=2)
+        def fan_out() -> list:
+            return parallel(*[partial(branch, i) for i in range(4)])
+        """,
+    )
+    cli(tmp_path, "get", "per_key", "p.py", BARCA_CAPACITY="4")
+    got = spans(tmp_path)
+    assert set(got) == {"key_a", "key_b", "key_c", "key_d"}
+    assert peak(got) == 2
+
+    (tmp_path / "spans.txt").unlink()
+    out = json.loads(
+        cli(tmp_path, "run", "fan_out", "p.py", "--json", BARCA_CAPACITY="4").stdout
+    )
+    assert out["status"] == "success"
+    got = spans(tmp_path)
+    assert set(got) == {f"branch_{i}" for i in range(4)}
+    assert peak(got) == 2

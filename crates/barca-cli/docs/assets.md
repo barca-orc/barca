@@ -75,6 +75,7 @@ Star-import dependency hashing remains conservative.
 | `retries=` | Total attempts on failure; 1 means no retry. |
 | `retry_backoff=` | Base delay in seconds; the delay grows linearly with the attempt number. |
 | `env=["NAME", ...]` | Environment variables the function reads. Their values are part of the cache key and are reported per step. See below. |
+| `weight=` | How much of the pool's capacity the step takes while it runs (default 1). Experimental. See "Heavy steps" below. |
 | `description=`, `tags=` | Metadata. |
 
 `inputs=`, `serializer=` and the dimension names in `partitions=` are part of the asset's run
@@ -120,7 +121,7 @@ def report(raw: dict) -> int:
 
 ```
 $ barca list pipeline.py --pretty
-Parse error: pipeline.py:report (line 9): `input` is not an argument of @asset. Did you mean `inputs`? @asset accepts: name, inputs, partitions, serializer, freshness, timeout_seconds, retries, retry_backoff, description, tags, env
+Parse error: pipeline.py:report (line 9): `input` is not an argument of @asset. Did you mean `inputs`? @asset accepts: name, inputs, partitions, serializer, freshness, timeout_seconds, retries, retry_backoff, description, tags, env, weight
 Rename `input` to `inputs`, or remove it. See `barca docs assets`.
 ```
 
@@ -214,6 +215,63 @@ barca get summary pipeline.py --agent     # raw and summary run again
 **Limitation:** barca cannot see environment variables your code reads without declaring them.
 Those are not part of the cache key and are not reported, so a changed value does not
 invalidate the asset.
+
+## Heavy steps: `weight=`
+
+Experimental. Each step runs in its own worker process, and independent steps run at the same
+time, up to one per worker. Under a hard memory limit (a container's `mem_limit`), several heavy
+steps that become ready together can add up past it, and the kernel kills one: the step fails
+with `worker for pipeline.py:train exited with SIGKILL (possibly the OOM killer)`. The same step
+succeeds alone. `weight=` limits how many such steps run at once without slowing the rest.
+
+```python
+from barca import asset
+
+
+@asset(weight=2)
+def embed_a() -> dict:
+    return {"rows": 1}
+
+
+@asset(weight=2)
+def embed_b() -> dict:
+    return {"rows": 2}
+
+
+@asset(weight=2)
+def embed_c() -> dict:
+    return {"rows": 3}
+```
+
+- The weights of the steps running at once add up to at most the **capacity**. It is the pool
+  size (available cores, or `BARCA_POOL_SIZE`) unless `[execution] capacity` in barca.toml or
+  `BARCA_CAPACITY` sets it; the environment variable wins. With a capacity of 4, the three steps
+  above run two at a time, and two weight-1 steps can run beside one of them.
+- `weight=` is a whole number of at least 1; anything else is a parse error (exit 2). It is
+  accepted on `@asset`, `@task` and `@sensor`. It is not part of the run hash: changing it
+  re-runs nothing and outputs and cache decisions are the same at any weight or capacity.
+- A step whose weight is above the capacity runs alone, with nothing beside it, rather than
+  never. Every command that plans it prints a warning on stderr:
+  `[barca] warning: 'embed' has weight=8, more than the capacity 4 (pool size); it runs alone`.
+- Steps start in the order they become ready. A heavy step waiting for room is not overtaken:
+  steps that become ready after it wait until it has started, so a stream of light steps
+  cannot hold it back for the rest of the run.
+- Every partition key of a partitioned node takes the node's weight, and so does every
+  `parallel()` branch, which takes the weight of the step that called `parallel()`. While that
+  step waits for its branches it is not counted (the branches carry its weight), so its own
+  memory is not limited then.
+- The capacity is per run: each run has its own pool of workers. Two runs at the same time
+  (two `barca get` commands, or `barca serve` running two schedules at once) each fill their
+  own capacity.
+- `barca plan --json` shows `capacity`, `capacity_source` and `weights` (the planned nodes with a
+  weight above 1); `--dry-run` shows `capacity` and a `weight` on each such step; `barca doctor`
+  has a `capacity` check.
+
+```bash
+barca plan pipeline.py
+barca get pipeline.py --dry-run --json
+barca doctor pipeline.py
+```
 
 ## How a node is identified
 
