@@ -12,6 +12,14 @@ reconciliation, and verified shared DuckDB worker lifetime. See
 upgrade and breaking-change notes. Releases between the historical entries below
 and these tags are available on the same releases page.
 
+## Pending
+
+### Polish
+
+- `barca get` with no target names at most five of the tasks it skipped (`... and 37 more; barca
+  list shows them`) and suggests `barca run <task>` without repeating every discovered file. On
+  the 116-node fixture the line was 2,000 characters.
+
 ## 0.28.1 (2026-10-21)
 
 ### Bug Fixes
