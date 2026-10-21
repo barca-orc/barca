@@ -32,6 +32,7 @@ import { useAssets } from '@/hooks/useAssets'
 import { useAssetStates } from '@/hooks/useAssetStates'
 import { useHealth } from '@/hooks/useHealth'
 import { connection } from '@/lib/connection'
+import { ApiError } from '@/lib/api'
 import { inPipeline } from '@/lib/pipeline'
 import { shortName, type LayoutDir, type GraphEntry } from '@/lib/graph'
 import { UNKNOWN_GRAPH_STATE, type GraphState } from '@/lib/graphState'
@@ -218,6 +219,8 @@ export function GroupedPipelinePage() {
   const loading =
     assetQuery.isPlaceholderData || !assetQuery.data || !stateQuery.data
   const error = assetQuery.isError || stateQuery.isError
+  // What to do about it, when the server says (e.g. a metadata DB barca cannot use).
+  const failure = stateQuery.error ?? assetQuery.error
   const title = scope
     ? tree.groups.get(scope)!.name
     : pipeline === 'modeling.py'
@@ -373,6 +376,7 @@ export function GroupedPipelinePage() {
             Can't load pipeline:{' '}
             {stateQuery.error?.message ?? assetQuery.error?.message}
           </p>
+          {failure instanceof ApiError && failure.remediation && <p>{failure.remediation}</p>}
           {/* A metadata database that cannot be read or migrated is mended by starting over. */}
           <ResetDatabaseButton readOnly={healthQuery.data?.read_only ?? false} />
         </div>

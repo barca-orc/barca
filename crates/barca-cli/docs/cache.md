@@ -745,7 +745,7 @@ Known limits:
 `--env <name>` (or `BARCA_ENV`, or `default_env` in `barca.toml`, else `default`) fully
 separates cache, artifacts, history and its backups. Use it for dev/staging/prod isolation.
 
-`get`, `run` and `serve` print the environment and artifact store they use once at startup, on
+`get` and `run` print the environment and artifact store they use once at startup, on
 stderr, when the environment comes from `default_env` in `barca.toml` or an artifact store is
 configured, so a one-off command on a box set up for another environment says so:
 
@@ -756,7 +756,9 @@ configured, so a one-off command on a box set up for another environment says so
 
 The source in brackets is `--env`, `BARCA_ENV`, `default_env in barca.toml` or `built-in
 default`. Credentials and signed URI queries are redacted. The line is never on stdout, so
-`--json` output is unchanged. With neither setting, nothing is printed.
+`--json` output is unchanged. With neither setting, nothing is printed. `serve` always prints
+the line, with `; metadata <path> (db format <n>)` added (`barca docs scheduling`, "The metadata
+DB at startup").
 
 ## Concurrent runs
 

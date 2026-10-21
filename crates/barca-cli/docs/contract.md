@@ -473,6 +473,12 @@ were cancelled, so deploy tooling can tell a forced stop from a clean drain (`ba
 scheduling`, "Stopping the server"). Exit 1 from `serve` means a forced stop, not a failed step
 of yours.
 
+A writer `barca serve` (not `--read-only`) sets its metadata DB up before it binds the port. When
+it cannot (the file is empty, not SQLite, in a newer format or has a malformed schema, or cannot be
+opened) it exits 3 with the error naming the file and the remediation, and serves nothing. A
+`--read-only` server keeps serving and reports the error in `GET /health` `metadata_error`
+(`barca docs scheduling`, "The metadata DB at startup").
+
 With `BARCA_LOG=json`, `barca serve` writes its lines, an error that stops it included, as JSON
 objects on stdout instead of text on stderr. Exit codes do not change. `get`, `run` and every
 other command keep progress and errors on stderr whatever `BARCA_LOG` says.
@@ -1799,6 +1805,13 @@ An argument the parser rejects (here `--jsn`) gives the same shape:
 `code` equals the exit code. `remediation` can be `null`. In human mode the same error is prose
 with the remediation before the final run summary.
 
+`reason` (string) is present only on an error a client may handle on its own, and names it
+stably; any other error has no `reason` key. The one value so far is `metadata_unusable`
+(`kind` `infra`, exit 3): the metadata DB is there but this barca cannot use it (empty, not a
+SQLite file, a newer format, a malformed schema). `error` names the file and `remediation` says
+to upgrade barca, put a backup back with `barca state restore`, or move the file aside. The HTTP
+API returns the same envelope (`500`).
+
 ### --agent lines
 
 With `--agent`, `get` and `run` print plain progress lines on stderr instead of a progress bar.
@@ -1835,7 +1848,8 @@ placeholders:
 | `[barca] step:<id> failed: <first line of the error>` | a step raised | stable |
 | `[barca] run failed: step '<id>' failed: <first error line>; <n> downstream steps skipped (exit <code>)` | last stderr line of a failed run, after the error envelope (every mode) | stable |
 | `[barca] <n>/<total> steps \| done in <secs>s` | end of a run that executed steps, with or without `--agent`; `failed in` when a step failed, `cancelled after` on a Ctrl-C that arrives while steps are running (never `done` then). The line is about the steps: with an artifact store, a Ctrl-C after the last step finished (while artifacts upload or the history is backed up) follows a `done` line, and the exit code (130) and the error envelope still say `cancelled` (`barca docs remote`, "Ctrl-C") | stable |
-| `[barca] env <env> (<source>); artifact store <store>` | once at startup of `get`, `run` and `serve` (every mode) when the environment comes from `default_env` in `barca.toml` or a separate artifact store is configured. `<source>` is `--env`, `BARCA_ENV`, `default_env in barca.toml` or `built-in default`; `<store>` is the store URI with credentials redacted, or `local (<dir>)` | experimental |
+| `[barca] env <env> (<source>); artifact store <store>` | once at startup of `get` and `run` (every mode) when the environment comes from `default_env` in `barca.toml` or a separate artifact store is configured. `<source>` is `--env`, `BARCA_ENV`, `default_env in barca.toml` or `built-in default`; `<store>` is the store URI with credentials redacted, or `local (<dir>)` | experimental |
+| `[barca] env <env> (<source>); artifact store <store>; metadata <path> (db format <n>)` | once at startup of `serve`, always, after its metadata DB is set up: the line above plus the database and its format (`PRAGMA user_version`). `(unusable)` in place of `(db format <n>)` when it cannot be used (a writer then exits 3), `(not created yet)` when there is no database yet (the first run creates it) | experimental |
 | `[barca] checking artifact store <store> (timeout <secs>s)` | before workers start whenever a separate artifact store is configured, including state-off runs; requires bucket/container-root listing and backend existence access, verifies reachability rather than write permission | experimental |
 | `[barca] uploading <n> artifacts to <store> (timeout <secs>s per attempt); waiting for confirmation` | before awaiting queued artifact uploads (every mode) | experimental |
 | `[barca] uploading <n> pending results to <store> from an earlier run` | before workers start, when results an earlier run could not upload are retried (every mode); followed by `[barca] uploaded <n> pending results` or `[barca] <n> pending results still not uploaded (<k> uploaded): <why>` | experimental |

@@ -492,8 +492,64 @@ async fn connect(path: &str) -> Result<(turso::Database, turso::Connection), Bar
     let conn = db
         .connect()
         .map_err(|e| BarcaError::Db(format!("failed to connect: {e}")))?;
-    crate::db_schema::check(&conn).await?;
+    crate::db_schema::check(&conn)
+        .await
+        .map_err(|e| unusable_at(e, path))?;
     Ok((db, conn))
+}
+
+/// A [`BarcaError::MetadataUnusable`] that does not name the database yet; [`unusable_at`]
+/// names it.
+pub(crate) fn unusable(why: String) -> BarcaError {
+    BarcaError::MetadataUnusable {
+        path: String::new(),
+        why,
+    }
+}
+
+/// `error`, naming `path` if it is a [`BarcaError::MetadataUnusable`] that names no database.
+pub(crate) fn unusable_at(error: BarcaError, path: &str) -> BarcaError {
+    match error {
+        BarcaError::MetadataUnusable { path: p, why } if p.is_empty() => {
+            BarcaError::MetadataUnusable {
+                path: path.to_string(),
+                why,
+            }
+        }
+        e => e,
+    }
+}
+
+/// Why the file at `path` cannot be a metadata DB before it is opened: it is empty with no
+/// write-ahead log to hold its pages, or it is not a SQLite file. None for a missing file (a new
+/// database is created there) and for one that looks like a database.
+pub fn unusable_file(path: &str) -> Option<String> {
+    let meta = fs::metadata(path).ok()?;
+    if meta.is_dir() {
+        return Some("it is a directory".to_string());
+    }
+    if empty_file(path) {
+        return Some("it is empty (0 bytes)".to_string());
+    }
+    not_a_database(path)
+}
+
+/// [`BarcaError::MetadataUnusable`] when `path` is a directory, which no snapshot can copy. Other
+/// checks of the file wait for its lock ([`init_db_as`]).
+pub fn directory_check(path: &str) -> Result<(), BarcaError> {
+    if Path::new(path).is_dir() {
+        return Err(BarcaError::MetadataUnusable {
+            path: path.to_string(),
+            why: "it is a directory".to_string(),
+        });
+    }
+    Ok(())
+}
+
+/// Whether `path` is a 0-byte file with no write-ahead log beside it: no database, though
+/// SQLite would start one there. barca never leaves a database it creates empty.
+pub(crate) fn empty_file(path: &str) -> bool {
+    fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() == 0) && wal_is_clean(path)
 }
 
 /// Open the database at `db_path` and connect. Callers must hold [`db_guard`]
@@ -555,9 +611,82 @@ pub fn wal_is_clean(db_path: &str) -> bool {
 }
 
 pub async fn init_db(db_path: &str) -> Result<(), BarcaError> {
+    init_db_as(db_path, db_path).await.map(|_| ())
+}
+
+/// [`init_db`] on the file at `path`, naming `shown` when the database cannot be used (a
+/// snapshot names the database it copies). Returns the format version (`PRAGMA user_version`,
+/// [`crate::db_schema::VERSION`] once initialized).
+///
+/// A database this release cannot use is [`BarcaError::MetadataUnusable`]: an empty file, a file
+/// that is not SQLite, a newer format, or a malformed schema. A lock or I/O failure is
+/// [`BarcaError::Db`].
+pub async fn init_db_as(path: &str, shown: &str) -> Result<i64, BarcaError> {
     let _g = db_guard().await;
-    let (_db, conn) = open_conn(db_path).await?;
-    init_schema(&conn).await
+    let initialized = async {
+        // Under the lock: a database another process is creating is empty until it commits.
+        let lock = acquire_file_lock(path, DB_FILE_LOCK_WAIT).await?;
+        if let Some(why) = unusable_file(path) {
+            return Err(unusable(why));
+        }
+        let (db, conn) = connect(path).await?;
+        let _handle = DbHandle {
+            _db: db,
+            _lock: lock,
+        };
+        init_schema(&conn).await?;
+        crate::db_schema::read_version(&conn).await
+    }
+    .await;
+    initialized.map_err(|e| named(e, shown))
+}
+
+/// `error` naming `shown`, if it says the database cannot be used. Turso's own words for a file
+/// it cannot read as a database count.
+fn named(error: BarcaError, shown: &str) -> BarcaError {
+    match error {
+        BarcaError::MetadataUnusable { why, .. } => BarcaError::MetadataUnusable {
+            path: shown.to_string(),
+            why,
+        },
+        BarcaError::Db(msg) if msg.contains("not a database") || msg.contains("malformed") => {
+            BarcaError::MetadataUnusable {
+                path: shown.to_string(),
+                why: msg,
+            }
+        }
+        e => e,
+    }
+}
+
+/// The format version of the metadata DB at `path`, read from a private snapshot without
+/// writing the file: `None` when there is no database yet. A database this release cannot use
+/// is [`BarcaError::MetadataUnusable`] naming `path`. For a read-only server, which never
+/// migrates the file itself.
+pub async fn probe_metadata(path: &str) -> Result<Option<i64>, BarcaError> {
+    directory_check(path)?;
+    let Some(snapshot) = DbSnapshot::take(path).await? else {
+        return Ok(None);
+    };
+    // The copy is private, so it can be judged without a lock.
+    if let Some(why) = unusable_file(snapshot.path()) {
+        return Err(BarcaError::MetadataUnusable {
+            path: path.to_string(),
+            why,
+        });
+    }
+    // The format the file is in, before the copy is migrated.
+    let version = {
+        let _g = db_guard().await;
+        let (_db, conn) = open_conn(snapshot.path())
+            .await
+            .map_err(|e| named(e, path))?;
+        crate::db_schema::read_version(&conn)
+            .await
+            .map_err(|e| named(e, path))?
+    };
+    init_db_as(snapshot.path(), path).await?;
+    Ok(Some(version))
 }
 
 /// Migrate legacy metadata atomically, preserving authoritative history. Unknown versions
@@ -572,15 +701,20 @@ pub(crate) async fn init_schema(conn: &turso::Connection) -> Result<(), BarcaErr
     let version = crate::db_schema::check(conn).await?;
     if version == crate::db_schema::VERSION {
         if crate::db_schema::additions_missing(conn).await? {
+            // A table that is there but lacks a column the additions do not bring is malformed,
+            // not behind: refuse it before any write.
+            crate::state_validate::legacy_schema(conn)
+                .await?
+                .map_err(unusable)?;
             return add_to_current_schema(conn).await;
         }
         return crate::state_validate::usable_schema(conn)
             .await?
-            .map_err(BarcaError::Db);
+            .map_err(unusable);
     }
     crate::state_validate::legacy_schema(conn)
         .await?
-        .map_err(BarcaError::Db)?;
+        .map_err(unusable)?;
     conn.execute("BEGIN IMMEDIATE", ())
         .await
         .map_err(|e| BarcaError::Db(format!("failed to begin schema migration: {e}")))?;
@@ -588,7 +722,7 @@ pub(crate) async fn init_schema(conn: &turso::Connection) -> Result<(), BarcaErr
         migrate_legacy_schema(conn).await?;
         crate::state_validate::usable_schema(conn)
             .await?
-            .map_err(BarcaError::Db)?;
+            .map_err(unusable)?;
         conn.execute(
             &format!("PRAGMA user_version = {}", crate::db_schema::VERSION),
             (),
@@ -639,7 +773,7 @@ async fn add_to_current_schema(conn: &turso::Connection) -> Result<(), BarcaErro
         }
         crate::state_validate::usable_schema(conn)
             .await?
-            .map_err(BarcaError::Db)?;
+            .map_err(unusable)?;
         conn.execute("COMMIT", ())
             .await
             .map_err(|e| BarcaError::Db(format!("failed to commit schema migration: {e}")))?;

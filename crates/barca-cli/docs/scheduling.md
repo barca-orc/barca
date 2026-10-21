@@ -238,6 +238,50 @@ barca serve pipeline.py --host 0.0.0.0         # listen on every interface (cont
 endpoints return `403`, the scheduler never starts, and every read of the metadata DB goes through a
 private copy, so it is safe to point at a project another process is running.
 
+### The metadata DB at startup
+
+`serve` names the database it uses on its first line, after the environment and the artifact
+store, with the format it is in:
+
+```
+[barca] env prod (--env); artifact store local (.barca/envs/prod/artifacts); metadata .barca/envs/prod/metadata.db (db format 1)
+```
+
+A writer server (not `--read-only`) sets that database up before it binds the port, migrating an
+older one in place (with no database yet the line says `(not created yet)`, and the first run or
+the scheduler creates it). When it cannot, it exits 3 instead of serving with its scheduler off, naming
+the file and what to do:
+
+```
+the metadata DB .barca/envs/prod/metadata.db cannot be used: it is empty (0 bytes)
+
+Not a problem in your code. If a newer barca wrote this database, upgrade barca. Otherwise put a backup back with `barca state restore` (it moves .barca/envs/prod/metadata.db aside first), or stop every barca process using it and move .barca/envs/prod/metadata.db aside to start an empty history.
+```
+
+A database barca cannot use is one that is empty (0 bytes), is not a SQLite file, was written in
+a newer format, or has a malformed schema. A lock another process holds is waited for (up to 60
+seconds) before the port is bound; a failure to open or write the file is exit 3 too. `get` and
+`run` give the same error, exit 3, with `reason` `metadata_unusable` in the JSON envelope.
+
+A `--read-only` server never writes the file, so it keeps serving: its startup line says
+`(unusable)`, a warning follows, `GET /health`
+reports the error in `metadata_error`, and every route that reads history answers `500` with the
+error envelope, `reason` `metadata_unusable` and the remediation. `metadata_error` goes back to
+`null` once a read succeeds again (after the writer migrated the file, or it was restored).
+
+`GET /health` also has `scheduler_enabled`: `false` with `--no-schedule` or `--read-only`, and
+once the scheduler stopped on an error (it then says why in `metadata_error`).
+
+With `--env <name>` the database is `.barca/envs/<name>/metadata.db`. If `.barca/metadata.db` (the
+default environment's) is also there but empty or not a database, often left by a container that
+started once without `--env`, `serve` warns once, naming both files. A valid one is the default
+environment's history and is left alone.
+
+```bash
+barca serve pipeline.py --env prod             # the startup line names .barca/envs/prod/metadata.db
+curl -s http://127.0.0.1:8274/health           # {..., "scheduler_enabled": true, "metadata_error": null}
+```
+
 `serve` binds to `127.0.0.1` by default and has no authentication. `--host 0.0.0.0` (or `::`)
 listens on every interface, which a container or VM needs for the port to be reachable from
 outside; barca then prints a warning on stderr, because anyone who can reach the port can trigger

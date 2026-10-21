@@ -2171,3 +2171,80 @@ async fn a_server_without_a_store_or_a_read_only_one_takes_no_posts() {
     );
     assert!(!dir.path().join("metadata.db").exists());
 }
+
+#[tokio::test]
+async fn health_reports_whether_the_scheduler_runs_and_no_metadata_error() {
+    for (read_only, schedule, enabled) in [
+        (false, true, true),
+        (false, false, false),
+        (true, true, false),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = isolated_config(dir.path(), read_only);
+        config.schedule = schedule;
+        let (_, health) = send(&app(config), "GET", "/health").await;
+        assert_eq!(
+            health["scheduler_enabled"], enabled,
+            "{read_only} {schedule}"
+        );
+        assert_eq!(health["metadata_error"], serde_json::Value::Null);
+    }
+}
+
+/// A metadata DB barca cannot use is one structured error naming it (`reason`
+/// `metadata_unusable`, with a remediation), never a SQL error, on a writer and a read-only
+/// server; `/health` reports it until a read succeeds again (#513).
+#[tokio::test]
+async fn an_unusable_metadata_db_is_a_structured_error_reported_on_health() {
+    for read_only in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let config = isolated_config(dir.path(), read_only);
+        let db = config.resolved.db_path.clone();
+        std::fs::write(&db, "x".repeat(4096)).unwrap();
+        let app = app(config);
+        for uri in ["/state", "/runs"] {
+            let (status, body) = send(&app, "GET", uri).await;
+            assert_eq!(
+                status,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "GET {uri}: {body}"
+            );
+            assert_eq!(body["kind"], "infra");
+            assert_eq!(body["code"], 3);
+            assert_eq!(body["reason"], "metadata_unusable");
+            let error = body["error"].as_str().unwrap();
+            assert!(error.contains(&db), "{error}");
+            assert!(!error.contains("Parse error"), "{error}");
+            let fix = body["remediation"].as_str().unwrap();
+            assert!(fix.contains("barca state restore"), "{fix}");
+            assert!(fix.contains("upgrade barca"), "{fix}");
+        }
+        let (_, health) = send(&app, "GET", "/health").await;
+        let reported = health["metadata_error"].as_str().unwrap();
+        assert!(reported.contains(&db), "{reported}");
+
+        // Moved aside: the next read succeeds, and /health clears.
+        std::fs::remove_file(&db).unwrap();
+        assert_eq!(send(&app, "GET", "/state").await.0, StatusCode::OK);
+        let (_, health) = send(&app, "GET", "/health").await;
+        assert_eq!(health["metadata_error"], serde_json::Value::Null);
+    }
+}
+
+#[tokio::test]
+async fn a_writer_serve_whose_metadata_db_cannot_be_used_fails_before_binding() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = isolated_config(dir.path(), false);
+    config.schedule = true;
+    let db = config.resolved.db_path.clone();
+    std::fs::write(&db, b"").unwrap();
+    let error = barca_server::serve(config).await.unwrap_err();
+    let barca_server::ServeError::Metadata(barca_core::BarcaError::MetadataUnusable { path, why }) =
+        &error
+    else {
+        panic!("not a metadata error: {error}");
+    };
+    assert_eq!(path, &db);
+    assert_eq!(why, "it is empty (0 bytes)");
+    assert_eq!(std::fs::read(&db).unwrap(), b"", "left as it was");
+}

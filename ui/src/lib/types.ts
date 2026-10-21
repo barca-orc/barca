@@ -55,6 +55,10 @@ export interface Health {
   read_only: boolean
   /** Whether this server fires `Schedule(...)` nodes. */
   scheduler: boolean
+  /** `scheduler`, and false once the scheduler stopped on an error. */
+  scheduler_enabled: boolean
+  /** Why the metadata DB cannot be used, while it cannot; null otherwise. */
+  metadata_error: string | null
   /** Unloaded sources and graph-invalid definitions; healthy node routes remain available. */
   load_errors: LoadError[]
   /** Major version of the HTTP API; a client refuses another. */
@@ -77,6 +81,8 @@ export interface ErrorEnvelope {
   node?: string | null
   traceback?: string | null
   artifact_dir?: string | null
+  /** A stable name for an error a client may handle: `metadata_unusable`. Absent otherwise. */
+  reason?: 'metadata_unusable'
 }
 
 /**

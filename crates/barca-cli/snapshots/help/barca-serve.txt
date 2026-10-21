@@ -56,6 +56,7 @@ Examples:
   barca serve pipeline.py --timezone America/New_York   # an IANA zone name
   barca serve pipeline.py --read-only        # inspect only: no runs, no scheduler, DB never written
   barca serve pipeline.py --drain-timeout 120   # on SIGTERM, give runs in flight 2 minutes
+  barca serve pipeline.py --env prod         # .barca/envs/prod/metadata.db, named on the startup line
 
 Binds to 127.0.0.1 by default. There is no authentication: with --host 0.0.0.0, anyone who
 can reach the port can trigger runs, so keep it on a private network or behind a proxy.
@@ -65,6 +66,13 @@ continue. Startup logs, /health load_errors and the UI show unloaded files and a
 From another machine, `--server <url>` on get, run, status, list, history and stats runs the
 command on this server and prints it there as a local run would (barca docs server-mode).
 `serve` itself always runs here: --server on it is a usage error.
+The first line names the env, the artifact store and the metadata DB with its format:
+[barca] env <env> (<source>); artifact store <store>; metadata <path> (db format <n>).
+A writer sets an existing DB up before it binds: one it cannot use (empty, not SQLite,
+a newer format, a malformed schema) or cannot open exits 3 naming the file and what to do.
+A --read-only server keeps serving and reports it in /health metadata_error, and its routes
+answer with an error whose reason is metadata_unusable. /health scheduler_enabled says
+whether the scheduler is running.
 With a store ([remote] uri), the metadata DB is backed up there every minute it changed
 (barca docs remote); barca state restore refuses to run while the server is up.
 SIGTERM or SIGINT drains: new runs get 503 with Retry-After, the scheduler stops, /health
