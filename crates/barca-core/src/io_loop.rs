@@ -971,7 +971,9 @@ impl WorkerPool {
                         .iter_mut()
                         .any(|c| !matches!(c.try_wait(), Ok(Some(_))))
                 {
-                    std::thread::sleep(Duration::from_millis(5));
+                    // A worker exits within a millisecond or two of SIGTERM: polling every
+                    // 5 ms made each run's shutdown about 5 ms (#560).
+                    std::thread::sleep(Duration::from_millis(1));
                 }
             }
 

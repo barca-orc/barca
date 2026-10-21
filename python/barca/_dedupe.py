@@ -20,8 +20,8 @@ go back to the coordinator ahead of each step result (`_runtime`), which prints
 """
 
 import hashlib
-import logging
 import os
+import sys
 import threading
 import warnings
 
@@ -78,6 +78,53 @@ def take() -> dict[str, int]:
     return out
 
 
+def _hook_logging(logging) -> None:
+    """Replace `logging.lastResort` with one that collapses repeats."""
+    last_resort = logging.lastResort
+    if last_resort is None:  # the project turned the last-resort output off
+        return
+
+    class _LastResort(type(last_resort)):
+        def emit(self, record):
+            if record.levelno == logging.WARNING and not record.exc_info and not record.stack_info:
+                try:
+                    repeat = is_repeat(record.getMessage())
+                except Exception:
+                    repeat = False
+                if repeat:
+                    return
+            super().emit(record)
+
+    logging.lastResort = _LastResort(last_resort.level)
+
+
+class _WhenLoggingIsImported:
+    """A `sys.meta_path` finder that hooks `logging` once it has been imported, then leaves."""
+
+    def find_spec(self, name, path=None, target=None):
+        if name != "logging":
+            return None
+        if self in sys.meta_path:
+            sys.meta_path.remove(self)
+        from importlib.machinery import PathFinder
+
+        spec = PathFinder.find_spec(name, path)
+        if spec is None or spec.loader is None:
+            return spec
+        loader = spec.loader
+
+        class _Hooking:
+            def create_module(self, spec):
+                return loader.create_module(spec)
+
+            def exec_module(self, module):
+                loader.exec_module(module)
+                _hook_logging(module)
+
+        spec.loader = _Hooking()
+        return spec
+
+
 def install(socket_path: str | None) -> None:
     """Replace `logging.lastResort` and hook `warnings.showwarning` (once per process)."""
     global _claim_dir, _installed
@@ -87,25 +134,13 @@ def install(socket_path: str | None) -> None:
     if socket_path:
         _claim_dir = socket_path + ".warnings"
 
-    last_resort = logging.lastResort
-    if last_resort is not None:  # None: the project turned the last-resort output off
-
-        class _LastResort(type(last_resort)):
-            def emit(self, record):
-                if (
-                    record.levelno == logging.WARNING
-                    and not record.exc_info
-                    and not record.stack_info
-                ):
-                    try:
-                        repeat = is_repeat(record.getMessage())
-                    except Exception:
-                        repeat = False
-                    if repeat:
-                        return
-                super().emit(record)
-
-        logging.lastResort = _LastResort(last_resort.level)
+    # `logging` costs about 10 ms to import on Python 3.14 (it brings in traceback, and that
+    # dataclasses and inspect), paid by every worker before its first step (#560). It is hooked
+    # here if something imported it already, and otherwise as soon as something does.
+    if "logging" in sys.modules:
+        _hook_logging(sys.modules["logging"])
+    else:
+        sys.meta_path.insert(0, _WhenLoggingIsImported())
 
     showwarning = warnings.showwarning
 
