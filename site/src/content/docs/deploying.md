@@ -240,6 +240,29 @@ trace's ids, so a failing `barca.run` span leads to that run's lines and back. W
 to its own stderr (Python's `logging`, by default) stays on stderr. The fields and their
 limits are in [Telemetry](/reference/telemetry/#logs-under-barca-serve).
 
+### Traces and metrics in Datadog
+
+With `BARCA_TELEMETRY=datadog` every run the server starts is one APM trace, sent to the
+Datadog Agent's trace port, and the server reports itself as DogStatsD metrics on the Agent's
+DogStatsD port. Point both at the Agent and name the service once; everything barca sends,
+Python and opted-in library spans included, is that one service:
+
+```yaml
+    environment:
+      BARCA_TELEMETRY: datadog
+      DD_AGENT_HOST: datadog-agent    # traces on 8126, DogStatsD on 8125
+      DD_SERVICE: pipelines
+      DD_ENV: production
+      DD_VERSION: "2026.10.20"        # your deploy; barca's own version is barca.version
+```
+
+In APM, the `barca.run` resource is the command and the targets (`run publish`), and the
+`barca.step` resources are the node names, so a monitor on `barca.run` errors per resource is a
+monitor per job, and the trace list says which asset failed and why. A monitor on the
+`barca.serve.up` gauge that alerts when it stops arriving or reads 0 catches a server that is
+down or was stopped; it is sent every five minutes. Tags, the partition cap and opt-in library
+tracing are in [Telemetry](/reference/telemetry/#datadog).
+
 ### What happens on restart
 
 - **Stopped with SIGINT or SIGTERM** (`docker compose stop`, `docker stop`, `systemctl stop`,

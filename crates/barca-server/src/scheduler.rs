@@ -197,6 +197,8 @@ fn skip_report(
         target: Some(job.id.clone()),
         job: job.id.clone(),
         env: None,
+        targets: vec![barca_core::telemetry::short_name(&job.id).to_string()],
+        files: Vec::new(),
         status: "skipped".to_string(),
         reason: Some(reason.to_string()),
         in_flight_run: handle.map(str::to_string),

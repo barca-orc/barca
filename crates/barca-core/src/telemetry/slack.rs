@@ -579,6 +579,8 @@ mod tests {
             target: Some("daily_revenue".into()),
             job: "p.py:daily_revenue".into(),
             env: Some("prod".into()),
+            targets: vec!["daily_revenue".into()],
+            files: vec![],
             status: "failed".into(),
             reason: None,
             in_flight_run: None,
@@ -590,7 +592,8 @@ mod tests {
             steps_cached: 0,
             steps: vec![StepReport {
                 node_id: "p.py:orders".into(),
-                kind: "asset",
+                node: std::sync::Arc::new(crate::telemetry::NodeContext::unknown("p.py:orders")),
+                partition: None,
                 outcome: StepOutcome::Failed,
                 start_unix_ns: 0,
                 duration_ns: 252_000_000_000,

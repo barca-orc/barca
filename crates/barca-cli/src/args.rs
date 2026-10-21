@@ -308,6 +308,7 @@ const SERVE_HELP: &str = "\
 Examples:
   BARCA_REMOTE=off barca serve pipeline.py   # local artifacts and history
   BARCA_LOG=json barca serve pipeline.py     # each line a JSON object on stdout, with run_id and node
+  BARCA_TELEMETRY=datadog barca serve pipeline.py   # a trace per run; barca.serve.up via DogStatsD
   barca serve                                # every file in the project; files added later need a restart
   barca serve pipeline.py                    # HTTP API on 127.0.0.1:8274 plus the scheduler
   barca serve pipeline.py --port 8400        # custom port

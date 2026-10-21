@@ -55,7 +55,7 @@ outside the `GENERATED` blocks is written by hand.
 | `get -o url`, `get --expires`, and `url` / `url_expires_at` in a `_barca_artifact` pointer | new (RFC-0011): signed HTTPS links to results in a cloud store. The URL's form is the cloud's own (SigV4, GCS V4, Azure SAS); `url_expires_at` is RFC 3339 UTC. `get -o url` with no cloud store, or an `--expires` over `7d`, is exit 2; a result missing from the store or credentials that cannot sign is exit 3 |
 | `status --sample` and `nodes[].shape` | read by a Python helper (`barca._inspect`) whose output may grow per format; the wording of `shape.note` (an unreadable, too large or unreachable artifact) may change |
 | `BARCA_PROGRESS_SECS`, `BARCA_POOL_SIZE`, `BARCA_COMM_COST_SECONDS`, `BARCA_TRACE_TIMING` | tuning and benchmarking knobs |
-| `BARCA_TELEMETRY` and the spans it sends | new: span names, tags and metrics may change |
+| `BARCA_TELEMETRY` and the spans and metrics it sends | new: span names, resources, tags and metrics may change |
 | `BARCA_SLACK_WEBHOOK_URL`, `BARCA_SLACK_NOTIFY`, `BARCA_UI_URL` and the Slack posts | new: the message text and layout are not a contract and may change in any release |
 | `BARCA_LOG` and the JSON lines of `barca serve` | new: the fields and how a line's `level` is chosen may change |
 | the `[barca] <n> more: ...` line | collapsing repeated library warnings is new; which output counts as a warning may change |
@@ -378,10 +378,11 @@ value of its first key only.
 | `BARCA_COMM_COST_SECONDS` | the scheduler's per-dispatch cost estimate | experimental |
 | `BARCA_TRACE_TIMING` | when set, prints a timing waterfall on stderr | experimental |
 | `BARCA_CACHE_MAX_SIZE` | size limit for `.barca/` (`[cache] max_size`): `20GB`, `500MB`, `20GiB`, bytes, `10%` of the filesystem or `off`; default 10% of the filesystem; an invalid value is a usage error (exit 2) | experimental |
-| `BARCA_TELEMETRY` | comma-separated telemetry integrations to send finished runs to; `datadog` is the only one (`barca docs telemetry`) | experimental |
+| `BARCA_TELEMETRY` | comma-separated telemetry integrations to send finished runs to; `datadog` is the only one (`barca docs telemetry`). Its settings are Datadog's own variables (`DD_SERVICE`, `DD_ENV`, `DD_VERSION`, `DD_TAGS`, `DD_TRACE_AGENT_URL`, `DD_AGENT_HOST`, `DD_TRACE_AGENT_PORT`, `DD_TRACE_ENABLED`, and for `barca serve` metrics `DD_DOGSTATSD_URL`, `DD_DOGSTATSD_SOCKET`, `DD_DOGSTATSD_PORT`) | experimental |
 | `BARCA_SLACK_WEBHOOK_URL` | a Slack incoming webhook (`https://`); set and non-empty, barca posts when a job starts failing, recovers, or is still failing a day later (`barca docs telemetry`). Never printed. `SLACK_WEBHOOK_URL` is ignored | experimental |
 | `BARCA_SLACK_NOTIFY` | `changes` (default), `failures` or `all`: which finished runs post to Slack; any other value is a warning and `changes` applies | experimental |
 | `BARCA_UI_URL` | base URL of the web UI; Slack posts link the run id to it | experimental |
+| `BARCA_TRACE_LIBRARIES` | `1` or `true`: with `BARCA_TELEMETRY=datadog` and `ddtrace` installed, workers patch every library `ddtrace` supports. Unset: only those `DD_PATCH_MODULES` or `DD_TRACE_<LIB>_ENABLED=true` name (`barca docs telemetry`) | experimental |
 | `BARCA_LOG` | `json`: `barca serve` writes every line as one JSON object on stdout instead of text on stderr (`barca docs telemetry`, "Logs under barca serve"); `text` or unset: the default. Under `serve` any other value is a usage error (exit 2). On every other command it changes nothing and prints `[barca] warning: BARCA_LOG applies to barca serve only; this command writes its usual lines` | experimental |
 
 barca sets `BARCA_SOCKET`, `BARCA_WORKER`, `BARCA_WORKER_ID` (and passes `BARCA_ARTIFACT_URI`,

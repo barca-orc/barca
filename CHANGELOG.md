@@ -197,6 +197,37 @@ and these tags are available on the same releases page.
   `DELETE /runs/{run_id}`, `GET /runs/{run_id}` and `GET /runs/{run_id}/events`. Event streams
   now end after `run_finished` and carry an `id:` per event.
 
+### Datadog telemetry
+
+- Datadog traces show the pipeline (#482). Every span reports as one service, `DD_SERVICE`
+  (default `barca`), `type: worker`, `span.kind: internal`, with `env`, `version`,
+  `barca.version` and `barca.project`. `barca.run` is named by the command and the targets' short
+  names (`get daily_revenue`) and, on a failure, names the first failed asset and its error
+  (`barca.failed_asset`, `error.type`, `error.message`). `barca.step` is one span per node, named
+  by the node, with `barca.asset`, `barca.node_id`, `barca.file`, `barca.group` (nested `group()`
+  path), `barca.freshness`, `barca.schedule`, `barca.cached` and outcome `skipped` for a planned
+  step that did not run. A partitioned node is one step with `barca.partitions.total/executed/
+  cached/failed` and a `barca.partition` child per key that ran (up to 200 per node, 2,000 per
+  run) and per failed key. Python `barca.execute` spans are named by the node too. Library spans
+  are opt-in: `DD_PATCH_MODULES`, `DD_TRACE_<LIB>_ENABLED`, or `BARCA_TRACE_LIBRARIES=1`
+  (experimental). Trace ids are 128-bit (`_dd.p.tid`); traces go to the Agent's `/v0.4/traces`
+  as JSON and are kept with sampling priority 2. `barca serve` reports `barca.serve.up`,
+  `barca.serve.schedules`, `barca.serve.files` and `barca.serve.nodes` as DogStatsD gauges
+  (`DD_DOGSTATSD_URL`, `DD_DOGSTATSD_SOCKET`, or `DD_AGENT_HOST`:`DD_DOGSTATSD_PORT`), with a
+  Datadog event on start and stop.
+
+- **Breaking:** Datadog dashboards and monitors need updating. The `<DD_SERVICE>-python` service
+  is gone: `barca.execute` and library spans are in `DD_SERVICE`, and libraries are no longer
+  patched unless opted in (`DD_PATCH_MODULES=<lib>:true` or `BARCA_TRACE_LIBRARIES=1`).
+  `barca.run` resources use short names (`run publish`, was `run pipeline.py:publish`);
+  `barca.step` and `barca.execute` resources are the node's short name (was the node id, with
+  the partition key, and the job for `barca.execute`): filter by `@barca.node_id` or
+  `@barca.partition` instead. The step tag `barca.node` is `barca.node_id`. Partition keys are
+  `barca.partition` child spans of one `barca.step` per node. The `barca.serve.start`,
+  `barca.serve.heartbeat` and `barca.serve.stop` traces are replaced by the `barca.serve.up`
+  gauge (1, and 0 on stop) and its siblings: move monitors on those traces to the metric.
+  Span `type` is `worker` (was `custom`).
+
 ## 0.24.2 (2026-10-20)
 
 ### Bug Fixes
