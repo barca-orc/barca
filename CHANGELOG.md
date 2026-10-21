@@ -70,6 +70,35 @@ and these tags are available on the same releases page.
   on the skipped `barca.run` span. A `running` row whose process is gone (a killed run) does not
   block. A run now records its job (`runs.job`) when it starts, not only when it ends.
 
+### Performance
+
+- Recording a run in the metadata database prepares each per-row statement once instead of
+  re-parsing its SQL for every row (#460): the step rows the recorder writes during the run, the
+  terminal ledger's success and failure rows, the read stamps (`last_read_at`/`evicted_at`),
+  pending uploads, captured logs and the cost estimates, which now commit in one transaction
+  instead of one per partition key. A cold three-level partition chain at 20,000 keys goes from
+  12.0 s to 7.1 s, and the warm run from 3.3 s to 2.5 s. The rows written are unchanged.
+
+- Skipping the dependents of failed partition keys no longer scans the ready queue once per
+  skipped key (#461). When half of N keys failed while the rest waited, the coordinator touched
+  the queue about N²/4 times (25 million at 10,000 keys); it now touches it about 3.5 N times.
+  The ready queue keeps a membership set, so a skipped item is taken out in O(1) and its stale
+  entry is dropped when it reaches the front. The skipped set is unchanged.
+
+### Documentation
+
+- The site's reference pages that are manual topics (CLI Contract, Discovery, Doctor, Groups,
+  Remote Storage, Server Mode, SQL, Telemetry) are generated from `crates/barca-cli/docs/*.md`
+  with `barca docs <topic>` references turned into links, and `cargo test -p barca` fails when one
+  differs from its topic (#501). This brings back in step the pages that had drifted (`barca sql`
+  reads CSV and evicts its `.barca/sql-cache/` copies; `get --json` always returns a pointer), adds
+  Server Mode and Groups to the sidebar, and lists the Reference pages alphabetically.
+
+- `barca docs cache` reads concept, behaviour, reference: what a run hash covers, what is not
+  followed, the cached/stale/evicted/unsynced states, forcing a recompute, the size limit. Its
+  0.18/0.19 upgrade notes moved to this file; its implementation guarantees to
+  `specs/cache-decisions.md` (#500).
+
 ## 0.27.0 (2026-10-20)
 
 ### Breaking
@@ -189,42 +218,6 @@ and these tags are available on the same releases page.
   `barca.serve.schedules`, `barca.serve.files` and `barca.serve.nodes` as DogStatsD gauges
   (`DD_DOGSTATSD_URL`, `DD_DOGSTATSD_SOCKET`, or `DD_AGENT_HOST`:`DD_DOGSTATSD_PORT`), with a
   Datadog event on start and stop.
-### Documentation
-
-- The site's reference pages that are manual topics (CLI Contract, Discovery, Doctor, Groups,
-  Remote Storage, Server Mode, SQL, Telemetry) are generated from `crates/barca-cli/docs/*.md`
-  with `barca docs <topic>` references turned into links, and `cargo test -p barca` fails when one
-  differs from its topic (#501). This brings back in step the pages that had drifted (`barca sql`
-  reads CSV and evicts its `.barca/sql-cache/` copies; `get --json` always returns a pointer), adds
-  Server Mode and Groups to the sidebar, and lists the Reference pages alphabetically.
-
-
-### Documentation
-
-- `barca docs cache` reads concept, behaviour, reference: what a run hash covers, what is not
-  followed, the cached/stale/evicted/unsynced states, forcing a recompute, the size limit. Its
-  0.18/0.19 upgrade notes moved to this file; its implementation guarantees to
-  `specs/cache-decisions.md` (#500).
-
-## Pending
-
-### Performance
-
-- Recording a run in the metadata database prepares each per-row statement once instead of
-  re-parsing its SQL for every row (#460): the step rows the recorder writes during the run, the
-  terminal ledger's success and failure rows, the read stamps (`last_read_at`/`evicted_at`),
-  pending uploads, captured logs and the cost estimates, which now commit in one transaction
-  instead of one per partition key. A cold three-level partition chain at 20,000 keys goes from
-  12.0 s to 7.1 s, and the warm run from 3.3 s to 2.5 s. The rows written are unchanged.
-
-
-### Performance
-
-- Skipping the dependents of failed partition keys no longer scans the ready queue once per
-  skipped key (#461). When half of N keys failed while the rest waited, the coordinator touched
-  the queue about N²/4 times (25 million at 10,000 keys); it now touches it about 3.5 N times.
-  The ready queue keeps a membership set, so a skipped item is taken out in O(1) and its stale
-  entry is dropped when it reaches the front. The skipped set is unchanged.
 
 ## 0.26.1 (2026-10-20)
 
