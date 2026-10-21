@@ -2383,6 +2383,23 @@ components:
         total_steps: &id044
           type: integer
           minimum: 0
+        pool_size:
+          type: integer
+          minimum: 0
+          description: Worker processes (available cores, or BARCA_POOL_SIZE). Experimental.
+        capacity:
+          type: integer
+          minimum: 0
+          description: The most the weight= of the steps running at once may add up to (#436). Experimental.
+        capacity_source:
+          type: string
+          description: Where capacity came from, BARCA_CAPACITY, [execution] capacity or pool size. Experimental.
+        weights:
+          type: object
+          additionalProperties:
+            type: integer
+            minimum: 2
+          description: Each planned node whose weight= is above 1, by node id. Experimental.
         phases:
           type: array
           items:
@@ -2449,6 +2466,10 @@ components:
             anyOf:
             - *id003
             - type: 'null'
+        weight:
+          type: integer
+          minimum: 2
+          description: Dry run only, the node's weight= when above 1 (#436). Experimental.
     ArtifactReference:
       type: object
       additionalProperties: false
@@ -3295,6 +3316,10 @@ components:
       - summary
       description: The barca get --dry-run --json / barca run --dry-run --json body.
       properties:
+        capacity:
+          type: integer
+          minimum: 0
+          description: The most the weight= of the steps running at once may add up to (#436). Experimental.
         steps:
           type: array
           items:

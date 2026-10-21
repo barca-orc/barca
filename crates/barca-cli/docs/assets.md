@@ -252,7 +252,7 @@ def embed_c() -> dict:
   re-runs nothing and outputs and cache decisions are the same at any weight or capacity.
 - A step whose weight is above the capacity runs alone, with nothing beside it, rather than
   never. Every command that plans it prints a warning on stderr:
-  `[barca] warning: 'embed' has weight=8, more than the capacity 4 (pool size); it runs alone`.
+  `[barca] warning: 'embed_a' has weight=8, more than the capacity 4 (pool size); it runs alone`.
 - Steps start in the order they become ready. A heavy step waiting for room is not overtaken:
   steps that become ready after it wait until it has started, so a stream of light steps
   cannot hold it back for the rest of the run.

@@ -62,4 +62,8 @@ bytes_changed?: boolean | null, partitions?: PartitionSummary | null,
  * Declared env values the step used (`@asset(env=[...])`): name -> value, `null` when unset,
  * `"<redacted>"` for secret-looking names. Absent when the node declares no env.
  */
-env?: { [key in string]: string | null } | null, };
+env?: { [key in string]: string | null } | null,
+/**
+ * Dry run only: the node's `weight=` when it is above 1 (#436). Absent otherwise.
+ */
+weight?: number | null, };

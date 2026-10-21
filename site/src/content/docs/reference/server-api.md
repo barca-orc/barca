@@ -480,7 +480,7 @@ are `null` until the node has run.
 ### Plan
 
 ```
-GET /plan              → { total_steps, phases: [{ reason: {type, node_id?}, streams: [{ stream_id, steps }] }], warnings: [{ kind, node, param, message }] }
+GET /plan              → { total_steps, pool_size, capacity, capacity_source, weights, phases: [{ reason: {type, node_id?}, streams: [{ stream_id, steps }] }], warnings: [{ kind, node, param, message }] }
 ```
 
 `warnings` is always present: the plan-time warnings for every step of the project, `[]` when

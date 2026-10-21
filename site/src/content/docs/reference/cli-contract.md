@@ -1118,6 +1118,7 @@ fetched) is still exit 3.
 <!-- BEGIN GENERATED schema get_dry_run_uploads_pending -->
 | Key | Type | Present |
 |---|---|---|
+| `capacity` | integer | always |
 | `command` | string | always |
 | `dry_run` | boolean | always |
 | `steps` | array | always |
@@ -1237,6 +1238,7 @@ document has `target` (a name, or `null` for a whole file):
 <!-- BEGIN GENERATED schema get_dry_run -->
 | Key | Type | Present |
 |---|---|---|
+| `capacity` | integer | always |
 | `command` | string | always |
 | `dry_run` | boolean | always |
 | `steps` | array | always |
@@ -1264,6 +1266,7 @@ The top-level `summary` counts the union once.
 <!-- BEGIN GENERATED schema run_dry_run_multi_target -->
 | Key | Type | Present |
 |---|---|---|
+| `capacity` | integer | always |
 | `command` | string | always |
 | `dry_run` | boolean | always |
 | `steps` | array | always |
@@ -1736,6 +1739,8 @@ stderr. These keys are experimental (0.29, #436).
 <!-- BEGIN GENERATED schema plan -->
 | Key | Type | Present |
 |---|---|---|
+| `capacity` | integer | always |
+| `capacity_source` | string | always |
 | `phases` | array | always |
 | `phases[]` | object | always |
 | `phases[].reason` | object | always |
@@ -1747,6 +1752,7 @@ stderr. These keys are experimental (0.29, #436).
 | `phases[].streams[].steps[]` | string | always |
 | `phases[].streams[].stream_id` | string | always |
 | `plan_version` | integer | always |
+| `pool_size` | integer | always |
 | `total_steps` | integer | always |
 | `warnings` | array | always |
 | `warnings[]` | object | always |
@@ -1754,6 +1760,7 @@ stderr. These keys are experimental (0.29, #436).
 | `warnings[].message` | string | always |
 | `warnings[].node` | string | always |
 | `warnings[].param` | string | always |
+| `weights` | object | always |
 <!-- END GENERATED schema plan -->
 
 ### docs
@@ -2064,6 +2071,7 @@ Older read-only snapshots without attempt metadata report a null history attempt
 | `checks[].data.artifacts` | string | sometimes |
 | `checks[].data.available_bytes` | integer | sometimes |
 | `checks[].data.barca_version` | string | sometimes |
+| `checks[].data.capacity` | integer | sometimes |
 | `checks[].data.enabled` | boolean | sometimes |
 | `checks[].data.executable` | string | sometimes |
 | `checks[].data.file` | string | sometimes |
@@ -2079,6 +2087,7 @@ Older read-only snapshots without attempt metadata report a null history attempt
 | `checks[].data.name` | string | sometimes |
 | `checks[].data.nodes` | integer | sometimes |
 | `checks[].data.path` | string | sometimes |
+| `checks[].data.pool_size` | integer | sometimes |
 | `checks[].data.size_bytes` | integer | sometimes |
 | `checks[].data.source` | string | sometimes |
 | `checks[].data.uri` | null | sometimes |

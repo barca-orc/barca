@@ -928,3 +928,36 @@ def test_big_inputs_topic_example(binary, topics, tmp_path, monkeypatch):
     proc = barca(binary, tmp_path, "get", "after_events", "pipeline.py")
     assert result(proc)["final_output"] == {"ran": True}
     assert "warning" not in proc.stderr
+
+
+def test_assets_topic_weight_example(binary, topics, tmp_path):
+    """`@asset(weight=2)`: the plan, the dry run and doctor show the weights and the capacity,
+    and a weight above the capacity warns. How many run at once: test_step_capacity.py."""
+    import os
+
+    code = next(c for c in blocks(topics["assets"], "python") if "weight=2" in c)
+    (tmp_path / "pipeline.py").write_text(code)
+    env = {**os.environ, "BARCA_REMOTE": "off", "BARCA_POOL_SIZE": "4", "BARCA_CAPACITY": "4"}
+
+    def run(*args):
+        return subprocess.run(
+            [binary, *args], cwd=tmp_path, capture_output=True, text=True, env=env
+        )
+
+    plan = result(run("plan", "pipeline.py"))
+    assert (plan["capacity"], plan["capacity_source"]) == (4, "BARCA_CAPACITY")
+    assert plan["weights"] == {f"pipeline.py:embed_{x}": 2 for x in "abc"}
+    dry = result(run("get", "pipeline.py", "--dry-run", "--json"))
+    assert dry["capacity"] == 4
+    assert {s["weight"] for s in dry["steps"]} == {2}
+    out = result(run("get", "embed_a,embed_b,embed_c", "pipeline.py", "--json"))
+    assert out["steps_executed"] == 3
+    doctor = result(run("doctor", "pipeline.py", "--json"))
+    assert next(c for c in doctor["checks"] if c["name"] == "capacity")["data"]["capacity"] == 4
+
+    (tmp_path / "pipeline.py").write_text(code.replace("weight=2", "weight=8", 1))
+    warned = run("plan", "pipeline.py")
+    assert (
+        "[barca] warning: 'embed_a' has weight=8, more than the capacity 4 (BARCA_CAPACITY); "
+        "it runs alone" in warned.stderr
+    )

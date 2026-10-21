@@ -100,12 +100,12 @@ def test_three_heavy_roots_run_two_at_a_time_with_the_same_outputs_and_cache(tmp
         write(root, THREE_HEAVY)
 
     got = json.loads(
-        cli(limited, "get", "total", "p.py", "-o", "json", BARCA_CAPACITY="4").stdout
+        cli(limited, "get", "total", "p.py", "-o", "value", "--json", BARCA_CAPACITY="4").stdout
     )
     assert peak(spans(limited)) == 2
     # The same pipeline with room for all three runs them together.
     unlimited = json.loads(
-        cli(free, "get", "total", "p.py", "-o", "json", BARCA_CAPACITY="100").stdout
+        cli(free, "get", "total", "p.py", "-o", "value", "--json", BARCA_CAPACITY="100").stdout
     )
     assert peak(spans(free)) == 3
 
@@ -115,12 +115,12 @@ def test_three_heavy_roots_run_two_at_a_time_with_the_same_outputs_and_cache(tmp
 
     # Cached the same way under either capacity, and at another weight.
     again = json.loads(
-        cli(limited, "get", "total", "p.py", "-o", "json", BARCA_CAPACITY="100").stdout
+        cli(limited, "get", "total", "p.py", "-o", "value", "--json", BARCA_CAPACITY="100").stdout
     )
     assert {s["status"] for s in again["steps"]} == {"cached"}
     (limited / "p.py").write_text((limited / "p.py").read_text().replace("weight=2", "weight=3"))
     reweighed = json.loads(
-        cli(limited, "get", "total", "p.py", "-o", "json", BARCA_CAPACITY="4").stdout
+        cli(limited, "get", "total", "p.py", "-o", "value", "--json", BARCA_CAPACITY="4").stdout
     )
     assert {s["status"] for s in reweighed["steps"]} == {"cached"}
     assert run_hashes(reweighed) == run_hashes(got)
@@ -191,7 +191,7 @@ def test_a_step_heavier_than_the_capacity_runs_alone_with_a_warning(tmp_path):
             return h + a + b
         """,
     )
-    proc = cli(tmp_path, "get", "total", "p.py", "-o", "json", BARCA_CAPACITY="2")
+    proc = cli(tmp_path, "get", "total", "p.py", "-o", "value", "--json", BARCA_CAPACITY="2")
     assert json.loads(proc.stdout)["final_output"] == 6
     assert (
         "[barca] warning: 'huge' has weight=5, more than the capacity 2 (BARCA_CAPACITY); "
@@ -208,65 +208,57 @@ def test_a_step_heavier_than_the_capacity_runs_alone_with_a_warning(tmp_path):
     assert "more than the capacity 2" in plan.stderr
 
 
+def chain(prefix, length, seconds):
+    """`length` light tasks, each reading the one before."""
+    out = []
+    for i in range(1, length + 1):
+        inputs = f'inputs={{"x": {prefix}{i - 1}}}' if i > 1 else ""
+        arg = "x: int" if i > 1 else ""
+        out.append(
+            f"@task({inputs})\n"
+            f"def {prefix}{i}({arg}) -> int:\n"
+            f'    span("{prefix}{i}", {seconds})\n'
+            f"    return {i}\n"
+        )
+    return "\n".join(out)
+
+
 def test_a_heavy_step_is_not_overtaken_by_light_steps_ready_after_it(tmp_path):
-    """Two chains of light steps keep one slot busy at any time. Were light steps let past a
-    heavy one waiting for room, the heavy step would wait for both chains to end."""
+    """Two chains of light steps keep the capacity busy. Were light steps let past a heavy one
+    waiting for room, it would wait for both chains to end. The pool (4) is larger than the
+    capacity (2), so each chain is a stream of its own and only the capacity holds steps back;
+    `x1 -> heavy` is a third stream, so `heavy` becomes ready in the middle of the phase."""
     write(
         tmp_path,
-        """
-        from barca import asset, task
-
-        @task()
-        def a1() -> int:
-            span("a1", 0.2)
-            return 1
-
-        @task(inputs={"x": a1})
-        def a2(x: int) -> int:
-            span("a2", 0.2)
-            return x
-
-        @task(inputs={"x": a2})
-        def a3(x: int) -> int:
-            span("a3", 0.2)
-            return x
-
-        @task(inputs={"x": a3})
-        def a4(x: int) -> int:
-            span("a4", 0.2)
-            return x
-
-        @task()
-        def b1() -> int:
-            span("b1", 0.35)
-            return 1
-
-        @task(inputs={"x": b1})
-        def b2(x: int) -> int:
-            span("b2", 0.35)
-            return x
-
-        @task(inputs={"x": b2})
-        def b3(x: int) -> int:
-            span("b3", 0.35)
-            return x
-
-        @task(inputs={"x": b3})
-        def b4(x: int) -> int:
-            span("b4", 0.35)
-            return x
-
-        @task(inputs={"x": a1}, weight=2)
-        def heavy(x: int) -> int:
-            span("heavy", 0.2)
-            return x
-        """,
+        "from barca import task\n\n"
+        + chain("a", 6, 0.2)
+        + "\n"
+        + chain("b", 6, 0.35)
+        + "\n"
+        + chain("x", 1, 0.3)
+        + """
+@task(inputs={"x": x1}, weight=2)
+def heavy(x: int) -> int:
+    span("heavy", 0.2)
+    return x
+""",
     )
-    cli(tmp_path, "run", "p.py", BARCA_CAPACITY="2", BARCA_POOL_SIZE="2")
+    plan = json.loads(cli(tmp_path, "plan", "p.py").stdout)
+    assert len(plan["phases"]) == 1, plan
+    cli(tmp_path, "run", "a6,b6,heavy", "p.py", BARCA_CAPACITY="2")
     got = spans(tmp_path)
-    assert len(got) == 9
+    assert len(got) == 14
     heavy_start, heavy_end = got["heavy"]
-    assert heavy_start < min(got["a3"][0], got["b3"][0]), got
+    heavy_ready = got["x1"][1]
+    # Each light step becomes ready when the one before it in its chain ends.
+    for prefix in "ab":
+        for i in range(2, 7):
+            ready = got[f"{prefix}{i - 1}"][1]
+            start = got[f"{prefix}{i}"][0]
+            if ready > heavy_ready + 0.05:
+                assert start >= heavy_start, f"{prefix}{i} overtook heavy: {got}"
+    # Not vacuous: it started while both chains still had steps to run.
+    assert heavy_start < min(got["a6"][0], got["b6"][0]), got
     for name, (start, end) in got.items():
         if name != "heavy":
             assert end <= heavy_start or start >= heavy_end, f"{name} overlapped heavy: {got}"
