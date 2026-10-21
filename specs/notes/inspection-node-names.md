@@ -1,5 +1,7 @@
 # Consistent declared names in inspection (#288)
 
+> Note from #373 (merged 2026-10-09). Status 2026-10-20: accurate.
+
 Status already gathers canonical node identity and the parsed declaration through
 one shared path reused by SQL. Use the declaration's explicit name when present,
 otherwise the function name, for its existing `name` field. SQL then reuses that

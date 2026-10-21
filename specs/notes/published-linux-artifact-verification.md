@@ -1,5 +1,7 @@
 # S07 publication acceptance: four Linux runtime targets
 
+> Note from #379 (merged 2026-10-10). Status 2026-10-20: partly stale: written as a plan; the job it describes runs as `verify-published-linux` in `release.yml`.
+
 Status: scoped technical plan before implementation. Depends on #372/#375;
 refs #107 and specs/notes/linux-target-packaging.md. Existing prepublication native
 build/runtime gates stay intact. No public API/config/dependency/version change.

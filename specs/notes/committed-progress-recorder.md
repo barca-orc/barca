@@ -1,5 +1,7 @@
 # Committed local progress before remote checkpoints (#214)
 
+> Note from #360 (merged 2026-10-09). Status 2026-10-20: partly stale: the "future minute publisher" became the minute backup checkpoint, not a shared-history push.
+
 This is the next P12 foundation, independently based on current main. It adds no
 public controls, schema version, wire fields or publication cadence. The existing
 recorder remains the single owner; successful receipts still belong to PR #359.

@@ -1,74 +1,13 @@
 # Benchmark Results
 
-Last run: 2026-06-10 | Apple Silicon (M-series) | Rust release build | v0.2.0
+Latest full pass: 2026-07-17, on the code that shipped as barca 0.7.0, via the Docker harness
+(`benchmarks/docker/`). Each section below is dated; the summary, profile and parallel-mode
+sections near the end are from v0.2.0 (June 2026).
 
-> **Note (2026-07-16):** the benchmark harness was since standardized for CPU/worker
-> fairness — every framework's parallelism is now pinned to the same core count and
-> worker count instead of Barca auto-detecting `cpu_count` while Dagster/Prefect
-> hardcoded 16 workers (see `benchmarks/README.md#methodology` and
-> `benchmarks/lib/env.sh`). The numbers below predate that change and should be
-> treated as illustrative, not reproducible as-is; re-run via `bench.sh` for
-> current, standardized numbers.
->
-> All 19 benchmarks with a `bench.sh` at the time were re-run end to end under
-> the new harness — see [Standardized re-run (2026-07-16)](#standardized-re-run-2026-07-16)
-> below. (A 20th, `etl_duckdb_dataframes`, was added afterward as a follow-up
-> to the `etl_duckdb` investigation below and measured separately, in
-> isolation — see the table's ‡ footnote.) This pass ran in a shared, virtualized CI-style container (not the
-> dedicated Apple Silicon box the original numbers came from), so absolute
-
-> **Further note (2026-07-16, same day):** a second fairness pass found that even with
-> worker *counts* matched, most `prefect/run.py` scripts on benchmarks with genuinely
-> independent branches were calling tasks directly/sequentially instead of via
-> `.submit()` — so Prefect never actually used the concurrency budget it was just given,
-> making it look slower than it fairly should on parallel-shaped benchmarks. That's now
-> fixed (see `benchmarks/README.md#methodology`) on every benchmark that has real
-> independent branches: `etl_duckdb`, `etl_duckdb_dataframes`, `fan_out_500`,
-> `fan_out_500_50ms`, `map_reduce`, `multi_file_discovery`, `parallel_tasks`,
-> `partitioned_chain`, `partitioned_etl`, `partitioned_fan_in`, `spaceflights`,
-> `timeseries_1000`, `wide_join`, and `wide_layers` — 13 of which have a row in the
-> table below (`timeseries_1000` doesn't). `deep_diamond` and `mixed_io_cpu` already had
-> this fix applied before this pass. Benchmarks that are strict sequential chains with
-> nothing to parallelize either way were correctly left unchanged: `trivial`,
-> `chain_100`, `large_payloads`, `incremental_backfill`. `resilience_pileup` is a
-> deliberate exception — its whole point is comparing barca's non-blocking retry/backoff
-> against Dagster/Prefect's sequential baseline (see the comment in
-> `resilience_pileup/bench.sh`), so it's intentionally left as-is rather than "fixed."
->
-> Dagster was investigated too and deliberately left unchanged everywhere — its only
-> real multiprocess mechanism spawns a fresh OS subprocess per step (measured
-> ~0.5–1.5s each), which dwarfs every task in this suite (all ≤50ms), so enabling it
-> would trade one distortion for a worse one; see "Why Dagster is excluded" in the
-> methodology doc.
->
-> **The Prefect numbers in the table below predate the `.submit()` fix and should be
-> treated as a worst case for Prefect** on the 13 affected rows listed above — re-run
-> via `bench.sh` for current numbers.
-> times aren't comparable across the two environments — only the
-> barca/dagster/prefect ratios *within* the same run are meaningful. The table
-> below shows dagster ahead or tied on 9 of 18 — **but most of that is
-> confirmed container noise, not a real result**: re-running individual rows
-> in isolation afterward reversed several of them outright (see Notes). Only
-> `etl_duckdb` held up as a genuine, reproducible barca loss across repeat
-> runs, with a specific identified cause (cross-process serialization of large
-> payloads across parallel branches). Read the Notes section before drawing
-> any conclusion from a single row in the table.
-
-> **Latest (2026-07-17):** the Prefect `.submit()` fix referenced above has now been
-> validated in a fresh full-suite pass — see
-> [Standardized re-run via Docker harness (2026-07-17)](#standardized-re-run-via-docker-harness-2026-07-17)
-> below. That pass also introduces `benchmarks/docker/`, a new Docker-based harness that
-> gives barca/Dagster/Prefect a genuinely **enforced** shared CPU + memory ceiling (`docker
-> run --cpuset-cpus`/`--memory`, not just CPU pinning with unenforced memory reporting) —
-> see `benchmarks/README.md#reproducible-fairness-via-docker-recommended` — and is now the
-> documented standard way to reproduce this suite. **That pass ran on different hardware
-> and a different virtualization stack** (Docker Desktop's Linux VM on an Apple Silicon
-> Mac, ARM64, nested) **than the 2026-07-16 pass below** (a dedicated x86_64 Linux
-> container) — the two passes are not comparable to each other in absolute times. A first
-> attempt on the new hardware showed dagster winning or tying on 14/20 rows, which turned
-> out to be a real, fixable barca-core bug (a `pool_size * 200ms` worker-shutdown tax that
-> a faster CPU no longer hides), not an environment artifact — see the section below for
-> the root cause, the fix, and the corrected numbers.
+> **Caveat (2026-10-20):** none of these numbers come from the current release (0.26.1), and
+> passes on different hardware are not comparable in absolute time; only the
+> barca/Dagster/Prefect ratios within one pass mean anything. #65 re-runs the suite on the
+> current harness; until then, re-run `bench.sh` before quoting a number.
 
 ## Standardized re-run via Docker harness (2026-07-17)
 

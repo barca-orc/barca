@@ -1,5 +1,7 @@
 # Remote startup preflight (#308, P04)
 
+> Note from #348 (merged 2026-10-09). Status 2026-10-20: partly stale: the state-off and shared-history pull references describe removed features; the artifact-store probe is current.
+
 The shared execution path must check configured artifact storage before starting
 Python workers, including state-off and serve runs. Reuse the transfer helper's
 read-only probe; do not introduce another authentication implementation or flag.

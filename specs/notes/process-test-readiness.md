@@ -1,5 +1,7 @@
 # Supported-interpreter and worker-shutdown tests (#334)
 
+> Note from #377 (merged 2026-10-09). Status 2026-10-20: partly stale: the minute-checkpoint outage test it names was renamed and now covers backups, not shared-history publication.
+
 ## Remaining scope
 
 Start from current main `f881a6d` in an isolated worktree. Keep repaired inherited

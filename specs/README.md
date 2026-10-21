@@ -39,5 +39,7 @@ wrong statuses and additional routes, rather than only repeating happy-path exam
 invariant, the regression evidence). They are not boundaries, they are not indexed here, and
 nothing in them is a promise: the PR that made each one is the record. A new boundary goes in
 this directory and in the table above; anything else goes in `notes/` or stays in its PR.
+Each note opens with one line naming the PR that made it and whether it still matches the code
+as of the date given. A note whose subject is removed is deleted, not kept as history.
 
 [DIRECTION.md](../DIRECTION.md) states what is being worked on and why.

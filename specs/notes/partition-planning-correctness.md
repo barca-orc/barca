@@ -1,5 +1,7 @@
 # Partition planning correctness (#337, P09)
 
+> Note from #354 (merged 2026-10-09). Status 2026-10-20: partly stale: the "pending" second slice (complete upstream hashes) shipped in #365.
+
 ## Boundary and remaining defects
 
 The existing planner, partition dispatcher and shared cache-decision function stay

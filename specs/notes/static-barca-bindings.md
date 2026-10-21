@@ -1,5 +1,7 @@
 # Static Barca bindings (#316, P07)
 
+> Note from #355 (merged 2026-10-09). Status 2026-10-20: accurate.
+
 ## Scope and contract
 
 Reuse `BarcaNames`, the existing conservative module binding collector, as the

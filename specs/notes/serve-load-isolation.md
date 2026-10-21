@@ -1,5 +1,7 @@
 # Serve startup/load isolation (#312, P11)
 
+> Note from #361 (merged 2026-10-09). Status 2026-10-20: accurate.
+
 ## Scope and reproduction
 
 Current main 31c7937 binds the server even with a syntax-invalid sibling, but

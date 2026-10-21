@@ -1,5 +1,7 @@
 # Helper hashing and worker import consistency (#295, P08)
 
+> Note from #358 (merged 2026-10-10). Status 2026-10-20: accurate.
+
 ## Boundary and reproduced failures
 
 Core owns static dependency cones; Python owns ordinary source imports. A run hash

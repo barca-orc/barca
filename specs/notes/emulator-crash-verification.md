@@ -1,5 +1,7 @@
 # Real process interruption against artifact emulators
 
+> Note from #367 (merged 2026-10-10). Status 2026-10-20: partly stale: the push/pull kill phases and `test_state_pull.py`/`test_state_validation.py` in the inventory were removed with the shared history.
+
 Status: scoped plan and source inventory, before implementation. Owner: S02 / #248
 in #344. Baseline: main 748479f (2026-10-09). This is test coverage of the current
 artifact visibility contract, not a new recovery policy.
