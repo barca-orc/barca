@@ -362,6 +362,17 @@ def _blocked(dest: Path, exc: OSError) -> ArtifactPathError:
     )
 
 
+def sha256_file(path: "str | Path") -> str:
+    """The SHA-256 of a local file, hex: what the transfer and state helpers compare copies by."""
+    import hashlib
+
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def _copy_local(src: "str | Path", dst: "str | Path") -> None:
     """Copy into a local store path, creating parents. Atomic at the destination."""
     dst = Path(dst)

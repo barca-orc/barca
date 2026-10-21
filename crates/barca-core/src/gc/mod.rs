@@ -13,8 +13,15 @@
 //! directories, results fetched back after an eviction). A full walk ([`survey`]) runs when
 //! that estimate is over the limit, at most a day after the last one, and under `barca gc`.
 //!
-//! **Never evicted:** the metadata DBs, their logs and locks and anything else barca does not
-//! own (only files under `.barca/` that a row or a leftover names are deleted); this
+//! **Unreferenced files.** A file in an artifact directory that no metadata row of any
+//! environment names is a leftover (tier 1): `barca state reset` and `barca state restore` leave
+//! the files the old database named, and nothing else would ever delete them (#552). One
+//! written in the last [`UNREFERENCED_GRACE`] is kept, and so is every one while a run is in
+//! flight on this `.barca/` (its rows are not written yet).
+//!
+//! **Never evicted:** the metadata DBs (and the copies `state reset` and `state restore` move
+//! aside), their logs and locks, the backups, and anything else barca does not own (only files
+//! under `.barca/` that a row or a leftover names are deleted); this
 //! command's outputs and inputs; results a run in flight in this process holds ([`Pin`]); with
 //! another live run on this `.barca/`, anything but tiers 1 and 2; the current result of a
 //! `Manual` node with no store copy.
@@ -49,6 +56,10 @@ const SURVEY_EVERY: Duration = Duration::from_secs(24 * 3600);
 
 /// A `sql-cache` copy used this recently may be in use by a query: it is not evicted.
 const SQL_CACHE_GRACE: Duration = Duration::from_secs(300);
+
+/// An artifact file no row names that was written this recently may belong to a step whose
+/// row is about to be written: it is not evicted.
+pub const UNREFERENCED_GRACE: Duration = Duration::from_secs(60);
 
 /// What the last full walk found, kept in `.barca/gc-state.json`.
 const STATE_FILE: &str = "gc-state.json";
@@ -146,6 +157,8 @@ impl Drop for Pin {
 #[derive(Default)]
 struct Pinned {
     run_ids: HashSet<String>,
+    /// Another run in this process is in flight on this `.barca/`.
+    others: bool,
     unresolved: bool,
     nodes: HashSet<String>,
     run_hashes: HashSet<String>,
@@ -158,6 +171,7 @@ fn pinned_except(root: &Path, own: Option<u64>) -> Pinned {
         if Some(*id) == own {
             continue;
         }
+        out.others = true;
         out.unresolved |= !state.resolved;
         out.nodes.extend(state.nodes.iter().cloned());
         out.run_hashes.extend(state.run_hashes.iter().cloned());
@@ -169,6 +183,10 @@ impl Pinned {
     /// Whether `e` became untouchable since the plan was made.
     fn holds(&self, e: &Eviction) -> bool {
         if e.run_hashes.iter().any(|h| self.run_hashes.contains(h)) {
+            return true;
+        }
+        // A run that started since the plan was made may be writing files no row names yet.
+        if self.others && e.leftover == Some(LeftoverKind::Unreferenced) {
             return true;
         }
         e.tier >= Tier::StoreHeld
@@ -220,6 +238,21 @@ impl Project {
                 .as_ref()
                 .is_some_and(|c| abs.starts_with(c));
         (inside && abs != self.barca).then_some(abs)
+    }
+
+    /// `path` (absolute) spelled from `self.barca` when it is spelled from its resolved form, so
+    /// a recorded path and a walked one compare equal.
+    fn key(&self, path: &Path) -> PathBuf {
+        match self
+            .barca_canon
+            .as_ref()
+            .and_then(|c| path.strip_prefix(c).ok())
+        {
+            Some(rest) if self.barca_canon.as_deref() != Some(self.barca.as_path()) => {
+                self.barca.join(rest)
+            }
+            _ => path.to_path_buf(),
+        }
     }
 
     fn artifact_trees(&self) -> Vec<PathBuf> {
@@ -329,6 +362,19 @@ fn checked(project: &Project, size: u64, limit: u64) {
     }
 }
 
+/// Forget the last full walk, so the next check walks `.barca/` again: the metadata database
+/// was replaced (`barca state reset`, `barca state restore`), and the recorded sizes the fast
+/// estimate adds up no longer describe the files on disk.
+pub fn forget_survey() {
+    if let Ok(project) = Project::here() {
+        forget_survey_in(&project);
+    }
+}
+
+fn forget_survey_in(project: &Project) {
+    let _ = std::fs::remove_file(project.barca.join(STATE_FILE));
+}
+
 fn read_state(project: &Project) -> Option<State> {
     let raw = std::fs::read_to_string(project.barca.join(STATE_FILE)).ok()?;
     serde_json::from_str(&raw).ok()
@@ -355,6 +401,62 @@ struct Walk {
     /// Bytes inside them (only when walked).
     artifacts: u64,
     moved_aside: Vec<plan::Leftover>,
+    /// Every file in the artifact directories (outside moved-aside ones): path, bytes,
+    /// modification time.
+    files: Vec<(PathBuf, u64, u64)>,
+    /// The bytes outside the artifact directories, by what holds them.
+    outside: BTreeMap<Held, u64>,
+}
+
+/// What holds the space under `.barca/`, as `barca gc` reports it (`held`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Held {
+    /// Artifact files a metadata row names.
+    Results,
+    /// Artifact files no metadata row names (tier-1 leftovers, or kept for now).
+    Unreferenced,
+    /// The metadata databases, their logs and locks: never evicted.
+    Metadata,
+    /// Databases `barca state reset` and `barca state restore` moved aside: never evicted.
+    DbCopies,
+    /// Metadata backups (`backups/`), five per environment: never evicted.
+    Backups,
+    /// Everything else: staging, `sql-cache`, moved-aside artifact directories.
+    Other,
+}
+
+impl Held {
+    /// The name in JSON.
+    pub fn code(self) -> &'static str {
+        match self {
+            Held::Results => "results",
+            Held::Unreferenced => "unreferenced",
+            Held::Metadata => "metadata",
+            Held::DbCopies => "db_copies",
+            Held::Backups => "backups",
+            Held::Other => "other",
+        }
+    }
+
+    /// What eviction may free from it: nothing for the databases and backups.
+    fn evictable(self) -> bool {
+        matches!(self, Held::Results | Held::Unreferenced | Held::Other)
+    }
+}
+
+/// What a file outside the artifact directories is, by its path below `.barca/`.
+fn outside_kind(barca: &Path, path: &Path) -> Held {
+    let rel = path.strip_prefix(barca).unwrap_or(path);
+    if rel.components().any(|c| c.as_os_str() == "backups") {
+        return Held::Backups;
+    }
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    match name.strip_prefix("metadata.db") {
+        Some(rest) if rest.contains(".reset-") || rest.contains(".pre-restore") => Held::DbCopies,
+        Some(_) => Held::Metadata,
+        None if name == "serve.lock" => Held::Metadata,
+        None => Held::Other,
+    }
 }
 
 fn modified_secs(meta: &std::fs::Metadata) -> u64 {
@@ -389,7 +491,14 @@ fn du(path: &Path) -> (u64, u64) {
 fn walk(project: &Project, artifacts: bool) -> Walk {
     let trees: HashSet<PathBuf> = project.artifact_trees().into_iter().collect();
     let mut out = Walk::default();
-    fn visit(dir: &Path, in_tree: bool, artifacts: bool, trees: &HashSet<PathBuf>, out: &mut Walk) {
+    fn visit(
+        barca: &Path,
+        dir: &Path,
+        in_tree: bool,
+        artifacts: bool,
+        trees: &HashSet<PathBuf>,
+        out: &mut Walk,
+    ) {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return;
         };
@@ -430,15 +539,24 @@ fn walk(project: &Project, artifacts: bool) -> Walk {
                     });
                     continue;
                 }
-                visit(&path, tree, artifacts, trees, out);
+                visit(barca, &path, tree, artifacts, trees, out);
             } else if tree {
                 out.artifacts += meta.len();
+                out.files.push((path, meta.len(), modified_secs(&meta)));
             } else {
                 out.other += meta.len();
+                *out.outside.entry(outside_kind(barca, &path)).or_default() += meta.len();
             }
         }
     }
-    visit(&project.barca, false, artifacts, &trees, &mut out);
+    visit(
+        &project.barca,
+        &project.barca,
+        false,
+        artifacts,
+        &trees,
+        &mut out,
+    );
     out
 }
 
@@ -568,6 +686,8 @@ struct Survey {
     total: u64,
     rows: Vec<plan::Row>,
     leftovers: Vec<plan::Leftover>,
+    /// The total by what holds it.
+    held: BTreeMap<Held, u64>,
 }
 
 /// The successful rows of one environment, with their files.
@@ -652,6 +772,109 @@ fn local_file(
     }
 }
 
+/// The files on this disk that some row of `env` names (any status, evicted or not), keyed
+/// by [`Project::key`]. `None` when a row names a store location this machine cannot map to
+/// its local copy (the environment's configuration does not resolve): then no file is known
+/// not to be named.
+async fn named_of(project: &Project, env: &EnvDb) -> Result<Option<Vec<PathBuf>>, BarcaError> {
+    let failed = |e| BarcaError::Db(format!("failed to read {}: {e}", env.db_path));
+    let recorded = with_db(&env.db_path, async |conn| {
+        let mut rows = conn
+            .query(
+                "SELECT DISTINCT artifact_path FROM materializations                  WHERE artifact_path IS NOT NULL AND artifact_path != ''",
+                (),
+            )
+            .await
+            .map_err(failed)?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next().await.map_err(failed)? {
+            out.push(row.get::<String>(0).map_err(failed)?);
+        }
+        Ok(out)
+    })
+    .await?;
+    let mut out = Vec::with_capacity(recorded.len());
+    for path in recorded {
+        match local_file(project, env, &path, false).0 {
+            Some(file) => out.push(project.key(&file)),
+            // A store location with no local mirror known: its copy here cannot be told apart.
+            None if env.layout.is_none() && crate::transfer::local_path(&path).is_none() => {
+                return Ok(None);
+            }
+            None => {}
+        }
+    }
+    Ok(Some(out))
+}
+
+/// The artifact files no row of any environment names, as leftovers. Empty when that cannot
+/// be known (see [`named_of`]). Files written in the last [`UNREFERENCED_GRACE`] are left out
+/// (they are still counted as [`Held::Unreferenced`]).
+async fn unreferenced(
+    project: &Project,
+    files: &[(PathBuf, u64, u64)],
+) -> Result<(Vec<plan::Leftover>, u64), BarcaError> {
+    let mut named: HashSet<PathBuf> = HashSet::new();
+    let mut known = true;
+    // A file older than every metadata database cannot be waiting for its row: the run that
+    // wrote it recorded into a database that is gone (`barca state reset`, `restore`).
+    let mut born: Option<SystemTime> = None;
+    for env in envs(project) {
+        let created = std::fs::metadata(&env.db_path)
+            .and_then(|m| m.created())
+            .ok();
+        born = match (born, created) {
+            (Some(b), Some(c)) => Some(b.min(c)),
+            (None, c) if c.is_some() => c,
+            // A database whose creation time cannot be read: no file is known to predate it.
+            _ => Some(UNIX_EPOCH),
+        };
+        match named_of(project, &env).await? {
+            Some(paths) => named.extend(paths),
+            None => known = false,
+        }
+    }
+    let mut candidates: Vec<&(PathBuf, u64, u64)> = files
+        .iter()
+        .filter(|(path, _, _)| !named.contains(&project.key(path)))
+        .collect();
+    // A path spelled through a symlink below `.barca/`: compare resolved paths, only when there
+    // is something to compare.
+    if !candidates.is_empty() {
+        let resolved: HashSet<PathBuf> = named
+            .iter()
+            .filter_map(|p| std::fs::canonicalize(p).ok())
+            .collect();
+        candidates.retain(|(path, _, _)| {
+            std::fs::canonicalize(path).map_or(true, |c| !resolved.contains(&c))
+        });
+    }
+    let bytes = candidates.iter().map(|(_, b, _)| b).sum();
+    if !known {
+        return Ok((Vec::new(), 0));
+    }
+    let fresh_after = now_secs().saturating_sub(UNREFERENCED_GRACE.as_secs());
+    let leftovers = candidates
+        .into_iter()
+        .filter(|(path, _, modified)| {
+            *modified <= fresh_after
+                || born.is_some_and(|born| {
+                    std::fs::symlink_metadata(path)
+                        .and_then(|m| m.modified())
+                        .is_ok_and(|m| m < born)
+                })
+        })
+        .map(|(path, bytes, modified)| plan::Leftover {
+            kind: LeftoverKind::Unreferenced,
+            path: path.clone(),
+            with: Vec::new(),
+            bytes: *bytes,
+            modified: *modified,
+        })
+        .collect();
+    Ok((leftovers, bytes))
+}
+
 /// Walk everything and read every environment's rows; remember the correction for
 /// [`estimate`].
 async fn survey(project: &Project, envs: &[EnvDb]) -> Result<Survey, BarcaError> {
@@ -663,6 +886,15 @@ async fn survey(project: &Project, envs: &[EnvDb]) -> Result<Survey, BarcaError>
         rows.extend(env_rows);
         recorded += env_recorded;
     }
+    let (unnamed, unnamed_bytes) = unreferenced(project, &walked.files).await?;
+    let moved_aside: u64 = walked.moved_aside.iter().map(|l| l.bytes).sum();
+    let mut held = walked.outside.clone();
+    *held.entry(Held::Other).or_default() += moved_aside;
+    *held.entry(Held::Unreferenced).or_default() += unnamed_bytes;
+    *held.entry(Held::Results).or_default() += walked
+        .artifacts
+        .saturating_sub(moved_aside)
+        .saturating_sub(unnamed_bytes);
     write_state(
         project,
         &State {
@@ -673,11 +905,14 @@ async fn survey(project: &Project, envs: &[EnvDb]) -> Result<Survey, BarcaError>
     );
     let mut leftovers = staging_leftovers(project);
     leftovers.extend(walked.moved_aside);
+    leftovers.extend(unnamed);
     leftovers.extend(sql_cache_leftovers(project));
+    held.retain(|_, bytes| *bytes > 0);
     Ok(Survey {
         total: walked.other + walked.artifacts,
         rows,
         leftovers,
+        held,
     })
 }
 
@@ -779,9 +1014,21 @@ async fn protections(
         None
     };
     let manual = manual_nodes(project, rows);
+    let recorded: HashSet<String> = own.recorded.iter().cloned().chain(pending).collect();
+    // The same, as files: a file this command read may be one no row of this machine names (a
+    // server ledger hit fetched from the store).
+    let mut paths = HashSet::new();
+    for env in envs {
+        for r in &recorded {
+            if let Some(file) = local_file(project, env, r, false).0 {
+                paths.insert(project.key(&file));
+                paths.insert(file);
+            }
+        }
+    }
     let protect = Protections {
-        paths: HashSet::new(),
-        recorded: own.recorded.iter().cloned().chain(pending).collect(),
+        paths,
+        recorded,
         run_hashes: own
             .run_hashes
             .iter()
@@ -801,6 +1048,10 @@ async fn protections(
             (None, false) => None,
         },
         keep_staging: !elsewhere.is_empty(),
+        keep_unreferenced: !elsewhere.is_empty()
+            || pinned.others
+            || pinned.unresolved
+            || pending_failed,
     };
     (protect, restricted)
 }
@@ -874,26 +1125,19 @@ async fn mark_evicted(db_path: &str, paths: &[&str]) {
     let Ok((_db, conn)) = crate::db::open_conn(db_path).await else {
         return;
     };
-    if conn.execute("BEGIN IMMEDIATE", ()).await.is_err() {
-        return;
-    }
-    let mut ok = true;
-    for path in paths {
-        ok = conn
-            .execute(
+    let _ = crate::db::with_tx(&conn, "BEGIN IMMEDIATE", "eviction marks", async {
+        for path in paths {
+            conn.execute(
                 "UPDATE materializations SET evicted_at = datetime('now') \
                  WHERE artifact_path = ?1 AND status = 'success'",
                 [*path],
             )
             .await
-            .is_ok();
-        if !ok {
-            break;
+            .map_err(|e| BarcaError::Db(format!("failed to mark an eviction: {e}")))?;
         }
-    }
-    let _ = conn
-        .execute(if ok { "COMMIT" } else { "ROLLBACK" }, ())
-        .await;
+        Ok(())
+    })
+    .await;
 }
 
 /// Files and bytes per tier.
@@ -1145,6 +1389,43 @@ pub struct GcTier {
     pub bytes: u64,
 }
 
+/// What holds part of the space left under `.barca/` after `barca gc`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GcHeld {
+    /// `results`, `unreferenced`, `metadata`, `db_copies`, `backups` or `other`.
+    pub what: String,
+    pub bytes: u64,
+    /// Whether eviction may ever free it (`false` for the databases and backups).
+    pub evictable: bool,
+}
+
+/// What an eviction frees, in [`Held`] terms.
+fn held_of(e: &Eviction) -> Held {
+    match e.leftover {
+        Some(LeftoverKind::Unreferenced) => Held::Unreferenced,
+        Some(_) => Held::Other,
+        None => Held::Results,
+    }
+}
+
+/// `held` after `evicted`, largest first.
+fn held_after(mut held: BTreeMap<Held, u64>, evicted: &[Eviction]) -> Vec<GcHeld> {
+    for e in evicted {
+        if let Some(bytes) = held.get_mut(&held_of(e)) {
+            *bytes = bytes.saturating_sub(e.bytes);
+        }
+    }
+    let mut out: Vec<(Held, u64)> = held.into_iter().filter(|(_, b)| *b > 0).collect();
+    out.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    out.into_iter()
+        .map(|(what, bytes)| GcHeld {
+            what: what.code().to_string(),
+            bytes,
+            evictable: what.evictable(),
+        })
+        .collect()
+}
+
 /// A file `barca gc` could not delete.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GcFailure {
@@ -1174,6 +1455,8 @@ pub struct GcResult {
     pub evicted: Vec<GcEntry>,
     /// Entries that could not be deleted (skipped).
     pub failed: Vec<GcFailure>,
+    /// What holds the space left (`after_bytes`), largest first.
+    pub held: Vec<GcHeld>,
 }
 
 /// `barca gc`: evict now, to [`LOW_WATERMARK_PERCENT`] of the limit, or with the limit off
@@ -1208,6 +1491,7 @@ async fn gc_in(
             total: 0,
             rows: Vec::new(),
             leftovers: Vec::new(),
+            held: BTreeMap::new(),
         }
     };
     let pinned = pinned_except(&project.root, None);
@@ -1239,6 +1523,7 @@ async fn gc_in(
         (done.evicted, done.failed)
     };
     let evicted_bytes: u64 = evicted.iter().map(|e| e.bytes).sum();
+    let held = held_after(survey.held, &evicted);
     if let Some(limit) = limit {
         remember(survey.total.saturating_sub(evicted_bytes), limit);
     }
@@ -1275,6 +1560,7 @@ async fn gc_in(
                 error,
             })
             .collect(),
+        held,
     })
 }
 
@@ -1283,6 +1569,11 @@ fn project_relative(project: &Project, path: &Path) -> String {
         .unwrap_or(path)
         .display()
         .to_string()
+}
+
+/// Bytes under `dir` (an artifact directory), for `barca state reset` to say what stays.
+pub fn bytes_under(dir: &Path) -> u64 {
+    du(dir).0
 }
 
 /// Size, limit and free space, for `barca doctor`.

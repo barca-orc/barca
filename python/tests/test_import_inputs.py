@@ -173,3 +173,83 @@ def test_importing_a_helper_as_an_input_is_an_error(proj):
     proc = barca(proj, "list")
     assert proc.returncode == 2
     assert "'close' is imported from pipelines.common" in proc.stderr
+
+
+# ── Naming one file of a package project (#551) ─────────────────────────────
+
+
+def ids(listing: dict) -> set:
+    return {n["id"] for n in listing["nodes"]}
+
+
+def test_naming_one_file_reads_the_files_it_imports_inputs_from(proj):
+    listing = ok(barca(proj, "list", "pipelines/reconcile.py"))
+    # sources.py and, through it, dims.py are read; the decoy and validate.py are not.
+    assert ids(listing) == {
+        "pipelines/dims.py:weeks",
+        "pipelines/sources.py:ibp_model",
+        "pipelines/reconcile.py:reconciled",
+    }
+    assert inputs_of(listing, "pipelines/reconcile.py:reconciled") == {
+        "pipelines/sources.py:ibp_model"
+    }
+
+
+def test_a_task_runs_with_only_its_own_file_named(proj):
+    r = ok(barca(proj, "run", "validate_planning_projection", "pipelines/validate.py"))
+    assert r["final_output"] == {"status": "PASS", "keys": 3}
+    assert r["steps_executed"] == 4
+    # Same node ids and run hashes as the whole project: its cache is shared.
+    again = ok(barca(proj, "run", "validate_planning_projection"))
+    assert again["steps_executed"] == 1
+    # From inside the package, the file spelled relative to the cwd.
+    inside = ok(barca(proj / "pipelines", "run", "validate_planning_projection", "validate.py"))
+    assert inside["steps_executed"] == 1
+
+
+def test_an_imported_file_contributes_only_what_the_named_file_needs(proj):
+    dims = proj / "pipelines" / "dims.py"
+    dims.write_text(
+        dims.read_text()
+        + textwrap.dedent(
+            """
+
+            @asset()
+            def unrelated() -> int:
+                raise RuntimeError("must not run")
+            """
+        )
+    )
+    r = ok(barca(proj, "get", "pipelines/sources.py"))
+    ran = {s["id"] for s in r["steps"]}
+    assert ran == {"pipelines/dims.py:weeks", "pipelines/sources.py:ibp_model"}
+    assert r["final_output"]["_barca_artifact"]["path"].startswith(
+        ".barca/artifacts/pipelines__sources.py--ibp_model/"
+    )
+
+
+def test_an_input_only_the_whole_project_can_resolve_says_what_to_run(proj):
+    # A re-export through the package `__init__.py`: found by name in the whole project.
+    (proj / "pipelines" / "__init__.py").write_text("from .dims import weeks\n")
+    (proj / "pipelines" / "summary.py").write_text(
+        textwrap.dedent(
+            """
+            from barca import asset
+            from pipelines import weeks
+
+
+            @asset(inputs={"w": weeks})
+            def summary(w: list) -> int:
+                return len(w)
+            """
+        )
+    )
+    assert "pipelines/summary.py:summary" in ids(ok(barca(proj, "list")))
+    proc = barca(proj, "get", "summary", "pipelines/summary.py")
+    assert proc.returncode == 2
+    err = json.loads(proc.stderr.strip().splitlines()[-1])
+    # The real file, never `pipelines/pipelines/...`.
+    assert "(pipelines/__init__.py)" in err["error"], err
+    assert "pipelines/pipelines" not in proc.stderr
+    assert "drop the file arguments" in err["remediation"], err
+    assert "barca get <target>" in err["remediation"], err

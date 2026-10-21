@@ -12,8 +12,8 @@ use crate::helper_proc;
 use crate::planner::{ExecutionPlan, Phase, ResourceConfig};
 use crate::recover::{self, Work};
 use crate::report::{
-    RunOutcome, cached_step_line, end_of_run_line, env_suffix, failed_step_line, fmt_bytes,
-    fmt_eta, kind_str, merge_partition_reports, reconcile_total, report_for, stale_warning,
+    RunOutcome, cached_step_line, end_of_run_line, env_suffix, failed_step_line, fmt_eta, kind_str,
+    merge_partition_reports, reconcile_total, report_for, stale_warning,
 };
 use crate::targets::{
     blocking_failure, final_output_of, plan_for_targets, resolve_targets, short_name,
@@ -109,6 +109,45 @@ pub(crate) fn default_pool_size() -> usize {
     std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4)
+}
+
+/// The capacity (#436): the most the `weight=` of the steps running at once may add up to, and
+/// where it came from. `BARCA_CAPACITY` > `[execution] capacity` > the pool size.
+pub(crate) fn capacity(
+    setting: crate::config::CapacitySetting,
+    pool_size: usize,
+) -> (usize, &'static str) {
+    setting.unwrap_or((pool_size.max(1), "pool size"))
+}
+
+/// The planned nodes whose `weight=` is above 1, by node id.
+pub(crate) fn planned_weights(plan: &ExecutionPlan) -> std::collections::BTreeMap<String, u32> {
+    plan.phases
+        .iter()
+        .flat_map(|p| &p.streams)
+        .flat_map(|s| &s.steps)
+        .filter(|st| st.weight > 1)
+        .map(|st| (st.step_id.base_id().to_string(), st.weight))
+        .collect()
+}
+
+/// Warn, once per node, about each weight above the capacity: such a step runs alone, with
+/// nothing beside it, rather than never.
+pub(crate) fn warn_over_capacity(
+    weights: &std::collections::BTreeMap<String, u32>,
+    capacity: usize,
+    source: &str,
+) {
+    for (node, weight) in weights {
+        if *weight as usize > capacity {
+            crate::run_line!(
+                Always,
+                "[barca] warning: '{}' has weight={weight}, more than the capacity {capacity} \
+                 ({source}); it runs alone",
+                short_name(node)
+            );
+        }
+    }
 }
 
 /// What `execute` produced: the run, each target's outcome, and the first step failure.
@@ -737,6 +776,7 @@ async fn start_workers(
             .map(|s| s.prefix.to_string_lossy().into_owned()),
         python: python.to_path_buf(),
         pool_size,
+        capacity: prepared.capacity,
         run_id: run_id.clone(),
         datadog: telemetry
             .iter()
@@ -1849,6 +1889,8 @@ struct Prepared {
     keep_going: bool,
     target_label: Option<String>,
     pool_size: usize,
+    /// The capacity the run's steps share (#436).
+    capacity: usize,
     exec_plan: ExecutionPlan,
     plan_warnings: Vec<crate::warnings::PlanWarning>,
     /// `Manual` nodes read as they are (RFC-0008), by id.
@@ -2070,9 +2112,13 @@ async fn prepare_run(
             planned.as_deref(),
         )?;
     }
+    // A planned step whose file imports a helper that does not parse cannot run (#550).
+    dag.check_imports(exec_plan.step_ids())?;
     // Plan-time warnings for the steps this command planned, before anything runs.
     let plan_warnings = crate::warnings::for_plan(&dag, &exec_plan);
     crate::warnings::print(&plan_warnings);
+    let (capacity, capacity_source) = capacity(request.cfg.capacity, pool_size);
+    warn_over_capacity(&planned_weights(&exec_plan), capacity, capacity_source);
 
     Ok(Prepared {
         dag,
@@ -2081,6 +2127,7 @@ async fn prepare_run(
         keep_going,
         target_label,
         pool_size,
+        capacity,
         exec_plan,
         plan_warnings,
         pinned,
@@ -2292,6 +2339,7 @@ pub(crate) async fn explain_dag_with_membership(
             cone.as_deref(),
         )?;
     }
+    dag.check_imports(exec_plan.step_ids())?;
     let warnings = crate::warnings::for_plan(dag, &exec_plan);
 
     // With a server, the dry run is decided against its ledger: check the server (a dry run
@@ -2386,7 +2434,14 @@ pub(crate) async fn explain_dag_with_membership(
         &mut summary,
     );
 
-    let steps = merge_partition_reports(steps);
+    let mut steps = merge_partition_reports(steps);
+    // The weights a real run would schedule by, and the capacity they share (#436).
+    let weights = planned_weights(&exec_plan);
+    for r in &mut steps {
+        r.weight = weights.get(recover::base_of(&r.id)).copied();
+    }
+    let (capacity, capacity_source) = capacity(cfg.capacity, pool_size);
+    warn_over_capacity(&weights, capacity, capacity_source);
     // Results of an earlier run still waiting for the store: the real run uploads them first.
     let uploads = if cfg.remote_artifacts() {
         crate::pending_uploads::report(&crate::pending_uploads::list(&cfg.db_path).await?, None)
@@ -2422,6 +2477,7 @@ pub(crate) async fn explain_dag_with_membership(
             summary,
             warnings,
             uploads,
+            capacity,
         },
         state.into_membership(),
     ))
@@ -2592,6 +2648,23 @@ async fn predict_steps(
         }
 
         let mut report = report_for(ctx.dag, &step, &decision, true);
+        // What changed since the last success (#558): the step, or its first key that runs.
+        let missed = match &decision {
+            Decision::Run(RunReason::NotMaterialized) if step.partition_keys.is_empty() => {
+                Some(step.step_id.display())
+            }
+            Decision::Partitioned { missing, .. } => {
+                missing.first().map(|k| k.display_id(&step.step_id.base))
+            }
+            _ => None,
+        };
+        if let Some(id) = missed
+            && let Some(changed) =
+                crate::changes::since_last_success(ctx.cache, ctx.dag, ctx.state, &id).await
+        {
+            report.detail = Some(format!("changed: {}", crate::changes::summary(&changed)));
+            report.changed = Some(changed);
+        }
         if !forced && !read_sensors.is_empty() {
             let note = read_sensors
                 .iter()
@@ -2728,7 +2801,24 @@ async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaError> {
         step_reports.push(report_for(dag, &step, &decision, false));
         let display_id = step.step_id.display();
         match decision {
-            Decision::Run(_) => uncached_steps.push(step),
+            Decision::Run(_) => {
+                // What the store already holds for a sensor at this run hash: a poll whose data
+                // did not change produces the same bytes, which are not uploaded again (#554).
+                // Only a sensor: it runs every time and is never served from the store, so a
+                // store object changed behind this machine's back is never read as its result.
+                // An asset is uploaded whenever it runs (a refresh repairs the store).
+                if let Some(s) = store.as_mut()
+                    && step.partition_keys.is_empty()
+                    && dag
+                        .get_node(step.step_id.base_id())
+                        .is_some_and(|n| n.kind() == crate::NodeKind::Sensor)
+                    && let Some(run_hash) = decide_state.run_hashes().get(&display_id)
+                    && let Some(known) = db::confirmed_object(&cache, &display_id, run_hash).await
+                {
+                    s.confirmed.insert(display_id.clone(), known);
+                }
+                uncached_steps.push(step)
+            }
             Decision::Cached {
                 oref,
                 stale_root,
@@ -2885,9 +2975,11 @@ async fn dispatch_phase(
             if store.is_none()
                 && let Some(run_hash) = run_hashes.get(node_id)
             {
-                recorder.record(StepRow::from_artifact(
-                    node_id, run_hash, artifact, attempts,
-                ));
+                recorder.record(
+                    StepRow::from_artifact(node_id, run_hash, artifact, attempts).with_components(
+                        crate::changes::step_components_json(dag, decide_state, node_id),
+                    ),
+                );
             }
             // Sink failures never fail the asset — surface them prominently.
             if let Some(sinks) = artifact.get("sinks").and_then(|v| v.as_array()) {
@@ -2914,7 +3006,9 @@ async fn dispatch_phase(
                 && let Some(at) = s.layout.store_for(path)
             {
                 let record = recorder.after_upload(
-                    StepRow::from_artifact(node_id, run_hash, artifact, attempts),
+                    StepRow::from_artifact(node_id, run_hash, artifact, attempts).with_components(
+                        crate::changes::step_components_json(dag, decide_state, node_id),
+                    ),
                     at.clone(),
                 );
                 let snapshot = artifact
@@ -2923,7 +3017,20 @@ async fn dispatch_phase(
                     .map(str::to_string);
                 let source = snapshot.as_deref().unwrap_or(path);
                 let cleanup = snapshot.clone();
-                if let Some(at) = s.client.upload_confirmed(
+                let digest = artifact.get("content_hash").and_then(|v| v.as_str());
+                if let Some(digest) = digest
+                    && s.holds_already(node_id, &at, digest)
+                {
+                    // A sensor poll that returned what the store already holds at this location,
+                    // as this machine recorded on a confirmed upload: record the step now, upload
+                    // nothing (#554).
+                    record(Some(digest.to_string()));
+                    if let Some(path) = &snapshot {
+                        std::fs::remove_file(path).ok();
+                    }
+                    s.unchanged_sensors += 1;
+                    store_paths.insert(node_id.to_string(), at);
+                } else if let Some(at) = s.client.upload_confirmed(
                     node_id,
                     path,
                     source,
@@ -3217,6 +3324,14 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
         .snapshot()
         .map(|(node_id, est)| (node_id.clone(), *est))
         .collect();
+    // What each executed step's run hash was made of, so a later status can say what changed.
+    let components: HashMap<String, String> = all_outputs
+        .keys()
+        .filter(|id| !cached_node_ids.contains(*id))
+        .filter_map(|id| {
+            crate::changes::step_components_json(dag, decide_state, id).map(|c| (id.clone(), c))
+        })
+        .collect();
     let mut ledger = RunLedger {
         run_id,
         status: if was_cancelled {
@@ -3241,6 +3356,7 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
         all_timings,
         cached_node_ids,
         run_hashes: decide_state.run_hashes(),
+        components: &components,
         output_hashes: &decide_state.sensor_outputs,
         store_paths,
         cost_snapshot: &cost_snapshot,
@@ -3307,7 +3423,25 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
     // copy failing, or Ctrl-C, can change the command's outcome; a failed upload is a warning
     // (#390), and the next backup sends the copy.
     let mut publish_error = None;
-    if cfg.backup_uri.is_some() {
+    // A run that recorded no new result takes no backup (#554): nothing failed, nothing was
+    // uploaded (no new artifact, no repair, no pending retry), every step it ran was a sensor
+    // whose value the store already held, and every earlier run is in a backup the store
+    // confirmed. Its run row reaches the store with the next backup.
+    let nothing_new = cfg.backup_uri.is_some()
+        && !was_cancelled
+        && all_failures.is_empty()
+        && step_failure.is_none()
+        && phase_error.is_none()
+        && transfer_error.is_none()
+        && store.as_ref().is_some_and(|s| {
+            s.client.uploads_queued() == 0 && s.unchanged_sensors == steps_executed
+        })
+        && crate::backup::covered(cfg, run_id).await;
+    if nothing_new {
+        crate::backup::mark_covered(cfg, run_id);
+        trace_point!("backup_skipped (no new result)");
+    }
+    if cfg.backup_uri.is_some() && !nothing_new {
         match final_backup(
             python,
             cfg,
@@ -3559,7 +3693,7 @@ async fn drain_store(ctx: DrainStore<'_>, trace: &impl Fn(&str)) -> bool {
                 "[barca] uploaded {} artifact{} ({}); waited {:.1}s at end of run",
                 report.transferred,
                 if report.transferred == 1 { "" } else { "s" },
-                fmt_bytes(report.bytes),
+                crate::gc::size::human(report.bytes),
                 t_drain.elapsed().as_secs_f64()
             );
         }
@@ -3668,7 +3802,7 @@ async fn final_backup(
             crate::run_line!(
                 Always,
                 "[barca] backed up the metadata DB ({}) to {at} in {:.2}s",
-                fmt_bytes(taken.size_bytes),
+                crate::gc::size::human(taken.size_bytes),
                 started.elapsed().as_secs_f64()
             );
             Ok(None)
@@ -3699,6 +3833,8 @@ async fn repair_targets(
     pending: &std::collections::HashSet<String>,
     repaired: &mut Vec<String>,
 ) {
+    // Every target that can be checked, then one round of questions to the store (#554).
+    let mut checks: Vec<(&String, &OutputRef, String, u64, String)> = Vec::new();
     for (_, id) in targets {
         if !cached.contains(id) {
             continue;
@@ -3716,7 +3852,7 @@ async fn repair_targets(
         let Some(store) = s.layout.store_for(&oref.path) else {
             continue;
         };
-        if pending.contains(&store) {
+        if pending.contains(&store) || checks.iter().any(|c| c.2 == store) {
             continue;
         }
         let Ok(local_sha) = db::file_sha256(local) else {
@@ -3725,10 +3861,18 @@ async fn repair_targets(
         if oref.content_hash.as_deref().is_some_and(|h| h != local_sha) {
             continue;
         }
-        let differs = match s.client.stat(&store).await {
+        checks.push((id, oref, store, meta.len(), local_sha));
+    }
+    if checks.is_empty() {
+        return;
+    }
+    let stores: Vec<String> = checks.iter().map(|c| c.2.clone()).collect();
+    let answers = s.client.stat_all(&stores).await;
+    for ((id, oref, store, len, local_sha), answer) in checks.into_iter().zip(answers) {
+        let differs = match answer {
             Ok(None) => false,
             Ok(Some((size, sha))) => {
-                if size == meta.len() && sha.as_deref().is_none_or(|h| h == local_sha) {
+                if size == len && sha.as_deref().is_none_or(|h| h == local_sha) {
                     continue;
                 }
                 true
@@ -3872,6 +4016,7 @@ mod store_tests {
             all_timings: &HashMap::new(),
             cached_node_ids: &std::collections::HashSet::new(),
             run_hashes: &run_hashes,
+            components: &HashMap::new(),
             output_hashes: &HashMap::new(),
             store_paths: &HashMap::new(),
             cost_snapshot: &[],
@@ -3929,6 +4074,7 @@ mod store_tests {
             all_timings: &HashMap::new(),
             cached_node_ids: &std::collections::HashSet::new(),
             run_hashes: &run_hashes,
+            components: &HashMap::new(),
             output_hashes: &HashMap::new(),
             store_paths: &store_paths,
             cost_snapshot: &[],

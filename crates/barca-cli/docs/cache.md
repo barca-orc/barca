@@ -15,6 +15,11 @@ environment variable and the hash changes, so only the affected subgraph re-runs
 
 - Tasks and sensors are never served from cache. Partitioned assets are cached per key (see
   `barca docs partitions`).
+- Each successful materialization also records a short digest of each part of its hash (the
+  function, each decorator argument that counts, each helper, each input, each declared env
+  var), so `barca status` and `--dry-run` can say which part changed since then
+  (`changed: helper pipelines/common.py:bucket_ltv`; `barca docs status`). The digests explain
+  a miss; they never decide one.
 - Environment variables a function reads **without** declaring them are not part of the hash:
   changing one does not invalidate anything. Declare them with `@asset(env=["NAME"])`
   (`barca docs assets`). Nodes that declare no env hash exactly as if `env=` did not exist.
@@ -67,6 +72,24 @@ Editing `clean` (or anything `clean` calls) changes `rows`' hash and it re-runs;
 does not. `from helpers import clean` + `clean(...)`, `import pkg.mod as m` + `m.f()`,
 `import pkg.mod` + `pkg.mod.f()` and `from pkg import mod` + `mod.f()` hash exactly the same
 way: only the definitions the step uses, never the whole module.
+
+A project module that does not parse stops the steps that cannot run without it, before
+anything runs. If `helpers.py` has a syntax error, every step of a file that imports it
+(directly, through another project module, or inside a function) is refused with exit 2 by the
+command that plans it (`get`, `run`, `--dry-run`, `plan`, `status`), with the module, the line,
+the column and the source line:
+
+```
+Parse error: syntax error in helpers.py: line 4, column 20: Expected `:`, found newline (imported by pipeline.py, so step 'pipeline.py:raw' cannot run)
+helpers.py:4:20:
+    def normalize(rows)
+                       ^
+Fix the syntax error: the worker imports helpers.py when it loads pipeline.py, so no step of pipeline.py can run until it parses.
+```
+
+A command that plans only steps of files that do not import the module is not affected, and
+`barca list` plans nothing. An import barca cannot see (`importlib.import_module("helpers")`)
+still fails in the step; its traceback ends with the file, the line and a caret at the error.
 
 The pipeline file can be named any way on the command line: `barca get rows pipeline.py`,
 `./pipeline.py`, an absolute path, and `barca get rows project/pipeline.py` from the parent
@@ -126,6 +149,7 @@ re-run, never a stale result.
 | `retries=` | no | decides how often a failing step is tried, not what it returns |
 | `retry_backoff=` | no | decides how long to wait between attempts, not what the step returns |
 | `timeout_seconds=` | no | decides how long the step may take, not what it returns |
+| `weight=` | no | decides how many steps run at once, not what the step returns |
 | `description=` | no | documentation |
 | `tags=` | no | labels for people and tools |
 | `@unsafe` | no | a marker barca reads and does not act on |
@@ -347,7 +371,7 @@ file. `barca status` (`barca docs status`) names the state each node is in:
 | State | Meaning | What the next `get` does |
 |---|---|---|
 | `cached` | a result for the current run hash is recorded and its file is usable | serves it |
-| `stale`, reason `changed` / `upstream_stale` / `failed` | the run hash moved (code, an upstream, a sensor's or `Manual` asset's output, a declared env var) or the last attempt failed | runs it |
+| `stale`, reason `changed` / `upstream_stale` / `failed` | the run hash moved (code, an upstream, a sensor's or `Manual` asset's output, a declared env var; `cache.changed` says which) or the last attempt failed | runs it |
 | `stale`, reason `artifact_missing` | the result is recorded but its file is gone, and something needs to read it | computes it again under the same run hash ("A cached result whose artifact is missing") |
 | `stale`, reason `evicted` | the same, because the cache size limit deleted the file | computes it again ("Disk use"); a copy the artifact store holds is downloaded instead, and is not stale |
 | `unsynced` | cached, but not where it should be: with an artifact store, this machine's copy, the store's object and the recorded digest do not all agree; with a configured server, its ledger has not received the result yet | repairs that (an upload, a download) without running a step (`barca docs remote`, `barca docs server-mode`) |
@@ -470,7 +494,10 @@ Each step has an `action`:
 `reason` is one of `task` and `sensor` (always run), `refresh` (named in `--refresh`),
 `refresh_cascade` (downstream of an asset named in `--refresh`), `refresh_all` (`--refresh-all`),
 `not_materialized` (no cached result for this code and these inputs: never run, or the code, an
-upstream or a sensor's output changed), `artifact_missing` (the result is cached, but its
+upstream or a sensor's output changed; when the step succeeded before, `changed` lists what
+differs from that success and `detail` reads `changed: code (+1 more)`, with the entries
+`barca docs status` describes; for a partitioned step, those of its first key that runs),
+`artifact_missing` (the result is cached, but its
 artifact is gone and something needs to read it) or `evicted` (the same, because the cache size
 limit deleted it). Under `--no-cascade`, a cached step downstream of a refreshed asset carries a
 `warning`. A step that reads a sensor is predicted from the sensor's last recorded output, and
@@ -670,7 +697,7 @@ the limit:
 
 | Order | What | Which first | Costs when needed again |
 |---|---|---|---|
-| 1 | Leftovers: `staging/<pid>/` of processes that are not running, `*.moved-aside*` directories, `sql-cache/` copies not used in the last 5 minutes | dead staging, then moved-aside, then the least recently used copies | nothing (nothing reads them) |
+| 1 | Leftovers: `staging/<pid>/` of processes that are not running, `*.moved-aside*` directories, files in an artifact directory that no metadata row of any environment names, `sql-cache/` copies not used in the last 5 minutes | dead staging, then moved-aside, then unnamed files (oldest first), then the least recently used copies | nothing (nothing reads them) |
 | 2 | Superseded results: a node (a partition key, for a partitioned asset) whose newest successful result is another one | oldest first | a recompute, only if the code and inputs return to that exact state |
 | 3 | Local copies the artifact store holds (its upload was confirmed with a digest) | least recently read first | a download |
 | 4 | Current results | least recently read first | a recompute |
@@ -691,9 +718,23 @@ the limit:
   evicted;
 - a result whose upload to the artifact store is still pending (`unsynced`, `local only` in `barca status`):
   its local copy is the only one until the next command uploads it;
-- the metadata DBs, their logs, locks and backups, and any file under `.barca/artifacts/` that no
-  result names (written by hand, or by another tool): counted, never deleted. Nothing outside
-  `.barca/` is ever deleted, and the artifact store is never touched.
+- a file in an artifact directory that no result names, while a run is in progress on this
+  `.barca/` (in any process) or for a minute after it was written (unless it is older than the
+  metadata DB): its row may not be written yet;
+- the metadata DBs, their logs, locks and backups, and the databases `barca state reset` and
+  `barca state restore` moved aside (`metadata.db.reset-<UTC>`, `metadata.db.pre-restore`):
+  counted, never deleted. Nothing outside `.barca/` is ever deleted, and the artifact store is
+  never touched.
+
+**After `barca state reset` or `barca state restore`.** The artifacts the old database named stay
+on disk, and the new one names none of them (after a restore, none the restored copy does not
+name). They are leftovers: the next check past the limit evicts them first, and `barca gc
+--max-size off` deletes them now. Until then, putting the old database back (`barca state restore
+--from <the moved file>`) uses them again; one that was evicted is computed again when it is
+needed. A reset says how much stays:
+`[barca] the 129 KB of artifacts under .barca/artifacts stay on disk, and no record names them now: ...`.
+With a server, a result fetched from the store for a hit in the server's ledger is also a file
+this machine's database does not name; evicting it costs a download.
 
 **What you see.** One line on stderr when something was evicted:
 
@@ -726,14 +767,27 @@ barca gc --dry-run              # what would be evicted, per tier, and what it l
 barca gc                        # evict now, down to 80% of max_size
 barca gc --max-size 5GB         # a one-off tighter budget
 barca gc --max-size off         # no limit: every leftover and superseded result, nothing else
-barca gc --json                 # {size_bytes, limit_bytes, target_bytes, after_bytes, tiers, evicted, failed, ...}
+barca gc --json                 # {size_bytes, limit_bytes, target_bytes, after_bytes, tiers, evicted, failed, held, ...}
 ```
 
 `--dry-run` lists exactly what `barca gc` then deletes (the same order, from the same
 measurement), unless something changes in between. With the limit `off`, `barca gc` evicts every
 leftover and superseded result, which never costs a recompute of anything current. `--env NAME`
-evicts only that environment's results (leftovers are shared). A file that cannot be deleted is
-skipped with one warning; `barca gc` exits 3 only when a metadata DB cannot be read.
+evicts only that environment's results (leftovers are shared; every environment's rows decide
+which files are named). A file that cannot be deleted is skipped with one warning; `barca gc`
+exits 3 only when a metadata DB cannot be read.
+
+When `barca gc` cannot get down to its target, a `held by:` line says what holds the rest, and
+`held` in the JSON lists it, largest first, as `{what, bytes, evictable}`: `results` (files a
+result names), `unreferenced` (files none names, kept for now), `metadata` (the metadata DBs),
+`db_copies` (databases reset and restore moved aside), `backups` and `other`. The DBs, their
+moved-aside copies and the backups are never evicted (`evictable: false`); delete a
+`metadata.db.reset-<UTC>` yourself once you no longer need to undo the reset:
+
+```
+nothing to evict: 355 KB of 1 KB
+held by: 115 KB metadata databases (never evicted), 111 KB databases moved aside by state reset/restore (never evicted; delete them once you no longer need to undo), 2 B other
+```
 
 **How it is measured.** The check after a command adds the recorded sizes of the results the
 metadata DBs hold, walks everything outside the artifact directories, and applies what the last

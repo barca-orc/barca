@@ -57,6 +57,96 @@ pub fn source_dir(file: &std::path::Path) -> PathBuf {
     }
 }
 
+/// The pipeline files that the loaded nodes take inputs from but that were not given: the
+/// files named in `from pipelines.transforms import daily_revenue` (used in `inputs=` or
+/// `partitions_from`) or `asset_ref("pipelines/transforms.py:daily_revenue")`, followed
+/// transitively (#551).
+///
+/// Naming files on the command line selects what is read, but such an input cannot be resolved
+/// without reading the file that defines it. Each candidate is the file the DAG resolver would
+/// look in (`dag::Resolver::module_files`: a packaged file's absolute import from the root;
+/// otherwise its own directory, then the root), kept only when it defines an
+/// `@asset`/`@task`/`@sensor` of that name. With the whole project loaded every candidate is
+/// already in `loaded`, so nothing is read from disk. Paths are root-relative (the working
+/// directory), in the order found.
+fn imported_sources(
+    loaded_nodes: &[(String, Vec<crate::model::ExtractedNode>)],
+    loaded: &std::collections::HashSet<String>,
+) -> Vec<String> {
+    use crate::model::{NodeRef, PartitionSpec};
+    use std::collections::{HashMap, HashSet};
+    let norm = |p: &std::path::Path| {
+        crate::config::normalize_lexically(p)
+            .to_string_lossy()
+            .replace('\\', "/")
+    };
+    let parse = |file: &str| -> Option<Vec<crate::model::ExtractedNode>> {
+        let source = fs::read_to_string(file).ok()?;
+        extract_pipeline(&source, file, |_| None)
+            .ok()
+            .map(|(nodes, _)| nodes)
+    };
+    let mut loaded: HashSet<String> = loaded.clone();
+    // Files probed on disk: their nodes, `None` when missing or unparseable.
+    let mut probed: HashMap<String, Option<Vec<crate::model::ExtractedNode>>> = HashMap::new();
+    let mut queue: Vec<(String, Vec<crate::model::ExtractedNode>)> = loaded_nodes.to_vec();
+    let mut added = Vec::new();
+    while let Some((file, nodes)) = queue.pop() {
+        for node in &nodes {
+            let refs =
+                node.inputs
+                    .iter()
+                    .map(|i| &i.upstream)
+                    .chain(node.partitions.values().filter_map(|p| match p {
+                        PartitionSpec::DerivedFrom { source_ref } => Some(source_ref),
+                        _ => None,
+                    }));
+            for r in refs {
+                let (candidates, name) = match r {
+                    NodeRef::Imported { module, name } => (
+                        crate::dag::Resolver::module_files(&file, module),
+                        name.as_str(),
+                    ),
+                    NodeRef::Canonical(value) => match value.rsplit_once(':') {
+                        Some((path, name)) => (
+                            vec![
+                                PathBuf::from(path),
+                                source_dir(std::path::Path::new(&file)).join(path),
+                            ],
+                            name,
+                        ),
+                        None => continue,
+                    },
+                    NodeRef::FunctionName(_) => continue,
+                };
+                let candidates: Vec<String> = candidates.iter().map(|c| norm(c)).collect();
+                if candidates.iter().any(|c| loaded.contains(c)) {
+                    continue;
+                }
+                let found = candidates.into_iter().find(|c| {
+                    probed
+                        .entry(c.clone())
+                        .or_insert_with(|| {
+                            std::path::Path::new(c)
+                                .is_file()
+                                .then(|| parse(c))
+                                .flatten()
+                        })
+                        .as_ref()
+                        .is_some_and(|nodes| nodes.iter().any(|n| n.function_name == name))
+                });
+                if let Some(found) = found {
+                    loaded.insert(found.clone());
+                    let nodes = probed.get(&found).cloned().flatten().unwrap_or_default();
+                    queue.push((found.clone(), nodes));
+                    added.push(found);
+                }
+            }
+        }
+    }
+    added
+}
+
 pub(crate) fn build_dag_blocking(
     file_args: &[String],
     python: &std::path::Path,
@@ -69,6 +159,20 @@ fn load_blocking(
     python: &std::path::Path,
     partial: bool,
 ) -> Result<(Dag, Vec<LoadError>), BarcaError> {
+    load_files(file_args, &[], python, partial)
+}
+
+/// [`load_blocking`] of `file_args`, after `imported`: pipeline files read only because a
+/// node in `file_args` takes an input from them (#551). Only their nodes upstream of a node in
+/// `file_args` are kept, so naming one file never runs another file's unrelated assets.
+fn load_files(
+    file_args: &[String],
+    imported: &[String],
+    python: &std::path::Path,
+    partial: bool,
+) -> Result<(Dag, Vec<LoadError>), BarcaError> {
+    let file_args: Vec<String> = imported.iter().chain(file_args).cloned().collect();
+    let file_args = file_args.as_slice();
     let mut errors = Vec::new();
     // Read pipeline sources first, so discovery and hashing share the import-path cache.
     let mut sources: Vec<(PathBuf, std::rc::Rc<str>)> = Vec::with_capacity(file_args.len());
@@ -117,6 +221,16 @@ fn load_blocking(
         }
     }
     let import_errors = cones.validate_imports(&nodes_by_file);
+    // Project modules that do not parse, by the pipeline file that imports them (#550). The
+    // file's steps are refused when a command plans one of them (`Dag::check_imports`).
+    let broken_imports: std::collections::HashMap<String, _> = sources
+        .iter()
+        .enumerate()
+        .filter_map(|(index, (path, _))| {
+            let broken = cones.broken_import(index)?.clone();
+            Some((path.to_string_lossy().into_owned(), broken))
+        })
+        .collect();
     if !partial && let Some(error) = import_errors.values().next() {
         return Err(BarcaError::Usage(error.clone()));
     }
@@ -137,9 +251,59 @@ fn load_blocking(
         }
         let pipeline = cones.pipeline(index);
         for mut node in nodes {
-            node.cone_hash = pipeline.hash(&node.function_name);
+            (node.cone_hash, node.cone_parts) = pipeline.hash_and_parts(&node.function_name);
             all_nodes.push(node);
         }
+    }
+
+    if !partial && imported.is_empty() {
+        let loaded_nodes: Vec<(String, Vec<crate::model::ExtractedNode>)> = sources
+            .iter()
+            .map(|(path, _)| {
+                let file = path.to_string_lossy();
+                let nodes = all_nodes
+                    .iter()
+                    .filter(|n| n.source_file == file)
+                    .cloned()
+                    .collect();
+                (file.into_owned(), nodes)
+            })
+            .collect();
+        let loaded = sources
+            .iter()
+            .map(|(path, _)| {
+                crate::config::normalize_lexically(path)
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect();
+        let more = imported_sources(&loaded_nodes, &loaded);
+        if !more.is_empty() {
+            // Dependencies first, so the given files' nodes stay last.
+            let more: Vec<String> = more.into_iter().rev().collect();
+            return load_files(file_args, &more, python, partial);
+        }
+    }
+    if !imported.is_empty() {
+        let given: Vec<String> = all_nodes
+            .iter()
+            .filter(|n| !imported.contains(&n.source_file))
+            .map(|n| n.continuity_key())
+            .collect();
+        let given: Vec<&str> = given.iter().map(String::as_str).collect();
+        // `isolate` rather than `build`: a broken definition elsewhere in an imported file must
+        // not fail a command that does not use it. The given files' nodes are always kept, so
+        // their own errors are reported below.
+        let keep: std::collections::HashSet<String> = Dag::isolate(&all_nodes, &[])
+            .0
+            .subgraph_many(&given)
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        all_nodes
+            .retain(|n| !imported.contains(&n.source_file) || keep.contains(&n.continuity_key()));
+        // Groups are declared for the files named; an imported file's would name pruned nodes.
+        group_declarations.retain(|d| !imported.contains(&d.file));
     }
 
     if !partial {
@@ -148,6 +312,7 @@ fn load_blocking(
         let groups = crate::groups::resolve(group_declarations, &all_nodes)?;
         let mut dag = Dag::build(&all_nodes)?;
         dag.groups = groups;
+        dag.broken_imports = broken_imports;
         return Ok((dag, errors));
     }
     let failed_files = errors.iter().map(|e| e.file.clone()).collect::<Vec<_>>();
@@ -161,6 +326,7 @@ fn load_blocking(
         .collect();
     resolve_dynamic_partitions(&mut healthy, python);
     let (mut dag, additional) = Dag::isolate(&healthy, &failed_files);
+    dag.broken_imports = broken_imports;
     failures.extend(additional);
     for (id, error) in failures {
         let file = all_nodes

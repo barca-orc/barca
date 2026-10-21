@@ -1,4 +1,6 @@
 # barca plan pipeline.py  (stdout, exit 0)
+capacity : integer
+capacity_source : string
 phases : array
 phases[] : object
 phases[].reason : object
@@ -10,6 +12,7 @@ phases[].streams[].steps : array
 phases[].streams[].steps[] : string
 phases[].streams[].stream_id : string
 plan_version : integer
+pool_size : integer
 total_steps : integer
 warnings : array
 warnings[] : object
@@ -17,3 +20,4 @@ warnings[].kind : string
 warnings[].message : string
 warnings[].node : string
 warnings[].param : string
+weights : object

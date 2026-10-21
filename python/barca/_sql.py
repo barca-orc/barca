@@ -34,6 +34,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from barca import _storage
+from barca._duckdb import _quote
 
 _MISSING_TABLE = re.compile(r"Table with name (.+?) does not exist")
 _QUERYABLE = ("parquet", "json", "csv")
@@ -51,10 +52,6 @@ _VERSION_KEYS = (
     "updated",
     "created",
 )
-
-
-def _quote_ident(name: str) -> str:
-    return '"' + name.replace('"', '""') + '"'
 
 
 def _quote_str(s: str) -> str:
@@ -76,7 +73,7 @@ def _register(con, view: dict) -> str | None:
     fmt = view["format"]
     if fmt not in _QUERYABLE:
         return f"a {fmt} artifact cannot be queried; only parquet, json and csv artifacts can"
-    name = _quote_ident(view["name"])
+    name = _quote(view["name"])
     if view.get("placeholder"):
         why = f"barca: the remote artifact of {view['name']} was not fetched for this query"
         con.execute(f"CREATE VIEW {name} AS SELECT error({_quote_str(why)}) AS not_fetched")

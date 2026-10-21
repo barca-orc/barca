@@ -103,6 +103,21 @@ additive optional metadata retains protocol version 3. Timeouts identify the ste
 slow imports, timeout identity and worker disconnects; protocol tests cover optional
 error metadata.
 
+## A worker after a failed step
+
+Error details optionally include `worker_continues: true`: the step raised an exception that
+unwound cleanly, and the worker goes on with the rest of its batch and then takes more work
+(#523). The coordinator closes the failed lease and keeps the worker; a retry may run in the
+same process. Without it (an older worker, or one that may not be sound: an exception
+while its module was imported or its function was looked up, `SystemExit`,
+`KeyboardInterrupt`, `MemoryError`, a step still running past `timeout_seconds`, or an
+unfinished `parallel()` exchange), the worker stops executing its batch, and the coordinator
+stops it, returns its unstarted leases to the queue front and starts a fresh worker when ready
+work needs one. A worker that dies is reported as before, with its exit status. The field is
+additive optional metadata and retains protocol version 3.
+[Conformance](../python/tests/test_worker_survives_exceptions.py) counts worker starts and
+dispatched steps from the coordinator's `BARCA_TRACE_TIMING` summary.
+
 ## Other messages and artifact data
 
 Coordinator → worker: `execute`, `execute_batch`, `parallel_response`, `cancel`, `done`.

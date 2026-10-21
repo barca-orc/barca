@@ -75,9 +75,9 @@ Change `summary` (say, `"total"` becomes `"sum"`) and ask what is stale. `status
 
 ```
 $ barca status
-NAME      KIND   STATE   WHY           LAST RUN                               SHAPE           DEPS
-raw_data  asset  cached  materialized  success 2026-10-21 02:41:21 UTC 0.00s  3 rows x 1 col  -
-summary   asset  stale   changed       success 2026-10-21 02:41:21 UTC 0.00s  dict (2 keys)   raw_data
+NAME      KIND   STATE   WHY            LAST RUN                               SHAPE           DEPS
+raw_data  asset  cached  materialized   success 2026-10-21 02:41:21 UTC 0.00s  3 rows x 1 col  -
+summary   asset  stale   changed: code  success 2026-10-21 02:41:21 UTC 0.00s  dict (2 keys)   raw_data
 
 1 cached, 1 stale, 0 never run, 0 partial, 0 unknown, 0 always run
 
@@ -132,12 +132,12 @@ examples.
 | `barca run <task> [files...]` | Run a task, or several (`a,b`), and what they depend on. |
 | `barca list [files...]` | Every asset, sensor and task, with its kind, freshness and inputs. |
 | `barca status [target] [files...]` | Per node: cached or stale and why, the last run, and the artifact's rows and columns. |
-| `barca logs RUN_ID` | A run's recorded step stdout, without progress messages. |
+| `barca logs [RUN_ID]` | A run's recorded step stdout, without progress messages; the most recent run without an id. |
 | `barca history` | Recent runs. |
 | `barca stats <target> [files...]` | Timing and re-execution statistics for one asset. |
 | `barca sql "<query>" [files...]` | Query cached results with DuckDB; each asset is a view (experimental). |
-| `barca doctor [files...]` | Check the project, Python, cache, metadata and stores without running steps. |
-| `barca plan [files...]` | The execution plan as JSON (experimental). |
+| `barca doctor [files...]` | Check the project, Python, cache, metadata, stores and capacity without running steps. |
+| `barca plan [files...]` | The execution plan as JSON, with the capacity and step weights (experimental). |
 | `barca gc` | Evict cached results to keep `.barca/` under its size limit (barca also does this after every run). |
 | `barca serve [files...]` | Cron scheduler, HTTP API and web UI; `--server` on other commands runs them there. |
 | `barca state backups` / `barca state restore` / `barca state reset` | List the metadata backups, put one back in place of the local database, or start it over (experimental; nothing is deleted). |

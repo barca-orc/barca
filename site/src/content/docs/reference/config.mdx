@@ -95,6 +95,11 @@ max_size = "20GB"
 # Seconds `barca serve` waits for runs in flight on SIGTERM or SIGINT before cancelling them.
 drain_timeout = 30
 
+[execution]
+# The most the weight= of the steps running at once may add up to (experimental).
+# Default: the pool size. See "Heavy steps" on the Decorators page.
+capacity = 4
+
 [remote]
 # Root of the remote store. Setting it turns remote storage on:
 # artifacts at {uri}/{env}/artifacts, backups of the history at {uri}/{env}/state/backups/.
@@ -124,6 +129,7 @@ url = "https://barca.internal.example.com"
 | `[discovery].include` | none | Glob patterns; only matching files are discovered. See [Discovery](/reference/discovery/). |
 | `[discovery].exclude` | none | Glob patterns skipped in addition to the built-in list. |
 | `[cache].max_size` | 10% of the filesystem | Size limit for `.barca/`; past it barca evicts down to 80% of it. `"off"` for no limit. See [Cache size](#cache-size). |
+| `[execution].capacity` | the pool size | Experimental. The most the `weight=` of the steps running at once may add up to; a whole number of at least 1. A step heavier than it runs alone. See [Heavy steps](/reference/api/decorators/#heavy-steps-weight). |
 | `[server].drain_timeout` | 30 | Seconds `barca serve` waits for runs in flight once stopped with SIGTERM or SIGINT, before it cancels them and exits 1. `0` cancels at once. `--drain-timeout` overrides it. |
 | `[remote].uri` | none | Root of the remote store. |
 | `[remote].artifacts_uri` | `{uri}/{env}/artifacts` | Artifact location, used as written. |
@@ -137,7 +143,7 @@ valid ones:
 
 ```
 invalid ./barca.toml: TOML parse error at line 1, column 1
-unknown field `defualt_env`, expected one of `default_env`, `remote`, `discovery`, `cache`, `server`
+unknown field `defualt_env`, expected one of `default_env`, `remote`, `discovery`, `cache`, `server`, `execution`
 ```
 
 Keep credentials out of `barca.toml`; they come from the environment.
@@ -158,7 +164,8 @@ under `barca serve`, barca checks the size. Over the limit, it deletes files in 
 until `.barca/` is at or below 80% of the limit:
 
 1. **Leftovers**: staging directories of processes that are no longer running, `*.moved-aside*`
-   directories, and `sql-cache/` copies (least recently used first).
+   directories, artifact files no metadata row names (what `barca state reset` and
+   `barca state restore` leave behind), and `sql-cache/` copies (least recently used first).
 2. **Superseded results**: a result whose node (or partition key) has a newer successful
    result. Oldest first.
 3. **Local copies the artifact store holds**: downloaded again when needed. Least recently read
@@ -167,15 +174,18 @@ until `.barca/` is at or below 80% of the limit:
 
 It never deletes what the command produced, read or returned; results a run in flight holds;
 anything but leftovers and superseded results while another run is in progress on this
-`.barca/`; the current result of a `freshness=Manual` node the store does not hold; the metadata
-databases; or anything outside `.barca/`. The remote store is never touched: bound it with your
+`.barca/`; the current result of a `freshness=Manual` node the store does not hold; an unnamed
+artifact file while a run is in progress or in the minute after it was written; the metadata
+databases, their backups and the copies reset and restore moved aside; or anything outside
+`.barca/`. The remote store is never touched: bound it with your
 bucket's lifecycle rules.
 
 When something was evicted, stderr says so in one line, and `--json` results gain
 `cache: {size_bytes, limit_bytes, evicted_files, evicted_bytes}`. An evicted result that a
 later run needs is downloaded or computed again under the same run hash, with reason
 `evicted`. `barca status` shows it as `stale` with reason `evicted`. `barca gc` runs the same
-eviction on demand (`--dry-run` to see it first, `--max-size` for a one-off limit), and
+eviction on demand (`--dry-run` to see it first, `--max-size` for a one-off limit; when it
+cannot reach its target, `held` says what holds the rest), and
 `barca doctor` reports the size against the limit and the free space. The full description is
 in `barca docs cache`, "Disk use".
 
@@ -190,6 +200,7 @@ Variables that override `barca.toml`:
 | Variable | Overrides | Notes |
 |---|---|---|
 | `BARCA_ENV` | `default_env` | Overridden by `--env`. |
+| `BARCA_CAPACITY` | `[execution].capacity` | Experimental. A whole number of at least 1; anything else exits 2. |
 | `BARCA_CACHE_MAX_SIZE` | `[cache].max_size` | Same values; an invalid one exits 2. For a container that sets its limit when it is deployed. |
 | `BARCA_REMOTE` | process override | `off` uses local artifacts/history, takes no backups and overrides all remote settings. Unset/empty keeps normal resolution; other values exit 2. |
 | `BARCA_REMOTE_URI` | `[remote].uri` | Enough on its own to turn remote storage and history backups on. |

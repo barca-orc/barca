@@ -19,7 +19,7 @@ the project.
 barca list                       # every node in the project
 barca run validate               # the task `validate`, wherever it is defined
 barca get total pipelines/       # only files under pipelines/
-barca get total pipeline.py      # only this file (the pre-0.13 form, still valid)
+barca get total pipeline.py      # this file, plus the files it imports inputs from
 ```
 
 ## The project root
@@ -61,7 +61,18 @@ static loading does not import modules to prove they execute successfully.
 A walk finding no file importing barca remains an error (exit 2).
 
 Files you name explicitly are always read, whatever their name or location, and need not import
-barca.
+barca. A named file that takes an input from another pipeline file (`from pipelines.transforms
+import daily_revenue` used in `inputs=`, or `asset_ref("pipelines/transforms.py:daily_revenue")`)
+brings that file along, and the files it takes inputs from in turn: `barca run notify
+pipelines/reports.py` works without naming `pipelines/transforms.py`. Only the nodes the named
+files need are taken from such a file, so `barca get pipelines/reports.py` does not run
+`transforms.py`'s other assets. Node ids and cache entries are the same as with the whole project
+read.
+
+An input that only the whole project can resolve stops with exit 2 and says so: a bare name with
+no import (`inputs={"x": daily_revenue}`) or a name re-exported through a package `__init__.py`.
+Name the defining file too, or drop the file arguments. `barca serve <files>` reads only the
+files named.
 
 ## Shaping discovery: `[discovery]` in barca.toml
 
@@ -177,7 +188,9 @@ How a name in `inputs=` is resolved, most specific first:
 
 1. a function defined in the same file;
 2. for an imported name, the function in the file the import points at (a relative import from
-   the file's package; an absolute one from the file's directory, then from the root);
+   the file's package; an absolute one from the root when the file is inside a package, every
+   directory down to it holding an `__init__.py`, otherwise from the file's directory, then from
+   the root);
 3. otherwise the one function with that name in the project (this also covers a name re-exported
    through a package `__init__.py`).
 

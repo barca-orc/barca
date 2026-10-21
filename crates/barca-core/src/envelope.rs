@@ -340,6 +340,27 @@ impl ErrorEnvelope {
             ),
             BarcaError::Dag(d) => match d.remediation() {
                 Some(fix) => fix,
+                // Named files are read with the pipeline files they import inputs from, but a
+                // bare name or a re-export through a package `__init__.py` is found only by
+                // reading the whole project (#551).
+                None if !ctx.files.is_empty()
+                    && matches!(
+                        d,
+                        crate::dag::DagError::UnresolvedInput { .. }
+                            | crate::dag::DagError::UnresolvedImport { .. }
+                    ) =>
+                {
+                    format!(
+                        "Only the named files ({}) and the pipeline files they import inputs \
+                         from were read. Add the file that defines it to the command line, or \
+                         drop the file arguments to read the whole project (`{}`).",
+                        ctx.files.join(", "),
+                        match ctx.command {
+                            "get" | "run" | "status" => format!("barca {} <target>", ctx.command),
+                            command => format!("barca {command}"),
+                        }
+                    )
+                }
                 None => format!(
                     "Fix the inputs between definitions, then run `{}` to check each node's \
                      inputs.",

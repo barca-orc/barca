@@ -176,3 +176,28 @@ def test_logs_does_not_need_the_configured_store(project, monkeypatch):
     monkeypatch.setenv("BARCA_REMOTE_URI", "s3://unreachable-no-driver-is-needed/logs")
     rows = json.loads(cli(project, "logs", doc["run_id"], "--json").stdout)
     assert any(row["line"] == "loading 3 files" for row in rows)
+
+
+def test_logs_without_a_run_id_reads_the_most_recent_run(project):
+    # Nothing recorded yet: a usage error that says what to run first.
+    empty = cli(project, "logs", "--pretty", code=2)
+    assert "no run is recorded" in empty.stderr.lower()
+
+    first = json.loads(cli(project, "run", "report", "pipeline.py", "--json").stdout)
+    second = json.loads(cli(project, "get", "source", "pipeline.py", "--json").stdout)
+    latest = cli(project, "logs", "--pretty")
+    # stdout is only the recorded lines; stderr names the run it read.
+    assert latest.stdout == ""  # `source` was cached: nothing printed
+    note = latest.stderr.strip().splitlines()[-1]
+    assert note.startswith(f"barca: logs of the most recent run: {second['run_id']} (get source,")
+    assert "success" in note
+
+    rerun = json.loads(cli(project, "run", "report", "pipeline.py", "--json").stdout)
+    assert rerun["run_id"] != first["run_id"]
+    lines = json.loads(cli(project, "logs", "--step", "report", "--json").stdout)
+    assert [entry["line"] for entry in lines] == ["loading 3 files", "", "tail"]
+    named = cli(project, "logs", "--json").stderr
+    assert f"most recent run: {rerun['run_id']} (run report," in named
+    # An explicit id is unchanged and prints no note.
+    explicit = cli(project, "logs", first["run_id"], "--json")
+    assert "most recent run" not in explicit.stderr

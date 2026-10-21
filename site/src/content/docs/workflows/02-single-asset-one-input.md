@@ -28,11 +28,14 @@ def b(fruit: str) -> str:
 ```
 
 `inputs={"fruit": a}` says that the parameter `fruit` receives the result of `a`. The key
-must be the name of a parameter of the function. Barca does not check this when it plans; a
-mismatch fails when the step runs:
+must be the name of a parameter of the function. Barca checks this when it reads the file,
+before anything runs: a key that is not a parameter, or a parameter with no input and no
+default, is a usage error (exit 2) on every command, `barca list` included. With the key
+misspelt, `inputs={"fruti": a}`:
 
 ```
-Step 'pipeline.py:b' failed: TypeError: b() got an unexpected keyword argument 'fruit'
+Parse error: pipeline.py:b (line 10): the inputs= key `fruti` is not a parameter: b() takes `fruit`. Did you mean `fruit`?
+Rename the key to `fruit`, or add a parameter `fruti` to b(). Barca passes each inputs= key to the function as a keyword argument. See `barca docs assets`.
 ```
 
 `b` is still an ordinary function. Called from Python, `b("kiwi")` returns `"KIWI"`.
@@ -105,7 +108,7 @@ barca status pipeline.py
 
 ```
 NAME  KIND   STATE  WHY             LAST RUN                           SHAPE  DEPS
-a     asset  stale  changed         success 2026-10-07 18:23:36 0.00s  str    -
+a     asset  stale  changed: code   success 2026-10-07 18:23:36 0.00s  str    -
 b     asset  stale  upstream_stale  success 2026-10-07 18:23:36 0.00s  str    a
 
 0 cached, 2 stale, 0 never run, 0 partial, 0 unknown, 0 always run
@@ -120,9 +123,9 @@ barca get b pipeline.py --dry-run
 ```
 Dry run: barca get b (nothing executed, nothing written)
 
-STATUS    WHY                                              STEP
-cached    -                                                pipeline.py:a
-will run  no cached result for this code and these inputs  pipeline.py:b
+STATUS    WHY            STEP
+cached    -              pipeline.py:a
+will run  changed: code  pipeline.py:b
 
 1 will run, 1 cached, 0 unknown
 ```

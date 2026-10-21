@@ -26,6 +26,47 @@ pub struct BarcaToml {
     pub discovery: Option<DiscoveryToml>,
     pub cache: Option<CacheToml>,
     pub server: Option<ServerToml>,
+    pub execution: Option<ExecutionToml>,
+}
+
+/// `[execution]`: how much runs at once (#436).
+#[derive(Debug, Deserialize, Default, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionToml {
+    /// The most the `weight=` of the steps running at once may add up to. The pool size when
+    /// not set.
+    pub capacity: Option<toml::Value>,
+}
+
+/// A capacity that was set (`BARCA_CAPACITY` > `[execution] capacity`), and where.
+pub type CapacitySetting = Option<(usize, &'static str)>;
+
+/// `BARCA_CAPACITY` > `[execution] capacity` > not set (the pool size applies). Anything but a
+/// whole number of at least 1 is a usage error naming where it came from.
+pub fn capacity_setting(file: Option<&ExecutionToml>) -> Result<CapacitySetting, BarcaError> {
+    let invalid = |source: &str, got: &str| {
+        BarcaError::Usage(format!(
+            "{source}: expected a whole number of at least 1, got {got}"
+        ))
+    };
+    if let Some(raw) = env_var("BARCA_CAPACITY") {
+        return match raw.trim().parse::<usize>() {
+            Ok(n) if n >= 1 => Ok(Some((n, "BARCA_CAPACITY"))),
+            _ => Err(invalid("BARCA_CAPACITY", &format!("'{raw}'"))),
+        };
+    }
+    match file.and_then(|e| e.capacity.as_ref()) {
+        None => Ok(None),
+        Some(toml::Value::Integer(n)) if *n >= 1 => Ok(Some((*n as usize, "[execution] capacity"))),
+        Some(other) => Err(invalid("[execution] capacity", &other.to_string())),
+    }
+}
+
+/// The capacity setting of the project at `cwd` (its barca.toml and the environment), for
+/// commands that resolve nothing else (`barca plan`).
+pub fn capacity_in(cwd: &Path) -> Result<CapacitySetting, BarcaError> {
+    let file = load_toml(cwd)?.unwrap_or_default();
+    capacity_setting(file.execution.as_ref())
 }
 
 /// `[cache]`: how much disk `.barca/` may use (RFC-0012, see `gc`).
@@ -149,6 +190,9 @@ pub struct ResolvedConfig {
     /// The configured server (`BARCA_SERVER`, else `[server] url`): its ledger is what `get` and
     /// `run` use unless `--local` (RFC-0007 section 4.1). `None` when none is configured.
     pub server_url: Option<String>,
+    /// `BARCA_CAPACITY` > `[execution] capacity`, when set: the most the `weight=` of the steps
+    /// running at once may add up to. `None` leaves it at the pool size (#436).
+    pub capacity: CapacitySetting,
     /// The ledger this command runs against: attached by the CLI's `get` and `run` from the
     /// configured server unless `--local`, never by `barca serve`, which is the ledger.
     pub ledger: Option<crate::ledger::Ledger>,
@@ -350,6 +394,7 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
     }
 
     let (cache_max_size, cache_max_size_source) = cache_max_size(file.cache.as_ref())?;
+    let capacity = capacity_setting(file.execution.as_ref())?;
     removed_settings(&remote)?;
 
     match env_var("BARCA_REMOTE").as_deref() {
@@ -375,6 +420,7 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
                         .and_then(|s| s.url.clone())
                         .filter(|u| !u.is_empty())
                 }),
+                capacity,
                 ledger: None,
             });
         }
@@ -473,6 +519,7 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
         cache_max_size_source,
         drain_timeout_secs,
         server_url,
+        capacity,
         ledger: None,
     })
 }
@@ -701,6 +748,7 @@ mod tests {
         "BARCA_TRANSFER_TIMEOUT",
         "BARCA_CACHE_MAX_SIZE",
         "BARCA_SERVER",
+        "BARCA_CAPACITY",
     ];
 
     fn clean_env() -> EnvGuard {
@@ -821,8 +869,6 @@ mod tests {
             std::env::set_var("BARCA_REMOTE", "");
             std::env::set_var("BARCA_REMOTE_URI", "");
             std::env::set_var("BARCA_ARTIFACT_URI", "");
-            std::env::set_var("BARCA_STATE_URI", "");
-            std::env::set_var("BARCA_STATE", "");
         }
         let cfg = resolve_in(None, dir.path()).unwrap();
         assert!(!cfg.remote_off);
@@ -876,6 +922,39 @@ mod tests {
         assert!(cfg.storage_options_json.is_none());
         assert!(cfg.artifact_root.ends_with(".barca/artifacts"));
         assert!(cfg.db_path.ends_with(".barca/metadata.db"));
+    }
+
+    #[test]
+    fn the_capacity_is_unset_by_default_and_the_env_var_wins_over_the_toml() {
+        let _e = clean_env();
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(resolve_in(None, dir.path()).unwrap().capacity, None);
+        write_toml(dir.path(), "[execution]\ncapacity = 3\n");
+        assert_eq!(
+            resolve_in(None, dir.path()).unwrap().capacity,
+            Some((3, "[execution] capacity"))
+        );
+        assert_eq!(
+            capacity_in(dir.path()).unwrap(),
+            Some((3, "[execution] capacity"))
+        );
+        unsafe { std::env::set_var("BARCA_CAPACITY", "5") };
+        assert_eq!(
+            resolve_in(None, dir.path()).unwrap().capacity,
+            Some((5, "BARCA_CAPACITY"))
+        );
+        for bad in ["0", "-1", "two"] {
+            unsafe { std::env::set_var("BARCA_CAPACITY", bad) };
+            let err = resolve_in(None, dir.path()).unwrap_err();
+            assert!(matches!(err, BarcaError::Usage(_)), "{bad}: {err}");
+            assert!(err.to_string().contains("BARCA_CAPACITY"), "{err}");
+        }
+        unsafe { std::env::remove_var("BARCA_CAPACITY") };
+        for bad in ["capacity = 0", "capacity = \"4\"", "capacity = 1.5"] {
+            write_toml(dir.path(), &format!("[execution]\n{bad}\n"));
+            let err = resolve_in(None, dir.path()).unwrap_err().to_string();
+            assert!(err.contains("[execution] capacity"), "{bad}: {err}");
+        }
     }
 
     #[test]

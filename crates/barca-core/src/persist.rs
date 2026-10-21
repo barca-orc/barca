@@ -48,6 +48,8 @@ pub(crate) struct RunLedger<'a> {
     pub(crate) all_timings: &'a HashMap<String, (Option<f64>, Option<u64>)>,
     pub(crate) cached_node_ids: &'a std::collections::HashSet<String>,
     pub(crate) run_hashes: &'a HashMap<String, String>,
+    /// Executed step -> its run hash's components as JSON ([`crate::changes`]).
+    pub(crate) components: &'a HashMap<String, String>,
     /// Sensor step -> content hash of the output it returned in this run. Other steps
     /// record the hash on their `OutputRef`, when the artifact went through a store.
     pub(crate) output_hashes: &'a HashMap<String, String>,
@@ -78,6 +80,8 @@ pub(crate) struct StepRow {
     max_rss_bytes: Option<u64>,
     /// Digest of the producer-owned serialized bytes.
     output_hash: Option<String>,
+    /// The run hash's components ([`crate::changes::step_components_json`]).
+    pub(crate) components: Option<String>,
 }
 
 impl StepRow {
@@ -109,7 +113,14 @@ impl StepRow {
             cpu_seconds: artifact.get("cpu_seconds").and_then(|v| v.as_f64()),
             max_rss_bytes: artifact.get("max_rss_bytes").and_then(|v| v.as_u64()),
             output_hash: str_of("content_hash").map(str::to_string),
+            components: None,
         }
+    }
+
+    /// With the run hash's components recorded ([`crate::changes`]).
+    pub(crate) fn with_components(mut self, components: Option<String>) -> Self {
+        self.components = components;
+        self
     }
 }
 
@@ -120,7 +131,7 @@ struct StepInsert(turso::Statement);
 impl StepInsert {
     // Turso otherwise intersects the node and run indexes, scanning this run
     // for each partition. Bound deduplication to the node's own history.
-    const SQL: &'static str = "INSERT INTO materializations (node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, elapsed_seconds, status, attempts, sinks_json, cpu_seconds, max_rss_bytes, output_hash, bytes_changed, run_id) SELECT ?1, ?2, ?3, ?4, ?5, NULLIF(?6, ''), 'success', ?7, NULLIF(?8, ''), NULLIF(?9, ''), NULLIF(?10, ''), NULLIF(?11, ''), COALESCE((SELECT output_hash FROM materializations INDEXED BY idx_mat_node_run WHERE node_id = ?1 AND run_hash = ?2 AND status = 'success' AND output_hash IS NOT NULL ORDER BY id DESC LIMIT 1) != NULLIF(?11, ''), 0), ?12 WHERE NOT EXISTS (SELECT 1 FROM materializations INDEXED BY idx_mat_node_run WHERE node_id = ?1 AND run_id = ?12)";
+    const SQL: &'static str = "INSERT INTO materializations (node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, elapsed_seconds, status, attempts, sinks_json, cpu_seconds, max_rss_bytes, output_hash, bytes_changed, run_id, components) SELECT ?1, ?2, ?3, ?4, ?5, NULLIF(?6, ''), 'success', ?7, NULLIF(?8, ''), NULLIF(?9, ''), NULLIF(?10, ''), NULLIF(?11, ''), COALESCE((SELECT output_hash FROM materializations INDEXED BY idx_mat_node_run WHERE node_id = ?1 AND run_hash = ?2 AND status = 'success' AND output_hash IS NOT NULL ORDER BY id DESC LIMIT 1) != NULLIF(?11, ''), 0), ?12, NULLIF(?13, '') WHERE NOT EXISTS (SELECT 1 FROM materializations INDEXED BY idx_mat_node_run WHERE node_id = ?1 AND run_id = ?12)";
 
     async fn prepare(conn: &turso::Connection) -> Result<Self, turso::Error> {
         db::prepare(conn, Self::SQL).await.map(Self)
@@ -143,6 +154,7 @@ impl StepInsert {
                 opt(row.max_rss_bytes.map(|r| r.to_string())),
                 opt(row.output_hash.clone()),
                 run_id.to_string(),
+                opt(row.components.clone()),
             ])
             .await
     }
@@ -358,10 +370,7 @@ async fn record_steps_with_until(
     let (_db, conn) = db::open_conn_with_until(db_path, until).await?;
     until.check()?;
     // Once admitted, finish the transaction even if cancellation arrives during it.
-    conn.execute("BEGIN", ())
-        .await
-        .map_err(|e| BarcaError::Db(format!("failed to begin progress batch: {e}")))?;
-    let result = async {
+    db::with_tx(&conn, "BEGIN", "progress batch", async {
         let failed = |e| BarcaError::Db(format!("failed to record progress step: {e}"));
         let mut written = 0u64;
         let mut insert = StepInsert::prepare(&conn).await.map_err(failed)?;
@@ -378,17 +387,9 @@ async fn record_steps_with_until(
         if written > 0 && updated != 1 {
             return Err(BarcaError::Db("cannot record new progress for a missing or finished run".to_string()));
         }
-        conn.execute("COMMIT", ())
-            .await
-            .map_err(|e| BarcaError::Db(format!("failed to commit progress batch: {e}")))?;
         Ok(written)
-    }.await;
-    if result.is_err() {
-        // Rollback cannot conceal the original failure. Dropping this short-lived
-        // connection also closes any transaction if rollback itself fails.
-        conn.execute("ROLLBACK", ()).await.ok();
-    }
-    result
+    })
+    .await
 }
 
 /// The exception a step failure carries, as (type, message, traceback). A worker reports a
@@ -642,21 +643,13 @@ pub(crate) async fn persist_run(db_path: &str, l: &RunLedger<'_>) -> Result<(), 
     let _g = db::db_guard().await;
     let (_db, conn) = db::open_conn(db_path).await?;
 
-    conn.execute("BEGIN", ())
-        .await
-        .map_err(|e| BarcaError::Db(format!("failed to begin terminal ledger: {e}")))?;
-    let result = async {
+    let result = db::with_tx(&conn, "BEGIN", "terminal ledger", async {
         // In the ledger's transaction: one commit for both. Best effort, as on its own.
         db::touch_read_in(&conn, l.touched).await;
-        write_terminal_ledger(&conn, l).await?;
-        conn.execute("COMMIT", ())
-            .await
-            .map_err(|e| BarcaError::Db(format!("failed to commit terminal ledger: {e}")))?;
-        Ok::<(), BarcaError>(())
-    }
+        write_terminal_ledger(&conn, l).await
+    })
     .await;
     if let Err(error) = result {
-        conn.execute("ROLLBACK", ()).await.ok();
         // The reads happened, whatever became of the ledger.
         db::touch_read_on(&conn, l.touched).await;
         return Err(error);
@@ -668,7 +661,8 @@ pub(crate) async fn persist_run(db_path: &str, l: &RunLedger<'_>) -> Result<(), 
     // skips the cold-start probe entirely. (Inline — this fn already holds
     // the process-wide DB guard.) Best effort, in one transaction of its own after the
     // ledger's: one commit instead of one per partition key (#460).
-    if !l.cost_snapshot.is_empty() && conn.execute("BEGIN", ()).await.is_ok() {
+    if !l.cost_snapshot.is_empty() {
+        let _ = db::with_tx(&conn, "BEGIN", "cost estimates", async {
         if let Ok(mut upsert) = db::prepare(
             &conn,
             "INSERT INTO cost_estimates (node_id, base_id, estimate_seconds, cpu_seconds, max_rss_bytes, samples, updated_at)
@@ -694,9 +688,9 @@ pub(crate) async fn persist_run(db_path: &str, l: &RunLedger<'_>) -> Result<(), 
                     .ok();
             }
         }
-        if conn.execute("COMMIT", ()).await.is_err() {
-            conn.execute("ROLLBACK", ()).await.ok();
-        }
+        Ok(())
+        })
+        .await;
     }
 
     Ok(())
@@ -773,6 +767,7 @@ async fn write_terminal_ledger(
             .get(node_id)
             .or(oref.content_hash.as_ref())
             .cloned();
+        row.components = l.components.get(node_id).cloned();
         let failed = |e| BarcaError::Db(format!("failed to record terminal step: {e}"));
         let insert = match &mut insert {
             Some(insert) => insert,
@@ -943,6 +938,7 @@ mod persist_tests {
                 cached_node_ids: &self.cached,
                 touched: &[],
                 run_hashes: &self.run_hashes,
+                components: &self.empty,
                 output_hashes: &self.empty,
                 store_paths: &self.empty,
                 cost_snapshot: &[],

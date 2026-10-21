@@ -59,11 +59,62 @@ pub enum ParseError {
 /// A syntax error as a person reads it: `line 12, column 18: Expected ':', found newline`.
 /// The parser reports a byte range, which says nothing to someone looking at an editor.
 fn syntax_message(source: &str, error: &ruff_python_parser::ParseError) -> String {
-    let offset = usize::from(error.location.start()).min(source.len());
-    let before = source.get(..offset).unwrap_or(source);
-    let line = before.matches('\n').count() + 1;
-    let column = before.rsplit('\n').next().unwrap_or("").chars().count() + 1;
-    format!("line {line}, column {column}: {}", error.error)
+    SyntaxProblem::of(source, error).to_string()
+}
+
+/// Where a file stops parsing, and why: `line 12, column 18: Expected ':', found newline`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyntaxProblem {
+    /// 1-based.
+    pub line: usize,
+    /// 1-based, in characters.
+    pub column: usize,
+    /// The parser's message.
+    pub message: String,
+    /// The text of that line, without its newline.
+    pub text: String,
+}
+
+impl SyntaxProblem {
+    pub(crate) fn of(source: &str, error: &ruff_python_parser::ParseError) -> Self {
+        let offset = usize::from(error.location.start()).min(source.len());
+        let before = source.get(..offset).unwrap_or(source);
+        let line = before.matches('\n').count() + 1;
+        let column = before.rsplit('\n').next().unwrap_or("").chars().count() + 1;
+        let text = source
+            .lines()
+            .nth(line - 1)
+            .unwrap_or("")
+            .trim_end()
+            .to_string();
+        SyntaxProblem {
+            line,
+            column,
+            message: error.error.to_string(),
+            text,
+        }
+    }
+
+    /// The line, and a caret under the column: what an editor would point at.
+    pub fn excerpt(&self) -> String {
+        let pad: String = self
+            .text
+            .chars()
+            .take(self.column.saturating_sub(1))
+            .map(|c| if c == '\t' { '\t' } else { ' ' })
+            .collect();
+        format!("    {}\n    {pad}^", self.text)
+    }
+}
+
+impl std::fmt::Display for SyntaxProblem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "line {}, column {}: {}",
+            self.line, self.column, self.message
+        )
+    }
 }
 
 /// Parse a Python source file and extract all barca-decorated nodes.
@@ -276,6 +327,16 @@ fn try_extract_function(
             fix: problem.fix,
         });
     }
+    // What the worker passes the function must be what it takes (#549).
+    if let Some(problem) = crate::input_params::check(func, kind, &keywords, &names.barca) {
+        return Err(ParseError::InvalidArguments {
+            file: file_path.to_string(),
+            function: func.name.to_string(),
+            line: source[..problem.offset].matches('\n').count() + 1,
+            message: problem.message,
+            fix: problem.fix,
+        });
+    }
 
     let (freshness, max_failures) =
         extract_freshness(&keywords, file_path, func.name.as_str(), &names.barca)?
@@ -289,6 +350,17 @@ fn try_extract_function(
     let retries = extract_int_kwarg(&keywords, "retries").unwrap_or(1).max(1);
     let retry_backoff_seconds = extract_float_kwarg(&keywords, "retry_backoff").unwrap_or(0.0);
     let tags = extract_tags(&keywords);
+    let weight = extract_weight(&keywords, source).map_err(|(offset, message)| {
+        ParseError::InvalidArguments {
+            file: file_path.to_string(),
+            function: func.name.to_string(),
+            line: source[..offset].matches('\n').count() + 1,
+            message,
+            fix: "write weight= as a whole number of at least 1, e.g. @asset(weight=2) \
+                  (see `barca docs assets`)"
+                .to_string(),
+        }
+    })?;
     let env = extract_env(&keywords, file_path, func.name.as_str())?;
     let artifact_serializer = keywords
         .iter()
@@ -328,6 +400,7 @@ fn try_extract_function(
         sinks,
         timeout_seconds,
         retries,
+        weight,
         retry_backoff_seconds,
         description,
         tags,
@@ -336,6 +409,7 @@ fn try_extract_function(
         byte_offset: start,
         source_text,
         cone_hash: String::new(), // computed after extraction in extract_nodes()
+        cone_parts: Vec::new(),
         artifact_serializer,
         param_types,
         return_type,
@@ -767,6 +841,35 @@ fn extract_env(
         }
     }
     Ok(names)
+}
+
+/// `weight=N`: a whole-number literal of at least 1, 1 when not written (#436). Anything else
+/// is refused with the byte offset of the value, rather than read as 1: a weight that silently
+/// did nothing would let heavy steps run together again.
+fn extract_weight(keywords: &[&Keyword], source: &str) -> Result<u32, (usize, String)> {
+    let Some(kw) = keywords
+        .iter()
+        .find(|kw| kw.arg.as_ref().map(|a| a.as_str()) == Some("weight"))
+    else {
+        return Ok(1);
+    };
+    let offset = kw.value.range().start().to_usize();
+    if let Expr::NumberLiteral(n) = &kw.value
+        && let ast::Number::Int(i) = &n.value
+        && let Some(w) = i.as_u32()
+        && w >= 1
+    {
+        return Ok(w);
+    }
+    Err((
+        offset,
+        format!(
+            "weight= must be a whole number of at least 1, got `{}`",
+            source
+                .get(kw.value.range().start().to_usize()..kw.value.range().end().to_usize())
+                .unwrap_or("?")
+        ),
+    ))
 }
 
 fn extract_string_kwarg(keywords: &[&Keyword], name: &str) -> Option<String> {

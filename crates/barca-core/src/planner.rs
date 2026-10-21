@@ -32,6 +32,17 @@ pub struct ExecutionPlan {
     pub total_steps: usize,
 }
 
+impl ExecutionPlan {
+    /// The node id of every planned step, in plan order (a partitioned step once per stream).
+    pub fn step_ids(&self) -> impl Iterator<Item = &str> {
+        self.phases
+            .iter()
+            .flat_map(|p| &p.streams)
+            .flat_map(|s| &s.steps)
+            .map(|step| step.step_id.base_id())
+    }
+}
+
 /// A phase — all streams execute concurrently; all must complete before next phase.
 #[derive(Debug, Clone)]
 pub struct Phase {
@@ -77,6 +88,8 @@ pub struct StreamStep {
     pub timeout_seconds: u32,
     /// Total number of attempts on failure (1 = no retry). Rust-side only.
     pub retries: u32,
+    /// `weight=`: how much of the pool's capacity the step takes while it runs (#436).
+    pub weight: u32,
     /// Base backoff in seconds between attempts; delay = `retry_backoff_seconds * attempt`.
     pub retry_backoff_seconds: f64,
     /// Late-expanded partition keys: workers loop over these internally.
@@ -416,6 +429,7 @@ fn build_phases(
                                     run_hashes: step.run_hashes.clone(),
                                     timeout_seconds: step.timeout_seconds,
                                     retries: step.retries,
+                                    weight: step.weight,
                                     retry_backoff_seconds: step.retry_backoff_seconds,
                                     partition_keys: chunk.to_vec(),
                                     param_types: step.param_types.clone(),
@@ -457,6 +471,7 @@ fn build_phases(
                                     run_hashes: step.run_hashes.clone(),
                                     timeout_seconds: step.timeout_seconds,
                                     retries: step.retries,
+                                    weight: step.weight,
                                     retry_backoff_seconds: step.retry_backoff_seconds,
                                     partition_keys: pks,
                                     param_types: step.param_types.clone(),
@@ -506,6 +521,7 @@ fn chain_to_steps(dag: &Dag, chain: &Chain) -> Vec<StreamStep> {
         let sinks: Vec<crate::model::SinkDecl> = node.extracted.sinks.to_vec();
         let timeout_seconds = node.extracted.timeout_seconds;
         let retries = node.extracted.retries;
+        let weight = node.extracted.weight;
         let retry_backoff_seconds = node.extracted.retry_backoff_seconds;
         let function_name: Arc<str> = Arc::from(node.function_name());
         let source_file: Arc<str> = Arc::from(node.source_file());
@@ -527,6 +543,7 @@ fn chain_to_steps(dag: &Dag, chain: &Chain) -> Vec<StreamStep> {
                 run_hashes: HashMap::new(),
                 timeout_seconds,
                 retries,
+                weight,
                 retry_backoff_seconds,
                 partition_keys: pks,
                 param_types: param_types.clone(),
@@ -545,6 +562,7 @@ fn chain_to_steps(dag: &Dag, chain: &Chain) -> Vec<StreamStep> {
                 run_hashes: HashMap::new(),
                 timeout_seconds,
                 retries,
+                weight,
                 retry_backoff_seconds,
                 partition_keys: Vec::new(),
                 param_types: param_types.clone(),
@@ -563,6 +581,7 @@ fn chain_to_steps(dag: &Dag, chain: &Chain) -> Vec<StreamStep> {
                 run_hashes: HashMap::new(),
                 timeout_seconds,
                 retries,
+                weight,
                 retry_backoff_seconds,
                 partition_keys: Vec::new(),
                 param_types,
@@ -772,6 +791,7 @@ mod tests {
                     sinks: SmallVec::new(),
                     timeout_seconds: 300,
                     retries: 1,
+                    weight: 1,
                     retry_backoff_seconds: 0.0,
                     description: None,
                     tags: HashMap::new(),
@@ -780,6 +800,7 @@ mod tests {
                     byte_offset: 0,
                     source_text: String::new(),
                     cone_hash: String::new(),
+                    cone_parts: Vec::new(),
                     artifact_serializer: None,
                     param_types: HashMap::new(),
                     return_type: None,
@@ -829,6 +850,7 @@ mod tests {
             sinks: SmallVec::new(),
             timeout_seconds: 300,
             retries: 1,
+            weight: 1,
             retry_backoff_seconds: 0.0,
             description: None,
             tags: HashMap::new(),
@@ -837,6 +859,7 @@ mod tests {
             byte_offset: 0,
             source_text: String::new(),
             cone_hash: String::new(),
+            cone_parts: Vec::new(),
             artifact_serializer: None,
             param_types: HashMap::new(),
             return_type: None,
@@ -1258,6 +1281,7 @@ mod tests {
                 sinks: SmallVec::new(),
                 timeout_seconds: 300,
                 retries: 1,
+                weight: 1,
                 retry_backoff_seconds: 0.0,
                 description: None,
                 tags: HashMap::new(),
@@ -1266,6 +1290,7 @@ mod tests {
                 byte_offset: 0,
                 source_text: String::new(),
                 cone_hash: String::new(),
+                cone_parts: Vec::new(),
                 artifact_serializer: None,
                 param_types: HashMap::new(),
                 return_type: None,
@@ -1402,6 +1427,7 @@ mod tests {
                     sinks: SmallVec::new(),
                     timeout_seconds: 300,
                     retries: 1,
+                    weight: 1,
                     retry_backoff_seconds: 0.0,
                     description: None,
                     tags: HashMap::new(),
@@ -1410,6 +1436,7 @@ mod tests {
                     byte_offset: 0,
                     source_text: String::new(),
                     cone_hash: String::new(),
+                    cone_parts: Vec::new(),
                     artifact_serializer: None,
                     param_types: HashMap::new(),
                     return_type: None,
@@ -1687,6 +1714,7 @@ mod tests {
             sinks: SmallVec::new(),
             timeout_seconds: 300,
             retries: 1,
+            weight: 1,
             retry_backoff_seconds: 0.0,
             description: None,
             tags: HashMap::new(),
@@ -1695,6 +1723,7 @@ mod tests {
             byte_offset: 0,
             source_text: String::new(),
             cone_hash: String::new(),
+            cone_parts: Vec::new(),
             artifact_serializer: None,
             param_types: HashMap::new(),
             return_type: None,
@@ -1717,6 +1746,7 @@ mod tests {
             sinks: SmallVec::new(),
             timeout_seconds: 300,
             retries: 1,
+            weight: 1,
             retry_backoff_seconds: 0.0,
             description: None,
             tags: HashMap::new(),
@@ -1725,6 +1755,7 @@ mod tests {
             byte_offset: 0,
             source_text: String::new(),
             cone_hash: String::new(),
+            cone_parts: Vec::new(),
             artifact_serializer: None,
             param_types: HashMap::new(),
             return_type: None,
@@ -1798,6 +1829,7 @@ mod tests {
             sinks: SmallVec::new(),
             timeout_seconds: 300,
             retries: 1,
+            weight: 1,
             retry_backoff_seconds: 0.0,
             description: None,
             tags: HashMap::new(),
@@ -1806,6 +1838,7 @@ mod tests {
             byte_offset: 0,
             source_text: String::new(),
             cone_hash: String::new(),
+            cone_parts: Vec::new(),
             artifact_serializer: None,
             param_types: HashMap::new(),
             return_type: None,
@@ -1829,6 +1862,7 @@ mod tests {
             sinks: SmallVec::new(),
             timeout_seconds: 300,
             retries: 1,
+            weight: 1,
             retry_backoff_seconds: 0.0,
             description: None,
             tags: HashMap::new(),
@@ -1837,6 +1871,7 @@ mod tests {
             byte_offset: 0,
             source_text: String::new(),
             cone_hash: String::new(),
+            cone_parts: Vec::new(),
             artifact_serializer: None,
             param_types: HashMap::new(),
             return_type: None,
@@ -1859,6 +1894,7 @@ mod tests {
             sinks: SmallVec::new(),
             timeout_seconds: 300,
             retries: 1,
+            weight: 1,
             retry_backoff_seconds: 0.0,
             description: None,
             tags: HashMap::new(),
@@ -1867,6 +1903,7 @@ mod tests {
             byte_offset: 0,
             source_text: String::new(),
             cone_hash: String::new(),
+            cone_parts: Vec::new(),
             artifact_serializer: None,
             param_types: HashMap::new(),
             return_type: None,

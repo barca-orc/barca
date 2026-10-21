@@ -116,12 +116,21 @@ additive migration (`additions_missing` / `add_to_current_schema`) read:
 - `ledger_posts` (0.27.0, RFC-0007): on a machine that runs against a server's ledger, one row per
   run it posted or has yet to post (`client_run_id` primary key, `server`, the post `body` as
   JSON, `state` `unsynced` or `shared`, `server_run_id`, the last `error`, `attempts`,
-  `created_at`, `updated_at`). Unlike the tables above it is created the first time a run is
+  `created_at`, `updated_at`). Since 0.29.0 (#570) the body also carries `bytes_unchecked`, the
+  post's base node ids whose changed bytes are not a warning (a `Manual` asset), so a post sent
+  later warns as one sent at the end of its run; it is absent when empty and in older rows, and
+  never sent to the server. Unlike the tables above it is created the first time a run is
   posted, never by a reader or by `init_db`; a database without it has posted nothing, and
   readers treat that as empty.
 - `schedule_state.paused_at` and `schedule_state.paused_until` (INTEGER unix seconds, nullable,
   0.27.0, #435): a schedule paused with `POST /schedule/{id}/pause`; `paused_until` NULL means
   until it is resumed.
+- `materializations.components` (TEXT, nullable, 0.29.0, #558): a JSON object with a short digest
+  (16 hex digits of SHA-256) of each component of a successful row's run hash (`code`,
+  `decorator argument NAME`, `decorator NAME`, `helper FILE:NAME`, `input ID`, `sensor ID`,
+  `env NAME`, `kind`), which `barca status` and `--dry-run` compare to say what changed. Never
+  part of a cache key. Older rows, failed rows and rows a server's ledger receives from a client
+  keep `NULL`, and their nodes report a plain `changed`.
 - `schedule_failures (node_id, failures, failed_nodes, mark)` (0.28.0, RFC-0008 rule 9), primary
   key `node_id`: the consecutive failed ticks of one scheduled node, the nodes that failed in the
   last counted tick (a JSON array), and the highest `materializations.id` when it was counted. A

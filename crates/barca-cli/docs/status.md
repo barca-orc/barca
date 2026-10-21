@@ -84,9 +84,25 @@ two cannot disagree. In JSON the states are snake_case, spelled exactly like the
 | `unknown` | dynamic partitions (`partitions_from`) whose source has not run yet, or an asset reading a sensor with no recorded output (and what depends on either) | `partitions_unknown`, `sensor_output_unknown` |
 | `always_runs` | tasks and sensors are never cached | `task`, `sensor` |
 
-- `changed`: the run hash differs from the last materialization, because this function's code or
-  its upstream outputs changed. barca records the combined run hash, not the two parts, so it
-  cannot say which.
+- `changed`: the run hash differs from the last successful materialization. `cache.changed` lists
+  what differs, and `detail` and the table's WHY column name the first and count the rest
+  (`changed: helper pipelines/common.py:bucket_ltv (+1 more)`):
+
+  | entry | what changed |
+  |---|---|
+  | `code` | the function, from `def` on |
+  | `decorator argument NAME` | an argument of `@asset` / `@sensor` / `@task` that counts (`serializer`, `inputs`, ...; `barca docs cache`) |
+  | `decorator NAME` | another decorator that counts (`@sink`, `@functools.lru_cache`, ...) |
+  | `helper FILE:NAME` | a definition the function uses, in its own file or a project module (`pipelines/common.py:bucket_ltv`); `helper FILE` for a module it uses whole |
+  | `input ID` | an upstream's run hash: its code or its own inputs changed |
+  | `sensor ID` | a sensor it reads returned a new value (or its code changed) |
+  | `env NAME` | a declared environment variable's value |
+  | `kind` | the node became an asset, task or sensor |
+
+  An entry appears when it was added or removed too (a helper the function now uses). Each
+  materialization records a short digest of each of these; a result recorded by barca before
+  0.29.0 has none, and the node is then a plain `changed` with no `cache.changed`. A `stale`
+  node with reason `upstream_stale` carries `cache.changed` as well when it can be told.
 - A node that reads a `@sensor` is judged by the sensor's last recorded output: status runs
   nothing, so it assumes the sensor returns the same value next time, and `detail` says so. If
   the sensor recorded a new value since the node last ran (for example a scheduled sensor), the

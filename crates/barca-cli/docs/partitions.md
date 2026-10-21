@@ -26,7 +26,9 @@ def summary(all_sales: list[dict]) -> dict:
 
 - `partitions([...])` declares keys. A literal list is read statically; any other expression
   (a list comprehension, a function call) is evaluated by the Python runtime at plan time.
-- The partition key is passed to the function as the parameter named in `partitions={...}`.
+- The partition key is passed to the function as the parameter named in `partitions={...}`. A
+  dimension that is not a parameter of the function is an error when the file is read, exit 2
+  (`barca docs assets`, "Inputs and parameters").
 - Changing the keys: adding a key runs that key and no other; removing a key or reordering the
   list runs no key. Downstream, a `partitions_from` consumer runs for the new key only, and a
   `collect` fan-in runs again whenever a key is added or removed. This is the same however the

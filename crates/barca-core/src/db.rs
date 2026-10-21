@@ -48,6 +48,37 @@ pub(crate) async fn prepare(
     conn.prepare(sql).await
 }
 
+/// Run `body` in a transaction on `conn`: `begin` (`BEGIN` or `BEGIN IMMEDIATE`), then `COMMIT`
+/// when `body` succeeds, `ROLLBACK` when it or the commit fails. `body` is not polled before the
+/// transaction has begun. Errors name `what`: `failed to begin {what}`, `failed to commit {what}`,
+/// and a failed rollback is added to the error that caused it (`{error}; {what} rollback
+/// failed`). A best-effort caller ignores the result.
+pub(crate) async fn with_tx<T>(
+    conn: &turso::Connection,
+    begin: &str,
+    what: &str,
+    body: impl std::future::Future<Output = Result<T, BarcaError>>,
+) -> Result<T, BarcaError> {
+    conn.execute(begin, ())
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to begin {what}: {e}")))?;
+    let result = match body.await {
+        Ok(value) => conn
+            .execute("COMMIT", ())
+            .await
+            .map(|_| value)
+            .map_err(|e| BarcaError::Db(format!("failed to commit {what}: {e}"))),
+        Err(error) => Err(error),
+    };
+    if let Err(error) = result {
+        conn.execute("ROLLBACK", ())
+            .await
+            .map_err(|e| BarcaError::Db(format!("{error}; {what} rollback failed: {e}")))?;
+        return Err(error);
+    }
+    result
+}
+
 #[cfg(test)]
 thread_local! {
     static PREPARES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -90,6 +121,10 @@ pub struct RunRecord {
     /// The `.py` files the run was given.
     pub files: Vec<String>,
     pub target: Option<String>,
+    /// The run's job: `all` for a run without targets, otherwise its resolved node ids, sorted
+    /// and comma-separated (`barca.job` in telemetry). `null` for runs recorded before 0.29.0.
+    #[serde(default)]
+    pub job: Option<String>,
     pub status: String,
     pub steps_total: Option<i64>,
     pub steps_executed: i64,
@@ -185,10 +220,6 @@ pub fn ensure_env_dirs(env: &str) -> Result<LocalPaths, BarcaError> {
         let _ = fs::write(&gitignore, "*\n");
     }
     Ok(paths)
-}
-
-pub fn ensure_db_dir() -> Result<String, BarcaError> {
-    Ok(ensure_env_dirs(crate::config::DEFAULT_ENV)?.db_path)
 }
 
 /// How long one barca process waits for another's DB operation before giving up.
@@ -808,10 +839,7 @@ pub(crate) async fn init_schema(conn: &turso::Connection) -> Result<(), BarcaErr
     crate::state_validate::legacy_schema(conn)
         .await?
         .map_err(unusable)?;
-    conn.execute("BEGIN IMMEDIATE", ())
-        .await
-        .map_err(|e| BarcaError::Db(format!("failed to begin schema migration: {e}")))?;
-    let migrated = async {
+    with_tx(conn, "BEGIN IMMEDIATE", "schema migration", async {
         migrate_legacy_schema(conn).await?;
         crate::state_validate::usable_schema(conn)
             .await?
@@ -822,29 +850,16 @@ pub(crate) async fn init_schema(conn: &turso::Connection) -> Result<(), BarcaErr
         )
         .await
         .map_err(|e| BarcaError::Db(format!("failed to record schema version: {e}")))?;
-        conn.execute("COMMIT", ())
-            .await
-            .map_err(|e| BarcaError::Db(format!("failed to commit schema migration: {e}")))?;
         Ok(())
-    }
-    .await;
-    if let Err(error) = migrated {
-        conn.execute("ROLLBACK", ()).await.map_err(|e| {
-            BarcaError::Db(format!("{error}; schema migration rollback failed: {e}"))
-        })?;
-        return Err(error);
-    }
-    Ok(())
+    })
+    .await
 }
 
 /// Add this release's additive columns and indexes to a version-1 database written by an
 /// earlier release, in one transaction: rows are untouched, and an error leaves the schema as it
 /// was. The format stays version 1 (see `specs/metadata-schema.md`).
 async fn add_to_current_schema(conn: &turso::Connection) -> Result<(), BarcaError> {
-    conn.execute("BEGIN IMMEDIATE", ())
-        .await
-        .map_err(|e| BarcaError::Db(format!("failed to begin schema migration: {e}")))?;
-    let added = async {
+    with_tx(conn, "BEGIN IMMEDIATE", "schema migration", async {
         crate::db_schema::add_columns(
             conn,
             "materializations",
@@ -867,19 +882,9 @@ async fn add_to_current_schema(conn: &turso::Connection) -> Result<(), BarcaErro
         crate::state_validate::usable_schema(conn)
             .await?
             .map_err(unusable)?;
-        conn.execute("COMMIT", ())
-            .await
-            .map_err(|e| BarcaError::Db(format!("failed to commit schema migration: {e}")))?;
         Ok(())
-    }
-    .await;
-    if let Err(error) = added {
-        conn.execute("ROLLBACK", ()).await.map_err(|e| {
-            BarcaError::Db(format!("{error}; schema migration rollback failed: {e}"))
-        })?;
-        return Err(error);
-    }
-    Ok(())
+    })
+    .await
 }
 
 async fn migrate_legacy_schema(conn: &turso::Connection) -> Result<(), BarcaError> {
@@ -1156,10 +1161,7 @@ pub async fn insert_logs(
         return Ok(());
     }
     drop(rows);
-    conn.execute("BEGIN", ())
-        .await
-        .map_err(|e| BarcaError::Db(format!("failed to begin log write: {e}")))?;
-    let result = async {
+    with_tx(&conn, "BEGIN", "log write", async {
         let mut insert = prepare(
             &conn,
             "INSERT INTO logs (run_id, node_id, seq, line) VALUES (?1, ?2, ?3, ?4)",
@@ -1178,19 +1180,9 @@ pub async fn insert_logs(
                 .map_err(|e| BarcaError::Db(format!("failed to record stdout: {e}")))?;
         }
         drop(insert);
-        conn.execute("COMMIT", ())
-            .await
-            .map_err(|e| BarcaError::Db(format!("failed to commit recorded stdout: {e}")))?;
         Ok(())
-    }
-    .await;
-    if let Err(error) = result {
-        conn.execute("ROLLBACK", ())
-            .await
-            .map_err(|e| BarcaError::Db(format!("{error}; log rollback failed: {e}")))?;
-        return Err(error);
-    }
-    Ok(())
+    })
+    .await
 }
 
 /// Fetch all persisted log lines for a run, in order.
@@ -1502,6 +1494,62 @@ pub(crate) async fn latest_success(cache: &CacheReader, node_id: &str) -> Option
         });
     }
     None
+}
+
+/// The run-hash components the latest successful materialization of `node_id` (a display id)
+/// recorded ([`crate::changes`]); `None` when it recorded none (before 0.29) or never succeeded.
+pub(crate) async fn last_success_components(cache: &CacheReader, node_id: &str) -> Option<String> {
+    let mut rows = cache
+        .conn()
+        .query(
+            "SELECT components FROM materializations WHERE node_id = ?1 AND status = 'success' \
+             ORDER BY id DESC LIMIT 1",
+            [node_id.to_string()],
+        )
+        .await
+        .ok()?;
+    let row = rows.next().await.ok()??;
+    row.get::<String>(0).ok().filter(|c| !c.is_empty())
+}
+
+/// The object this machine knows to be in the artifact store for `node_id` (a display id) at
+/// `run_hash`: the store location and digest of its latest successful row, unless an upload to
+/// that location is pending (#390) or the row has no digest. A row with a store location is
+/// recorded only once its upload was confirmed (`specs/artifact-upload-receipts.md`), so a
+/// step that produces the same digest again need not upload it again (#554).
+pub(crate) async fn confirmed_object(
+    cache: &CacheReader,
+    node_id: &str,
+    run_hash: &str,
+) -> Option<(String, String)> {
+    let mut rows = cache
+        .conn()
+        .query(
+            "SELECT artifact_path, output_hash FROM materializations INDEXED BY idx_mat_node_run \
+             WHERE node_id = ?1 AND run_hash = ?2 AND status = 'success' \
+             AND artifact_path IS NOT NULL ORDER BY id DESC LIMIT 1",
+            [node_id.to_string(), run_hash.to_string()],
+        )
+        .await
+        .ok()?;
+    let row = rows.next().await.ok()??;
+    let path = row.get::<String>(0).ok()?;
+    let digest = row.get::<String>(1).ok().filter(|d| !d.is_empty())?;
+    drop(rows);
+    // Any pending upload to that location (this host's or another's), or a database that
+    // cannot say: the object is not known to be there.
+    let mut pending = cache
+        .conn()
+        .query(
+            "SELECT 1 FROM pending_uploads WHERE store_path = ?1",
+            [path.clone()],
+        )
+        .await
+        .ok()?;
+    match pending.next().await {
+        Ok(None) => Some((path, digest)),
+        _ => None,
+    }
 }
 
 /// The id of the latest successful materialization of `node_id` (a display id), artifact or
@@ -2135,12 +2183,17 @@ pub(crate) async fn touch_read(db_path: &str, paths: &[String]) {
 
 /// [`touch_read`] on an open connection, in a transaction of its own. Best effort.
 pub(crate) async fn touch_read_on(conn: &turso::Connection, paths: &[String]) {
-    if paths.is_empty() || conn.execute("BEGIN IMMEDIATE", ()).await.is_err() {
+    if paths.is_empty() {
         return;
     }
-    let ok = touch_read_in(conn, paths).await;
-    let end = if ok { "COMMIT" } else { "ROLLBACK" };
-    let _ = conn.execute(end, ()).await;
+    let _ = with_tx(conn, "BEGIN IMMEDIATE", "read times", async {
+        if touch_read_in(conn, paths).await {
+            Ok(())
+        } else {
+            Err(BarcaError::Db("a read time was not recorded".into()))
+        }
+    })
+    .await;
 }
 
 /// Set `last_read_at` of `paths` inside the caller's transaction. Returns whether every update
@@ -2376,9 +2429,14 @@ async fn read_runs(
     } else {
         "NULL"
     };
+    let job = if has_column(&conn, "runs", "job").await? {
+        "job"
+    } else {
+        "NULL"
+    };
     let mut rows = conn
         .query(
-            &format!("SELECT run_id, command, files, target, status, steps_total, steps_executed, steps_cached, started_at, finished_at, elapsed_seconds, {attempts}, {trigger}, {client} FROM runs WHERE (?1 = '' OR run_id = ?1) ORDER BY id DESC LIMIT ?2"),
+            &format!("SELECT run_id, command, files, target, status, steps_total, steps_executed, steps_cached, started_at, finished_at, elapsed_seconds, {attempts}, {trigger}, {client}, {job} FROM runs WHERE (?1 = '' OR run_id = ?1) ORDER BY id DESC LIMIT ?2"),
             [run_id.unwrap_or_default().to_string(), limit.to_string()],
         )
         .await
@@ -2421,6 +2479,7 @@ async fn read_runs(
             scheduled_at: row.get::<String>(13).ok().filter(|t| !t.is_empty()),
             schedule_id: row.get::<String>(14).ok().filter(|t| !t.is_empty()),
             client_run_id: row.get::<String>(15).ok().filter(|t| !t.is_empty()),
+            job: row.get::<String>(16).ok().filter(|t| !t.is_empty()),
         });
     }
     Ok(records)
@@ -2759,15 +2818,6 @@ pub async fn node_histories(
     Ok(out)
 }
 
-/// The latest successful artifact of every partition key of `base_id` (node ids
-/// `<base_id>[<key>]`), as (partition node id, artifact path, artifact format), sorted by node id.
-pub async fn latest_partition_artifacts(
-    db_path: &str,
-    base_id: &str,
-) -> Result<Vec<(String, String, String)>, BarcaError> {
-    latest_partition_artifacts_scoped(db_path, base_id, None).await
-}
-
 pub(crate) async fn partition_artifacts_for_config(
     cfg: &crate::config::ResolvedConfig,
     base_id: &str,
@@ -2932,6 +2982,48 @@ async fn partitioned_avg_elapsed_on(
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn with_tx_commits_a_body_that_succeeds_and_rolls_back_one_that_fails() {
+        use crate::BarcaError;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metadata.db").display().to_string();
+        super::init_db(&path).await.unwrap();
+        let _guard = super::db_guard().await;
+        let (_db, conn) = super::open_conn(&path).await.unwrap();
+        let insert = |key: &'static str| {
+            let conn = &conn;
+            async move {
+                conn.execute(
+                    "INSERT INTO logs (run_id, node_id, seq, line) VALUES (?1, 'n', 0, 'l')",
+                    [key],
+                )
+                .await
+                .map_err(|e| BarcaError::Db(e.to_string()))
+            }
+        };
+        let kept = super::with_tx(&conn, "BEGIN", "test", async {
+            insert("kept").await?;
+            Ok(7)
+        })
+        .await;
+        assert!(matches!(kept, Ok(7)));
+        let failed = super::with_tx(&conn, "BEGIN IMMEDIATE", "test", async {
+            insert("dropped").await?;
+            Err::<(), _>(BarcaError::Other("body failed".into()))
+        })
+        .await;
+        assert!(matches!(failed, Err(BarcaError::Other(ref m)) if m == "body failed"));
+        let mut rows = conn
+            .query("SELECT run_id FROM logs ORDER BY run_id", ())
+            .await
+            .unwrap();
+        let mut keys = Vec::new();
+        while let Some(row) = rows.next().await.unwrap() {
+            keys.push(row.get::<String>(0).unwrap());
+        }
+        assert_eq!(keys, ["kept"]);
+    }
+
     #[tokio::test]
     async fn cancelled_snapshot_copy_stops_between_chunks_and_cleans_partial_stage() {
         let dir = tempfile::tempdir().unwrap();

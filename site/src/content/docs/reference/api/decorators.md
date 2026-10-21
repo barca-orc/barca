@@ -47,9 +47,9 @@ check in the binary equal), so a type checker and an IDE know them too.
 | Call | Positional arguments | Keyword arguments |
 |---|---|---|
 | `group()` | one | `members`, `output`, `description` |
-| `@asset` | none | `name`, `inputs`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env` |
-| `@sensor` | none | `name`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env` |
-| `@task` | none | `name`, `inputs`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env` |
+| `@asset` | none | `name`, `inputs`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env`, `weight` |
+| `@sensor` | none | `name`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env`, `weight` |
+| `@task` | none | `name`, `inputs`, `partitions`, `serializer`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`, `description`, `tags`, `env`, `weight` |
 | `@sink` | one | `serializer` |
 | `partitions()` | one | none |
 | `partitions_from()` | one | none |
@@ -116,6 +116,7 @@ Star-import dependency hashing remains conservative.
     description: str | None = None,
     tags: dict[str, str] | None = None,
     env: list[str] | None = None,
+    weight: int = 1,
 )
 ```
 
@@ -123,7 +124,10 @@ Declares an asset: a function whose result barca stores and reuses. The function
 only when its run hash changes, that is, when its code, an input, a sensor value it reads, its
 partition key or a declared environment variable changes.
 
-`inputs` maps a parameter name to an upstream node. `name` replaces the function name in the
+`inputs` maps a parameter name to an upstream node. Each key must be a parameter of the function,
+and each parameter without a default must be an input or a partition dimension (or have
+`**kwargs` take it); barca checks both when it reads the file, exit 2 (a `@task`'s parameters may
+be left unfilled, for `parallel()` branches). `name` replaces the function name in the
 node id. `serializer` forces `"json"`, `"pickle"`, `"parquet"` or `"csv"`. `timeout_seconds` is the
 limit for one attempt. `description` and `tags` are metadata.
 
@@ -133,12 +137,14 @@ delay in seconds between attempts (delay grows linearly: `retry_backoff * attemp
 Of these arguments, `inputs`, `serializer` and the dimension names in `partitions` are part of
 the run hash, with stacked `@sink` decorators and any decorator that is not barca's: changing
 one runs the asset again. `name`, `freshness`, `timeout_seconds`, `retries`, `retry_backoff`,
-`description`, `tags` and the partition keys are not, and neither is the formatting of the
+`weight`, `description`, `tags` and the partition keys are not, and neither is the formatting of the
 decorator: editing them re-runs nothing. `barca docs cache` has the full list with the reason
 for each (from 0.19; up to 0.18 any edit to the decorator re-ran the asset).
 
 `env` declares the environment variables the function reads. See
-[Declared environment variables](#declared-environment-variables-env) below.
+[Declared environment variables](#declared-environment-variables-env) below. `weight` is how
+much of the pool's capacity the step takes while it runs; see
+[Heavy steps](#heavy-steps-weight) below.
 
 ```python
 from barca import asset, Always, Manual, Schedule
@@ -223,6 +229,47 @@ values each run used.
 
 **Limitation:** environment variables your code reads without declaring them are not seen by
 barca. They are not part of the cache key, so changing one does not invalidate anything.
+
+### Heavy steps (`weight=`)
+
+Experimental (0.29). Independent steps run at the same time, one per worker. Under a hard
+memory limit, several heavy steps that become ready together can add up past it, and the
+kernel kills one (`worker for pipeline.py:train exited with SIGKILL (possibly the OOM killer)`,
+see [A worker that dies](/reference/cli/#a-worker-that-dies)). `weight=` limits how many of
+them run at once without lowering `BARCA_POOL_SIZE` for every step.
+
+```python
+from barca import asset
+
+@asset(weight=2)
+def embed_a() -> dict:
+    return {"rows": 1}
+
+@asset(weight=2)
+def embed_b() -> dict:
+    return {"rows": 2}
+
+@asset(weight=2)
+def embed_c() -> dict:
+    return {"rows": 3}
+```
+
+- The weights of the steps running at once add up to at most the **capacity**: the pool size,
+  unless `[execution] capacity` in `barca.toml` or `BARCA_CAPACITY` sets it (the environment
+  variable wins). With a capacity of 4 the three assets above run two at a time.
+- `weight` is a whole number of at least 1 (default 1); anything else is a parse error. It is
+  accepted on `@asset`, `@task` and `@sensor`, and it is not part of the run hash: outputs and
+  cache decisions are the same at any weight or capacity.
+- A step whose weight is above the capacity runs alone rather than never, and each command that
+  plans it warns on stderr.
+- Steps start in the order they become ready: a heavy step waiting for room is not overtaken by
+  lighter steps that became ready after it.
+- Partition keys take their node's weight. `parallel()` branches take the weight of the step
+  that called `parallel()`; that step is not counted while it waits for them.
+- The capacity is per run: two runs at the same time (two commands, or `barca serve` running two
+  schedules at once) each fill their own.
+- `barca plan` shows `capacity` and `weights`, `--dry-run` shows `capacity` and each heavy
+  step's `weight`, and `barca doctor` reports the capacity.
 
 ## Partitions
 
@@ -401,6 +448,7 @@ See `barca docs sinks`.
     description: str | None = None,
     tags: dict[str, str] | None = None,
     env: list[str] | None = None,
+    weight: int = 1,
 )
 ```
 
@@ -473,6 +521,7 @@ a walk-through, and `barca docs assets` ("Sensors").
     description: str | None = None,
     tags: dict[str, str] | None = None,
     env: list[str] | None = None,
+    weight: int = 1,
 )
 ```
 

@@ -133,6 +133,28 @@ pub struct LedgerStep {
 pub struct LedgerPost {
     pub run: LedgerRun,
     pub steps: Vec<LedgerStep>,
+    /// The base ids of the steps whose new bytes under an unchanged run hash are expected, not
+    /// a sign of a nondeterministic function ([`crate::cache::checks_bytes`]): a `Manual`
+    /// asset. Taken from the graph when the post is built and kept with it in `ledger_posts`,
+    /// so a post sent later, when no graph is at hand (#570), warns for the same steps. Never
+    /// sent to the server.
+    #[serde(skip)]
+    pub bytes_unchecked: Vec<String>,
+}
+
+impl LedgerPost {
+    /// The steps of `bytes_changed` (the server's answer to this post) that get the
+    /// non-determinism warning: those whose node promises the same bytes for the same code and
+    /// inputs.
+    pub(crate) fn warns_for(&self, bytes_changed: Vec<String>) -> Vec<String> {
+        bytes_changed
+            .into_iter()
+            .filter(|node| {
+                let base = crate::StepId::parse(node).base_id().to_string();
+                !self.bytes_unchecked.contains(&base)
+            })
+            .collect()
+    }
 }
 
 /// The answer to an accepted post (`201`).
@@ -383,7 +405,8 @@ impl Ledger {
     }
 
     /// Post the finished run `run_id` to the ledger and say which of its steps the ledger
-    /// already held with different bytes. Never fails the run: a post that is refused or does
+    /// already held with different bytes and get the warning ([`LedgerPost::warns_for`]).
+    /// Never fails the run: a post that is refused or does
     /// not arrive prints a warning and is kept `unsynced` for the next command.
     pub(crate) async fn record_run(
         &self,
@@ -422,7 +445,7 @@ impl Ledger {
             return Vec::new();
         }
         match self.send(cfg, &post).await {
-            Ok(accepted) => accepted.bytes_changed,
+            Ok(accepted) => post.warns_for(accepted.bytes_changed),
             Err(e) => {
                 crate::run_line!(
                     Always,
@@ -546,7 +569,8 @@ impl Ledger {
                         "[barca] recorded run {run_id} on the server (run {})",
                         accepted.run_id
                     );
-                    for node in accepted.bytes_changed {
+                    // The same rule as a post sent at the end of its run (#570).
+                    for node in post.warns_for(accepted.bytes_changed) {
                         crate::run_line!(Always, "{}", bytes_changed_warning(&node));
                     }
                 }
@@ -646,6 +670,16 @@ async fn build_post(
     if steps.is_empty() {
         return Ok(None);
     }
+    let mut bytes_unchecked: Vec<String> = steps
+        .iter()
+        .map(|step| crate::StepId::parse(&step.node_id).base_id().to_string())
+        .filter(|base| {
+            dag.get_node(base)
+                .is_some_and(|n| !crate::cache::checks_bytes(n))
+        })
+        .collect();
+    bytes_unchecked.sort();
+    bytes_unchecked.dedup();
     Ok(Some(LedgerPost {
         run: LedgerRun {
             run_id: run.run_id,
@@ -662,6 +696,7 @@ async fn build_post(
             host: Some(db::local_host()),
         },
         steps,
+        bytes_unchecked,
     }))
 }
 
@@ -689,6 +724,42 @@ pub mod posts {
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now'))
     )";
+
+    /// A post as `ledger_posts.body` keeps it: the post as sent, plus what this machine needs
+    /// to answer the server's reply when the post is sent later
+    /// ([`LedgerPost::bytes_unchecked`]).
+    #[derive(serde::Serialize)]
+    struct Stored<'a> {
+        #[serde(flatten)]
+        post: &'a LedgerPost,
+        #[serde(skip_serializing_if = "<[String]>::is_empty")]
+        bytes_unchecked: &'a [String],
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Read {
+        #[serde(flatten)]
+        post: LedgerPost,
+        /// Missing from a post kept by 0.28 and earlier: every step is then checked, as before.
+        #[serde(default)]
+        bytes_unchecked: Vec<String>,
+    }
+
+    pub(super) fn encode(post: &LedgerPost) -> Result<String, BarcaError> {
+        serde_json::to_string(&Stored {
+            post,
+            bytes_unchecked: &post.bytes_unchecked,
+        })
+        .map_err(|e| BarcaError::Other(format!("ledger post: {e}")))
+    }
+
+    pub(super) fn decode(body: &str) -> Option<LedgerPost> {
+        let read: Read = serde_json::from_str(body).ok()?;
+        Some(LedgerPost {
+            bytes_unchecked: read.bytes_unchecked,
+            ..read.post
+        })
+    }
 
     /// A post that has not been accepted yet.
     pub const UNSYNCED: &str = "unsynced";
@@ -729,8 +800,7 @@ pub mod posts {
         post: &LedgerPost,
         outcome: Result<&str, &str>,
     ) -> Result<(), BarcaError> {
-        let body = serde_json::to_string(post)
-            .map_err(|e| BarcaError::Other(format!("ledger post: {e}")))?;
+        let body = encode(post)?;
         let (state, server_run_id, error) = match outcome {
             Ok(id) => (super::posts::SHARED, id.to_string(), String::new()),
             Err(why) => (super::posts::UNSYNCED, String::new(), why.to_string()),
@@ -779,7 +849,7 @@ pub mod posts {
         let mut out = Vec::new();
         while let Some(row) = rows.next().await.map_err(failed("reading posts"))? {
             let body = row.get::<String>(0).map_err(failed("reading posts"))?;
-            if let Ok(post) = serde_json::from_str(&body) {
+            if let Some(post) = decode(&body) {
                 out.push(post);
             }
         }
@@ -817,7 +887,7 @@ pub mod posts {
         while let Some(row) = rows.next().await.map_err(failed("reading posts"))? {
             let text = |i| row.get::<String>(i).ok().filter(|s| !s.is_empty());
             let nodes = text(5)
-                .and_then(|b| serde_json::from_str::<LedgerPost>(&b).ok())
+                .and_then(|b| decode(&b))
                 .map(|p| p.steps.into_iter().map(|s| s.node_id).collect())
                 .unwrap_or_default();
             out.push(PostRecord {
@@ -877,11 +947,7 @@ pub mod posts {
             .map_err(failed("reading posts"))?;
         let mut waiting: Vec<LedgerPost> = Vec::new();
         while let Some(row) = rows.next().await.map_err(failed("reading posts"))? {
-            if let Some(post) = row
-                .get::<String>(0)
-                .ok()
-                .and_then(|b| serde_json::from_str(&b).ok())
-            {
+            if let Some(post) = row.get::<String>(0).ok().and_then(|b| decode(&b)) {
                 waiting.push(post);
             }
         }
@@ -898,8 +964,7 @@ pub mod posts {
                     .await
                     .map_err(failed("removing a post"))?;
             } else {
-                let body = serde_json::to_string(&post)
-                    .map_err(|e| BarcaError::Other(format!("ledger post: {e}")))?;
+                let body = encode(&post)?;
                 conn.execute(
                     "UPDATE ledger_posts SET body = ?2, updated_at = datetime('now') \
                      WHERE client_run_id = ?1",
@@ -1177,8 +1242,7 @@ async fn write_post(db_path: &str, post: &LedgerPost) -> Result<PostAccepted, Ba
     let run = &post.run;
     let _g = db::db_guard().await;
     let (_db, conn) = db::open_conn(db_path).await?;
-    conn.execute("BEGIN IMMEDIATE", ()).await.map_err(failed)?;
-    let written = async {
+    let bytes_changed = db::with_tx(&conn, "BEGIN IMMEDIATE", "ledger post", async {
         conn.execute(
             "INSERT INTO runs (run_id, command, files, target, status, steps_total, \
              steps_executed, steps_cached, started_at, finished_at, elapsed_seconds, host, \
@@ -1262,19 +1326,77 @@ async fn write_post(db_path: &str, post: &LedgerPost) -> Result<PostAccepted, Ba
             .map_err(failed)?;
         }
         Ok::<_, BarcaError>(bytes_changed)
+    })
+    .await?;
+    Ok(PostAccepted {
+        run_id,
+        bytes_changed,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn step(node_id: &str) -> LedgerStep {
+        LedgerStep {
+            node_id: node_id.to_string(),
+            run_hash: "h".to_string(),
+            status: "success".to_string(),
+            path: Some(format!("/store/{node_id}.json")),
+            format: Some("json".to_string()),
+            size_bytes: Some(1),
+            digest: Some("d".to_string()),
+            elapsed_seconds: None,
+            attempts: None,
+            error: None,
+        }
     }
-    .await;
-    match written {
-        Ok(bytes_changed) => {
-            conn.execute("COMMIT", ()).await.map_err(failed)?;
-            Ok(PostAccepted {
-                run_id,
-                bytes_changed,
-            })
+
+    fn post(bytes_unchecked: &[&str]) -> LedgerPost {
+        LedgerPost {
+            run: LedgerRun {
+                run_id: "r1".to_string(),
+                command: "get".to_string(),
+                files: Vec::new(),
+                target: None,
+                status: "success".to_string(),
+                steps_total: None,
+                steps_executed: 2,
+                steps_cached: 0,
+                started_at: "2026-10-21T00:00:00Z".to_string(),
+                finished_at: None,
+                elapsed_seconds: None,
+                host: None,
+            },
+            steps: vec![step("p.py:pinned[day=a]"), step("p.py:noisy")],
+            bytes_unchecked: bytes_unchecked.iter().map(|s| s.to_string()).collect(),
         }
-        Err(e) => {
-            let _ = conn.execute("ROLLBACK", ()).await;
-            Err(e)
-        }
+    }
+
+    #[test]
+    fn a_held_post_keeps_which_steps_are_not_checked_for_bytes_but_never_sends_it() {
+        let held = post(&["p.py:pinned"]);
+        // The wire body has no trace of it.
+        let wire = serde_json::to_value(&held).unwrap();
+        assert!(wire.get("bytes_unchecked").is_none(), "{wire}");
+        // The kept body round-trips it.
+        let kept = posts::decode(&posts::encode(&held).unwrap()).unwrap();
+        assert_eq!(kept, held);
+        assert_eq!(kept.bytes_unchecked, ["p.py:pinned"]);
+        // A body kept by 0.28 (no list) still reads, with every step checked.
+        let legacy = posts::decode(&serde_json::to_string(&held).unwrap()).unwrap();
+        assert!(legacy.bytes_unchecked.is_empty());
+        assert_eq!(legacy.steps, held.steps);
+    }
+
+    #[test]
+    fn only_steps_whose_bytes_are_checked_warn_when_a_held_post_is_sent() {
+        let changed = vec!["p.py:pinned[day=a]".to_string(), "p.py:noisy".to_string()];
+        assert_eq!(
+            post(&["p.py:pinned"]).warns_for(changed.clone()),
+            ["p.py:noisy"]
+        );
+        assert_eq!(post(&[]).warns_for(changed.clone()), changed);
     }
 }

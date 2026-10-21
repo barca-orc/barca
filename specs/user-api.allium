@@ -401,7 +401,8 @@ rule RetryStep {
         ExecuteStep(step)
 
     @guidance
-        -- Each retry is a fresh worker invocation.
+        -- A retry after an exception may run in the same worker process (#523); a retry
+        -- after a crash, timeout, sys.exit() or failed import runs in a fresh one.
         -- Retries do not cascade: a parent's retry does not re-run children.
 }
 

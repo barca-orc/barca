@@ -212,7 +212,7 @@ fn percentile(sorted: &[f64], q: f64) -> f64 {
 /// `GET /plan` — execution plan for the server's files (cache-aware).
 pub async fn plan(State(state): State<AppState>) -> Result<Json<PlanResult>, ApiError> {
     let dag = state.loaded_dag().await?;
-    let result = queries::plan_from_dag(&dag);
+    let result = queries::plan_from_dag(&dag, state.config.resolved.capacity);
     state.cache.write().unwrap().plan = Some(result.clone());
     Ok(Json(result))
 }

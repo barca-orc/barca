@@ -160,7 +160,10 @@ nothing is ever downloaded before a run. With a store configured by `[remote] ur
 `BARCA_REMOTE_URI`, the database is backed up:
 
 - by `barca get` and `barca run`, on a one-minute checkpoint when the run recorded something
-  since the last backup, and once when the run ends;
+  since the last backup, and once when the run ends. A run that recorded no new result takes no
+  backup at its end: nothing failed or was uploaded, and every step it ran was a sensor whose
+  value the store already held (a warm `get` whose data did not change). Its run row goes with
+  the next backup;
 - by `barca serve`, every minute in which the database changed, and once when it shuts down
   (not with `--read-only`).
 
@@ -177,15 +180,20 @@ Its sidecar is `2026-10-14T18-02-11.482Z-3f9a1c2e.json`. Names barca 0.26.0 wrot
 (`2026-10-14T18-02-11Z.db`), are still listed, restored and pruned. The sidecar:
 
 ```json
-{"run_id": "7f30b3e9", "rows": 412, "digest": "<sha256>", "barca_version": "0.26.0", "db_format": 1}
+{"run_id": "7f30b3e9", "rows": 412, "digest": "<sha256>", "barca_version": "0.29.0", "db_format": 1,
+ "host": "laptop", "project": "/home/me/analytics"}
 ```
 
 `run_id` is the run that took it (`null` for `barca serve`), `rows` the run and
-materialization rows in the copy, `db_format` its metadata format. Then both files are
+materialization rows in the copy, `db_format` its metadata format, `host` and `project` the
+machine and the project directory that took it (absent in a sidecar barca 0.28 or earlier
+wrote; such a backup is still listed and restored, with no host). Then both files are
 uploaded to `<uri>/<env>/state/backups/` (one `python -m barca._state backup` per backup). Each
 place keeps the five newest backups, pruned after a successful write; only files named like a
-backup are ever removed. At the end of a run stderr says
-`[barca] backed up the metadata DB (48.0 KB) to <uri>/<env>/state/backups/<name> in 0.31s`.
+backup are ever removed. In the store, the newest backup of every *other* host and project
+directory taken in the last week is kept as well (at most five of those), so a second machine
+writing to the prefix cannot rotate out the first one's last backup. At the end of a run stderr says
+`[barca] backed up the metadata DB (49.2 KB) to <uri>/<env>/state/backups/<name> in 0.31s`.
 
 A backup that does not reach the store never fails the run. At the end of a run it is a warning,
 `[barca] warning: the metadata backup was not uploaded: backup to <store> failed: <why>; the run
@@ -203,19 +211,22 @@ barca state backups --json
 ```
 
 ```
-#  NAME                                  WHERE  SIZE     ROWS  RUN
-1  2026-10-14T18-02-11.482Z-3f9a1c2e.db  both   48.0 KB  412   7f30b3e9
-2  2026-10-14T18-01-10.907Z-3f9a1c2e.db  both   47.5 KB  401   7f30b3e9
+#  NAME                                  WHERE  SIZE     ROWS  RUN       HOST
+1  2026-10-14T18-02-11.482Z-3f9a1c2e.db  both   49.2 KB  412   7f30b3e9  laptop (this machine)
+2  2026-10-14T18-01-10.907Z-3f9a1c2e.db  both   48.6 KB  401   7f30b3e9  laptop (this machine)
 ```
 
 `where` is `local`, `store` or `both`; `agree` (JSON) says whether both copies have the same
-size and digest (`null` with one copy). A store that cannot be listed is a warning on stderr and
+size and digest (`null` with one copy). `host` and `project` (JSON) say who took it, and
+`mine` whether it was this host and project directory (`null` for a backup from barca 0.28 or
+earlier). The `HOST` column shows another project directory on this host as `host:/path`. A store that cannot be listed is a warning on stderr and
 `store_error` in JSON; the local copies are still listed.
 
 Put one back, only when you ask:
 
 ```bash
-barca state restore                  # the newest
+barca state restore                  # this machine's newest (the newest, if it has none)
+barca state restore --from 1         # the newest, whichever machine took it
 barca state restore --from 2         # by index in barca state backups
 barca state restore --from 2026-10-14T18-01-10.907Z-3f9a1c2e
 ```
@@ -229,7 +240,14 @@ migrated). Then the current database, its write-ahead log folded in, moves to
 on stderr says what happened:
 `[barca] restored 2026-10-14T18-01-10.907Z-3f9a1c2e.db from the local copy (.barca/backups/...), 401 rows,
 taken by run 7f30b3e9; the database it replaced is .barca/metadata.db.pre-restore`.
-With `--json`, stdout also gets `{restored, from, source, pre_restore, rows, run_id}`.
+With `--json`, stdout also gets `{restored, from, source, pre_restore, rows, run_id, host,
+project}`.
+
+Without `--from`, `restore` takes this machine's newest backup (same host and project
+directory), and says so when newer ones came from elsewhere:
+`[barca] restoring this machine's newest backup, 2026-10-14T18-01-10.907Z-3f9a1c2e.db (#3); the
+2 newer ones were taken by desktop. barca state restore --from 1 restores the newest`. With
+none of its own (a fresh machine taking over), it takes the newest and names who took it.
 
 - No backup at all, an unknown `--from`, or a copy that fails the check: exit 2, nothing changed.
   A copy that fails names the next newest (`barca state restore --from 3`).
@@ -257,10 +275,17 @@ barca state reset --yes --json       # {database, moved_to, moved, undo}
 The database and its `-wal` and `-shm` move to `.barca/metadata.db.reset-<UTC>` (and
 `<that>-wal`, `<that>-shm`) in the same directory, and an empty database takes its place. Run
 history, cache records, partition keys and schedule pauses start over, so the next `get`
-recomputes what it needs; artifacts are left alone, and the cache limit (`barca gc`) evicts the
-ones nothing references. A database that cannot be opened moves as it is. One line on stderr
+recomputes what it needs. A database that cannot be opened moves as it is. One line on stderr
 says what moved and how to undo it:
 `[barca] reset the metadata database: the old one is .barca/metadata.db.reset-2026-10-20T18-02-11.482Z, .barca/metadata.db is new and empty. Undo: barca state restore --from .barca/metadata.db.reset-2026-10-20T18-02-11.482Z`.
+
+Artifacts are left on disk, and a second line says how much:
+`[barca] the 129 KB of artifacts under .barca/artifacts stay on disk, and no record names them now: the cache size limit evicts them first, barca gc --max-size off deletes them now, and until then the undo above brings them back`.
+No record names them, so they are the first thing the cache size limit evicts (`barca docs
+cache`, "Disk use"); `barca gc --max-size off` deletes them now. The same holds after `barca
+state restore` for the artifacts the restored copy does not name. The moved-aside databases
+themselves are never deleted: remove a `metadata.db.reset-<UTC>` yourself when you no longer
+need it (`barca gc` lists them under `held` as `db_copies`).
 
 - Not in a terminal without `--yes`: exit 2, nothing changed.
 - A run in progress on this machine (`running` in `barca history`, its process alive): exit 3,
@@ -281,7 +306,14 @@ it, `barca get` serves cached results from the bucket.
 
 **Two machines on one store with no server** is not supported. Each backs up to the same prefix
 and the five-copy retention interleaves their histories; nothing coordinates them. Use a server
-(RFC-0007) to share state.
+(RFC-0007) to share state, or give each machine its own `[remote] uri`. barca notices: when a
+backup finds that another host (or another project directory) took a backup after this one's
+previous backup, or `barca state backups` lists one newer than this machine's newest, stderr
+gets one warning per command:
+`[barca] warning: <store> also holds backups from desktop (the newest 2026-10-14T18-05-00.120Z-9c1d2e3f.db), taken after this machine's own: two machines are backing up to one store, and nothing coordinates them. barca state restore picks this machine's newest backup unless given --from. To share state between machines, use a server (barca docs server-mode); otherwise give each machine its own [remote] uri`.
+A machine with no backup of its own yet (one restoring another's) is not warned; once both
+write, both are. Pruning keeps each machine's newest backup, and `restore` without `--from`
+picks this machine's, so neither loses its last copy to the other.
 
 **Upgrading from the shared history.** barca 0.26.0 removed `optimistic` mode: `[remote] state`,
 `[remote] state_uri`, `[remote] push_retries`, `BARCA_STATE`, `BARCA_STATE_URI`,
@@ -301,15 +333,17 @@ that copy. A final output that is only in the store is downloaded first.
 
 - Nothing is downloaded before the run: the local metadata DB is used as it is.
 - Steps always read and write local files under `.barca/artifacts/`. A helper process
-  uploads each artifact in the background as soon as its step finishes.
+  uploads each artifact in the background as soon as its step finishes. A sensor that returned
+  what the store already holds at that location, by this machine's record of a confirmed upload
+  (its data did not change), is not uploaded again; an asset is uploaded whenever it runs.
 - A cache hit whose file is only in the store is downloaded just before the first step that
   reads it eagerly. Cached intermediates nothing reads are never downloaded, and neither are
   parquet results that are only read lazily (below).
 - Before results are recorded, barca waits for every upload. A result whose upload failed is
   still recorded, and kept on this machine as a pending upload (see "When an upload fails
   after the steps succeeded"); every other row points at an object that is in the store.
-- The metadata DB is backed up on the minute checkpoint and at the end (see "Backups and
-  restore").
+- The metadata DB is backed up on the minute checkpoint and at the end, unless the run
+  recorded no new result (see "Backups and restore").
 
 stderr reports each part, so remote cost is visible. The first line names the environment
 and the store, printed once at startup by `get`, `run` and `serve` whenever a store is
@@ -317,9 +351,9 @@ configured (`barca docs cache`, "Environments"):
 
 ```
 [barca] env default (built-in default); artifact store s3://bucket/proj/default/artifacts
-[barca] fetched 1 cached artifact (672.8 KB) in 0.1s
-[barca] uploaded 2 artifacts (672.8 KB); waited 0.0s at end of run
-[barca] backed up the metadata DB (48.0 KB) to s3://my-bucket/barca/my-project/default/state/backups/2026-10-14T18-02-11.482Z-3f9a1c2e.db in 0.31s
+[barca] fetched 1 cached artifact (688.9 KB) in 0.1s
+[barca] uploaded 2 artifacts (688.9 KB); waited 0.0s at end of run
+[barca] backed up the metadata DB (49.2 KB) to s3://my-bucket/barca/my-project/default/state/backups/2026-10-14T18-02-11.482Z-3f9a1c2e.db in 0.31s
 ```
 
 ## When an upload fails after the steps succeeded
@@ -666,8 +700,10 @@ Know before sharing:
 
 ## Limitations
 
-- Backups are this machine's: two machines on one store without a server interleave them
-  (see "Backups and restore"). Sharing state means a server (RFC-0007).
+- Backups are this machine's: two machines on one store without a server interleave them, with
+  a warning (see "Backups and restore"). Sharing state means a server (RFC-0007). A machine is
+  its host name and project directory: a container whose host name changes at every start is a
+  new machine each time.
 - Retention is fixed at five backups in each place. A backup is a whole copy of the database,
   so the store holds up to five times its size.
 - With `BARCA_ARTIFACT_URI` or `[remote] artifacts_uri` alone (no `[remote] uri`), results go to

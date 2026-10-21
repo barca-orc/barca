@@ -16,6 +16,9 @@ pub struct Dag {
     pub groups: Vec<crate::groups::NodeGroup>,
     pub graph: DiGraph<DagNode, EdgeKind>,
     index: HashMap<String, NodeIndex>,
+    /// Pipeline files (as node `source_file`s) that import a project module that does not
+    /// parse (#550). Their steps cannot run: [`Dag::check_imports`] refuses a plan with one.
+    pub(crate) broken_imports: HashMap<String, crate::project_modules::BrokenImport>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -319,6 +322,26 @@ fn norm_path(p: &std::path::Path) -> String {
         .replace('\\', "/")
 }
 
+/// Whether `dir` (root-relative; the root is the working directory) is a package: every
+/// directory from the root down to it has an `__init__.py`. The root itself is not.
+fn in_package(dir: &std::path::Path) -> bool {
+    use std::path::Component;
+    let mut current = std::path::PathBuf::new();
+    let mut any = false;
+    for component in dir.components() {
+        match component {
+            Component::CurDir => continue,
+            Component::Normal(part) => current.push(part),
+            _ => return false,
+        }
+        if !current.join("__init__.py").is_file() {
+            return false;
+        }
+        any = true;
+    }
+    any
+}
+
 fn file_dir(file: &str) -> std::path::PathBuf {
     std::path::Path::new(file)
         .parent()
@@ -380,7 +403,7 @@ impl Resolver {
     }
 
     /// Candidate files for `module` imported from `from_file`, most specific first.
-    fn module_files(from_file: &str, module: &str) -> Vec<std::path::PathBuf> {
+    pub(crate) fn module_files(from_file: &str, module: &str) -> Vec<std::path::PathBuf> {
         let level = module.chars().take_while(|c| *c == '.').count();
         let rest = module[level..].replace('.', "/");
         let mut bases = Vec::new();
@@ -390,6 +413,11 @@ impl Resolver {
                 base = base.join("..");
             }
             bases.push(base);
+        } else if in_package(&file_dir(from_file)) {
+            // A file inside a package is imported by its dotted name with only the root on
+            // the import path (`project_modules::PipelineLayout`), so `from pkg.mod import x`
+            // in `pkg/a.py` is `pkg/mod.py`, never `pkg/pkg/mod.py`.
+            bases.push(std::path::PathBuf::new());
         } else {
             bases.push(file_dir(from_file));
             bases.push(std::path::PathBuf::new());
@@ -430,9 +458,10 @@ impl Resolver {
                     return Ok(i);
                 }
                 match self.unique(name) {
+                    // Name the file the import reaches, not the first path tried (#551).
                     Err(Miss::NotFound) => Err(Miss::NotInModule {
                         module: module.clone(),
-                        file: norm_path(&files[0]),
+                        file: norm_path(files.iter().find(|f| f.is_file()).unwrap_or(&files[0])),
                     }),
                     other => other,
                 }
@@ -663,6 +692,7 @@ impl Dag {
                 resolved_inputs: HashMap::new(),
                 resolved_collected: HashMap::new(),
                 definition_hash: def_hash,
+                components: crate::changes::definition_components(node),
             };
 
             let idx = graph.add_node(dag_node);
@@ -745,6 +775,7 @@ impl Dag {
             graph,
             index,
             groups: Vec::new(),
+            broken_imports: HashMap::new(),
         };
 
         // Verify acyclicity.
@@ -807,6 +838,47 @@ impl Dag {
     /// Get a node by ID.
     pub fn get_node(&self, id: &str) -> Option<&DagNode> {
         self.index.get(id).map(|idx| &self.graph[*idx])
+    }
+
+    /// Refuse to plan a step whose file imports a project module that does not parse (#550):
+    /// the worker's import of the file would fail, after the steps before it had run. Only the
+    /// steps given are looked at, so a command whose steps do not import the module is not
+    /// affected. The first such step, in the order given, is named.
+    pub fn check_imports<'a>(
+        &self,
+        step_ids: impl IntoIterator<Item = &'a str>,
+    ) -> Result<(), crate::BarcaError> {
+        if self.broken_imports.is_empty() {
+            return Ok(());
+        }
+        for id in step_ids {
+            let Some(node) = self.get_node(id) else {
+                continue;
+            };
+            let file = &node.extracted.source_file;
+            let Some(broken) = self.broken_imports.get(file) else {
+                continue;
+            };
+            let via = if broken.imported_by == *file {
+                String::new()
+            } else {
+                format!(" through {}", broken.imported_by)
+            };
+            return Err(crate::BarcaError::Parse(format!(
+                "syntax error in {}: {} (imported by {file}{via}, so step '{id}' cannot run)\n\
+                 {}:{}:{}:\n{}\n\
+                 Fix the syntax error: the worker imports {} when it loads {file}, so no step of \
+                 {file} can run until it parses.",
+                broken.file,
+                broken.problem,
+                broken.file,
+                broken.problem.line,
+                broken.problem.column,
+                broken.problem.excerpt(),
+                broken.file,
+            )));
+        }
+        Ok(())
     }
 
     /// Get upstream node IDs.
@@ -901,6 +973,7 @@ mod tests {
             sinks: smallvec::SmallVec::new(),
             timeout_seconds: 300,
             retries: 1,
+            weight: 1,
             retry_backoff_seconds: 0.0,
             description: None,
             tags: HashMap::new(),
@@ -909,6 +982,7 @@ mod tests {
             byte_offset: 0,
             source_text: "def a(): return 1".to_string(),
             cone_hash: String::new(),
+            cone_parts: Vec::new(),
             artifact_serializer: None,
             param_types: HashMap::new(),
             return_type: None,
@@ -1307,6 +1381,8 @@ def margin(region: str, tier: str, sales: dict) -> dict:\n    return sales\n"
     /// result leave the definition hash alone; edits that can change it do not.
     #[test]
     fn definition_hash_covers_the_result_and_nothing_else() {
+        // The partition dimensions are parameters of the function (#549).
+        const A: &str = "def a(region=None, area=None):\n    return 1\n";
         let base = definition_hash_of(&format!(
             "@asset(partitions={{\"region\": partitions([\"us\", \"eu\"])}})\n{A}"
         ));
@@ -1341,7 +1417,7 @@ def margin(region: str, tier: str, sales: dict) -> dict:\n    return sales\n"
         assert_ne!(
             base,
             definition_hash_of(
-                "@asset(partitions={\"region\": partitions([\"us\", \"eu\"])})\ndef a():\n    return 2\n"
+                "@asset(partitions={\"region\": partitions([\"us\", \"eu\"])})\ndef a(region=None, area=None):\n    return 2\n"
             ),
             "the body counts"
         );

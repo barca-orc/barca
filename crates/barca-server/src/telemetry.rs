@@ -134,7 +134,7 @@ mod tests {
         let file = &state.config.files[0];
         std::fs::write(
             file,
-            "from barca import asset\n@asset\ndef first(): return 1\n@asset\ndef second(first): return first + 1\n",
+            "from barca import asset\n@asset\ndef first(): return 1\n@asset(inputs={\"first\": first})\ndef second(first): return first + 1\n",
         )
         .unwrap();
         state.loaded_dag().await.unwrap();

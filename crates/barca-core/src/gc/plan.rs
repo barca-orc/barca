@@ -8,6 +8,7 @@
 //! The order (RFC-0012):
 //!
 //! 1. **Leftovers**: staging directories of dead processes, `*.moved-aside*` directories,
+//!    artifact files no metadata row names (left by `barca state reset` or `restore`),
 //!    `sql-cache/` copies (least recently used first). Nothing reads them.
 //! 2. **Superseded results**: a file none of whose rows is the newest successful result of
 //!    its node (node id including the partition key). Oldest first.
@@ -65,6 +66,10 @@ pub enum LeftoverKind {
     Staging,
     /// A `*.moved-aside*` directory beside an artifact path.
     MovedAside,
+    /// A file in an artifact directory that no metadata row of any environment names: what
+    /// `barca state reset` or `barca state restore` left behind, or a copy fetched for a server
+    /// ledger hit (fetched again when read).
+    Unreferenced,
     /// A downloaded copy in `.barca/sql-cache/`, with its `.version` stamp.
     SqlCache,
 }
@@ -146,6 +151,9 @@ pub struct Protections {
     /// pid namespace (a second container on the same volume), where a pid that looks dead here
     /// can be alive.
     pub keep_staging: bool,
+    /// Keep every artifact file no row names: a run is in flight on this `.barca/`, and its
+    /// files have no rows yet.
+    pub keep_unreferenced: bool,
 }
 
 impl Protections {
@@ -278,6 +286,7 @@ pub fn plan(
         .iter()
         .filter(|l| protect.allows(Tier::Leftovers) && !protect.paths.contains(&l.path))
         .filter(|l| !(protect.keep_staging && l.kind == LeftoverKind::Staging))
+        .filter(|l| !(protect.keep_unreferenced && l.kind == LeftoverKind::Unreferenced))
         .collect();
     left.sort_by(|a, b| (a.kind, a.modified, &a.path).cmp(&(b.kind, b.modified, &b.path)));
 

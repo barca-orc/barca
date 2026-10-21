@@ -186,6 +186,10 @@ pub fn render_status_table(result: &crate::status::StatusResult) -> String {
                 }
                 // Human form of an `unsynced` reason: `local only`, `not in ledger`.
                 _ if n.cache.state == "unsynced" => n.cache.reason.replace('_', " "),
+                // `changed: helper pipelines/common.py:bucket_ltv (+1 more)` (#558).
+                _ if n.cache.reason == "changed" && n.cache.changed.is_some() => {
+                    n.cache.detail.clone()
+                }
                 _ => n.cache.reason.clone(),
             };
             let last = n
@@ -703,21 +707,6 @@ pub(crate) fn failed_step_line(node_id: &str, error: &str) -> String {
         .find(|l| !l.is_empty())
         .unwrap_or("unknown error");
     format!("[barca] step:{node_id} failed: {first}")
-}
-
-pub fn fmt_bytes(n: u64) -> String {
-    const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
-    let mut v = n as f64;
-    let mut unit = 0;
-    while v >= 1024.0 && unit < UNITS.len() - 1 {
-        v /= 1024.0;
-        unit += 1;
-    }
-    if unit == 0 {
-        format!("{n} B")
-    } else {
-        format!("{v:.1} {}", UNITS[unit])
-    }
 }
 
 #[cfg(test)]

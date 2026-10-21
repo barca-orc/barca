@@ -49,6 +49,9 @@ pub struct IoConfig {
     pub upload_snapshot_prefix: Option<String>,
     pub python: PathBuf,
     pub pool_size: usize,
+    /// The most the weights of the steps running at once may add up to (#436): the pool size
+    /// unless `[execution] capacity` or `BARCA_CAPACITY` sets it.
+    pub capacity: usize,
     pub run_id: String,
     /// Present only when the Datadog integration successfully configured.
     pub datadog: Option<std::sync::Arc<crate::telemetry::datadog::Dispatch>>,
@@ -326,6 +329,13 @@ pub struct WorkerPool {
     next_branch_group: u64,
     /// The result directories of the groups each step started, removed when the step ends.
     branch_dirs: HashMap<ItemId, Vec<PathBuf>>,
+    /// Failed steps whose worker went on to its next step instead of being replaced (#523).
+    failures_survived: usize,
+    /// Steps encoded and sent to a worker, counting a step again each time it is re-sent
+    /// after its worker stopped with it still leased. Each failed step used to stop its
+    /// worker and re-send the rest of its batch, so with many failures this grew with keys
+    /// × batch size (#523).
+    steps_dispatched: usize,
 }
 
 /// The directory that holds branch results, under the project's `.barca`.
@@ -421,6 +431,8 @@ impl WorkerPool {
             branch_root,
             next_branch_group: 0,
             branch_dirs: HashMap::new(),
+            failures_survived: 0,
+            steps_dispatched: 0,
         })
     }
 
@@ -624,6 +636,7 @@ impl WorkerPool {
                         traceback,
                         elapsed,
                         import_seconds,
+                        worker_continues,
                     } => {
                         let Some(item_id) = self.take_lease(worker_id, node_id, coord) else {
                             crate::errln!(
@@ -659,12 +672,15 @@ impl WorkerPool {
                         }
                         self.drop_branch_results(item_id);
 
-                        // User code failed (or hung past its timeout) in this
-                        // process — kill it so retries and remaining work get a
-                        // fresh interpreter. Unstarted leases go back to the
-                        // queue front; the 200ms SIGTERM grace runs off the
-                        // event loop.
-                        if let Some(mut handle) = self.workers.remove(&worker_id) {
+                        // A step that raised leaves its worker sound, and the worker goes on
+                        // with its batch (#523). One that may not be sound (a failed import,
+                        // `sys.exit()`, still running past its timeout) is stopped so retries
+                        // and remaining work get a fresh interpreter: unstarted leases go back
+                        // to the queue front, and the 200ms SIGTERM grace runs off the event
+                        // loop.
+                        if worker_continues {
+                            self.failures_survived += 1;
+                        } else if let Some(mut handle) = self.workers.remove(&worker_id) {
                             Self::return_leases(&mut handle, coord);
                             tokio::task::spawn_blocking(move || {
                                 graceful_kill(&mut handle.child);
@@ -733,6 +749,8 @@ impl WorkerPool {
                                     dag_inputs: HashMap::new(),
                                     timeout_seconds: 300,
                                     retries: 1,
+                                    // Set to the caller's by `on_parallel_requested`.
+                                    weight: 1,
                                     retry_backoff_seconds: 0.0,
                                     serializer: None,
                                     sinks: Vec::new(),
@@ -930,6 +948,18 @@ impl WorkerPool {
     /// `BARCA_TRACE_TIMING=1` — see benchmarks/RESULTS.md's docker-harness
     /// re-run notes).
     pub async fn shutdown(self) {
+        if self.trace_on {
+            // How many workers the run started, against the failed steps that kept theirs (a
+            // failing step costs no worker start), and how many steps were sent to workers,
+            // re-sends included (#523).
+            crate::errln!(
+                "[trace]  {:>8.1}ms  workers started {}, failed steps that kept their worker {}, steps dispatched {}",
+                self.trace_start.elapsed().as_secs_f64() * 1000.0,
+                self.next_worker_id,
+                self.failures_survived,
+                self.steps_dispatched
+            );
+        }
         drop(self.acceptor);
         let workers = self.workers;
         let frozen = self.frozen;
@@ -1056,6 +1086,11 @@ impl WorkerPool {
             if coord.ready_count() == 0 || cancel.is_cancelled() {
                 return;
             }
+            // The capacity is full for the step next in line: nothing starts until enough of
+            // what is running finishes, and nothing queued behind it goes first (#436).
+            if !coord.head_fits(self.running_weight(coord), self.capacity()) {
+                return;
+            }
 
             // Find an idle worker, or start the ones the ready work can use.
             let Some(wid) = self
@@ -1101,6 +1136,7 @@ impl WorkerPool {
                 );
             }
 
+            self.steps_dispatched += batch.len();
             let handle = self
                 .workers
                 .get_mut(&wid)
@@ -1123,6 +1159,32 @@ impl WorkerPool {
             handle.leases = batch.into_iter().collect();
             handle.front_since = std::time::Instant::now();
         }
+    }
+
+    /// The capacity as a weight, at least 1.
+    fn capacity(&self) -> u32 {
+        u32::try_from(self.config.capacity.max(1)).unwrap_or(u32::MAX)
+    }
+
+    /// The total weight of the steps running now: for each worker in the pool, the weight of
+    /// what it has leased (a step with a weight above 1 is always leased alone, `batch_len`).
+    /// A worker stopped in `parallel()` is not counted while its branches run, which take its
+    /// weight (`Coordinator::on_parallel_requested`): counting both, a step could never get
+    /// its branches started.
+    fn running_weight(&self, coord: &Coordinator) -> u32 {
+        let capacity = self.capacity();
+        self.workers
+            .values()
+            .map(|w| {
+                w.leases
+                    .iter()
+                    .map(|&id| {
+                        crate::coordinator::effective_weight(coord.item(id).spec.weight, capacity)
+                    })
+                    .max()
+                    .unwrap_or(0)
+            })
+            .sum()
     }
 
     /// Remove what the branches of `item_id`'s parallel groups returned. Called when the step
@@ -1183,6 +1245,11 @@ impl WorkerPool {
         let Some(first) = ready.next() else {
             return 0;
         };
+        // A step with a weight above 1 is leased on its own, and none is leased behind a
+        // lighter one, so a worker's weight is the weight of the step it is running (#436).
+        if coord.item(first).spec.weight > 1 {
+            return 1;
+        }
         let head_node = coord.item(first).step_id.display();
         // The phase's other steps (waiting on upstreams or on their stream) count toward
         // whether the work is trivial, not toward the ceiling.
@@ -1198,6 +1265,9 @@ impl WorkerPool {
             let Some(&id) = ready.peek() else {
                 break;
             };
+            if coord.item(id).spec.weight > 1 {
+                break;
+            }
             let est = cost.estimate(&coord.item(id).step_id.display());
             if acc + est > budget {
                 break;
@@ -1222,10 +1292,22 @@ impl WorkerPool {
             return;
         }
         // Each worker still starting takes the first batch left when it connects.
+        // Only as many as the capacity lets start: a worker for a step that has to wait would
+        // sit idle (#436).
+        let capacity = self.capacity();
+        let mut running = self.running_weight(coord);
         let mut ready = coord.ready_items().peekable();
         let mut taken = 0;
         let mut batches = 0;
         while taken < coord.ready_count() && batches < self.pending.len() + room {
+            let Some(&head) = ready.peek() else {
+                break;
+            };
+            let weight = coord.item(head).spec.weight;
+            if !crate::coordinator::fits(running, weight, capacity) {
+                break;
+            }
+            running += crate::coordinator::effective_weight(weight, capacity);
             taken += self.batch_len(coord, cost, &mut ready, coord.ready_count() - taken);
             batches += 1;
         }
@@ -1832,6 +1914,7 @@ mod tests {
             dag_inputs: HashMap::new(),
             timeout_seconds: 300,
             retries: 1,
+            weight: 1,
             retry_backoff_seconds: 0.0,
             serializer: Some("parquet".to_string()),
             run_hash: Some("abc123".to_string()),
@@ -1879,6 +1962,7 @@ mod tests {
             dag_inputs: HashMap::new(),
             timeout_seconds: 300,
             retries: 1,
+            weight: 1,
             retry_backoff_seconds: 0.0,
             serializer: None,
             sinks: Vec::new(),
@@ -1913,6 +1997,7 @@ mod tests {
             dag_inputs: HashMap::new(),
             timeout_seconds: 300,
             retries: 1,
+            weight: 1,
             retry_backoff_seconds: 0.0,
             serializer: None,
             sinks: Vec::new(),
@@ -1945,6 +2030,7 @@ mod tests {
             dag_inputs: HashMap::new(),
             timeout_seconds: 300,
             retries: 1,
+            weight: 1,
             retry_backoff_seconds: 0.0,
             serializer: None,
             sinks: Vec::new(),
@@ -2067,6 +2153,7 @@ mod tests {
             dag_inputs: HashMap::new(),
             timeout_seconds: 300,
             retries: 1,
+            weight: 1,
             retry_backoff_seconds: 0.0,
             serializer: None,
             sinks: Vec::new(),
@@ -2105,6 +2192,7 @@ mod tests {
             dag_inputs: HashMap::new(),
             timeout_seconds: 300,
             retries: 1,
+            weight: 1,
             retry_backoff_seconds: 0.0,
             serializer: None,
             sinks: Vec::new(),
@@ -2203,6 +2291,7 @@ mod tests {
             dag_inputs: HashMap::new(),
             timeout_seconds: 300,
             retries: 1,
+            weight: 1,
             retry_backoff_seconds: 0.0,
             serializer: None,
             sinks: Vec::new(),
@@ -2221,6 +2310,7 @@ mod tests {
             upload_snapshot_prefix: None,
             python: PathBuf::from("python3"),
             pool_size,
+            capacity: pool_size,
             run_id: format!("{run_id}-{}", std::process::id()),
             datadog: None,
             artifact_root: ".".to_string(),
@@ -2480,6 +2570,7 @@ mod tests {
                     upload_snapshot_prefix: None,
                     python: PathBuf::from("python3"),
                     pool_size: n,
+                    capacity: n,
                     run_id: "test-shutdown".to_string(),
                     datadog: None,
                     artifact_root: ".".to_string(),
@@ -2502,6 +2593,8 @@ mod tests {
                 branch_root: branch_root.clone(),
                 next_branch_group: 0,
                 branch_dirs: HashMap::new(),
+                failures_survived: 0,
+                steps_dispatched: 0,
             };
 
             let start = std::time::Instant::now();

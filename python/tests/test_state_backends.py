@@ -23,15 +23,15 @@ The contract:
     5. stat                         -> exists and size for a backup; not there for a missing name
 """
 
+import datetime
+import json
 import os
 import socket
 import uuid
 from urllib.parse import urlsplit
 
 import pytest
-
-from barca import _storage
-from barca import _state
+from barca import _state, _storage
 
 from . import emulators
 
@@ -209,13 +209,14 @@ def backend(request, tmp_path, monkeypatch):
 # ─── the contract ────────────────────────────────────────────────────────────
 
 
-def _backup_files(tmp_path, name: str, data: bytes):
+def _backup_files(tmp_path, name: str, data: bytes, host: "str | None" = None):
     db = tmp_path / name
     db.write_bytes(data)
     sidecar = tmp_path / (name[: -len(".db")] + ".json")
-    sidecar.write_text(
-        '{"run_id": "r1", "rows": 2, "digest": "d", "barca_version": "0", "db_format": 1}'
-    )
+    side = {"run_id": "r1", "rows": 2, "digest": "d", "barca_version": "0", "db_format": 1}
+    if host is not None:
+        side.update(host=host, project="/srv/project")
+    sidecar.write_text(json.dumps(side))
     return str(db), str(sidecar)
 
 
@@ -231,6 +232,7 @@ def test_backup_list_fetch_and_stat_round_trip(backend, tmp_path):
     assert _state.backup(db, sidecar, prefix, 5) == {
         "uploaded": "2026-10-14T18-02-11Z.db",
         "removed": [],
+        "others": [],
     }
     (listed,) = _state.list_backups(prefix)["backups"]
     assert listed["name"] == "2026-10-14T18-02-11Z.db"
@@ -283,3 +285,48 @@ def test_millisecond_names_sort_among_to_the_second_ones(backend, tmp_path):
     assert listed == list(reversed(names))
     db, sidecar = _backup_files(tmp_path, "2026-10-14T18-02-13.000Z-00000000.db", b"x")
     assert _state.backup(db, sidecar, prefix, 5)["removed"] == [names[0]]
+
+
+def test_two_writers_on_one_prefix_keep_each_newest_and_report_each_other(backend, tmp_path):
+    # #553: machine B backs up into machine A's prefix. A's newest backup survives B's
+    # pruning, and each one's backup names the other's that came after its own previous one.
+    prefix = backend.make_uri(tmp_path)
+    t = iter(range(10, 60))
+    today = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H-%M")
+
+    def take(host):
+        name = f"{today}-{next(t)}Z.db"
+        db, sidecar = _backup_files(tmp_path, name, name.encode(), host=host)
+        return name, _state.backup(db, sidecar, prefix, 5)
+
+    first_a, result = take("a")
+    assert result["others"] == []
+    # B has no backup of its own yet: taking over is not interleaving.
+    _, result = take("b")
+    assert result["others"] == []
+    for _ in range(6):
+        last_b, result = take("b")
+    assert result["others"] == []
+    listed = [b["name"] for b in _state.list_backups(prefix)["backups"]]
+    assert first_a in listed, "A's newest backup is kept"
+    assert len(listed) == 6
+    # A again: B's backups since A's previous one are reported, newest first.
+    _, result = take("a")
+    assert result["others"][0] == {"name": last_b, "host": "b", "project": "/srv/project"}
+    assert len(result["others"]) == 5
+    assert first_a in result["removed"], "A's older backup goes once A has a newer one"
+    # A sidecar from before 0.29 (no host) is pruned by age and stops the scan.
+    _, result = take(None)
+    assert result["others"] == []
+
+
+def test_another_writers_old_backup_is_pruned_after_a_week(backend, tmp_path):
+    prefix = backend.make_uri(tmp_path)
+    old = "2020-01-01T00-00-00Z.db"
+    db, sidecar = _backup_files(tmp_path, old, b"x", host="gone")
+    _state.backup(db, sidecar, prefix, 5)
+    today = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H-%M")
+    for i in range(5):
+        db, sidecar = _backup_files(tmp_path, f"{today}-1{i}Z.db", b"y", host="here")
+        result = _state.backup(db, sidecar, prefix, 5)
+    assert result["removed"] == [old]

@@ -216,17 +216,6 @@ def load_source_module(source_file: str, mod_name: str) -> ModuleType:
         return sys.modules[mod_name]
 
 
-def load_package_module(dotted: str) -> ModuleType:
-    """Import `dotted` (a module inside a package under the cwd, the project root) by name, so
-    it has its parent package. The root goes on sys.path and is claimed, so the package and
-    everything it imports compile from source like any pipeline file."""
-    root = os.path.realpath(os.getcwd())
-    if root not in sys.path:
-        sys.path.insert(0, root)
-    _claim(root)
-    return importlib.import_module(dotted)
-
-
 def _pipeline_name(path: Path) -> str | None:
     """An ordinary root/package/namespace identity, when its path has one."""
     _claim_project_root()

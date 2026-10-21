@@ -10,10 +10,11 @@ Options:
   -h, --help                Print help
 
 Examples:
-  barca state restore                  # the newest backup
+  barca state restore                  # this machine's newest backup (the newest if it has none)
+  barca state restore --from 1         # the newest, whichever machine took it
   barca state restore --from 2         # the second newest
   barca state restore --from 2026-10-14T18-02-11.482Z-3f9a1c2e  # by name, .db optional
-  barca state restore --json           # {restored, from, source, pre_restore, rows, run_id}
+  barca state restore --json           # {restored, from, source, pre_restore, rows, run_id, host, project}
   barca state restore --from .barca/metadata.db.reset-2026-10-20T18-02-11.482Z  # a file barca state reset moved aside
 
 The copy is checked first (a whole SQLite file, integrity, barca's tables, a format this barca

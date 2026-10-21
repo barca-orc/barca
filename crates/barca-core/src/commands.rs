@@ -223,30 +223,7 @@ pub async fn get_many_streaming(
 }
 
 /// `barca run a,b` — several tasks in one run; see [`get_many`]. Every task always re-runs;
-/// upstream assets follow `policy`, applied to the union of the cones.
-pub async fn run_many(
-    cfg: &crate::config::ResolvedConfig,
-    target_names: &[String],
-    file_args: &[String],
-    python: &std::path::Path,
-    policy: CachePolicy,
-    agent_mode: bool,
-    cancel: impl Into<crate::interrupt::Interrupt>,
-) -> Result<MultiResult, BarcaError> {
-    run_many_streaming(
-        cfg,
-        target_names,
-        file_args,
-        python,
-        policy,
-        agent_mode,
-        cancel,
-        None,
-    )
-    .await
-}
-
-/// Streaming counterpart that preserves the multi-target execution policy.
+/// upstream assets follow `policy`, applied to the union of the cones. Events go to `event_tx`.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_many_streaming(
     cfg: &crate::config::ResolvedConfig,

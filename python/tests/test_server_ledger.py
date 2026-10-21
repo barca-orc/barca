@@ -34,7 +34,7 @@ import random
 import time
 from pathlib import Path
 
-from barca import asset, sensor, task
+from barca import Manual, asset, sensor, task
 
 
 @asset()
@@ -54,6 +54,11 @@ def report(middle: dict) -> dict:
 
 @asset()
 def noisy() -> float:
+    return random.random()
+
+
+@asset(freshness=Manual)
+def pinned() -> float:
     return random.random()
 
 
@@ -435,6 +440,37 @@ def test_a_run_held_for_its_uploads_is_posted_by_the_command_that_uploads_them(t
     assert result_b["final_output"] == {"n": 20}
     [copy] = local_copies(team.b, "report")
     assert json.loads(copy.read_text()) == {"n": 20}
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes into read-only directories")
+def test_a_held_manual_refresh_is_posted_without_the_nondeterminism_warning(team):
+    # The ledger holds A's first `pinned` (a `Manual` asset) and `noisy` (an ordinary asset).
+    get(team.a, "pinned", "--refresh", "pinned")
+    get(team.a, "noisy")
+    # Both are refreshed while the store refuses uploads: new bytes under the same run hashes,
+    # and each run's post is held for its uploads (#507).
+    artifacts = team.store / "default" / "artifacts"
+    folders = [artifacts, *(p for p in artifacts.iterdir() if p.is_dir())]
+    for folder in folders:
+        folder.chmod(stat.S_IRUSR | stat.S_IXUSR)
+    try:
+        held = [get(team.a, name, "--refresh", name)[0]["run_id"] for name in ("pinned", "noisy")]
+    finally:
+        for folder in folders:
+            folder.chmod(stat.S_IRWXU)
+    assert [p["state"] for p in posts(team.a)] == ["shared", "shared", "unsynced", "unsynced"]
+
+    # The next command uploads them and sends the held posts; the server answers that it held
+    # both with other bytes. A hand-refreshed `Manual` asset is refreshed to get new bytes, so
+    # only `noisy` gets the warning, as when a post is sent at the end of its run (#570).
+    _, err = get(team.a, "base")
+    for run_id in held:
+        assert f"[barca] recorded run {run_id} on the server" in err, err
+    assert (
+        "[barca] warning: pipeline.py:noisy produced different bytes for the same code and "
+        "inputs; the function is not deterministic"
+    ) in err, err
+    assert "pipeline.py:pinned produced different bytes" not in err, err
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root writes into read-only directories")

@@ -534,9 +534,14 @@ async fn run_cli(
             step,
             format,
             env,
-        } => logs_cmd(env.as_deref(), &run_id, step.as_deref(), is_json(format))
-            .await
-            .map_err(engine),
+        } => logs_cmd(
+            env.as_deref(),
+            run_id.as_deref(),
+            step.as_deref(),
+            is_json(format),
+        )
+        .await
+        .map_err(engine),
         Cli::History {
             reconcile,
             limit,

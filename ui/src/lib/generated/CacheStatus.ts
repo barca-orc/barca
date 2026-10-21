@@ -23,4 +23,11 @@ run_hash?: string | null,
 /**
  * The artifact a `get` would serve from cache.
  */
-artifact?: string | null, };
+artifact?: string | null,
+/**
+ * A `stale` node: what changed in its run hash since its last successful materialization
+ * (`code`, `decorator argument NAME`, `decorator NAME`, `helper FILE:NAME`, `input ID`,
+ * `sensor ID`, `env NAME`, `kind`). Absent when that materialization recorded no components
+ * (before 0.29.0).
+ */
+changed?: Array<string> | null, };

@@ -2,8 +2,8 @@
 openapi: 3.1.0
 info:
   title: Barca current HTTP API
-  version: '6'
-  description: 'Normative current wire contract; specification version 6 is independent of package versions.
+  version: '7'
+  description: 'Normative current wire contract; specification version 7 is independent of package versions.
     Scope: registered barca-server routes and fallback responses. No authentication is implemented (security
     is empty); read-only is an operating mode. The run contract and inspection routes of RFC-0007 section
     3.4 are shipped (POST /runs, GET /runs/{run_id}, its events, output and cancel; /list, /nodes, /history,
@@ -2383,6 +2383,23 @@ components:
         total_steps: &id044
           type: integer
           minimum: 0
+        pool_size:
+          type: integer
+          minimum: 0
+          description: Worker processes (available cores, or BARCA_POOL_SIZE). Experimental.
+        capacity:
+          type: integer
+          minimum: 0
+          description: The most the weight= of the steps running at once may add up to (#436). Experimental.
+        capacity_source:
+          type: string
+          description: Where capacity came from, BARCA_CAPACITY, [execution] capacity or pool size. Experimental.
+        weights:
+          type: object
+          additionalProperties:
+            type: integer
+            minimum: 2
+          description: Each planned node whose weight= is above 1, by node id. Experimental.
         phases:
           type: array
           items:
@@ -2425,6 +2442,10 @@ components:
         status: *id003
         reason: *id003
         detail: *id003
+        changed:
+          description: Dry run, a step with no cached result that succeeded before; what changed in its run hash since then (0.29.0).
+          type: array
+          items: *id003
         run_hash: *id003
         artifact: *id003
         warning: *id003
@@ -2449,6 +2470,10 @@ components:
             anyOf:
             - *id003
             - type: 'null'
+        weight:
+          type: integer
+          minimum: 2
+          description: Dry run only, the node's weight= when above 1 (#436). Experimental.
     ArtifactReference:
       type: object
       additionalProperties: false
@@ -2615,6 +2640,10 @@ components:
         detail: *id003
         run_hash: *id003
         artifact: *id003
+        changed:
+          description: What changed in a stale node's run hash since its last successful materialization (0.29.0).
+          type: array
+          items: *id003
     PartitionState:
       type: object
       additionalProperties: false
@@ -3295,6 +3324,10 @@ components:
       - summary
       description: The barca get --dry-run --json / barca run --dry-run --json body.
       properties:
+        capacity:
+          type: integer
+          minimum: 0
+          description: The most the weight= of the steps running at once may add up to (#436). Experimental.
         steps:
           type: array
           items:
@@ -3655,6 +3688,7 @@ components:
       - command
       - files
       - target
+      - job
       - status
       - steps_total
       - steps_executed
@@ -3674,6 +3708,12 @@ components:
           type: array
           items: *id005
         target: *id042
+        job:
+          type:
+          - string
+          - 'null'
+          description: The run's job, all for a run without targets, otherwise its resolved node ids
+            sorted and comma-separated; null for runs recorded before barca stored it.
         status: *id005
         steps_total: *id058
         steps_executed: *id056

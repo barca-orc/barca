@@ -44,6 +44,7 @@ pub const HISTORY_FIELDS: &[&str] = &[
     "command",
     "files",
     "target",
+    "job",
     "status",
     "steps_total",
     "steps_executed",
@@ -67,6 +68,7 @@ pub const STEP_FIELDS: &[&str] = &[
     "status",
     "reason",
     "detail",
+    "changed",
     "run_hash",
     "artifact",
     "warning",
@@ -77,6 +79,7 @@ pub const STEP_FIELDS: &[&str] = &[
     "import_seconds",
     "partitions",
     "env",
+    "weight",
 ];
 
 /// Item fields of `recent_runs[]` in `barca stats --json`.
@@ -175,6 +178,7 @@ mod tests {
             command: String::new(),
             files: vec![],
             target: None,
+            job: None,
             status: String::new(),
             steps_total: None,
             steps_executed: 0,
@@ -204,6 +208,7 @@ mod tests {
             status: s(),
             reason: s(),
             detail: s(),
+            changed: Some(Vec::new()),
             run_hash: s(),
             artifact: s(),
             artifact_mismatch: Some(true),
@@ -214,6 +219,7 @@ mod tests {
             warning: s(),
             partitions: Some(Default::default()),
             env: Some(Default::default()),
+            weight: Some(2),
         };
         assert_eq!(keys(&serde_json::to_value(step).unwrap()), set(STEP_FIELDS));
     }
@@ -245,6 +251,7 @@ mod tests {
                 detail: String::new(),
                 run_hash: None,
                 artifact: None,
+                changed: None,
             },
             partitions: Some(PartitionState {
                 total: 0,

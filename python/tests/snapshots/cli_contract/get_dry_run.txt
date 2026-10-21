@@ -1,4 +1,5 @@
 # barca get total pipeline.py --dry-run --json  (stdout, exit 0)
+capacity : integer
 command : string
 dry_run : boolean
 steps : array

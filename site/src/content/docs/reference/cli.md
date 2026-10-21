@@ -44,7 +44,7 @@ barca get [target[,target...]] [file.py|dir/ ...] [--refresh a,b [--no-cascade] 
 barca run <task[,task...]> [file.py|dir/ ...] [--refresh a,b [--no-cascade] | --refresh-all]  Run task(s) (always re-run)
 barca plan [file.py|dir/ ...]                Emit the execution plan as JSON (experimental)
 barca doctor [file.py|dir/ ...] [--json]      Diagnose project prerequisites without running steps
-barca logs <run_id> [--step NAME] [--json]    A run's captured step stdout
+barca logs [run_id] [--step NAME] [--json]    A run's captured step stdout (default: the most recent run)
 barca history [-l N | --all] [--json|--pretty]  Show recent runs
 barca stats <target> [file.py|dir/ ...]       Show timing/cache stats for an asset
 barca gc [--dry-run] [--max-size SIZE] [--json]  Evict cached results to keep .barca/ under its size limit (experimental)
@@ -200,7 +200,7 @@ exit code is still 2 and nothing runs.
 | `-o json\|pretty` | Older spellings of `--json` / `--pretty`. |
 | `--partition KEY=V[,V]` | Select keys of a partitioned target (a JSON object for compound keys); only they run, are returned and are refreshed. |
 | `--agent` | Plain progress lines on stderr in place of the progress bar. |
-| `--fields a,b` | Keep only these keys on each entry of `steps`: `id`, `kind`, `action`, `status`, `reason`, `detail`, `run_hash`, `artifact`, `warning`, `partitions`, `env`. |
+| `--fields a,b` | Keep only these keys on each entry of `steps`: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `partitions`, `env`. |
 | `--env <name>` | Use a named environment's cache and history. |
 
 `--no-cache` was removed in 0.24.0; use `--refresh-all`.
@@ -350,25 +350,28 @@ still keep an uncertain owner `running`; reconciliation is your assertion that i
 The change is local to the selected environment's metadata database.
 
 
-Show recent runs from `.barca/metadata.db`: run id, command, status, step counts and timing.
+Show recent runs from `.barca/metadata.db`: run id, command, target, status, step counts and
+timing. TARGET is the run's job by function name, `all` for a run without targets, cut at 24
+characters with `…`.
 The human table defaults to the 10 most recent; JSON returns every run unless `--limit` is explicit.
 
 ```
 $ barca history
-RUN_ID         CMD     STATUS      STEPS CACHED   TIME STARTED
------------------------------------------------------------------------------
-14f1e316840c   run     success         1      2   0.1s 2026-10-21 02:39:25 UTC
-14f01f296a75   get     success         0      2   0.0s 2026-10-21 02:39:25 UTC
-14f3870e173f   get     success         2      0   0.1s 2026-10-21 02:39:25 UTC
+RUN_ID         CMD     TARGET                   STATUS      STEPS CACHED   TIME STARTED
+------------------------------------------------------------------------------------------------------
+14f1e316840c   run     notify                   success         1      2   0.1s 2026-10-21 02:39:25 UTC
+14f01f296a75   get     country_report,weekly_s… success         0      2   0.0s 2026-10-21 02:39:25 UTC
+14f3870e173f   get     all                      success         2      0   0.1s 2026-10-21 02:39:25 UTC
 ```
 
-Times are UTC. `--fields` takes `run_id`, `command`, `files`, `target`, `status`,
+Times are UTC. `--fields` takes `run_id`, `command`, `files`, `target`, `job`, `status`,
 `steps_total`, `steps_executed`, `steps_cached`, `attempts`, `started_at`, `finished_at`,
 `elapsed_seconds`, `triggered_by`, `scheduled_at`, `schedule_id`. `triggered_by` says what
 started the run: `manual` (a command typed on a machine), `api` (an HTTP request to
 `barca serve`), `schedule` (a cron tick, with the tick in `scheduled_at`, RFC 3339 in UTC, and
 the scheduled node in `schedule_id`) or `client`; it is `null` for runs recorded before barca
-recorded it.
+recorded it. `job` is the run's job in full: `all`, or its resolved node ids sorted and
+comma-separated (`null` for runs recorded before 0.29.0); `target` is the target as typed.
 
 ```bash
 barca history --fields run_id,triggered_by,scheduled_at   # what started each run
@@ -591,8 +594,13 @@ spells it in snake_case, exactly like the `summary` keys; the table prints `neve
 | `unknown` | dynamic partitions whose source has not run | `partitions_unknown` |
 | `always_runs` | tasks and sensors | `task`, `sensor` |
 
-`changed` means the run hash differs from the last materialization: this function's code or its
-upstream outputs changed. barca stores only the combined hash, so it cannot say which.
+`changed` means the run hash differs from the last successful materialization, and
+`cache.changed` says what differs: `code`, `decorator argument NAME`, `decorator NAME`,
+`helper FILE:NAME` (a function or constant the code uses, in its own file or a project module),
+`input ID`, `sensor ID`, `env NAME` or `kind`. `detail` and the table's WHY column name the first
+and count the rest (`changed: helper pipelines/common.py:bucket_ltv (+1 more)`), and a dry run's
+step carries the same `changed` list. A result recorded before 0.29.0 has no record of the parts,
+and its node stays a plain `changed`.
 `artifact_missing` means the result is recorded but its artifact file is gone and a run would
 have to read it, so it would be computed again; a missing artifact that nothing reads leaves the
 node `cached` (`barca docs cache`, "A cached result whose artifact is missing").
@@ -658,13 +666,17 @@ See [barca sql](/reference/sql/) for views, errors and limits.
 With a remote store (`[remote] uri` or `BARCA_REMOTE_URI`), `get` and `run` back the metadata
 DB up on a one-minute checkpoint and when they end, and `serve` every minute it changed: to
 `.barca/backups/<name>.db` and `<uri>/<env>/state/backups/<name>.db`, five copies kept in each,
-each with a `<name>.json` sidecar (`run_id`, `rows`, `digest`, `barca_version`, `db_format`).
-Nothing is downloaded before a run.
+each with a `<name>.json` sidecar (`run_id`, `rows`, `digest`, `barca_version`, `db_format`,
+and from 0.29 `host` and `project`: the machine and project directory that took it). Nothing is
+downloaded before a run. A store is one machine's backup: when another machine's backup is
+newer than this one's own, a backup or `barca state backups` warns once, pruning keeps each
+machine's newest backup, and `restore` without `--from` picks this machine's.
 
 ```bash
-barca state backups                  # newest first: # NAME WHERE SIZE ROWS RUN
-barca state backups --json           # {backups: [{index, name, where, size_bytes, run_id, rows, digest, agree, barca_version, db_format}], local_dir, store}
-barca state restore                  # put the newest backup back
+barca state backups                  # newest first: # NAME WHERE SIZE ROWS RUN HOST
+barca state backups --json           # {backups: [{index, name, where, size_bytes, run_id, rows, digest, agree, barca_version, db_format, host, project, mine}], local_dir, store}
+barca state restore                  # put this machine's newest backup back (the newest, if it has none)
+barca state restore --from 1         # the newest, whichever machine took it
 barca state restore --from 2         # by index; or --from 2026-10-14T18-02-11.482Z-3f9a1c2e
 barca state reset --yes              # move .barca/metadata.db aside to metadata.db.reset-<UTC>, start empty
 barca state restore --from .barca/metadata.db.reset-2026-10-20T18-02-11.482Z  # undo a reset
@@ -673,7 +685,7 @@ barca state restore --from .barca/metadata.db.reset-2026-10-20T18-02-11.482Z  # 
 `restore` checks the copy first (a whole SQLite file, integrity, barca's tables, a usable
 format), the local copy before the store's, then moves the current database to
 `.barca/metadata.db.pre-restore` and puts the copy in place; one line on stderr says what it
-restored and from where, and `--json` adds `{restored, from, source, pre_restore, rows, run_id}`
+restored and from where, and `--json` adds `{restored, from, source, pre_restore, rows, run_id, host, project}`
 on stdout. It never runs by itself. Exit 2: no backup, an unknown `--from`, or a copy that fails
 the check (nothing is changed). Exit 3: `barca serve` is running on the environment. See
 [Remote storage](/reference/remote-storage/#backups-and-restore).
@@ -725,7 +737,10 @@ See [the CLI contract](/reference/cli-contract/#a-closed-stdout-or-stderr-stable
 An error in a pipeline file fails every command that reads the file with exit 2, whatever the
 target: a syntax error, or a decorator called with an argument it does not define
 (`@asset(after=other)`, `input=` for `inputs=`). See
-[Accepted arguments](/reference/api/decorators/#accepted-arguments).
+[Accepted arguments](/reference/api/decorators/#accepted-arguments). A syntax error in a helper
+module a pipeline file imports fails, with exit 2 before anything runs, every command that plans
+a step of that file (`plan`, `status`, `get`, `run`, `--dry-run`), naming the module, line,
+column and source line; `list` and steps of other files are not affected.
 
 In JSON output mode (whenever results are JSON: piped or captured stdout, `--json`, `-o json` or
 `BARCA_OUTPUT=json`; `plan` always; `docs` with `--json`), an error is a single JSON line, the
@@ -768,7 +783,8 @@ worker for pipeline.py:train exited with code 3
 ```
 
 SIGKILL is what the out-of-memory killer sends: check the container's or host's memory limit.
-Several heavy steps running at once in separate workers add up. A worker frozen waiting for
+Several heavy steps running at once in separate workers add up; give them a `weight=` so fewer
+run at once (see [Decorators](/reference/api/decorators/#heavy-steps-weight)). A worker frozen waiting for
 its `parallel()` branches adds `while it waited for its parallel() branches`. When the exit
 status is not available within a few hundred milliseconds, the error is the plain
 `worker disconnected`.
@@ -832,6 +848,9 @@ on stderr when `default_env` or an artifact store is in effect. See
 ## Recorded stdout
 
 `barca logs RUN_ID --pretty` prints recorded step stdout, without progress or prefixes.
+Without a run id, `barca logs` reads the most recent run (running or finished) and names it in a
+line on stderr: `barca: logs of the most recent run: 07c4a64d0540 (run notify, success, started
+2026-10-21 06:40:36 UTC)`.
 `--json` returns `[{node_id, line}]` in recorded order. `--step report` selects a function
 name; use an exact node id if names collide, or a partitioned id to select one key.
 `--env dev` reads that environment's local history. It reads no pipeline source and makes

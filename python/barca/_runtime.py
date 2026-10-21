@@ -234,8 +234,13 @@ def emit_step_error(
     traceback: str,
     elapsed: float,
     import_seconds: float | None = None,
+    worker_continues: bool = False,
 ) -> None:
-    """Report a step failed."""
+    """Report a step failed.
+
+    `worker_continues` tells the coordinator this worker is still sound and goes on with its
+    batch; without it the coordinator stops the worker and starts a fresh one (#523).
+    """
     _report_repeated_warnings()
     _emit_result(
         {
@@ -246,6 +251,7 @@ def emit_step_error(
             "traceback": traceback,
             "elapsed": elapsed,
             **({"import_seconds": import_seconds} if import_seconds is not None else {}),
+            **({"worker_continues": True} if worker_continues else {}),
         }
     )
 
@@ -272,6 +278,12 @@ def emit_log(node_id: str, line: str) -> None:
     send_message({"type": "log", "node_id": node_id, "line": line})
 
 
+# Set when a parallel() exchange with the coordinator did not complete (the request was sent
+# but no answer was read, or the answer was not one). The socket's framing can no longer be
+# trusted, so the worker reports its step's failure and exits instead of taking more work.
+exchange_broken = False
+
+
 def submit_and_wait(work_items: list[dict]) -> list[dict]:
     """Submit work items to the executor and block until all complete.
 
@@ -285,6 +297,8 @@ def submit_and_wait(work_items: list[dict]) -> list[dict]:
         One entry per item: {"status": "ok", "artifact": {"path", "format", "frame_type"?}}
         or {"status": "error", "error": "..."}. Artifact values are read from files.
     """
+    global exchange_broken
+    exchange_broken = True
     send_message(
         {
             "type": "submit",
@@ -298,6 +312,7 @@ def submit_and_wait(work_items: list[dict]) -> list[dict]:
     response = recv_message()
     if response.get("type") != "parallel_response":
         raise RuntimeError(f"unexpected response type: {response.get('type')}")
+    exchange_broken = False
     return response.get("results", [])
 
 

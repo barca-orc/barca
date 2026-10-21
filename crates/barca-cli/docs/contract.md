@@ -57,6 +57,7 @@ outside the `GENERATED` blocks is written by hand.
 | the `[barca] <n> more: ...` line | collapsing repeated library warnings is new; which output counts as a warning may change |
 | `BARCA_ARTIFACT_URI` | 0.4.0 back-compat override, superseded by `BARCA_REMOTE_URI` / `[remote].artifacts_uri` |
 | `barca state reset` and its JSON, `POST /state/reset` | new in 0.28 (#508): the JSON shape and the name of the moved-aside file may change after field use |
+| `weight=` on `@asset`, `@task` and `@sensor`, `[execution] capacity`, `BARCA_CAPACITY`, `capacity` / `capacity_source` / `pool_size` / `weights` in `barca plan`, `capacity` and `steps[].weight` in `--dry-run`, the `capacity` doctor check | new in 0.29 (#436): how steps are admitted under the capacity, and whether a step waiting in `parallel()` counts, may change after field use |
 | `barca gc` and its JSON, `[cache] max_size`, `BARCA_CACHE_MAX_SIZE`, the `cache` key of `get`/`run` results, the step and status reason `evicted`, the `cache_size` doctor check | new in 0.25 (RFC-0012): the low watermark, the eviction order and the JSON shapes may change after field use |
 | `--agent` lines other than `step:`, the end-of-run line and `run failed:` | progress notes (`still running`, skipped tasks, the text of warnings, `SINK FAILED`) whose wording may change |
 
@@ -78,7 +79,7 @@ outside the `GENERATED` blocks is written by hand.
 | `barca run` | `<ARGS>...` | stable | Run a task and its dependency cone — the task always re-runs |
 | `barca plan` | `[<FILES>...]` | experimental: prints the planner's internal phase/stream layout, which changes with scheduling work | Parse source files and emit the execution plan as JSON |
 | `barca doctor` | `[<FILES>...]` | experimental: new prerequisite report; check names and provider-specific data may evolve | Diagnose project prerequisites without running pipeline steps |
-| `barca logs` | `<RUN_ID>` | stable | Read a run's captured step stdout, without progress messages |
+| `barca logs` | `[<RUN_ID>]` | stable | Read a run's captured step stdout, without progress messages |
 | `barca history` | - | stable | Show recent run history |
 | `barca gc` | - | experimental: new in 0.25 (RFC-0012): the eviction order, the low watermark and the JSON shape may change after field use | Evict cached results to keep .barca/ under its size limit |
 | `barca stats` | `<TARGET> [<FILES>...]` | stable | Show execution statistics for an asset |
@@ -149,7 +150,7 @@ default, and any aliases.
 | `--refresh-all` | - | default `false` | stable | Force re-materialize EVERY asset in the target's cone (nothing comes from cache) |
 | `--dry-run` | - | default `false` | stable | Show what this command would do (each step cached or will-run, and why) without executing steps or recording a run |
 | `--agent` | - | default `false` | stable | Agent-friendly output: plain structured progress lines instead of visual progress bar |
-| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `partitions`, `env` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Implies --json; not valid with --pretty or -o pretty. An unknown key is a usage error listing the valid ones |
+| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `partitions`, `env`, `weight` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Implies --json; not valid with --pretty or -o pretty. An unknown key is a usage error listing the valid ones |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger) and status, history and stats are answered by a configured server |
 | `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history and stats) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
@@ -167,7 +168,7 @@ default, and any aliases.
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `--agent` | - | default `false` | stable | Agent-friendly output: plain structured progress lines instead of visual progress bar |
-| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `partitions`, `env` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones |
+| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `partitions`, `env`, `weight` | - | stable | Keep only these keys (comma-separated) on each entry of `steps` in the JSON output. Not valid with -o value/pretty. An unknown key is a usage error listing the valid ones |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger) and status, history and stats are answered by a configured server |
 | `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history and stats) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
@@ -191,7 +192,7 @@ default, and any aliases.
 
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
-| `<RUN_ID>` | - | required | stable | Exact run id from get/run JSON or history |
+| `<RUN_ID>` | - | - | stable | Exact run id from get/run JSON or history (default: the most recent run) |
 | `--step` | `STEP` | - | stable | Function name or exact node id (including a partition key when desired) |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
@@ -206,7 +207,7 @@ default, and any aliases.
 | `--all` | - | default `false` | stable | Show every recorded run (no limit) |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
-| `--fields` | comma-separated: `run_id`, `command`, `files`, `target`, `status`, `steps_total`, `steps_executed`, `steps_cached`, `attempts`, `started_at`, `finished_at`, `elapsed_seconds`, `triggered_by`, `scheduled_at`, `schedule_id`, `client_run_id` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `runs`. Implies --json. An unknown key is a usage error listing the valid ones |
+| `--fields` | comma-separated: `run_id`, `command`, `files`, `target`, `job`, `status`, `steps_total`, `steps_executed`, `steps_cached`, `attempts`, `started_at`, `finished_at`, `elapsed_seconds`, `triggered_by`, `scheduled_at`, `schedule_id`, `client_run_id` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `runs`. Implies --json. An unknown key is a usage error listing the valid ones |
 | `--env` | `ENV` | - | stable | Environment name (separates cache/state per environment) |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Run this command on a barca server (`barca serve`) and print its result here: the URL given, or with no URL the configured one (BARCA_SERVER, else [server] url in barca.toml). Without it, get and run run on this machine (against a configured server's ledger) and status, history and stats are answered by a configured server |
 | `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, and the answers of status, history and stats) | Ignore any configured server for this command: run against this machine's own ledger and records; nothing is read from or sent to the server |
@@ -405,6 +406,7 @@ value of its first key only.
 | `BARCA_COMM_COST_SECONDS` | the scheduler's per-dispatch cost estimate | experimental |
 | `BARCA_TRACE_TIMING` | when set, prints a timing waterfall on stderr | experimental |
 | `BARCA_CACHE_MAX_SIZE` | size limit for `.barca/` (`[cache] max_size`): `20GB`, `500MB`, `20GiB`, bytes, `10%` of the filesystem or `off`; default 10% of the filesystem; an invalid value is a usage error (exit 2) | experimental |
+| `BARCA_CAPACITY` | the most the `weight=` of the steps running at once may add up to (beats `[execution] capacity` in `barca.toml`; default: the pool size); a whole number of at least 1, anything else is a usage error (exit 2) | experimental |
 | `BARCA_SERVER` | the configured barca server (beats `[server] url` in `barca.toml`): the ledger of a local `get`/`run`, what `status`/`history`/`stats` answer from, and what a bare `--server` uses; empty is unset; an invalid URL is a usage error (`barca docs server-mode`) | experimental |
 | `BARCA_TELEMETRY` | comma-separated telemetry integrations to send finished runs to; `datadog` is the only one (`barca docs telemetry`). Its settings are Datadog's own variables (`DD_SERVICE`, `DD_ENV`, `DD_VERSION`, `DD_TAGS`, `DD_TRACE_AGENT_URL`, `DD_AGENT_HOST`, `DD_TRACE_AGENT_PORT`, `DD_TRACE_ENABLED`, and for `barca serve` metrics `DD_DOGSTATSD_URL`, `DD_DOGSTATSD_SOCKET`, `DD_DOGSTATSD_PORT`) | experimental |
 | `BARCA_SLACK_WEBHOOK_URL` | a Slack incoming webhook (`https://`); set and non-empty, barca posts when a job starts failing, recovers, or is still failing a day later (`barca docs telemetry`). Never printed. `SLACK_WEBHOOK_URL` is ignored | experimental |
@@ -494,11 +496,18 @@ objects on stdout instead of text on stderr. Exit codes do not change. `get`, `r
 other command keep progress and errors on stderr whatever `BARCA_LOG` says.
 
 An error in a pipeline file (a syntax error, a decorator argument barca does not define, an
+`inputs=` key or partition dimension that is not a parameter, a parameter nothing fills, an
 invalid `env=`, cron or `max_failures=`) fails every command that reads that file, whatever the target: `list`,
 `plan`, `status`, `get`, `run`, `stats` and `sql` exit 2 and run nothing. With no file arguments
 that is every pipeline file of the project. The envelope's `error` starts with `Parse error:
-<file>:<function> (line <n>):` for a decorator argument, and its `remediation` says what to
+<file>:<function> (line <n>):` for a decorator argument or a parameter mismatch, and its `remediation` says what to
 change; the wording is not contract.
+
+A syntax error in a project module that a pipeline file imports (a helper) fails the commands
+that plan a step of that file (`plan`, `status`, `get`, `run`, `--dry-run`) with exit 2 before
+anything runs; a command whose steps are all in other files, and `list`, are not affected. The
+envelope's `error` starts with `Parse error: syntax error in <module file>: line <n>, column
+<c>:` and names the step; its `remediation` shows the source line with a caret.
 
 ### A closed stdout or stderr (stable)
 
@@ -1106,6 +1115,7 @@ fetched) is still exit 3.
 <!-- BEGIN GENERATED schema get_dry_run_uploads_pending -->
 | Key | Type | Present |
 |---|---|---|
+| `capacity` | integer | always |
 | `command` | string | always |
 | `dry_run` | boolean | always |
 | `steps` | array | always |
@@ -1217,12 +1227,15 @@ would happen. `partitions(<expression>)` may evaluate Python while resolving key
 `cached`, `run`, `partial` or `unknown` (in place of `status`). An `unknown` step has `reason`
 `partitions_unknown` (dynamic partitions whose source has not run) or `sensor_output_unknown` (it,
 or a step upstream of it, reads a sensor with no recorded output). A step that reads a sensor is
-predicted from the sensor's last recorded output, and `detail` says so. With one target the
+predicted from the sensor's last recorded output, and `detail` says so. `capacity` is the most the
+`weight=` of the steps running at once may add up to, and a step whose node has a `weight=` above
+1 carries `weight` (both experimental, #436). With one target the
 document has `target` (a name, or `null` for a whole file):
 
 <!-- BEGIN GENERATED schema get_dry_run -->
 | Key | Type | Present |
 |---|---|---|
+| `capacity` | integer | always |
 | `command` | string | always |
 | `dry_run` | boolean | always |
 | `steps` | array | always |
@@ -1250,6 +1263,7 @@ The top-level `summary` counts the union once.
 <!-- BEGIN GENERATED schema run_dry_run_multi_target -->
 | Key | Type | Present |
 |---|---|---|
+| `capacity` | integer | always |
 | `command` | string | always |
 | `dry_run` | boolean | always |
 | `steps` | array | always |
@@ -1446,6 +1460,13 @@ counts every node even when `nodes` is truncated.
   `cache.reason` is `materialized`, `local_only`, `store_only`, `mismatch`, `not_in_ledger`, `changed`, `upstream_stale`, `failed`, `artifact_missing`,
   `evicted` (experimental), `no_record`, `partitions_missing`, `partitions_unknown`,
   `sensor_output_unknown`, `task` or `sensor`.
+- `cache.changed` (experimental, 0.29.0) appears on a `stale` node (reason `changed` or
+  `upstream_stale`) whose last successful materialization recorded its run-hash components: an
+  array of strings naming what differs, `code`, `decorator argument NAME`, `decorator NAME`,
+  `helper FILE:NAME` (or `helper FILE`), `input ID`, `sensor ID`, `env NAME` or `kind`, in that
+  order. With reason `changed`, `detail` is then `changed: <first>` plus ` (+N more)`. Absent for
+  a result recorded before 0.29.0. A dry run's step (`steps[].changed`) carries the same list
+  when its `reason` is `not_materialized` and the step succeeded before.
 - With a configured server (experimental, `barca docs server-mode`), `barca status` without
   `--server` or `--local` is answered by the server and each node gets `local` (boolean: this
   machine has a copy of the result). A node the server has no result for whose result this
@@ -1458,6 +1479,84 @@ counts every node even when `nodes` is truncated.
   by format `rows`, `columns[]`, `keys`, `key_count`, `sample` (with `--sample`), or only `note`
   when it cannot be read.
 
+#### What changed
+
+After `total`'s input `numbers` changed its code, `barca status pipeline.py --json`:
+
+<!-- BEGIN GENERATED schema status_changed -->
+| Key | Type | Present |
+|---|---|---|
+| `nodes` | array | always |
+| `nodes[]` | object | always |
+| `nodes[].cache` | object | always |
+| `nodes[].cache.changed` | array | sometimes |
+| `nodes[].cache.changed[]` | string | always |
+| `nodes[].cache.detail` | string | always |
+| `nodes[].cache.reason` | string | always |
+| `nodes[].cache.run_hash` | string | always |
+| `nodes[].cache.state` | string | always |
+| `nodes[].env` | array | always |
+| `nodes[].id` | string | always |
+| `nodes[].inputs` | array | always |
+| `nodes[].inputs[]` | string | always |
+| `nodes[].kind` | string | always |
+| `nodes[].last_materialization` | null \| object | always |
+| `nodes[].last_materialization.artifact` | string | always |
+| `nodes[].last_materialization.content_hash` | string | always |
+| `nodes[].last_materialization.created_at` | string | always |
+| `nodes[].last_materialization.elapsed_seconds` | number | always |
+| `nodes[].last_materialization.format` | string | always |
+| `nodes[].last_materialization.run_hash` | string | always |
+| `nodes[].last_materialization.size_bytes` | integer | always |
+| `nodes[].last_materialization.status` | string | always |
+| `nodes[].name` | string | always |
+| `nodes[].partitioned` | boolean | always |
+| `nodes[].shape` | null \| object | always |
+| `nodes[].shape.keys` | array | sometimes |
+| `nodes[].shape.keys[]` | string | always |
+| `nodes[].shape.rows` | integer | sometimes |
+| `nodes[].shape.type` | string | always |
+| `root` | string | always |
+| `summary` | object | always |
+| `summary.always_runs` | integer | always |
+| `summary.cached` | integer | always |
+| `summary.never_run` | integer | always |
+| `summary.partial` | integer | always |
+| `summary.stale` | integer | always |
+| `summary.unknown` | integer | always |
+| `summary.unsynced` | integer | always |
+| `target` | null | always |
+| `targets` | array | always |
+| `total` | integer | always |
+| `truncated` | boolean | always |
+<!-- END GENERATED schema status_changed -->
+
+and `barca get total pipeline.py --dry-run --json`:
+
+<!-- BEGIN GENERATED schema get_dry_run_changed -->
+| Key | Type | Present |
+|---|---|---|
+| `capacity` | integer | always |
+| `command` | string | always |
+| `dry_run` | boolean | always |
+| `steps` | array | always |
+| `steps[]` | object | always |
+| `steps[].action` | string | always |
+| `steps[].changed` | array | always |
+| `steps[].changed[]` | string | always |
+| `steps[].detail` | string | always |
+| `steps[].id` | string | always |
+| `steps[].kind` | string | always |
+| `steps[].reason` | string | always |
+| `steps[].run_hash` | string | always |
+| `summary` | object | always |
+| `summary.cached` | integer | always |
+| `summary.unknown` | integer | always |
+| `summary.will_run` | integer | always |
+| `target` | string | always |
+| `warnings` | array | always |
+<!-- END GENERATED schema get_dry_run_changed -->
+
 ### state backups, state restore and state reset
 
 `barca state backups` prints `{backups, local_dir, store}` and, when the store could not be
@@ -1467,15 +1566,22 @@ Each entry of `backups`, newest first: `index` (integer, 1 = newest), `name`
 (`2026-10-14T18-02-11.482Z-3f9a1c2e.db`; `2026-10-14T18-02-11Z.db` from 0.26.0), `where`
 (`local`, `store` or `both`), `size_bytes` (integer),
 `run_id` (string or `null`), `rows` and `db_format` (integers or `null`), `digest` and
-`barca_version` (strings or `null`; from the backup's sidecar), and `agree` (boolean when the
-backup is in both places, else `null`). No backups is an empty array, exit 0.
+`barca_version` (strings or `null`; from the backup's sidecar), `agree` (boolean when the
+backup is in both places, else `null`), and, additive in 0.29, `host` and `project` (strings,
+the host and absolute project directory that took it) and `mine` (boolean: this host and
+project directory), all `null` for a backup whose sidecar predates them. No backups is an empty
+array, exit 0. A backup another host or project directory took after this one's newest adds a
+`[barca] warning: ...` line on stderr (not contract); the exit code is unchanged.
 
 `barca state restore [--from N|NAME|PATH]` puts a backup (or, with a path, any barca database
 file, such as one `barca state reset` moved aside) in place of the metadata DB and moves the
-current one to `metadata.db.pre-restore`. One `[barca] restored ...` line on stderr (not
-contract); with `--json` (or piped), stdout has `{restored, from, source, pre_restore, rows,
-run_id}`: `from` is `local`, `store` or `file` (`--from PATH`; `rows` and `run_id` are then
-`null`), `source` the copy's path or redacted URI,
+current one to `metadata.db.pre-restore`. Without `--from` it takes this host and project
+directory's newest backup (`mine`), or the newest when there is none (from 0.29; before, always
+the newest), with a `[barca] restoring ...` line on stderr when that is not the newest. One
+`[barca] restored ...` line on stderr (not contract); with `--json` (or piped), stdout has
+`{restored, from, source, pre_restore, rows, run_id, host, project}`: `from` is `local`,
+`store` or `file` (`--from PATH`; `rows`, `run_id`, `host` and `project` are then `null`),
+`source` the copy's path or redacted URI,
 `pre_restore` the path of the replaced database or `null`. Exit 2 (`usage`): no backup, an
 unknown `--from`, a copy that fails validation (the message names the next newest), a copy in a
 format this barca cannot use. Exit 3 (`infra`): a `barca serve` holds the environment, or no
@@ -1516,6 +1622,11 @@ has `scheduled_at` (the tick, RFC 3339 in UTC) and `schedule_id` (the scheduled 
 a `client` run had on the laptop that posted it (`barca docs server-mode`), `null` on every other
 run; additive and experimental.
 
+`runs[].job` (additive, 0.29.0) is what the run was for: `all` for a run without targets,
+otherwise its resolved node ids, sorted and comma-separated (`barca.job` in telemetry);
+`null` for runs recorded before barca stored it. `target` stays the target as typed. The human
+table's TARGET column shows the job by function name, cut at 24 characters with `…`.
+
 
 <!-- BEGIN GENERATED schema history -->
 | Key | Type | Present |
@@ -1530,6 +1641,7 @@ run; additive and experimental.
 | `runs[].files` | array | always |
 | `runs[].files[]` | string | always |
 | `runs[].finished_at` | string | always |
+| `runs[].job` | string | always |
 | `runs[].run_id` | string | always |
 | `runs[].schedule_id` | null | always |
 | `runs[].scheduled_at` | null | always |
@@ -1571,6 +1683,7 @@ Reconciled history (same envelope; unknown end timestamp and duration remain nul
 | `runs[].elapsed_seconds` | null | always |
 | `runs[].files` | array | always |
 | `runs[].finished_at` | null | always |
+| `runs[].job` | null | always |
 | `runs[].run_id` | string | always |
 | `runs[].schedule_id` | null | always |
 | `runs[].scheduled_at` | null | always |
@@ -1632,6 +1745,11 @@ the first included.
 | `evicted_bytes` | integer | always |
 | `evicted_files` | integer | always |
 | `failed` | array | always |
+| `held` | array | always |
+| `held[]` | object | always |
+| `held[].bytes` | integer | always |
+| `held[].evictable` | boolean | always |
+| `held[].what` | string | always |
 | `limit_bytes` | integer | always |
 | `restricted` | null | always |
 | `size_bytes` | integer | always |
@@ -1653,6 +1771,11 @@ the first included.
   progress on this `.barca/`).
 - `dry_run` says whether anything was deleted. `--dry-run` lists exactly what `barca gc` then
   deletes, unless something changes in between.
+- `held[]` says what holds `after_bytes`, largest first: `what` is `results`, `unreferenced`
+  (artifact files no result names, kept for now), `metadata`, `db_copies` (databases `state
+  reset` and `state restore` moved aside), `backups` or `other`; `bytes`; and `evictable`
+  (`false` for the databases, their copies and the backups). Leftover entries in `evicted[]`
+  include artifact files no result names.
 
 ### get and run: over the cache size limit (experimental)
 
@@ -1713,9 +1836,17 @@ The phase/stream layout uses the same pool as execution: available cores, or a p
 
 `warnings` is the plan-warnings array described under "Plan warnings" above.
 
+`pool_size` is that pool. `capacity` is the most the `weight=` of the steps running at once may
+add up to, and `capacity_source` where it came from: `BARCA_CAPACITY`, `[execution] capacity`
+or `pool size`. `weights` maps each planned node whose `weight=` is above 1 to its weight (`{}`
+when there are none). A node heavier than the capacity runs alone; `plan` warns about it on
+stderr. These keys are experimental (0.29, #436).
+
 <!-- BEGIN GENERATED schema plan -->
 | Key | Type | Present |
 |---|---|---|
+| `capacity` | integer | always |
+| `capacity_source` | string | always |
 | `phases` | array | always |
 | `phases[]` | object | always |
 | `phases[].reason` | object | always |
@@ -1727,6 +1858,7 @@ The phase/stream layout uses the same pool as execution: available cores, or a p
 | `phases[].streams[].steps[]` | string | always |
 | `phases[].streams[].stream_id` | string | always |
 | `plan_version` | integer | always |
+| `pool_size` | integer | always |
 | `total_steps` | integer | always |
 | `warnings` | array | always |
 | `warnings[]` | object | always |
@@ -1734,6 +1866,7 @@ The phase/stream layout uses the same pool as execution: available cores, or a p
 | `warnings[].message` | string | always |
 | `warnings[].node` | string | always |
 | `warnings[].param` | string | always |
+| `weights` | object | always |
 <!-- END GENERATED schema plan -->
 
 ### docs
@@ -2009,6 +2142,10 @@ See `barca docs types` and `specs/artifact-formats.md`.
 in recorded order; text returns only the lines. `--step` selects an exact id/base id/function
 name; ambiguous or absent steps and missing runs exit 2. Silent recorded steps return no
 lines. `--env` selects local history; logs does not import source or contact a remote store.
+Without `RUN_ID` (additive, 0.29.0), logs reads the newest run in history, running or
+finished, and names it on stderr (`barca: logs of the most recent run: <run_id> (<command>
+<target>, <status>, started <time>)`; the wording is not stable); stdout is unchanged. With no
+run recorded it exits 2.
 Task return values remain `final_output` as for assets. Get/run JSON mode suppresses captured
 stdout lines; non-JSON modes prefix them with `[node_id]` on stderr. Agent framework lines
 remain `[barca]`-prefixed. Retrieve captured output with `barca logs`. See `barca docs logs`
@@ -2044,6 +2181,7 @@ Older read-only snapshots without attempt metadata report a null history attempt
 | `checks[].data.artifacts` | string | sometimes |
 | `checks[].data.available_bytes` | integer | sometimes |
 | `checks[].data.barca_version` | string | sometimes |
+| `checks[].data.capacity` | integer | sometimes |
 | `checks[].data.enabled` | boolean | sometimes |
 | `checks[].data.executable` | string | sometimes |
 | `checks[].data.file` | string | sometimes |
@@ -2059,6 +2197,7 @@ Older read-only snapshots without attempt metadata report a null history attempt
 | `checks[].data.name` | string | sometimes |
 | `checks[].data.nodes` | integer | sometimes |
 | `checks[].data.path` | string | sometimes |
+| `checks[].data.pool_size` | integer | sometimes |
 | `checks[].data.size_bytes` | integer | sometimes |
 | `checks[].data.source` | string | sometimes |
 | `checks[].data.uri` | null | sometimes |

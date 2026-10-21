@@ -207,6 +207,41 @@ Not a `hyperfine` run: `python benchmarks/transfer_hash/bench.py [MB] [--max-sec
 times the SHA-256 a remote-backed run takes of each local artifact it reads (about 0.5 s/GB with a
 warm page cache), so a regression in `python/barca/_transfer.py` shows up as a number.
 
+### Planning pipeline (#250)
+
+Not a `hyperfine` run, barca only: `benchmarks/planning_pipeline/bench.sh [--scale N] [--pool N]`
+writes the 116-node planning-pipeline fixture (74 assets, 42 tasks, 262 edges; see
+`planning_pipeline/skeleton.txt`) with seeded data and reports wall time and peak resident memory
+of barca's whole process tree and of its largest process for a cold `barca run` of all 42 tasks,
+a `barca get` of the two leaf assets, and a warm rerun. Set `BARCA_REMOTE_URI` and the store's
+credentials to keep barca's artifacts in a store; `PLANNING_SOURCE_MODE=store` (with the
+`PLANNING_STORE_*` variables of `project/settings.py`) reads the sources from one too.
+
+`--scale` is the row-count knob. The default, 67, is the large size calibrated to #233's
+pipeline: 22.3M forecast rows, and the central `forecast_reconciled` table (34 consumers) at the
+same 22.3M rows. Its synthetic keys compress well, so the artifact is 106 MB, not the 350 MB of
+#233's wider rows. CI runs scale 1 (`python/tests/test_planning_pipeline.py`) and scale 8 (the
+store tests, `test_planning_pipeline_remote.py`), never this size.
+
+Measured 2026-10-21 on an AMD Ryzen AI Max+ 395 (32 threads), pool 4, duckdb 1.5.6,
+polars 2.0.0, pandas 3.0.6, while other builds were running on the machine (rough numbers;
+rerun on an idle machine before quoting them):
+
+| Scale 67 | Artifacts | Wall | Peak RSS, tree | Peak RSS, largest process |
+|---|---|---|---|---|
+| cold run, 42 tasks (114 steps) | local | 26.0 s | 13.2 GB | 8.7 GB |
+| `get`, 2 leaf assets | local | 0.9 s | 0.9 GB | 1.6 GB |
+| warm run, 42 tasks | local | 2.4 s | 4.9 GB | 2.5 GB |
+| cold run, 42 tasks (114 steps) | MinIO on the same machine | 35.6 s | 13.2 GB | 8.8 GB |
+| `get`, 2 leaf assets | MinIO on the same machine | 2.5 s | 1.0 GB | 1.6 GB |
+| warm run, 42 tasks | MinIO on the same machine | 5.6 s | 4.9 GB | 2.4 GB |
+
+The largest process is a worker. Its peak comes from the steps that convert a 22M-row relation to
+polars and back (`driver_carryover_item` and the projection assets below it): the cost of the
+pipeline's own engine hops, not of barca. The tree peak is four such workers at once (#436 is
+the open question of limiting heavy workers). "Largest process" can exceed "tree" in a short run
+because the tree is sampled every 50 ms and the per-process peak is exact.
+
 ### Scheduler / daemon
 
 The odd one out: not a `hyperfine` cold-start measurement but a comparison of the

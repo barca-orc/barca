@@ -70,6 +70,12 @@ pub enum WorkerMessage {
         elapsed: f64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         import_seconds: Option<f64>,
+        /// The worker is still sound and goes on with its batch: the step raised an
+        /// exception that unwound cleanly. Absent (an older worker, or one that may not be
+        /// sound: a failed import, `sys.exit()`, a step still running past its timeout), the
+        /// coordinator stops the worker and starts a fresh one (#523).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        worker_continues: bool,
     },
     /// A step was blocked because an upstream failed.
     Blocked { node_id: String, reason: String },
@@ -464,10 +470,19 @@ mod tests {
     use super::*;
     use std::io::Cursor;
 
+    /// A fixture directory under `/tmp`, not `$TMPDIR`: these tests need socket paths that fit
+    /// [`SOCKET_PATH_MAX`], and the test runner's own `$TMPDIR` may be long (#571).
+    fn short_tempdir() -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix("bt")
+            .tempdir_in("/tmp")
+            .unwrap()
+    }
+
     #[test]
     fn a_long_tmpdir_falls_back_to_a_short_private_directory() {
         use std::os::unix::fs::PermissionsExt;
-        let root = tempfile::tempdir().unwrap();
+        let root = short_tempdir();
         let long = root.path().join("d".repeat(150));
         std::fs::create_dir_all(&long).unwrap();
         let short = root.path().join("s");
@@ -486,7 +501,7 @@ mod tests {
 
     #[test]
     fn no_short_directory_is_an_error_naming_the_path_limit_and_fix() {
-        let root = tempfile::tempdir().unwrap();
+        let root = short_tempdir();
         let long = root.path().join("d".repeat(150));
         let err = socket_path_in(std::slice::from_ref(&long), "1-run-main.sock").unwrap_err();
         assert!(err.contains(&long.display().to_string()), "{err}");
@@ -496,7 +511,7 @@ mod tests {
 
     #[test]
     fn a_dead_coordinators_sockets_are_swept() {
-        let root = tempfile::tempdir().unwrap();
+        let root = short_tempdir();
         // SAFETY: getuid cannot fail.
         let dir = root
             .path()
@@ -725,6 +740,7 @@ mod tests {
             traceback: "Traceback (most recent call last):\n  ...".to_string(),
             elapsed: 1.5,
             import_seconds: Some(1.1),
+            worker_continues: true,
         };
 
         let mut buffer = Vec::new();
@@ -742,7 +758,9 @@ mod tests {
                 traceback,
                 elapsed,
                 import_seconds,
+                worker_continues,
             } => {
+                assert!(worker_continues);
                 assert_eq!(node_id, "transform");
                 assert_eq!(error_type, "ValueError");
                 assert_eq!(message, "invalid input");

@@ -339,8 +339,9 @@ def fail(orders):
 
                 scoped.setattr(_worker, "serialize_hashed", reject_write)
             ok = _worker._run_daemon_step(step, modules, str(tmp_path / "arts"), lru)
-        assert ok == (outcome == "success")
-        if ok:
+        # A step that raised leaves the worker sound: it goes on to its next step (#523).
+        assert ok
+        if outcome == "success":
             artifact = reports[-1][1]["artifact"]
             assert _artifacts.deserialize(artifact["path"], "parquet")["amount"].tolist() == [14]
         else:
@@ -348,6 +349,7 @@ def fail(orders):
             assert errors[0]["error_type"] == (
                 "ValueError" if outcome == "user_failure" else "OSError"
             )
+            assert errors[0]["worker_continues"] is True
         assert con.sql("select twice(x) from project_marker").fetchone() == (198,)
         with pytest.raises(duckdb.CatalogException):
             con.sql("select * from orders")

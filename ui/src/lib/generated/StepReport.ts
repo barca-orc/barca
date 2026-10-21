@@ -26,7 +26,14 @@ reason?: string | null,
 /**
  * The reason in words.
  */
-detail?: string | null, run_hash?: string | null,
+detail?: string | null,
+/**
+ * Dry run, a step with no cached result: what changed in its run hash since its last
+ * successful materialization (`code`, `decorator argument NAME`, `decorator NAME`,
+ * `helper FILE:NAME`, `input ID`, `sensor ID`, `env NAME`, `kind`). Absent when that
+ * materialization recorded no components (before 0.29.0) or there is none.
+ */
+changed?: Array<string> | null, run_hash?: string | null,
 /**
  * The cached artifact, when the step is served from cache.
  */
@@ -62,4 +69,8 @@ bytes_changed?: boolean | null, partitions?: PartitionSummary | null,
  * Declared env values the step used (`@asset(env=[...])`): name -> value, `null` when unset,
  * `"<redacted>"` for secret-looking names. Absent when the node declares no env.
  */
-env?: { [key in string]: string | null } | null, };
+env?: { [key in string]: string | null } | null,
+/**
+ * Dry run only: the node's `weight=` when it is above 1 (#436). Absent otherwise.
+ */
+weight?: number | null, };

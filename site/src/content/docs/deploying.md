@@ -221,6 +221,26 @@ What each part is for:
 The published port above is bound to the host's loopback. Barca has no authentication, so
 before you bind it to anything wider, add [authentication](#authentication) at the proxy.
 
+### Containers with a memory limit
+
+Steps run in separate worker processes, independent ones at the same time. Under a hard memory
+limit (`mem_limit`, a pod's limit), heavy steps that become ready together can add up past it,
+and the kernel kills one: the step fails with
+`worker for pipeline.py:train exited with SIGKILL (possibly the OOM killer)` (see
+[A worker that dies](/reference/cli/#a-worker-that-dies)). Give those steps a `weight=`
+(experimental): the steps running at once add up to at most the capacity, the pool size unless
+`[execution] capacity` in `barca.toml` or `BARCA_CAPACITY` sets it.
+
+```toml
+# barca.toml
+[execution]
+capacity = 4
+```
+
+With `@asset(weight=2)` on the heavy assets, two of them run at once and light steps use what is
+left. The capacity is per run: two schedules that fire together run with a capacity
+each. See [Heavy steps](/reference/api/decorators/#heavy-steps-weight).
+
 ### Native Debian and Alpine targets
 
 Every release from 0.24.0 verifies fresh official PyPI wheel installations and downloaded
@@ -359,7 +379,8 @@ server uploads artifacts to it and backs its metadata DB up there every minute i
 The run history stays in the `.barca` volume. If that volume is lost, start a container with an
 empty one, run `barca state restore` in it before `barca serve`, and the newest backup comes
 back from the store (`barca state restore` refuses to run while a server is using the
-environment). Barca 0.25 and earlier needed `BARCA_STATE=off` here; 0.26.0 removed that
+environment). It takes the newest backup this host and project directory took; a container
+with a new host name has none, so it takes the newest and names the host that took it. Barca 0.25 and earlier needed `BARCA_STATE=off` here; 0.26.0 removed that
 variable, and setting it is now a usage error.
 
 Other machines that use the same store do not see this server's runs in

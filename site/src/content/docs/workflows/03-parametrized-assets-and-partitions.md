@@ -213,11 +213,11 @@ partitions={"ticker": partitions(["AAPL", "MSFT", "GOOG", "NVDA"])}
 ```
 $ barca get report pipeline.py --dry-run --pretty
 ...
-STATUS    WHY                                              STEP
-will run  sensors always re-run                            pipeline.py:feed_version
-partial   3 of 4 keys cached; will run: ticker=NVDA        pipeline.py:prices
-partial   3 of 4 keys cached; will run: ticker=NVDA        pipeline.py:signal
-will run  no cached result for this code and these inputs  pipeline.py:report
+STATUS    WHY                                        STEP
+will run  sensors always re-run                      pipeline.py:feed_version
+partial   3 of 4 keys cached; will run: ticker=NVDA  pipeline.py:prices
+partial   3 of 4 keys cached; will run: ticker=NVDA  pipeline.py:signal
+will run  changed: input pipeline.py:signal          pipeline.py:report
 
 4 will run, 6 cached, 0 unknown
 ```

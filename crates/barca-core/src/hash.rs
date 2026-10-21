@@ -90,17 +90,13 @@ pub fn run_hash(
     format!("{:x}", hasher.finalize())
 }
 
-/// Compute a hash of partition source identity.
-///
-/// For static partitions: hash of the sorted partition values.
-/// For derived partitions: the materialization ID of the source asset.
-pub fn partition_source_hash(values_json: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(b"partition_source:");
-    hasher.update(PROTOCOL_VERSION.as_bytes());
-    hasher.update(b"\n");
-    hasher.update(values_json.as_bytes());
-    format!("{:x}", hasher.finalize())
+/// A short digest of `bytes` (the first 16 hex digits of its SHA-256): what a materialization
+/// records per component of its run hash, to say later which one changed (#558). Never part of
+/// a cache key.
+pub fn short_digest(bytes: &[u8]) -> String {
+    let mut hex = format!("{:x}", Sha256::digest(bytes));
+    hex.truncate(16);
+    hex
 }
 
 #[cfg(test)]

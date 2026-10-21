@@ -245,13 +245,17 @@ Examples:
   barca plan pipeline.py              # phases and steps that would run; nothing executes
   barca plan pipeline.py other.py     # several files form one DAG
 
-Output: always pretty-printed JSON {plan_version, total_steps, phases: [{reason, streams: [{stream_id, steps}]}],
-warnings}. `warnings` is always an array ([] when there are none) of {kind, node, param, message}:
+Output: always pretty-printed JSON {plan_version, total_steps, pool_size, capacity, capacity_source,
+weights, phases: [{reason, streams: [{stream_id, steps}]}], warnings}. `warnings` is always an array ([] when there are none) of {kind, node, param, message}:
 plan-time warnings such as an input a step never uses, each also one `[barca] warning: ...` line on
 stderr (barca docs assets, \"Unused inputs\").
 `plan_version` is 1: the plan document format, independent of the package and database versions.
 `reason` is an object: {\"type\": \"initial\"} or {\"type\": \"fan_in\", \"node_id\": ...}.
 Planning uses the execution pool size (available cores, or BARCA_POOL_SIZE).
+`pool_size`, `capacity` (the most the weight= of the steps running at once may add up to:
+BARCA_CAPACITY, [execution] capacity, or the pool size, named in `capacity_source`) and
+`weights` ({node: weight} for each node with weight= above 1) show how many steps run at once
+(experimental; barca docs assets, \"Heavy steps\").
 Parsing is static; partitions(<expression>) evaluates Python while loading its keys.
 Planning reads no state and takes no --env.
 Experimental: the layout may change between releases (barca docs contract).
@@ -271,12 +275,16 @@ More: barca docs doctor";
 
 const LOGS_HELP: &str = "\
 Examples:
+  barca logs                            # the most recent run; stderr names which one
+  barca logs --step report              # one step of the most recent run
   barca logs 7f30b3e9 --pretty          # captured stdout lines, without progress messages
   barca logs 7f30b3e9 --step report --pretty   # one function name or exact node id
   barca logs 7f30b3e9 --json            # [{node_id, line}] in recorded order
   barca logs 7f30b3e9 --env dev         # read another environment's local history
 
-Replace the example id with run_id from barca run/get --json or barca history.
+Replace the example id with run_id from barca run/get --json or barca history. Without a run
+id, barca reads the newest run in barca history (running or finished) and names it on stderr:
+barca: logs of the most recent run: <run_id> (<command> <target>, <status>, started <time>).
 Reads the local recorded stdout lines; does not execute or import pipeline code. Unknown runs
 and ambiguous step names are usage errors. Missing/unknown steps are usage errors; a recorded
 step that printed nothing returns no lines. Prints emitted before a failed step are retained.
@@ -292,6 +300,7 @@ Examples:
   barca history --pretty       # the table, even when piped
   barca history --fields run_id,status,elapsed_seconds,attempts   # JSON with only these keys per run
   barca history --fields run_id,triggered_by,scheduled_at   # what started each run (manual, api, schedule, client)
+  barca history --fields run_id,job,status   # what each run was for: `all` or its resolved node ids
   barca history --env dev      # runs recorded in another environment
   barca history --server -l 20 # the runs of the configured barca server (barca docs server-mode)
   barca history --local        # this machine's runs, even with a server configured
@@ -302,7 +311,9 @@ no end time or duration is invented. Ordinary history inspection never reconcile
 unknown owner automatically.
 Newest first. When more runs exist than are shown, JSON says `\"truncated\": true` with the
 `total`, and the table prints a one-line note on stderr. In JSON, `files` is an array: the .py
-files the run was given.
+files the run was given. TARGET in the table is the run's job by function name (`all` for a
+run without targets), cut at 24 characters with `…`; JSON `job` holds it in full: `all`, or the
+resolved node ids sorted and comma-separated (null for runs recorded before 0.29.0).
 JSON returns every item unless --limit is given; human tables keep their default bound.
 More: barca docs agents, barca docs cache";
 
@@ -474,7 +485,8 @@ const STATE_HELP: &str = "\
 Examples:
   barca state backups                  # the metadata backups, local and in the store, newest first
   barca state backups --json           # {backups: [{index, name, where, size_bytes, run_id, rows, ...}], local_dir, store}
-  barca state restore                  # put the newest backup back in place of .barca/metadata.db
+  barca state restore                  # put this machine's newest backup back in place of .barca/metadata.db
+  barca state restore --from 1         # the newest, whichever machine took it
   barca state restore --from 3         # the third newest (the index in barca state backups)
   barca state restore --from 2026-10-14T18-02-11.482Z-3f9a1c2e.db  # one backup, by name
   barca state backups --env dev        # another environment's backups
@@ -497,16 +509,20 @@ Examples:
   barca state backups --env dev        # another environment's backups
 
 Newest first. `where` is local, store or both; `agree` says whether the two copies of a backup
-match (null with one copy). A store that cannot be listed is a warning on stderr and
-`store_error` in JSON; the local copies are still listed.
+match (null with one copy). `host` and `project` name the machine and project directory that
+took it, `mine` whether it was this one (null for a backup from barca 0.28 or earlier). A store
+that cannot be listed is a warning on stderr and `store_error` in JSON; the local copies are
+still listed. A backup another machine took after this one's newest is a warning on stderr:
+two machines on one store are not supported (use a server).
 More: barca docs remote";
 
 const STATE_RESTORE_HELP: &str = "\
 Examples:
-  barca state restore                  # the newest backup
+  barca state restore                  # this machine's newest backup (the newest if it has none)
+  barca state restore --from 1         # the newest, whichever machine took it
   barca state restore --from 2         # the second newest
   barca state restore --from 2026-10-14T18-02-11.482Z-3f9a1c2e  # by name, .db optional
-  barca state restore --json           # {restored, from, source, pre_restore, rows, run_id}
+  barca state restore --json           # {restored, from, source, pre_restore, rows, run_id, host, project}
   barca state restore --from .barca/metadata.db.reset-2026-10-20T18-02-11.482Z  # a file barca state reset moved aside
 
 The copy is checked first (a whole SQLite file, integrity, barca's tables, a format this barca
@@ -690,8 +706,8 @@ pub(crate) enum Cli {
     /// Read a run's captured step stdout, without progress messages
     #[command(after_help = LOGS_HELP)]
     Logs {
-        /// Exact run id from get/run JSON or history
-        run_id: String,
+        /// Exact run id from get/run JSON or history (default: the most recent run)
+        run_id: Option<String>,
         /// Function name or exact node id (including a partition key when desired)
         #[arg(long)]
         step: Option<String>,

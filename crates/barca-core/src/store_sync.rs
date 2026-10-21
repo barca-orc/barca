@@ -3,8 +3,8 @@
 
 use crate::cache::BLOCKED_ARTIFACT_PATH;
 use crate::dispatch;
+use crate::gc::size::human;
 use crate::recover;
-use crate::report::fmt_bytes;
 use crate::transfer::{ArtifactLayout, TransferClient};
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
@@ -31,6 +31,12 @@ pub(crate) struct StoreSync {
     present: Option<Result<(), String>>,
     /// The run's cancellation: a wait on the store ends when it fires.
     cancel: CancellationToken,
+    /// Display id -> (store location, digest) of the object this machine knows the store holds
+    /// for the run hash the sensor runs at ([`crate::db::confirmed_object`]), for each sensor
+    /// decided to run. A poll that produces the same bytes there is not uploaded again (#554).
+    pub(crate) confirmed: HashMap<String, (String, String)>,
+    /// Sensor results of this run that were the bytes the store already held, so not uploaded.
+    pub(crate) unchanged_sensors: usize,
 }
 
 /// What a wait on the artifact store reports when the run is cancelled during it. The run
@@ -47,7 +53,17 @@ impl StoreSync {
             missing: Vec::new(),
             present: None,
             cancel,
+            confirmed: HashMap::new(),
+            unchanged_sensors: 0,
         }
+    }
+
+    /// Whether the store already holds `digest` at `store` for sensor `node_id`, by this
+    /// machine's record of a confirmed upload: the poll's result need not be uploaded again.
+    pub(crate) fn holds_already(&self, node_id: &str, store: &str, digest: &str) -> bool {
+        self.confirmed
+            .get(node_id)
+            .is_some_and(|(at, known)| at == store && known == digest)
     }
 
     /// Whether `path` is the local mirror of a cache hit that has not been
@@ -173,7 +189,7 @@ impl StoreSync {
                 "[barca] fetched {} cached artifact{} ({}) in {:.1}s",
                 report.transferred,
                 if report.transferred == 1 { "" } else { "s" },
-                fmt_bytes(report.bytes),
+                human(report.bytes),
                 started.elapsed().as_secs_f64()
             );
             crate::lines::Lines::current().note(pb, &msg);
