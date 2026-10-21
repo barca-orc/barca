@@ -48,6 +48,14 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   nor `barca status`'s `last_bytes_change` reports it: a `Manual` asset is refreshed with the
   same code and inputs precisely to pick up new data (#548).
 
+- A long `TMPDIR` (over about 80 characters, as CI runners and sandboxes set) no longer fails
+  every run with `socket bind: path must be shorter than SUN_LEN` (exit 3). Barca's coordination
+  sockets (workers, the transfer helper) now live in a private per-user directory,
+  `$TMPDIR/barca-<uid>/` (0700), falling back to `/tmp/barca-<uid>/` when that path would exceed
+  the platform's socket path limit (107 bytes on Linux, 103 on macOS); when neither fits, the
+  error names the path, the limit and the fix. Sockets left by a killed coordinator are removed
+  by the next run (#557).
+
 ### Performance
 
 - Small pipelines start faster (#560). Workers start together: when ready work has no idle
