@@ -116,7 +116,11 @@ Positional rules (stable), for `get`, `run` and `status`:
   (`a,,b`), is a usage error.
 - An unknown target is a usage error (exit 2) on every command, with one remediation:
   ``Run `barca list <files>` to see available assets and tasks.``, preceded by a suggestion when
-  a node name is close (below).
+  a node name is close (below). So is a name that several nodes have, and `barca run` without a
+  target. No other usage error carries that remediation: each states its own fix (the corrected
+  command for positionals in the wrong order, the valid names for an unknown `--refresh` name,
+  what to set for `-o url` without a cloud store, what to remove for a removed setting) or, with
+  nothing more to say, `See barca <command> --help`.
 - A mistyped name gets one "did you mean" rule: a flag, a subcommand, a target, a `--refresh`
   name, a `barca sql` view, a `barca docs` topic and a decorator argument (`input=` for
   `inputs=`). barca suggests the closest names within one edit of what was written (two for a
