@@ -234,7 +234,7 @@ barca serve pipeline.py --read-only            # inspect only: no runs, no sched
 barca serve pipeline.py --host 0.0.0.0         # listen on every interface (containers, VMs)
 ```
 
-`--read-only` serves the API without the ability to change anything: run, cancel and pause
+`--read-only` serves the API without the ability to change anything: run, cancel, pause and reset
 endpoints return `403`, the scheduler never starts, and every read of the metadata DB goes through a
 private copy, so it is safe to point at a project another process is running.
 
@@ -291,7 +291,10 @@ constructed and will be removed in a later minor release.
 
 With a remote store configured, `barca serve` uploads artifacts and backs its metadata DB up
 every minute it changed (`barca docs remote`, "Backups and restore"); `barca state restore`
-refuses to run while it is up:
+and `barca state reset` refuse to run while it is up. To start its metadata DB over (one it
+cannot read, say), use the web UI's **Reset database** button or `POST /state/reset`: it moves the
+database aside to `metadata.db.reset-<UTC>` and starts empty, refused with `409` while a run is
+pending or running:
 
 ```bash
 barca serve pipeline.py                  # local ledger; artifact uploads and backups enabled

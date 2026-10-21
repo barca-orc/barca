@@ -1,4 +1,4 @@
-//! `barca state backups` and `barca state restore` (RFC-0009).
+//! `barca state backups`, `barca state restore` (RFC-0009) and `barca state reset`.
 
 use barca_core::BarcaError;
 
@@ -108,6 +108,73 @@ pub(crate) async fn state_restore_cmd(
         barca_core::outln!(
             "{}",
             serde_json::to_string(&restored).map_err(|e| BarcaError::Other(e.to_string()))?
+        );
+    }
+    Ok(())
+}
+
+pub(crate) async fn state_reset_cmd(
+    env: Option<&str>,
+    yes: bool,
+    json: bool,
+) -> Result<(), BarcaError> {
+    use std::io::IsTerminal;
+    let cfg = barca_core::config::resolve(env)?;
+    if let Some(holder) = barca_core::backup::ServeLock::holder(&cfg) {
+        return Err(BarcaError::Other(format!(
+            "cannot reset while barca serve is using this environment ({holder}): use the \
+             Reset database button in its UI, or POST /state/reset. Nothing was changed."
+        )));
+    }
+    if !yes {
+        if !std::io::stdin().is_terminal() {
+            return Err(BarcaError::Usage(
+                "barca state reset asks before it moves the database aside, and stdin is not a \
+                 terminal: pass --yes"
+                    .to_string(),
+            ));
+        }
+        barca_core::errln!(
+            "This moves {} (and its -wal and -shm) aside to {}.reset-<UTC> and starts an empty \
+             database: run history, cache records and schedule pauses start over. Nothing is \
+             deleted; barca state restore --from <the moved file> undoes it.",
+            cfg.db_path,
+            cfg.db_path
+        );
+        barca_core::term::stderr_str("Reset the metadata database? [y/N] ");
+        let mut answer = String::new();
+        std::io::stdin().read_line(&mut answer)?;
+        if !matches!(answer.trim(), "y" | "Y" | "yes" | "Yes" | "YES") {
+            barca_core::errln!("[barca] not reset: nothing was changed");
+            return Ok(());
+        }
+    }
+    let reset = barca_core::backup::reset(&cfg, |running| {
+        if running.is_empty() {
+            return Ok(());
+        }
+        Err(BarcaError::Other(format!(
+            "cannot reset while a run is in progress ({}): wait for it to finish or cancel it. \
+             Nothing was changed.",
+            running.join(", ")
+        )))
+    })
+    .await?;
+    match (&reset.moved_to, &reset.undo) {
+        (Some(moved), Some(undo)) => barca_core::errln!(
+            "[barca] reset the metadata database: the old one is {moved}, {} is new and empty. \
+             Undo: {undo}",
+            reset.database
+        ),
+        _ => barca_core::errln!(
+            "[barca] there was no metadata database; {} is new and empty",
+            reset.database
+        ),
+    }
+    if json {
+        barca_core::outln!(
+            "{}",
+            serde_json::to_string(&reset).map_err(|e| BarcaError::Other(e.to_string()))?
         );
     }
     Ok(())

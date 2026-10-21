@@ -20,6 +20,7 @@ import type {
   RunList,
   RunView,
   ScheduleJob,
+  ResetResult,
 } from './types'
 
 
@@ -91,6 +92,8 @@ export const api = {
     ),
   resumeSchedule: (id: string) =>
     request<unknown>(`/schedule/${encodeURIComponent(id)}/resume`, { method: 'POST' }),
+  /** `barca state reset`: move the metadata database aside and start an empty one. */
+  resetState: () => request<ResetResult>('/state/reset', { method: 'POST' }),
 }
 
 export { ApiError }

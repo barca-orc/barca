@@ -37,6 +37,7 @@ export type { CacheStatus } from './generated/CacheStatus'
 export type { PartitionState } from './generated/PartitionState'
 export type { LastMaterialization } from './generated/LastMaterialization'
 export type { Durations } from './generated/Durations'
+export type { ResetResult } from './generated/ResetResult'
 
 import type { LoadError } from './generated/LoadError'
 

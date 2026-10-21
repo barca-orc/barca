@@ -3,17 +3,18 @@ Put a metadata backup in place of the local database (the current one is kept as
 Usage: barca state restore [OPTIONS]
 
 Options:
-      --from <N|NAME>  Which backup: its index in `barca state backups` (1 = newest) or its name; default the newest
-      --json           Emit JSON on stdout (the default when stdout is not a terminal)
-      --pretty         Emit human-readable output (the default when stdout is a terminal)
-      --env <ENV>      Environment name (separates cache/state per environment)
-  -h, --help           Print help
+      --from <N|NAME|PATH>  Which backup: its index in `barca state backups` (1 = newest) or its name; default the newest. Or the path of a database file, such as one `barca state reset` moved aside
+      --json                Emit JSON on stdout (the default when stdout is not a terminal)
+      --pretty              Emit human-readable output (the default when stdout is a terminal)
+      --env <ENV>           Environment name (separates cache/state per environment)
+  -h, --help                Print help
 
 Examples:
   barca state restore                  # the newest backup
   barca state restore --from 2         # the second newest
   barca state restore --from 2026-10-14T18-02-11.482Z-3f9a1c2e  # by name, .db optional
   barca state restore --json           # {restored, from, source, pre_restore, rows, run_id}
+  barca state restore --from .barca/metadata.db.reset-2026-10-20T18-02-11.482Z  # a file barca state reset moved aside
 
 The copy is checked first (a whole SQLite file, integrity, barca's tables, a format this barca
 can use): the local copy when there is one, else the store's. A copy that fails is a usage error
@@ -21,4 +22,6 @@ naming the next newest, and nothing changes. Then the current database moves to
 metadata.db.pre-restore (replacing an older one) and the copy takes its place; one line on
 stderr says what was restored and from where. Stop barca get/run in this project first.
 Exit 2: no backup, unknown --from, a copy that is not valid. Exit 3: barca serve is running.
+--from also takes the path of a database file (the one barca state reset moved aside), with its
+-wal beside it when there is one.
 More: barca docs remote

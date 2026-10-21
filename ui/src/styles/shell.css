@@ -94,7 +94,7 @@
 .barca-pipe[data-active] { background: var(--bg-active); color: var(--text-strong); }
 .barca-pipe-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .barca-pipe-empty { padding: 6px 9px; font-family: var(--font-sans); font-size: var(--text-xs); color: var(--text-faint); }
-.barca-side-foot { margin-top: auto; border-top: 1px solid var(--border-subtle); padding: 10px 14px; }
+.barca-side-foot { margin-top: auto; border-top: 1px solid var(--border-subtle); padding: 10px 14px; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
 .barca-user { display: flex; align-items: center; gap: 9px; }
 .barca-avatar {
   width: 26px;

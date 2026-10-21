@@ -19,6 +19,7 @@ mod handlers;
 mod inspect;
 mod ledger;
 mod pause;
+mod reset;
 mod routes;
 mod runs;
 mod scheduler;

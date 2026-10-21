@@ -318,7 +318,8 @@ error (exit 2) that names the right one. `barca pipeline.py` is short for
 | `barca serve [files...]` | HTTP API, cron scheduler and web UI. `--port N`, `--host IP`, `--watch`, `--no-schedule`, `--timezone`, `--read-only`, `--drain-timeout`, `--env`. SIGTERM drains runs in flight; `BARCA_LOG=json` writes its lines as JSON on stdout |
 | &nbsp;&nbsp;`--server [<url>]`, `--local` | On `get`, `run`, `status`, `list`, `history`, `stats` (experimental): `--server` runs the command on a `barca serve` and prints it here as a local run would; with no URL it uses `BARCA_SERVER` or `[server] url` in `barca.toml`. `--local` ignores a configured server. See `barca docs server-mode` |
 | `barca state backups` | The metadata backups, local and in the store, newest first. `--json`, `--pretty`, `--env` |
-| `barca state restore` | Put a backup in place of the metadata DB; the current one is kept as `metadata.db.pre-restore`. `--from N\|NAME`, `--json`, `--env` |
+| `barca state restore` | Put a backup in place of the metadata DB; the current one is kept as `metadata.db.pre-restore`. `--from N\|NAME\|PATH`, `--json`, `--env` |
+| `barca state reset` | Start the metadata DB over (experimental): it moves aside to `metadata.db.reset-<UTC>`, nothing is deleted. Asks in a terminal; `--yes`, `--json`, `--env`. Also the UI's **Reset database** button (`POST /state/reset`) |
 | `barca docs [topic]` | The manual, compiled into the binary. `--all`, `--json`, `--fields` |
 | `barca version` | Print the version (also `barca --version`). |
 

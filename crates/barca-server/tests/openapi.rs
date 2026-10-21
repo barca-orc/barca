@@ -411,9 +411,14 @@ async fn inspection_methods_errors_read_only_and_ui_match_contract() {
         ("DELETE", "/runs/missing", "/runs/{run_id}"),
         ("POST", "/schedule/missing/pause", "/schedule/{id}/pause"),
         ("POST", "/schedule/missing/resume", "/schedule/{id}/resume"),
+        ("POST", "/state/reset", "/state/reset"),
     ] {
         checked(&router, method, url, path, 403).await;
     }
+    assert!(
+        !dir.path().join("metadata.db").exists(),
+        "a read-only reset touched history"
+    );
     let refused = request_json(
         &router,
         "POST",
@@ -944,6 +949,10 @@ async fn a_draining_server_refuses_runs_and_says_so_on_health() {
         .unwrap();
     assert_eq!(resp.status().as_u16(), 503);
     assert_eq!(resp.headers()["retry-after"].to_str().unwrap(), "30");
+    // So is a reset of the metadata database.
+    let resp = request(&router, "POST", "/state/reset").await;
+    assert_eq!(resp.headers()["retry-after"].to_str().unwrap(), "30");
+    checked(&router, "POST", "/state/reset", "/state/reset", 503).await;
     // Reads stay available while the runs in flight finish.
     checked(&router, "GET", "/runs?limit=0", "/runs", 200).await;
     assert!(
@@ -1091,4 +1100,102 @@ async fn ledger_lookup_and_post_match_contract() {
     assert_eq!(status, 403);
     validate(&response("/ledger/runs", 403), &body);
     checked(&router, "GET", "/ledger/runs", "/ledger/runs", 405).await;
+}
+
+/// The files in `dir` whose name starts with `metadata.db.reset-`.
+fn moved_aside(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .filter_map(|e| e.ok()?.file_name().into_string().ok())
+        .filter(|n| n.starts_with("metadata.db.reset-"))
+        .collect();
+    names.sort();
+    names
+}
+
+async fn run_count(router: &Router) -> usize {
+    checked(router, "GET", "/runs?limit=100", "/runs", 200).await["runs"]
+        .as_array()
+        .unwrap()
+        .len()
+}
+
+#[tokio::test]
+async fn state_reset_moves_the_database_aside_refuses_during_a_run_and_mends_a_broken_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = config(dir.path(), false);
+    let router = app(cfg.clone());
+    let handle = checked(&router, "POST", "/get/first", "/get/{target}", 200).await["run_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(wait(&router, &handle).await["status"], "complete");
+    assert_eq!(run_count(&router).await, 1);
+
+    // Refused while a run is in flight; nothing moves.
+    let slow = checked(&router, "POST", "/run/slow", "/run/{target}", 200).await["run_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let refused = checked(&router, "POST", "/state/reset", "/state/reset", 409).await;
+    assert!(
+        refused["error"].as_str().unwrap().contains(&slow),
+        "the error names the run: {refused}"
+    );
+    assert!(moved_aside(dir.path()).is_empty());
+    checked(
+        &router,
+        "DELETE",
+        &format!("/runs/{slow}"),
+        "/runs/{run_id}",
+        200,
+    )
+    .await;
+    assert_eq!(wait(&router, &slow).await["status"], "cancelled");
+
+    // The database moves aside and the next request sees an empty history.
+    let reset = checked(&router, "POST", "/state/reset", "/state/reset", 200).await;
+    let moved = reset["moved_to"].as_str().unwrap().to_owned();
+    assert!(Path::new(&moved).is_file(), "{reset}");
+    assert_eq!(reset["database"], cfg.resolved.db_path.as_str());
+    assert!(
+        reset["undo"]
+            .as_str()
+            .unwrap()
+            .starts_with("barca state restore --from "),
+        "{reset}"
+    );
+    assert_eq!(
+        moved_aside(dir.path()).first().map(String::as_str),
+        Path::new(&moved).file_name().and_then(|n| n.to_str())
+    );
+    assert_eq!(run_count(&router).await, 0);
+    let state = checked(&router, "GET", "/state", "/state", 200).await;
+    let first = state
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["name"] == "first")
+        .unwrap();
+    assert!(first["last_materialization"].is_null(), "{first}");
+    assert_eq!(barca_core::db::count_runs(&moved).await.unwrap(), 2);
+
+    // The moved file restores (with the server stopped, as the CLI says).
+    let restored = barca_core::backup::restore(&cfg.python, &cfg.resolved, Some(moved.as_str()))
+        .await
+        .unwrap();
+    assert_eq!(restored.from, "file");
+    assert_eq!(run_count(&router).await, 2);
+
+    // A database that cannot be read: `/state` fails, a reset mends it.
+    std::fs::write(&cfg.resolved.db_path, b"this is not a database").unwrap();
+    let _ = std::fs::remove_file(format!("{}-wal", cfg.resolved.db_path));
+    let broken = request(&router, "GET", "/runs?limit=1").await;
+    assert_eq!(broken.status().as_u16(), 500);
+    let reset = checked(&router, "POST", "/state/reset", "/state/reset", 200).await;
+    let moved = reset["moved_to"].as_str().unwrap();
+    assert_eq!(std::fs::read(moved).unwrap(), b"this is not a database");
+    assert_eq!(run_count(&router).await, 0);
+    checked(&router, "GET", "/state", "/state", 200).await;
+    checked(&router, "GET", "/state/reset", "/state/reset", 405).await;
 }

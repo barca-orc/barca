@@ -1773,6 +1773,43 @@ pub(crate) async fn live_runs(conn: &turso::Connection, db_path: &str) -> Vec<St
         .collect()
 }
 
+/// The `running` runs whose owner this process can see is alive: on this machine, a process
+/// that exists. A run whose owner cannot be judged from here (another machine, an older row
+/// from another host) is not listed: unlike [`live_runs`], which keeps those, this is for a
+/// refusal that must not hold forever because of a row nobody will finish (`barca state
+/// reset`). Best effort: empty when nothing can be read.
+pub(crate) async fn runs_alive_here(conn: &turso::Connection, db_path: &str) -> Vec<String> {
+    use crate::run_owner::{Owner, judge_json};
+    let on = crate::run_owner::System::for_db(db_path);
+    let this_host = crate::run_owner::Observer::here(&on).host;
+    running_runs(conn)
+        .await
+        .into_iter()
+        .filter(|run| {
+            if run.owner.is_empty() {
+                !this_host.is_empty()
+                    && run.host == this_host
+                    && run.pid.is_some_and(|pid| pid > 0 && pid_alive(pid))
+            } else {
+                judge_json(run.pid, &run.owner, &on) == Owner::Alive
+            }
+        })
+        .map(|run| run.run_id)
+        .collect()
+}
+
+/// Open the database file at `db_path`, taking no lock, for a caller that holds it
+/// ([`lock_db`]). `None` when it cannot be opened or is not one this version reads.
+pub(crate) async fn connect_locked(db_path: &str) -> Option<(turso::Database, turso::Connection)> {
+    connect(db_path).await.ok()
+}
+
+/// Create barca's tables in a new database at `db_path`, for a caller that holds its lock.
+pub(crate) async fn init_locked(db_path: &str) -> Result<(), BarcaError> {
+    let (_db, conn) = connect(db_path).await?;
+    init_schema(&conn).await
+}
+
 // ─── Cache size limit (RFC-0012) ─────────────────────────────────────────────
 
 /// Record that the results at `paths` (recorded artifact paths) were read now: by a step that

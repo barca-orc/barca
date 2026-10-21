@@ -101,6 +101,7 @@ client prints it as it would print the local command's.
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET`  | `/state` | Every node: its `barca status` entry plus typical durations and next run. |
+| `POST` | `/state/reset` | Start the metadata database over, as `barca state reset`: it moves aside to `metadata.db.reset-<UTC>`, nothing is deleted. See [Resetting the database](#resetting-the-database). |
 | `GET`  | `/groups` | Organizational groups as `[{id, name, description, members, output}]`; separate from execution edges. |
 | `GET`  | `/assets` | Every node as `barca list --json` shows it. |
 | `GET`  | `/assets/{name}` | One node's `barca list --json` entry with its `barca stats --json` body. |
@@ -352,6 +353,37 @@ fire time in unix seconds for scheduled nodes. `cache` is the `barca status` cac
 reading artifact shapes starts a reader process, too slow for an endpoint the UI polls. The cache
 check reads a private copy of the metadata DB, so this endpoint never writes it.
 
+### Resetting the database
+
+```
+POST /state/reset      → { database, moved_to, moved, undo }
+```
+
+What the web UI's **Reset database** button calls (on the "Can't load pipeline" panel, and in
+the sidebar), behind a dialog that says what happens and how to undo it. It works as `barca state
+reset` does: under the database's lock, the metadata database and its `-wal` and `-shm` move to
+`metadata.db.reset-<UTC>` (and `<that>-wal`, `<that>-shm`) in the same directory, and an empty
+database takes its place, so the next request sees an empty history. Nothing is deleted;
+artifacts are left alone. A database that cannot be opened or migrated (the case that makes
+`/state` fail with `Database error: ...`) moves as it is. The server keeps no connection open
+between requests, so the next one opens the new file; the paused schedules and the finished runs
+it remembered are cleared with the database.
+
+```json
+{
+  "database": ".barca/metadata.db",
+  "moved_to": ".barca/metadata.db.reset-2026-10-20T18-02-11.482Z",
+  "moved": [".barca/metadata.db.reset-2026-10-20T18-02-11.482Z", ".barca/metadata.db.reset-2026-10-20T18-02-11.482Z-wal"],
+  "undo": "barca state restore --from .barca/metadata.db.reset-2026-10-20T18-02-11.482Z"
+}
+```
+
+`moved_to` and `undo` are `null` when there was no database. Undo with `undo`, run with the
+server stopped. `409` while a run is pending or running (this server's, or a local run's on this
+machine), naming it, with nothing changed; `403` under `--read-only`; `503` while the server
+drains. There is no authentication (`barca serve` has none by design): anyone who can open the UI
+can reset.
+
 ### Logs
 
 ```
@@ -365,8 +397,8 @@ empty list. A run in progress streams them as `log` events.
 
 The first SIGTERM or SIGINT starts a drain. Until the server exits:
 
-- `POST /runs` (except a `dry_run`) and the older `POST /run`, `POST /run/{target}` and
-  `POST /get/{target}` return `503` with the error envelope
+- `POST /runs` (except a `dry_run`), `POST /state/reset` and the older `POST /run`,
+  `POST /run/{target}` and `POST /get/{target}` return `503` with the error envelope
   (`"error": "this server is shutting down: ..."`, `kind: infra`) and a `Retry-After` header: the drain
   timeout in seconds, at least 1. No run is started.
 - `GET /health` returns `200` with `"status": "draining"`.
@@ -386,8 +418,9 @@ for supervisor grace periods.
 
 ### Read-only mode
 
-With `--read-only`, every route that runs, cancels or pauses (`POST /runs` other than a dry
-run, `DELETE /runs/{run_id}`, the schedule pause and resume, and the older trigger routes)
+With `--read-only`, every route that runs, cancels, pauses or resets (`POST /runs` other than a
+dry run, `DELETE /runs/{run_id}`, the schedule pause and resume, `POST /state/reset`, and the older
+trigger routes)
 returns `403`, the scheduler does not start, and every read goes through a private copy of the
 metadata DB — the database is never opened in place, created or written.
 

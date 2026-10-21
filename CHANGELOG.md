@@ -40,6 +40,16 @@ and these tags are available on the same releases page.
   request or an input change; ticks skipped while a job is paused or still in flight do not count.
   Consecutive failures are kept in a new `schedule_failures` table, added in place within metadata
   format 1.
+- **Reset the metadata database** from the web UI and with `barca state reset` (#508). A
+  **Reset database** button on the "Can't load pipeline" panel and in the sidebar, behind a dialog
+  that says what happens and how to undo it, calls the new `POST /state/reset`. The database and
+  its `-wal` and `-shm` move aside to `metadata.db.reset-<UTC>` in the same directory and an empty
+  one takes its place; nothing is deleted, artifacts stay, and a database that cannot be opened
+  or migrated moves as it is. Refused with `409` (exit 3 on the CLI) while a run is pending or
+  running, `403` under `--read-only`, `503` while draining. `barca state reset` asks in a
+  terminal (`--yes` otherwise) and refuses while `barca serve` holds the environment. Undo with
+  `barca state restore --from <the moved file>`: `--from` now also takes a database file's path.
+  Experimental.
 
 ## 0.27.0 (2026-10-20)
 
