@@ -3,7 +3,7 @@ title: 'RFC-0009: The store as backup, and restore'
 description: 'A remote store with no server is this machine''s backup and read-through cache. The metadata database is backed up on the minute, five copies are kept, and restore is one explicit command.'
 ---
 
-- **Status:** Accepted
+- **Status:** Implemented (0.26.0)
 - **Amended:** 2026-10-20: the `unsynced` reason is spelled `cache.reason` with snake_case values
   (`local_only`, `store_only`, `mismatch`), replacing the `why` wording below; see
   "Implementation notes" at the end for how #403 shipped it.

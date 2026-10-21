@@ -641,7 +641,8 @@ never an HTTP error: it is a run whose outcome is `failed`. The Python client ra
 
 - No authentication and no TLS. The server listens on `127.0.0.1` by default; `--host` can
   make it reachable from other machines. Authenticate at a proxy.
-- No shared ledger yet: other machines do not see this server's history (RFC-0007).
+- One server per project. Machines share results by pointing at it ([the ledger](#the-ledger));
+  a second server on the same project, or a bucket on its own, shares nothing (RFC-0007).
 - Runs in progress are not resumed after a restart. A finished run's outcome is kept and
   `GET /runs/{run_id}` answers it; a run still queued at the restart never started.
 - One machine: steps run in worker processes on the host that runs the server.
