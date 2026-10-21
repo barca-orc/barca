@@ -4,8 +4,8 @@ Operating rules for agents in this repository. Product architecture, CLI contrac
 design principles live in [CLAUDE.md](CLAUDE.md). Read this file for **worktrees**,
 **reap**, and **cleanup** before starting work and again before ending a session.
 
-Disk is scarce. Every abandoned worktree with its own `target/` has cost multi‑GB.
-Treat teardown as part of the task, not optional polish.
+Every worktree's build directory costs several GB. Treat teardown as part of the task, not
+optional polish: an abandoned tree keeps its build directory until someone deletes it.
 
 ## Worktrees
 
@@ -33,11 +33,17 @@ recreate under `.worktrees/<slug>` before editing.
 
 1. One topic per worktree. Do not reuse another agent’s tree or branch.
 2. Do all edits, builds, installs, and tests inside that worktree.
-3. Prefer a shared Cargo target dir so each tree does not keep its own multi‑GB `target/`:
+3. Build into a **private** target dir inside the tree, for every `cargo` and `maturin`
+   command:
    ```bash
-   export CARGO_TARGET_DIR="<trunk>/target"
+   export CARGO_TARGET_DIR="$PWD/target-local"   # from the tree root; gitignored
    ```
-   (`<trunk>` = the primary checkout). Skip a full `cargo build` unless you need the binary.
+   Do not share the trunk `target/` between trees. Two trees building at once overwrite the
+   same `target/release/barca`, and cargo can count one tree's `barca-core` as already built
+   for another, so `maturin develop` installs a binary without your change (seen with several
+   parallel agents on 2026-10-20). Before trusting a Python test run, confirm the installed
+   binary contains your change, e.g. a string only your branch has. Delete `target-local/`
+   on teardown. Skip a full `cargo build` unless you need the binary.
 4. Leave the trunk on `main` with a clean `git status`. Move accidental work with
    `git stash push -u` → `.worktrees/<slug>` → `git stash pop`, then delete leftover ignored
    junk on the trunk (for example `ui/demo/.barca`).
@@ -102,6 +108,6 @@ sibling paths from your session.
 ## Pointers
 
 - Architecture and CLI/docs contract: [CLAUDE.md](CLAUDE.md)
-- New worktree setup hooks: [`.cursor/worktrees.json`](.cursor/worktrees.json) (no per-tree
-  `cargo build` — use `CARGO_TARGET_DIR` on the trunk `target/` when you need a binary)
+- New worktree setup hooks: [`.cursor/worktrees.json`](.cursor/worktrees.json) (`uv sync`
+  only; build into the tree's own `target-local/` when you need a binary)
 - Driving barca from scripts/agents: `barca docs agents` / `barca docs skill`

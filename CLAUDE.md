@@ -150,15 +150,24 @@ Trunk-based: `main` is the integration branch — always green, but not necessar
 released. Merging to main never publishes anything; only pushing a `v*` tag does.
 
 - **Always use worktrees** for local development work — see [AGENTS.md](AGENTS.md):
-  create only under `.worktrees/<slug>`, share `CARGO_TARGET_DIR` with the trunk `target/`,
-  reap processes, and remove the tree when the task is done (orphan trees eat disk)
+  create only under `.worktrees/<slug>`, build into the tree's own `target-local/`
+  (`CARGO_TARGET_DIR`; never the trunk `target/` shared between trees), reap processes, and
+  remove the tree when the task is done (orphan trees eat disk)
 - **Topic branches**: one per issue, branched off main, PRed straight into main
+- **Merging**: the `protect-main` ruleset allows **squash merges only**, requires `CI / test`
+  and `CI / backends` on the PR's head, and requires the branch to be up to date with main.
+  Merge one PR at a time: each merge makes the others behind, and updating them all at once
+  restarts every CI run. To ship several PRs as one release, combine them on one branch, run
+  CI once, and squash-merge it with a body that lists each PR and the issues it closes.
 - **Release**: when ready to ship, cut a short-lived release branch
-  `release/v<major>.<minor>.<patch>` off main containing only the version bump; PR it
-  into main and merge with `--delete-branch`, then tag the merge commit
-  `v<major>.<minor>.<patch>` — the tag triggers the release workflow (wheels, GitHub
-  Release, PyPI). The `release/` prefix keeps branch and tag names from colliding, so
-  `git push origin v<x.y.z>` and `git log v<x.y.z>..` are unambiguous
+  `release/v<major>.<minor>.<patch>` off main containing only the version bump (and the
+  `## Pending` CHANGELOG heading renamed to the version); PR it into main and squash-merge
+  with `--delete-branch`, then tag the merge commit `v<major>.<minor>.<patch>` — the tag
+  triggers the release workflow (wheels, GitHub Release, PyPI). The `release/` prefix keeps
+  branch and tag names from colliding, so `git push origin v<x.y.z>` and `git log v<x.y.z>..`
+  are unambiguous. PyPI's simple index is cached by its CDN for up to 10 minutes, so a new
+  version can be uploaded but not yet installable; the workflow's post-publish check waits
+  for it.
 
 ## Boundary contracts
 
