@@ -263,9 +263,12 @@ def test_two_project_copies_on_one_store_are_told_apart(tmp_path):
     assert "also holds backups from" in proc.stderr and str(b.resolve()) in proc.stderr
     assert "barca docs server-mode" in proc.stderr
     assert proc.stderr.count("also holds backups from") == 1
-    # B runs often: A's newest backup is still in the store.
+    # B runs often, each run recording a new result (a run that records none takes no
+    # backup, #554): A's newest backup is still in the store.
     for i in range(6):
-        (b / "pipeline.py").write_text(PIPELINE + f"\n# {i}\n")
+        changed = PIPELINE.replace('{"sum": sum(numbers)}', f'{{"sum": sum(numbers), "run": {i}}}')
+        assert changed != PIPELINE
+        (b / "pipeline.py").write_text(changed)
         ok(cli(b, store, "get", "total", "--json"))
     proc = cli(a, store, "state", "backups", "--json")
     listed = ok(proc)["backups"]
