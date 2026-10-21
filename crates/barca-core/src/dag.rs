@@ -1308,6 +1308,8 @@ def margin(region: str, tier: str, sales: dict) -> dict:\n    return sales\n"
     /// result leave the definition hash alone; edits that can change it do not.
     #[test]
     fn definition_hash_covers_the_result_and_nothing_else() {
+        // The partition dimensions are parameters of the function (#549).
+        const A: &str = "def a(region=None, area=None):\n    return 1\n";
         let base = definition_hash_of(&format!(
             "@asset(partitions={{\"region\": partitions([\"us\", \"eu\"])}})\n{A}"
         ));
@@ -1342,7 +1344,7 @@ def margin(region: str, tier: str, sales: dict) -> dict:\n    return sales\n"
         assert_ne!(
             base,
             definition_hash_of(
-                "@asset(partitions={\"region\": partitions([\"us\", \"eu\"])})\ndef a():\n    return 2\n"
+                "@asset(partitions={\"region\": partitions([\"us\", \"eu\"])})\ndef a(region=None, area=None):\n    return 2\n"
             ),
             "the body counts"
         );

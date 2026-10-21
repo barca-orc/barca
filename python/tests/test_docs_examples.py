@@ -397,11 +397,19 @@ def test_site_ordering_only_pattern_example_runs(binary, tmp_path):
     assert out["status"] == "success" and out["warnings"] == []
     assert "warning" not in proc.stderr
     assert (tmp_path / "order.log").read_text() == "migrate\nseed\n"
-    # Without the parameter the step cannot be called: barca passes `_migrate=None`.
+    # Without the parameter the step cannot be called: barca passes `_migrate=None`, and says
+    # so when it reads the file (#549), before `migrate` runs.
+    (tmp_path / "order.log").unlink()
     broken = code.replace("def seed_data(_migrate):", "def seed_data():")
     (tmp_path / "pipeline.py").write_text(broken + stubs)
     proc = barca(binary, tmp_path, "run", "seed_data", "pipeline.py", "--json")
-    assert proc.returncode == 1 and "TypeError" in proc.stderr
+    assert proc.returncode == 2, proc.stderr
+    assert (
+        "the inputs= key `_migrate` is not a parameter: seed_data() takes no parameters."
+        in proc.stderr
+    )
+    assert "Add a parameter `_migrate` to seed_data(), or remove the key." in proc.stderr
+    assert not (tmp_path / "order.log").exists()
 
 
 def test_scheduling_topic_example(binary, topics, tmp_path):

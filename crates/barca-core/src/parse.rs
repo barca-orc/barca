@@ -276,6 +276,16 @@ fn try_extract_function(
             fix: problem.fix,
         });
     }
+    // What the worker passes the function must be what it takes (#549).
+    if let Some(problem) = crate::input_params::check(func, kind, &keywords, &names.barca) {
+        return Err(ParseError::InvalidArguments {
+            file: file_path.to_string(),
+            function: func.name.to_string(),
+            line: source[..problem.offset].matches('\n').count() + 1,
+            message: problem.message,
+            fix: problem.fix,
+        });
+    }
 
     let (freshness, max_failures) =
         extract_freshness(&keywords, file_path, func.name.as_str(), &names.barca)?

@@ -8,6 +8,18 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Breaking
+
+- **Breaking:** `inputs=` keys and partition dimensions are checked against the function's
+  parameters when barca reads the file (#549). A key that is not a parameter, or a parameter
+  with no default that is neither an input, a partition dimension nor a `partitions_from`
+  upstream, is a usage error (exit 2) naming the file, line, node and parameter, with "Did you
+  mean"; `list`, `plan`, `--dry-run`, `get` and `run` all report it before any step runs.
+  Before, it was a worker `TypeError` after the upstream steps ran, so a file holding such a
+  step that was never run planned fine and now stops every command that reads it: fix the
+  signature, or give the parameter a default. `**kwargs` takes any key; a `@task`'s parameters
+  are not required (they are how `parallel()` branches get their arguments).
+
 ### Testing
 
 - Three tests no longer fail by chance or by environment: the `barca state restore` refusal test waits for the server's lock to be released instead of assuming it is immediate (a child process started by another test briefly holds it) (#524); the Datadog parallel-span test counts each span once and only its own run's (ddtrace resends a payload it timed out on, and the fake Agent now serves requests concurrently) (#530); the coordination-socket tests build their fixtures under `/tmp`, so they pass when the runner's `TMPDIR` is long (#571).

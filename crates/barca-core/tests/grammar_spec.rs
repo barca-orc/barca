@@ -1118,8 +1118,9 @@ fn rejected(src: &str) -> String {
 
 /// `decorators` above `def node(): ...`, after the usual import and one upstream asset.
 fn with_decorators(decorators: &str) -> String {
+    // `node` takes any keyword: what it is passed is checked elsewhere (`input_params`, #549).
     format!(
-        "from barca import *\n\n@asset()\ndef raw():\n    return 1\n\n{decorators}\ndef node():\n    return 1\n"
+        "from barca import *\n\n@asset()\ndef raw():\n    return 1\n\n{decorators}\ndef node(**kwargs):\n    return 1\n"
     )
 }
 

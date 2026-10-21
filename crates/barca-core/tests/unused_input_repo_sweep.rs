@@ -112,6 +112,21 @@ const REJECTED_ARGUMENTS: &[(&str, &str, &str)] = &[
         "t",
         "when",
     ),
+    // What the worker would pass the function is not what it takes (#549): the manual's
+    // misspelt `input=` example leaves `raw` unfilled; the manual's examples and the tests of
+    // this check; Dagster's `@asset def b(a)` in the framework comparison (read as barca's by
+    // bare-name discovery).
+    ("crates/barca-cli/docs/assets.md", "report", "raw"),
+    ("crates/barca-cli/docs/assets.md", "amounts", "row"),
+    ("python/tests/test_errors.py", "takes_one", "b"),
+    ("python/tests/test_input_parameters.py", "amounts", "row"),
+    ("python/tests/test_input_parameters.py", "amounts", "rows"),
+    ("python/tests/test_input_parameters.py", "sales", "regoin"),
+    (
+        "site/src/content/docs/comparisons/framework-comparison.md",
+        "b",
+        "a",
+    ),
 ];
 
 fn repo_root() -> PathBuf {

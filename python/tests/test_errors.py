@@ -135,7 +135,7 @@ class TestUserErrors:
         assert "real_asset" in msg
 
     def test_wrong_arg_count(self, tmp_path):
-        """TypeError from wrong args shows function name."""
+        """An inputs= key the function does not take is refused before anything runs (#549)."""
         f = write_module(
             tmp_path,
             "wrong_args.py",
@@ -154,9 +154,11 @@ class TestUserErrors:
         with pytest.raises(BarcaError) as exc_info:
             barca.get(f)
         msg = str(exc_info.value)
-        assert "TypeError" in msg
-        assert "takes_one" in msg
+        assert "wrong_args.py:takes_one (line 7)" in msg
+        assert "the inputs= key `b` is not a parameter: takes_one() takes `a`." in msg
+        assert "TypeError" not in msg
         assert "_worker.py" not in msg
+        assert not (tmp_path / ".barca" / "artifacts").exists(), "nothing ran"
 
     def test_asset_returns_none(self, tmp_path):
         """Asset returning None is valid, not an error."""

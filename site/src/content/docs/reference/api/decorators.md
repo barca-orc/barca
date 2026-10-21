@@ -124,7 +124,10 @@ Declares an asset: a function whose result barca stores and reuses. The function
 only when its run hash changes, that is, when its code, an input, a sensor value it reads, its
 partition key or a declared environment variable changes.
 
-`inputs` maps a parameter name to an upstream node. `name` replaces the function name in the
+`inputs` maps a parameter name to an upstream node. Each key must be a parameter of the function,
+and each parameter without a default must be an input or a partition dimension (or have
+`**kwargs` take it); barca checks both when it reads the file, exit 2 (a `@task`'s parameters may
+be left unfilled, for `parallel()` branches). `name` replaces the function name in the
 node id. `serializer` forces `"json"`, `"pickle"`, `"parquet"` or `"csv"`. `timeout_seconds` is the
 limit for one attempt. `description` and `tags` are metadata.
 

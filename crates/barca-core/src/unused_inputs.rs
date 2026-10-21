@@ -1068,9 +1068,10 @@ mod tests {
     }
 
     #[test]
-    fn an_input_missing_from_the_signature_is_not_reported() {
-        // The call fails at run time (unexpected keyword); that is not this warning's business.
-        assert!(unused_in(&step("", "    return 1", "\"a\": up")).is_empty());
+    fn an_input_missing_from_the_signature_is_an_error_not_a_warning() {
+        // An `inputs=` key that is not a parameter is refused when the file is read (#549).
+        let err = extract_nodes(&step("", "    return 1", "\"a\": up"), "t.py").unwrap_err();
+        assert!(err.to_string().contains("`a` is not a parameter"), "{err}");
     }
 
     #[test]

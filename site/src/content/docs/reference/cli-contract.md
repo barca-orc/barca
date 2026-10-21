@@ -506,10 +506,11 @@ objects on stdout instead of text on stderr. Exit codes do not change. `get`, `r
 other command keep progress and errors on stderr whatever `BARCA_LOG` says.
 
 An error in a pipeline file (a syntax error, a decorator argument barca does not define, an
+`inputs=` key or partition dimension that is not a parameter, a parameter nothing fills, an
 invalid `env=`, cron or `max_failures=`) fails every command that reads that file, whatever the target: `list`,
 `plan`, `status`, `get`, `run`, `stats` and `sql` exit 2 and run nothing. With no file arguments
 that is every pipeline file of the project. The envelope's `error` starts with `Parse error:
-<file>:<function> (line <n>):` for a decorator argument, and its `remediation` says what to
+<file>:<function> (line <n>):` for a decorator argument or a parameter mismatch, and its `remediation` says what to
 change; the wording is not contract.
 
 ### A closed stdout or stderr (stable)
