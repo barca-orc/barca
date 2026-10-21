@@ -365,9 +365,11 @@ The next run executes only the failed key and the fan-in (`2/4 steps`).
 
 ## With a remote store
 
-Partitions are cached per key across machines as well. With `BARCA_REMOTE_URI` set to a
-shared directory, a second copy of the project ran no key of `sales` after the first copy had
-computed them. The store holds one directory per key, laid out as it is locally.
+With `BARCA_REMOTE_URI` set, every key's result is uploaded to the store, one directory per
+key, laid out as it is locally. The store is this machine's backup and read-through cache: with
+the local copies of both keys of a `sales` deleted, the next `barca get sales` ran no step and
+printed `[barca] fetched 2 cached artifacts`. Another machine reuses those keys only through a
+server they both point at (`barca docs server-mode`).
 
 ## A few thousand keys
 

@@ -3,8 +3,6 @@ title: Getting Started
 description: Install barca, run two assets, see them cached, and find out what reruns when the code changes.
 ---
 
-Every command and its output below were run with barca 0.18.0.
-
 ## Install
 
 You need Python 3.12 or later. With [uv](https://docs.astral.sh/uv/):
@@ -49,18 +47,20 @@ uv run barca get pipeline.py
 
 ```
 [barca] 2/2 steps | done in 0.0s
-Run 51fabebab1c0 | all assets in 0.135s (2 steps, 1 phase)
+Run 151401da97ef | all assets in 0.133s (2 steps, 1 phase)
 
-Value:
-{
-  "count": 3,
-  "total": 6
-}
+.barca/artifacts/pipeline.py--summary/2d10c4c5ef45….json
+  {
+    "count": 3,
+    "total": 6
+  }
 ```
 
 Barca read `pipeline.py` without importing it, saw that `summary` depends on `raw_data`,
-ran both in a Python worker process, and printed the value of the last asset. The first
-line is progress, on stderr. The rest is the result, on stdout.
+and ran both in a Python worker process, which imports the file to call the functions. It
+then printed where the last asset's result is, with a preview of the
+value under it when the value is small json. The `[barca]` lines are progress, on stderr. The
+rest is the result, on stdout. File names are shortened here; barca prints the whole run hash.
 
 ## Where the results went
 
@@ -68,8 +68,8 @@ The run created a `.barca/` directory next to `pipeline.py`:
 
 ```
 .barca/metadata.db                                     run history and the record of what is cached
-.barca/artifacts/pipeline.py--raw_data/43c63fdf….json  the result of raw_data
-.barca/artifacts/pipeline.py--summary/34b59f38….json   the result of summary
+.barca/artifacts/pipeline.py--raw_data/a8e7dac3….json  the result of raw_data
+.barca/artifacts/pipeline.py--summary/2d10c4c5….json   the result of summary
 ```
 
 Each file name is the step's run hash: a hash of the function's code and its inputs. Do not
@@ -82,12 +82,17 @@ uv run barca get pipeline.py
 ```
 
 ```
-Run 51fa8fe09d90 | all assets in 0.005s (0 steps, 1 phase)
-...
+Run 151168b9247f | all assets in 0.011s (0 steps, 1 phase)
+
+.barca/artifacts/pipeline.py--summary/2d10c4c5ef45….json
+  {
+    "count": 3,
+    "total": 6
+  }
 ```
 
-`0 steps`: neither function ran. Both run hashes match a recorded result, so the value was
-read from `.barca/artifacts/`.
+`0 steps`: neither function ran, and no worker imported the file. Both run hashes match a
+recorded result, so barca printed the same file in `.barca/artifacts/`.
 
 ## See what barca sees
 
@@ -132,8 +137,8 @@ uv run barca get summary --dry-run
 
 ```
 NAME      KIND   STATE   WHY           LAST RUN                           SHAPE           DEPS
-raw_data  asset  cached  materialized  success 2026-10-07 18:14:53 0.00s  3 rows x 1 col  -
-summary   asset  stale   changed       success 2026-10-07 18:14:53 0.00s  dict (2 keys)   raw_data
+raw_data  asset  cached  materialized  success 2026-10-21 02:36:50 0.00s  3 rows x 1 col  -
+summary   asset  stale   changed       success 2026-10-21 02:36:50 0.00s  dict (2 keys)   raw_data
 
 1 cached, 1 stale, 0 never run, 0 partial, 0 unknown, 0 always run
 ```
@@ -157,8 +162,13 @@ uv run barca get summary
 
 ```
 [barca] 1/2 steps | done in 0.0s
-Run 51fa9938f318 | got 'summary' in 0.099s (1 step, 1 phase)
-...
+Run 15134f24969a | got 'summary' in 0.068s (1 step, 1 phase)
+
+.barca/artifacts/pipeline.py--summary/029a5a3b4fad….json
+  {
+    "count": 3,
+    "mean": 2.0
+  }
 ```
 
 One step ran. `raw_data` did not change, so its result came from the cache. If you had

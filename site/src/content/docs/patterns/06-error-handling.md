@@ -50,8 +50,8 @@ cat attempts.txt
 ## What barca does
 
 ```
-[barca] 2/2 steps | done in 0.1s
-Run 51ec7879e318 | ran 'notify' in 3.346s (2 steps, 1 phase)
+[barca] 2/2 steps | done in 0.0s
+Run 14f89b37ed6a | ran 'notify' in 3.210s (2 steps, 1 phase)
 
 Value:
 {
@@ -60,9 +60,9 @@ Value:
 ```
 
 ```
-attempt 1 at 1791396830.7 pid 17784
-attempt 2 at 1791396831.7 pid 17995
-attempt 3 at 1791396833.8 pid 18365
+attempt 1 at 1792550324.0 pid 188387
+attempt 2 at 1792550325.0 pid 188431
+attempt 3 at 1792550327.1 pid 188716
 ```
 
 The second attempt starts one second after the first and the third two seconds after the
@@ -89,15 +89,15 @@ barca run after_broken pipeline.py
 ```
 
 ```
-broken runs
-broken runs
+[pipeline.py:broken] broken runs
+[pipeline.py:broken] broken runs
 [barca] 0/2 steps | failed in 0.0s
-[barca] run failed: step 'pipeline.py:broken' failed (exit 1)
 Worker failed: ValueError: always fails
-  File ".../pipeline.py", line 27, in broken
+  File "/home/you/project/pipeline.py", line 27, in broken
     raise ValueError("always fails")
 
 Fix the error in 'pipeline.py:broken' (see the traceback) and re-run the same command. Steps that succeeded are cached and will not re-run.
+[barca] run failed: step 'pipeline.py:broken' failed: ValueError: always fails; 1 downstream steps skipped (exit 1)
 ```
 
 The command exits 1. `after_broken` does not run. With `--json`, stdout carries the failure
@@ -122,7 +122,7 @@ if attempts remain. With `@asset(timeout_seconds=1)` on a function that sleeps f
 seconds, the command fails after about one second:
 
 ```
-Worker failed: TimeoutError: Function '<lambda>' exceeded timeout of 1s
+Worker failed: TimeoutError: Step 'pipeline.py:slow' exceeded timeout of 1s
 ```
 
 ## Limits

@@ -71,6 +71,13 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   Removed and Documentation subsections, and the GitHub release bodies of 0.24.2 to 0.26.1 were
   rewritten from their sections.
 
+- First-run pages show what barca prints today (#495): Getting Started, the Patterns pages and
+  the CLI reference were re-captured on 0.27.0 (artifact paths with a small json preview,
+  prefixed step output, no `importing` line outside `--agent`), their "run with barca 0.18.0" stamps are
+  gone, `after=` and `when=` are documented as the usage errors they now are, and the remote
+  store is described everywhere as this machine's backup and read-through cache, with sharing
+  through a server.
+
 ## 0.27.0 (2026-10-20)
 
 ### Breaking

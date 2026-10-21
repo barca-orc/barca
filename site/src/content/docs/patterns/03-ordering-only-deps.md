@@ -37,10 +37,10 @@ barca run seed_data pipeline.py
 upstream result is not read from disk.
 
 ```
-migrating
-seeding
-[barca] 2/2 steps | done in 0.1s
-Run 5360fb511240 | ran 'seed_data' in 0.878s (2 steps, 1 phase)
+[pipeline.py:migrate_db] migrating
+[pipeline.py:seed_data] seeding
+[barca] 2/2 steps | done in 0.0s
+Run 150a5b2362ad | ran 'seed_data' in 0.065s (2 steps, 1 phase)
 
 Value:
 {
@@ -85,8 +85,14 @@ relation inputs, sensor inputs), is in `barca docs assets`, "Unused inputs".
   Worker failed: TypeError: seed_data() got an unexpected keyword argument '_migrate'
   ```
 
-- **There is no `after=` keyword.** Early prototypes had one. On 0.18.0 `@task(after=[migrate_db])`
-  is not an error: the keyword is ignored, `migrate_db` does not run, and the command exits 0.
+- **There is no `after=` keyword.** Early prototypes had one. `@task(after=[migrate_db])` is a
+  usage error (exit 2) for every command that reads the file:
+
+  ```
+  Parse error: after.py:seed_data (line 9): `after` is not an argument of @task. @task accepts: name, inputs, partitions, serializer, freshness, timeout_seconds, retries, retry_backoff, description, tags, env
+  Remove `after`, or replace it with an argument @task accepts. See `barca docs tasks`.
+  ```
+
   Use `inputs={"_name": upstream}`.
 - **A task cannot be an ordering-only input to an asset**, for the same reason it cannot be a
   data input: [Asset-to-Task](/patterns/02-asset-to-task/).
