@@ -421,6 +421,30 @@ in flight is then reported as `interrupted` (`barca docs cache`); `nohup barca s
 ignoring SIGHUP. A process that is process 1 of a container never receives them. SIGKILL cannot
 be handled by any program.
 
+## Containers with a memory limit
+
+Each step runs in its own worker process, and `serve` runs independent steps at the same time,
+up to the pool size. Under a hard memory limit (`mem_limit` in Compose, a pod's memory limit),
+heavy steps that become ready together (a cold cache after a deploy, say) can add up past it:
+the kernel kills one, and the step fails with
+`worker for pipeline.py:train exited with SIGKILL (possibly the OOM killer)`. The same step
+succeeds alone.
+
+Give the heavy steps a `weight=` (experimental, `barca docs assets`, "Heavy steps"): the steps
+running at once add up to at most the capacity, the pool size unless `[execution] capacity` in
+barca.toml or `BARCA_CAPACITY` sets it. With
+
+```toml
+# barca.toml
+[execution]
+capacity = 4
+```
+
+and `@asset(weight=2)` on the heavy assets, at most two of them run at once, and light steps
+still use what is left. `barca doctor` reports the capacity in effect. Lowering
+`BARCA_POOL_SIZE` instead limits every step. The capacity is per run: two schedules that fire
+together run with a capacity each.
+
 ## Source load failures
 
 A broken source does not disable unrelated schedules. Serve excludes its definitions

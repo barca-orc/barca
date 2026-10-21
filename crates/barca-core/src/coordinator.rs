@@ -40,6 +40,9 @@ pub struct ItemSpec {
     pub dag_inputs: HashMap<String, String>,
     pub timeout_seconds: u32,
     pub retries: u32,
+    /// How much of the pool's capacity this item takes while it runs (`weight=`, #436).
+    /// `parallel()` branches and partition keys carry their node's.
+    pub weight: u32,
     pub retry_backoff_seconds: f64,
     pub serializer: Option<String>,
     /// Sink outputs from stacked `@sink(...)` decorators.
@@ -75,6 +78,7 @@ impl ItemSpec {
             dag_inputs: HashMap::new(),
             timeout_seconds: step.timeout_seconds,
             retries: step.retries,
+            weight: step.weight,
             retry_backoff_seconds: step.retry_backoff_seconds,
             serializer: step.serializer.as_ref().map(|s| s.to_string()),
             sinks: step.sinks.clone(),
@@ -87,6 +91,20 @@ impl ItemSpec {
             is_dynamic: false,
         }
     }
+}
+
+// ─── Capacity ─────────────────────────────────────────────────────────────────
+
+/// The weight an item counts for under `capacity`: its `weight=`, at least 1, and at most the
+/// capacity. A step heavier than the capacity counts as the whole of it, so it starts only when
+/// nothing else is running and then runs alone, rather than never (#436).
+pub fn effective_weight(weight: u32, capacity: u32) -> u32 {
+    weight.clamp(1, capacity.max(1))
+}
+
+/// Whether an item of `weight` may start while steps whose weights total `running` are running.
+pub fn fits(running: u32, weight: u32, capacity: u32) -> bool {
+    running + effective_weight(weight, capacity) <= capacity.max(1)
 }
 
 // ─── Failure handling ─────────────────────────────────────────────────────────
@@ -396,6 +414,20 @@ impl Coordinator {
         }
     }
 
+    /// Whether the item at the head of the ready queue may start while steps whose weights
+    /// total `running` are running (`fits`). `false` when nothing is ready.
+    ///
+    /// Only the head is ever considered: an item that does not fit holds back the items queued
+    /// behind it, light ones included, until enough of what is running finishes. Letting
+    /// lighter items past it would keep the capacity filled with them and a heavy step could
+    /// wait for the rest of the run (#436).
+    pub fn head_fits(&self, running: u32, capacity: u32) -> bool {
+        self.ready
+            .iter()
+            .next()
+            .is_some_and(|id| fits(running, self.items[&id].spec.weight, capacity))
+    }
+
     /// The ready items in the order `next_ready` hands them out, left in the queue.
     pub fn ready_items(&self) -> impl Iterator<Item = ItemId> + '_ {
         self.ready.iter()
@@ -487,9 +519,12 @@ impl Coordinator {
 
         let group_id = GroupId(self.next_group_id);
         self.next_group_id += 1;
+        // A branch runs the caller's kind of work: it takes the caller's weight (#436).
+        let weight = self.items[&parent_id].spec.weight;
 
         let mut child_ids = Vec::with_capacity(specs.len());
-        for spec in specs {
+        for mut spec in specs {
+            spec.weight = weight;
             let child_id = ItemId(self.next_item_id);
             self.next_item_id += 1;
 
@@ -1055,6 +1090,7 @@ mod tests {
             dag_inputs: HashMap::new(),
             timeout_seconds: 300,
             retries: 1,
+            weight: 1,
             retry_backoff_seconds: 0.0,
             serializer: None,
             sinks: Vec::new(),
@@ -1576,6 +1612,7 @@ mod tests {
                 run_hashes: HashMap::new(),
                 timeout_seconds: 300,
                 retries: 0,
+                weight: 1,
                 retry_backoff_seconds: 0.0,
                 partition_keys: pks.clone(),
                 param_types: HashMap::new(),
@@ -1769,6 +1806,7 @@ mod tests {
             run_hashes: hashes,
             timeout_seconds: 300,
             retries: 1,
+            weight: 1,
             retry_backoff_seconds: 0.0,
             partition_keys: pks,
             param_types: HashMap::new(),
@@ -1841,6 +1879,7 @@ mod tests {
             run_hashes: HashMap::new(),
             timeout_seconds: 300,
             retries: 1,
+            weight: 1,
             retry_backoff_seconds: 0.0,
             partition_keys: pks,
             param_types: HashMap::new(),
@@ -1932,6 +1971,7 @@ mod tests {
             run_hashes: HashMap::new(),
             timeout_seconds: 300,
             retries: 1,
+            weight: 1,
             retry_backoff_seconds: 0.0,
             partition_keys: pks,
             param_types: HashMap::new(),
@@ -2012,6 +2052,7 @@ mod tests {
             run_hashes: HashMap::new(),
             timeout_seconds: 300,
             retries: 1,
+            weight: 1,
             retry_backoff_seconds: 0.0,
             partition_keys: vec![],
             param_types: HashMap::new(),
@@ -2063,5 +2104,130 @@ mod tests {
             item.spec.collected_inputs.get("data"),
             Some(&vec![oref_a, oref_b])
         );
+    }
+
+    // ─── Capacity (#436) ────────────────────────────────────────────────────
+
+    fn weighted(name: &str, weight: u32) -> ItemSpec {
+        ItemSpec {
+            weight,
+            ..spec(name)
+        }
+    }
+
+    #[test]
+    fn a_weight_above_the_capacity_counts_as_all_of_it() {
+        assert_eq!(effective_weight(0, 4), 1);
+        assert_eq!(effective_weight(3, 4), 3);
+        assert_eq!(effective_weight(9, 4), 4);
+        assert!(fits(2, 2, 4));
+        assert!(!fits(3, 2, 4));
+        // Too heavy for the capacity: it starts when nothing runs, and then only it runs.
+        assert!(fits(0, 9, 4));
+        assert!(!fits(1, 9, 4));
+        assert!(!fits(4, 1, 4));
+    }
+
+    /// Start what fits from the head of the queue, as the pool does; returns what started.
+    fn admit(c: &mut Coordinator, running: &mut u32, capacity: u32) -> Vec<ItemId> {
+        let mut started = Vec::new();
+        while c.head_fits(*running, capacity) {
+            let id = c.next_ready().unwrap();
+            *running += effective_weight(c.item(id).spec.weight, capacity);
+            started.push(id);
+        }
+        started
+    }
+
+    #[test]
+    fn three_heavy_items_run_two_at_a_time_under_a_capacity_of_four() {
+        let mut c = Coordinator::new();
+        let heavy: Vec<ItemId> = ["h1", "h2", "h3"]
+            .iter()
+            .map(|n| c.add_item(dummy_step_id(n), weighted(n, 2), vec![]))
+            .collect();
+        let mut running = 0;
+        assert_eq!(admit(&mut c, &mut running, 4), heavy[..2]);
+        c.on_item_completed(heavy[0]);
+        running -= 2;
+        assert_eq!(admit(&mut c, &mut running, 4), heavy[2..]);
+    }
+
+    /// A heavy item waiting for room is not overtaken by lighter items queued after it, or a
+    /// stream of light work could keep it waiting for the rest of the run.
+    #[test]
+    fn a_heavy_item_starts_before_the_light_ones_queued_behind_it() {
+        let mut c = Coordinator::new();
+        let l1 = c.add_item(dummy_step_id("l1"), spec("l1"), vec![]);
+        let l2 = c.add_item(dummy_step_id("l2"), spec("l2"), vec![]);
+        let heavy = c.add_item(dummy_step_id("h"), weighted("h", 2), vec![]);
+        let l3 = c.add_item(dummy_step_id("l3"), spec("l3"), vec![]);
+        let mut running = 0;
+        assert_eq!(admit(&mut c, &mut running, 2), vec![l1, l2]);
+
+        // One slot frees: the heavy item does not fit yet, and l3 waits behind it.
+        c.on_item_completed(l1);
+        running -= 1;
+        assert_eq!(admit(&mut c, &mut running, 2), vec![]);
+        // A light item made ready now queues behind it too.
+        let l4 = c.add_item(dummy_step_id("l4"), spec("l4"), vec![]);
+        assert_eq!(admit(&mut c, &mut running, 2), vec![]);
+
+        c.on_item_completed(l2);
+        running -= 1;
+        assert_eq!(admit(&mut c, &mut running, 2), vec![heavy]);
+        c.on_item_completed(heavy);
+        running -= 2;
+        assert_eq!(admit(&mut c, &mut running, 2), vec![l3, l4]);
+    }
+
+    #[test]
+    fn parallel_branches_take_the_weight_of_the_step_that_called_parallel() {
+        let mut c = Coordinator::new();
+        let parent = c.add_item(dummy_step_id("p"), weighted("p", 3), vec![]);
+        c.next_ready();
+        let (_, children) = c.on_parallel_requested(parent, vec![spec("c0"), spec("c1")]);
+        for child in children {
+            assert_eq!(c.item(child).spec.weight, 3);
+        }
+    }
+
+    #[test]
+    fn every_partition_key_takes_its_nodes_weight() {
+        use crate::planner::{Phase, PhaseReason, StreamStep, WorkerStream};
+        use crate::{PartitionKey, StepId};
+
+        let pk = |k: &str| PartitionKey::from(HashMap::from([("k".to_string(), k.to_string())]));
+        let step = StreamStep {
+            step_id: StepId::unpartitioned("f:heavy"),
+            kind: crate::NodeKind::Asset,
+            function_name: std::sync::Arc::from("heavy"),
+            source_file: std::sync::Arc::from("f"),
+            inputs: HashMap::new(),
+            pending_partitions: HashMap::new(),
+            serializer: None,
+            sinks: vec![],
+            run_hashes: HashMap::new(),
+            timeout_seconds: 300,
+            retries: 1,
+            weight: 2,
+            retry_backoff_seconds: 0.0,
+            partition_keys: vec![pk("a"), pk("b"), pk("c")],
+            param_types: HashMap::new(),
+            return_type: None,
+        };
+        let phase = Phase {
+            reason: PhaseReason::Initial,
+            streams: vec![WorkerStream {
+                stream_id: "w0".to_string(),
+                steps: vec![step],
+            }],
+        };
+        let mut c = Coordinator::new();
+        assert_eq!(c.load_phase(&phase, &HashMap::new()), 3);
+        assert!(c.items.values().all(|it| it.spec.weight == 2));
+        // Under a capacity of 4, two keys at a time.
+        let mut running = 0;
+        assert_eq!(admit(&mut c, &mut running, 4).len(), 2);
     }
 }

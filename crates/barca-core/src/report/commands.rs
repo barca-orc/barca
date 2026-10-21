@@ -853,6 +853,19 @@ pub fn render_explain(
                 result.summary.cached,
                 result.summary.unknown
             );
+            let heavy: Vec<String> = result
+                .steps
+                .iter()
+                .filter_map(|s| s.weight.map(|w| format!("{} (weight {w})", s.id)))
+                .collect();
+            if !heavy.is_empty() {
+                line!(
+                    rendered,
+                    "Steps running at once total at most weight {}: {}",
+                    result.capacity,
+                    heavy.join(", ")
+                );
+            }
             if let Some(uploads) = &result.uploads {
                 line!(
                     rendered,

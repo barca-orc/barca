@@ -111,6 +111,45 @@ pub(crate) fn default_pool_size() -> usize {
         .unwrap_or(4)
 }
 
+/// The capacity (#436): the most the `weight=` of the steps running at once may add up to, and
+/// where it came from. `BARCA_CAPACITY` > `[execution] capacity` > the pool size.
+pub(crate) fn capacity(
+    setting: crate::config::CapacitySetting,
+    pool_size: usize,
+) -> (usize, &'static str) {
+    setting.unwrap_or((pool_size.max(1), "pool size"))
+}
+
+/// The planned nodes whose `weight=` is above 1, by node id.
+pub(crate) fn planned_weights(plan: &ExecutionPlan) -> std::collections::BTreeMap<String, u32> {
+    plan.phases
+        .iter()
+        .flat_map(|p| &p.streams)
+        .flat_map(|s| &s.steps)
+        .filter(|st| st.weight > 1)
+        .map(|st| (st.step_id.base_id().to_string(), st.weight))
+        .collect()
+}
+
+/// Warn, once per node, about each weight above the capacity: such a step runs alone, with
+/// nothing beside it, rather than never.
+pub(crate) fn warn_over_capacity(
+    weights: &std::collections::BTreeMap<String, u32>,
+    capacity: usize,
+    source: &str,
+) {
+    for (node, weight) in weights {
+        if *weight as usize > capacity {
+            crate::run_line!(
+                Always,
+                "[barca] warning: '{}' has weight={weight}, more than the capacity {capacity} \
+                 ({source}); it runs alone",
+                short_name(node)
+            );
+        }
+    }
+}
+
 /// What `execute` produced: the run, each target's outcome, and the first step failure.
 /// Single-target runs turn that failure into an `Err`; multi-target runs report it per target.
 pub(crate) struct Executed {
@@ -737,6 +776,7 @@ async fn start_workers(
             .map(|s| s.prefix.to_string_lossy().into_owned()),
         python: python.to_path_buf(),
         pool_size,
+        capacity: prepared.capacity,
         run_id: run_id.clone(),
         datadog: telemetry
             .iter()
@@ -1849,6 +1889,8 @@ struct Prepared {
     keep_going: bool,
     target_label: Option<String>,
     pool_size: usize,
+    /// The capacity the run's steps share (#436).
+    capacity: usize,
     exec_plan: ExecutionPlan,
     plan_warnings: Vec<crate::warnings::PlanWarning>,
     /// `Manual` nodes read as they are (RFC-0008), by id.
@@ -2073,6 +2115,8 @@ async fn prepare_run(
     // Plan-time warnings for the steps this command planned, before anything runs.
     let plan_warnings = crate::warnings::for_plan(&dag, &exec_plan);
     crate::warnings::print(&plan_warnings);
+    let (capacity, capacity_source) = capacity(request.cfg.capacity, pool_size);
+    warn_over_capacity(&planned_weights(&exec_plan), capacity, capacity_source);
 
     Ok(Prepared {
         dag,
@@ -2081,6 +2125,7 @@ async fn prepare_run(
         keep_going,
         target_label,
         pool_size,
+        capacity,
         exec_plan,
         plan_warnings,
         pinned,
@@ -2386,7 +2431,14 @@ pub(crate) async fn explain_dag_with_membership(
         &mut summary,
     );
 
-    let steps = merge_partition_reports(steps);
+    let mut steps = merge_partition_reports(steps);
+    // The weights a real run would schedule by, and the capacity they share (#436).
+    let weights = planned_weights(&exec_plan);
+    for r in &mut steps {
+        r.weight = weights.get(recover::base_of(&r.id)).copied();
+    }
+    let (capacity, capacity_source) = capacity(cfg.capacity, pool_size);
+    warn_over_capacity(&weights, capacity, capacity_source);
     // Results of an earlier run still waiting for the store: the real run uploads them first.
     let uploads = if cfg.remote_artifacts() {
         crate::pending_uploads::report(&crate::pending_uploads::list(&cfg.db_path).await?, None)
@@ -2422,6 +2474,7 @@ pub(crate) async fn explain_dag_with_membership(
             summary,
             warnings,
             uploads,
+            capacity,
         },
         state.into_membership(),
     ))

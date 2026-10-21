@@ -123,6 +123,11 @@ pub const RULES: &[Rule] = &[
         reason: "decides how long the step may take, not what it returns",
     },
     Rule {
+        part: "weight",
+        counts: Counts::No,
+        reason: "decides how many steps run at once, not what the step returns",
+    },
+    Rule {
         part: "description",
         counts: Counts::No,
         reason: "documentation",
@@ -832,6 +837,7 @@ def sales(region: str, a: list, b: int) -> dict:
             "retries=5",
             "retry_backoff=2.5",
             "timeout_seconds=10",
+            "weight=4",
             "freshness=Manual",
             "freshness=Schedule(\"0 * * * *\")",
             "name=\"other\"",

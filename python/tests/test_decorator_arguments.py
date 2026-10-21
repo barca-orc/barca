@@ -23,7 +23,7 @@ from barca.api import _find_binary
 
 ASSET_ACCEPTS = (
     "@asset accepts: name, inputs, partitions, serializer, freshness, timeout_seconds, "
-    "retries, retry_backoff, description, tags, env"
+    "retries, retry_backoff, description, tags, env, weight"
 )
 
 GOOD = """
@@ -70,7 +70,7 @@ def envelope(proc: subprocess.CompletedProcess) -> dict:
         (
             "@task(when='always')",
             "`when` is not an argument of @task. @task accepts: name, inputs, partitions, serializer, freshness, "
-            "timeout_seconds, retries, retry_backoff, description, tags, env",
+            "timeout_seconds, retries, retry_backoff, description, tags, env, weight",
             "Remove `when`, or replace it with an argument @task accepts. See `barca docs tasks`.",
         ),
         (

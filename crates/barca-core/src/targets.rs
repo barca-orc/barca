@@ -805,6 +805,7 @@ def lone() -> int:
             summary: ExplainSummary::default(),
             warnings: Vec::new(),
             uploads: None,
+            capacity: 4,
         };
         let one = serde_json::to_value(&r).unwrap();
         assert_eq!(one["target"], "a");

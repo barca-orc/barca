@@ -768,7 +768,8 @@ worker for pipeline.py:train exited with code 3
 ```
 
 SIGKILL is what the out-of-memory killer sends: check the container's or host's memory limit.
-Several heavy steps running at once in separate workers add up. A worker frozen waiting for
+Several heavy steps running at once in separate workers add up; give them a `weight=` so fewer
+run at once (see [Decorators](/reference/api/decorators/#heavy-steps-weight)). A worker frozen waiting for
 its `parallel()` branches adds `while it waited for its parallel() branches`. When the exit
 status is not available within a few hundred milliseconds, the error is the plain
 `worker disconnected`.

@@ -207,6 +207,9 @@ pub struct StepReport {
     /// `"<redacted>"` for secret-looking names. Absent when the node declares no env.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<std::collections::BTreeMap<String, Option<String>>>,
+    /// Dry run only: the node's `weight=` when it is above 1 (#436). Absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weight: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -238,6 +241,8 @@ pub struct ExplainResult {
     /// Results of an earlier run still waiting to be uploaded; the real run uploads them
     /// before its own work. Absent when there are none.
     pub uploads: Option<UploadsReport>,
+    /// The most the `weight=` of the steps running at once may add up to (#436).
+    pub capacity: usize,
 }
 
 /// One target of a multi-target dry run.
@@ -268,7 +273,7 @@ impl Serialize for ExplainResult {
                 s.collect_map(self.0.iter().map(|(k, v)| (k, v)))
             }
         }
-        let mut s = serializer.serialize_struct("ExplainResult", 6)?;
+        let mut s = serializer.serialize_struct("ExplainResult", 8)?;
         s.serialize_field("dry_run", &self.dry_run)?;
         s.serialize_field("command", &self.command)?;
         if self.targets.len() > 1 {
@@ -276,6 +281,7 @@ impl Serialize for ExplainResult {
         } else {
             s.serialize_field("target", &self.target)?;
         }
+        s.serialize_field("capacity", &self.capacity)?;
         s.serialize_field("steps", &self.steps)?;
         s.serialize_field("summary", &self.summary)?;
         s.serialize_field("warnings", &self.warnings)?;
@@ -302,6 +308,8 @@ impl<'de> Deserialize<'de> for ExplainResult {
             warnings: Vec<PlanWarning>,
             #[serde(default)]
             uploads: Option<UploadsReport>,
+            #[serde(default)]
+            capacity: usize,
         }
         let wire = WireExplain::deserialize(deserializer)?;
         if !wire.targets.is_empty() && (wire.targets.len() < 2 || wire.target.is_some()) {
@@ -318,6 +326,7 @@ impl<'de> Deserialize<'de> for ExplainResult {
             summary: wire.summary,
             warnings: wire.warnings,
             uploads: wire.uploads,
+            capacity: wire.capacity,
         })
     }
 }
@@ -353,6 +362,18 @@ pub struct PlanResult {
     /// Version of this plan document, independent of the package/worker/DB versions.
     pub plan_version: u32,
     pub total_steps: usize,
+    /// Worker processes: available cores, or `BARCA_POOL_SIZE`.
+    #[serde(default)]
+    pub pool_size: usize,
+    /// The most the `weight=` of the steps running at once may add up to (#436).
+    #[serde(default)]
+    pub capacity: usize,
+    /// Where `capacity` came from: `BARCA_CAPACITY`, `[execution] capacity` or `pool size`.
+    #[serde(default)]
+    pub capacity_source: String,
+    /// The planned nodes whose `weight=` is above 1, by node id (`{}` when there are none).
+    #[serde(default)]
+    pub weights: std::collections::BTreeMap<String, u32>,
     pub phases: Vec<PlanPhase>,
     /// Plan-time warnings for the planned steps (`[]` when there are none).
     #[serde(default)]
@@ -487,7 +508,7 @@ mod wire_tests {
     fn explanations_roundtrip_whole_file_single_target_and_ordered_multiple_targets() {
         for target in [None, Some("p.py:z")] {
             let result: ExplainResult = roundtrip(json!({
-                "dry_run": true, "command": "get", "target": target,
+                "dry_run": true, "command": "get", "target": target, "capacity": 4,
                 "steps": [{"id":"p.py:z", "kind":"asset", "action":"run", "reason":"not_materialized"}],
                 "summary": {"will_run":1,"cached":0,"unknown":0}, "warnings":[]
             }));

@@ -67,7 +67,6 @@ Design questions nobody has answered yet, the issue each blocks, and the release
 - **Pause persistence** (#435): whether a paused schedule stays paused across a server restart. Proposed yes. By 0.27.0.
 - **Route aliases and resume** (#393): how long the old routes stay as aliases, and when `Last-Event-ID` resume replaces the drop-is-infra-error rule. By 0.27.0.
 - **Fixture home** (#250): `examples/planning_pipeline/` or `benchmarks/planning_pipeline/`. By 0.27.0.
-- **Heavy-worker limit** (#436): a per-node weight, a concurrency group, or a memory budget from recorded RSS. Unscheduled; decided when scheduled.
 
 ## Decided, October 2026
 
@@ -88,6 +87,8 @@ The design decisions behind items 2 to 4, settled on 2026-10-14. The RFCs carry 
 **Signed URLs.** `barca.signed_url(uri)` returns a link that expires after 1 hour by default and at most 7 days, with `Content-Disposition: attachment; filename=<node>.<ext>`; `barca.get` keeps returning values. Shipped in 0.26.0. Settled 2026-10-20 (RFC-0011).
 
 **Store reasons and partial keys.** A result only on this machine is `unsynced` with `cache.reason: "local_only"` in status JSON (RFC-0009's `why` wording is amended to match). A partitioned target with failed keys exits 1 and returns only the keys that succeeded, experimentally. Settled 2026-10-20.
+
+**Heavy steps.** A per-node `weight=N` (default 1) on `@asset`, `@task` and `@sensor`, against a capacity that is the pool size unless `[execution] capacity` or `BARCA_CAPACITY` sets it; not a concurrency group, not a memory budget from recorded RSS. A step heavier than the capacity runs alone, with a warning; the ready queue stays first come, first served, so a heavy step is not overtaken; partition keys and `parallel()` branches take their node's weight. Experimental. Settled 2026-10-21 (#436).
 
 **Server mode.** Sharing state means a server. The server owns the ledger (run hashes, artifact paths, run history, schedules), holds the deployed code and runs schedules from it, and is the only writer of metadata. `barca get` runs locally by default: it asks the server's ledger, fetches hits from the store, computes misses locally, uploads them to the store and then posts the rows; the server checks the object and its checksum before accepting a row. `--server` runs the job on the server. A configured server that cannot be reached is exit 3 naming it; `--local` runs against the local ledger with nothing pushed. A connection dropped mid-run is an infra error naming the run id. Otherwise local and server runs print the same thing.
 

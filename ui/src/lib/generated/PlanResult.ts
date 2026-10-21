@@ -6,7 +6,23 @@ export type PlanResult = {
 /**
  * Version of this plan document, independent of the package/worker/DB versions.
  */
-plan_version: number, total_steps: number, phases: Array<PlanPhase>,
+plan_version: number, total_steps: number,
+/**
+ * Worker processes: available cores, or `BARCA_POOL_SIZE`.
+ */
+pool_size: number,
+/**
+ * The most the `weight=` of the steps running at once may add up to (#436).
+ */
+capacity: number,
+/**
+ * Where `capacity` came from: `BARCA_CAPACITY`, `[execution] capacity` or `pool size`.
+ */
+capacity_source: string,
+/**
+ * The planned nodes whose `weight=` is above 1, by node id (`{}` when there are none).
+ */
+weights: { [key in string]: number }, phases: Array<PlanPhase>,
 /**
  * Plan-time warnings for the planned steps (`[]` when there are none).
  */

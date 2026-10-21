@@ -901,6 +901,7 @@ mod tests {
             sinks: smallvec::SmallVec::new(),
             timeout_seconds: 300,
             retries: 1,
+            weight: 1,
             retry_backoff_seconds: 0.0,
             description: None,
             tags: HashMap::new(),

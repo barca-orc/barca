@@ -289,6 +289,17 @@ fn try_extract_function(
     let retries = extract_int_kwarg(&keywords, "retries").unwrap_or(1).max(1);
     let retry_backoff_seconds = extract_float_kwarg(&keywords, "retry_backoff").unwrap_or(0.0);
     let tags = extract_tags(&keywords);
+    let weight = extract_weight(&keywords, source).map_err(|(offset, message)| {
+        ParseError::InvalidArguments {
+            file: file_path.to_string(),
+            function: func.name.to_string(),
+            line: source[..offset].matches('\n').count() + 1,
+            message,
+            fix: "write weight= as a whole number of at least 1, e.g. @asset(weight=2) \
+                  (see `barca docs assets`)"
+                .to_string(),
+        }
+    })?;
     let env = extract_env(&keywords, file_path, func.name.as_str())?;
     let artifact_serializer = keywords
         .iter()
@@ -328,6 +339,7 @@ fn try_extract_function(
         sinks,
         timeout_seconds,
         retries,
+        weight,
         retry_backoff_seconds,
         description,
         tags,
@@ -767,6 +779,35 @@ fn extract_env(
         }
     }
     Ok(names)
+}
+
+/// `weight=N`: a whole-number literal of at least 1, 1 when not written (#436). Anything else
+/// is refused with the byte offset of the value, rather than read as 1: a weight that silently
+/// did nothing would let heavy steps run together again.
+fn extract_weight(keywords: &[&Keyword], source: &str) -> Result<u32, (usize, String)> {
+    let Some(kw) = keywords
+        .iter()
+        .find(|kw| kw.arg.as_ref().map(|a| a.as_str()) == Some("weight"))
+    else {
+        return Ok(1);
+    };
+    let offset = kw.value.range().start().to_usize();
+    if let Expr::NumberLiteral(n) = &kw.value
+        && let ast::Number::Int(i) = &n.value
+        && let Some(w) = i.as_u32()
+        && w >= 1
+    {
+        return Ok(w);
+    }
+    Err((
+        offset,
+        format!(
+            "weight= must be a whole number of at least 1, got `{}`",
+            source
+                .get(kw.value.range().start().to_usize()..kw.value.range().end().to_usize())
+                .unwrap_or("?")
+        ),
+    ))
 }
 
 fn extract_string_kwarg(keywords: &[&Keyword], name: &str) -> Option<String> {

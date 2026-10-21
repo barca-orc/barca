@@ -77,6 +77,7 @@ pub const STEP_FIELDS: &[&str] = &[
     "import_seconds",
     "partitions",
     "env",
+    "weight",
 ];
 
 /// Item fields of `recent_runs[]` in `barca stats --json`.
@@ -214,6 +215,7 @@ mod tests {
             warning: s(),
             partitions: Some(Default::default()),
             env: Some(Default::default()),
+            weight: Some(2),
         };
         assert_eq!(keys(&serde_json::to_value(step).unwrap()), set(STEP_FIELDS));
     }
