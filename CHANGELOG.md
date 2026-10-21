@@ -64,6 +64,11 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   sum of the steps' times, so a run of parallel steps reported several times its real duration
   (`done in 8.2s` for a 1.9 s run).
 
+- A failed step's message starts `Step '<node>' failed:` instead of `Worker failed:`, which read like
+  a barca fault. Its remediation fits the failure: a timeout says to raise `timeout_seconds=`, a
+  worker that died without a Python exception (`os._exit`, a native crash, SIGKILL) says so, and
+  "see the traceback" appears only when there is one.
+
 ### Performance
 
 - Small pipelines start faster (#560). Workers start together: when ready work has no idle
