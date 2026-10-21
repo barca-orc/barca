@@ -55,6 +55,9 @@ pub struct IoConfig {
     /// Merged fsspec storage options (JSON), forwarded to workers (for remote
     /// `@sink` destinations).
     pub storage_options_json: Option<String>,
+    /// `--agent` (and every run `barca serve` starts): workers announce each module they
+    /// import (`[barca] importing <module>`); otherwise they say nothing of their own (#496).
+    pub agent_mode: bool,
 }
 
 /// Callback invoked on each step completion with (node_id, artifact_json, attempts made).
@@ -1219,6 +1222,11 @@ async fn spawn_worker(
         .stderr(crate::term::child_output())
         .stdin(Stdio::null());
 
+    if config.agent_mode {
+        cmd.env("BARCA_WORKER_AGENT", "1");
+    } else {
+        cmd.env_remove("BARCA_WORKER_AGENT");
+    }
     if let Some(prefix) = &config.upload_snapshot_prefix {
         cmd.env("BARCA_UPLOAD_SNAPSHOT_PREFIX", prefix);
     } else {
@@ -2213,6 +2221,7 @@ mod tests {
                     datadog: None,
                     artifact_root: ".".to_string(),
                     storage_options_json: None,
+                    agent_mode: false,
                 },
                 socket_path: socket_path.clone(),
                 listener,

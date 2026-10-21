@@ -325,6 +325,7 @@ default, and any aliases.
 | `<TOPIC>` | - | - | stable | Topic to show (omit for the index), e.g. types, cache, examples/duckdb |
 | `--all` | - | default `false` | stable | Print every topic in one stream |
 | `--json` | - | default `false` | stable | Emit JSON instead of markdown |
+| `--pretty` | - | default `false` | stable | Print markdown, the default even when piped (accepted like every read command's --pretty) |
 | `--fields` | comma-separated: `name`, `summary`, `content` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `topics`, or on the one topic. Implies --json. An unknown key is a usage error listing the valid ones |
 
 #### barca version
@@ -417,7 +418,7 @@ unexpectedly or speaks another API version is exit 3 naming its URL, with `--loc
 remediation; a server whose store is not this project's `[remote]` (or a project with no
 `[remote]`) is exit 2 naming both.
 
-barca sets `BARCA_SOCKET`, `BARCA_WORKER`, `BARCA_WORKER_ID` (and passes `BARCA_ARTIFACT_URI`,
+barca sets `BARCA_SOCKET`, `BARCA_WORKER`, `BARCA_WORKER_ID`, `BARCA_WORKER_AGENT` (and passes `BARCA_ARTIFACT_URI`,
 `BARCA_STORAGE_OPTIONS`) for its own worker processes; these are internal, not part of the
 contract. `BARCA_TEST_*` variables are hooks for barca's own test suite, also not part of the
 contract. Variables your nodes declare with `@asset(env=[...])` are yours (`barca docs assets`).
@@ -1604,6 +1605,13 @@ Reconciled history (same envelope; unknown end timestamp and duration remain nul
 
 `id` is the node id (`file.py:name`), the same key every other command uses. The timing fields
 are `null` when the asset never ran; `recent_runs[].error_message` is a string for failed runs.
+`total_runs` counts executions (recorded materializations). Despite its name, `cache_hit_rate` is
+not a cache hit rate: it is the share of those executions that repeated an earlier execution's
+run hash, i.e. ran again with unchanged code and inputs (`--refresh`, a retry after a failure, an
+evicted result). A cache hit executes nothing and is not recorded per asset; `barca history`
+counts cache hits per run (`steps_cached`). The human report labels it "Re-executed with
+unchanged inputs". Until 0.27.0 it counted every execution whose run hash appeared more than once,
+the first included.
 
 ### gc (experimental)
 
@@ -2037,7 +2045,9 @@ and `specs/task-output.md` for flush, failure and ordering boundaries.
 
 ### Execution timing and imports
 
-Import progress uses `[barca] importing <module>` before a module is loaded. Completion
+Under `--agent` (and in runs `barca serve` starts), import progress uses
+`[barca] importing <module>` before a module is loaded; without `--agent` the line is not printed,
+and `import_seconds` in the run JSON reports a slow import. Completion
 and permanent failure step lines append `attempts=N` only when N > 1; their existing
 prefixes and completion durations remain. Timeout messages identify the step, rather
 than the internal callable wrapper.

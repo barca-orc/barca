@@ -127,6 +127,8 @@ pub struct AssetStats {
     pub median_elapsed_seconds: Option<f64>,
     pub max_elapsed_seconds: Option<f64>,
     pub p95_elapsed_seconds: Option<f64>,
+    /// The share of executions that repeated an earlier execution's run hash (not cache hits,
+    /// which execute nothing and are not recorded per asset).
     pub cache_hit_rate: f64,
     pub recent_runs: Vec<AssetRunEntry>,
 }
@@ -2429,15 +2431,18 @@ pub async fn get_asset_stats(db_path: &str, node_id: &str) -> Result<AssetStats,
     let max_elapsed = all_elapsed.last().copied();
     let p95_elapsed = percentile(&all_elapsed, 95.0);
 
-    // Cache hit rate: rows with non-null, non-empty run_hash that appear more than once.
+    // `cache_hit_rate` (the JSON key keeps its name): the share of this node's executions that
+    // repeated an earlier execution's run hash, i.e. ran again with unchanged code and inputs
+    // (`--refresh`, a retry after a failure, an evicted result). A cache hit executes nothing
+    // and writes no row, so it is not counted here; `barca history` counts them per run (#496).
     let cache_hit_rate = if total_runs > 1 {
         let mut rows = conn
             .query(
-                "SELECT COUNT(*) FROM materializations WHERE node_id = ?1 AND run_hash != '' AND run_hash IN (SELECT run_hash FROM materializations WHERE node_id = ?1 GROUP BY run_hash HAVING COUNT(*) > 1)",
+                "SELECT COUNT(*) - COUNT(DISTINCT run_hash) FROM materializations WHERE node_id = ?1 AND run_hash IS NOT NULL AND run_hash != ''",
                 [node_id.to_string()],
             )
             .await
-            .map_err(|e| BarcaError::Db(format!("failed to query cache hits: {e}")))?;
+            .map_err(|e| BarcaError::Db(format!("failed to query repeated executions: {e}")))?;
         let cached_count: i64 = rows
             .next()
             .await

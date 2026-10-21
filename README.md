@@ -314,13 +314,13 @@ error (exit 2) that names the right one. `barca pipeline.py` is short for
 | `barca plan [files...]` | Versioned plan JSON (`plan_version: 1`). The execution plan as JSON (experimental), using the execution pool size. No flags. |
 | `barca gc` | Evict cached results to keep `.barca/` under its size limit (`[cache] max_size` or `BARCA_CACHE_MAX_SIZE`, default 10% of the filesystem; barca also does it after every `get` and `run`). `--dry-run`, `--max-size SIZE`, `--json`, `--pretty`, `--env` |
 | `barca history` | Every run in JSON, 10 in a human table. `--limit N`, `--all`, `--json`, `--pretty`, `--fields`, `--env`; `--reconcile RUN_ID` explicitly records a verified-stopped run as interrupted |
-| `barca stats <target> [files...]` | Timing and cache statistics for one asset. `--json`, `--pretty`, `--fields`, `--env` |
+| `barca stats <target> [files...]` | Timing and re-execution statistics for one asset. `--json`, `--pretty`, `--fields`, `--env` |
 | `barca serve [files...]` | HTTP API, cron scheduler and web UI. `--port N`, `--host IP`, `--watch`, `--no-schedule`, `--timezone`, `--read-only`, `--drain-timeout`, `--env`. SIGTERM drains runs in flight; `BARCA_LOG=json` writes its lines as JSON on stdout |
 | &nbsp;&nbsp;`--server [<url>]`, `--local` | On `get`, `run`, `status`, `list`, `history`, `stats` (experimental): `--server` runs the command on a `barca serve` and prints it here as a local run would; with no URL it uses `BARCA_SERVER` or `[server] url` in `barca.toml`. `--local` ignores a configured server. See `barca docs server-mode` |
 | `barca state backups` | The metadata backups, local and in the store, newest first. `--json`, `--pretty`, `--env` |
 | `barca state restore` | Put a backup in place of the metadata DB; the current one is kept as `metadata.db.pre-restore`. `--from N\|NAME\|PATH`, `--json`, `--env` |
 | `barca state reset` | Start the metadata DB over (experimental): it moves aside to `metadata.db.reset-<UTC>`, nothing is deleted. Asks in a terminal; `--yes`, `--json`, `--env`. Also the UI's **Reset database** button (`POST /state/reset`) |
-| `barca docs [topic]` | The manual, compiled into the binary. `--all`, `--json`, `--fields` |
+| `barca docs [topic]` | The manual, compiled into the binary. `--all`, `--json`, `--pretty`, `--fields` |
 | `barca version` | Print the version (also `barca --version`). |
 
 Failed runs end stderr with the failed step, its first error line and the count of skipped
