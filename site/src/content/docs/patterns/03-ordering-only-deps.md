@@ -79,10 +79,11 @@ relation inputs, sensor inputs), is in `barca docs assets`, "Unused inputs".
 ## Limits
 
 - **The function must still accept the parameter.** Barca passes `_migrate=None`. Without the
-  parameter the step fails:
+  parameter every command that reads the file exits 2, before anything runs:
 
   ```
-  Step 'pipeline.py:seed_data' failed: TypeError: seed_data() got an unexpected keyword argument '_migrate'
+  Parse error: pipeline.py:seed_data (line 9): the inputs= key `_migrate` is not a parameter: seed_data() takes no parameters.
+  Add a parameter `_migrate` to seed_data(), or remove the key. Barca passes each inputs= key to the function as a keyword argument. See `barca docs assets`.
   ```
 
 - **There is no `after=` keyword.** Early prototypes had one. `@task(after=[migrate_db])` is a

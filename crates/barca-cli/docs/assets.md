@@ -66,7 +66,7 @@ Star-import dependency hashing remains conservative.
 
 | Option | Meaning |
 |---|---|
-| `inputs={"param": upstream}` | Wire upstream nodes to parameters. The param name must match a function parameter. |
+| `inputs={"param": upstream}` | Wire upstream nodes to parameters. The param name must match a function parameter; barca checks this when it reads the file ("Inputs and parameters" below). |
 | `name="..."` | Explicit node name (the default is the function name). |
 | `freshness=` | `Always` (default), `Manual`, or `Schedule("<cron>", max_failures=5)`. See `barca docs scheduling`. |
 | `serializer=` | Force `"json"`, `"pickle"`, `"parquet"` or `"csv"`. See `barca docs types`. |
@@ -167,6 +167,44 @@ Not checked:
   `inputs=make_inputs()`) is still read as "no inputs", without a message. `env=` is the
   exception: anything but a list of string literals is an error.
 - `parallel()` and `parallel_map()`: their arguments are your own.
+
+## Inputs and parameters
+
+Barca calls a step with one keyword argument per `inputs=` key and per partition dimension. Both
+sides are in the source, so a mismatch is an error when barca reads the file, before any step
+runs: exit 2, `kind` `usage`, on the same commands and with the same scope as an argument barca
+does not define (above).
+
+- An `inputs=` key (or a `partitions=` dimension) that is not a parameter of the function:
+
+  ```python
+  @asset(inputs={"row": raw})        # the parameter is `rows`
+  def amounts(rows: list) -> list:
+      return rows
+  ```
+
+  ```
+  Parse error: pipeline.py:amounts (line 9): the inputs= key `row` is not a parameter: amounts() takes `rows`. Did you mean `rows`?
+  Rename the key to `rows`, or add a parameter `row` to amounts(). Barca passes each inputs= key to the function as a keyword argument. See `barca docs assets`.
+  ```
+
+- A parameter with no default that is neither an `inputs=` key, a partition dimension nor the
+  upstream of a `partitions_from(...)` (passed under its name, `barca docs partitions`). The
+  line is the parameter's:
+
+  ```
+  Parse error: pipeline.py:amounts (line 10): the parameter `rows` of amounts() has no input and no default: barca passes it no arguments, so calling it would fail.
+  Wire it with `inputs={"rows": <upstream>}`, give it a default (`rows=...`), or remove it. See `barca docs assets`.
+  ```
+
+- A function with `**kwargs` takes any key; a parameter with a default may be left unfilled.
+- A `@task`'s parameters are not reported missing: a task with parameters is how a `parallel()`
+  branch receives its arguments (`barca docs tasks`). Its `inputs=` keys are checked.
+- When `inputs=` or `partitions=` is not a dict literal with string keys, which arguments
+  arrive cannot be known, and no parameter is reported missing.
+
+Up to 0.28 both mistakes failed only when the step ran, as a `TypeError` from the worker after
+every upstream had run.
 
 ## Environment variables: `env=`
 

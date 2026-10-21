@@ -27,6 +27,7 @@ pub mod groups;
 pub mod hash;
 pub mod helper_proc;
 pub mod http;
+mod input_params;
 pub mod interrupt;
 pub mod io_loop;
 pub mod jsonlog;
