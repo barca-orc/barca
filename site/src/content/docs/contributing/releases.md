@@ -68,13 +68,24 @@ a pre-commit hook.
    upload both wait on it, so a version with no section publishes nothing. A tag containing
    `rc`, `alpha`, `beta` or `dev` is marked as a pre-release.
 6. **Publishes the wheels and the sdist to PyPI.**
+7. **Deploys the docs site**, [barca.sh](https://barca.sh), from the tag: a `deploy-site` job
+   runs `npm ci`, `npm run build` and `npx wrangler deploy` in `site/` (Node 24; the Worker is
+   configured in `site/wrangler.jsonc`). It starts after the GitHub Release and the PyPI upload
+   and nothing waits on it, so a failed deploy leaves the release published; rerun the job once
+   the cause is fixed. It needs two repository secrets, `CLOUDFLARE_API_TOKEN` (a Cloudflare
+   API token from the "Edit Cloudflare Workers" template) and `CLOUDFLARE_ACCOUNT_ID`, and
+   fails with an error naming whichever is missing.
 
 There are no wheels for Windows, Linux arm64 or macOS x86_64. On those platforms `pip` builds
 from the sdist, which needs a Rust toolchain.
 
 The workflow also runs on a pull request that changes `release.yml`; it then builds everything,
 checks that `CHANGELOG.md` has a section for the version in `pyproject.toml`, and skips the
-release and the PyPI upload.
+release, the PyPI upload and the site deploy.
+
+To deploy the site by hand, for example to publish a docs fix between releases, run
+`cd site && npm ci && npm run deploy` with the same two variables set, or after
+`npx wrangler login`.
 
 ## Release notes and the changelog
 

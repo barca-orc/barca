@@ -167,7 +167,9 @@ released. Merging to main never publishes anything; only pushing a `v*` tag does
   with `--delete-branch`, then tag the merge commit `v<major>.<minor>.<patch>` — the tag
   triggers the release workflow (wheels, GitHub Release, PyPI). The `release/` prefix keeps
   branch and tag names from colliding, so `git push origin v<x.y.z>` and `git log v<x.y.z>..`
-  are unambiguous. PyPI's simple index is cached by its CDN for up to 10 minutes, so a new
+  are unambiguous. The same workflow then deploys barca.sh from the tag (`deploy-site`, using
+  the `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` secrets); nothing waits on it, so a
+  failed deploy never blocks a release. PyPI's simple index is cached by its CDN for up to 10 minutes, so a new
   version can be uploaded but not yet installable; the workflow's post-publish check waits
   for it.
 
