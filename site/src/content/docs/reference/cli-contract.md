@@ -614,7 +614,8 @@ The list covers the steps the command planned (the targets' cones; the whole pro
 or `get` with no target), one item per step and parameter, sorted by node, parameter and kind. It is a function of the
 source files and the targets only: cache state, `--refresh*`, `--env` and the output mode do not
 change it, so a dry run reports exactly what the real run will. Each item is also printed once on
-stderr as `[barca] warning: <message>` before any step runs, in every output mode. Warnings never
+stderr as `[barca] warning: <message>` before any step runs, in every output mode (except
+`undeclared_env`, summarized in one line, below). Warnings never
 change the exit code, and the error envelope on stderr never contains them. `list`, `status`,
 `history`, `stats` and `sql` have no `warnings` key. `barca serve` carries the same array in
 `GET /plan` and in the run outcome of `GET /runs/{run_id}` (experimental with the rest of that
@@ -626,8 +627,11 @@ item keys are stable on `get` and `run`, and experimental with the rest of the o
 the set of `kind` values grows additively.
 
 `undeclared_env`: a step's code reads an environment variable it does not declare in `env=[...]`
-(`barca docs cache`, "Environment variables"), one item per step and variable. All the items of
-one step carry the same `message`, so stderr has one line per step. A variable name built at run
+(`barca docs cache`, "Environment variables"), one item per step and variable; the items of one
+step carry the same `message`. These items are not printed one by one: stderr gets a single
+summary line for the command, `[barca] warning: <n> step(s) read(s) environment variables not
+declared in env=: <at most 5 names, sorted> (+<k> more); barca status lists them`, printed only
+when there is at least one. A variable name built at run
 time is a pattern with `*` (`*_REGISTRY_CSV`). The kind is experimental: which reads are found
 may grow.
 
@@ -2013,8 +2017,8 @@ placeholders:
 [barca] uploaded <n> pending results
 [barca] uploading <n> artifacts to <store>/default/artifacts (timeout <secs>s per attempt); waiting for confirmation
 [barca] uploading <n> pending results to <store>/default/artifacts from an earlier run
+[barca] warning: 1 step reads environment variables not declared in env=: CONTRACT_REPORT_TITLE; barca status lists them
 [barca] warning: pipeline.py:report never uses its input `rows`. It is still loaded in full each time the step runs, and it counts toward the step's cache key. Use it, remove it from inputs=, or rename the parameter `_rows` if it is there for ordering only (a `_` input is not loaded and never flagged)
-[barca] warning: pipeline.py:report reads an environment variable it does not declare: CONTRACT_REPORT_TITLE. Changing it does not re-run the step, which keeps serving its cached result; add it to env=[...] so that it does (`barca docs cache`, "Environment variables")
 ```
 <!-- END GENERATED agent-lines -->
 

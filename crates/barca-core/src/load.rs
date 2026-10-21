@@ -474,10 +474,10 @@ mod source_dir_tests {
     use std::path::{Path, PathBuf};
 
     /// #574: the environment variables a step reads, in its function and in the project
-    /// helpers it reaches, are found statically; the undeclared ones are plan warnings, one line
-    /// per step, and no hash changes.
+    /// helpers it reaches, are found statically; the undeclared ones are plan warnings (one item
+    /// per step and variable, one stderr line per command), and no hash changes.
     #[tokio::test]
-    async fn undeclared_env_reads_are_found_through_helpers_and_warned_once_per_step() {
+    async fn undeclared_env_reads_are_found_through_helpers_and_summarized_once() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("settings.py"),
@@ -535,6 +535,12 @@ mod source_dir_tests {
         assert_eq!(warnings[0].message, warnings[1].message);
         assert!(warnings[0].message.contains("TOKEN_A, TOKEN_B"));
         assert!(warnings[0].message.contains("env=[...]"));
+        // stderr: one summary line for the command.
+        assert_eq!(
+            crate::warnings::undeclared_env_summary(&warnings).unwrap(),
+            "2 steps read environment variables not declared in env=: APP_ROOT, TOKEN_A, \
+             TOKEN_B; barca status lists them"
+        );
     }
 
     #[tokio::test]

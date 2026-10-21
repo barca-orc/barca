@@ -258,7 +258,7 @@ def test_a_registry_source_switch_is_seen_only_when_declared(planning_pipeline):
     Undeclared, as in the original pipeline: switching the variable does not change the run
     hash, so the step stays cached with the old rows. Barca reports the read instead (#574): the
     registry builds the name in an f-string, so the step's `undeclared_env` and a plan warning
-    name the pattern `*_REGISTRY_CSV`, once on stderr. Operators re-read with `--refresh`. Declared with `env=[...]`, the switch re-runs the
+    name the pattern `*_REGISTRY_CSV`, in one stderr line for the command. Operators re-read with `--refresh`. Declared with `env=[...]`, the switch re-runs the
     registry and its consumer, and the step reports the value. But barca reads the variable from
     its own environment: a value the pipeline loads from its `.env` at import is not the one
     hashed or reported (#575)."""
@@ -290,9 +290,11 @@ def test_a_registry_source_switch_is_seen_only_when_declared(planning_pipeline):
         "node": "assets.py:account_exit_registry",
         "param": "*_REGISTRY_CSV",
     }.items() <= next(w for w in warnings if w["param"] == "*_REGISTRY_CSV").items()
-    lines = [line for line in proc.stderr.splitlines() if "assets.py:account_exit_registry" in line]
-    assert len(lines) == 1, proc.stderr  # one line for the step, however many variables
-    assert "*_REGISTRY_CSV" in lines[0] and "env=[...]" in lines[0]
+    # One line for the whole command, however many steps and variables; the detail is in JSON.
+    lines = [line for line in proc.stderr.splitlines() if "not declared in env=" in line]
+    assert len(lines) == 1, proc.stderr
+    assert lines[0].startswith("[barca] warning: 1 step reads environment variables"), lines[0]
+    assert "*_REGISTRY_CSV" in lines[0] and "barca status lists them" in lines[0]
     out = barca(
         root,
         "get",

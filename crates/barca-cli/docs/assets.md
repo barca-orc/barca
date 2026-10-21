@@ -259,11 +259,11 @@ barca get summary pipeline.py --agent     # raw and summary run again
 **Undeclared reads are reported, not hashed.** A variable your code reads without declaring it
 is not part of the cache key, so changing it does not re-run anything. Barca finds such reads
 statically, in the function and in the project helpers it reaches (`os.environ["NAME"]`,
-`os.environ.get("NAME")`, `os.getenv("NAME")`, pydantic settings fields), and warns once per
-step before anything runs:
+`os.environ.get("NAME")`, `os.getenv("NAME")`, pydantic settings fields), and prints one
+line for the command before anything runs:
 
 ```text
-[barca] warning: pipeline.py:raw reads an environment variable it does not declare: REGION. Changing it does not re-run the step, ...; add it to env=[...] so that it does
+[barca] warning: 1 step reads environment variables not declared in env=: REGION; barca status lists them
 ```
 
 The JSON result lists them per step as `undeclared_env` (also in `--dry-run` and in

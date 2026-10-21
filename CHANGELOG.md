@@ -13,7 +13,7 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 - Barca reports the environment variables a step reads without declaring them in `env=[...]`
   (#574). They are found statically, in the function and in the project helpers it reaches
   (`os.environ[...]`, `os.environ.get(...)`, `os.getenv(...)`, pydantic settings fields), and
-  reported as one `[barca] warning:` line per step, an `undeclared_env` item per variable in the
+  reported as one `[barca] warning:` summary line per command, an `undeclared_env` item per variable in the
   `warnings` array, and `undeclared_env` on each `get`/`run`/`--dry-run` step and `status` node
   (experimental). Run hashes do not change: switching such a variable still serves the cached
   result, and the warning names the `env=` fix.

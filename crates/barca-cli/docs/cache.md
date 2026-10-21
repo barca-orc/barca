@@ -56,10 +56,11 @@ installed packages, and reads of variables starting with `BARCA_` are not report
 
 The reads not declared in `env=` are reported, and nothing about caching changes:
 
-- `get`, `run`, their `--dry-run` and `plan` print one `[barca] warning:` line per step on
-  stderr before anything runs, naming the variables (the first six, then a count) and the
-  `env=[...]` fix. Like every plan warning it is printed once per command, for the steps the
-  command planned, whether they run or are served from cache.
+- `get`, `run`, their `--dry-run` and `plan` print one line on stderr before anything runs,
+  for the whole command, when any planned step has an undeclared read (whether it runs or is
+  served from cache): `[barca] warning: 3 steps read environment variables not declared in
+  env=: *_REGISTRY_CSV, PLANNING_SOURCE_MODE, REGION (+2 more); barca status lists them`. It
+  names at most five variables or patterns, sorted. `--agent` prints the same line.
 - The JSON `warnings` array has one item per step and variable: `kind: "undeclared_env"`, the
   variable in `param` (`barca docs contract`, "Plan warnings").
 - Each JSON `steps[]` entry of `get`, `run` and `--dry-run`, and each `nodes[]` entry of
