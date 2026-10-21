@@ -19,16 +19,20 @@ and these tags are available on the same releases page.
 - Small pipelines start faster (#560). Workers start together: when ready work has no idle
   worker, every worker it can use (up to the pool size) is started at once and each joins when
   it connects, where they started one at a time with a 30-40 ms wait for each; a one-step run
-  still starts one. A worker imports `barca._worker` in about 13 ms instead of 41 ms
-  (`barca.api`, `barca.client`, `traceback` and `concurrent.futures` load on first use). A warm
-  run (every step cached) opens the metadata DB once to start, once per phase and once to
-  record, where it opened it eleven times for a three-phase pipeline: the run's start is one
-  visit, the schema is read once per open, `last_read_at` is written in the ledger's
-  transaction, unchanged cost estimates are not written back, and a run that wrote nothing
-  skips the cache size check when the last check under the same limit passed. Pinned and
-  interleaved (median of 15): `trivial` <TRIVIAL>, `deep_diamond` <DD>, `chain_100` <CHAIN>,
-  fan-out 500 x 50 ms <FAN>. The worker's protocol hello now carries its `worker_id`
-  (additive within protocol 3); `BARCA_TRACE_TIMING` prints the DB opens.
+  still starts one. A worker is ready for its first step in about 25 ms instead of 50 ms: it
+  imports `barca.api`, `barca.client`, `traceback` and `concurrent.futures` on first use, and
+  hooks `logging` (to collapse repeated warnings) only once something imports it. Steps waiting
+  behind the ready ones count when the batch size judges a workload trivial, so a fan-out whose
+  streams start with a few cheap steps uses the whole pool from the start. A warm run (every
+  step cached) opens the metadata DB once to start, once per phase and once to record, where it
+  opened it eleven times for a three-phase pipeline: the run's start is one visit, the schema
+  is read once per open, `last_read_at` is written in the ledger's transaction, unchanged cost
+  estimates are not written back, and a run that wrote nothing skips the cache size check when
+  the last check under the same limit passed. Pinned and interleaved, median of 15, before ->
+  after: `trivial` 86 -> 47 ms, `deep_diamond` 297 -> 90 ms, `chain_100` 124 -> 97 ms,
+  fan-out 500 x 50 ms 2.51 -> 1.82 s; warm `deep_diamond` 18 -> 13 ms. A worker's protocol
+  hello now carries its `worker_id` (additive within protocol 3), and `BARCA_TRACE_TIMING`
+  prints the metadata DB opens.
 
 ## 0.28.1 (2026-10-21)
 
