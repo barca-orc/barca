@@ -27,8 +27,12 @@ What the project reproduces (see the issue for why each matters):
 - 28 assets run `fetchone()` on an aggregate of a lazy input and return a typed empty relation
   when it has no rows; one asset returns its input unchanged under a second name.
 
-Only the local source mode is exercised. The store and hybrid modes are wired in
-`settings.py` and `sources.py` but not yet run against an emulator.
+`PLANNING_SOURCE_MODE` selects where the roots read: `local` (the project's `data/`), `store`
+or `hybrid` (an object store; `hybrid` is the name for keeping barca's own artifacts local).
+`python/tests/test_planning_pipeline_remote.py` runs all three against the S3 emulator.
+
+`--scale` multiplies the row counts: 1 is the CI size (a few hundred rows per table), 67 is the
+large size of `bench.sh` (about 22M forecast rows, #233's scale).
 """
 
 from __future__ import annotations
@@ -621,6 +625,35 @@ def _write_parquet(path: Path, rows: list[dict], types: dict) -> None:
     pq.write_table(pa.Table.from_pylist(rows, schema), path)
 
 
+# Above this many forecast rows the forecast is drawn with numpy instead of row by row (the
+# large size, about 22M rows, would take minutes and gigabytes as Python dicts). Every scale
+# up to 20 stays on the row-by-row path, so the small size's bytes do not depend on numpy.
+LARGE_ROWS = 1_000_000
+
+
+def _write_large_forecast(path: Path, accounts, items, weeks, odd: list[dict], seed: int):
+    """The forecast table, vectorized: one row per account x item x week, in that order."""
+    import numpy as np
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    gen = np.random.default_rng(seed)
+    item_ids = np.array([i for i, _ in items], dtype=np.int64)
+    n_a, n_i, n_w = len(accounts), len(item_ids), len(weeks)
+    columns = {
+        "account_id": np.repeat(np.array(accounts, dtype=np.int64), n_i * n_w),
+        "item_id": np.tile(np.repeat(item_ids, n_w), n_a),
+        "week": np.tile(np.array(weeks, dtype=np.int64), n_a * n_i),
+        "units": gen.integers(1, 41, size=n_a * n_i * n_w, dtype=np.int64),
+    }
+    columns = {
+        c: np.concatenate([values, np.array([row[c] for row in odd], dtype=np.int64)])
+        for c, values in columns.items()
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(pa.table(columns), path, row_group_size=1_000_000)
+
+
 def write_data(root: Path, sizes: Sizes, seed: int) -> None:
     """Seeded synthetic sources under `root/data`, plus the registry CSV and API stub."""
     rng = random.Random(seed)
@@ -708,20 +741,23 @@ def write_data(root: Path, sizes: Sizes, seed: int) -> None:
         {"year": B, "account_id": B, "group_id": B, "week": B, "units": D, "revenue": D},
     )
 
-    forecast = [
-        {"account_id": a, "item_id": i, "week": w, "units": rng.randint(1, 40)}
-        for a in accounts
-        for i, _ in items
-        for w in weeks
-    ]
+    forecast_path = data / f"forecast/snapshot={FORECAST_SNAPSHOT}/forecast.parquet"
+    forecast_types = {"account_id": B, "item_id": B, "week": B, "units": B}
     # An item outside the catalog, and a negative row the forecast asset drops.
-    forecast.append({"account_id": 1, "item_id": 999, "week": 1, "units": 3})
-    forecast.append({"account_id": 1, "item_id": items[0][0], "week": 1, "units": -1})
-    _write_parquet(
-        data / f"forecast/snapshot={FORECAST_SNAPSHOT}/forecast.parquet",
-        forecast,
-        {"account_id": B, "item_id": B, "week": B, "units": B},
-    )
+    odd = [
+        {"account_id": 1, "item_id": 999, "week": 1, "units": 3},
+        {"account_id": 1, "item_id": items[0][0], "week": 1, "units": -1},
+    ]
+    if len(accounts) * len(items) * len(weeks) > LARGE_ROWS:
+        _write_large_forecast(forecast_path, accounts, items, weeks, odd, seed)
+    else:
+        forecast = [
+            {"account_id": a, "item_id": i, "week": w, "units": rng.randint(1, 40)}
+            for a in accounts
+            for i, _ in items
+            for w in weeks
+        ]
+        _write_parquet(forecast_path, forecast + odd, forecast_types)
 
     for name in ("campaign", "channel"):
         rows = [
