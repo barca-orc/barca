@@ -504,6 +504,11 @@ digest sets the baseline. The check is on serialized bytes, so a serializer that
 metadata can also warn. Artifact paths and exit codes are unchanged. Partitioned steps are
 compared per key; the run's step is marked if any key changed.
 
+A `Manual` asset is not checked. It is refreshed by hand with the same code and inputs to pick up
+new data, so new bytes are what the refresh is for: no warning, no `bytes_changed`, no
+`last_bytes_change`. What reads it is stale after such a refresh, since its bytes count in their
+run hashes (`barca docs scheduling`).
+
 `barca status` shows the last such event even after a later unchanged recompute: its JSON has
 `last_bytes_change` (node id, run hash, digest, UTC timestamp) and
 `last_materialization.content_hash` when a digest was recorded. The boundary is specified in

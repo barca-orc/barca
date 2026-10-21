@@ -364,7 +364,10 @@ async fn status_from_dag_with_membership(
             cache,
             partitions: partitions.filter(|_| !node.extracted.partitions.is_empty()),
             last_materialization,
-            last_bytes_change: history.last_bytes_change,
+            // A `Manual` asset's refresh by hand is meant to give new bytes (#548).
+            last_bytes_change: history
+                .last_bytes_change
+                .filter(|_| crate::cache::checks_bytes(node)),
             shape: None,
             env: node.extracted.env.clone(),
             local: None,

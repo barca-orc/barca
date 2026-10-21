@@ -1763,6 +1763,15 @@ async fn return_outputs(
             }
         }
     }
+    // A `Manual` asset refreshed by hand gives new bytes on purpose (#548): no warning.
+    changed.retain(|node| {
+        let base = crate::StepId::parse(node).base_id().to_string();
+        session
+            .prepared
+            .dag
+            .get_node(&base)
+            .is_none_or(crate::cache::checks_bytes)
+    });
     for node in changed.iter().chain(&session.state.repaired_mismatches) {
         crate::run_line!(Always, "{}", crate::ledger::bytes_changed_warning(node));
         let base = crate::StepId::parse(node).base_id().to_string();

@@ -43,6 +43,11 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   key of a partitioned `Manual` asset too. The run hash of every asset that reads a `Manual`
   asset changes once: each recomputes once after upgrading.
 
+- Refreshing a `Manual` asset by hand no longer prints "produced different bytes for the same code
+  and inputs; the function is not deterministic", and neither the run's `steps[].bytes_changed`
+  nor `barca status`'s `last_bytes_change` reports it: a `Manual` asset is refreshed with the
+  same code and inputs precisely to pick up new data (#548).
+
 ### Removed
 
 - Committed junk and two broken examples (#497): the three `benchmarks/*/airflow/.venv`

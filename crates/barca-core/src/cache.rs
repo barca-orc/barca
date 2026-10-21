@@ -271,6 +271,14 @@ pub(crate) fn folds_output(dag: &Dag, id: &str) -> bool {
     })
 }
 
+/// Whether new bytes under an unchanged run hash mean `node` is not deterministic, so barca
+/// warns and reports `bytes_changed` / `last_bytes_change`. A `Manual` asset is pinned and
+/// refreshed by hand with the same code and inputs precisely to pick up new data: a new result
+/// is what the refresh is for, and what reads it is already marked stale by its bytes (#548).
+pub(crate) fn checks_bytes(node: &crate::model::DagNode) -> bool {
+    !(node.kind() == crate::NodeKind::Asset && node.extracted.freshness == crate::Freshness::Manual)
+}
+
 /// Record the output of `display_id` for its consumers' run hashes when its node folds its
 /// output ([`folds_output`]). Nothing is recorded without a content hash (a result recorded
 /// before barca hashed outputs): its consumers are then hashed against its run hash alone.

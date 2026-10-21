@@ -32,6 +32,11 @@ on reports with no event. The diagnostic does not change the run's exit code.
 That event remains visible after later unchanged recomputes. The human status table prints the
 last event's timestamp and exact node id. A restored backup preserves the stored flag.
 
+A `Manual` asset (RFC-0008) is not checked: it is refreshed by hand with the same code and
+inputs to pick up new data, so a refresh that gives new bytes emits no warning, no
+`bytes_changed` and no `last_bytes_change` (the stored row keeps its flag). Its consumers fold
+its digest into their run hashes (#548), so they are stale after such a refresh.
+
 Store mismatch repair (RFC-0009) produces the same diagnostic: a `barca get` that re-uploads a
 target whose store copy differs from this machine's (status `unsynced`, `cache.reason`
 `mismatch`) prints the changed-bytes warning and sets `steps[].bytes_changed: true` on that
