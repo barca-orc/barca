@@ -2,6 +2,7 @@
 import type { ListNode, NodeState } from './types'
 import { shortName, type GraphEntry } from './graph'
 import { graphState, UNKNOWN_GRAPH_STATE, type GraphState } from './graphState'
+import { runningCount, runningGraphState } from './running'
 
 import type { NodeGroup } from './types'
 export type { NodeGroup } from './types'
@@ -51,6 +52,7 @@ export function memberName(id: string): string {
 
 export function memberHealth(node: NodeState | undefined): GraphState {
   if (!node) return UNKNOWN_GRAPH_STATE
+  if (node.running) return runningGraphState(node.running)
   if (
     node.kind !== 'asset' &&
     node.last_materialization?.status === 'success'
@@ -69,6 +71,14 @@ export function groupHealth(
   states: Map<string, NodeState>,
 ): GraphState {
   const members = ids.map((id) => memberHealth(states.get(id)))
+  // Work in progress comes first: the group pulses while a run is inside it.
+  const running = runningCount(ids, states)
+  if (running)
+    return {
+      status: 'running',
+      label: `${running} running`,
+      hint: `A run is working on ${running} member${running === 1 ? '' : 's'} of this group now.`,
+    }
   const failed = members.filter((s) => s.status === 'failed').length
   const warning = members.filter((s) => s.status === 'warning').length
   const unknown = members.filter((s) => s.status === 'skipped').length

@@ -78,7 +78,9 @@ and per-attempt timeout; longer waits report progress every 10 seconds. Failed
 uploads report their attempt count and remain unrecorded.
 
 A failure to reach the bucket stops the run before any step: exit 3, naming the location, with
-the cloud's own error (expired login, access denied). A missing extra says which one to install.
+the cloud's own error (expired login, access denied, a bucket that does not exist), and the
+remediation lists what to check: the URI, that the bucket exists (barca never creates it), the
+endpoint, the credentials, and `BARCA_REMOTE=off` to run one command without the store. A missing extra says which one to install.
 
 A warning that a storage library repeats on every operation (aiohttp's `Could not parse .netrc
 file` under adlfs, when `~/.netrc` is malformed) is printed once per run, then counted:
@@ -670,3 +672,5 @@ Know before sharing:
 
 Run `barca doctor --pretty` before a run to check configured stores and credential identity.
 See `barca docs doctor` for check limits and a copyable local-only debugging profile.
+
+See also: `barca docs cache`, `barca docs server-mode`, `barca docs doctor`.

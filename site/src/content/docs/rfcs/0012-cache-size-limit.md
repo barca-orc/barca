@@ -3,7 +3,7 @@ title: 'RFC-0012: A Size Limit for .barca'
 description: 'max_size caps what barca keeps on disk. Past the limit, barca evicts leftovers, then superseded results, then local copies the store holds, then the least recently read results, and recomputes or refetches anything evicted when it is needed.'
 ---
 
-- **Status:** Accepted
+- **Status:** Implemented (0.25.0)
 - **Date:** 2026-10-20 (accepted 2026-10-20)
 - **Touches:** barca-core | barca-cli | HTTP server
 - **Supersedes / Related:** Reopens parked #83 (`barca gc`, keep N versions) with a size budget instead of a version count. Relies on the missing-artifact behaviour of #252 (a cached result whose file is gone is refetched or recomputed under the same run hash). Related: #403 (backups under `.barca/backups/`), #390 (pending uploads), #233 (parked artifact I/O bounds).

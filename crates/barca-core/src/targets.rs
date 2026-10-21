@@ -67,7 +67,10 @@ impl From<TargetError> for BarcaError {
             TargetError::NotFound { name, available } => {
                 BarcaError::AssetNotFound(name, available.join(", "))
             }
-            other => BarcaError::Usage(other.to_string()),
+            ambiguous @ TargetError::Ambiguous { .. } => {
+                BarcaError::AmbiguousTarget(ambiguous.to_string())
+            }
+            wrong @ TargetError::WrongKind { .. } => BarcaError::Usage(wrong.to_string()),
         }
     }
 }
@@ -213,8 +216,23 @@ pub fn skipped_tasks_note_among(
         .map(|(id, _)| short_name(id))
         .collect();
     let first = tasks.first()?;
-    let run_hint = format!("barca run {first} {}", file_args.join(" "));
-    let listed = tasks.join(", ");
+    // One file is worth naming; with several (often every discovered file), `barca run <task>`
+    // reads the project the same way and stays one short line.
+    let run_hint = match file_args {
+        [one] => format!("barca run {first} {one}"),
+        _ => format!("barca run {first}"),
+    };
+    // A large project can skip dozens of tasks: name a few, count the rest.
+    const NAMED: usize = 5;
+    let listed = if tasks.len() > NAMED {
+        format!(
+            "{} and {} more; barca list shows them",
+            tasks[..NAMED].join(", "),
+            tasks.len() - NAMED
+        )
+    } else {
+        tasks.join(", ")
+    };
     Some(if tasks.len() == order.len() {
         format!(
             "[barca] nothing to get: no assets or sensors, only tasks ({listed}). \
@@ -318,6 +336,16 @@ pub(crate) fn refresh_name_matches(node_id: &str, name: &str) -> bool {
     node_id == name || node_id.ends_with(&format!(":{name}"))
 }
 
+/// "Did you mean ...?" for an unknown target `name` among node ids `available`: compared with
+/// the function names, or with the full ids when `name` is one (`pipeline.py:amount`).
+pub fn target_suggestion(name: &str, available: &[&str]) -> Option<String> {
+    if name.contains(':') {
+        crate::suggest::suggestion(name, available.iter().copied())
+    } else {
+        crate::suggest::suggestion(name, available.iter().map(|id| short_name(id)))
+    }
+}
+
 /// The function name of a node id (`pipeline.py:src` -> `src`, `pipeline.py:p[k=v]` -> `p`).
 pub(crate) fn short_name(node_id: &str) -> &str {
     let base = node_id.split('[').next().unwrap_or(node_id);
@@ -352,9 +380,12 @@ pub(crate) fn validate_refresh_names(
     for name in names {
         if !assets.iter().any(|id| refresh_name_matches(id, name)) {
             let valid: Vec<&str> = assets.iter().map(|id| short_name(id)).collect();
+            let meant = target_suggestion(name, &assets)
+                .map(|m| format!("{m}\n"))
+                .unwrap_or_default();
             return Err(BarcaError::Usage(format!(
                 "--refresh: no upstream asset named '{name}'{}.\n\
-                 Upstream assets you can refresh: {}\n\
+                 {meant}Upstream assets you can refresh: {}\n\
                  Pass several as a comma-separated list: --refresh {}",
                 match target_ids {
                     [] => String::new(),
@@ -599,6 +630,24 @@ def lone() -> int:
     }
 
     #[test]
+    fn skipped_tasks_note_stays_one_short_line_in_a_large_project() {
+        let kinds: Vec<(String, crate::NodeKind)> =
+            std::iter::once(("a.py:src".to_string(), crate::NodeKind::Asset))
+                .chain((0..42).map(|i| (format!("checks.py:validate_{i}"), crate::NodeKind::Task)))
+                .collect();
+        let kinds: Vec<(&str, crate::NodeKind)> =
+            kinds.iter().map(|(id, k)| (id.as_str(), *k)).collect();
+        let files = names(&["a.py", "checks.py", "helpers.py"]);
+        let note = skipped_tasks_note_among(&kinds, &files).unwrap();
+        assert!(note.starts_with("[barca] skipped 42 tasks (validate_0, validate_1, validate_2, validate_3, validate_4 and 37 more; barca list shows them)"), "{note}");
+        assert!(
+            note.ends_with("Run a task with: barca run validate_0"),
+            "{note}"
+        );
+        assert!(note.len() < 250, "{note}");
+    }
+
+    #[test]
     fn refresh_names_may_come_from_any_targets_cone() {
         let dag = dag();
         let both = ["p.py:check_a", "p.py:check_b"];
@@ -614,6 +663,39 @@ def lone() -> int:
             validate_refresh_names(&dag, &["p.py:check_a"], &names(&["deeper"]), false, None)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn a_mistyped_refresh_name_suggests_the_closest_upstream_asset() {
+        let dag = dag();
+        let msg = validate_refresh_names(&dag, &["p.py:check_a"], &names(&["sorc"]), false, None)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            msg.contains("\nDid you mean 'src'?\nUpstream assets"),
+            "{msg}"
+        );
+        let msg = validate_refresh_names(&dag, &["p.py:check_a"], &names(&["zzzzzz"]), false, None)
+            .unwrap_err()
+            .to_string();
+        assert!(!msg.contains("Did you mean"), "{msg}");
+    }
+
+    #[test]
+    fn an_unknown_target_suggests_by_function_name_or_full_id() {
+        let ids = ["p.py:raw", "p.py:amounts", "q.py:amounts", "p.py:report"];
+        assert_eq!(
+            target_suggestion("amount", &ids).as_deref(),
+            Some("Did you mean 'amounts'?")
+        );
+        assert_eq!(
+            target_suggestion("q.py:amount", &ids).as_deref(),
+            Some("Did you mean 'q.py:amounts'?")
+        );
+        assert_eq!(target_suggestion("orders", &ids), None);
+        let err = resolve_target_among([("p.py:amounts", crate::NodeKind::Asset)], "amount", "get")
+            .unwrap_err();
+        assert!(matches!(err, TargetError::NotFound { .. }));
     }
 
     #[test]
@@ -854,7 +936,7 @@ mod resolve_target_tests {
                     Name one by its full id, e.g. `a.py:orders`";
         assert_eq!(err.to_string(), text);
         let cli = BarcaError::from(err);
-        assert!(matches!(cli, BarcaError::Usage(_)));
+        assert!(matches!(cli, BarcaError::AmbiguousTarget(_)));
         assert_eq!(cli.to_string(), text);
     }
 

@@ -105,14 +105,21 @@ Positional rules (stable), for `get`, `run` and `status`:
   never selects `prod_deploy`). A function name defined in more than one file, or an empty name
   (`a,,b`), is a usage error.
 - An unknown target is a usage error (exit 2) on every command, with one remediation:
-  ``Run `barca list <files>` to see available assets and tasks.``
-- barca never offers fuzzy suggestions on the command line: no "did you mean" for targets or
-  `barca docs` topics (an unknown topic lists every valid topic), and argument errors carry no
-  "a similar argument exists" tip. A guess can read as confirmation. The one place a guess is
-  made is a misspelt decorator argument in a pipeline file (`input=` for `inputs=`): the error
-  names the accepted argument when exactly one is within one edit of what was written (two for
-  a name longer than four characters), always next to the full list of accepted arguments
-  (`barca docs assets`, "Accepted arguments").
+  ``Run `barca list <files>` to see available assets and tasks.``, preceded by a suggestion when
+  a node name is close (below). So is a name that several nodes have, and `barca run` without a
+  target. No other usage error carries that remediation: each states its own fix (the corrected
+  command for positionals in the wrong order, the valid names for an unknown `--refresh` name,
+  what to set for `-o url` without a cloud store, what to remove for a removed setting) or, with
+  nothing more to say, `See barca <command> --help`.
+- A mistyped name gets one "did you mean" rule: a flag, a subcommand, a target, a `--refresh`
+  name, a `barca sql` view, a `barca docs` topic and a decorator argument (`input=` for
+  `inputs=`). barca suggests the closest names within one edit of what was written (two for a
+  name longer than four characters): the best match only, or two when they tie, and nothing
+  when none is that close or more than two tie. It reads `Did you mean 'amounts'?` (or
+  `Did you mean 'stats' or 'status'?`) and starts the envelope's `remediation`, or follows the
+  error line in human mode; `error` is unchanged. A suggestion never changes the exit code (a
+  usage error stays 2) and barca never acts on one. clap's own tips are not used: a mistyped
+  flag gets no "to pass '--x' as a value, use '-- --x'" tip.
 - `--refresh` and `--fields` take one comma-separated list (`--refresh a,b`).
 
 ## Arguments
@@ -321,6 +328,7 @@ default, and any aliases.
 | `<TOPIC>` | - | - | stable | Topic to show (omit for the index), e.g. types, cache, examples/duckdb |
 | `--all` | - | default `false` | stable | Print every topic in one stream |
 | `--json` | - | default `false` | stable | Emit JSON instead of markdown |
+| `--pretty` | - | default `false` | stable | Print markdown, the default even when piped (accepted like every read command's --pretty) |
 | `--fields` | comma-separated: `name`, `summary`, `content` | - | stable | Output JSON with only these keys (comma-separated) on each entry of `topics`, or on the one topic. Implies --json. An unknown key is a usage error listing the valid ones |
 
 #### barca version
@@ -413,7 +421,7 @@ unexpectedly or speaks another API version is exit 3 naming its URL, with `--loc
 remediation; a server whose store is not this project's `[remote]` (or a project with no
 `[remote]`) is exit 2 naming both.
 
-barca sets `BARCA_SOCKET`, `BARCA_WORKER`, `BARCA_WORKER_ID` (and passes `BARCA_ARTIFACT_URI`,
+barca sets `BARCA_SOCKET`, `BARCA_WORKER`, `BARCA_WORKER_ID`, `BARCA_WORKER_AGENT` (and passes `BARCA_ARTIFACT_URI`,
 `BARCA_STORAGE_OPTIONS`) for its own worker processes; these are internal, not part of the
 contract. `BARCA_TEST_*` variables are hooks for barca's own test suite, also not part of the
 contract. Variables your nodes declare with `@asset(env=[...])` are yours (`barca docs assets`).
@@ -1600,6 +1608,13 @@ Reconciled history (same envelope; unknown end timestamp and duration remain nul
 
 `id` is the node id (`file.py:name`), the same key every other command uses. The timing fields
 are `null` when the asset never ran; `recent_runs[].error_message` is a string for failed runs.
+`total_runs` counts executions (recorded materializations). Despite its name, `cache_hit_rate` is
+not a cache hit rate: it is the share of those executions that repeated an earlier execution's
+run hash, i.e. ran again with unchanged code and inputs (`--refresh`, a retry after a failure, an
+evicted result). A cache hit executes nothing and is not recorded per asset; `barca history`
+counts cache hits per run (`steps_cached`). The human report labels it "Re-executed with
+unchanged inputs". Until 0.27.0 it counted every execution whose run hash appeared more than once,
+the first included.
 
 ### gc (experimental)
 
@@ -1878,31 +1893,7 @@ The change to the stable `run failed:` line and its position ships in the next m
 `*_SECRET`, `*_KEY`, `*_PASSWORD`), double quotes around values with spaces. With several targets
 the first failed step is summarized once; each target's error remains in JSON.
 
-## Changing the surface
-
-A pull request that changes a command, flag, environment variable, exit code, JSON output, the
-error envelope or an `--agent` line updates, in the same PR:
-
-1. the snapshots, with one command from the repository root (it rebuilds barca first):
-
-   ```
-   scripts/update-cli-snapshots.sh
-   ```
-
-   This runs `BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca` (help snapshots in
-   `crates/barca-cli/snapshots/help/`, the command, argument and exit-code tables here) and
-   `BARCA_UPDATE_SNAPSHOTS=1 pytest python/tests/test_cli_contract.py` (JSON schemas in
-   `python/tests/snapshots/cli_contract/` and the schema tables here), then copies this page to
-   the site (`site/src/content/docs/reference/cli-contract.md`). Review the diff: it is the
-   change to the contract.
-2. this page's hand-written parts (stability, the experimental table, notes), and the
-   classification in `EXPERIMENTAL` in `crates/barca-cli/src/contract.rs` for a new experimental
-   flag or command;
-3. pre-1.0, for a breaking change: plan a minor bump and add a "Breaking" line to the release
-   notes. From 1.0: keep the old spelling working for at least one minor release, with a stderr
-   warning.
-
-See also: `barca docs agents` (how to drive barca from scripts and agents), `barca docs skill`.
+## Notes by feature
 
 ### Static decorator bindings
 
@@ -2033,7 +2024,9 @@ and `specs/task-output.md` for flush, failure and ordering boundaries.
 
 ### Execution timing and imports
 
-Import progress uses `[barca] importing <module>` before a module is loaded. Completion
+Under `--agent` (and in runs `barca serve` starts), import progress uses
+`[barca] importing <module>` before a module is loaded; without `--agent` the line is not printed,
+and `import_seconds` in the run JSON reports a slow import. Completion
 and permanent failure step lines append `attempts=N` only when N > 1; their existing
 prefixes and completion durations remain. Timeout messages identify the step, rather
 than the internal callable wrapper.
@@ -2075,3 +2068,29 @@ Older read-only snapshots without attempt metadata report a null history attempt
 | `checks[].ok` | boolean | always |
 | `ok` | boolean | always |
 <!-- END GENERATED schema doctor -->
+
+## Changing the surface
+
+A pull request that changes a command, flag, environment variable, exit code, JSON output, the
+error envelope or an `--agent` line updates, in the same PR:
+
+1. the snapshots, with one command from the repository root (it rebuilds barca first):
+
+   ```
+   scripts/update-cli-snapshots.sh
+   ```
+
+   This runs `BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca` (help snapshots in
+   `crates/barca-cli/snapshots/help/`, the command, argument and exit-code tables here) and
+   `BARCA_UPDATE_SNAPSHOTS=1 pytest python/tests/test_cli_contract.py` (JSON schemas in
+   `python/tests/snapshots/cli_contract/` and the schema tables here), then copies this page to
+   the site (`site/src/content/docs/reference/cli-contract.md`). Review the diff: it is the
+   change to the contract.
+2. this page's hand-written parts (stability, the experimental table, notes), and the
+   classification in `EXPERIMENTAL` in `crates/barca-cli/src/contract.rs` for a new experimental
+   flag or command;
+3. pre-1.0, for a breaking change: plan a minor bump and add a "Breaking" line to the release
+   notes. From 1.0: keep the old spelling working for at least one minor release, with a stderr
+   warning.
+
+See also: `barca docs agents` (how to drive barca from scripts and agents), `barca docs skill`.

@@ -126,6 +126,29 @@ def result(): return Path("external.txt").read_text()
     assert _rows(tmp_path)[-1][3]
 
 
+def test_sensor_and_task_with_new_values_do_not_warn(tmp_path):
+    """A sensor's new value under its unchanged run hash is what it is for, not nondeterminism."""
+    (tmp_path / "pipeline.py").write_text("""
+from pathlib import Path
+import time
+from barca import asset, sensor, task
+@sensor()
+def version(): return True, Path("data.txt").read_text()
+@asset(inputs={"version": version})
+def rows(version): return {"version": version}
+@task(inputs={"_rows": rows})
+def stamp(_rows): return time.time_ns()
+""")
+    # a -> b: the sensor's bytes change under its run hash; b -> b: the task's do.
+    for value in ["a", "b", "b"]:
+        (tmp_path / "data.txt").write_text(value)
+        result, err = _cli(tmp_path, "run", "stamp", "pipeline.py", "--json")
+        assert "not deterministic" not in err, err
+        assert not any(step.get("bytes_changed") for step in result["steps"]), result["steps"]
+    status, _ = _cli(tmp_path, "status", "pipeline.py", "--json")
+    assert all(node.get("last_bytes_change") is None for node in status["nodes"]), status
+
+
 def test_sensor_returning_to_earlier_value_compares_earlier_run_hash(tmp_path):
     (tmp_path / "pipeline.py").write_text("""
 from pathlib import Path
@@ -200,3 +223,26 @@ def later(value):
         if proc.poll() is None:
             proc.terminate()
             proc.communicate(timeout=10)
+
+
+def test_a_manual_asset_refreshed_by_hand_with_new_bytes_does_not_warn(tmp_path):
+    """A `Manual` asset is refreshed by hand to pick up new data: new bytes are the point."""
+    (tmp_path / "pipeline.py").write_text("""
+from pathlib import Path
+from barca import asset, Manual
+@asset(freshness=Manual)
+def fx(): return float(Path("ref.txt").read_text())
+@asset(inputs={"fx": fx})
+def price(fx): return 100 * fx
+""")
+    (tmp_path / "ref.txt").write_text("1.08")
+    _cli(tmp_path, "get", "price", "pipeline.py", "--refresh", "fx", "--json")
+    (tmp_path / "ref.txt").write_text("1.20")
+    result, err = _cli(tmp_path, "get", "fx", "pipeline.py", "--refresh", "fx", "--json")
+    assert "not deterministic" not in err, err
+    assert not any(step.get("bytes_changed") for step in result["steps"]), result["steps"]
+    status, _ = _cli(tmp_path, "status", "pipeline.py", "--json")
+    assert all(node.get("last_bytes_change") is None for node in status["nodes"]), status
+    # The refresh still reaches what reads it (#548).
+    result, err = _cli(tmp_path, "get", "price", "pipeline.py", "-o", "value", "--json")
+    assert result["final_output"] == 120.0 and "not deterministic" not in err, err

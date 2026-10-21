@@ -17,7 +17,9 @@ pub const PROTOCOL_VERSION: u32 = 3;
 
 /// Negotiate before a helper can receive work. The caller bounds this together
 /// with connection startup and owns reaping the child on every error path.
-pub(crate) async fn accept_hello<S>(stream: &mut S, role: &str) -> io::Result<()>
+/// Returns the helper's hello: a worker's carries its `worker_id`, which pairs the
+/// connection with the process the coordinator started.
+pub(crate) async fn accept_hello<S>(stream: &mut S, role: &str) -> io::Result<serde_json::Value>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
@@ -44,7 +46,8 @@ where
         let _ = write_frame(stream, &serde_json::json!({"type": "protocol_error", "message": message, "protocol_version": PROTOCOL_VERSION})).await;
         return Err(io::Error::new(io::ErrorKind::InvalidData, message));
     }
-    write_frame(stream, &serde_json::json!({"type": "hello", "role": "coordinator", "protocol_version": PROTOCOL_VERSION})).await
+    write_frame(stream, &serde_json::json!({"type": "hello", "role": "coordinator", "protocol_version": PROTOCOL_VERSION})).await?;
+    Ok(hello.unwrap_or_default())
 }
 
 // ─── Worker → Coordinator ────────────────────────────────────────────────────
@@ -362,11 +365,96 @@ where
 
 // ─── Socket path helper ──────────────────────────────────────────────────────
 
-/// Generate a unique socket path for a worker.
-pub fn socket_path(run_id: &str, worker_id: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join("barca-sockets");
-    std::fs::create_dir_all(&dir).ok();
-    dir.join(format!("{run_id}-{worker_id}.sock"))
+/// The longest Unix socket path `bind` accepts, in bytes: `sun_path` is 104 bytes on macOS
+/// and the BSDs and 108 on Linux, and holds the terminating NUL.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub const SOCKET_PATH_MAX: usize = 107;
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+pub const SOCKET_PATH_MAX: usize = 103;
+
+/// A unique socket path for one coordination socket of this process:
+/// `<dir>/<pid>-<run_id>-<worker_id>.sock`, where `<dir>` is `barca-<uid>` (created 0700,
+/// owned by this user) under `$TMPDIR`, or under `/tmp` when the `$TMPDIR` path would be
+/// longer than [`SOCKET_PATH_MAX`] (#557). Errs, naming the path, the limit and the fix,
+/// when neither directory gives a path that fits.
+///
+/// The pid lets [`sweep_dead_sockets`] remove the sockets of a coordinator that was killed.
+pub fn socket_path(run_id: &str, worker_id: &str) -> Result<std::path::PathBuf, String> {
+    let name = format!("{}-{run_id}-{worker_id}.sock", std::process::id());
+    socket_path_in(&[std::env::temp_dir(), "/tmp".into()], &name)
+}
+
+fn socket_path_in(bases: &[std::path::PathBuf], name: &str) -> Result<std::path::PathBuf, String> {
+    // SAFETY: getuid cannot fail.
+    let uid = unsafe { libc::getuid() };
+    let mut first = None;
+    for base in bases {
+        let dir = base.join(format!("barca-{uid}"));
+        let path = dir.join(name);
+        first.get_or_insert_with(|| path.clone());
+        if path.as_os_str().len() > SOCKET_PATH_MAX || !private_dir(&dir, uid) {
+            continue;
+        }
+        sweep_dead_sockets(&dir);
+        return Ok(path);
+    }
+    let path = first.unwrap_or_default();
+    Err(format!(
+        "no usable directory for barca's coordination socket: {} is {} bytes, over the \
+         platform's {SOCKET_PATH_MAX}-byte limit for a socket path, and /tmp is not writable; \
+         set TMPDIR to a shorter directory",
+        path.display(),
+        path.as_os_str().len()
+    ))
+}
+
+/// Create `dir` 0700, or accept it when it exists as a real directory owned by `uid`
+/// (tightening its mode to 0700). Anything else (another user's directory, a symlink) is
+/// refused, so another user can neither read nor replace the sockets.
+fn private_dir(dir: &std::path::Path, uid: u32) -> bool {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+    let _ = std::fs::DirBuilder::new().mode(0o700).create(dir);
+    let Ok(meta) = std::fs::symlink_metadata(dir) else {
+        return false;
+    };
+    if !meta.is_dir() || meta.uid() != uid {
+        return false;
+    }
+    if meta.mode() & 0o077 != 0
+        && std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).is_err()
+    {
+        return false;
+    }
+    true
+}
+
+/// Remove the sockets (and their `.warnings` directories) of coordinators that are gone
+/// (killed, out of memory): a run that ends any other way removes its own. A name this code
+/// did not make is left alone.
+fn sweep_dead_sockets(dir: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !(name.ends_with(".sock") || name.ends_with(".sock.warnings")) {
+            continue;
+        }
+        let owner = name
+            .split_once('-')
+            .and_then(|(pid, _)| pid.parse::<i64>().ok());
+        if owner
+            .is_some_and(|pid| pid != i64::from(std::process::id()) && !crate::db::pid_alive(pid))
+        {
+            let path = entry.path();
+            if path.is_dir() {
+                std::fs::remove_dir_all(&path).ok();
+            } else {
+                std::fs::remove_file(&path).ok();
+            }
+        }
+    }
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -375,6 +463,58 @@ pub fn socket_path(run_id: &str, worker_id: &str) -> std::path::PathBuf {
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn a_long_tmpdir_falls_back_to_a_short_private_directory() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let long = root.path().join("d".repeat(150));
+        std::fs::create_dir_all(&long).unwrap();
+        let short = root.path().join("s");
+        std::fs::create_dir_all(&short).unwrap();
+        let path = socket_path_in(&[long.clone(), short.clone()], "1-run-main.sock").unwrap();
+        assert!(path.starts_with(&short), "{}", path.display());
+        assert!(path.as_os_str().len() <= SOCKET_PATH_MAX);
+        let mode = std::fs::metadata(path.parent().unwrap())
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o700);
+        // A socket can be bound there.
+        std::os::unix::net::UnixListener::bind(&path).unwrap();
+    }
+
+    #[test]
+    fn no_short_directory_is_an_error_naming_the_path_limit_and_fix() {
+        let root = tempfile::tempdir().unwrap();
+        let long = root.path().join("d".repeat(150));
+        let err = socket_path_in(std::slice::from_ref(&long), "1-run-main.sock").unwrap_err();
+        assert!(err.contains(&long.display().to_string()), "{err}");
+        assert!(err.contains(&SOCKET_PATH_MAX.to_string()), "{err}");
+        assert!(err.contains("set TMPDIR to a shorter directory"), "{err}");
+    }
+
+    #[test]
+    fn a_dead_coordinators_sockets_are_swept() {
+        let root = tempfile::tempdir().unwrap();
+        // SAFETY: getuid cannot fail.
+        let dir = root
+            .path()
+            .join(format!("barca-{}", unsafe { libc::getuid() }));
+        std::fs::create_dir(&dir).unwrap();
+        // pid 0x7fff_fff0 is above any real pid_max.
+        let dead = dir.join("2147483632-run-main.sock");
+        std::fs::write(&dead, b"").unwrap();
+        std::fs::create_dir(dir.join("2147483632-run-main.sock.warnings")).unwrap();
+        let live = dir.join(format!("{}-other-main.sock", std::process::id()));
+        std::fs::write(&live, b"").unwrap();
+        let foreign = dir.join("notes.txt");
+        std::fs::write(&foreign, b"").unwrap();
+        socket_path_in(&[root.path().to_path_buf()], "x.sock").unwrap();
+        assert!(!dead.exists());
+        assert!(!dir.join("2147483632-run-main.sock.warnings").exists());
+        assert!(live.exists() && foreign.exists());
+    }
 
     #[test]
     fn test_encode_decode_worker_message() {

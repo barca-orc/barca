@@ -26,6 +26,7 @@ function node(id: string, state: CacheStatus['state'] = 'cached', failed = false
     env: [],
     durations: null,
     next_run: null,
+    running: null,
   }
 }
 

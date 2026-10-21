@@ -1,9 +1,10 @@
 """Remote storage configured with environment variables only (no barca.toml).
 
 The promise in `barca docs remote`: set BARCA_REMOTE_URI and the variables your cloud or fsspec
-already reads, and two machines share one cache. Each case runs a pipeline on "machine A" (a
-project directory), then on "machine B" (a fresh copy with no local .barca/), and B must be a
-cache hit served from the bucket. Runs against the local emulators the backend suite uses
+already reads, and the store becomes this machine's backup and read-through cache (sharing
+between machines means a server, `barca docs server-mode`). Each case runs a pipeline, checks
+that its artifacts are recorded in the store, deletes the local copies, and requires the next
+get to be served from the store with no step run and the history backed up there. Runs against the local emulators the backend suite uses
 (MinIO, fake-gcs-server, Azurite); a backend whose emulator is unreachable is skipped.
 """
 

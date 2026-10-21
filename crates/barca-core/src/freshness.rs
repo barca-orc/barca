@@ -160,8 +160,9 @@ pub(crate) fn walk<'a>(dag: &'a Dag, targets: &[&str], policy: &CachePolicy) -> 
 /// A `Manual` node read as it is: its latest successful result.
 #[derive(Debug, Clone)]
 pub(crate) struct Pin {
-    /// The run hash of that result. Nodes below hash it, so a refresh of the `Manual` node
-    /// changes their run hashes and they are recomputed.
+    /// The run hash of that result. Nodes below hash it and the result's content hash
+    /// (`output`), so a refresh of the `Manual` node that gives new bytes changes their run
+    /// hashes and they are recomputed (#548).
     pub(crate) run_hash: String,
     pub(crate) output: OutputRef,
     /// Its inputs' latest results or its code differ from the ones it was computed with.
@@ -249,7 +250,7 @@ pub(crate) async fn is_stale(
                 hashes.insert(up.to_string(), latest.run_hash);
             }
         }
-        if up_node.kind() == NodeKind::Sensor && !outputs.contains_key(up.as_str()) {
+        if crate::cache::folds_output(dag, up) && !outputs.contains_key(up.as_str()) {
             sensors.push(up.as_str());
         }
     }

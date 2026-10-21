@@ -14,7 +14,7 @@ Freshness says when each node is updated. Under `barca serve` (RFC-0008):
 |---|---|
 | `Schedule("<cron>")` | Fires on a cron schedule while `barca serve` is running. |
 | `Always` (default for assets/tasks) | Brought up to date at each tick of a scheduled node above it, in that tick's run. |
-| `Manual` (default for sensors) | Refreshed by hand only: never by a tick, and never by a request for something below it, which reads its current result. |
+| `Manual` (default for sensors) | Refreshed by hand only: never by a tick, and never by a request for something below it, which reads its current result. A sensor is the exception: every run that needs its value polls it, whatever its freshness. |
 
 ```python
 from pathlib import Path
@@ -103,8 +103,10 @@ Its `job` is the scheduled node.
 
 A `Manual` asset or task is never run by a tick, and a `barca get` or `barca run` of something
 below it does not recompute it: whatever reads it reads its latest result, even when its inputs
-or code have changed since. Nodes below it are hashed against that result, so they are not
-recomputed because of it until it changes. Only naming it in `--refresh` gets it recomputed:
+or code have changed since. Nodes below it are hashed against that result (its run hash and its
+bytes), so they are not recomputed because of it until it changes, and are recomputed once it
+has a new result: a refresh by hand that gives new bytes makes them stale even when its code
+and inputs did not change. Only naming it in `--refresh` gets it recomputed:
 `barca get baseline pipeline.py --refresh baseline` (or `--refresh-all`). That holds when it is
 the target too: `barca get baseline pipeline.py` returns its current result, with the stale
 note, and exits 2 when it was never computed. A `Manual` task named as the target of
@@ -305,6 +307,14 @@ JSON, while malformed request parameters can produce plain-text extractor errors
 nginx or Traefik (any path prefix, live logs included): https://barca.sh/deploying/.
 Full model: https://barca.sh/scheduling/.
 
+The UI shows what is running now on every page, whoever started it (the scheduler, another
+client, a `barca get` in a shell on the same `.barca/`): a running node pulses on the graph and
+the pipeline page, the assets list shows a Running badge with the elapsed time (and keys
+done/total for a partitioned node) linking to the run, each pipeline and group counts its
+running nodes, and the header shows how many runs are in progress. It reads `GET /state`,
+whose `running` field names the run working on each node, every 2 s while anything runs.
+`GET /runs?status=running` lists the runs in flight with the nodes each is working on.
+
 The UI's Runs view shows persisted CLI, scheduled and HTTP runs, plus queued/live server
 runs, with what started each. Select a run to inspect its status, timing, steps, errors and
 logs. After triggering a node in the graph, use View run to open its details; even a cache hit
@@ -418,3 +428,5 @@ and graph-dependent nodes while retaining healthy definitions, even in a file wi
 blocked sibling node. Startup logs and the UI report unloaded sources and affected
 node IDs; `GET /health` exposes the same `load_errors`. With `--watch`, repaired
 configured sources and schedules rejoin automatically. One-shot commands stay strict.
+
+See also: `barca docs server-mode`, `barca docs telemetry`, `barca docs assets`.

@@ -68,8 +68,9 @@ Rename `input` to `inputs`, or remove it. See `barca docs assets`.
 ```
 
 - The error names the node, the line, the argument and everything the call accepts. "Did you
-  mean" appears only when exactly one accepted argument is one edit away from what was written
-  (two for a name longer than four characters).
+  mean" names the closest accepted argument within one edit of what was written (two for a name
+  longer than four characters), or two that tie. Mistyped flags, subcommands and targets get the
+  same rule.
 - Every argument in the table has an effect on each decorator it is listed for, and only
   arguments that had none are rejected. On `@task` and `@sensor`, `partitions=` runs the
   function once per key and `serializer=` forces the stored format, as on `@asset`.

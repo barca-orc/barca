@@ -31,12 +31,13 @@ barca run deploy pipeline.py
 
 ## What barca does
 
-First run: two steps, `model` and then `deploy`. The task's `print` goes to stderr.
+First run: two steps, `model` and then `deploy`. The task's `print` goes to stderr, prefixed
+with the step's id. In a terminal `run` prints the task's value under the summary.
 
 ```
-deploying model v3
+[pipeline.py:deploy] deploying model v3
 [barca] 2/2 steps | done in 0.0s
-Run 51e3fed40948 | ran 'deploy' in 0.048s (2 steps, 1 phase)
+Run 150dcb149a6c | ran 'deploy' in 0.064s (2 steps, 1 phase)
 
 Value:
 {
@@ -47,9 +48,14 @@ Value:
 Second run: one step. `model` is served from cache and `deploy` runs again.
 
 ```
-deploying model v3
+[pipeline.py:deploy] deploying model v3
 [barca] 1/2 steps | done in 0.0s
-Run 51e3fed84870 | ran 'deploy' in 0.045s (1 step, 1 phase)
+Run 150f3857378c | ran 'deploy' in 0.061s (1 step, 1 phase)
+
+Value:
+{
+  "deployed": 3
+}
 ```
 
 `--dry-run` shows the same decision without running anything:

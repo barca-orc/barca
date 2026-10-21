@@ -7,6 +7,8 @@ parses these statically from source without importing.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any
+
 __version__ = "0.28.2"
 
 __all__ = [
@@ -349,8 +351,34 @@ def duckdb_connection():
 
 # ─── Python API ──────────────────────────────────────────────────────────────
 
-from barca.api import BarcaError, get, history, plan, run, signed_url, stats  # noqa: E402
-from barca.client import Client, Run  # noqa: E402
+# Loaded on first use: a worker imports `barca` for the decorators, and `barca.api` and
+# `barca.client` bring in urllib, http.client and ssl, about half of a worker's start-up (#560).
+_LAZY = {
+    "BarcaError": "barca.api",
+    "get": "barca.api",
+    "history": "barca.api",
+    "plan": "barca.api",
+    "run": "barca.api",
+    "signed_url": "barca.api",
+    "stats": "barca.api",
+    "Client": "barca.client",
+    "Run": "barca.client",
+}
+
+if TYPE_CHECKING:
+    from barca.api import BarcaError, get, history, plan, run, signed_url, stats  # noqa: E402
+    from barca.client import Client, Run  # noqa: E402
+
+
+def __getattr__(name: str) -> Any:
+    module = _LAZY.get(name)
+    if module is None:
+        raise AttributeError(f"module 'barca' has no attribute {name!r}")
+    import importlib
+
+    value = getattr(importlib.import_module(module), name)
+    globals()[name] = value
+    return value
 
 
 class Group:

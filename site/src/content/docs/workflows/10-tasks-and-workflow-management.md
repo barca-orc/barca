@@ -198,8 +198,8 @@ A task as the target of `barca get`, and an asset as the target of `barca run`, 
 (exit 2):
 
 ```
-{"code":2,"error":"'deploy' is a task — use `barca run` instead","kind":"usage","remediation":"Run `barca list pipeline.py` to see available assets and tasks."}
-{"code":2,"error":"'trained_model' is an asset — use `barca get` instead","kind":"usage","remediation":"Run `barca list pipeline.py` to see available assets and tasks."}
+{"code":2,"error":"'deploy' is a task — use `barca run` instead","kind":"usage","remediation":"See `barca get --help`."}
+{"code":2,"error":"'trained_model' is an asset — use `barca get` instead","kind":"usage","remediation":"See `barca run --help`."}
 ```
 
 `barca get pipeline.py` with no target computes the assets and skips every task, naming them on

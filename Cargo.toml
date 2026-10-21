@@ -9,8 +9,8 @@ ruff_text_size = "=0.0.4"
 petgraph = "0.8"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["raw_value"] }
-# No "suggestions" feature: clap's "a similar argument exists" tips can read as confirmation to
-# an agent, and barca never offers fuzzy suggestions (see `barca docs agents`).
+# No "suggestions" feature: a mistyped flag or subcommand gets barca's own "Did you mean" (one
+# rule for every name, `barca_core::suggest`; see `barca docs agents`), not clap's tips.
 clap = { version = "4", default-features = false, features = ["std", "color", "help", "usage", "error-context", "derive"] }
 thiserror = "2"
 axum = "0.8"

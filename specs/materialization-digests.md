@@ -19,7 +19,8 @@ digest stores 0. This comparison and the insert share the recorder's transaction
 terminal and replay writes remain idempotent for a run/node pair. Partition keys are compared
 individually. Returning to an earlier run hash still finds the previous digest for that hash.
 
-At run completion each changed node emits once:
+At run completion each changed asset emits once (a sensor or task is never reported: it runs
+every time, and a sensor's new value under an unchanged run hash is its purpose):
 
 `[barca] warning: <node> produced different bytes for the same code and inputs; the function is not deterministic`
 
@@ -29,8 +30,13 @@ on reports with no event. The diagnostic does not change the run's exit code.
 
 `barca status --json` exposes the latest materialization's `content_hash` when available, and
 `last_bytes_change: {node_id, run_hash, content_hash, created_at}` for the last mismatch event.
-That event remains visible after later unchanged recomputes. The human status table prints the
+That event remains visible after later unchanged recomputes. Sensors and tasks have no event. The human status table prints the
 last event's timestamp and exact node id. A restored backup preserves the stored flag.
+
+A `Manual` asset (RFC-0008) is not checked: it is refreshed by hand with the same code and
+inputs to pick up new data, so a refresh that gives new bytes emits no warning, no
+`bytes_changed` and no `last_bytes_change` (the stored row keeps its flag). Its consumers fold
+its digest into their run hashes (#548), so they are stale after such a refresh.
 
 Store mismatch repair (RFC-0009) produces the same diagnostic: a `barca get` that re-uploads a
 target whose store copy differs from this machine's (status `unsynced`, `cache.reason`

@@ -34,7 +34,7 @@ barca run publish pipeline.py
 
 ```
 [barca] 2/2 steps | done in 0.0s
-Run 51f18c924f70 | ran 'publish' in 0.089s (2 steps, 2 phases)
+Run 14fcc4d8648c | ran 'publish' in 0.098s (2 steps, 2 phases)
 
 Value:
 {
@@ -72,21 +72,25 @@ barca run publish_gated pipeline.py
 
 ```
 [barca] 0/3 steps | failed in 0.0s
-[barca] run failed: step 'pipeline.py:gate' failed (exit 1)
-Worker failed: ValueError: validation failed for ids [2]
-  File ".../pipeline.py", line 21, in gate
+Step 'pipeline.py:gate' failed: ValueError: validation failed for ids [2]
+  File "/home/you/project/pipeline.py", line 21, in gate
     raise ValueError(f"validation failed for ids {result['bad_ids']}")
+
+Fix the error in 'pipeline.py:gate' (see the traceback) and re-run the same command. Steps that succeeded are cached and will not re-run.
+[barca] run failed: step 'pipeline.py:gate' failed: ValueError: validation failed for ids [2]; 1 downstream steps skipped (exit 1)
 ```
 
-`publish_gated` does not run and the command exits 1.
+`validation` was cached by the run before, so no step completed (`0/3`). `publish_gated` does
+not run and the command exits 1.
 
 ## Limits
 
 - **A step cannot be skipped from the outside.** Every step in the target's cone either runs,
   is served from cache, or is skipped because a step it depends on failed. A step that decides
   to do nothing still runs and still counts as a success.
-- **Decorators take no condition.** There is no `when=` argument. On 0.18.0
-  `@task(when=lambda: ...)` is not an error: the keyword is ignored and the task runs.
+- **Decorators take no condition.** There is no `when=` argument. `@task(when=lambda: ...)` is
+  a usage error (exit 2): ``Parse error: when.py:t (line 4): `when` is not an argument of
+  @task``, followed by the arguments `@task` accepts.
 - **A gate that raises fails the run.** That is the intent of a gate, but it means the exit
   code is 1 and steps downstream are reported as skipped. If "nothing to do" is a normal
   outcome, branch in the body and return a value that says so.

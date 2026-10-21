@@ -337,7 +337,16 @@ pub async fn sql(
                      it as parquet, CSV or json."
                 ))
             } else {
-                BarcaError::Usage(format!("no view named '{table}'\n{}", available()))
+                let meant = crate::suggest::suggestion(
+                    &table,
+                    views
+                        .iter()
+                        .map(|v| v.name.as_str())
+                        .filter(|n| !out.unavailable.contains_key(*n)),
+                )
+                .map(|m| format!("{m}\n"))
+                .unwrap_or_default();
+                BarcaError::Usage(format!("no view named '{table}'\n{meant}{}", available()))
             }
         }
         "no_duckdb" => BarcaError::Usage(format!(

@@ -174,9 +174,10 @@ pub(crate) struct DecideState {
     /// upstream it cascaded from).
     pub(crate) cascade_roots: HashMap<String, String>,
     pub(crate) stale_cached: HashMap<String, String>,
-    /// Sensor step (display id) -> content hash of its output, folded into each consumer's run
-    /// hash (#183). A real run fills it as sensors finish (they run in an earlier phase than
-    /// their consumers); a dry run seeds it from each sensor's last recorded output.
+    /// Sensor or `Manual` asset step (display id, [`folds_output`]) -> content hash of its
+    /// output, folded into each consumer's run hash (#183, #548). A real run fills it as such a
+    /// step finishes (it runs in an earlier phase than its consumers) or is served from cache;
+    /// a dry run seeds it from each one's last recorded output.
     pub(crate) sensor_outputs: HashMap<String, String>,
     /// `Manual` nodes read as they are in this run (RFC-0008), by base id.
     pub(crate) pinned: HashMap<String, crate::freshness::Pin>,
@@ -255,6 +256,46 @@ impl DecideState {
             self.complete_upstreams.insert(upstream.to_string());
         }
         Ok(())
+    }
+}
+
+/// Whether the output of `id` (a base id) is folded into its consumers' run hashes, not only
+/// its run hash: a sensor (#183), and a `Manual` asset (#548). A `Manual` asset is read as it
+/// is and refreshed by hand with the same code and inputs, so its run hash stays the same when
+/// a refresh gives new bytes; its output is what tells what reads it that it changed.
+pub(crate) fn folds_output(dag: &Dag, id: &str) -> bool {
+    dag.get_node(id).is_some_and(|n| match n.kind() {
+        crate::NodeKind::Sensor => true,
+        crate::NodeKind::Asset => n.extracted.freshness == crate::Freshness::Manual,
+        crate::NodeKind::Task => false,
+    })
+}
+
+/// Whether new bytes under an unchanged run hash mean `node` is not deterministic, so barca
+/// warns and reports `bytes_changed` / `last_bytes_change`: only for an asset. A sensor returns
+/// a new value under the same run hash whenever the data it watches changes and a task runs
+/// every time; a `Manual` asset is pinned and refreshed by hand with the same code and inputs
+/// precisely to pick up new data, and what reads it is already stale by its bytes (#548).
+pub(crate) fn checks_bytes(node: &crate::model::DagNode) -> bool {
+    node.kind() == crate::NodeKind::Asset && node.extracted.freshness != crate::Freshness::Manual
+}
+
+/// Record the output of `display_id` for its consumers' run hashes when its node folds its
+/// output ([`folds_output`]). Nothing is recorded without a content hash (a result recorded
+/// before barca hashed outputs): its consumers are then hashed against its run hash alone.
+pub(crate) fn record_output(
+    dag: &Dag,
+    state: &mut DecideState,
+    display_id: &str,
+    content_hash: Option<&String>,
+) {
+    let base = display_id.split('[').next().unwrap_or(display_id);
+    if let Some(h) = content_hash
+        && folds_output(dag, base)
+    {
+        state
+            .sensor_outputs
+            .insert(display_id.to_string(), h.clone());
     }
 }
 
@@ -341,10 +382,14 @@ pub(crate) fn hash_step(
     {
         let display_id = step.step_id.display();
         let mut step = step.clone();
+        let run_hash = pin.run_hash.clone();
+        // And its output: a refresh by hand gives the same run hash and maybe new bytes (#548).
+        let content_hash = pin.output.content_hash.clone();
         state
             .run_hashes
-            .insert(display_id.clone(), pin.run_hash.clone());
-        step.run_hashes.insert(display_id, pin.run_hash.clone());
+            .insert(display_id.clone(), run_hash.clone());
+        record_output(dag, state, &display_id, content_hash.as_ref());
+        step.run_hashes.insert(display_id, run_hash);
         return Ok(step);
     }
     state.require_upstream_hashes(step)?;
@@ -396,9 +441,10 @@ pub(crate) fn hash_step(
 
 /// The run hash of every asset step of `phases` that is known before anything runs, as
 /// `(node id, run hash)`: what a run against a server asks the ledger in one request
-/// (RFC-0007 section 4.1). A step that reads a sensor (its output is folded into the hash), a
-/// step with partitions read from another step's output, and everything below them are left
-/// out; the phase that decides them asks for them ([`phase_keys`]).
+/// (RFC-0007 section 4.1). A sensor or `Manual` asset (its output is folded into its
+/// consumers' hashes, [`folds_output`]), a step with partitions read from another step's
+/// output, and everything below them are left out; the phase that decides them asks for them
+/// ([`phase_keys`]).
 pub(crate) fn cone_keys(dag: &Dag, phases: &[Phase]) -> Vec<(String, String)> {
     let mut state = DecideState::default();
     let mut unknown: HashSet<String> = HashSet::new();
@@ -409,7 +455,7 @@ pub(crate) fn cone_keys(dag: &Dag, phases: &[Phase]) -> Vec<(String, String)> {
             let base = step.step_id.base_id();
             let kind = dag.get_node(base).map(|n| n.kind());
             let blocked = !step.pending_partitions.is_empty()
-                || kind == Some(crate::NodeKind::Sensor)
+                || folds_output(dag, base)
                 || step
                     .inputs
                     .values()
@@ -558,7 +604,10 @@ pub(crate) async fn decide_step(
                 .cloned()
                 .expect("partitioned step has a precomputed run hash per key");
             match lookup_in(cache, &pdisplay, &run_h).await {
-                Some(oref) => cached.push((pdisplay, oref)),
+                Some(oref) => {
+                    record_output(dag, state, &pdisplay, oref.content_hash.as_ref());
+                    cached.push((pdisplay, oref))
+                }
                 None => missing.push(pk.clone()),
             }
         }
@@ -573,6 +622,7 @@ pub(crate) async fn decide_step(
     Ok(match lookup_in(cache, &display_id, &run_h).await {
         None => (step, Decision::Run(RunReason::NotMaterialized)),
         Some(oref) => {
+            record_output(dag, state, &display_id, oref.content_hash.as_ref());
             // Cached, but does it depend on something refreshed in this run?
             let stale_root = step.inputs.values().find_map(|up| {
                 let up_base = up.split('[').next().unwrap_or(up);

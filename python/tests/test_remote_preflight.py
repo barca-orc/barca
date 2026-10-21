@@ -96,6 +96,10 @@ def test_a_bad_store_is_rejected_before_importing_user_code(project, mode, detai
         next(line for line in reversed(out.stderr.splitlines()) if line.startswith("{"))
     )
     assert envelope["kind"] == "infra"
+    # The remediation says what to check, not the generic "Retrying may succeed".
+    assert "barca does not create it" in envelope["remediation"], envelope
+    assert "BARCA_REMOTE=off" in envelope["remediation"], envelope
+    assert "Retrying may succeed" not in out.stderr, out.stderr
     with sqlite3.connect(root / ".barca/metadata.db") as db:
         assert db.execute("SELECT status, steps_executed FROM runs").fetchall() == [("failed", 0)]
 

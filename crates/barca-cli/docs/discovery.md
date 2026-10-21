@@ -205,3 +205,5 @@ the producer module's import-time setup once; it does not execute the producer a
 - `barca serve --watch` re-reads the files it found at start; a file added later needs a restart.
 - Ids changed in 0.13: before, an id kept the spelling you typed (`./p.py:f`, an absolute path).
   Cache entries recorded under another spelling are not found once; the first run recomputes them.
+
+See also: `barca docs assets`, `barca docs cache`, `barca docs doctor`.

@@ -1,6 +1,6 @@
 import { NavLink, useLocation, useSearchParams } from 'react-router'
 import { Sun, Moon, Play, List, GitBranch } from 'lucide-react'
-import { Button, IconButton } from '@/components'
+import { Button, IconButton, RunsInProgress } from '@/components'
 import { useTheme } from '@/context/theme'
 
 import type { TopbarRun } from './shellContext'
@@ -40,6 +40,7 @@ export function Topbar({ run }: TopbarProps) {
       </nav>
 
       <div className="barca-top-actions">
+        <RunsInProgress />
         {isAssets && (
           <div className="barca-view-toggle" role="group" aria-label="Asset view">
             <button type="button" aria-pressed={!graph} onClick={() => setView('list')}><List size={14} />List</button>

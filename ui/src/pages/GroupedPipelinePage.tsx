@@ -14,6 +14,7 @@ import {
   ConnectionBadge,
   IconButton,
   KeyValue,
+  RunningBadge,
   SearchInput,
   Section,
   SidePanel,
@@ -34,6 +35,7 @@ import { useHealth } from '@/hooks/useHealth'
 import { connection } from '@/lib/connection'
 import { ApiError } from '@/lib/api'
 import { inPipeline } from '@/lib/pipeline'
+import { runningCount } from '@/lib/running'
 import { shortName, type LayoutDir, type GraphEntry } from '@/lib/graph'
 import { UNKNOWN_GRAPH_STATE, type GraphState } from '@/lib/graphState'
 import {
@@ -156,6 +158,11 @@ export function GroupedPipelinePage() {
     ? byId.get(groupOutput(selectedGroup.id, tree))
     : undefined
   const groupStatus = selectedGroup ? groupHealth(leaves, byId) : undefined
+  // How many nodes in view a run is working on now, whoever started it.
+  const runningHere = runningCount(
+    scope ? groupLeaves(scope, tree) : assets.map((a) => a.id),
+    byId,
+  )
 
   const update = (changes: Record<string, string | null>) => {
     const next = new URLSearchParams(params)
@@ -238,6 +245,12 @@ export function GroupedPipelinePage() {
               {scope ? groupLeaves(scope, tree).length : assets.length} total
               nodes
             </span>
+            {runningHere > 0 && (
+              <span className="barca-count barca-count-running">
+                <StatusDot status="running" size={6} />
+                {runningHere} running
+              </span>
+            )}
           </div>
           <div className="barca-view-actions">
             <ConnectionBadge
@@ -412,6 +425,10 @@ export function GroupedPipelinePage() {
                   <StatusDot status="warning" size={6} />
                   Needs refresh
                 </span>
+                <span>
+                  <StatusDot status="running" size={6} />
+                  Running
+                </span>
               </div>
             </div>
           ) : (
@@ -434,6 +451,7 @@ export function GroupedPipelinePage() {
                     const outputNode = group
                       ? byId.get(groupOutput(entry.id, tree))
                       : undefined
+                    const running = group ? null : byId.get(entry.id)?.running
                     return (
                       <tr
                         key={entry.id}
@@ -465,12 +483,19 @@ export function GroupedPipelinePage() {
                             </div>
                           )}
                         </td>
-                        <td title={state.hint}>
-                          <StatusBadge
-                            status={state.status}
-                            label={state.label}
-                            size="sm"
-                          />
+                        <td title={running ? undefined : state.hint}>
+                          {running ? (
+                            <RunningBadge
+                              running={running}
+                              nowMs={stateQuery.dataUpdatedAt}
+                            />
+                          ) : (
+                            <StatusBadge
+                              status={state.status}
+                              label={state.label}
+                              size="sm"
+                            />
+                          )}
                         </td>
                         <td>{group ? entry.summary : '—'}</td>
                         <td>

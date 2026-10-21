@@ -66,8 +66,8 @@ the first run.
 <CardGrid>
 	<Card title="Where results live" icon="document">
 		`.barca/` in the project root holds the cache and the run history; git already ignores
-		it. A [remote store](/reference/remote-storage/) is an optional shared copy, and `--env`
-		keeps dev and prod apart.
+		it. A [remote store](/reference/remote-storage/) is this machine's backup and
+		read-through cache; sharing means a [server](/deploying/). `--env` keeps dev and prod apart.
 	</Card>
 	<Card title="Inspection commands" icon="magnifier">
 		`barca list`, `barca status`, `--dry-run` and `barca plan` show what exists, what is

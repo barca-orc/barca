@@ -58,18 +58,19 @@ comes back as a `ParallelError` and the run still succeeds (exit 0), because `de
 did not raise:
 
 ```
-[barca] 4/4 steps | done in 4.4s
-Run 51e6126313d8 | ran 'deploy_all' in 2.522s (2 steps, 2 phases)
+[barca] 4/4 steps | done in 3.2s
+Run 1504cbf23786 | ran 'deploy_all' in 1.229s (2 steps, 1 phase)
 
 Value:
 {
-  "ap-southeast-1": "failed: RuntimeError: region unavailable\n  File \".../pipeline.py\", line 17, in deploy\n    raise RuntimeError(\"region unavailable\")",
+  "ap-southeast-1": "failed: RuntimeError: region unavailable\n  File \"/home/you/project/pipeline.py\", line 16, in deploy\n    raise RuntimeError(\"region unavailable\")",
   "eu-west-1": "ok",
   "us-east-1": "ok"
 }
 ```
 
-`ParallelError.error` is a string: the exception type, its message and the traceback lines.
+`ParallelError.error` is a string: the exception type,
+its message and the traceback lines.
 
 `parallel_map(fn, items, **kwargs)` is the same as
 `parallel(*(partial(fn, item, **kwargs) for item in items))`:
@@ -89,11 +90,11 @@ results = parallel_map(deploy, ["us-east-1", "eu-west-1"], version=m["version"])
   (which runs in the caller and passes its return value), fails the step:
 
   ```
-  Worker failed: TypeError: parallel() expects functools.partial objects, got function
+  Step 'pipeline.py:deploy_all' failed: TypeError: parallel() expects functools.partial objects, got function
   ```
 
 - **Branches are not retried and have a fixed time limit.** A branch runs once, whatever
-  `retries=` its task declares (checked on 0.18.0 with a branch declared `retries=2`: one
+  `retries=` its task declares (a branch declared `retries=2` that raises runs one
   attempt), and `timeout_seconds=` on its task has no effect: a branch that runs longer than
   300 seconds comes back as a `ParallelError` holding a `TimeoutError` (checked with a branch
   declared `timeout_seconds=1000`). The calling step's own `timeout_seconds` keeps counting

@@ -100,11 +100,11 @@ client prints it as it would print the local command's.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET`  | `/state` | Every node: its `barca status` entry plus typical durations and next run. |
+| `GET`  | `/state` | Every node: its `barca status` entry plus typical durations, next run and the run working on it now. |
 | `POST` | `/state/reset` | Start the metadata database over, as `barca state reset`: it moves aside to `metadata.db.reset-<UTC>`, nothing is deleted. See [Resetting the database](#resetting-the-database). |
 | `GET`  | `/groups` | Organizational groups as `[{id, name, description, members, output}]`; separate from execution edges. |
 | `GET`  | `/assets` | Every node as `barca list --json` shows it. |
-| `GET`  | `/assets/{name}` | One node's `barca list --json` entry with its `barca stats --json` body. |
+| `GET`  | `/assets/{name}` | One node's `barca list --json` entry with its `barca stats --json` body and the run working on it now. |
 | `GET`  | `/assets/{name}/schema` | Selected node and direct inputs as `NodeStatus[]`, with artifact shapes inspected on demand. |
 | `GET`  | `/plan` | Execution plan (phases and streams) as JSON. |
 | `GET`  | `/schedule` | Scheduled jobs with next fire time, last run, last skipped tick and pause. |
@@ -274,10 +274,17 @@ newest first. `limit` defaults to 100 and is bounded to 1–1000. It includes ru
 HTTP and the scheduler in this environment's local metadata DB, plus queued server runs. There
 is no source filter: a historical run remains visible even when its pipeline is no longer served.
 
+`GET /runs?status=running` lists only the runs in flight, newest first: this server's pending
+and running runs, and the `barca get` / `barca run` commands running on the same `.barca/`
+whose process is alive (the check the scheduler uses to skip a tick). Each has `active_steps`,
+the nodes it is working on now as `[{node_id, step, partitions}]` (see `running` under
+[State](#state)). Any other `status` is a `400`.
+
 Each summary has `id` and `run_id` (the database run id), `handle` (the same id while the
 server keeps the run in memory, `null` otherwise), `command`, `files`, `target`, `status`,
 `triggered_by`, `scheduled_at`, `schedule_id`, UTC `started_at` and `finished_at`,
-`elapsed_seconds`, `steps_total`, `steps_executed`, `steps_cached`, and `error`.
+`elapsed_seconds`, `steps_total`, `steps_executed`, `steps_cached`, and `error`; with
+`?status=running`, also `active_steps`.
 
 The UI's **Runs** view lists this history and shows what started each run; each run opens its
 status, timing, steps, errors and logs.
@@ -360,6 +367,30 @@ fire time in unix seconds for scheduled nodes. `cache` is the `barca status` cac
 reading artifact shapes starts a reader process, too slow for an endpoint the UI polls. The cache
 check reads a private copy of the metadata DB, so this endpoint never writes it.
 
+`running` is the run working on the node now, whoever started it, or `null`:
+
+```
+"running": {
+  "run_id": "0eeee4d342ed",
+  "triggered_by": "schedule",          // schedule, api, client, manual (a CLI run), or null
+  "started_at": "2026-10-21T10:00:00.000Z",
+  "step": "running",                   // or "queued"
+  "partitions": { "running": 6, "done": 4, "total": 10 }   // null for an unpartitioned node
+}
+```
+
+It covers this server's runs (the scheduler's, `POST /runs`, `barca get --server`) and the
+`barca get` / `barca run` commands on the same `.barca/` whose process is alive. A server run
+covers its targets and the nodes upstream of them; a node is `queued` while the run waits for a
+run slot or for the node's upstream steps, and `running` once its step executes, until its
+`step_finished`. A CLI run streams nothing to the server: it covers only its targets, as
+`running`, until each records a materialization. For a partitioned node, `done` is the keys
+with a result (cached, or finished by this run), `total` every key, and `running` the keys not
+done yet while the step runs. When several runs work on one node, the one whose step is running
+wins, then the oldest. `GET /assets/{name}` has the same `running` field. The UI polls this
+endpoint every 2 s while any node is running (10 s otherwise) and shows the runs on every page,
+whichever tab or client started them.
+
 ### Resetting the database
 
 ```
@@ -435,7 +466,7 @@ metadata DB — the database is never opened in place, created or written.
 
 ```
 GET /assets            → [ListNode, ...]
-GET /assets/{name}     → { "asset": ListNode, "stats": Stats }
+GET /assets/{name}     → { "asset": ListNode, "stats": Stats, "running": NodeRunning | null }
 ```
 
 `ListNode` is a `barca list --json` node: `{ id, kind, freshness, inputs, env }`, with
@@ -641,7 +672,8 @@ never an HTTP error: it is a run whose outcome is `failed`. The Python client ra
 
 - No authentication and no TLS. The server listens on `127.0.0.1` by default; `--host` can
   make it reachable from other machines. Authenticate at a proxy.
-- No shared ledger yet: other machines do not see this server's history (RFC-0007).
+- One server per project. Machines share results by pointing at it ([the ledger](#the-ledger));
+  a second server on the same project, or a bucket on its own, shares nothing (RFC-0007).
 - Runs in progress are not resumed after a restart. A finished run's outcome is kept and
   `GET /runs/{run_id}` answers it; a run still queued at the restart never started.
 - One machine: steps run in worker processes on the host that runs the server.

@@ -56,6 +56,16 @@ pub enum ParseError {
     },
 }
 
+/// A syntax error as a person reads it: `line 12, column 18: Expected ':', found newline`.
+/// The parser reports a byte range, which says nothing to someone looking at an editor.
+fn syntax_message(source: &str, error: &ruff_python_parser::ParseError) -> String {
+    let offset = usize::from(error.location.start()).min(source.len());
+    let before = source.get(..offset).unwrap_or(source);
+    let line = before.matches('\n').count() + 1;
+    let column = before.rsplit('\n').next().unwrap_or("").chars().count() + 1;
+    format!("line {line}, column {column}: {}", error.error)
+}
+
 /// Parse a Python source file and extract all barca-decorated nodes.
 ///
 /// Pure function — no I/O, no side effects. Returns `Err` for unparseable Python.
@@ -63,7 +73,7 @@ pub enum ParseError {
 pub fn extract_nodes(source: &str, file_path: &str) -> Result<Vec<ExtractedNode>, ParseError> {
     let parsed = parse_module(source).map_err(|e| ParseError::SyntaxError {
         file: file_path.to_string(),
-        message: e.to_string(),
+        message: syntax_message(source, &e),
     })?;
 
     let module = parsed.into_syntax();
@@ -92,7 +102,7 @@ pub(crate) fn extract_pipeline(
         crate::BarcaError::Parse(
             ParseError::SyntaxError {
                 file: file.to_string(),
-                message: e.to_string(),
+                message: syntax_message(source, &e),
             }
             .to_string(),
         )
@@ -1036,6 +1046,21 @@ fn extract_refs_from_starred(expr: &Expr, refs: &mut Vec<NodeRef>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_syntax_error_names_its_line_and_column_not_a_byte_range() {
+        let src = "from barca import asset\n\n\n@asset()\ndef raw() -> list\n    return [1]\n";
+        let err = extract_nodes(src, "pipeline.py").unwrap_err().to_string();
+        assert!(
+            err.starts_with("syntax error in pipeline.py: line 5, column 18: "),
+            "{err}"
+        );
+        assert!(!err.contains("byte range"), "{err}");
+        // Columns count characters, not bytes.
+        let src = "x = 'é'\ny = (\n";
+        let err = extract_nodes(src, "p.py").unwrap_err().to_string();
+        assert!(err.contains("line 3, column 1: "), "{err}");
+    }
 
     #[test]
     fn test_trivial_asset() {

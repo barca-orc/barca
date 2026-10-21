@@ -54,6 +54,7 @@ pub mod sql;
 pub(crate) mod state_validate;
 pub mod status;
 mod store_sync;
+pub mod suggest;
 pub mod targets;
 pub mod telemetry;
 pub mod term;
@@ -80,6 +81,11 @@ pub enum BarcaError {
     #[error("Asset '{0}' not found. Available: {1}")]
     AssetNotFound(String, String),
 
+    /// A target name that several nodes have (the same function name in two files). Like
+    /// [`BarcaError::AssetNotFound`], a usage error whose remediation is `barca list`.
+    #[error("{0}")]
+    AmbiguousTarget(String),
+
     #[error("DAG error: {0}")]
     Dag(#[from] dag::DagError),
 
@@ -87,7 +93,7 @@ pub enum BarcaError {
     Parse(String),
 
     /// A user step failed permanently (after its retries).
-    #[error("Worker failed: {}", .0.message)]
+    #[error("Step '{}' failed: {}", .0.node, .0.message)]
     WorkerFailed(Box<FailedStep>),
 
     #[error("run cancelled")]

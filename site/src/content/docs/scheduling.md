@@ -7,8 +7,6 @@ A node declared with `freshness=Schedule("<cron>")` runs on that cron schedule w
 `barca serve` is running. The scheduler is part of the server and is on unless you pass
 `--no-schedule`. `barca get` and `barca run` never fire schedules.
 
-The run output in the examples on this page is from barca 0.18.0.
-
 ## Run a function every 10 minutes
 
 ```python
@@ -29,9 +27,9 @@ barca serve job.py
 ```
 
 ```
-[barca] serving on http://127.0.0.1:8274  (1 file)
 [barca] scheduling 1 task:
-  job.py:refresh — */10 * * * * (next 2026-10-07 14:30:00)
+  job.py:refresh — */10 * * * * (next 2026-10-20 22:50:00)
+[barca] serving on http://127.0.0.1:8274  (1 file)
 ```
 
 `refresh` now runs every ten minutes for as long as the server is up.
@@ -76,7 +74,7 @@ node follows the schedules above it.
 |---|---|
 | `Schedule("<cron>")` | Fires on a cron schedule while `barca serve` is running. |
 | `Always` | Brought up to date at each tick of a scheduled node above it, in that tick's run. |
-| `Manual` | Refreshed by hand only: never by a tick, and never by a request for something below it, which reads its current result. |
+| `Manual` | Refreshed by hand only: never by a tick, and never by a request for something below it, which reads its current result. A sensor is the exception: every run that needs its value polls it, whatever its freshness. |
 
 ```python
 # pipeline.py
@@ -112,8 +110,12 @@ does not fire.
 
 A `Manual` asset or task is never run by a tick, and `barca get` or `barca run` of something
 below it does not recompute it: whatever reads it reads its latest successful result, even when
-its inputs or code have changed since. Nodes below it are hashed against that result, so it does
-not make them stale until it changes. When it is stale, `barca get report` says so on stderr:
+its inputs or code have changed since. Nodes below it are hashed against that result (its run
+hash and its bytes), so it does not make them stale until it changes, and once it has a new
+result they are stale relative to it: a refresh by hand that gives new bytes for the same code
+and inputs (a reference table that reads external data) makes `barca status` report them stale,
+and the next `barca get` or tick recomputes them. A refresh that gives the same bytes changes
+nothing below it. When it is stale, `barca get report` says so on stderr:
 
 ```
 [barca] note: baseline is Manual and stale; barca get baseline pipeline.py --refresh baseline to recompute
@@ -199,19 +201,27 @@ tick below `orders` is computed. In the second the sensor's value is unchanged, 
 is a cache hit and only the sensor and the task run:
 
 ```
-[barca] scheduled run pipeline.py:publish → 52f9c9c52e70
+[barca] scheduled run pipeline.py:publish → 14ca5c7b3768
+[barca] importing /srv/project/pipeline.py
 [barca] step:pipeline.py:inbox completed 0.0s (1/3)
-computing orders for version 89569899
 [barca] step:pipeline.py:orders completed 0.0s (2/3)
-publishing {'rows': 3}
 [barca] step:pipeline.py:publish completed 0.0s (3/3)
 [barca] 3/3 steps | done in 0.0s
-[barca] scheduled run pipeline.py:publish → 52fa627180a8
+[barca] scheduled run pipeline.py:publish → 14cd98ec4433
+[barca] importing /srv/project/pipeline.py
 [barca] step:pipeline.py:inbox completed 0.0s (1/3)
 [barca] step:pipeline.py:orders cached
-publishing {'rows': 3}
 [barca] step:pipeline.py:publish completed 0.0s (2/3)
 [barca] 2/3 steps | done in 0.0s
+```
+
+What the steps print is recorded with the run, not written to the server's stderr. `barca logs`
+reads it back by run id:
+
+```
+$ barca logs 14ca5c7b3768 --pretty
+computing orders for version 89627531
+publishing {'rows': 3}
 ```
 
 ### Two scheduled nodes that share an upstream
@@ -276,6 +286,12 @@ last run id, last status and consecutive failed ticks
 ([Server API](/reference/server-api/#scheduling)), and the web UI at
 `/ui/` shows the next scheduled run of each node. Both are computed in the server's
 `--timezone`, so they are the times the job will fire at.
+
+A scheduled run shows in the web UI while it runs, like any other: the node pulses on the graph
+and the pipeline page, the assets list shows a Running badge with the elapsed time and a link to
+the run, and the header counts the runs in progress. The UI reads it from `GET /state`'s
+`running` field ([Server API](/reference/server-api/#state)), so it does not matter which tab,
+client or shell started the run.
 
 ## Caveats
 

@@ -184,8 +184,7 @@ fn files_before_target_prints_the_corrected_command() {
     .expect("wrong order must be an error");
     assert_eq!(
         msg,
-        "error: the target comes before the files\n\n  barca run validate_foo pipeline.py\n\n\
-             Run `barca list pipeline.py` to see available assets and tasks."
+        "error: the target comes before the files\n\n  barca run validate_foo pipeline.py"
     );
 }
 
@@ -198,10 +197,11 @@ fn corrected_command_keeps_flags_and_handles_the_shorthand() {
     )
     .unwrap();
     assert!(
-        msg.contains("\n  barca get total a.py b.py --env dev -o value\n"),
+        msg.ends_with("\n  barca get total a.py b.py --env dev -o value"),
         "{msg}"
     );
-    assert!(msg.ends_with("Run `barca list a.py b.py` to see available assets and tasks."));
+    // The corrected command is the remediation: no `barca list` pointer (#492).
+    assert!(!msg.contains("barca list"), "{msg}");
 }
 
 #[test]
@@ -230,22 +230,89 @@ fn correct_order_and_files_only_are_not_wrong_order() {
     }
 }
 
-/// barca never offers fuzzy suggestions (`barca docs agents`): a guess can read as
-/// confirmation. clap is built without its `suggestions` feature.
+/// The usage error for `argv` as JSON, by the same path `main` takes.
+fn clap_error_json(argv: &str) -> serde_json::Value {
+    let argv: Vec<String> = argv.split_whitespace().map(str::to_string).collect();
+    let Err(e) = Cli::try_parse_from(&argv) else {
+        panic!("`{argv:?}` must not parse");
+    };
+    let err = CliError::from_clap(&e, &argv);
+    assert_eq!(err.code(), 2, "a suggestion never changes the exit code");
+    serde_json::from_str(&err.render(true)).unwrap()
+}
+
 #[test]
-fn argument_errors_carry_no_similar_argument_tip() {
-    for argv in [
-        "barca get total p.py --jsn",
-        "barca run t p.py --refesh a",
-        "barca lst p.py",
+fn a_mistyped_flag_or_subcommand_gets_did_you_mean() {
+    for (argv, meant) in [
+        ("barca run t p.py --refesh a", "Did you mean '--refresh'?"),
+        ("barca get total p.py --jsn", "Did you mean '--json'?"),
+        ("barca lst p.py", "Did you mean 'list'?"),
+        // `stats` and `status` tie, one edit each: both, nothing else.
+        ("barca statsu", "Did you mean 'stats' or 'status'?"),
+        ("barca state rest", "Did you mean 'reset'?"),
     ] {
-        let Err(e) = Cli::try_parse_from(argv.split_whitespace()) else {
-            panic!("`{argv}` must not parse");
+        let json = clap_error_json(argv);
+        let remediation = json["remediation"].as_str().unwrap();
+        assert!(remediation.starts_with(meant), "{argv}: {json}");
+        assert_eq!(json["kind"], "usage", "{argv}");
+        // clap's `-- --flag` tip is wrong advice for a typo.
+        assert!(!json.to_string().contains("as a value"), "{argv}: {json}");
+        // The human output has it on its own line, after the error line.
+        let argv: Vec<String> = argv.split_whitespace().map(str::to_string).collect();
+        let Err(e) = Cli::try_parse_from(&argv) else {
+            unreachable!()
         };
-        let text = CliError::from_clap(&e).render(true).to_lowercase();
-        assert!(!text.contains("similar"), "{argv}: {text}");
-        assert!(!text.contains("did you mean"), "{argv}: {text}");
+        let human = CliError::from_clap(&e, &argv).render(false);
+        assert!(human.contains(&format!("\n\n{meant}\n")), "{human}");
     }
+}
+
+#[test]
+fn an_unrelated_flag_or_subcommand_gets_no_guess() {
+    for argv in ["barca get total p.py --frobnicate", "barca zzzzzz"] {
+        let json = clap_error_json(argv);
+        assert!(
+            !json.to_string().to_lowercase().contains("did you mean"),
+            "{argv}: {json}"
+        );
+        assert!(!json.to_string().contains("similar"), "{argv}: {json}");
+    }
+}
+
+#[test]
+fn an_unknown_target_suggests_the_closest_node() {
+    let files = vec!["pipeline.py".to_string()];
+    let e = CliError::from_barca(
+        barca_core::BarcaError::AssetNotFound(
+            "amount".into(),
+            "pipeline.py:raw, pipeline.py:amounts, pipeline.py:report".into(),
+        ),
+        &Context {
+            command: "get",
+            files: files.clone(),
+        },
+    );
+    assert_eq!(e.code(), 2);
+    assert_eq!(
+        e.remediation.as_deref(),
+        Some(
+            "Did you mean 'amounts'? Run `barca list pipeline.py` to see available assets and tasks."
+        )
+    );
+    // The `barca list` pointer replaces the remediation and keeps the suggestion.
+    let e = e.with_final_hint(barca_core::envelope::list_hint(&files));
+    assert_eq!(
+        e.remediation.as_deref(),
+        Some(
+            "Did you mean 'amounts'? Run `barca list pipeline.py` to see available assets and tasks."
+        )
+    );
+    let human = e.render(false);
+    assert!(
+        human.starts_with("Asset 'amount' not found. Available: "),
+        "{human}"
+    );
+    assert!(human.ends_with("\n\nDid you mean 'amounts'? Run `barca list pipeline.py` to see available assets and tasks."), "{human}");
 }
 
 #[test]
@@ -264,6 +331,31 @@ fn unknown_target_remediation_is_one_wording_on_every_command() {
             Some("Run `barca list pipeline.py` to see available assets and tasks."),
             "{command}"
         );
+    }
+}
+
+/// Only an unknown or ambiguous target points at `barca list` (#492).
+#[test]
+fn only_target_errors_end_with_the_list_hint() {
+    let ctx = Context {
+        command: "get",
+        files: vec!["pipeline.py".to_string()],
+    };
+    let hint = "Run `barca list pipeline.py` to see available assets and tasks.";
+    let remediation = |e: barca_core::BarcaError| CliError::from_barca(e, &ctx).remediation;
+    assert_eq!(
+        remediation(barca_core::BarcaError::AmbiguousTarget(
+            "'x' matches more than one node".into()
+        ))
+        .as_deref(),
+        Some(hint)
+    );
+    for e in [
+        barca_core::BarcaError::Usage("'report' is a task — use `barca run` instead".into()),
+        barca_core::BarcaError::Usage("-o url needs a cloud artifact store\nUse -o path.".into()),
+    ] {
+        let r = remediation(e).unwrap_or_default();
+        assert!(!r.contains("barca list"), "{r}");
     }
 }
 
@@ -377,4 +469,35 @@ fn tty_aware_commands_take_json_and_pretty_and_the_rule_is_documented() {
         );
     }
     assert!(after_help(&root).contains("BARCA_OUTPUT"));
+}
+
+/// The README's Commands table names every command `barca --help` lists, and every `barca ...`
+/// line in its bash blocks parses. The README is at the repo root, outside the crate, so the
+/// check is skipped where it is absent (a packaged sdist).
+#[test]
+fn readme_commands_table_matches_the_cli() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../README.md");
+    let Ok(readme) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    let rows: Vec<&str> = readme
+        .lines()
+        .filter(|l| l.starts_with("| `barca "))
+        .collect();
+    for sub in Cli::command().get_subcommands() {
+        let name = sub.get_name();
+        if name == "help" {
+            continue;
+        }
+        let listed = rows.iter().any(|l| {
+            l.contains(&format!("`barca {name} ")) || l.contains(&format!("`barca {name}`"))
+        });
+        assert!(
+            listed,
+            "README.md's Commands table needs a `barca {name}` row"
+        );
+    }
+    for line in command_lines(&readme, true) {
+        assert_parses(&line, "README.md");
+    }
 }

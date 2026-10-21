@@ -127,6 +127,8 @@ pub struct AssetStats {
     pub median_elapsed_seconds: Option<f64>,
     pub max_elapsed_seconds: Option<f64>,
     pub p95_elapsed_seconds: Option<f64>,
+    /// The share of executions that repeated an earlier execution's run hash (not cache hits,
+    /// which execute nothing and are not recorded per asset).
     pub cache_hit_rate: f64,
     pub recent_runs: Vec<AssetRunEntry>,
 }
@@ -482,9 +484,20 @@ impl CacheReader {
     }
 }
 
+/// How many times this process has opened a metadata DB ([`connect`]). Each open costs a
+/// fraction of a millisecond plus the lock; `BARCA_TRACE_TIMING` prints the count at the end
+/// of a run, and a test holds a warm run's count down (#560).
+static OPENS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// [`OPENS`] so far.
+pub fn opens() -> usize {
+    OPENS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Open the database file at `path` and connect, taking no lock. For callers that already
 /// hold the cross-process lock for the database this file is (or is about to become).
 async fn connect(path: &str) -> Result<(turso::Database, turso::Connection), BarcaError> {
+    OPENS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let db = Builder::new_local(path)
         .build()
         .await
@@ -625,42 +638,97 @@ pub async fn init_db(db_path: &str) -> Result<(), BarcaError> {
 /// schema. A lock or I/O failure is [`BarcaError::Db`].
 pub async fn init_db_as(path: &str, shown: &str) -> Result<i64, BarcaError> {
     let _g = db_guard().await;
-    let initialized = async {
-        // Under the lock: a database another process is creating is empty until it commits.
-        let lock = acquire_file_lock(path, DB_FILE_LOCK_WAIT).await?;
-        if empty_file(path) {
-            // Replaced rather than opened in place: nothing in it, and a new file is what a
-            // missing database gets.
-            fs::remove_file(path)?;
-            // A snapshot's copy is initialized silently: the note is for the file itself.
-            if path == shown {
-                crate::errln!(
-                    "[barca] note: the metadata DB {shown} was empty (0 bytes); initialized it \
-                     as a new database"
-                );
-            }
-        } else if let Some(why) = unusable_file(path) {
-            return Err(unusable(why));
+    initialized(path, shown)
+        .await
+        .map(|(handle, conn, version)| {
+            // The connection keeps the file open (and Turso's lock on it) until it is dropped,
+            // so it goes before the handle releases barca's lock. Dropped the other way round,
+            // another process could take barca's lock while the file was still held, and fail
+            // with "File is locked by another process" (#537).
+            drop(conn);
+            drop(handle);
+            version
+        })
+        .map_err(|e| named(e, shown))
+}
+
+/// The database at `path` opened under its lock and initialized ([`init_db_as`]), with its
+/// format version. The caller holds the in-process guard, and drops the connection before the
+/// handle.
+async fn initialized(
+    path: &str,
+    shown: &str,
+) -> Result<(DbHandle, turso::Connection, i64), BarcaError> {
+    // Under the lock: a database another process is creating is empty until it commits.
+    let lock = acquire_file_lock(path, DB_FILE_LOCK_WAIT).await?;
+    if empty_file(path) {
+        // Replaced rather than opened in place: nothing in it, and a new file is what a
+        // missing database gets.
+        fs::remove_file(path)?;
+        // A snapshot's copy is initialized silently: the note is for the file itself.
+        if path == shown {
+            crate::errln!(
+                "[barca] note: the metadata DB {shown} was empty (0 bytes); initialized it \
+                 as a new database"
+            );
         }
-        let (db, conn) = connect(path).await?;
-        let handle = DbHandle {
-            _db: db,
-            _lock: lock,
-        };
-        let version = match init_schema(&conn).await {
-            Ok(()) => crate::db_schema::read_version(&conn).await,
-            Err(e) => Err(e),
-        };
-        // The connection keeps the file open (and Turso's lock on it) until it is dropped, so
-        // it goes before the handle releases barca's lock. Dropped the other way round, another
-        // process could take barca's lock while the file was still held, and fail with "File
-        // is locked by another process" (#537).
-        drop(conn);
-        drop(handle);
-        version
+    } else if let Some(why) = unusable_file(path) {
+        return Err(unusable(why));
+    }
+    let (db, conn) = connect(path).await?;
+    let handle = DbHandle {
+        _db: db,
+        _lock: lock,
+    };
+    let version = match init_schema(&conn).await {
+        Ok(()) => crate::db_schema::read_version(&conn).await,
+        Err(e) => Err(e),
+    };
+    match version {
+        Ok(version) => Ok((handle, conn, version)),
+        Err(e) => {
+            drop(conn);
+            drop(handle);
+            Err(e)
+        }
+    }
+}
+
+/// What a run reads from the metadata DB as it starts ([`start_run`]).
+pub struct StartedRun {
+    /// Every persisted per-node cost estimate ([`load_cost_estimates`]).
+    pub cost_estimates: Vec<(String, crate::cost::NodeEstimate)>,
+    /// [`get_avg_elapsed`] of the run's unpartitioned nodes.
+    pub avg_elapsed: HashMap<String, f64>,
+    /// [`get_avg_elapsed_for_partitioned`] of its partitioned base ids.
+    pub partitioned_avg_elapsed: HashMap<String, f64>,
+}
+
+/// Start a run in one visit to the metadata DB: initialize it ([`init_db`]), record the run
+/// ([`create_run_with`]) and read what the run needs (cost estimates, average step times). These
+/// were four opens of the database, each with its lock and schema check (#560).
+pub async fn start_run(
+    db_path: &str,
+    run: NewRun<'_>,
+    node_ids: &[String],
+    base_ids: &[String],
+) -> Result<StartedRun, BarcaError> {
+    let _g = db_guard().await;
+    let (handle, conn, _) = initialized(db_path, db_path)
+        .await
+        .map_err(|e| named(e, db_path))?;
+    let started = async {
+        insert_run(&conn, db_path, &run).await;
+        Ok(StartedRun {
+            cost_estimates: cost_estimates_on(&conn).await?,
+            avg_elapsed: avg_elapsed_on(&conn, node_ids).await?,
+            partitioned_avg_elapsed: partitioned_avg_elapsed_on(&conn, base_ids).await?,
+        })
     }
     .await;
-    initialized.map_err(|e| named(e, shown))
+    drop(conn);
+    drop(handle);
+    started
 }
 
 /// `error` naming `shown`, if it says the database cannot be used. Turso's own words for a file
@@ -727,17 +795,15 @@ pub async fn probe_metadata(path: &str) -> Result<Option<i64>, BarcaError> {
 pub(crate) async fn init_schema(conn: &turso::Connection) -> Result<(), BarcaError> {
     let version = crate::db_schema::check(conn).await?;
     if version == crate::db_schema::VERSION {
-        if crate::db_schema::additions_missing(conn).await? {
+        // Read once and judged twice: this runs at the start of every run.
+        let schema = crate::state_validate::Schema::read(conn).await?;
+        if crate::db_schema::additions_missing_in(&schema) {
             // A table that is there but lacks a column the additions do not bring is malformed,
             // not behind: refuse it before any write.
-            crate::state_validate::legacy_schema(conn)
-                .await?
-                .map_err(unusable)?;
+            schema.columns_fit(true).map_err(unusable)?;
             return add_to_current_schema(conn).await;
         }
-        return crate::state_validate::usable_schema(conn)
-            .await?
-            .map_err(unusable);
+        return schema.columns_fit(false).map_err(unusable);
     }
     crate::state_validate::legacy_schema(conn)
         .await?
@@ -1527,6 +1593,12 @@ pub async fn load_cost_estimates(
 ) -> Result<Vec<(String, crate::cost::NodeEstimate)>, BarcaError> {
     let _g = db_guard().await;
     let (_db, conn) = open_conn(db_path).await?;
+    cost_estimates_on(&conn).await
+}
+
+async fn cost_estimates_on(
+    conn: &turso::Connection,
+) -> Result<Vec<(String, crate::cost::NodeEstimate)>, BarcaError> {
     let mut rows = conn
         .query(
             "SELECT node_id, estimate_seconds, cpu_seconds, max_rss_bytes, samples FROM cost_estimates",
@@ -1650,6 +1722,12 @@ pub struct NewRun<'a> {
 pub async fn create_run_with(db_path: &str, run: NewRun<'_>) -> Result<(), BarcaError> {
     let _g = db_guard().await;
     let (_db, conn) = open_conn(db_path).await?;
+    insert_run(&conn, db_path, &run).await;
+    Ok(())
+}
+
+/// The row of a run that is starting, and the runs it finds interrupted ([`create_run_with`]).
+async fn insert_run(conn: &turso::Connection, db_path: &str, run: &NewRun<'_>) {
     // The marker exists from before the row does until the run has recorded its outcome
     // ([`finish_run`], or the end of this process).
     let owner = crate::run_owner::claim(db_path, run.run_id);
@@ -1672,8 +1750,7 @@ pub async fn create_run_with(db_path: &str, run: NewRun<'_>) -> Result<(), Barca
     )
     .await
     .ok();
-    mark_interrupted_runs(&conn, db_path).await;
-    Ok(())
+    mark_interrupted_runs(conn, db_path).await;
 }
 
 /// Record a run that ended before it started executing (its target was refused, it was
@@ -2011,9 +2088,16 @@ pub struct AliveRun {
 /// is left out too, so it never holds a schedule back for ever. One query of the `running`
 /// rows (`idx_runs_status`); best effort: empty when nothing can be read.
 pub async fn alive_running_runs(db_path: &str) -> Vec<AliveRun> {
+    alive_running_runs_in(db_path, db_path).await
+}
+
+/// [`alive_running_runs`], with the `running` rows read from `read_path`: a snapshot of the
+/// metadata database at `db_path` ([`DbSnapshot`]), so a polled reader (`GET /state`) never
+/// opens the real one. The owners are judged against `db_path`'s marker directory.
+pub async fn alive_running_runs_in(read_path: &str, db_path: &str) -> Vec<AliveRun> {
     let running = {
         let _g = db_guard().await;
-        let Ok((_db, conn)) = open_conn(db_path).await else {
+        let Ok((_db, conn)) = open_conn(read_path).await else {
             return Vec::new();
         };
         running_runs(&conn).await
@@ -2046,12 +2130,28 @@ pub(crate) async fn touch_read(db_path: &str, paths: &[String]) {
     let Ok((_db, conn)) = open_conn(db_path).await else {
         return;
     };
-    if conn.execute("BEGIN IMMEDIATE", ()).await.is_err() {
+    touch_read_on(&conn, paths).await;
+}
+
+/// [`touch_read`] on an open connection, in a transaction of its own. Best effort.
+pub(crate) async fn touch_read_on(conn: &turso::Connection, paths: &[String]) {
+    if paths.is_empty() || conn.execute("BEGIN IMMEDIATE", ()).await.is_err() {
         return;
+    }
+    let ok = touch_read_in(conn, paths).await;
+    let end = if ok { "COMMIT" } else { "ROLLBACK" };
+    let _ = conn.execute(end, ()).await;
+}
+
+/// Set `last_read_at` of `paths` inside the caller's transaction. Returns whether every update
+/// went through; it stops at the first that does not (the earlier ones stay in the transaction).
+pub(crate) async fn touch_read_in(conn: &turso::Connection, paths: &[String]) -> bool {
+    if paths.is_empty() {
+        return true;
     }
     let mut ok = true;
     match prepare(
-        &conn,
+        conn,
         "UPDATE materializations SET last_read_at = datetime('now'), evicted_at = NULL \
          WHERE artifact_path = ?1 AND status = 'success'",
     )
@@ -2067,8 +2167,7 @@ pub(crate) async fn touch_read(db_path: &str, paths: &[String]) {
         }
         Err(_) => ok = false,
     }
-    let end = if ok { "COMMIT" } else { "ROLLBACK" };
-    let _ = conn.execute(end, ()).await;
+    ok
 }
 
 /// Of `paths` (recorded artifact paths), those whose latest successful row was evicted to stay
@@ -2429,15 +2528,18 @@ pub async fn get_asset_stats(db_path: &str, node_id: &str) -> Result<AssetStats,
     let max_elapsed = all_elapsed.last().copied();
     let p95_elapsed = percentile(&all_elapsed, 95.0);
 
-    // Cache hit rate: rows with non-null, non-empty run_hash that appear more than once.
+    // `cache_hit_rate` (the JSON key keeps its name): the share of this node's executions that
+    // repeated an earlier execution's run hash, i.e. ran again with unchanged code and inputs
+    // (`--refresh`, a retry after a failure, an evicted result). A cache hit executes nothing
+    // and writes no row, so it is not counted here; `barca history` counts them per run (#496).
     let cache_hit_rate = if total_runs > 1 {
         let mut rows = conn
             .query(
-                "SELECT COUNT(*) FROM materializations WHERE node_id = ?1 AND run_hash != '' AND run_hash IN (SELECT run_hash FROM materializations WHERE node_id = ?1 GROUP BY run_hash HAVING COUNT(*) > 1)",
+                "SELECT COUNT(*) - COUNT(DISTINCT run_hash) FROM materializations WHERE node_id = ?1 AND run_hash IS NOT NULL AND run_hash != ''",
                 [node_id.to_string()],
             )
             .await
-            .map_err(|e| BarcaError::Db(format!("failed to query cache hits: {e}")))?;
+            .map_err(|e| BarcaError::Db(format!("failed to query repeated executions: {e}")))?;
         let cached_count: i64 = rows
             .next()
             .await
@@ -2747,22 +2849,41 @@ pub async fn get_avg_elapsed(
     }
     let _g = db_guard().await;
     let (_db, conn) = open_conn(db_path).await?;
+    avg_elapsed_on(&conn, node_ids).await
+}
+
+/// How many values one `IN (...)` list binds: well under SQLite's parameter limit.
+const IN_LIST_CHUNK: usize = 500;
+
+/// [`get_avg_elapsed`] on an open connection: one statement per 500 nodes, not one per node.
+async fn avg_elapsed_on(
+    conn: &turso::Connection,
+    node_ids: &[String],
+) -> Result<HashMap<String, f64>, BarcaError> {
     let mut result = HashMap::new();
-    for nid in node_ids {
+    for chunk in node_ids.chunks(IN_LIST_CHUNK) {
+        let marks = (1..=chunk.len())
+            .map(|i| format!("?{i}"))
+            .collect::<Vec<_>>()
+            .join(", ");
         let mut rows = conn
             .query(
-                "SELECT AVG(elapsed_seconds) FROM materializations WHERE node_id = ?1 AND elapsed_seconds IS NOT NULL",
-                [nid.clone()],
+                &format!(
+                    "SELECT node_id, AVG(elapsed_seconds) FROM materializations \
+                     WHERE node_id IN ({marks}) AND elapsed_seconds IS NOT NULL GROUP BY node_id"
+                ),
+                turso::params_from_iter(chunk.iter().cloned()),
             )
             .await
             .map_err(|e| BarcaError::Db(format!("failed to query avg elapsed: {e}")))?;
-        if let Some(row) = rows
+        while let Some(row) = rows
             .next()
             .await
             .map_err(|e| BarcaError::Db(format!("failed to read row: {e}")))?
-            && let Ok(avg) = row.get::<f64>(0)
         {
-            result.insert(nid.clone(), avg);
+            if let (Ok(node_id), Ok(avg)) = (row.get::<String>(0), row.get::<f64>(1)) {
+                result.insert(node_id, avg);
+            }
         }
     }
     Ok(result)
@@ -2780,6 +2901,13 @@ pub async fn get_avg_elapsed_for_partitioned(
     }
     let _g = db_guard().await;
     let (_db, conn) = open_conn(db_path).await?;
+    partitioned_avg_elapsed_on(&conn, base_node_ids).await
+}
+
+async fn partitioned_avg_elapsed_on(
+    conn: &turso::Connection,
+    base_node_ids: &[String],
+) -> Result<HashMap<String, f64>, BarcaError> {
     let mut result = HashMap::new();
     for nid in base_node_ids {
         let pattern = format!("{nid}[%]");

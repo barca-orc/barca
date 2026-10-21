@@ -14,6 +14,7 @@ import os
 import signal
 import socket
 import sqlite3
+import stat
 import subprocess
 import time
 import urllib.error
@@ -387,6 +388,77 @@ def test_a_post_with_a_missing_object_is_409_and_retried_by_the_next_command(tea
     _, err = get(team.a, "base")
     assert f"[barca] recorded run {run_id} on the server" in err, err
     assert all(p["state"] == "shared" for p in posts(team.a)), posts(team.a)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes into read-only directories")
+def test_a_run_held_for_its_uploads_is_posted_by_the_command_that_uploads_them(team):
+    # A's uploads fail (#390): the run succeeds here, and its post waits for them (#507).
+    artifacts = team.store / "default" / "artifacts"
+    artifacts.mkdir(parents=True, exist_ok=True)
+    artifacts.chmod(stat.S_IRUSR | stat.S_IXUSR)
+    try:
+        result_a, err = get(team.a, "report")
+        run_id = result_a["run_id"]
+        assert result_a["uploads"]["pending"] == 3, result_a
+        assert (
+            f"run {run_id} is not recorded on the server {team.url} yet: some of its results "
+            "are not in the artifact store yet" in err
+        ), err
+        [post] = posts(team.a)
+        assert (post["client_run_id"], post["state"]) == (run_id, "unsynced")
+        assert team.server.history() == []
+        nodes, _ = _status(team.a, "report")
+        assert nodes["pipeline.py:report"]["cache"]["reason"] == "not_in_ledger", nodes
+        # Still failing: the next command keeps the post held instead of sending it to a
+        # server that would refuse it. The ledger has no result, so it computes them again,
+        # and that run is held too.
+        again, err = get(team.a, "report")
+        assert "still not recorded" not in err, err
+        assert "recorded run" not in err, err
+        assert [p["state"] for p in posts(team.a)] == ["unsynced", "unsynced"]
+    finally:
+        artifacts.chmod(stat.S_IRWXU)
+
+    # The store is fixed: A's next command uploads the results, then posts the held run before
+    # deciding its own steps, which are hits.
+    result_a, err = get(team.a, "report")
+    assert "[barca] uploaded 3 pending results" in err, err
+    assert f"[barca] recorded run {run_id} on the server" in err, err
+    assert f"[barca] recorded run {again['run_id']} on the server" in err, err
+    assert computed(result_a) == set(), result_a
+    assert [p["state"] for p in posts(team.a)] == ["shared", "shared"]
+    assert {r["client_run_id"] for r in team.server.history()} == {run_id, again["run_id"]}
+
+    # B gets A's results from the ledger and fetches them instead of computing.
+    result_b, _ = get(team.b, "report")
+    assert computed(result_b) == set(), result_b
+    assert result_b["final_output"] == {"n": 20}
+    [copy] = local_copies(team.b, "report")
+    assert json.loads(copy.read_text()) == {"n": 20}
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes into read-only directories")
+def test_a_dropped_pending_upload_is_taken_out_of_its_held_post(team):
+    artifacts = team.store / "default" / "artifacts"
+    artifacts.mkdir(parents=True, exist_ok=True)
+    artifacts.chmod(stat.S_IRUSR | stat.S_IXUSR)
+    try:
+        result_a, _ = get(team.a, "report")
+    finally:
+        artifacts.chmod(stat.S_IRWXU)
+    run_id = result_a["run_id"]
+    # `report`'s local copy goes away: its pending upload is dropped, and the rest of the run
+    # is posted without it, so the server does not refuse the whole post.
+    [copy] = local_copies(team.a, "report")
+    copy.unlink()
+    _, err = get(team.a, "middle")
+    assert "dropped the pending upload of pipeline.py:report" in err, err
+    assert f"[barca] recorded run {run_id} on the server" in err, err
+    [post] = posts(team.a)
+    assert post["state"] == "shared"
+    assert sorted(s["node_id"] for s in json.loads(post["body"])["steps"]) == NODES[:2]
+    result_b, _ = get(team.b, "report")
+    assert computed(result_b) == {"pipeline.py:report"}, result_b
 
 
 def test_a_server_that_cannot_be_reached_stops_the_command_with_exit_3(team):

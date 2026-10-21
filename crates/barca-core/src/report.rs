@@ -153,6 +153,19 @@ pub fn list_node_json(
 }
 
 /// One row per node: NAME KIND STATE WHY LAST RUN SHAPE DEPS.
+/// A stored timestamp (always UTC: `datetime('now')`, or RFC 3339 with `Z`) for a human table,
+/// marked as UTC so it is not read as local time (#496). Empty stays empty.
+pub fn utc_cell(ts: &str) -> String {
+    let ts = ts.trim();
+    if ts.is_empty() {
+        return String::new();
+    }
+    format!(
+        "{} UTC",
+        ts.strip_suffix('Z').unwrap_or(ts).replacen('T', " ", 1)
+    )
+}
+
 pub fn render_status_table(result: &crate::status::StatusResult) -> String {
     use std::fmt::Write;
     let mut rendered = String::new();
@@ -183,7 +196,7 @@ pub fn render_status_table(result: &crate::status::StatusResult) -> String {
                         .elapsed_seconds
                         .map(|e| format!(" {e:.2}s"))
                         .unwrap_or_default();
-                    format!("{} {}{secs}", m.status, m.created_at)
+                    format!("{} {}{secs}", m.status, utc_cell(&m.created_at))
                 })
                 .unwrap_or_else(|| "-".to_string());
             let deps = if n.inputs.is_empty() {
@@ -240,7 +253,9 @@ pub fn render_status_table(result: &crate::status::StatusResult) -> String {
             writeln!(
                 &mut rendered,
                 "{}: different bytes for the same code and inputs at {} ({})",
-                node.name, event.created_at, event.node_id
+                node.name,
+                utc_cell(&event.created_at),
+                event.node_id
             )
             .unwrap();
         }
@@ -722,5 +737,17 @@ mod progress_tests {
     fn remaining_never_underflows() {
         // The ETA math subtracts usizes; this used to panic in debug and wrap in release.
         assert_eq!(2usize.saturating_sub(4), 0);
+    }
+}
+
+#[cfg(test)]
+mod utc_tests {
+    use super::utc_cell;
+
+    #[test]
+    fn stored_timestamps_are_marked_utc() {
+        assert_eq!(utc_cell("2026-10-21 02:04:05"), "2026-10-21 02:04:05 UTC");
+        assert_eq!(utc_cell("2026-10-21T02:04:05Z"), "2026-10-21 02:04:05 UTC");
+        assert_eq!(utc_cell(""), "");
     }
 }

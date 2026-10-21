@@ -10,7 +10,7 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-BARCA="$REPO_ROOT/.venv/bin/barca"
+BARCA="${BARCA:-$REPO_ROOT/.venv/bin/barca}"
 
 PORT=$(( 8300 + (RANDOM % 500) ))
 RESULTS="$(mktemp)"

@@ -128,9 +128,10 @@ In JSON mode the first line is the envelope's `error` and the second its `remedi
 (`barca docs contract`).
 
 - The error names the node (`file.py:function`), the line of the argument, the argument and
-  everything the call accepts. "Did you mean" appears only when exactly one accepted argument
-  is one edit away from what was written (two edits for a name longer than four characters):
-  `input`, `partition`, `serialiser`. `after` or `when` get the list and no guess.
+  everything the call accepts. "Did you mean" names the closest accepted argument within one
+  edit of what was written (two edits for a name longer than four characters), or two that
+  tie: `input`, `partition`, `serialiser`. `after` or `when` get the list and no guess. It is
+  the rule every mistyped name follows (`barca docs agents`).
 - The helpers and `@sink` take exactly one argument by position. Passing it by keyword
   (`partitions(values=[...])`, `collect(asset_fn=x)`, `Schedule(cron="...")`,
   `@sink(path="...")`) is rejected, and the error says to pass the value as the first argument.
@@ -388,10 +389,10 @@ changes on every run, such as a timestamp, re-runs the sensor's consumers every 
 every sensor, including one nothing depends on: a sensor is something `get` can target, and
 observing is read-only. Tasks are the only nodes a bare `get` skips.
 
-See also: `barca docs tasks`, `barca docs cache`, `barca docs scheduling`.
-
 Explicit references to `globals`, `locals`, `vars`, `exec`, `eval` or `__builtins__` make imported barca
 names uncertain, even when the reference is aliased, qualified or shadowed. Such names are
 left to Python's argument checks and their nodes conservatively hash the whole module
 (`barca docs cache`). The static checks do not resolve arbitrary reflective indirection
 or runtime side effects.
+
+See also: `barca docs tasks`, `barca docs cache`, `barca docs scheduling`.

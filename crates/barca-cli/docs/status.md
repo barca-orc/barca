@@ -35,17 +35,18 @@ barca status pipeline.py --json --sample 2      # plus up to 2 sample rows per j
 ```
 
 ```
-NAME    KIND   STATE        WHY           LAST RUN                           SHAPE            DEPS
-orders  asset  cached       materialized  success 2026-10-02 11:56:43 0.54s  3 rows x 2 cols  -
-total   asset  cached       materialized  success 2026-10-02 11:56:43 0.00s  dict (1 key)     orders
-notify  task   always-runs  task          -                                  -                total
+NAME    KIND   STATE        WHY           LAST RUN                               SHAPE            DEPS
+orders  asset  cached       materialized  success 2026-10-02 11:56:43 UTC 0.54s  3 rows x 2 cols  -
+total   asset  cached       materialized  success 2026-10-02 11:56:43 UTC 0.00s  dict (1 key)     orders
+notify  task   always-runs  task          -                                      -                total
 
 2 cached, 0 stale, 0 never run, 0 partial, 0 unknown, 1 always run
 ```
 
 Status executes no pipeline step and records no new run, and it does not create `.barca/`.
 Source parsing is static, but `partitions(<expression>)` may evaluate Python and import its
-module while resolving keys. Like every inspection command, the result goes to stdout (a table in a terminal, JSON
+module while resolving keys. Times in the table (`LAST RUN`, like `STARTED` in `barca history`
+and `CREATED` in `barca stats`) are UTC and say so; the JSON has the same UTC values. Like every inspection command, the result goes to stdout (a table in a terminal, JSON
 when piped; `--json` / `--pretty` override) and errors to stderr; an unknown target is a usage
 error (exit 2) that ends with ``Run `barca list <files>` to see available assets and tasks.``,
 the same remediation as `get` and `run`. A target is one name or several, comma-separated with no
@@ -251,8 +252,9 @@ barca history --json --fields run_id,status,attempts
 barca stats total pipeline.py --json
 ```
 
-Before importing a module, a worker prints `[barca] importing <module>` on stderr.
-Imports longer than one second add `import_seconds` to the step report, summed across
+Under `--agent` (and in every run `barca serve` starts), a worker prints
+`[barca] importing <module>` on stderr before it imports a module; without `--agent` it prints
+nothing of its own, and the import time is in the run JSON. Imports longer than one second add `import_seconds` to the step report, summed across
 attempts and executed keys. This time is included in `elapsed_seconds`; it is not an
 extra charge. A reused module adds no import time. Framework import diagnostics remain
 visible under `--json`; task prints remain accessible through `barca logs`.
@@ -278,3 +280,5 @@ carries the tick it was started for in `scheduled_at` (RFC 3339, UTC) and the sc
 ```bash
 barca history --json --fields run_id,triggered_by,scheduled_at,schedule_id
 ```
+
+See also: `barca docs cache`, `barca docs logs`, `barca docs sql`, `barca docs agents`.

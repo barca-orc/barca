@@ -9,7 +9,7 @@
  */
 
 import { match } from 'ts-pattern'
-import type { CacheStatus, NodeState, StatusKind } from './types'
+import type { CacheStatus, NodeRunning, NodeState, StatusKind } from './types'
 
 /** How much a node needs attention, most urgent first. */
 export type Severity =
@@ -55,6 +55,8 @@ export interface AssetRow {
   p95: string | null
   /** Next cron fire time (ms since epoch), if scheduled. */
   nextRunMs: number | null
+  /** The run working on the node now, whoever started it. */
+  running: NodeRunning | null
 }
 
 /** A failed latest attempt outranks any cache state — it's the thing to look at. */
@@ -162,6 +164,7 @@ export function buildRows(nodes: NodeState[], nowMs: number): AssetRow[] {
         typicalSeconds: n.durations?.median_seconds ?? null,
         p95: n.durations ? formatSeconds(n.durations.p95_seconds) : null,
         nextRunMs: n.next_run === null ? null : n.next_run * 1000,
+        running: n.running ?? null,
       }
     })
     .sort((a, b) => RANK[a.severity] - RANK[b.severity] || a.name.localeCompare(b.name))

@@ -1,13 +1,195 @@
 # Benchmark Results
 
-Latest full pass: 2026-07-17, on the code that shipped as barca 0.7.0, via the Docker harness
-(`benchmarks/docker/`). Each section below is dated; the summary, profile and parallel-mode
-sections near the end are from v0.2.0 (June 2026).
+Latest pass: 2026-10-21, barca 0.28.0 against Dagster 1.13.26, Prefect 3.9.0 and Airflow 3.3.2
+on one Linux machine (first section below, #65). The sections after it are older passes on
+other hardware and are kept for the record. Absolute times from different machines are not
+comparable; within one pass, the ratios between frameworks are.
 
-> **Caveat (2026-10-20):** none of these numbers come from the current release (0.26.1), and
-> passes on different hardware are not comparable in absolute time; only the
-> barca/Dagster/Prefect ratios within one pass mean anything. #65 re-runs the suite on the
-> current harness; until then, re-run `bench.sh` before quoting a number.
+## Re-run on current versions (2026-10-21)
+
+### Setup
+
+- **Machine:** AMD Ryzen AI MAX+ 395 (16 cores, 32 threads), 62 GiB RAM, Fedora 44, kernel
+  7.2.8. No container.
+- **Pinning:** every measured process ran under `taskset -c 16-31`. CPUs 16-31 are the SMT
+  siblings of cores 0-15, where other agents were building and testing during the pass, so the
+  measured processes shared physical cores with that load. The 1-minute load average is
+  recorded before and after each scenario below; it ranged from 1 to 15.
+- **Workers:** `BARCA_POOL_SIZE=16` and `BARCA_BENCH_WORKERS=16` (Prefect's `max_workers`),
+  one per pinned CPU, except where a row says otherwise. Dagster's `materialize()` runs every
+  step in process, one after another (see the README). Airflow runs `airflow dags test`, which
+  without `--use-executor` also runs every task in process, one after another.
+- **Versions:** barca 0.28.0 is a release build (`maturin develop --uv --release`, rustc
+  1.99.0) of `main` at `8ce67c84`, the same code as the `v0.28.0` tag apart from the version
+  bump. The older barca versions are the PyPI wheels. Dagster 1.13.26, Prefect 3.9.0 (released
+  that morning; 3.8.8 was the previous release) and Airflow 3.3.2 with its 3.13 constraints
+  file, each in its own uv venv. Python 3.13.16 everywhere except the Dagster project scaffold
+  (Python 3.14.8, chosen by `create-dagster`).
+- **Runner:** `hyperfine` is not installed, so `benchmarks/lib/interleave.py` ran each scenario:
+  one warm-up round, then rounds of every command in turn (A B C A B C ...) so that load
+  changes hit all frameworks alike. Tables give the median and the min–max range. Each timed
+  run is a fresh process; the barca, Dagster and Prefect metadata stores persist across runs
+  within a scenario, as with `bench.sh`.
+- **What is timed:** wall time of each framework's `run.sh` (process start to exit), except
+  Airflow, where `run.py` times `airflow dags test` and leaves out the `airflow db migrate`
+  before it. barca runs with `--refresh-all`, so every step executes.
+
+### Small pipelines
+
+| Benchmark | barca 0.28.0 | Dagster 1.13.26 | Prefect 3.9.0 | Airflow 3.3.2 | Runs | Load before → after |
+|---|---:|---:|---:|---:|---|---|
+| trivial (1 asset) | 64 ms (61–74) | 1.07 s (0.90–1.26) | 5.09 s (4.81–5.34) | 5.05 s (4.80–5.84) | 10 | 10.9 → 9.7 |
+| chain_100 | 112 ms (103–124) | 1.88 s (1.57–2.09) | 5.16 s (4.80–7.78) | 10.3 s (9.7–12.9) | 10 (Airflow 5) | 13.2 → 7.4 |
+| deep_diamond (18) | 310 ms (265–342) | 1.19 s (1.05–1.31) | 5.13 s (4.68–5.70) | 6.45 s (5.97–7.35) | 10 | 7.4 → 5.7 |
+| fan_out_500_50ms | 2.24 s (2.22–2.44) | 30.2 s (29.7–30.8) | 6.53 s (6.19–10.03) | 54.6 s (53.5–56.1) | 5 (Airflow 3) | 5.3 → 12.9 |
+
+barca 0.27.0 from PyPI ran in the same rounds: 63 ms, 126 ms, 310 ms and 2.28 s.
+
+Ratios to barca: Dagster 17×, 17×, 3.8× and 13×; Prefect 79×, 46×, 17× and 2.9×; Airflow
+79×, 92×, 21× and 24×.
+
+The trivial barca time moved between passes on the same build: 64 ms in this pass, 99 ms and
+79 ms in two later passes when the machine was less loaded (table "barca across versions").
+Read differences of a few tens of milliseconds as noise.
+
+Commands (from the repository root, with each framework's `.venv` symlinked to its venv and
+`AIRFLOW_BIN` set):
+
+```bash
+export BARCA_POOL_SIZE=16 BARCA_BENCH_WORKERS=16
+B=benchmarks/trivial
+python3 benchmarks/lib/interleave.py trivial.json --runs 10 --warmup 2 --internal airflow \
+  --cmd "barca=$B/barca/run.sh" \
+  --cmd "barca-0.27.0=BARCA=/path/to/barca-0.27.0/bin/barca $B/barca/run.sh" \
+  --cmd "dagster=$B/dagster/run.sh" --cmd "prefect=$B/prefect/run.sh" \
+  --cmd "airflow=$B/airflow/run.sh"
+# chain_100: --runs 10 --warmup 1 --runs-for airflow=5
+# deep_diamond: --runs 10 --warmup 1
+# fan_out_500_50ms: --runs 5 --warmup 1 --runs-for airflow=3
+```
+
+### Partitioned: 10 steps × 1000 partitions = 10,000 steps
+
+| Framework | Pattern | Time | Runs |
+|---|---|---:|---|
+| barca 0.28.0 | `partitions()` | 2.27 s (2.14–2.40) | 5 |
+| barca 0.27.0 | `partitions()` | 3.08 s (2.85–3.40) | 5 |
+| Dagster 1.13.26 | `StaticPartitionsDefinition`, one `materialize()` per key | 141 s (137–144) | 3 |
+| Prefect 3.9.0 | `task.map()` | killed at 10 min; 3,050 of 10,000 task runs completed | 1 |
+| Airflow 3.3.2 | `expand()`, `dags test`, PostgreSQL 18 metadata DB | killed at 10 min; 1,000 of 10,000 task instances succeeded | 1 |
+
+Load average 15.2 → 5.9 (barca, Dagster), 6.3 → 2.9 (Prefect, Airflow). Each framework runs in
+a child of `scripts/run_all.py`, which kills its process group after `BENCH_TIMEOUT` (600 s);
+the time includes the child's imports. The Prefect count is from the temporary server's
+`task_run` table and the Airflow count from `task_instance`, read after the kill. PostgreSQL ran
+in a podman container whose processes were pinned to CPUs 16-31.
+
+```bash
+cd benchmarks/partitioned_10k/scripts
+BARCA=/path/to/barca python3 run_all.py barca
+/path/to/dagster-venv/bin/python run_all.py dagster
+/path/to/prefect-venv/bin/python run_all.py prefect
+AIRFLOW_BIN=/path/to/airflow-venv/bin/airflow \
+  AIRFLOW_SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@127.0.0.1:55432/airflow \
+  /path/to/airflow-venv/bin/python run_all.py airflow
+```
+
+(each under `taskset -c 16-31`, through `interleave.py` with `BENCH_RESULTS=/dev/stdout` and
+`--internal` for every label, so the time `run_all.py` reports is the one used).
+
+### barca across versions, same machine
+
+To separate barca's own changes from the change of machine, the PyPI wheels of the versions
+the June pages quoted ran on this machine, interleaved with 0.28.0 (`--no-cache` in place of
+`--refresh-all`, which those versions did not have). Load average 1.6–4.
+
+| Benchmark | barca 0.1.5 (2026-06-05) | barca 0.2.0 (2026-06-10) | barca 0.28.0 |
+|---|---:|---:|---:|
+| trivial | 42 ms (38–107); 32 ms in a 20-run recheck | 242 ms (238–278) | 99 ms (84–207); 79 ms in the recheck |
+| chain_100 | 53 ms (46–99) | 255 ms (250–296) | 143 ms (115–385) |
+| deep_diamond | 87 ms (75–91) | 1.39 s (1.36–1.39) | 360 ms (265–385) |
+| fan_out_500_50ms | 1.69 s (1.69–1.70) | 5.28 s (5.27–5.28) | 2.31 s (2.23–2.37) |
+| partitioned 10k (`get step_9`) | 0.42 s (0.40–0.42), 5 runs | not run | 2.27 s (table above) |
+
+### Partition scaling (`benchmarks/partition_scaling`)
+
+Three assets over N keys (`fetch → normalize → score`), `barca get score assets.py`,
+`BARCA_POOL_SIZE=8` to match the #456 and #510 measurements. Cold deletes `.barca/` before
+every run; warm runs with everything cached. Coordinator peak RSS from `/usr/bin/time -f %M`.
+
+| Case | barca 0.24.2 | barca 0.26.1 | barca 0.27.0 | barca 0.28.0 |
+|---|---:|---:|---:|---:|
+| 2k cold | 1.99 s / 108 MB | 1.45 s / 78 MB | 1.51 s / 79 MB | 1.15 s / 76 MB |
+| 2k warm | 330 ms / 41 MB | 400 ms / 50 MB | 413 ms / 50 MB | 314 ms / 47 MB |
+| 20k cold | 300 s / 5.3 GB (1 run) | 11.7 s / 0.58 GB (1 run) | 11.6 s / 0.58 GB | 6.91 s / 0.60 GB |
+| 20k warm | not run | not run | 3.25 s / 0.24 GB | 2.23 s / 0.24 GB |
+
+Medians of 5 runs at 2k and 3 at 20k unless marked. 0.26.1, 0.27.0 and 0.28.0 ran interleaved;
+0.24.2 ran afterwards on its own. Load average 1.5–4.8.
+
+### Planning pipeline (`benchmarks/planning_pipeline`, 116 nodes)
+
+The fixture from #250 (74 assets, 42 tasks, 262 edges; DuckDB, pandas and polars in every
+worker), generated with `generate.py DEST`, `BARCA_POOL_SIZE=4` as in its tests.
+
+| Case | Command | Steps run | barca 0.27.0 | barca 0.28.0 |
+|---|---|---|---:|---:|
+| cold | `barca run <all 42 tasks> assets.py --json` after deleting `.barca/` | 114 | 688 ms (608–702) | 674 ms (632–730) |
+| warm | `barca get assets.py --json` | 0 (74 cached) | 30 ms (29–33) | 23 ms (23–25) |
+| helper edit | `barca get assets.py --json` after editing the function in `drivers.py` that three driver assets call | 10 | 419 ms (405–440) | 403 ms (390–423) |
+
+Each helper-edit run changes the multiplier in that function to a value not used before, so
+every run sees a new edit. 5 runs cold and edit, 10 warm. Load average 2.1–4.7.
+
+### Install, import and a two-asset pipeline
+
+| Metric | barca 0.28.0 | Dagster 1.13.26 | Prefect 3.9.0 | Airflow 3.3.2 |
+|---|---:|---:|---:|---:|
+| Packages in a fresh venv (`uv pip install X`) | 1 | 48 | 103 | not measured |
+| Venv size (`du -sm`) | 31 MB | 81 MB | 147 MB | not measured |
+| Lockfile entries (`uv lock`, project depending on X) | 2 | 53 | 106 | not measured |
+| Wheel (manylinux x86_64) | 13.9 MB | 2.0 MB | 7.0 MB | not measured |
+| `python -c "import X"` (bare `python -c pass`: 13 ms) | 42 ms | 365 ms | 502 ms | 733 ms (`airflow.sdk`) |
+| Two-asset pipeline, cold | 73 ms (67–76) | 3.64 s (3.45–3.94) | 4.59 s (4.37–4.91) | not measured |
+| Same pipeline, everything cached | 13 ms (13–15) | not measured | not measured | not measured |
+
+The `create-dagster@1.13.26 project` scaffold, which adds `dagster-dg-cli` and
+`dagster-webserver` as dev dependencies, installs 98 packages (184 MB, 112 lock entries). The
+two-asset pipeline is `raw_data → summary` (three rows, count and sum): `barca get pipeline.py`,
+`dg launch --assets raw_data,summary` in that scaffold, and `python pipeline.py` with a
+`@flow` calling two `@task`s. 10 runs each, interleaved, load average 2.7 → 1.6. `import barca`
+spends most of its 29 ms above bare Python in `barca.api`, which imports `urllib.request`.
+
+### What changed since June, and why
+
+- **Partitions.** The 20k-key cold run went from 300 s and 5.3 GB of coordinator memory on
+  0.24.2 to 11.7 s and 0.58 GB on 0.26.1: #456 (in 0.24.3) replaced the K² ordering edges
+  between partition keys with one gate per step and indexed recorded outputs. 0.28.0 cuts the
+  20k cold run again to 6.9 s and the warm run from 3.25 s to 2.23 s: #510 prepares each
+  per-row metadata write once per transaction instead of once per row. #515 (failed keys'
+  dependents) is not exercised here, since no key fails. The partitioned 10k comparison
+  follows: 3.08 s on 0.27.0, 2.27 s on 0.28.0.
+- **10k against June's 0.7 s.** barca 0.1.5 runs the same file in 0.42 s on this machine. It
+  recorded no result per key (`final_output` is `null`), so a later run could not reuse a
+  partition. By 0.18.0 each key was cached and recorded on its own, which is where the time
+  between 0.42 s and 2.27 s goes.
+- **Fixed cost per run.** 0.1.5 ran the trivial asset in 32–42 ms, 0.28.0 in 64–99 ms. With
+  `BARCA_TRACE_TIMING=1` on 0.28.0 the worker's Python start and connect take about 30 ms and
+  the run ledger, read stamps and persistence about 15 ms after the step finishes. 0.2.0's
+  242 ms was the per-worker 200 ms shutdown sleep that the 2026-07-17 pass below fixed.
+- **Workers start one at a time.** deep_diamond takes 87 ms on 0.1.5 and 310–360 ms on 0.28.0,
+  fan-out 1.69 s against 2.24–2.31 s. The trace shows the coordinator start a worker, wait
+  30–40 ms for it to connect, and only then start the next; a step that finished in the
+  meantime is recorded after the wait. deep_diamond starts 6 workers this way (about 210 ms),
+  fan-out 16 (about 0.55 s). Not changed in this PR.
+- **The other frameworks.** Absolute June numbers came from an Apple Silicon Mac and are not
+  comparable with this machine. Within each pass, Dagster stayed at 15–17× barca on trivial
+  and went from 12× to 17× on chain_100 and from 12× to 13× on fan-out. Prefect's fan-out
+  dropped from 30.7 s to 6.5 s because the harness now submits tasks with `.submit()` to a
+  16-thread runner (fixed 2026-07-16); June called them directly, one after another. Airflow
+  3.3's `dags test` takes 10 s on chain_100 and 55 s on fan-out, where June's Airflow 3.2.2
+  pass recorded 79.5 s and 417 s. Dagster's 10k run took 141 s here against 95 s in June; the
+  pattern (one `materialize()` per partition key) is unchanged.
 
 ## Standardized re-run via Docker harness (2026-07-17)
 

@@ -523,18 +523,18 @@ pub(crate) async fn run(server: &Server, args: RunArgs, ctx: &Context) -> Result
     }
 }
 
-/// A usage error of a run ends with the `barca list` pointer naming the files the user typed, as
-/// a local `get`/`run` ends it (`get_run_error`): the server names its own files, or none.
+/// A server's target error (unknown or ambiguous) ends with the `barca list` pointer naming the
+/// files the user typed, as a local `get`/`run` ends it (`get_run_error`): the server names its
+/// own files, or none. Other usage errors keep the server's own remediation (#492).
 fn with_typed_files(mut error: CliError, ctx: &Context) -> CliError {
     if error.kind != ErrorKind::Usage {
         return error;
     }
-    let hint = list_hint(&ctx.files);
     error.remediation = Some(match error.remediation.take() {
-        None => hint,
-        Some(r) if r.contains(&hint) => r,
-        Some(r) if r.starts_with("Run `barca list") => hint,
-        Some(r) => format!("{r}\n{hint}"),
+        Some(r) if r.starts_with("Run `barca list") => list_hint(&ctx.files),
+        Some(r) => r,
+        // The envelope's remediation is always a string (`barca docs contract`).
+        None => format!("See `barca {} --help`.", ctx.command),
     });
     error
 }

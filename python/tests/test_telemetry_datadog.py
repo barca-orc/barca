@@ -293,7 +293,9 @@ def test_an_agent_that_refuses_the_trace_warns(project):
     finally:
         refusing.close()
     assert proc.returncode == 0, proc.stderr
-    assert "415" in proc.stderr
+    assert "the Agent answered 'HTTP/1.0 415" in proc.stderr or (
+        "the Agent answered 'HTTP/1.1 415" in proc.stderr
+    ), proc.stderr
 
 
 def test_an_unknown_integration_name_warns(project, agent):

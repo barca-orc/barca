@@ -184,7 +184,7 @@ struct Trace {
 macro_rules! trace_point {
     ($trace:expr, $($arg:tt)*) => {
         if $trace.enabled {
-            crate::errln!("[trace] {:>8.1}ms  {}", $trace.start.elapsed().as_secs_f64() * 1000.0, format_args!($($arg)*));
+            crate::errln!("[trace] {:>8.1}ms  {}  [db opens {}]", $trace.start.elapsed().as_secs_f64() * 1000.0, format_args!($($arg)*), db::opens());
         }
     };
 }
@@ -415,13 +415,8 @@ async fn execute_started(
     session.state.read_paths.extend(returned);
     let mut read: Vec<String> = session.state.read_paths.iter().cloned().collect();
     read.sort();
-    db::touch_read(&request.cfg.db_path, &read).await;
-    trace_point!(
-        session.started.trace,
-        "touch_read_done ({} paths)",
-        read.len()
-    );
-    let elapsed = record_and_publish(&mut session).await?;
+    // Their `last_read_at` is written with the run's ledger, on its connection.
+    let elapsed = record_and_publish(&mut session, &read).await?;
     let mut executed = return_outputs(&mut session, elapsed).await?;
     let own = cache_check_inputs(&session, &executed);
     let pin = session.state.pin.take();
@@ -430,6 +425,9 @@ async fn execute_started(
     // The cache size limit after a run: evict if `.barca/` is over its limit. What the run
     // produced, read or returns is never evicted.
     executed.result.cache = crate::gc::after_command(cfg, &own, pin.as_ref()).await;
+    if std::env::var_os("BARCA_TRACE_TIMING").is_some() {
+        crate::errln!("[trace] metadata db opens {}", db::opens());
+    }
     Ok(executed)
 }
 
@@ -478,6 +476,7 @@ fn cache_check_inputs(session: &RunSession<'_, '_>, executed: &Executed) -> crat
             .filter(|n| n.extracted.freshness == crate::model::Freshness::Manual)
             .map(|n| n.id.clone())
             .collect(),
+        wrote_nothing: session.state.steps_executed == 0 && session.store.is_none(),
     }
 }
 /// After the steps ran: say which `Manual` nodes this run read as they are although they are
@@ -522,11 +521,14 @@ async fn note_stale_pins(session: &mut RunSession<'_, '_>) -> Result<(), BarcaEr
     Ok(())
 }
 
+/// Average step times by node id, for the ETA.
+type AvgTimes = HashMap<String, f64>;
+
 async fn open_state(
     request: &ExecuteRequest<'_>,
     prepared: &Prepared,
     started: &mut RunStart,
-) -> Result<crate::cost::CostModel, BarcaError> {
+) -> Result<(crate::cost::CostModel, AvgTimes, AvgTimes), BarcaError> {
     let cfg = request.cfg;
     let run_id = &started.run_id;
     let command_label = request.command_label;
@@ -536,10 +538,14 @@ async fn open_state(
     db::ensure_env_dirs(&cfg.env)?;
     let db_path = cfg.db_path.clone();
 
-    db::init_db(&db_path).await?;
-    trace_point!(started.trace, "db_init");
-
-    db::create_run_with(
+    // One visit to the database: initialize it, record the run, and read the cost estimates
+    // and the average step times the progress bar's ETA is made of.
+    let (node_ids, base_ids) = eta_ids(exec_plan);
+    let db::StartedRun {
+        cost_estimates,
+        avg_elapsed,
+        partitioned_avg_elapsed,
+    } = db::start_run(
         &db_path,
         db::NewRun {
             run_id,
@@ -550,6 +556,8 @@ async fn open_state(
             job: Some(&prepared.job_name),
             trigger: &request.options.trigger,
         },
+        &node_ids,
+        &base_ids,
     )
     .await?;
     if let Some(tx) = &request.event_tx {
@@ -557,54 +565,53 @@ async fn open_state(
             run_id: run_id.clone(),
         });
     }
-    trace_point!(started.trace, "db_create_run");
+    trace_point!(
+        started.trace,
+        "db_run_started ({} unpartitioned, {} partitioned base ids)",
+        node_ids.len(),
+        base_ids.len()
+    );
 
     // Measured-cost model: seed from persisted estimates so batch sizing is
     // pre-warmed — the cold-start probe is paid once ever per stable node,
     // not once per run.
     let mut cost_model = crate::cost::CostModel::new();
-    cost_model.seed(db::load_cost_estimates(&db_path).await?);
-    trace_point!(started.trace, "cost_model_seeded");
+    cost_model.seed(cost_estimates);
 
-    Ok(cost_model)
+    Ok((cost_model, avg_elapsed, partitioned_avg_elapsed))
 }
-async fn prepare_progress(
+
+/// The ids whose average step time the ETA needs: the unpartitioned nodes (exact lookup), and
+/// the base ids of partitioned ones (a `LIKE` lookup).
+fn eta_ids(exec_plan: &ExecutionPlan) -> (Vec<String>, Vec<String>) {
+    let steps = || {
+        exec_plan
+            .phases
+            .iter()
+            .flat_map(|p| &p.streams)
+            .flat_map(|s| &s.steps)
+    };
+    let unpartitioned = steps()
+        .filter(|st| st.partition_keys.is_empty())
+        .map(|st| st.step_id.display())
+        .collect();
+    let partitioned = steps()
+        .filter(|st| !st.partition_keys.is_empty())
+        .map(|st| st.step_id.base_id().to_string())
+        .collect();
+    (unpartitioned, partitioned)
+}
+fn prepare_progress(
     exec_plan: &ExecutionPlan,
-    db_path: &str,
+    avg_times: &AvgTimes,
+    partitioned_avg_times: &AvgTimes,
     agent_mode: bool,
-    trace: &Trace,
-) -> Result<(Option<indicatif::ProgressBar>, f64), BarcaError> {
+) -> (Option<indicatif::ProgressBar>, f64) {
     // Progress bar setup. `total_steps` starts as the plan-time estimate and
     // grows as dynamic (`partitions_from`) phases expand at dispatch time —
     // see the `phase_step_count` reconciliation below.
     let total_steps = exec_plan.total_steps;
-    // Collect unpartitioned node_ids for exact ETA lookup.
-    let unpartitioned_node_ids: Vec<String> = exec_plan
-        .phases
-        .iter()
-        .flat_map(|p| &p.streams)
-        .flat_map(|s| &s.steps)
-        .filter(|st| st.partition_keys.is_empty())
-        .map(|st| st.step_id.display())
-        .collect();
-    // Collect partitioned base node_ids for LIKE-based ETA lookup.
-    let partitioned_base_ids: Vec<String> = exec_plan
-        .phases
-        .iter()
-        .flat_map(|p| &p.streams)
-        .flat_map(|s| &s.steps)
-        .filter(|st| !st.partition_keys.is_empty())
-        .map(|st| st.step_id.base_id().to_string())
-        .collect();
-    let avg_times = db::get_avg_elapsed(db_path, &unpartitioned_node_ids).await?;
-    let partitioned_avg_times =
-        db::get_avg_elapsed_for_partitioned(db_path, &partitioned_base_ids).await?;
-    trace_point!(
-        trace,
-        "eta_queries ({} unpartitioned, {} partitioned base ids)",
-        unpartitioned_node_ids.len(),
-        partitioned_base_ids.len()
-    );
+    let (unpartitioned_node_ids, _) = eta_ids(exec_plan);
     let total_estimated: f64 = unpartitioned_node_ids
         .iter()
         .filter_map(|nid| avg_times.get(nid))
@@ -645,7 +652,7 @@ async fn prepare_progress(
         None
     };
 
-    Ok((pb, total_estimated))
+    (pb, total_estimated)
 }
 async fn start_workers(
     request: &ExecuteRequest<'_>,
@@ -678,20 +685,31 @@ async fn start_workers(
             _ = cancel.cancelled() => Err(BarcaError::Cancelled),
             checked = tokio::time::timeout(limit, client.preflight()) => match checked {
                 Ok(Ok(())) => Ok(()),
-                Ok(Err(why)) => Err(BarcaError::Other(format!("artifact store preflight at {location} failed: {why}"))),
-                Err(_) => Err(BarcaError::Other(format!("artifact store preflight at {location} timed out after {}s", limit.as_secs()))),
+                Ok(Err(why)) => Err(BarcaError::Other(format!(
+                    "artifact store preflight at {location} failed: {why}\n{STORE_PREFLIGHT_FIX}"
+                ))),
+                Err(_) => Err(BarcaError::Other(format!(
+                    "artifact store preflight at {location} timed out after {}s\n{STORE_PREFLIGHT_FIX}",
+                    limit.as_secs()
+                ))),
             },
         };
         if let Err(error) = checked {
             client.abort().await;
             return Err(error);
         }
-        // Results an earlier command computed here and could not upload go first (#390).
-        if let Err(error) =
-            retry_pending_uploads(&mut client, db_path, cancel, &location, None).await
-        {
-            client.abort().await;
-            return Err(error);
+        // Results an earlier command computed here and could not upload go first (#390), and
+        // with a server, the runs they held back are posted to its ledger (#507).
+        match retry_pending_uploads(&mut client, db_path, cancel, &location, None).await {
+            Ok(settled) => {
+                if let Some(ledger) = &cfg.ledger {
+                    ledger.post_uploaded(cfg, &settled).await;
+                }
+            }
+            Err(error) => {
+                client.abort().await;
+                return Err(error);
+            }
         }
         Some(StoreSync::new(client, cancel.clone()))
     } else {
@@ -731,6 +749,7 @@ async fn start_workers(
             }),
         artifact_root: worker_artifact_root,
         storage_options_json: cfg.storage_options_json.clone(),
+        agent_mode: request.agent_mode,
     };
     let mut pool = crate::io_loop::WorkerPool::start(io_config).map_err(BarcaError::Other)?;
     // Finished steps are written to the local metadata DB while the run goes on (#214), and,
@@ -768,21 +787,22 @@ async fn start_workers(
 /// Upload what earlier commands on this machine left pending (#390), before this command's own
 /// work, and wait for it. One that fails again stays pending with its new error; the run goes
 /// on either way, and reports what is still pending when it ends. A pending result whose local
-/// file is gone has nothing left to upload and is dropped.
+/// file is gone has nothing left to upload and is dropped, and taken out of its run's held
+/// ledger post. Returns the store locations of the pending results uploaded or dropped.
 async fn retry_pending_uploads(
     client: &mut TransferClient,
     db_path: &str,
     cancel: &CancellationToken,
     location: &str,
     only: Option<&std::collections::HashSet<&str>>,
-) -> Result<(), BarcaError> {
+) -> Result<std::collections::HashSet<String>, BarcaError> {
     use crate::pending_uploads::Settled;
     let mut pending = crate::pending_uploads::list(db_path).await?;
     if let Some(only) = only {
         pending.retain(|p| only.contains(p.store_path.as_str()));
     }
     if pending.is_empty() {
-        return Ok(());
+        return Ok(Default::default());
     }
     let mut settled = Vec::new();
     let mut queued: Vec<&str> = Vec::new();
@@ -856,7 +876,18 @@ async fn retry_pending_uploads(
             ),
         }
     }
-    crate::pending_uploads::settle(db_path, &settled).await
+    crate::pending_uploads::settle(db_path, &settled).await?;
+    let dropped: std::collections::HashSet<String> = settled
+        .iter()
+        .filter(|(_, s)| matches!(s, Settled::Dropped))
+        .map(|(at, _)| at.clone())
+        .collect();
+    crate::ledger::posts::forget_steps(db_path, &dropped).await?;
+    Ok(settled
+        .into_iter()
+        .filter(|(_, s)| !matches!(s, Settled::Failed(_)))
+        .map(|(at, _)| at)
+        .collect())
 }
 /// Upload this host's pending results (#390) among `store_paths` (artifact-store locations) now,
 /// before something needs them in the store: `barca get -o url` signs only objects the store
@@ -886,26 +917,32 @@ pub(crate) async fn upload_pending(
     let retried =
         retry_pending_uploads(&mut client, &cfg.db_path, cancel, &location, Some(&wanted)).await;
     match retried {
-        Ok(()) => client.shutdown().await,
-        Err(_) => {
+        Ok(settled) => {
+            client.shutdown().await;
+            if let Some(ledger) = &cfg.ledger {
+                ledger.post_uploaded(cfg, &settled).await;
+            }
+            Ok(())
+        }
+        Err(error) => {
             client.abort().await;
+            Err(error)
         }
     }
-    retried
 }
 async fn open_run<'a, 'r>(
     request: &'a ExecuteRequest<'r>,
     prepared: &'a Prepared,
     mut started: RunStart,
 ) -> Result<RunSession<'a, 'r>, BarcaError> {
-    let cost_model = open_state(request, prepared, &mut started).await?;
+    let (cost_model, avg_times, partitioned_avg_times) =
+        open_state(request, prepared, &mut started).await?;
     let (pb, total_estimated) = prepare_progress(
         &prepared.exec_plan,
-        &request.cfg.db_path,
+        &avg_times,
+        &partitioned_avg_times,
         request.agent_mode,
-        &started.trace,
-    )
-    .await?;
+    );
     let (store, pool, recorder) = match start_workers(request, prepared, &mut started, &pb).await {
         Ok(workers) => workers,
         Err(error) => {
@@ -1400,13 +1437,9 @@ fn collect_outputs(
                 .step_clocks
                 .insert(node_id.clone(), (finished, wall));
         }
-        // A sensor's output hash: its consumers, decided in a later phase, fold it into
-        // their run hashes (#183).
-        if session
-            .prepared
-            .dag
-            .get_node(item.step_id.base_id())
-            .is_some_and(|n| n.kind() == crate::NodeKind::Sensor)
+        // A sensor's or `Manual` asset's output hash: its consumers, decided in a later
+        // phase, fold it into their run hashes (#183, #548).
+        if crate::cache::folds_output(&session.prepared.dag, item.step_id.base_id())
             && session
                 .state
                 .decide_state
@@ -1631,9 +1664,13 @@ async fn drive_phases(session: &mut RunSession<'_, '_>) -> Result<(), BarcaError
     finish_queue(session, &mut queue);
     Ok(())
 }
-async fn record_and_publish(session: &mut RunSession<'_, '_>) -> Result<f64, BarcaError> {
+async fn record_and_publish(
+    session: &mut RunSession<'_, '_>,
+    touched: &[String],
+) -> Result<f64, BarcaError> {
     let elapsed = finalize_run(
         FinalizeRun {
+            touched,
             pool: session.pool.take().expect("workers started"),
             recorder: session.recorder.take().expect("recorder started"),
             pb: &session.pb,
@@ -1641,7 +1678,6 @@ async fn record_and_publish(session: &mut RunSession<'_, '_>) -> Result<f64, Bar
             steps_executed: session.state.steps_executed,
             completed_steps: session.state.completed_steps,
             total_steps: session.state.total_steps,
-            elapsed_so_far: session.state.elapsed_so_far,
             cancel: &session.started.cancel,
             phase_error: &session.state.phase_error,
             step_failure: &session.state.step_failure,
@@ -1724,8 +1760,13 @@ async fn return_outputs(
         }
     }
 
-    let mut changed =
-        db::changed_bytes_in_run(&session.request.cfg.db_path, &session.started.run_id).await?;
+    // Only a step that ran can record changed bytes: a run that executed none (every step
+    // cached) is not looked up.
+    let mut changed = if session.state.steps_executed > 0 {
+        db::changed_bytes_in_run(&session.request.cfg.db_path, &session.started.run_id).await?
+    } else {
+        Vec::new()
+    };
     // With a server, the run is posted to its ledger now that its uploads are confirmed. A
     // step the ledger already held with other bytes gets the same warning.
     if let Some(ledger) = &session.request.cfg.ledger {
@@ -1742,6 +1783,18 @@ async fn return_outputs(
             }
         }
     }
+    // Only an asset promises the same bytes for the same code and inputs. A sensor returns a
+    // new value under the same run hash whenever the data it watches changes, a task runs
+    // every time, and a `Manual` asset is refreshed by hand to pick up new data (#548): none
+    // of them is a nondeterministic function.
+    changed.retain(|node| {
+        let base = crate::StepId::parse(node).base_id().to_string();
+        session
+            .prepared
+            .dag
+            .get_node(&base)
+            .is_none_or(crate::cache::checks_bytes)
+    });
     for node in changed.iter().chain(&session.state.repaired_mismatches) {
         crate::run_line!(Always, "{}", crate::ledger::bytes_changed_warning(node));
         let base = crate::StepId::parse(node).base_id().to_string();
@@ -2263,14 +2316,15 @@ pub(crate) async fn explain_dag_with_membership(
     state.pinned = pinned;
     // A dry run executes nothing, so it cannot know what a sensor will return. It predicts with
     // each sensor's last recorded output (#183); a consumer of a sensor with none is unknown.
+    // A `Manual` asset it would refresh is predicted the same way (#548).
     if let Some(cache) = &cache {
         let sensors: Vec<&str> = exec_plan
             .phases
             .iter()
             .flat_map(|p| &p.streams)
             .flat_map(|s| &s.steps)
-            .filter(|st| st.kind == crate::NodeKind::Sensor)
             .map(|st| st.step_id.base_id())
+            .filter(|id| crate::cache::folds_output(dag, id))
             .collect();
         state.sensor_outputs = db::last_output_hashes(cache, &sensors).await?;
     }
@@ -2986,6 +3040,8 @@ async fn dispatch_phase(
 }
 
 struct FinalizeRun<'a> {
+    /// What the run read ([`crate::persist::RunLedger::touched`]).
+    touched: &'a [String],
     pool: crate::io_loop::WorkerPool,
     recorder: StepRecorder,
     pb: &'a Option<indicatif::ProgressBar>,
@@ -2993,7 +3049,6 @@ struct FinalizeRun<'a> {
     steps_executed: usize,
     completed_steps: usize,
     total_steps: usize,
-    elapsed_so_far: f64,
     cancel: &'a CancellationToken,
     phase_error: &'a Option<String>,
     step_failure: &'a Option<(String, String)>,
@@ -3034,6 +3089,7 @@ struct FinalizeRun<'a> {
 
 async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64, BarcaError> {
     let FinalizeRun {
+        touched,
         pool,
         recorder,
         pb,
@@ -3041,7 +3097,6 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
         steps_executed,
         completed_steps,
         total_steps,
-        elapsed_so_far,
         cancel,
         phase_error,
         step_failure,
@@ -3089,7 +3144,8 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
             steps_executed,
             completed_steps,
             total_steps,
-            elapsed_so_far,
+            // The run's wall time so far, not the sum of its steps' times (they overlap).
+            wall_seconds: t0.elapsed().as_secs_f64(),
             cancel,
             phase_error,
             step_failure,
@@ -3188,6 +3244,7 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
         output_hashes: &decide_state.sensor_outputs,
         store_paths,
         cost_snapshot: &cost_snapshot,
+        touched,
     };
     persist_run(db_path, &ledger).await?;
     if let Some(error) = recorder_error {
@@ -3338,6 +3395,13 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
     Ok(elapsed)
 }
 
+/// What to do when the artifact store cannot be reached before a run: the second line of the
+/// error, so it is the envelope's `remediation` instead of the generic infra one.
+const STORE_PREFLIGHT_FIX: &str = "Nothing ran. Check the store's URI (BARCA_REMOTE_URI or \
+     [remote] uri), that the bucket or container exists (barca does not create it), the \
+     endpoint (FSSPEC_S3_ENDPOINT_URL for MinIO or R2) and the credentials. BARCA_REMOTE=off \
+     runs one command without the store (barca docs remote).";
+
 struct StopProgress<'a> {
     pool: crate::io_loop::WorkerPool,
     pb: &'a Option<indicatif::ProgressBar>,
@@ -3345,7 +3409,7 @@ struct StopProgress<'a> {
     steps_executed: usize,
     completed_steps: usize,
     total_steps: usize,
-    elapsed_so_far: f64,
+    wall_seconds: f64,
     cancel: &'a CancellationToken,
     phase_error: &'a Option<String>,
     step_failure: &'a Option<(String, String)>,
@@ -3358,7 +3422,7 @@ async fn stop_workers(ctx: StopProgress<'_>, trace: &impl Fn(&str)) {
         steps_executed,
         completed_steps,
         total_steps,
-        elapsed_so_far,
+        wall_seconds,
         cancel,
         phase_error,
         step_failure,
@@ -3400,7 +3464,7 @@ async fn stop_workers(ctx: StopProgress<'_>, trace: &impl Fn(&str)) {
         crate::run_line!(
             Always,
             "{}",
-            end_of_run_line(completed_steps, total_steps, elapsed_so_far, outcome)
+            end_of_run_line(completed_steps, total_steps, wall_seconds, outcome)
         );
     }
 }
@@ -3811,6 +3875,7 @@ mod store_tests {
             output_hashes: &HashMap::new(),
             store_paths: &HashMap::new(),
             cost_snapshot: &[],
+            touched: &[],
         };
         persist_run(&db_path, &ledger).await.unwrap();
 
@@ -3867,6 +3932,7 @@ mod store_tests {
             output_hashes: &HashMap::new(),
             store_paths: &store_paths,
             cost_snapshot: &[],
+            touched: &[],
         };
         persist_run(&db_path, &ledger).await.unwrap();
 

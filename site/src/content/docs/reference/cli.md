@@ -1,11 +1,12 @@
 ---
 title: CLI Reference
-description: Every barca command with its arguments, flags, defaults and output, checked against barca 0.18.0.
+description: Every barca command with its arguments, flags, defaults and output.
 ---
 
 Installing the `barca` package (`pip install barca` or `uv add barca`) puts the `barca` command
-in the environment's `bin/`. This page describes barca 0.18.0; the output shown was pasted from
-that version. `barca <command> --help` and `barca docs` describe the version you have installed.
+in the environment's `bin/`. The output on this page was captured from a terminal running the
+current release, with long paths shortened. `barca <command> --help` and `barca docs` describe
+the version you have installed.
 
 ## Command shape
 
@@ -27,8 +28,6 @@ barca run <task> [files]      # tasks: the task always runs
   error: the target comes before the files
 
     barca run notify pipeline.py
-
-  Run `barca list pipeline.py` to see available assets and tasks.
   ```
 
 `barca list`, `barca status`, `--dry-run` and `barca sql` show what barca sees without running
@@ -41,9 +40,11 @@ code and JSON output schema, marked stable or experimental, with the policy for 
 
 ```
 barca get [target[,target...]] [file.py|dir/ ...] [--refresh a,b [--no-cascade] | --refresh-all]
-                                               Get asset value(s) — cache-aware
+                                               Get assets — cache-aware; prints their artifact paths
 barca run <task[,task...]> [file.py|dir/ ...] [--refresh a,b [--no-cascade] | --refresh-all]  Run task(s) (always re-run)
 barca plan [file.py|dir/ ...]                Emit the execution plan as JSON (experimental)
+barca doctor [file.py|dir/ ...] [--json]      Diagnose project prerequisites without running steps
+barca logs <run_id> [--step NAME] [--json]    A run's captured step stdout
 barca history [-l N | --all] [--json|--pretty]  Show recent runs
 barca stats <target> [file.py|dir/ ...]       Show timing/cache stats for an asset
 barca gc [--dry-run] [--max-size SIZE] [--json]  Evict cached results to keep .barca/ under its size limit (experimental)
@@ -125,7 +126,7 @@ cache.
 ```
 $ barca get summary pipeline.py --json
 [barca] 2/2 steps | done in 0.0s
-{"elapsed_seconds":0.0628,"final_output":{"_barca_artifact":{"format":"json","path":".barca/artifacts/pipeline.py--summary/2d10....json","size_bytes":24}},"phases":1,"run_id":"354b04602500","status":"success","steps":[{"detail":"no cached result for this code and these inputs","id":"pipeline.py:raw_data","kind":"asset","reason":"not_materialized","run_hash":"a8e7...","status":"ran"},{"detail":"no cached result for this code and these inputs","id":"pipeline.py:summary","kind":"asset","reason":"not_materialized","run_hash":"2d10...","status":"ran"}],"steps_executed":2,"warnings":[]}
+{"elapsed_seconds":0.08844638,"final_output":{"_barca_artifact":{"format":"json","path":".barca/artifacts/pipeline.py--summary/2d10....json","size_bytes":24}},"phases":1,"run_id":"14f3f967c1b6","status":"success","steps":[{"attempts":1,"detail":"no cached result for this code and these inputs","elapsed_seconds":0.0023,"id":"pipeline.py:raw_data","kind":"asset","reason":"not_materialized","run_hash":"a8e7...","status":"ran"},{"attempts":1,"detail":"no cached result for this code and these inputs","elapsed_seconds":0.0007,"id":"pipeline.py:summary","kind":"asset","reason":"not_materialized","run_hash":"2d10...","status":"ran"}],"steps_executed":2,"warnings":[]}
 ```
 
 The first line is progress, on stderr. The JSON is one line on stdout (hashes shortened here).
@@ -136,7 +137,7 @@ the path, with a small json value (up to 10 lines) previewed under it:
 
 ```
 $ barca get summary pipeline.py
-Run 35449de4ed6f | got 'summary' in 0.004s (0 steps, 1 phase)
+Run 14f389a807a2 | got 'summary' in 0.050s (0 steps, 1 phase)
 
 .barca/artifacts/pipeline.py--summary/2d10....json
   {
@@ -179,10 +180,13 @@ returns the last asset's artifact. Tasks are skipped, and stderr names them and 
 command. A sensor nothing depends on still runs. A file with only tasks gets nothing: exit 0,
 `"steps": []`, and a stderr note pointing at `barca run`.
 
-Every `get`/`run` usage error (wrong order, unknown target, `get` on a task or `run` on an
-asset, an unknown `--refresh` name) exits 2 and ends with
-``Run `barca list <files>` to see available assets and tasks.`` There is no "did you mean"
-matching.
+Every `get`/`run` usage error exits 2. An unknown or ambiguous target (and `run` without one)
+ends with ``Run `barca list <files>` to see available assets and tasks.``; the others state
+their own fix: the corrected command for the wrong order, `barca run` for a task given to
+`get`, the valid names for an unknown `--refresh` name. A name close to one barca knows
+(a target, a `--refresh` name, a flag or a subcommand) is preceded by `Did you mean '...'?`: the
+best match within one edit (two for a name longer than four characters), or two that tie. The
+exit code is still 2 and nothing runs.
 
 | Flag | Meaning |
 |---|---|
@@ -228,12 +232,13 @@ with `env NAME=value ...`. See [Decorators](/reference/api/decorators/#declared-
 
 Run a task and what it depends on. The task always runs; it is never cached. The assets
 upstream of it are served from cache when unchanged, as with `barca get`. `run` takes the same
-flags as `get`.
+flags as `get`. In a terminal it prints the task's value under the summary; `-o value` prints
+only the value.
 
 ```
 $ barca run notify pipeline.py
-[barca] 1/3 steps | done in 0.1s
-Run 5269fc06ce80 | ran 'notify' in 0.192s (1 step, 1 phase)
+[barca] 1/3 steps | done in 0.0s
+Run 14f1e316840c | ran 'notify' in 0.074s (1 step, 1 phase)
 
 Value:
 {
@@ -323,7 +328,8 @@ attempts, including import/input loading/call/serialization and excluding retry 
 After a worker disconnect, the coordinator's observed in-flight time is used. For
 partitioned steps it sums executed keys, while attempts is the maximum for one key.
 
-A worker prints `[barca] importing <module>` before loading a module. Imports longer
+Under `--agent` (and in every run `barca serve` starts) a worker prints
+`[barca] importing <module>` before loading a module; otherwise it prints nothing. Imports longer
 than one second add `import_seconds`, included in elapsed time and summed across
 attempts/keys. Reused modules add no import time. Agent completion and permanent failure
 lines append `attempts=N` for retries. `history --json` sums recorded materialization
@@ -351,9 +357,9 @@ The human table defaults to the 10 most recent; JSON returns every run unless `-
 $ barca history
 RUN_ID         CMD     STATUS      STEPS CACHED   TIME STARTED
 -----------------------------------------------------------------------------
-5269fc06ce80   run     success         1      2   0.2s 2026-10-07 18:22:40
-5269fa584a48   get     success         0      1   0.0s 2026-10-07 18:22:40
-526915c3ef18   get     success         2      0   0.5s 2026-10-07 18:22:40
+14f1e316840c   run     success         1      2   0.1s 2026-10-21 02:39:25 UTC
+14f01f296a75   get     success         0      2   0.0s 2026-10-21 02:39:25 UTC
+14f3870e173f   get     success         2      0   0.1s 2026-10-21 02:39:25 UTC
 ```
 
 Times are UTC. `--fields` takes `run_id`, `command`, `files`, `target`, `status`,
@@ -412,12 +418,14 @@ barca gc --json                 # {size_bytes, limit_bytes, target_bytes, after_
 ```
 
 ```
-$ barca gc --dry-run
-would evict 1204 files (38.2 GB), leaving 14.9 GB of 20 GB:
-  leftovers                  3 files    1.1 GB
-  superseded              1180 files     33 GB
-  held by the store         21 files    4.1 GB
+$ barca gc --dry-run --max-size 400KB
+would evict 4 files (1.4 MB), leaving 342 KB of 400 KB:
+  superseded                 3 files    807 KB
+  least recently read        1 file     549 KB
 ```
+
+Each tier that has something to evict gets a line; `leftovers` and `held by the store` appear
+the same way. Under the limit it prints one line, such as `nothing to evict: 284 KB of 3.4 GB`.
 
 The order is leftovers, superseded results, local copies the artifact store holds, then the
 least recently read current results. `--dry-run` lists exactly what `barca gc` then deletes.
@@ -428,20 +436,24 @@ read. The remote store is never touched.
 
 ## stats
 
-Show statistics for one node: how many times it ran, timings (average, median, p95, max),
-cache hit rate and recent runs. The target is required.
+Show statistics for one node: how many times it executed, timings (average, median, p95,
+max), how many executions repeated unchanged inputs, and recent runs. The target is required.
+Times are UTC.
 
 ```
 $ barca stats total pipeline.py
 Asset: pipeline.py:total
 Total materializations: 1
 Timing:  avg 0.001s  median 0.001s  p95 0.001s  max 0.001s
-Cache hit rate: 0.0%
+Re-executed with unchanged inputs: 0.0%
 
 Recent runs:
   ELAPSED    STATUS    ATTEMPTS CREATED
-  0.001s     success   1        2026-10-07 18:22:40
+  0.001s     success   1        2026-10-21 02:39:25 UTC
 ```
+
+A cache hit executes nothing, so it is not counted here; `barca history` counts cache hits per
+run. In the JSON the re-execution share is `cache_hit_rate` (the key keeps its name).
 
 The JSON has `id`, `total_runs`, `cache_hit_rate`, `avg_elapsed_seconds`,
 `median_elapsed_seconds`, `p95_elapsed_seconds`, `max_elapsed_seconds` and `recent_runs` (each
@@ -557,10 +569,10 @@ barca status pipeline.py --json --sample 5       # plus up to 5 sample rows per 
 ```
 
 ```
-NAME    KIND   STATE        WHY           LAST RUN                           SHAPE            DEPS
-orders  asset  cached       materialized  success 2026-10-07 18:22:40 0.38s  3 rows x 2 cols  -
-total   asset  cached       materialized  success 2026-10-07 18:22:40 0.00s  dict (1 key)     orders
-notify  task   always-runs  task          success 2026-10-07 18:22:41 0.15s  dict (1 key)     total
+NAME    KIND   STATE        WHY           LAST RUN                               SHAPE            DEPS
+orders  asset  cached       materialized  success 2026-10-21 02:39:25 UTC 0.00s  3 rows x 2 cols  -
+total   asset  cached       materialized  success 2026-10-21 02:39:25 UTC 0.00s  dict (1 key)     orders
+notify  task   always-runs  task          success 2026-10-21 02:39:25 UTC 0.00s  dict (1 key)     total
 
 2 cached, 0 stale, 0 never run, 0 partial, 0 unknown, 1 always run
 ```
@@ -688,6 +700,7 @@ barca docs skill              # the agent skill (SKILL.md), with its frontmatter
 barca docs --all              # every topic in one stream
 barca docs --json             # topic index as JSON; add a topic for its full text
 barca docs --fields name      # JSON index with only topic names (name, summary, content)
+barca docs cache --pretty     # markdown, the default even when piped
 ```
 
 `barca docs skill` is the short [agent skill](/reference/agent-skill/) an AI agent loads once.
@@ -729,7 +742,7 @@ artifacts are stored; a local path or remote URI, which may not exist if the ste
 succeeded):
 
 ```
-{"artifact_dir":".barca/artifacts/pipeline.py--clean","code":1,"error":"step 'pipeline.py:clean' failed: ZeroDivisionError: division by zero","kind":"step_failed","node":"pipeline.py:clean","remediation":"Fix the error in 'pipeline.py:clean' (see the traceback) and re-run the same command. Steps that succeeded are cached and will not re-run.","traceback":"  File \"/abs/path/pipeline.py\", line 11, in clean\n    return x / 0\n           ~~^~~"}
+{"artifact_dir":".barca/artifacts/pipeline.py--clean","code":1,"error":"step 'pipeline.py:clean' failed: ZeroDivisionError: division by zero","kind":"step_failed","node":"pipeline.py:clean","remediation":"Fix the error in 'pipeline.py:clean' (see the traceback) and re-run the same command. Steps that succeeded are cached and will not re-run.","traceback":"  File \"/home/you/project/pipeline.py\", line 11, in clean\n    return x / 0\n           ~~^~~"}
 ```
 
 In human mode (a terminal, `--pretty`, `-o pretty`, `-o path` or `-o value`) the error is prose, with the remediation
@@ -764,7 +777,7 @@ status is not available within a few hundred milliseconds, the error is the plai
 
 ```
 $ barca version
-barca 0.18.0
+barca 0.27.0
 ```
 
 `barca --version` prints the same. Neither takes `--json`.
@@ -800,10 +813,21 @@ on stderr when `default_env` or an artifact store is in effect. See
 - From 0.20.0: `POST /run/{target}` and `POST /get/{target}` answer 404, 409 or 400 for a
   target that cannot run; they used to answer 200 with a `run_id` of a run that then failed.
 - From 0.20.0: the `barca list` table column `NEXT FIRE` is `NEXT FIRE (LOCAL TIME)`.
+- From 0.25.0: `get` prints artifact paths by default. `final_output` in the JSON is always a
+  pointer, and a terminal shows the path with a small json value previewed under it; `-o value`
+  prints the value. A partitioned target returns every key, and `--partition` selects keys.
+  `.barca/` has a size limit (`[cache] max_size`, default 10% of the filesystem) and is evicted
+  past it.
+- From 0.26.0: a remote store fails soft once the steps are done: an upload that fails after
+  every step succeeded exits 0 with a warning (it was 3), and the result is `unsynced` until the
+  next command uploads it.
 - From 0.26.0: the shared history (`optimistic` mode) is gone. `[remote] state`, `state_uri`,
   `push_retries`, `BARCA_STATE`, `BARCA_STATE_URI` and `BARCA_PUSH_RETRIES` are usage errors;
   nothing is pulled before a run, and the store holds backups instead
   ([Remote storage](/reference/remote-storage/)). `barca serve` works with a store.
+- From 0.27.0: `barca serve` drains on SIGTERM or SIGINT: runs in flight finish, for up to
+  `--drain-timeout` seconds, before it exits; it used to cancel them at once
+  ([serve](#serve)).
 
 ## Recorded stdout
 

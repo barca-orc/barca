@@ -110,3 +110,5 @@ no longer in the bucket) exits 3 and carries the store's error.
 
 To recompute a result before querying it, use `--refresh` (`barca get revenue --refresh revenue`);
 never delete files under `.barca/` (other than `.barca/sql-cache/`).
+
+See also: `barca docs status`, `barca docs types`, `barca docs cache`.

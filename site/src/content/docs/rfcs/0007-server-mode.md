@@ -3,7 +3,8 @@ title: 'RFC-0007: Server Mode — the server is the ledger'
 description: 'One deployed barca serve owns the record of what exists. Laptops run their own work against it, or send a run to it. Still one node per run.'
 ---
 
-- **Status:** Accepted
+- **Status:** Implemented (0.27.0)
+- **Left:** removing the older HTTP route aliases (`POST /run`, `POST /run/{target}`, `POST /get/{target}`, `GET /status/{id}`, `GET /events/{id}`) and `barca.Client`, which 0.27.0 keeps for one minor release (§3.4).
 - **Date:** 2026-10-03 (revised 2026-10-10, accepted 2026-10-14)
 - **Touches:** barca-cli | HTTP server | python/barca | barca-core
 - **Prerequisites:** [#306](https://github.com/barca-orc/barca/pull/306) (SIGTERM, trigger errors, interrupted runs in containers) and [#272](https://github.com/barca-orc/barca/pull/272) (`serve --host`), both merged. [RFC-0009](/rfcs/0009-store-backup-and-restore/) (the store as backup, content digests) ships first or together. Draining on shutdown ([#190](https://github.com/barca-orc/barca/issues/190)) is not a prerequisite; a refusal while shutting down is in scope (§4.5).
@@ -11,7 +12,7 @@ description: 'One deployed barca serve owns the record of what exists. Laptops r
 
 ---
 
-> **Implementation status:** Accepted design, partly shipped. The run contract and inspection
+> **Implementation status:** shipped in 0.27.0. The run contract and inspection
 > routes of section 3.4 are implemented (#393): `POST /runs`, `GET /runs/{run_id}` and its
 > events, output and cancel, `/list`, `/nodes`, `/history`, `/stats/{name}`, `/project`, and
 > `/health` with `api_version`. `triggered_by` is `manual` for a command typed on a machine

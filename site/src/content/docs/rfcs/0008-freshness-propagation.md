@@ -3,7 +3,7 @@ title: 'RFC-0008: Freshness Propagation in barca serve'
 description: 'What Always and Manual do at run time: a scheduled tick brings the Always nodes below it up to date in one run; Manual is refreshed by hand only and pins itself.'
 ---
 
-- **Status:** Accepted
+- **Status:** Implemented (0.28.0). A partitioned `Manual` node is not pinned yet (section 4.6).
 - **Date:** 2026-10-07 (accepted 2026-10-14)
 - **Touches:** HTTP server | barca-core
 - **Supersedes / Related:** [RFC-0001](/rfcs/0001-node-kinds-and-freshness/) (defines `Always`/`Manual`/`Schedule`; this RFC gives the first two their run-time meaning), [RFC-0004](/rfcs/0004-http-server-api/) (the scheduler and its per-job rules). Issues #253 and #80; closed attempt #261. Decisions recorded in [DIRECTION.md](https://github.com/barca-orc/barca/blob/main/DIRECTION.md#decided-october-2026).
@@ -173,7 +173,10 @@ ticks.
 4. **`Manual` pins itself.** A `Manual` asset or task is never run by a tick, whether the
    tick is its own ancestor's or any other. It is not a wall: an `Always` node below it is
    still reached through it when some other input of that node changed, and reads the
-   `Manual` node's current result. A `Manual` node that has never been computed blocks what
+   `Manual` node's current result. What is below it is hashed against that result, its run
+   hash and its bytes, so once it has a new result (also a refresh by hand that gives new
+   bytes for unchanged code and inputs) everything below it is stale relative to it, exactly
+   as for any upstream (#548). A `Manual` node that has never been computed blocks what
    reads it (section 4.5).
 5. **`Schedule` stops propagation too.** A node with its own schedule is updated on its own
    ticks, not by a tick above it. Freshness answers one question, "when is this node
@@ -262,6 +265,11 @@ Implemented in #253 (PR #470). Decisions taken there, on 2026-10-20:
   included, so neither does `max_failures` (section 4.2 assumed the cron did).
 - A partitioned `Manual` node is not pinned yet, and a partitioned task below a tick always
   fires.
+- **A `Manual` asset's bytes count below it** (#548). Pinned, a `Manual` asset
+  is refreshed by hand with the same code and inputs, so its run hash does not change when a
+  refresh gives new bytes. Its consumers fold the SHA-256 of its output into their run hashes,
+  as a sensor's consumers do, and it runs in a phase before them. In 0.28.0 and 0.28.1 only
+  the run hash counted, so what read a refreshed reference table kept its old result.
 
 ## 5. Determinism, Caching & Testing
 

@@ -364,7 +364,10 @@ async fn status_from_dag_with_membership(
             cache,
             partitions: partitions.filter(|_| !node.extracted.partitions.is_empty()),
             last_materialization,
-            last_bytes_change: history.last_bytes_change,
+            // Only an asset's new bytes under the same run hash mean it is not deterministic.
+            last_bytes_change: history
+                .last_bytes_change
+                .filter(|_| crate::cache::checks_bytes(node)),
             shape: None,
             env: node.extracted.env.clone(),
             local: None,

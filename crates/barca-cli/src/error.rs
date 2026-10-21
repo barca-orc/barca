@@ -13,18 +13,20 @@
 //! The schema is documented in `barca docs agents` (crates/barca-cli/docs/agents.md).
 
 pub use barca_core::envelope::{
-    Context, ErrorEnvelope as CliError, ErrorKind, list_hint, shell_quote,
+    Context, ErrorEnvelope as CliError, ErrorKind, list_hint, names_a_target, shell_quote,
 };
 
 pub trait CliErrorExt {
-    fn from_clap(e: &clap::Error) -> Self;
+    fn from_clap(e: &clap::Error, argv: &[String]) -> Self;
     fn emit(&self, json: bool) -> !;
 }
 
 impl CliErrorExt for CliError {
-    /// An argument-parser (clap) error: always `usage`.
-    fn from_clap(e: &clap::Error) -> Self {
-        let mut out = Self::from_prose(ErrorKind::Usage, e.render().to_string());
+    /// An argument-parser (clap) error for `argv`: always `usage`. A mistyped flag or
+    /// subcommand gets the one "Did you mean" rule (`barca_core::suggest`) in place of clap's
+    /// `-- --flag` tip.
+    fn from_clap(e: &clap::Error, argv: &[String]) -> Self {
+        let mut out = Self::from_prose(ErrorKind::Usage, clap_prose(e, argv));
         // "the following required arguments were not provided:" names them on the next line.
         if out.error.ends_with(':')
             && let Some(rem) = out.remediation.take()
@@ -45,6 +47,92 @@ impl CliErrorExt for CliError {
         }
         barca_core::term::exit(self.code())
     }
+}
+
+/// clap's rendered error, with "Did you mean ...?" after its first line for an unknown flag or
+/// subcommand that is close to one `argv`'s command takes. clap's tip to pass an unknown flag
+/// as a value (`use '-- --refesh'`) is dropped: it is wrong advice for a mistyped flag.
+fn clap_prose(e: &clap::Error, argv: &[String]) -> String {
+    use clap::error::{ContextKind, ContextValue, ErrorKind as Kind};
+    let rendered = e.render().to_string();
+    let invalid = |kind| match e.get(kind) {
+        Some(ContextValue::String(s)) => Some(s.as_str()),
+        _ => None,
+    };
+    let cmd = command_of(argv);
+    let meant = match e.kind() {
+        Kind::UnknownArgument => invalid(ContextKind::InvalidArg).and_then(|arg| {
+            let typed = arg.strip_prefix("--")?.split('=').next()?;
+            let longs: Vec<String> = cmd
+                .get_arguments()
+                .filter(|a| !a.is_hide_set())
+                .flat_map(|a| {
+                    a.get_long()
+                        .into_iter()
+                        .chain(a.get_visible_aliases().into_iter().flatten())
+                })
+                .chain(["help"])
+                .map(str::to_string)
+                .collect();
+            let close = barca_core::suggest::closest(typed, longs.iter().map(String::as_str));
+            let flags: Vec<String> = close.iter().map(|l| format!("--{l}")).collect();
+            barca_core::suggest::did_you_mean(
+                &flags.iter().map(String::as_str).collect::<Vec<_>>(),
+                '\'',
+            )
+        }),
+        Kind::InvalidSubcommand => invalid(ContextKind::InvalidSubcommand).and_then(|name| {
+            barca_core::suggest::suggestion(
+                name,
+                cmd.get_subcommands()
+                    .filter(|c| !c.is_hide_set())
+                    .map(|c| c.get_name()),
+            )
+        }),
+        _ => None,
+    };
+    let mut lines: Vec<&str> = Vec::new();
+    let mut it = rendered.lines().peekable();
+    while let Some(line) = it.next() {
+        if e.kind() == Kind::UnknownArgument && line.trim_start().starts_with("tip: to pass '") {
+            // Drop the tip and the blank line after it.
+            if it.peek().is_some_and(|l| l.trim().is_empty()) {
+                it.next();
+            }
+            continue;
+        }
+        lines.push(line);
+    }
+    let mut out = String::new();
+    for (i, line) in lines.iter().enumerate() {
+        out.push_str(line);
+        out.push('\n');
+        if i == 0
+            && let Some(meant) = &meant
+        {
+            out.push_str(&format!("\n{meant}\n"));
+        }
+    }
+    out
+}
+
+/// The (sub)command `argv` names: `barca get ...` is `get`, `barca state reset ...` is
+/// `state reset`; the top-level command when none is named.
+fn command_of(argv: &[String]) -> clap::Command {
+    use clap::CommandFactory;
+    let mut cmd = crate::args::Cli::command();
+    for arg in argv.iter().skip(1) {
+        if arg == "--" {
+            break;
+        }
+        if arg.starts_with('-') {
+            continue;
+        }
+        if let Some(sub) = cmd.find_subcommand(arg) {
+            cmd = sub.clone();
+        }
+    }
+    cmd
 }
 
 /// Whether raw argv asks for JSON output, for errors raised before the arguments parse. Same

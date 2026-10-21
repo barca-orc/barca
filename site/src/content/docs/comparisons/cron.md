@@ -3,7 +3,11 @@ title: "Barca vs cron / systemd timers"
 description: What a scheduled job gets from a crontab line, a systemd timer, and a barca Schedule under barca serve, feature by feature.
 ---
 
-Last measured: 2026-07-19, with barca 0.7.0 and cron and systemd (versions not recorded), on a machine that was not recorded. Not re-run since. Re-run tracked in [#277](https://github.com/barca-orc/barca/issues/277).
+:::caution[Written in 2026-07]
+This page has no timings. Its comparison was written on 2026-07-19 with barca 0.7.0, and the barca output on it is from 0.18.0. It has not been re-checked against the current release. A re-run of the comparison pages is tracked in [#65](https://github.com/barca-orc/barca/issues/65).
+:::
+
+Last measured: 2026-07-19, with barca 0.7.0 and cron and systemd (versions not recorded), on a machine that was not recorded. Not re-run since. Re-run tracked in [#65](https://github.com/barca-orc/barca/issues/65).
 
 This page contains no timings. It compares what each tool does for one scheduled job. The cron
 column describes [cronie's crontab(5)](https://man7.org/linux/man-pages/man5/crontab.5.html) and

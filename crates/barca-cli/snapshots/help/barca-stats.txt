@@ -17,7 +17,7 @@ Options:
 
 Examples:
   barca stats total                         # find `total` anywhere in the project
-  barca stats total pipeline.py             # timing percentiles and cache hit rate
+  barca stats total pipeline.py             # timing percentiles and re-executions
   barca stats total pipeline.py --json      # {id, total_runs, cache_hit_rate, ..., recent_runs}, even in a terminal
   barca stats total pipeline.py --pretty    # the text report, even when piped
   barca stats total pipeline.py --fields status,error_message   # JSON; trims recent_runs entries

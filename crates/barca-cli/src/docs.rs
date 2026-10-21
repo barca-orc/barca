@@ -28,24 +28,9 @@ macro_rules! topic {
     };
 }
 
-/// Every topic, in index order. Add new topics here (and a file under `docs/`).
+/// Every topic, in reading order: the overview, then getting work done, then examples and
+/// reference, the contract last. Add new topics here (and a file under `docs/`).
 pub const TOPICS: &[Topic] = &[
-    topic!(
-        "doctor",
-        "Check project prerequisites without running steps",
-        "doctor.md"
-    ),
-    topic!("logs", "Read a run's recorded step stdout", "logs.md"),
-    topic!(
-        "server-mode",
-        "One server as the team's ledger; --server runs a command there; [server] url, BARCA_SERVER, --local",
-        "server-mode.md"
-    ),
-    topic!(
-        "groups",
-        "Organizational groups, nesting and outputs",
-        "groups.md"
-    ),
     topic!(
         "overview",
         "What barca is, the mental model, and the commands",
@@ -61,6 +46,17 @@ pub const TOPICS: &[Topic] = &[
         "@asset, inputs, freshness, retries, node ids",
         "assets.md"
     ),
+    topic!("tasks", "@task, ordering-only deps, barca run", "tasks.md"),
+    topic!(
+        "partitions",
+        "Fan-out over keys and fan-in with collect",
+        "partitions.md"
+    ),
+    topic!(
+        "cache",
+        "Run hashes, artifacts, --refresh / --refresh-all, environments",
+        "cache.md"
+    ),
     topic!(
         "types",
         "Output formats, and how annotations pick readers (pandas, polars, pyarrow, duckdb)",
@@ -71,31 +67,31 @@ pub const TOPICS: &[Topic] = &[
         "Large inputs: lazy types (duckdb, polars LazyFrame) load only the subset a step needs",
         "big-inputs.md"
     ),
-    topic!("tasks", "@task, ordering-only deps, barca run", "tasks.md"),
-    topic!(
-        "cache",
-        "Run hashes, artifacts, --refresh / --refresh-all, environments",
-        "cache.md"
-    ),
-    topic!(
-        "remote",
-        "Share one cache across machines: S3, GCS, Azure, configured with environment variables",
-        "remote.md"
-    ),
-    topic!(
-        "telemetry",
-        "Report runs and steps to Datadog; post to Slack when a job starts failing or recovers",
-        "telemetry.md"
-    ),
-    topic!(
-        "partitions",
-        "Fan-out over keys and fan-in with collect",
-        "partitions.md"
-    ),
     topic!(
         "sinks",
         "@sink exports to local or remote paths",
         "sinks.md"
+    ),
+    topic!(
+        "status",
+        "barca status: cache state, last run and artifact shape per node",
+        "status.md"
+    ),
+    topic!("logs", "Read a run's recorded step stdout", "logs.md"),
+    topic!(
+        "sql",
+        "barca sql: query cached results with DuckDB, without writing a step",
+        "sql.md"
+    ),
+    topic!(
+        "doctor",
+        "Check project prerequisites without running steps",
+        "doctor.md"
+    ),
+    topic!(
+        "groups",
+        "Organizational groups, nesting and outputs",
+        "groups.md"
     ),
     topic!(
         "scheduling",
@@ -103,29 +99,19 @@ pub const TOPICS: &[Topic] = &[
         "scheduling.md"
     ),
     topic!(
-        "status",
-        "barca status: cache state, last run and artifact shape per node",
-        "status.md"
+        "server-mode",
+        "One server as the team's ledger; --server runs a command there; [server] url, BARCA_SERVER, --local",
+        "server-mode.md"
     ),
     topic!(
-        "sql",
-        "barca sql: query cached results with DuckDB, without writing a step",
-        "sql.md"
+        "remote",
+        "This machine's backup and read-through cache: S3, GCS, Azure; sharing means a server",
+        "remote.md"
     ),
     topic!(
-        "agents",
-        "Output contract, exit codes and workflows for scripts and AI agents",
-        "agents.md"
-    ),
-    topic!(
-        "contract",
-        "The CLI contract: commands, flags, JSON schemas, exit codes, stability policy",
-        "contract.md"
-    ),
-    topic!(
-        "skill",
-        "Agent skill (SKILL.md): the short guide an AI agent loads once",
-        "skill.md"
+        "telemetry",
+        "Report runs and steps to Datadog; post to Slack when a job starts failing or recovers",
+        "telemetry.md"
     ),
     topic!(
         "examples",
@@ -146,6 +132,21 @@ pub const TOPICS: &[Topic] = &[
         "examples/deploy-task",
         "An asset feeding a task, run with barca run",
         "examples-deploy-task.md"
+    ),
+    topic!(
+        "agents",
+        "Output contract, exit codes and workflows for scripts and AI agents",
+        "agents.md"
+    ),
+    topic!(
+        "skill",
+        "Agent skill (SKILL.md): the short guide an AI agent loads once",
+        "skill.md"
+    ),
+    topic!(
+        "contract",
+        "The CLI contract: commands, flags, JSON schemas, exit codes, stability policy",
+        "contract.md"
     ),
 ];
 
@@ -230,8 +231,13 @@ pub fn run(topic: Option<&str>, all: bool, json: bool) -> Result<String, String>
                 body
             }),
             None => {
-                // No fuzzy "did you mean": a guess can read as confirmation. List every topic.
+                // The closest topic, if one is close, then every topic.
                 let mut msg = format!("error: unknown docs topic '{name}'");
+                if let Some(meant) =
+                    barca_core::suggest::suggestion(name, TOPICS.iter().map(|t| t.name))
+                {
+                    msg.push_str(&format!("\n\n{meant}"));
+                }
                 msg.push_str("\n\nValid topics (run `barca docs` for summaries):\n");
                 for t in TOPICS {
                     msg.push_str(&format!("  {}\n", t.name));
@@ -304,6 +310,47 @@ mod tests {
                 t.name
             );
             assert!(t.body.ends_with('\n'), "{} must end with a newline", t.name);
+        }
+    }
+
+    /// Topics close with their cross-links, so nothing is appended after them.
+    #[test]
+    fn every_topic_ends_with_see_also() {
+        for t in TOPICS.iter() {
+            let last = t.body.trim_end().rsplit("\n\n").next().unwrap_or("");
+            assert!(
+                last.starts_with("See also: "),
+                "topic '{}' must end with a 'See also: ...' paragraph, found: {last:?}",
+                t.name
+            );
+        }
+    }
+
+    #[test]
+    fn index_starts_with_the_overview_and_ends_with_the_contract() {
+        assert_eq!(TOPICS.first().map(|t| t.name), Some("overview"));
+        assert_eq!(TOPICS.last().map(|t| t.name), Some("contract"));
+    }
+
+    #[test]
+    fn overview_commands_table_lists_every_command() {
+        use clap::CommandFactory;
+        let overview = find("overview").unwrap().body;
+        for sub in crate::Cli::command().get_subcommands() {
+            let name = sub.get_name();
+            if name == "help" {
+                continue;
+            }
+            let listed = overview
+                .lines()
+                .filter(|l| l.starts_with("| `barca "))
+                .any(|l| {
+                    l.contains(&format!("`barca {name} ")) || l.contains(&format!("`barca {name}`"))
+                });
+            assert!(
+                listed,
+                "the overview's Commands table needs a `barca {name}` row"
+            );
         }
     }
 
@@ -425,10 +472,12 @@ mod tests {
     }
 
     #[test]
-    fn unknown_topic_lists_every_topic_without_guessing() {
+    fn unknown_topic_suggests_the_closest_and_lists_every_topic() {
         let err = run(Some("typs"), false, false).unwrap_err();
         assert!(err.contains("unknown docs topic 'typs'"));
-        assert!(!err.to_lowercase().contains("did you mean"), "{err}");
+        assert!(err.contains("\n\nDid you mean 'types'?\n"), "{err}");
+        let far = run(Some("zzzzzzzz"), false, false).unwrap_err();
+        assert!(!far.to_lowercase().contains("did you mean"), "{far}");
         for t in TOPICS {
             assert!(err.contains(&format!("\n  {}\n", t.name)), "{err}");
         }

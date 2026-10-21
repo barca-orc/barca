@@ -27,7 +27,8 @@ save it as a file, for example `barca docs skill > .claude/skills/barca/SKILL.md
 So `barca list pipeline.py` shows a table in your terminal, and `barca list pipeline.py | cat`
 or a subprocess call gets JSON. Pass `--json` anyway in scripts: it states the intent
 and survives someone setting `BARCA_OUTPUT=pretty`. `plan` always prints JSON and `docs` always
-prints markdown (`barca docs --json` for JSON); neither follows the rule.
+prints markdown (`barca docs --json` for JSON, and `--pretty` is accepted and changes nothing);
+neither follows the rule.
 
 ```bash
 barca list pipeline.py --json        # JSON even in a terminal
@@ -368,7 +369,7 @@ barca status total,orders pipeline.py --json    # several targets: the union of 
 barca list pipeline.py --json       # {nodes: [{id, kind, freshness, inputs, env}], total, truncated}; freshness: always|manual|schedule
 barca plan pipeline.py              # phases and steps that would run, nothing executes
 barca history --json                # {runs: [...], total, truncated}: every recorded run unless --limit is given
-barca stats total pipeline.py --json  # timings and cache hit rate for one asset
+barca stats total pipeline.py --json  # timings and re-executions for one asset
 ```
 
 Source parsing is static and planning executes no pipeline step. `partitions(<expression>)`
@@ -494,15 +495,33 @@ step or imports user code. To recompute first, use `--refresh`; never delete fil
   error: the target comes before the files
 
     barca run report pipeline.py
-
-  Run `barca list pipeline.py` to see available assets and tasks.
   ```
 
-  With more than one non-`.py` name after a file it states the rule and does not guess. barca
-  never offers fuzzy "did you mean" suggestions, because a guess can read as confirmation: an
-  unknown target ends with ``Run `barca list <files>` to see available assets and tasks.`` on
-  every command, a mistyped flag is just an error, and an unknown `barca docs` topic lists every
-  valid topic.
+  With more than one non-`.py` name after a file it states the rule and does not guess. An unknown
+  or ambiguous target ends with ``Run `barca list <files>` to see available assets and tasks.``
+  on every command; other usage errors carry their own fix (the corrected command, `barca run`
+  for a task, the valid `--refresh` names) and no `barca list` pointer.
+- A mistyped name gets "Did you mean ...?": a flag, a subcommand, a target, a `--refresh` name,
+  a `barca sql` view, a `barca docs` topic and a decorator argument. The rule is the same
+  everywhere: the closest names within one edit of what was written (two for a name longer than
+  four characters), the best match only, or two when they tie; nothing when no name is that
+  close. The suggestion is in the `remediation` (and on its own line in human mode), never in
+  `error`, and it never changes the exit code: the command still exits 2 and runs nothing.
+  barca does not act on a guess; check it before you retry, since a near name can be a
+  different node.
+
+  ```
+  $ barca get amount pipeline.py --pretty
+  Asset 'amount' not found. Available: pipeline.py:amounts, pipeline.py:report
+
+  Did you mean 'amounts'? Run `barca list pipeline.py` to see available assets and tasks.
+
+  $ barca statsu
+  error: unrecognized subcommand 'statsu'
+
+  Did you mean 'stats' or 'status'?
+  ...
+  ```
 
 ## Editing a barca project: a safe loop
 
@@ -530,3 +549,5 @@ Plan documents include `plan_version: 1`, independent of the package and databas
 Workers and the transfer helper negotiate their socket protocol before receiving work.
 A version mismatch exits 3 and names the helper version and expected version; reinstall
 Barca in the Python environment used for the run. The handshake does not import pipeline code.
+
+See also: `barca docs skill`, `barca docs contract`, `barca docs status`.

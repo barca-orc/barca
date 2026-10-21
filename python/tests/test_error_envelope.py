@@ -162,6 +162,27 @@ def test_ctrl_c_is_cancelled_with_exit_130(project):
     assert env["kind"] == "cancelled"
 
 
+@pytest.mark.parametrize(
+    ("body", "decorator", "says", "not_says"),
+    [
+        ("time.sleep(10)", "@asset(timeout_seconds=1)", "timeout_seconds=", "see the traceback"),
+        ("os._exit(3)", "@asset()", "died without a Python exception", "see the traceback"),
+        ("os.kill(os.getpid(), 9)", "@asset()", "out-of-memory killer", "see the traceback"),
+    ],
+)
+def test_remediation_fits_how_the_step_failed(tmp_path, body, decorator, says, not_says):
+    """A timeout or a dead worker has no traceback to look at; the remediation says what to do."""
+    (tmp_path / "pipeline.py").write_text(
+        f"import os\nimport time\nfrom barca import asset\n\n{decorator}\ndef step() -> int:\n"
+        f"    {body}\n    return 1\n"
+    )
+    env = envelope(barca_cli(tmp_path, "get", "step", "pipeline.py"))
+    assert env["kind"] == "step_failed" and env["node"] == "pipeline.py:step", env
+    assert says in env["remediation"] and not_says not in env["remediation"], env
+    human = barca_cli(tmp_path, "get", "step", "pipeline.py", "--pretty").stderr
+    assert "Step 'pipeline.py:step' failed: " in human and says in human, human
+
+
 # ─── Human mode ───────────────────────────────────────────────────────────────
 
 
@@ -169,7 +190,8 @@ def test_human_mode_keeps_prose_and_appends_the_remediation(project):
     proc = barca_cli(project, "get", "oops", "pipeline.py", "-o", "pretty")
     assert proc.returncode == 1
     assert proc.stdout == ""
-    assert "Worker failed: ZeroDivisionError: division by zero" in proc.stderr
+    assert "Step 'pipeline.py:oops' failed: ZeroDivisionError: division by zero" in proc.stderr
+    assert "Worker failed" not in proc.stderr
     assert "return x / 0" in proc.stderr
     assert "will not re-run.\n[barca] run failed:" in proc.stderr
     assert not proc.stderr.strip().splitlines()[-1].startswith("{")

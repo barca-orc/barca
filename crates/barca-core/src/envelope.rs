@@ -52,6 +52,7 @@ impl ErrorKind {
         match e {
             BarcaError::WorkerFailed(_) => ErrorKind::StepFailed,
             BarcaError::AssetNotFound(..)
+            | BarcaError::AmbiguousTarget(_)
             | BarcaError::Usage(_)
             | BarcaError::Parse(_)
             | BarcaError::Dag(_) => ErrorKind::Usage,
@@ -96,12 +97,22 @@ pub fn list_cmd(files: &[String]) -> String {
     }
 }
 
-/// The one remediation for an unknown target or a misused name, on every command: `barca list`
-/// is how you discover the assets, tasks and sensors a project defines.
+/// The one remediation for an unknown or ambiguous target, on every command: `barca list` is how
+/// you discover the assets, tasks and sensors a project defines. Other usage errors carry their
+/// own remediation (#492).
 pub fn list_hint(files: &[String]) -> String {
     format!(
         "Run `{}` to see available assets and tasks.",
         list_cmd(files)
+    )
+}
+
+/// Whether `e` is about which node a target names (unknown or ambiguous), the one kind of
+/// error the `barca list` hint fixes.
+pub fn names_a_target(e: &BarcaError) -> bool {
+    matches!(
+        e,
+        BarcaError::AssetNotFound(..) | BarcaError::AmbiguousTarget(_)
     )
 }
 
@@ -199,13 +210,16 @@ impl<'de> Deserialize<'de> for ErrorEnvelope {
                 "step details require kind 'step_failed'",
             ));
         }
-        // A failed step reads as a local run prints it: `Worker failed: <summary>` and the
-        // traceback (the envelope's `error` names the node instead).
+        // A failed step reads as a local run prints it: `Step '<node>' failed: <summary>` and
+        // the traceback.
         let head = match (&wire.kind, &wire.node) {
             (ErrorKind::StepFailed, Some(node)) => wire
                 .error
                 .strip_prefix(&format!("step '{node}' failed: "))
-                .map_or_else(|| wire.error.clone(), |s| format!("Worker failed: {s}")),
+                .map_or_else(
+                    || wire.error.clone(),
+                    |s| format!("Step '{node}' failed: {s}"),
+                ),
             _ => wire.error.clone(),
         };
         let prose = match &wire.traceback {
@@ -224,6 +238,31 @@ impl<'de> Deserialize<'de> for ErrorEnvelope {
             prose_has_remediation: false,
             run_failure_line: None,
         })
+    }
+}
+
+/// What to do about a failed step, by how it failed: a timeout, a worker that died without a
+/// Python exception, or an exception (with or without a traceback to look at).
+fn step_remediation(step: &crate::FailedStep) -> String {
+    const RERUN: &str =
+        "re-run the same command. Steps that succeeded are cached and will not re-run.";
+    let summary = step.summary();
+    let node = &step.node;
+    if summary.starts_with("TimeoutError: ") && summary.contains(" exceeded timeout of ") {
+        format!(
+            "'{node}' ran longer than its timeout_seconds= (300 when not set). Raise it on the \
+             decorator or make the step faster, then {RERUN}"
+        )
+    } else if summary.starts_with("worker for ") || summary.starts_with("worker disconnected") {
+        format!(
+            "The worker running '{node}' died without a Python exception: os._exit(), a crash \
+             in native code, or the kernel (SIGKILL is often the out-of-memory killer). Check \
+             its memory use and the native libraries it calls, then {RERUN}"
+        )
+    } else if step.traceback().is_some() {
+        format!("Fix the error in '{node}' (see the traceback) and {RERUN}")
+    } else {
+        format!("Fix the error in '{node}' and {RERUN}")
     }
 }
 
@@ -267,11 +306,7 @@ impl ErrorEnvelope {
             return ErrorEnvelope {
                 kind,
                 error: format!("step '{}' failed: {}", step.node, step.summary()),
-                remediation: Some(format!(
-                    "Fix the error in '{}' (see the traceback) and re-run the same command. \
-                     Steps that succeeded are cached and will not re-run.",
-                    step.node
-                )),
+                remediation: Some(step_remediation(step)),
                 node: Some(step.node.clone()),
                 traceback: step.traceback().map(str::to_string),
                 artifact_dir: step.artifact_dir.clone(),
@@ -291,7 +326,14 @@ impl ErrorEnvelope {
             };
         }
         let fallback = match &e {
-            BarcaError::AssetNotFound(..) => list_hint(&ctx.files),
+            BarcaError::AssetNotFound(name, available) => {
+                let ids: Vec<&str> = available.split(", ").collect();
+                match crate::targets::target_suggestion(name, &ids) {
+                    Some(meant) => format!("{meant} {}", list_hint(&ctx.files)),
+                    None => list_hint(&ctx.files),
+                }
+            }
+            BarcaError::AmbiguousTarget(_) => list_hint(&ctx.files),
             BarcaError::Parse(_) => format!(
                 "Fix the Python syntax error, then run `{}` to confirm discovery.",
                 ctx.list_cmd()
@@ -361,9 +403,17 @@ impl ErrorEnvelope {
         {
             return self;
         }
-        // A generic fallback remediation is replaced, not repeated, by the more specific hint.
+        // A generic fallback remediation is replaced, not repeated, by the more specific hint;
+        // a leading "Did you mean ...?" stays in front of it.
         if !self.prose_has_remediation {
-            self.remediation = Some(hint);
+            let meant = self
+                .remediation
+                .as_deref()
+                .filter(|r| r.starts_with("Did you mean "))
+                .and_then(|r| r.split_once("? "))
+                .map(|(meant, _)| format!("{meant}? "))
+                .unwrap_or_default();
+            self.remediation = Some(format!("{meant}{hint}"));
             return self;
         }
         self.remediation = Some(match self.remediation.take() {

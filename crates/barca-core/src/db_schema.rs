@@ -162,28 +162,26 @@ pub(crate) async fn check(conn: &Connection) -> Result<i64, BarcaError> {
 
 /// Whether a version-1 database lacks an additive column, table or index of this release, so that
 /// [`crate::db::init_schema`] adds them (in one transaction) before using it. Read-only.
+#[cfg(test)]
 pub(crate) async fn additions_missing(conn: &Connection) -> Result<bool, BarcaError> {
-    let failed = |e| BarcaError::Db(format!("failed to read the metadata schema: {e}"));
+    Ok(additions_missing_in(
+        &crate::state_validate::Schema::read(conn).await?,
+    ))
+}
+
+/// [`additions_missing`], judged from a schema already read.
+pub(crate) fn additions_missing_in(schema: &crate::state_validate::Schema) -> bool {
     for (table, definitions) in [
         ("materializations", MATERIALIZATION_COLUMNS),
         ("runs", RUN_COLUMNS),
         ("schedule_state", SCHEDULE_STATE_COLUMNS),
     ] {
-        let mut rows = conn
-            .query(&format!("PRAGMA table_info({table})"), ())
-            .await
-            .map_err(failed)?;
-        let mut columns = Vec::new();
-        while let Some(row) = rows.next().await.map_err(failed)? {
-            columns.push(row.get::<String>(1).map_err(failed)?);
-        }
-        drop(rows);
         let missing = definitions.iter().any(|definition| {
             let name = definition.split_whitespace().next().unwrap_or_default();
-            !columns.iter().any(|column| column == name)
+            !schema.columns(table).any(|column| column == name)
         });
         if missing {
-            return Ok(true);
+            return true;
         }
     }
     let tables = ADDED_TABLES.iter().map(|(name, _)| ("table", *name));
@@ -194,21 +192,9 @@ pub(crate) async fn additions_missing(conn: &Connection) -> Result<bool, BarcaEr
             .expect("CREATE INDEX IF NOT EXISTS <name> ...");
         ("index", name)
     });
-    for (kind, name) in tables.chain(indexes) {
-        let mut rows = conn
-            .query(
-                "SELECT 1 FROM sqlite_schema WHERE type = ?1 AND name = ?2",
-                [kind, name],
-            )
-            .await
-            .map_err(failed)?;
-        let found = rows.next().await.map_err(failed)?.is_some();
-        drop(rows);
-        if !found {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+    tables
+        .chain(indexes)
+        .any(|(kind, name)| !schema.has(kind, name))
 }
 
 /// Apply only missing additive columns. Existing columns are not a reason to swallow errors.

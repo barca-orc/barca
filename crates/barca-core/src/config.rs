@@ -525,10 +525,10 @@ fn removed_settings(remote: &RemoteToml) -> Result<(), BarcaError> {
         None => Ok(()),
         Some(what) => Err(BarcaError::Usage(format!(
             "{what} is no longer supported: barca {SHARED_HISTORY_REMOVED_IN} removed the shared \
-             history (`optimistic` mode, pull-before-run and the conditional push; RFC-0009). A \
-             remote store is now this machine's backup and read-through cache, with no setting: \
-             remove it. To share state between machines, use a server (RFC-0007). See barca docs \
-             remote."
+             history (`optimistic` mode, pull-before-run and the conditional push; RFC-0009).\n\
+             Remove it: a remote store is now this machine's backup and read-through cache, with \
+             no setting. To share state between machines, use a server (RFC-0007). See `barca \
+             docs remote`."
         ))),
     }
 }

@@ -1,9 +1,12 @@
-"""get/run usage errors state the fix and point at `barca list` (issue #148).
+"""get/run usage errors state the fix (issue #148).
 
 Positionals in the wrong order have exactly one valid reading, so barca prints the corrected
-command instead of guessing. There is deliberately no fuzzy "did you mean" matching: an agent
-could read a guess as confirmation. Every get/run usage error exits 2 and ends with
-`barca list <files>`, the discovery entry point.
+command instead of guessing. A mistyped name (target, `--refresh` name, flag, subcommand) gets
+one "Did you mean" rule (#556): the closest name within one or two edits, at the start of the
+remediation, never in `error` and never changing the exit code. Every get/run usage error exits 2.
+Only an unknown or ambiguous target (and `run` without one) ends with `barca list <files>`, the
+discovery entry point; every other usage error carries its own fix and no `barca list` pointer
+(#492).
 
 `get`/`run` default to JSON output, so their errors are a JSON envelope on stderr (#154); these
 tests read `error` and `remediation` from it. One test checks the human-mode prose.
@@ -69,7 +72,7 @@ def test_run_with_files_before_target_prints_the_corrected_command(project):
     err = usage_error(barca(project, "run", "pipeline.py", "report"))
     assert "error: the target comes before the files" in err
     assert "\nbarca run report pipeline.py\n" in err
-    assert last_line(err) == "Run `barca list pipeline.py` to see available assets and tasks."
+    assert "barca list" not in err  # the corrected command is the fix
     assert "did you mean" not in err.lower()
 
 
@@ -77,7 +80,7 @@ def test_get_with_files_before_target_prints_the_corrected_command(project):
     err = usage_error(barca(project, "get", "pipeline.py", "mid"))
     assert "error: the target comes before the files" in err
     assert "\nbarca get mid pipeline.py\n" in err
-    assert last_line(err) == "Run `barca list pipeline.py` to see available assets and tasks."
+    assert "barca list" not in err
 
 
 def test_the_corrected_command_keeps_every_file_and_flag(project):
@@ -85,7 +88,6 @@ def test_the_corrected_command_keeps_every_file_and_flag(project):
         barca(project, "run", "pipeline.py", "report", "other.py", "--refresh", "src", "--agent")
     )
     assert "\nbarca run report pipeline.py other.py --refresh src --agent\n" in err
-    assert "Run `barca list pipeline.py other.py`" in err
 
 
 def test_the_corrected_command_runs(project):
@@ -105,7 +107,7 @@ def test_several_non_py_positionals_after_a_file_state_the_rule_without_guessing
     assert "error: the target comes before the files" in err
     assert "Usage: barca run <TARGET> <FILES>..." in err
     assert "\nbarca run report pipeline.py\n" not in err
-    assert last_line(err) == "Run `barca list pipeline.py` to see available assets and tasks."
+    assert "barca list" not in err
 
 
 def test_run_without_a_target(project):
@@ -118,23 +120,23 @@ def test_target_without_files_reads_the_whole_project(project):
     # No files means tree discovery (#202), so a bare target just works...
     ran = barca(project, "run", "report")
     assert ran.returncode == 0, ran.stderr
-    # ...and misuse errors point at the project-wide `barca list`.
-    err = usage_error(barca(project, "get", "report"))
-    assert "'report' is a task" in err
+    # ...and an unknown target points at the project-wide `barca list`.
+    err = usage_error(barca(project, "get", "nope"))
+    assert "'nope' not found" in err
     assert last_line(err) == "Run `barca list` to see available assets and tasks."
 
 
 def test_space_separated_refresh_still_says_to_use_commas(project):
     err = usage_error(barca(project, "run", "report", "pipeline.py", "--refresh", "src", "mid"))
     assert "'mid' is not a .py file" in err
-    assert "--refresh src,mid" in err
-    assert last_line(err) == "Run `barca list pipeline.py` to see available assets and tasks."
+    assert last_line(err) == "If you meant to refresh several assets, join them with commas: --refresh src,mid"
 
 
 def test_unknown_refresh_name(project):
     err = usage_error(barca(project, "run", "report", "pipeline.py", "--refresh", "nope"))
     assert "no upstream asset named 'nope'" in err
-    assert last_line(err) == "Run `barca list pipeline.py` to see available assets and tasks."
+    assert "Upstream assets you can refresh: src, mid" in err  # its own fix
+    assert "barca list" not in err
 
 
 def test_unknown_target(project):
@@ -144,12 +146,59 @@ def test_unknown_target(project):
         assert last_line(err) == "Run `barca list pipeline.py` to see available assets and tasks."
 
 
+def test_a_mistyped_target_suggests_the_closest_node(project):
+    for cmd, name, meant in (("get", "midd", "mid"), ("run", "reprt", "report")):
+        proc = barca(project, cmd, name, "pipeline.py")
+        err = usage_error(proc)
+        env = json.loads(proc.stderr.strip().splitlines()[-1])
+        assert f"'{name}' not found" in env["error"]
+        assert "did you mean" not in env["error"].lower()
+        assert env["remediation"] == (
+            f"Did you mean '{meant}'? Run `barca list pipeline.py` to see available assets and tasks."
+        ), env
+        assert "Run `barca list pipeline.py`" in last_line(err)
+
+
+def test_a_far_off_target_gets_no_guess(project):
+    err = usage_error(barca(project, "get", "nope", "pipeline.py"))
+    assert "did you mean" not in err.lower()
+
+
+def test_a_mistyped_refresh_name_suggests_the_closest_upstream_asset(project):
+    err = usage_error(barca(project, "run", "report", "pipeline.py", "--refresh", "srcc"))
+    assert "no upstream asset named 'srcc'" in err
+    assert "\nDid you mean 'src'?\n" in err
+    # Not a target error: its own fix (the valid names), no `barca list` pointer (#492).
+    assert "barca list" not in err, err
+
+
+def test_a_mistyped_flag_or_subcommand_suggests_the_closest(project):
+    proc = barca(project, "get", "mid", "pipeline.py", "--refesh", "src")
+    env = json.loads(proc.stderr.strip().splitlines()[-1])
+    assert proc.returncode == 2 and env["kind"] == "usage", proc.stderr
+    assert env["remediation"].startswith("Did you mean '--refresh'?"), env
+    assert "as a value" not in proc.stderr  # clap's `-- --refesh` tip is gone
+    proc = barca(project, "statsu")
+    assert proc.returncode == 2
+    assert "\n\nDid you mean 'stats' or 'status'?\n" in proc.stderr, proc.stderr
+
+
+def test_human_mode_puts_the_suggestion_on_its_own_line(project):
+    proc = barca(project, "get", "midd", "pipeline.py", "-o", "pretty")
+    assert proc.returncode == 2
+    assert proc.stderr.startswith("Asset 'midd' not found. Available: "), proc.stderr
+    assert last_line(proc.stderr) == (
+        "Did you mean 'mid'? Run `barca list pipeline.py` to see available assets and tasks."
+    )
+
+
 def test_task_asset_misuse(project):
     err = usage_error(barca(project, "get", "report", "pipeline.py"))
     assert "use `barca run` instead" in err
-    assert last_line(err) == "Run `barca list pipeline.py` to see available assets and tasks."
+    assert "barca list" not in err
     err = usage_error(barca(project, "run", "mid", "pipeline.py"))
     assert "use `barca get` instead" in err
+    assert "barca list" not in err
 
 
 def test_a_correct_command_still_succeeds(project):
@@ -161,5 +210,22 @@ def test_human_mode_prints_the_prose(project):
     assert proc.returncode == 2
     err = proc.stderr
     assert err.startswith("error: the target comes before the files\n\n")
-    assert "\n  barca run report pipeline.py -o pretty\n" in err
-    assert last_line(err) == "Run `barca list pipeline.py` to see available assets and tasks."
+    assert err.rstrip().endswith("\n  barca run report pipeline.py -o pretty")
+    assert "barca list" not in err
+
+
+AMBIGUOUS = """
+from barca import asset
+
+
+@asset()
+def src() -> dict:
+    return {"v": 2}
+"""
+
+
+def test_ambiguous_target(project):
+    (project / "other.py").write_text(AMBIGUOUS)
+    err = usage_error(barca(project, "get", "src", "pipeline.py", "other.py"))
+    assert "'src' matches more than one node" in err
+    assert last_line(err) == "Run `barca list pipeline.py other.py` to see available assets and tasks."

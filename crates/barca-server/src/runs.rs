@@ -141,11 +141,23 @@ async fn check_target_as(
                 files: Vec::new(),
             },
         )),
-        Err(e @ barca_core::targets::TargetError::Ambiguous { .. }) => {
-            Err(ApiError::Conflict(e.to_string()))
-        }
+        // The CLI's error and remediation: `barca list` for an ambiguous name, `barca <cmd>
+        // --help` for the wrong kind (#492).
+        Err(e @ barca_core::targets::TargetError::Ambiguous { .. }) => Err(ApiError::run(
+            BarcaError::from(e),
+            Context {
+                command: verb_command(verb),
+                files: Vec::new(),
+            },
+        )),
         Err(e @ barca_core::targets::TargetError::WrongKind { .. }) if wording == Wording::Cli => {
-            Err(ApiError::BadRequest(e.to_string()))
+            Err(ApiError::run(
+                BarcaError::from(e),
+                Context {
+                    command: verb_command(verb),
+                    files: Vec::new(),
+                },
+            ))
         }
         Err(barca_core::targets::TargetError::WrongKind { name, kind }) => {
             let (what, endpoint) = match kind {
@@ -998,6 +1010,18 @@ pub struct RunSummary {
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub steps_cached: i64,
     pub error: Option<String>,
+    /// With `?status=running` only: the nodes the run is working on now.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub active_steps: Option<Vec<ActiveStep>>,
+}
+/// A node an in-flight run is working on (`GET /runs?status=running`).
+#[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct ActiveStep {
+    pub node_id: String,
+    pub step: crate::running::RunningStep,
+    pub partitions: Option<crate::running::PartitionProgress>,
 }
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -1010,14 +1034,21 @@ pub struct RunList {
 #[derive(Default, Deserialize)]
 pub struct RunsQuery {
     pub limit: Option<usize>,
+    /// `running`: only the runs in flight (pending or running), this server's and the CLI's.
+    pub status: Option<RunsFilter>,
+}
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RunsFilter {
+    Running,
 }
 
-fn timestamp(at: f64) -> String {
+pub(crate) fn timestamp(at: f64) -> String {
     chrono::DateTime::from_timestamp_millis((at * 1000.0) as i64)
         .map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
         .unwrap_or_default()
 }
-fn durable_timestamp(at: &str) -> String {
+pub(crate) fn durable_timestamp(at: &str) -> String {
     chrono::NaiveDateTime::parse_from_str(at, "%Y-%m-%d %H:%M:%S")
         .map(|t| {
             t.and_utc()
@@ -1044,6 +1075,7 @@ fn summary(record: db::RunRecord, live: Option<&RunState>) -> RunSummary {
         steps_executed: record.steps_executed,
         steps_cached: record.steps_cached,
         error: live.and_then(|r| r.error.clone()),
+        active_steps: None,
     }
 }
 fn live_summary(run: &RunState, files: &[String]) -> RunSummary {
@@ -1070,6 +1102,7 @@ fn live_summary(run: &RunState, files: &[String]) -> RunSummary {
                 .count() as i64
         }),
         error: run.error.clone(),
+        active_steps: None,
     }
 }
 fn live_runs(state: &AppState) -> Vec<RunState> {
@@ -1083,6 +1116,11 @@ pub async fn list(
 ) -> Result<Json<RunList>, ApiError> {
     let limit = query.limit.unwrap_or(100).clamp(1, 1000);
     let snapshot = snapshot_db(&state).await?;
+    if query.status == Some(RunsFilter::Running) {
+        return in_flight_list(&state, &snapshot.path, limit)
+            .await
+            .map(Json);
+    }
     // Clone after the snapshot: a new live run not yet in the snapshot stays visible.
     let live = live_runs(&state);
     let by_id: HashMap<_, _> = live.iter().map(|r| (r.handle.as_str(), r)).collect();
@@ -1119,6 +1157,68 @@ pub async fn list(
         runs,
         total,
     }))
+}
+
+/// `GET /runs?status=running`: the runs in flight, newest first, each with the nodes it is
+/// working on now ([`crate::running`]).
+async fn in_flight_list(
+    state: &AppState,
+    read_path: &str,
+    limit: usize,
+) -> Result<RunList, ApiError> {
+    let flights = crate::running::in_flight(state, Some(read_path)).await;
+    let mut runs = Vec::with_capacity(flights.len());
+    if !flights.is_empty() {
+        let dag = state.loaded_dag().await?;
+        let mut cfg = state.config.resolved.clone();
+        cfg.db_path = read_path.to_string();
+        let status =
+            barca_core::status::status_from_dag(&cfg, &[], &dag, &state.config.python, 0, false)
+                .await?;
+        for flight in &flights {
+            let mut row = match state.runs.get(&flight.run_id) {
+                Some(live) => live_summary(&live, &state.config.files),
+                None => match db::get_run(read_path, &flight.run_id).await? {
+                    Some(record) => {
+                        let mut row = summary(record, None);
+                        // The snapshot's owner diagnosis is not this machine's: the owner
+                        // was found alive.
+                        row.status = "running".into();
+                        row
+                    }
+                    None => continue,
+                },
+            };
+            let by_node =
+                crate::running::by_node(std::slice::from_ref(flight), &status.nodes, &dag);
+            row.active_steps = Some(
+                status
+                    .nodes
+                    .iter()
+                    .filter_map(|n| {
+                        by_node.get(&n.id).map(|r| ActiveStep {
+                            node_id: n.id.clone(),
+                            step: r.step,
+                            partitions: r.partitions.clone(),
+                        })
+                    })
+                    .collect(),
+            );
+            runs.push(row);
+        }
+    }
+    runs.sort_by(|a, b| {
+        b.started_at
+            .cmp(&a.started_at)
+            .then_with(|| b.id.cmp(&a.id))
+    });
+    let total = runs.len();
+    runs.truncate(limit);
+    Ok(RunList {
+        truncated: total > runs.len(),
+        runs,
+        total,
+    })
 }
 
 /// Evict finished runs older than `max_age` from the in-memory runs map, checking every

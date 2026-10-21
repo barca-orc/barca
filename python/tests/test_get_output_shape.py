@@ -218,7 +218,11 @@ def test_a_terminal_previews_a_small_json_value_under_its_path(project):
     assert '  "total": 6' in out
     # A value longer than the preview limit shows only its path.
     proc = cli(project, "get", "big", "pipeline.py", "--pretty")
-    assert "pipeline.py--big/" in proc.stdout and "99" not in proc.stdout
+    # The path is the last line: no preview of the list's elements follows it. Checking lines
+    # rather than a substring like "99" keeps a run id or duration from deciding the result.
+    lines = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+    assert "pipeline.py--big/" in lines[-1], proc.stdout
+    assert not {"99", "99,", "[", "]"} & set(lines), proc.stdout
 
 
 def test_python_get_still_returns_values(project, monkeypatch):

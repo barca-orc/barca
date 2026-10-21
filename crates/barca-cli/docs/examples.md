@@ -11,3 +11,5 @@ Self-contained pipelines. Each topic shows the file and the commands; save the c
 | `barca docs discovery` ("Cross-file inputs") | A project split into a package of modules, wired by ordinary imports; save each `# file:` block at its path. |
 
 These examples are executed by the test suite, so they stay correct as barca changes.
+
+See also: `barca docs overview`, `barca docs partitions`, `barca docs tasks`.
