@@ -315,7 +315,8 @@ error (exit 2) that names the right one. `barca pipeline.py` is short for
 | `barca gc` | Evict cached results to keep `.barca/` under its size limit (`[cache] max_size` or `BARCA_CACHE_MAX_SIZE`, default 10% of the filesystem; barca also does it after every `get` and `run`). `--dry-run`, `--max-size SIZE`, `--json`, `--pretty`, `--env` |
 | `barca history` | Every run in JSON, 10 in a human table. `--limit N`, `--all`, `--json`, `--pretty`, `--fields`, `--env`; `--reconcile RUN_ID` explicitly records a verified-stopped run as interrupted |
 | `barca stats <target> [files...]` | Timing and cache statistics for one asset. `--json`, `--pretty`, `--fields`, `--env` |
-| `barca serve [files...]` | HTTP API, cron scheduler and web UI. `--port N`, `--host IP`, `--watch`, `--no-schedule`, `--timezone`, `--read-only`, `--env` |
+| `barca serve [files...]` | HTTP API, cron scheduler and web UI. `--port N`, `--host IP`, `--watch`, `--no-schedule`, `--timezone`, `--read-only`, `--drain-timeout`, `--env`. SIGTERM drains runs in flight; `BARCA_LOG=json` writes its lines as JSON on stdout |
+| &nbsp;&nbsp;`--server [<url>]`, `--local` | On `get`, `run`, `status`, `list`, `history`, `stats` (experimental): `--server` runs the command on a `barca serve` and prints it here as a local run would; with no URL it uses `BARCA_SERVER` or `[server] url` in `barca.toml`. `--local` ignores a configured server. See `barca docs server-mode` |
 | `barca state backups` | The metadata backups, local and in the store, newest first. `--json`, `--pretty`, `--env` |
 | `barca state restore` | Put a backup in place of the metadata DB; the current one is kept as `metadata.db.pre-restore`. `--from N\|NAME`, `--json`, `--env` |
 | `barca docs [topic]` | The manual, compiled into the binary. `--all`, `--json`, `--fields` |
@@ -387,22 +388,39 @@ has to come in through a sensor. A scheduled sensor's tick runs the sensor and d
 trigger the assets that read it. The other freshness values, `Always` (the default) and
 `Manual`, are recorded and shown by `barca list` and have no effect at run time today.
 
-The server-ledger design in RFC-0007 is accepted but not implemented in v0.24.0:
-CLI `--server`, server URL configuration and laptop runs against the shared ledger are
-still pending. Use HTTP or `barca.Client` to run deployed code on today's server;
-ordinary `barca get` and `barca.get()` execute locally.
-
-Runs started over HTTP are asynchronous: `POST` returns a `run_id`, and you poll
-`/status/<run_id>`.
+Server mode (RFC-0007, experimental) makes the server the team's ledger. With
+`[server] url` (or `BARCA_SERVER`) and the server's `[remote]` store in `barca.toml`, `barca get`
+on a laptop still runs locally but reads cache hits from the server's ledger and posts what it
+computes; `barca status`, `history` and `stats` answer from the server. `--server` runs a command
+on the server and prints what the same command prints locally; Ctrl-C cancels it there.
+`--local` leaves the server untouched.
 
 ```bash
-curl localhost:8274/health                  # {"read_only":false,"scheduler":true,"status":"ok","version":"0.23.0"}
-curl localhost:8274/schedule                # each schedule: last and next fire, last status
-curl -XPOST localhost:8274/run              # every asset and sensor (tasks are skipped) -> {"run_id":"..."}
-curl -XPOST localhost:8274/get/summary      # one asset and what it depends on
-curl -XPOST localhost:8274/run/publish      # one task; this recomputes every asset it depends on
-curl localhost:8274/status/<run_id>         # {"status":"complete","result":{...}}
-curl -XDELETE localhost:8274/run/<run_id>   # cancel a run in flight (409 if it already finished)
+barca get summary                                       # here, against the server's ledger
+barca get summary --server https://barca.example.com    # runs there, prints here
+export BARCA_SERVER=https://barca.example.com           # or [server] url in barca.toml
+barca run publish --server --agent                      # the configured server
+barca history -l 5                                      # its runs
+barca get summary --local                               # this machine only
+```
+
+In Python, `barca.get("summary", server=True)`. `barca.Client` is deprecated in favour of
+`barca.api` (`barca docs server-mode`).
+
+Runs started over HTTP are asynchronous: `POST /runs` returns the run's database id at once,
+its events stream as they happen, and `GET /runs/<run_id>` answers with its outcome, also after
+a restart.
+
+```bash
+curl localhost:8274/health                  # {"api_version":1,"env":"default","scheduler":true,"status":"ok",...}
+curl localhost:8274/schedule                # each schedule: last and next fire, last status, pause
+curl -XPOST localhost:8274/runs -d '{"command":"get","targets":["summary"]}'   # -> {"run_id":"..."}
+curl -XPOST localhost:8274/runs -d '{"command":"run","targets":["publish"]}'   # one task
+curl -N localhost:8274/runs/<run_id>/events # progress lines, step results, then the outcome
+curl localhost:8274/runs/<run_id>           # {"status":"success","outcome":{...the barca get --json body...}}
+curl -XDELETE localhost:8274/runs/<run_id>  # cancel a run in flight (409 if it already finished)
+curl -XPOST localhost:8274/schedule/daily/pause   # hold one schedule back; .../resume lets it fire again
+curl localhost:8274/list                    # barca list --json --all, from the server (also /nodes, /history, /stats/<name>)
 ```
 
 More: `barca docs scheduling`, the [server API reference](https://barca.sh/reference/server-api/),
@@ -423,11 +441,16 @@ unit tested as ordinary Python.
 
 ## Datadog job traces
 
-Set `BARCA_TELEMETRY=datadog` to report job runs and steps to a Datadog Agent.
-Install `barca[datadog]` in your job environment to add named Python executions and
-nested library traces in the same job trace. In the `<DD_SERVICE>-python` service,
-select `barca.execute` to see jobs by their canonical names. See `barca docs telemetry`
-for setup, tags, and delivery limits.
+Set `BARCA_TELEMETRY=datadog` to report each run to a Datadog Agent as one trace of the
+pipeline: a `barca.run` span named by the command and its targets, a `barca.step` span per node
+named by the node, carrying its file, group, partition counts, outcome and cost, and the first
+failed asset on the run. Everything reports as one service, `DD_SERVICE`. Install
+`barca[datadog]` in your job environment to add each step's Python call (`barca.execute`) and,
+opted in with `DD_PATCH_MODULES` or `BARCA_TRACE_LIBRARIES=1`, library spans. `barca serve`
+reports itself as DogStatsD metrics (`barca.serve.up`). See `barca docs telemetry` for setup,
+tags, and delivery limits. Under `barca serve`, `BARCA_LOG=json` writes each log
+line as a JSON object on stdout with its level, `run_id`, `node` and the run's trace and span
+ids, so Datadog joins a run's logs to its trace.
 
 ## Slack notifications
 

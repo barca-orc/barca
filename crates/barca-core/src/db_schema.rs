@@ -17,7 +17,23 @@ pub(crate) const RUN_COLUMNS: &[&str] = &[
     // How a notification integration finds the job's previous run. NULL on rows from older
     // versions and on runs that never finished.
     "job TEXT",
+    // What started the run (`manual`, `api`, `schedule`, `client`), and for a scheduled run
+    // the tick and the schedule (#393). NULL on rows from older versions.
+    "triggered_by TEXT",
+    "scheduled_at TEXT",
+    "schedule_id TEXT",
+    // A run `barca serve` started: its full result, so `GET /runs/{id}` answers after a
+    // restart (#393). NULL for every other run.
+    "outcome_json TEXT",
+    // On a server: the run id a laptop gave the run it posted to the ledger
+    // (`triggered_by: client`, RFC-0007 section 4.1). A repeated post of the same run is
+    // recognised by it. NULL for every other run.
+    "client_run_id TEXT",
 ];
+
+/// A schedule held back by `POST /schedule/{id}/pause` (#435): since when and until when
+/// (unix seconds; `paused_until` NULL means until it is resumed). NULL when not paused.
+pub(crate) const SCHEDULE_STATE_COLUMNS: &[&str] = &["paused_at INTEGER", "paused_until INTEGER"];
 
 pub(crate) const MATERIALIZATION_COLUMNS: &[&str] = &[
     "artifact_path TEXT",
@@ -135,6 +151,7 @@ pub(crate) async fn additions_missing(conn: &Connection) -> Result<bool, BarcaEr
     for (table, definitions) in [
         ("materializations", MATERIALIZATION_COLUMNS),
         ("runs", RUN_COLUMNS),
+        ("schedule_state", SCHEDULE_STATE_COLUMNS),
     ] {
         let mut rows = conn
             .query(&format!("PRAGMA table_info({table})"), ())
@@ -241,9 +258,12 @@ mod tests {
         )
         .await
         .unwrap();
-        conn.execute("INSERT INTO schedule_state VALUES ('p.py:a',123)", ())
-            .await
-            .unwrap();
+        conn.execute(
+            "INSERT INTO schedule_state (node_id,last_fired_at) VALUES ('p.py:a',123)",
+            (),
+        )
+        .await
+        .unwrap();
         conn.execute(
             "INSERT INTO materializations (node_id,run_id,output_json) VALUES ('p.py:a',?1,'42')",
             [id],
@@ -400,6 +420,42 @@ mod tests {
         assert_eq!(
             scalar(&conn, "SELECT COUNT(*) FROM pending_uploads").await,
             0
+        );
+    }
+
+    #[tokio::test]
+    async fn a_format_1_database_from_before_an_added_column_gets_it_and_keeps_its_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("format1.db").display().to_string();
+        populated(&path, "saved").await;
+        {
+            // As a 0.24 release left it: format 1 without the columns added since.
+            let (_db, conn) = raw(&path).await;
+            for (table, name) in [
+                ("runs", "triggered_by"),
+                ("runs", "scheduled_at"),
+                ("runs", "schedule_id"),
+                ("runs", "outcome_json"),
+                ("schedule_state", "paused_at"),
+                ("schedule_state", "paused_until"),
+            ] {
+                conn.execute(&format!("ALTER TABLE {table} DROP COLUMN {name}"), ())
+                    .await
+                    .unwrap();
+            }
+            assert!(additions_missing(&conn).await.unwrap());
+        }
+        db::init_db(&path).await.unwrap();
+        db::init_db(&path).await.unwrap();
+        let (_db, conn) = raw(&path).await;
+        assert!(!additions_missing(&conn).await.unwrap());
+        assert_eq!(scalar(&conn, "PRAGMA user_version").await, VERSION);
+        let run = db::get_run(&path, "saved").await.unwrap().unwrap();
+        assert_eq!(run.status, "success");
+        assert_eq!(run.triggered_by, None, "older rows do not say");
+        assert_eq!(
+            scalar(&conn, "SELECT last_fired_at FROM schedule_state").await,
+            123
         );
     }
 

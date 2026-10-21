@@ -33,7 +33,8 @@ The domain lives in Rust; the frontend's business logic is deliberately thin.
 - `lib/api.ts` — typed `fetch` wrappers over the barca-server HTTP API.
 - `lib/types.ts` — re-exports the **generated** wire types and adds the few
   frontend-only / ad-hoc-JSON types (`StatusKind`, `LogLine`, `Health`,
-  `RunHandle`, `AssetDetail`).
+  `RunHandle`, `AssetDetail`, `NodeStats`, `ErrorEnvelope`, `RunOutcome`,
+  `RunViewStatus`, `ScheduleJob`).
 - `lib/generated/` — TypeScript types **generated from Rust** via `ts-rs`. Do
   not hand-edit. Rust is the single source of truth, so the wire contract can't
   drift (it once did — `Freshness` is `{"type":"Always"}`, PascalCase, which a
@@ -53,6 +54,8 @@ Pure functions that decide *what* to show. These are the unit-test targets.
 | Module | Responsibility | Test |
 |---|---|---|
 | `lib/runStream.ts` | `reduceRunEvent(state, event)` — fold an SSE event stream into UI state | `runStream.test.ts` |
+| `lib/runs.ts` | `runStatus`, `runIsLive`, `triggeredByLabel`, `parseOutcome` — a run's status, trigger and outcome → display | `runs.test.ts` |
+| `lib/schedules.ts` | `scheduleRows(assets, states, now, jobs)` — scheduled nodes with next run, last run, pause | `schedules.test.ts` |
 | `lib/runFeedback.ts` | `runFeedback(status, logs, error)` — map a node's status to a feedback descriptor | `runFeedback.test.ts` |
 | `lib/status.ts` | `statusMeta`, `freshnessLabel`, `nodeKindLabel` — domain → display tokens | — |
 | `lib/graph.ts` | `buildGraph(assets, dir)` — assets → dagre-positioned React Flow nodes/edges | — |

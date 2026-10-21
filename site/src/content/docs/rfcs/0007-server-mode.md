@@ -11,10 +11,18 @@ description: 'One deployed barca serve owns the record of what exists. Laptops r
 
 ---
 
-> **Implementation status (v0.24.0):** Accepted design, not shipped functionality.
-> The server URL settings, CLI `--server`/`--local` flags, shared-ledger operations and
-> parity contract below are pending #393, #394 and #402. For a working setup today,
-> follow [Deploying barca serve](/deploying/) and the [current HTTP API](/reference/server-api/).
+> **Implementation status:** Accepted design, partly shipped. The run contract and inspection
+> routes of section 3.4 are implemented (#393): `POST /runs`, `GET /runs/{run_id}` and its
+> events, output and cancel, `/list`, `/nodes`, `/history`, `/stats/{name}`, `/project`, and
+> `/health` with `api_version`. `triggered_by` is `manual` for a command typed on a machine
+> (this RFC's `cli`). The server URL settings (`[server] url`, `BARCA_SERVER`), the CLI's
+> `--server`/`--local` flags, `barca.get(..., server=True)` and the parity suite are implemented
+> (#394); a `--server` run records `triggered_by: api`. The ledger (#402) is implemented too:
+> `POST /ledger/lookup`, `POST /ledger/runs`, and local `get`/`run` against a configured server
+> (over `http://` or `https://`); `barca status`, `history` and `stats` answer from a configured
+> server, `status` with `local` per node and `unsynced` (`not_in_ledger`) for a pending post.
+> For a working setup today, follow [Deploying barca serve](/deploying/) and the
+> [current HTTP API](/reference/server-api/).
 
 ## 1. Summary
 

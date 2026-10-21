@@ -56,6 +56,11 @@ test = [
     "s3fs",
     "gcsfs",
     "google-cloud-storage",
+    # Datadog: Python spans in the workers and the fake Agent's msgpack decoding
+    # (python/tests/test_telemetry_datadog.py). CI installs Datadog's APM test agent
+    # (ddapm-test-agent) in a venv of its own: it pins an older protobuf.
+    "ddtrace>=3,<5",
+    "msgpack",
 ]
 
 [tool.maturin]

@@ -296,11 +296,16 @@ dependencies = [
 name = "barca"
 version = "0.26.1"
 dependencies = [
+ "axum",
  "barca-core",
  "barca-server",
  "chrono",
  "clap",
+ "reqwest",
+ "serde",
  "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
  "tokio",
 ]
 
@@ -350,10 +355,12 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml_ng",
+ "sha2 0.10.9",
  "tempfile",
  "thiserror",
  "tokio",
  "tokio-stream",
+ "tokio-util",
  "tower",
  "ts-rs",
 ]
@@ -3615,6 +3622,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]

@@ -106,7 +106,8 @@ pub fn expand_pending_partitions(
             for (dim, source_name) in &step.pending_partitions {
                 if let Some(oref) = find_partition_source(all_outputs, source_name) {
                     if oref.format != "json" {
-                        crate::errln!(
+                        crate::run_line!(
+                            Always,
                             "[barca] error: partition source '{}' must be JSON format, got '{}'",
                             source_name,
                             oref.format
@@ -118,7 +119,8 @@ pub fn expand_pending_partitions(
                     let json_str = match std::fs::read_to_string(&oref.path) {
                         Ok(s) => s,
                         Err(e) => {
-                            crate::errln!(
+                            crate::run_line!(
+                                Always,
                                 "[barca] error: failed to read partition artifact '{}': {e}",
                                 oref.path
                             );
@@ -137,7 +139,8 @@ pub fn expand_pending_partitions(
                             })
                             .collect(),
                         _ => {
-                            crate::errln!(
+                            crate::run_line!(
+                                Always,
                                 "[barca] warning: partition source '{}' did not return an array",
                                 source_name
                             );
@@ -146,7 +149,8 @@ pub fn expand_pending_partitions(
                     };
                     dim_values.insert(dim.clone(), values);
                 } else {
-                    crate::errln!(
+                    crate::run_line!(
+                        Always,
                         "[barca] warning: partition source '{}' not found in outputs",
                         source_name
                     );

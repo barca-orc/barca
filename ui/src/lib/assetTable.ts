@@ -94,6 +94,7 @@ function staleReason(reason: CacheStatus['reason']): string {
     .with('local_only', () => 'local only')
     .with('store_only', () => 'store only')
     .with('mismatch', () => 'store copy differs')
+    .with('not_in_ledger', () => 'not in ledger')
     .with(
       'materialized',
       'no_record',

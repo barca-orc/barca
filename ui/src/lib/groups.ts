@@ -1,5 +1,5 @@
 /** Organizational metadata, independent of execution. */
-import type { AssetSummary, NodeState } from './types'
+import type { ListNode, NodeState } from './types'
 import { shortName, type GraphEntry } from './graph'
 import { graphState, UNKNOWN_GRAPH_STATE, type GraphState } from './graphState'
 
@@ -99,7 +99,7 @@ export function groupHealth(
 
 /** Collapse only visual edges. Real inputs and the original graph stay intact. */
 export function projectGroups(
-  assets: AssetSummary[],
+  assets: ListNode[],
   tree: GroupTree,
   scope: string | null,
 ) {

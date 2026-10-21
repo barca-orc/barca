@@ -2,14 +2,16 @@
 
 use barca_core::CancellationToken;
 use barca_core::RunEvent;
+use barca_core::db;
 use barca_core::results::{AssetSummary, GetResult, PlanResult};
 use dashmap::DashMap;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, RwLock};
-use tokio::sync::{Semaphore, broadcast};
+use tokio::sync::Semaphore;
 
 /// How many runs may execute concurrently by default (one per available core).
 fn default_run_concurrency() -> usize {
@@ -61,39 +63,50 @@ pub enum RunStatus {
     Complete,
     /// Finished with an error.
     Failed,
-    /// Stopped mid-flight via `DELETE /run/{id}` or server shutdown.
+    /// Stopped mid-flight via `DELETE /runs/{id}` or server shutdown.
     Cancelled,
 }
 
-/// In-memory record of a single run. The server-side `handle` is the polling id
-/// returned by `POST /run`; the real DB run id lives inside `result` once complete.
+/// In-memory record of a single run, kept while it runs and for a while after. `handle` is
+/// the database run id, allocated when the run is accepted.
 #[derive(Clone, Debug, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct RunState {
-    /// Server-side polling handle (see `/status/{run_id}`).
+    /// The run id (see `/runs/{run_id}`); the older `/status/{run_id}` calls it the handle.
     pub handle: String,
-    /// Durable id assigned by the engine, including failed and cancelled runs.
+    /// The same id, once the run has written its database row.
     #[serde(skip)]
     pub db_run_id: Option<String>,
     #[serde(skip)]
     pub command: String,
+    /// The targets as given, comma-separated (`None`: every asset and sensor).
     #[serde(skip)]
     pub target: Option<String>,
-    /// The full node id `target` resolved to when the run was accepted, or `None` for a run
-    /// of every asset and sensor (`POST /run`). The scheduler matches a due job against it,
-    /// so a run counts as in flight for its node however the target was spelled.
+    /// The full node ids the targets resolved to when the run was accepted; empty for a run of
+    /// every asset and sensor. The scheduler matches a due job against them, so a run counts
+    /// as in flight for its node however the target was spelled.
     #[serde(skip)]
-    pub node: Option<String>,
+    pub nodes: Vec<String>,
+    /// What started the run.
+    #[serde(skip)]
+    pub trigger: barca_core::outcome::Trigger,
+    /// The files the request named (`[]`: the deployed set).
+    #[serde(skip)]
+    pub files: Vec<String>,
     pub status: RunStatus,
-    /// Populated when `status == Complete`. Carries the DB run id, timing, output.
+    /// Populated when `status == Complete` for a single-target run. Carries the DB run id,
+    /// timing, output.
     pub result: Option<GetResult>,
-    /// Populated when `status == Failed`.
+    /// Populated when the run did not succeed.
     pub error: Option<String>,
     /// Unix epoch seconds when the run was accepted.
     pub started_at: f64,
     /// Unix epoch seconds when the run finished (success or failure).
     pub finished_at: Option<f64>,
-    /// Cancels this run's execution future. `DELETE /run/{id}` triggers it;
+    /// The run's full result once it finished.
+    #[serde(skip)]
+    pub outcome: Option<barca_core::outcome::Outcome>,
+    /// Cancels this run's execution future. `DELETE /runs/{id}` triggers it;
     /// the run task observes it, terminates workers, and marks the run
     /// cancelled. Not part of the JSON status payload.
     #[serde(skip)]
@@ -238,14 +251,16 @@ pub struct Durations {
     pub samples: usize,
 }
 
-/// Live event channel for one run: a broadcast for subscribers plus a backlog
-/// so a client that subscribes a beat after the run starts still receives the
-/// events emitted before it connected (the "replay backlog, then stream live"
-/// pattern). Durable history lives in the DB; this is the live tap.
+/// Live event channel for one run. Every event is numbered (the SSE `id:`) and kept for the
+/// run's lifetime, so a subscriber reads the whole run from the start whenever it connects,
+/// and a subscriber that falls behind reads on from where it was: nothing is dropped and
+/// nothing is sent twice. Durable history lives in the DB; this is the live tap.
 #[derive(Clone)]
 pub struct RunChannel {
-    tx: broadcast::Sender<RunEvent>,
     backlog: Arc<Mutex<Vec<RunEvent>>>,
+    /// How many events have been emitted; subscribers wait on it. Held only by the channel's
+    /// handles, so when the last one is dropped the subscribers see it closed.
+    emitted: Arc<tokio::sync::watch::Sender<usize>>,
 }
 
 impl Default for RunChannel {
@@ -256,28 +271,83 @@ impl Default for RunChannel {
 
 impl RunChannel {
     pub fn new() -> Self {
-        let (tx, _) = broadcast::channel(1024);
         Self {
-            tx,
             backlog: Arc::new(Mutex::new(Vec::new())),
+            emitted: Arc::new(tokio::sync::watch::channel(0).0),
         }
     }
 
-    /// Record an event to the backlog and broadcast it to live subscribers.
-    /// Push-before-send under the lock so a subscriber snapshotting the backlog
-    /// (while holding the lock) can't miss or duplicate an event.
+    /// Record an event and wake the subscribers.
     pub fn emit(&self, event: RunEvent) {
         let mut backlog = self.backlog.lock().unwrap();
-        backlog.push(event.clone());
-        let _ = self.tx.send(event);
+        backlog.push(event);
+        self.emitted.send_replace(backlog.len());
     }
 
-    /// Snapshot the current backlog and subscribe to live events atomically.
-    pub fn snapshot_and_subscribe(&self) -> (Vec<RunEvent>, broadcast::Receiver<RunEvent>) {
-        let backlog = self.backlog.lock().unwrap();
-        let snapshot = backlog.clone();
-        let rx = self.tx.subscribe();
-        (snapshot, rx)
+    /// Every event emitted so far, in order.
+    pub fn snapshot(&self) -> Vec<RunEvent> {
+        self.backlog.lock().unwrap().clone()
+    }
+
+    /// The events from number `from` on, each with its number, as they are emitted. Ends after
+    /// the run's terminal `run_finished`, or, once every event emitted has been sent, when the
+    /// channel is dropped (server shutdown, eviction) before the run finished.
+    pub fn subscribe(
+        &self,
+        from: usize,
+    ) -> impl futures::Stream<Item = (usize, RunEvent)> + Send + 'static + use<> {
+        struct Cursor {
+            next: usize,
+            ready: std::collections::VecDeque<(usize, RunEvent)>,
+            done: bool,
+            closed: bool,
+            emitted: tokio::sync::watch::Receiver<usize>,
+            backlog: Arc<Mutex<Vec<RunEvent>>>,
+        }
+        let cursor = Cursor {
+            next: from,
+            ready: Default::default(),
+            done: false,
+            closed: false,
+            emitted: self.emitted.subscribe(),
+            backlog: self.backlog.clone(),
+        };
+        futures::stream::unfold(cursor, |mut cursor| async move {
+            loop {
+                if let Some(item) = cursor.ready.pop_front() {
+                    cursor.done = item.1.is_terminal();
+                    return Some((item, cursor));
+                }
+                if cursor.done {
+                    return None;
+                }
+                // Mark the current count seen before reading, so an emit after the read
+                // wakes `changed` below.
+                cursor.emitted.borrow_and_update();
+                {
+                    let backlog = cursor.backlog.lock().unwrap();
+                    if backlog.len() > cursor.next {
+                        let from = cursor.next;
+                        cursor.ready.extend(
+                            backlog[from..]
+                                .iter()
+                                .cloned()
+                                .enumerate()
+                                .map(|(i, e)| (from + i, e)),
+                        );
+                        cursor.next = backlog.len();
+                        continue;
+                    }
+                }
+                if cursor.closed {
+                    return None;
+                }
+                if cursor.emitted.changed().await.is_err() {
+                    // Dropped: send what is left, then end.
+                    cursor.closed = true;
+                }
+            }
+        })
     }
 }
 
@@ -299,8 +369,10 @@ pub struct JobStatus {
     /// Last time a due tick of this job was skipped (unix epoch seconds) because a run of
     /// its node was already in flight. Kept in memory only; a restart clears it.
     pub last_skipped: Option<i64>,
-    /// Handle of the in-flight run that caused `last_skipped`.
+    /// Handle of the in-flight run that caused `last_skipped` (`None` for a paused job).
     pub skipped_for: Option<String>,
+    /// Why the last due tick was skipped: `in_flight` or `paused`.
+    pub skip_reason: Option<&'static str>,
 }
 
 /// Cloneable application state shared across all axum handlers.
@@ -317,17 +389,28 @@ pub struct AppState {
     /// parallel; the shared metadata.db is kept race-free by a process-wide DB
     /// lock in `barca-core`, not by serializing whole runs.
     pub run_slots: Arc<Semaphore>,
-    /// Total permits in `run_slots` — lets shutdown wait for in-flight runs by
-    /// re-acquiring every permit.
-    pub run_slot_count: usize,
-    /// Cancelled on graceful shutdown; every run token is a child of this, so
-    /// Ctrl-C stops in-flight runs (workers terminated, runs marked cancelled).
+    /// Cancelled when a drain ends without the runs finishing (its deadline, or a second
+    /// SIGTERM/SIGINT); every run token is a child of this, so in-flight runs stop (workers
+    /// terminated, runs marked cancelled with [`Self::cancel_reason`]).
     pub shutdown: CancellationToken,
+    /// Cancelled by the first SIGTERM/SIGINT: the server drains. New runs are refused with
+    /// `503`, the scheduler stops and `/health` says `draining`; runs in flight go on.
+    pub draining: CancellationToken,
+    /// Why the server cancelled its runs (`server shutdown`), set before [`Self::shutdown`]
+    /// is cancelled. Every run executes inside its scope, so the run records the reason.
+    pub cancel_reason: barca_core::interrupt::CancelReason,
+    /// Every run task, so a drain can wait for them to end.
+    pub run_tasks: tokio_util::task::TaskTracker,
     /// Live scheduler view, published by the scheduler and read by `GET /schedule`.
     pub schedule: Arc<RwLock<Vec<JobStatus>>>,
     /// Bumped by the `--watch` file watcher on every DAG invalidation, so the
     /// scheduler can re-read its job set without a restart.
     pub dag_generation: Arc<AtomicU64>,
+    /// Paused schedules by node id, read from `schedule_state` on first use and kept in step
+    /// with it by the pause and resume routes.
+    pub pauses: Arc<tokio::sync::OnceCell<RwLock<HashMap<String, db::SchedulePause>>>>,
+    /// When this server started (unix seconds), for `GET /project`'s `deployed_at`.
+    pub started_at: i64,
 }
 
 impl AppState {
@@ -341,11 +424,37 @@ impl AppState {
             cache: Arc::new(RwLock::new(DagCache::default())),
             events: Arc::new(DashMap::new()),
             run_slots: Arc::new(Semaphore::new(run_slot_count)),
-            run_slot_count,
             shutdown: CancellationToken::new(),
+            draining: CancellationToken::new(),
+            cancel_reason: barca_core::interrupt::CancelReason::new(),
+            run_tasks: tokio_util::task::TaskTracker::new(),
             schedule: Arc::new(RwLock::new(Vec::new())),
             dag_generation: Arc::new(AtomicU64::new(0)),
+            pauses: Arc::new(tokio::sync::OnceCell::new()),
+            started_at: chrono::Utc::now().timestamp(),
         }
+    }
+}
+
+impl AppState {
+    /// Whether the server is draining (or past it): no new run is admitted.
+    pub fn is_draining(&self) -> bool {
+        self.draining.is_cancelled()
+    }
+
+    /// The error a cancelled run reports: `run cancelled`, plus the reason when the server
+    /// cancelled it (`run cancelled: server shutdown`).
+    pub fn cancelled_message(&self) -> String {
+        match self.cancel_reason.get() {
+            Some(reason) => format!("run cancelled: {reason}"),
+            None => "run cancelled".to_string(),
+        }
+    }
+
+    /// The seconds a client refused during a drain is told to wait (`Retry-After`): the drain
+    /// timeout, by when this server is gone and its replacement is likely up. At least 1.
+    pub fn retry_after_secs(&self) -> u64 {
+        self.config.resolved.drain_timeout_secs.max(1)
     }
 }
 

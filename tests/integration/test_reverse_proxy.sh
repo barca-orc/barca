@@ -235,13 +235,17 @@ nginx = f"http://127.0.0.1:{nginx_port}"
 proxy_checks("nginx (bare proxy_pass)", nginx, "slow")
 proxy_checks("Traefik (PathPrefix + stripPrefix)", f"http://127.0.0.1:{traefik_port}", "slow_b")
 
-# Control: with the header ignored, nginx holds the stream back, so no event
-# arrives while the run is going (the run takes ~4s) — the nginx streaming check
-# above really measures the header.
+# Control: with the header ignored, nginx holds the stream back until it ends, so the
+# events arrive together, not as they happen (the run takes ~4s) — the nginx streaming
+# check above really measures the header. The stream ends after run_finished (#393), so
+# they arrive when the run ends rather than at the read timeout.
 print("control:")
 held = event_arrivals(nginx, "buffered", "slow_c", read_timeout=8)
-during = [t for t in held if t < 4.5]
-check(not during, f"nginx withholds events when the header is ignored ({len(during)} arrived during the run)")
+held_spread = held[-1] - held[0] if held else 0
+check(
+    held_spread < 1.0,
+    f"nginx withholds events when the header is ignored (first→last {held_spread:.1f}s)",
+)
 
 sys.exit(1 if failures else 0)
 PY

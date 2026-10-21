@@ -14,7 +14,7 @@
 //! persisted so catch-up survives restarts; runs execute through the bounded run
 //! pool and are visible via `GET /schedule`.
 
-use crate::handlers;
+use crate::runs;
 use crate::state::{AppState, JobStatus, RunStatus};
 #[cfg(test)]
 use barca_core::results::AssetSummary;
@@ -71,6 +71,8 @@ async fn sleep_to_next_second(zone: &Zone) {
 enum TickAction<'a> {
     /// Trigger a run of this job.
     Fire(&'a ScheduledJob),
+    /// Skip because the job is paused (`POST /schedule/{id}/pause`).
+    Paused(&'a ScheduledJob),
     /// Skip because a run of this job's node (`handle`) is still in flight, whoever started
     /// it: an earlier tick, `POST /get`, `POST /run/{task}` or `POST /run`.
     Skip {
@@ -86,13 +88,19 @@ enum TickAction<'a> {
 fn plan_tick<'a, Tz: TimeZone>(
     now: &DateTime<Tz>,
     jobs: &'a [ScheduledJob],
+    paused: impl Fn(&ScheduledJob) -> bool,
     in_flight: impl Fn(&ScheduledJob) -> Option<String>,
 ) -> Vec<TickAction<'a>> {
     due_jobs(now, jobs)
         .into_iter()
-        .map(|job| match in_flight(job) {
-            Some(handle) => TickAction::Skip { job, handle },
-            None => TickAction::Fire(job),
+        .map(|job| {
+            if paused(job) {
+                return TickAction::Paused(job);
+            }
+            match in_flight(job) {
+                Some(handle) => TickAction::Skip { job, handle },
+                None => TickAction::Fire(job),
+            }
         })
         .collect()
 }
@@ -101,10 +109,11 @@ fn plan_tick<'a, Tz: TimeZone>(
 /// run of that node, or a run of every asset and sensor (`POST /run`, which has no node)
 /// for a scheduled asset or sensor. A run of another node does not count, even one whose
 /// cone includes this node.
-fn run_covers(command: &str, node: Option<&str>, job: &ScheduledJob) -> bool {
-    match node {
-        Some(node) => node == job.id,
-        None => command == "get" && job.kind != NodeKind::Task,
+fn run_covers(command: &str, nodes: &[String], job: &ScheduledJob) -> bool {
+    if nodes.is_empty() {
+        command == "get" && job.kind != NodeKind::Task
+    } else {
+        nodes.contains(&job.id)
     }
 }
 
@@ -115,7 +124,7 @@ fn run_in_flight_for(state: &AppState, job: &ScheduledJob) -> Option<String> {
         .runs
         .iter()
         .filter(|r| matches!(r.status, RunStatus::Pending | RunStatus::Running))
-        .filter(|r| run_covers(&r.command, r.node.as_deref(), job))
+        .filter(|r| run_covers(&r.command, &r.nodes, job))
         .min_by(|a, b| a.started_at.total_cmp(&b.started_at))
         .map(|r| r.handle.clone())
 }
@@ -127,20 +136,38 @@ struct Bookkeeping {
     last_handle: HashMap<String, String>,
     /// Last-fired epoch per job; persisted for catch-up.
     last_fired: HashMap<String, i64>,
-    /// Last skipped tick per job: its epoch and the handle of the run that caused it.
-    last_skip: HashMap<String, (i64, String)>,
+    /// Last skipped tick per job: its epoch, why (`in_flight`, `paused`) and the run in
+    /// flight that caused it.
+    last_skip: HashMap<String, (i64, &'static str, Option<String>)>,
 }
 
 /// Note a skipped tick of `job` at `epoch`: the line on stderr, the `/schedule` entry, and a
-/// `barca.run` span with status `skipped` when telemetry is on.
-fn record_skip(book: &mut Bookkeeping, job: &ScheduledJob, handle: &str, epoch: i64, what: &str) {
-    barca_core::errln!(
-        "[barca] {what} {} skipped — run {handle} of the same node still in flight",
-        job.id
-    );
+/// `barca.run` span with status `skipped` when telemetry is on. `handle` is the run still in
+/// flight; `None` for a paused job.
+fn record_skip(
+    book: &mut Bookkeeping,
+    job: &ScheduledJob,
+    handle: Option<&str>,
+    epoch: i64,
+    what: &str,
+) {
+    let (reason, line) = match handle {
+        Some(handle) => (
+            "in_flight",
+            format!(
+                "[barca] {what} {} skipped — run {handle} of the same node still in flight",
+                job.id
+            ),
+        ),
+        None => (
+            "paused",
+            format!("[barca] {what} {} skipped — the schedule is paused", job.id),
+        ),
+    };
+    barca_core::jsonlog::line(barca_core::jsonlog::Level::Warning, Some(&job.id), &line);
     book.last_skip
-        .insert(job.id.clone(), (epoch, handle.to_string()));
-    let report = skip_report(job, handle, epoch);
+        .insert(job.id.clone(), (epoch, reason, handle.map(str::to_string)));
+    let report = skip_report(job, reason, handle, epoch);
     tokio::spawn(async move {
         let integrations = barca_core::telemetry::configured();
         if !integrations.is_empty() {
@@ -151,10 +178,15 @@ fn record_skip(book: &mut Bookkeeping, job: &ScheduledJob, handle: &str, epoch: 
     });
 }
 
-/// The `barca.run` report for a skipped tick: no steps, no duration, status `skipped`, reason
-/// `in_flight` and the handle of the run that was in flight. It gets an id of its own, so it
-/// is a trace of its own.
-fn skip_report(job: &ScheduledJob, handle: &str, epoch: i64) -> barca_core::telemetry::RunReport {
+/// The `barca.run` report for a skipped tick: no steps, no duration, status `skipped`, its
+/// reason (`in_flight` or `paused`) and the handle of the run that was in flight. It gets an
+/// id of its own, so it is a trace of its own.
+fn skip_report(
+    job: &ScheduledJob,
+    reason: &str,
+    handle: Option<&str>,
+    epoch: i64,
+) -> barca_core::telemetry::RunReport {
     barca_core::telemetry::RunReport {
         run_id: db::generate_run_id(),
         command: match job.kind {
@@ -165,9 +197,11 @@ fn skip_report(job: &ScheduledJob, handle: &str, epoch: i64) -> barca_core::tele
         target: Some(job.id.clone()),
         job: job.id.clone(),
         env: None,
+        targets: vec![barca_core::telemetry::short_name(&job.id).to_string()],
+        files: Vec::new(),
         status: "skipped".to_string(),
-        reason: Some("in_flight".to_string()),
-        in_flight_run: Some(handle.to_string()),
+        reason: Some(reason.to_string()),
+        in_flight_run: handle.map(str::to_string),
         start_unix_ns: u64::try_from(epoch)
             .unwrap_or(0)
             .saturating_mul(1_000_000_000),
@@ -176,22 +210,34 @@ fn skip_report(job: &ScheduledJob, handle: &str, epoch: i64) -> barca_core::tele
         steps_executed: 0,
         steps_cached: 0,
         steps: Vec::new(),
+        trigger: barca_core::outcome::Trigger::schedule(&job.id, epoch),
     }
 }
 
-/// Trigger a run for a due job, routed by node kind: assets and sensors go
-/// through the `get` path, tasks through the `run` path. Returns the handle.
+/// Trigger a run for the tick of a due job at `epoch`, routed by node kind: assets and
+/// sensors go through the `get` path, tasks through the `run` path. Returns the run id.
 ///
 /// A tick brings the node up to date, it does not force it: sensors upstream
 /// are polled, anything whose inputs changed is recomputed, and an asset whose
 /// inputs did not change is served from cache. A task itself always runs.
-fn trigger(state: &AppState, job: &ScheduledJob) -> String {
-    match job.kind {
-        NodeKind::Task => handlers::start_scheduled_task(state.clone(), job.id.clone()),
-        NodeKind::Asset | NodeKind::Sensor => {
-            handlers::start_run(state.clone(), Some(job.id.clone()), Some(job.id.clone()))
-        }
-    }
+fn trigger(state: &AppState, job: &ScheduledJob, epoch: i64) -> String {
+    let command = match job.kind {
+        NodeKind::Task => barca_core::outcome::RunCommand::Run,
+        NodeKind::Asset | NodeKind::Sensor => barca_core::outcome::RunCommand::Get,
+    };
+    runs::start(
+        state.clone(),
+        runs::RunSpec {
+            command,
+            targets: vec![job.id.clone()],
+            nodes: vec![job.id.clone()],
+            files: Vec::new(),
+            policy: barca_core::cache::CachePolicy::CacheAware,
+            trigger: barca_core::outcome::Trigger::schedule(&job.id, epoch),
+            values: false,
+            partition: None,
+        },
+    )
 }
 
 /// Whether a scheduled tick elapsed between `last_fired` and `now` — i.e. the
@@ -221,6 +267,7 @@ async fn catch_up(
     db_path: &str,
 ) -> Result<Bookkeeping, barca_core::BarcaError> {
     let saved = db::get_schedule_state(db_path).await?;
+    let pauses = db::get_schedule_pauses(db_path).await?;
     let mut book = Bookkeeping {
         last_fired: saved.clone(),
         ..Bookkeeping::default()
@@ -228,7 +275,15 @@ async fn catch_up(
     for job in jobs {
         match saved.get(&job.id) {
             Some(&last_epoch) => {
-                let last = zone.timestamp(last_epoch);
+                // Ticks skipped while a pause was on are not caught up: a pause that has
+                // ended counts from when it ended.
+                let pause = pauses.get(&job.id);
+                let paused_now = pause.is_some_and(|p| p.until.is_none_or(|u| u > now.timestamp()));
+                let since = match pause.and_then(|p| p.until) {
+                    Some(until) if !paused_now => last_epoch.max(until),
+                    _ => last_epoch,
+                };
+                let last = zone.timestamp(since);
                 if barca_core::schedule::next_fire(
                     &job.cron,
                     zone,
@@ -236,11 +291,23 @@ async fn catch_up(
                 )
                 .is_some_and(|next| next <= *now)
                 {
-                    if let Some(handle) = run_in_flight_for(state, job) {
-                        record_skip(&mut book, job, &handle, now.timestamp(), "catch-up run");
+                    if paused_now {
+                        record_skip(&mut book, job, None, now.timestamp(), "catch-up run");
+                    } else if let Some(handle) = run_in_flight_for(state, job) {
+                        record_skip(
+                            &mut book,
+                            job,
+                            Some(&handle),
+                            now.timestamp(),
+                            "catch-up run",
+                        );
                     } else {
-                        let handle = trigger(state, job);
-                        barca_core::errln!("[barca] catch-up run {} → {handle}", job.id);
+                        let handle = trigger(state, job, now.timestamp());
+                        barca_core::jsonlog::line(
+                            barca_core::jsonlog::Level::Info,
+                            Some(&job.id),
+                            &format!("[barca] catch-up run {} → {handle}", job.id),
+                        );
                         book.last_handle.insert(job.id.clone(), handle);
                     }
                     book.last_fired.insert(job.id.clone(), now.timestamp());
@@ -276,8 +343,9 @@ fn publish_registry(state: &AppState, jobs: &[ScheduledJob], book: &Bookkeeping)
                 kind: j.kind,
                 last_fired: book.last_fired.get(&j.id).copied(),
                 last_handle: book.last_handle.get(&j.id).cloned(),
-                last_skipped: skip.map(|(at, _)| *at),
-                skipped_for: skip.map(|(_, handle)| handle.clone()),
+                last_skipped: skip.map(|(at, _, _)| *at),
+                skipped_for: skip.and_then(|(_, _, handle)| handle.clone()),
+                skip_reason: skip.map(|(_, reason, _)| *reason),
             }
         })
         .collect();
@@ -380,6 +448,15 @@ pub async fn run_scheduler(state: AppState) {
         }
     };
 
+    // Paused schedules, for the tick to skip. They are kept in step by the pause routes.
+    if let Err(e) = crate::pause::pauses(&state).await {
+        let (_, envelope) = e.parts();
+        barca_core::errln!(
+            "[barca] scheduler: cannot read paused schedules: {}",
+            envelope.error
+        );
+    }
+
     // Handle issued, last-fired epoch and last skip per job, for the `/schedule` view;
     // `last_fired` also powers durability. The overlap skip reads `state.runs`, not
     // these. Entries for jobs removed on reload are harmless.
@@ -399,7 +476,16 @@ pub async fn run_scheduler(state: AppState) {
     publish_registry(&state, &jobs, &book);
 
     loop {
-        sleep_to_next_second(&zone).await;
+        // A draining server starts no run: the scheduler stops, and a tick it misses is
+        // caught up by the next server's startup catch-up.
+        tokio::select! {
+            _ = sleep_to_next_second(&zone) => {}
+            _ = state.draining.cancelled() => {}
+        }
+        if state.is_draining() {
+            barca_core::errln!("[barca] scheduler stopped: the server is draining");
+            return;
+        }
 
         // `--watch`: re-read the job set when a source file changed.
         let current_gen = state.dag_generation.load(Ordering::Relaxed);
@@ -417,14 +503,27 @@ pub async fn run_scheduler(state: AppState) {
         // NOTE: benchmarks/scheduler_overhead/barca/run.sh's CI smoke greps stderr for
         // "scheduled run.*:probe" to count ticks independent of worker execution — keep
         // that substring ("scheduled run", plus the job id) if this wording changes.
-        for action in plan_tick(&now, &jobs, |job| run_in_flight_for(&state, job)) {
+        let epoch = now.timestamp();
+        for action in plan_tick(
+            &now,
+            &jobs,
+            |job| crate::pause::active(&state, &job.id, epoch).is_some(),
+            |job| run_in_flight_for(&state, job),
+        ) {
             match action {
+                TickAction::Paused(job) => {
+                    record_skip(&mut book, job, None, epoch, "scheduled run");
+                }
                 TickAction::Skip { job, handle } => {
-                    record_skip(&mut book, job, &handle, now.timestamp(), "scheduled run");
+                    record_skip(&mut book, job, Some(&handle), epoch, "scheduled run");
                 }
                 TickAction::Fire(job) => {
-                    let handle = trigger(&state, job);
-                    barca_core::errln!("[barca] scheduled run {} → {handle}", job.id);
+                    let handle = trigger(&state, job, epoch);
+                    barca_core::jsonlog::line(
+                        barca_core::jsonlog::Level::Info,
+                        Some(&job.id),
+                        &format!("[barca] scheduled run {} → {handle}", job.id),
+                    );
                     book.last_handle.insert(job.id.clone(), handle);
                     book.last_fired.insert(job.id.clone(), now.timestamp());
                     if let Some(dbp) = &db_path {
@@ -514,12 +613,15 @@ mod tests {
                 db_run_id: None,
                 command: command.into(),
                 target: target.map(str::to_string),
-                node: node.map(str::to_string),
+                nodes: node.map(str::to_string).into_iter().collect(),
+                trigger: barca_core::outcome::Trigger::api(),
+                files: Vec::new(),
                 status,
                 result: None,
                 error: None,
                 started_at,
                 finished_at: None,
+                outcome: None,
                 cancel: barca_core::CancellationToken::new(),
             },
         );
@@ -784,7 +886,7 @@ mod tests {
                 &[job("f.py:daily", NodeKind::Task, "0 5 * * *")],
                 &Bookkeeping::default(),
             );
-            let body = handlers::schedule_at(&st, an_instant());
+            let body = crate::handlers::schedule_at(&st, an_instant());
             let want = DateTime::parse_from_rfc3339(want).unwrap().timestamp();
             assert_eq!(body[0]["next_fire"], want, "{zone}: {body}");
             assert_eq!(body[0]["id"], "f.py:daily");
@@ -962,7 +1064,7 @@ mod tests {
     #[test]
     fn a_skipped_tick_is_reported_with_status_skipped_and_the_run_in_flight() {
         let task = job("f.py:weekly", NodeKind::Task, "0 5 * * *");
-        let report = skip_report(&task, "h1", 1_000);
+        let report = skip_report(&task, "in_flight", Some("h1"), 1_000);
         assert_eq!(report.status, "skipped");
         assert_eq!(report.reason.as_deref(), Some("in_flight"));
         assert_eq!(report.in_flight_run.as_deref(), Some("h1"));
@@ -971,6 +1073,14 @@ mod tests {
         assert_eq!(report.start_unix_ns, 1_000_000_000_000);
         assert!(report.steps.is_empty());
         assert_ne!(report.run_id, "h1", "a skip is its own trace");
+        assert_eq!(
+            report.trigger.triggered_by,
+            barca_core::outcome::TriggeredBy::Schedule
+        );
+        assert_eq!(report.trigger.schedule_id.as_deref(), Some("f.py:weekly"));
+        let paused = skip_report(&task, "paused", None, 1_000);
+        assert_eq!(paused.reason.as_deref(), Some("paused"));
+        assert!(paused.in_flight_run.is_none());
     }
 
     #[tokio::test]
@@ -979,15 +1089,17 @@ mod tests {
         let jobs = [job("f.py:daily", NodeKind::Asset, "0 5 * * *")];
         let mut book = Bookkeeping::default();
         publish_registry(&st, &jobs, &book);
-        let body = handlers::schedule_at(&st, an_instant());
+        let body = crate::handlers::schedule_at(&st, an_instant());
         assert_eq!(body[0]["last_skipped"], serde_json::Value::Null);
         assert_eq!(body[0]["skipped_for"], serde_json::Value::Null);
 
-        record_skip(&mut book, &jobs[0], "api", 1_234, "scheduled run");
+        record_skip(&mut book, &jobs[0], Some("api"), 1_234, "scheduled run");
         publish_registry(&st, &jobs, &book);
-        let body = handlers::schedule_at(&st, an_instant());
+        let body = crate::handlers::schedule_at(&st, an_instant());
         assert_eq!(body[0]["last_skipped"], 1_234);
         assert_eq!(body[0]["skipped_for"], "api");
+        assert_eq!(body[0]["skip_reason"], "in_flight");
+        assert_eq!(body[0]["paused"], false);
     }
 
     // ─── per-tick planning (the overlap-skip guard) ────────────────────────
@@ -1013,16 +1125,19 @@ mod tests {
     #[test]
     fn plan_tick_fires_when_nothing_is_in_flight() {
         let jobs = vec![job("f.py:daily", NodeKind::Asset, "0 5 * * *")];
-        let plan = plan_tick(&at(5, 0), &jobs, |_| None);
+        let plan = plan_tick(&at(5, 0), &jobs, |_| false, |_| None);
         assert_eq!(fired_ids(&plan), vec!["f.py:daily"]);
     }
 
     #[test]
     fn plan_tick_skips_when_a_run_of_the_node_is_in_flight() {
         let jobs = vec![job("f.py:daily", NodeKind::Asset, "0 5 * * *")];
-        let plan = plan_tick(&at(5, 0), &jobs, |j| {
-            (j.id == "f.py:daily").then(|| "h1".to_string())
-        });
+        let plan = plan_tick(
+            &at(5, 0),
+            &jobs,
+            |_| false,
+            |j| (j.id == "f.py:daily").then(|| "h1".to_string()),
+        );
         assert!(fired_ids(&plan).is_empty());
         assert_eq!(skipped_ids(&plan), vec!["f.py:daily"]);
         // The skip carries the offending handle for the log line.
@@ -1046,19 +1161,19 @@ mod tests {
             1.0,
         );
         let jobs = vec![job("f.py:daily", NodeKind::Asset, "0 5 * * *")];
-        let plan = plan_tick(&at(5, 0), &jobs, |j| run_in_flight_for(&st, j));
+        let plan = plan_tick(&at(5, 0), &jobs, |_| false, |j| run_in_flight_for(&st, j));
         assert_eq!(skipped_ids(&plan), vec!["f.py:daily"]);
 
         // Once it finishes, the next due tick fires.
         st.runs.get_mut("api").unwrap().status = RunStatus::Complete;
-        let plan = plan_tick(&at(5, 0), &jobs, |j| run_in_flight_for(&st, j));
+        let plan = plan_tick(&at(5, 0), &jobs, |_| false, |j| run_in_flight_for(&st, j));
         assert_eq!(fired_ids(&plan), vec!["f.py:daily"]);
     }
 
     #[test]
     fn plan_tick_ignores_jobs_not_due_this_minute() {
         let jobs = vec![job("f.py:daily", NodeKind::Asset, "0 5 * * *")];
-        let plan = plan_tick(&at(6, 0), &jobs, |_| Some("h".into()));
+        let plan = plan_tick(&at(6, 0), &jobs, |_| false, |_| Some("h".into()));
         assert!(plan.is_empty(), "06:00 is not the job's minute");
     }
 
@@ -1069,9 +1184,12 @@ mod tests {
             job("f.py:b", NodeKind::Task, "0 5 * * *"),
         ];
         // `a` has a run still going; `b` has none.
-        let plan = plan_tick(&at(5, 0), &jobs, |j| {
-            (j.id == "f.py:a").then(|| "ha".into())
-        });
+        let plan = plan_tick(
+            &at(5, 0),
+            &jobs,
+            |_| false,
+            |j| (j.id == "f.py:a").then(|| "ha".into()),
+        );
         assert_eq!(skipped_ids(&plan), vec!["f.py:a"]);
         assert_eq!(fired_ids(&plan), vec!["f.py:b"]);
     }
@@ -1102,7 +1220,7 @@ mod tests {
         assert_eq!(st.runs.len(), 1, "no second run of the node");
         assert_eq!(
             book.last_skip["f.py:daily"],
-            (back.timestamp(), "api".to_string())
+            (back.timestamp(), "in_flight", Some("api".to_string()))
         );
         assert_eq!(
             book.last_fired["f.py:daily"],
@@ -1126,6 +1244,83 @@ mod tests {
             .single()
             .unwrap()
             .fixed_offset()
+    }
+
+    #[test]
+    fn plan_tick_skips_a_paused_job_before_anything_else() {
+        let jobs = vec![
+            job("f.py:a", NodeKind::Asset, "0 5 * * *"),
+            job("f.py:b", NodeKind::Task, "0 5 * * *"),
+        ];
+        let plan = plan_tick(&at(5, 0), &jobs, |j| j.id == "f.py:a", |_| None);
+        assert!(matches!(plan[0], TickAction::Paused(j) if j.id == "f.py:a"));
+        assert_eq!(fired_ids(&plan), vec!["f.py:b"]);
+    }
+
+    #[tokio::test]
+    async fn a_paused_job_is_not_caught_up_and_its_skip_says_paused() {
+        let (_dir, db_path) = schedule_db().await;
+        let jobs = [job("f.py:daily", NodeKind::Asset, "0 6 * * *")];
+        catch_up(&app_state(), &jobs, &Zone::Utc, &utc(2, 5, 0), &db_path)
+            .await
+            .unwrap();
+        // Paused until resumed, across the restart: the missed 06:00 tick is skipped.
+        db::set_schedule_pause(
+            &db_path,
+            "f.py:daily",
+            Some(db::SchedulePause {
+                paused_at: utc(2, 5, 30).timestamp(),
+                until: None,
+            }),
+            utc(2, 5, 30).timestamp(),
+        )
+        .await
+        .unwrap();
+        let st = app_state();
+        let back = utc(3, 9, 0);
+        let book = catch_up(&st, &jobs, &Zone::Utc, &back, &db_path)
+            .await
+            .unwrap();
+        assert!(st.runs.is_empty(), "a paused job does not run");
+        assert_eq!(
+            book.last_skip["f.py:daily"],
+            (back.timestamp(), "paused", None)
+        );
+
+        // A pause that ended counts from when it ended: the ticks inside it are not caught up.
+        let (_dir, db_path) = schedule_db().await;
+        catch_up(&app_state(), &jobs, &Zone::Utc, &utc(2, 5, 0), &db_path)
+            .await
+            .unwrap();
+        db::set_schedule_pause(
+            &db_path,
+            "f.py:daily",
+            Some(db::SchedulePause {
+                paused_at: utc(2, 5, 30).timestamp(),
+                until: Some(utc(4, 7, 0).timestamp()),
+            }),
+            utc(2, 5, 30).timestamp(),
+        )
+        .await
+        .unwrap();
+        let st = app_state();
+        let book = catch_up(&st, &jobs, &Zone::Utc, &utc(4, 8, 0), &db_path)
+            .await
+            .unwrap();
+        assert!(
+            st.runs.is_empty(),
+            "no tick between the end of the pause and now"
+        );
+        assert!(book.last_skip.is_empty());
+        let st = app_state();
+        let book = catch_up(&st, &jobs, &Zone::Utc, &utc(5, 8, 0), &db_path)
+            .await
+            .unwrap();
+        assert_eq!(
+            book.last_handle.len(),
+            1,
+            "the 06:00 tick after the pause is caught up"
+        );
     }
 
     #[tokio::test]
@@ -1307,8 +1502,8 @@ mod tests {
         let task = job("f.py:t", NodeKind::Task, "* * * * *");
         // Both kinds must produce a handle that is registered in the runs map,
         // proving each routes into a real run-trigger path (get vs run).
-        let ha = trigger(&st, &asset);
-        let ht = trigger(&st, &task);
+        let ha = trigger(&st, &asset, 0);
+        let ht = trigger(&st, &task, 0);
         assert!(st.runs.contains_key(&ha));
         assert!(st.runs.contains_key(&ht));
         assert_ne!(ha, ht);

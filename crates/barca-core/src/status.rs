@@ -58,6 +58,11 @@ pub struct NodeStatus {
     /// are part of its run hash.
     #[serde(default)]
     pub env: Vec<String>,
+    /// With a configured server (`barca status` answered by the server's ledger): whether this
+    /// machine has a copy of the node's result (RFC-0007 section 4.1). Absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(skip))]
+    pub local: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,13 +76,14 @@ pub struct CacheStatus {
         )
     )]
     pub state: String,
-    /// Machine-readable reason: `materialized`, `local_only`, `store_only`, `mismatch`, `changed`,
+    /// Machine-readable reason: `materialized`, `local_only`, `store_only`, `mismatch`,
+    /// `not_in_ledger` (the CLI with a configured server; the server never answers it), `changed`,
     /// `upstream_stale`, `failed`, `artifact_missing`, `evicted`, `no_record`, `partitions_missing`,
     /// `partitions_unknown`, `sensor_output_unknown`, `task` or `sensor`.
     #[cfg_attr(
         feature = "ts",
         ts(
-            type = "\"materialized\" | \"local_only\" | \"store_only\" | \"mismatch\" | \"changed\" | \"upstream_stale\" | \"failed\" | \"artifact_missing\" | \"evicted\" | \"no_record\" | \"partitions_missing\" | \"partitions_unknown\" | \"sensor_output_unknown\" | \"task\" | \"sensor\""
+            type = "\"materialized\" | \"local_only\" | \"store_only\" | \"mismatch\" | \"not_in_ledger\" | \"changed\" | \"upstream_stale\" | \"failed\" | \"artifact_missing\" | \"evicted\" | \"no_record\" | \"partitions_missing\" | \"partitions_unknown\" | \"sensor_output_unknown\" | \"task\" | \"sensor\""
         )
     )]
     pub reason: String,
@@ -134,9 +140,70 @@ pub struct StatusSummary {
     pub partial: usize,
     pub unknown: usize,
     pub always_runs: usize,
-    /// Cached, but this machine's copy and the artifact store's do not agree (RFC-0009).
+    /// Cached, but not (yet) where it should be: this machine's copy and the artifact store's
+    /// do not agree (RFC-0009: `local_only`, `store_only`, `mismatch`), or, with a server, a
+    /// result whose ledger post is pending (`not_in_ledger`).
     #[serde(default)]
     pub unsynced: usize,
+}
+
+impl StatusSummary {
+    /// Node counts per cache state.
+    pub fn of(nodes: &[NodeStatus]) -> Self {
+        let mut summary = StatusSummary::default();
+        for n in nodes {
+            match n.cache.state.as_str() {
+                "cached" => summary.cached += 1,
+                "unsynced" => summary.unsynced += 1,
+                "stale" => summary.stale += 1,
+                "never_run" => summary.never_run += 1,
+                "partial" => summary.partial += 1,
+                "always_runs" => summary.always_runs += 1,
+                _ => summary.unknown += 1,
+            }
+        }
+        summary
+    }
+}
+
+/// One result this machine computed whose post to the server's ledger is pending: the step's
+/// node id (with any partition suffix), its run hash, and why the post did not arrive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingPost {
+    pub node_id: String,
+    pub run_hash: String,
+    pub error: Option<String>,
+}
+
+/// A node the server's ledger does not hold a result for, but this machine computed one whose
+/// post is pending, is `unsynced` with reason `not_in_ledger` (beside RFC-0009's `local_only`,
+/// `store_only` and `mismatch`). `get` serves it from this machine; the next `get` or `run`
+/// against the server posts it again. A node the ledger already has as `cached` is left alone,
+/// and so is one whose current run hash differs from the pending one (the server's code moved
+/// on). Returns true when `node` changed.
+pub fn not_in_ledger(node: &mut NodeStatus, pending: &[PendingPost]) -> bool {
+    if node.cache.state == "cached" || node.kind != "asset" {
+        return false;
+    }
+    let mine = pending.iter().find(|p| {
+        let base = p.node_id.split('[').next().unwrap_or(&p.node_id);
+        base == node.id
+            && (node.partitioned
+                || node.cache.run_hash.is_none()
+                || node.cache.run_hash.as_deref() == Some(p.run_hash.as_str()))
+    });
+    let Some(p) = mine else {
+        return false;
+    };
+    node.cache.state = "unsynced".to_string();
+    node.cache.reason = "not_in_ledger".to_string();
+    node.cache.detail = format!(
+        "computed here and not recorded on the server yet: {}; the next get or run against the \
+         server posts it",
+        p.error.as_deref().unwrap_or("its post is pending")
+    );
+    node.local = Some(true);
+    true
 }
 
 /// Gather status for every node in scope (the targets' upstream cones, or the whole DAG when
@@ -298,6 +365,7 @@ async fn status_from_dag_with_membership(
             last_bytes_change: history.last_bytes_change,
             shape: None,
             env: node.extracted.env.clone(),
+            local: None,
         });
     }
 
@@ -311,18 +379,7 @@ async fn status_from_dag_with_membership(
         read_shapes(python, cfg, &mut nodes, sample).await;
     }
 
-    let mut summary = StatusSummary::default();
-    for n in &nodes {
-        match n.cache.state.as_str() {
-            "cached" => summary.cached += 1,
-            "stale" => summary.stale += 1,
-            "never_run" => summary.never_run += 1,
-            "partial" => summary.partial += 1,
-            "always_runs" => summary.always_runs += 1,
-            "unsynced" => summary.unsynced += 1,
-            _ => summary.unknown += 1,
-        }
-    }
+    let summary = StatusSummary::of(&nodes);
     Ok((
         StatusResult {
             targets: explained.target_names(),
@@ -377,9 +434,10 @@ pub(crate) enum Copies {
     Missing,
 }
 
-/// What the store said about one object.
+/// What the store said about one object (`python -m barca._state stat`). The server's ledger
+/// checks a post's objects with the same answer.
 #[derive(Debug, Clone, Default, Deserialize)]
-pub(crate) struct StoreObject {
+pub struct StoreObject {
     pub exists: bool,
     pub size_bytes: Option<u64>,
     /// Only for a store that is a plain directory: object stores give no content checksum to
@@ -843,6 +901,50 @@ pub(crate) async fn run_json_helper(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn node(state: &str, run_hash: Option<&str>) -> NodeStatus {
+        NodeStatus {
+            id: "p.py:a".into(),
+            name: "a".into(),
+            kind: "asset".into(),
+            inputs: vec![],
+            partitioned: false,
+            cache: CacheStatus {
+                state: state.into(),
+                reason: "no_record".into(),
+                detail: String::new(),
+                run_hash: run_hash.map(String::from),
+                artifact: None,
+            },
+            partitions: None,
+            last_materialization: None,
+            last_bytes_change: None,
+            shape: None,
+            env: vec![],
+            local: Some(false),
+        }
+    }
+
+    #[test]
+    fn a_pending_post_is_unsynced_not_in_ledger_unless_the_ledger_has_it() {
+        let pending = vec![PendingPost {
+            node_id: "p.py:a".into(),
+            run_hash: "h1".into(),
+            error: None,
+        }];
+        let mut n = node("never_run", Some("h1"));
+        assert!(not_in_ledger(&mut n, &pending));
+        assert_eq!(
+            (n.cache.state.as_str(), n.cache.reason.as_str()),
+            ("unsynced", "not_in_ledger")
+        );
+        assert_eq!(n.local, Some(true));
+        assert_eq!(StatusSummary::of(std::slice::from_ref(&n)).unsynced, 1);
+        // The ledger already has a result, or the server's code hashes differently.
+        assert!(!not_in_ledger(&mut node("cached", Some("h1")), &pending));
+        assert!(!not_in_ledger(&mut node("stale", Some("h2")), &pending));
+        assert!(!not_in_ledger(&mut node("never_run", Some("h1")), &[]));
+    }
 
     fn report(action: &str, reason: Option<&str>) -> StepReport {
         StepReport {

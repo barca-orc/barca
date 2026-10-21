@@ -25,8 +25,11 @@ pub(crate) async fn get_cmd(
     dry_run: bool,
     agent: bool,
     fields: Option<&[String]>,
+    ledger: Option<barca_core::ledger::Ledger>,
 ) -> Result<(), barca_core::BarcaError> {
-    let cfg = barca_core::config::resolve(env)?;
+    let mut cfg = barca_core::config::resolve(env)?;
+    // The configured server's ledger, unless --local (RFC-0007 section 4.1).
+    cfg.ledger = ledger;
     if mode.url_expires.is_some() {
         signable_store(&cfg)?;
     }

@@ -46,7 +46,7 @@ pub struct IoConfig {
     pub pool_size: usize,
     pub run_id: String,
     /// Present only when the Datadog integration successfully configured.
-    pub datadog_job: Option<String>,
+    pub datadog: Option<std::sync::Arc<crate::telemetry::datadog::Dispatch>>,
     /// Local artifact directory workers write to and read from. Always local:
     /// a separate artifact store is synced by `transfer::TransferClient`.
     /// Set explicitly on every worker so env-separated layouts work
@@ -362,22 +362,18 @@ impl WorkerPool {
         coord: &Coordinator,
     ) -> serde_json::Value {
         let mut step = build_step_json(item, coord);
-        if let Some(job) = &self.config.datadog_job {
-            use crate::telemetry::datadog::span_id;
-            let run = &self.config.run_id;
-            // Dynamic parallel items have no synthetic step span in the run report.
+        if let Some(dispatch) = &self.config.datadog {
+            // Dynamic parallel items have no span of their own in the run report.
             // Attach their Python execution to the nearest reported ancestor.
             let mut parent = item;
             while let Some(group) = parent.group {
                 parent = coord.item(coord.group(group).parent);
             }
-            step["datadog"] = serde_json::json!({
-                "trace_id": span_id(&["trace", run]),
-                "parent_id": span_id(&["step", run, &parent.step_id.display()]),
-                "run_id": run,
-                "job": job,
-                "attempt": item.attempts,
-            });
+            if let Some(context) =
+                dispatch.context(&self.config.run_id, &parent.step_id, item.attempts)
+            {
+                step["datadog"] = context;
+            }
         }
         step
     }
@@ -509,6 +505,7 @@ impl WorkerPool {
                             ev(RunEvent::StepFinished {
                                 node_id: node_id.clone(),
                                 ok: true,
+                                cached: false,
                                 elapsed_seconds: artifact.elapsed_seconds,
                                 error: None,
                                 import_seconds: artifact.import_seconds,
@@ -548,6 +545,7 @@ impl WorkerPool {
                             ev(RunEvent::StepFinished {
                                 node_id: node_id.clone(),
                                 ok: false,
+                                cached: false,
                                 elapsed_seconds: Some(elapsed),
                                 error: Some(error.clone()),
                                 import_seconds,
@@ -754,6 +752,7 @@ impl WorkerPool {
                                 ev(RunEvent::StepFinished {
                                     node_id,
                                     ok: false,
+                                    cached: false,
                                     elapsed_seconds: Some(ran_for.as_secs_f64()),
                                     error: Some(error.clone()),
                                     import_seconds: None,
@@ -792,6 +791,7 @@ impl WorkerPool {
                             ev(RunEvent::StepFinished {
                                 node_id,
                                 ok: false,
+                                cached: false,
                                 elapsed_seconds: Some(ran_for.as_secs_f64()),
                                 error: Some(error.clone()),
                                 import_seconds: None,
@@ -2210,7 +2210,7 @@ mod tests {
                     python: PathBuf::from("python3"),
                     pool_size: n,
                     run_id: "test-shutdown".to_string(),
-                    datadog_job: None,
+                    datadog: None,
                     artifact_root: ".".to_string(),
                     storage_options_json: None,
                 },

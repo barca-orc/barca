@@ -51,7 +51,7 @@ barca get total pipeline.py      # second time: everything is a cache hit
 | `barca plan [files...]` | Emit the tiered execution plan as JSON. |
 | `barca gc [--dry-run] [--max-size SIZE]` | Evict cached results to keep `.barca/` under `[cache] max_size` (default 10% of the filesystem; barca also does this after every `get` and `run`) (`barca docs cache`, "Disk use"). |
 | `barca history` / `barca stats` | Past runs; timing and cache statistics (`--json`, `--fields`; history takes `--limit`/`--all`). |
-| `barca serve [files...]` | HTTP API, cron scheduler and the web UI (`/ui/`). |
+| `barca serve [files...]` | HTTP API, cron scheduler and the web UI (`/ui/`). `--server` on get/run/status/list/history/stats runs them there (`barca docs server-mode`). |
 | `barca docs [topic]` | This manual. |
 
 `files...` are optional everywhere: without them barca reads every file in the project that
@@ -72,9 +72,11 @@ that; see `barca docs agents`.
 - `barca docs remote` — share one cache across machines (S3, GCS, Azure) with a few environment variables
 - `barca docs partitions` — fan-out over keys, fan-in with `collect`
 - `barca docs sinks` — export outputs to local or remote paths
-- `barca docs scheduling` — freshness, cron schedules, `barca serve`, HTTP/Python client setup and current server-mode limits
-- `barca docs telemetry` — report runs and steps to Datadog (`BARCA_TELEMETRY=datadog`), and post
-  to Slack when a job starts failing or recovers (`BARCA_SLACK_WEBHOOK_URL`)
+- `barca docs scheduling` — freshness, cron schedules, `barca serve`, HTTP/Python client setup
+- `barca docs server-mode` — one `barca serve` as the team's ledger: local runs read cache hits from it and post what they compute; `--server` runs `get`, `run`, `status`, `list`, `history`, `stats` there; `--local` leaves it out
+- `barca docs telemetry` — report runs and steps to Datadog (`BARCA_TELEMETRY=datadog`), post
+  to Slack when a job starts failing or recovers (`BARCA_SLACK_WEBHOOK_URL`), and JSON log lines
+  from `barca serve` (`BARCA_LOG=json`)
 - `barca docs status` — one view of cache state, last run and artifact shape per node
 - `barca docs sql` — query cached results with DuckDB while debugging, without writing a step
 - `barca docs skill` — the short agent skill (also `SKILL.md` in the repo): start here if you are an AI agent

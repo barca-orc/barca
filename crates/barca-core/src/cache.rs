@@ -138,7 +138,7 @@ pub(crate) enum Decision {
 
 /// Per-run state the decisions accumulate: run hashes (also used to persist results), assets
 /// refreshed in this run, and cached assets downstream of a refreshed one.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub(crate) struct DecideState {
     // Monotonic: only this component can insert, and no key is removed during a run.
     run_hashes: HashMap<String, String>,
@@ -296,17 +296,13 @@ pub(crate) fn in_dependency_order<'p>(
     steps
 }
 
-/// Decide what happens to `step`. Steps must be visited in dependency order
-/// ([`in_dependency_order`]): in-phase upstream run
-/// hashes are already in `state` when a consumer is hashed, so check-time and persist-time hashes
-/// are identical. `cache` is `None` when there is no metadata DB yet (nothing is cached).
-pub(crate) async fn decide_step(
+/// Compute `step`'s run hashes (one per partition key) into `state` and onto the returned
+/// step. Steps must be visited in dependency order ([`in_dependency_order`]).
+pub(crate) fn hash_step(
     dag: &Dag,
-    policy: &CachePolicy,
-    cache: Option<&db::CacheReader>,
     state: &mut DecideState,
     step: &crate::planner::StreamStep,
-) -> Result<(crate::planner::StreamStep, Decision), crate::BarcaError> {
+) -> Result<crate::planner::StreamStep, crate::BarcaError> {
     state.require_upstream_hashes(step)?;
     let base_id = step.step_id.base_id();
     let display_id = step.step_id.display();
@@ -351,6 +347,81 @@ pub(crate) async fn decide_step(
             step.run_hashes.insert(pdisplay, run_h);
         }
     }
+    Ok(step)
+}
+
+/// The run hash of every asset step of `phases` that is known before anything runs, as
+/// `(node id, run hash)`: what a run against a server asks the ledger in one request
+/// (RFC-0007 section 4.1). A step that reads a sensor (its output is folded into the hash), a
+/// step with partitions read from another step's output, and everything below them are left
+/// out; the phase that decides them asks for them ([`phase_keys`]).
+pub(crate) fn cone_keys(dag: &Dag, phases: &[Phase]) -> Vec<(String, String)> {
+    let mut state = DecideState::default();
+    let mut unknown: HashSet<String> = HashSet::new();
+    let mut keys = Vec::new();
+    for phase in phases {
+        state.register_phase(phase);
+        for (_, step) in in_dependency_order(dag, phase) {
+            let base = step.step_id.base_id();
+            let kind = dag.get_node(base).map(|n| n.kind());
+            let blocked = !step.pending_partitions.is_empty()
+                || kind == Some(crate::NodeKind::Sensor)
+                || step
+                    .inputs
+                    .values()
+                    .any(|up| unknown.contains(up.split('[').next().unwrap_or(up)));
+            if blocked {
+                unknown.insert(base.to_string());
+                continue;
+            }
+            match hash_step(dag, &mut state, step) {
+                Ok(hashed) if kind == Some(crate::NodeKind::Asset) => {
+                    keys.extend(hashed.run_hashes);
+                }
+                Ok(_) => {}
+                Err(_) => {
+                    unknown.insert(base.to_string());
+                }
+            }
+        }
+    }
+    keys
+}
+
+/// The `(node id, run hash)` of every asset step of `phase`, hashed on a copy of `state` (which
+/// has the phase registered and every upstream decided). A step that cannot be hashed yet is
+/// left out; its decision then finds no answer and runs it.
+pub(crate) fn phase_keys(dag: &Dag, phase: &Phase, state: &DecideState) -> Vec<(String, String)> {
+    let mut scratch = state.clone();
+    let mut keys = Vec::new();
+    for (_, step) in in_dependency_order(dag, phase) {
+        if dag.get_node(step.step_id.base_id()).map(|n| n.kind()) != Some(crate::NodeKind::Asset) {
+            // Hashed all the same: an asset below it needs its run hash.
+            let _ = hash_step(dag, &mut scratch, step);
+            continue;
+        }
+        if let Ok(hashed) = hash_step(dag, &mut scratch, step) {
+            keys.extend(hashed.run_hashes);
+        }
+    }
+    keys
+}
+
+/// Decide what happens to `step`. Steps must be visited in dependency order
+/// ([`in_dependency_order`]): in-phase upstream run
+/// hashes are already in `state` when a consumer is hashed, so check-time and persist-time hashes
+/// are identical. `cache` is `None` when there is no metadata DB yet (nothing is cached).
+pub(crate) async fn decide_step(
+    dag: &Dag,
+    policy: &CachePolicy,
+    cache: Option<&db::CacheReader>,
+    state: &mut DecideState,
+    step: &crate::planner::StreamStep,
+) -> Result<(crate::planner::StreamStep, Decision), crate::BarcaError> {
+    let step = hash_step(dag, state, step)?;
+    let base_id = step.step_id.base_id();
+    let display_id = step.step_id.display();
+    let base_node = dag.get_node(base_id);
 
     let kind = base_node.map(|n| n.kind());
     // Sensors and tasks always re-run — never cached.
@@ -458,6 +529,12 @@ pub(crate) async fn lookup_cached(
     node_id: &str,
     run_hash: &str,
 ) -> Option<dispatch::OutputRef> {
+    // With a server, its ledger answers, not this machine's history (RFC-0007 section 4.1).
+    // Every key a decision looks up was asked for before the phase was decided; one that was
+    // not is a miss, and the step runs here.
+    if let Some(ledger) = cache.ledger() {
+        return ledger.answer(node_id, run_hash).flatten();
+    }
     const COLUMNS: &str = "artifact_path, artifact_format, artifact_size_bytes";
     let query = |columns: String| {
         cache.conn().query(
@@ -1481,6 +1558,78 @@ def report(values: list) -> int:
                     .unwrap();
             assert_eq!(decided.run_hashes[&consumer_id], expected);
             assert!(state.complete_upstreams.contains(&upstream));
+        }
+    }
+
+    const LEDGER: &str = r#"
+from barca import asset, sensor
+@asset()
+def a() -> int:
+    return 1
+@asset(inputs={"a": a})
+def b(a: int) -> int:
+    return a + 1
+@sensor()
+def s() -> int:
+    return 1
+@asset(inputs={"s": s})
+def c(s: int) -> int:
+    return s
+@asset(inputs={"c": c})
+def d(c: int) -> int:
+    return c
+"#;
+
+    #[test]
+    fn cone_keys_are_the_run_hashes_a_run_computes_except_below_a_sensor() {
+        let nodes = crate::parse::extract_nodes(LEDGER, "t.py").unwrap();
+        let dag = Dag::build(&nodes).unwrap();
+        let phases = crate::planner::plan_from_dag(
+            &dag,
+            &ResourceConfig {
+                pool_size: 2,
+                concurrency_groups: HashMap::new(),
+            },
+        )
+        .phases;
+        let keys: HashMap<String, String> = cone_keys(&dag, &phases).into_iter().collect();
+        let mut ids: Vec<&str> = keys.keys().map(String::as_str).collect();
+        ids.sort();
+        // `s` is a sensor (never a cache hit) and its output is part of `c`'s and `d`'s hashes.
+        assert_eq!(ids, ["t.py:a", "t.py:b"]);
+
+        // The decisions of a run compute the same hashes.
+        let mut state = DecideState::default();
+        for phase in &phases {
+            state.register_phase(phase);
+            for (_, step) in in_dependency_order(&dag, phase) {
+                if step.step_id.base_id() == "t.py:s" {
+                    state.sensor_outputs.insert("t.py:s".into(), "out".into());
+                }
+                hash_step(&dag, &mut state, step).unwrap();
+            }
+        }
+        assert_eq!(keys["t.py:a"], state.run_hashes()["t.py:a"]);
+        assert_eq!(keys["t.py:b"], state.run_hashes()["t.py:b"]);
+
+        // Once the sensor has run, the phase that decides `c` asks for it.
+        let mut state = DecideState::default();
+        state.sensor_outputs.insert("t.py:s".into(), "out".into());
+        let mut asked = Vec::new();
+        for phase in &phases {
+            state.register_phase(phase);
+            asked.extend(phase_keys(&dag, phase, &state));
+            for (_, step) in in_dependency_order(&dag, phase) {
+                hash_step(&dag, &mut state, step).unwrap();
+            }
+        }
+        let asked: HashMap<String, String> = asked.into_iter().collect();
+        assert!(
+            !asked.contains_key("t.py:s"),
+            "sensors are never asked about"
+        );
+        for id in ["t.py:a", "t.py:b", "t.py:c", "t.py:d"] {
+            assert_eq!(asked[id], state.run_hashes()[id], "{id}");
         }
     }
 }

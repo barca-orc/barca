@@ -1,37 +1,30 @@
-//! Endpoint handlers. Core commands are `async fn`s that run directly on the
-//! server's runtime — handlers simply `.await` them. Each run carries a
-//! `CancellationToken` (a child of the server-wide shutdown token) so
-//! `DELETE /run/{id}`, the run timeout, and Ctrl-C can all stop it mid-flight:
-//! workers are terminated and the run is marked cancelled/failed.
+//! Inspection endpoint handlers. Core commands are `async fn`s that run directly on the
+//! server's runtime — handlers simply `.await` them. Runs are in [`crate::runs`].
 
 use crate::error::ApiError;
-use crate::state::{AppState, Durations, NodeState, RunChannel, RunState, RunStatus, now_ts};
+use crate::state::{AppState, Durations, NodeState};
 use axum::Json;
 use axum::extract::{Path, State};
-use axum::response::Sse;
-use axum::response::sse::{Event, KeepAlive};
 use axum::response::{IntoResponse, Response};
-use barca_core::cache::CachePolicy;
-use barca_core::commands;
 use barca_core::queries;
-use barca_core::results::{AssetSummary, GetResult, PlanResult};
-use barca_core::{BarcaError, RunEvent, db};
-use futures::stream::{self, Stream, StreamExt};
+use barca_core::results::PlanResult;
+use barca_core::{BarcaError, db};
 use serde_json::{Value, json};
-use std::convert::Infallible;
-use std::time::Duration;
-use tokio_stream::wrappers::BroadcastStream;
 
-/// Default timeout for a single run (10 minutes).
-const RUN_TIMEOUT: Duration = Duration::from_secs(600);
-
-/// `GET /health` — liveness, version, whether this server is read-only, whether it runs the
-/// scheduler, and the cache size against its limit.
-/// No core work.
+/// `GET /health` — liveness (or `draining`), version, the API version a client checks, the
+/// environment and artifact store this server uses, whether it is read-only, whether it runs
+/// the scheduler, and the cache size against its limit. No core work.
 pub async fn health(State(state): State<AppState>) -> Json<Value> {
+    let cfg = &state.config.resolved;
     Json(json!({
-        "status": "ok",
+        // `draining` once the server was told to stop: it finishes its runs and starts none.
+        "status": if state.is_draining() { "draining" } else { "ok" },
         "version": env!("CARGO_PKG_VERSION"),
+        "api_version": barca_core::outcome::API_VERSION,
+        "env": cfg.env,
+        // The artifact store this server writes to, so a client can refuse a mismatched
+        // `[remote]`; null when artifacts stay on this machine.
+        "store_uri": cfg.remote_artifacts().then(|| cfg.artifact_root.clone()),
         "read_only": state.config.read_only,
         "load_errors": *state.load_errors.read().unwrap(),
         // Whether this server fires `Schedule(...)` nodes: the same rule `serve`
@@ -43,17 +36,6 @@ pub async fn health(State(state): State<AppState>) -> Json<Value> {
             .filter(|_| !state.config.read_only)
             .map(|(size, limit)| json!({"size_bytes": size, "limit_bytes": limit})),
     }))
-}
-
-/// Refuse a request that would run or cancel work on a `--read-only` server.
-fn refuse_if_read_only(state: &AppState) -> Result<(), ApiError> {
-    if state.config.read_only {
-        return Err(ApiError::Forbidden(
-            "this server is read-only (`barca serve --read-only`): it does not run or cancel work"
-                .to_string(),
-        ));
-    }
-    Ok(())
 }
 
 /// A metadata DB a read-only request may query: a private snapshot of the real
@@ -211,12 +193,27 @@ pub async fn plan(State(state): State<AppState>) -> Result<Json<PlanResult>, Api
     Ok(Json(result))
 }
 
-/// `GET /assets` — list every node with kind/freshness/inputs (cache-aware).
-pub async fn assets(State(state): State<AppState>) -> Result<Json<Vec<AssetSummary>>, ApiError> {
+/// `GET /assets` — every node as `barca list --json` shows it: `freshness` a lowercase
+/// word, the cron expression in `schedule` and the next fire time (this machine's local
+/// time) in `next_fire` for a scheduled node.
+pub async fn assets(State(state): State<AppState>) -> Result<Json<Vec<Value>>, ApiError> {
     let dag = state.loaded_dag().await?;
     let result = queries::list_assets_from_dag(&dag);
-    state.cache.write().unwrap().assets = Some(result.clone());
-    Ok(Json(result))
+    let next_fires = next_fires(&dag);
+    let nodes = result
+        .iter()
+        .map(|a| barca_core::report::list_node_json(a, next_fires.get(&a.id)))
+        .collect();
+    state.cache.write().unwrap().assets = Some(result);
+    Ok(Json(nodes))
+}
+
+/// Each scheduled node's next fire time in this machine's local time, as `barca list` shows.
+pub(crate) fn next_fires(dag: &barca_core::dag::Dag) -> std::collections::HashMap<String, String> {
+    barca_core::schedule::describe_schedule_from_dag(Some(dag), &barca_core::schedule::Zone::Local)
+        .into_iter()
+        .filter_map(|j| j.next_fire_local.map(|t| (j.id, t)))
+        .collect()
 }
 
 /// `GET /assets/{name}/schema` — inspect the selected node and its direct inputs.
@@ -258,7 +255,8 @@ pub async fn asset_schema(
     Ok(Json(result.nodes))
 }
 
-/// `GET /assets/{name}` — summary joined with timing/cache stats for one asset.
+/// `GET /assets/{name}` — one node as `barca list --json` shows it, with its
+/// `barca stats --json` body.
 pub async fn asset_detail(
     State(state): State<AppState>,
     Path(name): Path<String>,
@@ -285,139 +283,22 @@ pub async fn asset_detail(
         }
     };
 
-    let stats = if state.config.read_only {
-        let snap = snapshot_db(&state).await?;
-        db::get_asset_stats(&snap.path, &summary.id).await?
-    } else {
-        db::ensure_env_dirs(&state.config.resolved.env)?;
-        db::init_db(&state.config.resolved.db_path).await?;
-        db::get_asset_stats(&state.config.resolved.db_path, &summary.id).await?
-    };
+    let snap = snapshot_db(&state).await?;
+    let stats = db::get_asset_stats(&snap.path, &summary.id).await?;
 
+    let next_fire = next_fires(&dag).remove(&summary.id);
     Ok(Json(json!({
-        "asset": summary,
-        "stats": stats,
+        "asset": barca_core::report::list_node_json(&summary, next_fire.as_ref()),
+        "stats": barca_core::report::stats_json(&stats),
     })))
-}
-
-/// `POST /run` — get every asset and sensor (`barca get <files>` with no target; tasks are
-/// skipped); returns a polling handle immediately.
-pub async fn run(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
-    refuse_if_read_only(&state)?;
-    let dag = state.loaded_dag().await?;
-    if !queries::list_assets_from_dag(&dag)
-        .iter()
-        .any(|n| n.kind != barca_core::NodeKind::Task)
-    {
-        return Err(ApiError::BadRequest(
-            "no loaded assets or sensors to run; inspect /health load_errors".into(),
-        ));
-    }
-    let handle = start_run(state, None, None);
-    Ok(Json(json!({ "run_id": handle })))
-}
-
-/// Check a trigger's target before a run is started for it, with the function `barca get`
-/// and `barca run` use (`barca_core::targets::resolve_target_among`), so the server refuses what the
-/// command line refuses, in the same words: an unknown name is `404`, a name that matches
-/// several nodes `409`, the wrong verb for the node's kind `400`. So is source that does not
-/// parse or a DAG that cannot be built. Returns the full node id the name resolved to.
-async fn check_target(state: &AppState, name: &str, verb: &str) -> Result<String, ApiError> {
-    let nodes = target_nodes(state).await?;
-    let nodes = nodes.iter().map(|(id, kind)| (id.as_str(), *kind));
-    match barca_core::targets::resolve_target_among(nodes, name, verb) {
-        Ok(node) => Ok(node),
-        Err(e @ barca_core::targets::TargetError::NotFound { .. }) => {
-            Err(ApiError::NotFound(e.to_string()))
-        }
-        Err(e @ barca_core::targets::TargetError::Ambiguous { .. }) => {
-            Err(ApiError::Conflict(e.to_string()))
-        }
-        // The resolver's own words name a command (`use `barca run` instead`); an HTTP
-        // client is told the endpoint.
-        Err(barca_core::targets::TargetError::WrongKind { name, kind }) => {
-            let (what, endpoint) = match kind {
-                barca_core::NodeKind::Task => ("a task", "run"),
-                _ => ("an asset", "get"),
-            };
-            Err(ApiError::BadRequest(format!(
-                "'{name}' is {what}: use POST /{endpoint}/{name}"
-            )))
-        }
-    }
-}
-
-/// The nodes a run started now would find: read from the source, and kept for as long as
-/// the source files do not change (their sizes and modification times are compared on every
-/// call, which costs one `stat` per file). A run reads the source itself each time, so
-/// checking against anything older, such as the `/assets` cache of a server without
-/// `--watch`, would refuse a node that was just added and accept one that was just removed.
-async fn target_nodes(
-    state: &AppState,
-) -> Result<std::sync::Arc<Vec<(String, barca_core::NodeKind)>>, ApiError> {
-    let dag = state.loaded_dag().await?;
-    let nodes = std::sync::Arc::new(
-        queries::list_assets_from_dag(&dag)
-            .into_iter()
-            .map(|n| (n.id, n.kind))
-            .collect(),
-    );
-    Ok(nodes)
-}
-
-/// `POST /run/{target}` — trigger a task run; returns a polling handle. The target is
-/// checked first ([`check_target`]): no run is started for a name that cannot run.
-pub async fn run_target(
-    State(state): State<AppState>,
-    Path(target): Path<String>,
-) -> Result<Json<Value>, ApiError> {
-    refuse_if_read_only(&state)?;
-    let node = check_target(&state, &target, "run").await?;
-    let handle = start_run_task(state, target, node);
-    Ok(Json(json!({ "run_id": handle })))
-}
-
-/// `POST /get/{target}` — trigger a target-scoped get; returns a polling handle. The target
-/// is checked first ([`check_target`]): no run is started for a name that cannot be got.
-pub async fn get_target(
-    State(state): State<AppState>,
-    Path(target): Path<String>,
-) -> Result<Json<Value>, ApiError> {
-    refuse_if_read_only(&state)?;
-    let node = check_target(&state, &target, "get").await?;
-    let handle = start_run(state, Some(target), Some(node));
-    Ok(Json(json!({ "run_id": handle })))
-}
-
-/// `DELETE /run/{run_id}` — cancel an in-flight run. The run's workers are
-/// terminated and its status transitions to `cancelled`; poll `/status/{id}`
-/// to observe the transition. Cancelling a finished run is a no-op conflict.
-pub async fn cancel_run(
-    State(state): State<AppState>,
-    Path(run_id): Path<String>,
-) -> Result<Json<Value>, ApiError> {
-    refuse_if_read_only(&state)?;
-    let run = state
-        .runs
-        .get(&run_id)
-        .ok_or_else(|| ApiError::NotFound(format!("run '{run_id}' not found")))?;
-    match run.status {
-        RunStatus::Pending | RunStatus::Running => {
-            run.cancel.cancel();
-            Ok(Json(json!({ "run_id": run_id, "status": "cancelling" })))
-        }
-        status => Err(ApiError::Conflict(format!(
-            "run '{run_id}' already finished ({})",
-            json!(status).as_str().unwrap_or("finished")
-        ))),
-    }
 }
 
 /// `GET /schedule` — list scheduled jobs with next fire time and last run status.
 /// Reads the scheduler's published registry; volatile fields (next fire, live
 /// status) are computed per request.
-pub async fn schedule(State(state): State<AppState>) -> Json<Value> {
-    Json(schedule_at(&state, chrono::Utc::now()))
+pub async fn schedule(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    crate::pause::pauses(&state).await?;
+    Ok(Json(schedule_at(&state, chrono::Utc::now())))
 }
 
 /// The body of `GET /schedule` as of `now`. `next_fire` is computed in the zone the server
@@ -438,6 +319,7 @@ pub(crate) fn schedule_at(state: &AppState, now: chrono::DateTime<chrono::Utc>) 
                 .last_handle
                 .as_ref()
                 .and_then(|h| state.runs.get(h).map(|r| r.status));
+            let pause = crate::pause::active(state, &j.id, now.timestamp());
             json!({
                 "id": j.id,
                 "cron": j.cron,
@@ -448,367 +330,81 @@ pub(crate) fn schedule_at(state: &AppState, now: chrono::DateTime<chrono::Utc>) 
                 "last_status": last_status,
                 "last_skipped": j.last_skipped,
                 "skipped_for": j.skipped_for,
+                "skip_reason": j.skip_reason,
+                "paused": pause.is_some(),
+                "paused_until": pause.and_then(|p| p.until),
             })
         })
         .collect();
     json!(items)
 }
 
-/// `GET /status/{run_id}` — poll an in-flight or finished run.
-pub async fn status(
-    State(state): State<AppState>,
-    Path(run_id): Path<String>,
-) -> Result<Json<RunState>, ApiError> {
-    state
-        .runs
-        .get(&run_id)
-        .map(|r| Json(r.clone()))
-        .ok_or_else(|| ApiError::NotFound(format!("run '{run_id}' not found")))
-}
-
-/// `GET /events/{run_id}` — Server-Sent Events stream of a run's live events
-/// (run lifecycle, logs, step completion). Replays the backlog first so a client
-/// that connects a beat after the run starts still sees everything, then streams
-/// live. Each SSE message is a JSON-encoded [`RunEvent`].
-///
-/// Sends `X-Accel-Buffering: no` so nginx (and proxies that honor it) pass
-/// events through as they happen instead of buffering the response; idle
-/// streams carry a keep-alive comment every 15s, inside nginx's default 60s
-/// read timeout.
-pub async fn events(
-    State(state): State<AppState>,
-    Path(run_id): Path<String>,
-) -> Result<
-    (
-        [(axum::http::HeaderName, &'static str); 1],
-        Sse<impl Stream<Item = Result<Event, Infallible>>>,
-    ),
-    ApiError,
-> {
-    let channel: RunChannel = state
-        .events
-        .get(&run_id)
-        .map(|c| c.clone())
-        .ok_or_else(|| ApiError::NotFound(format!("run '{run_id}' not found")))?;
-
-    let (backlog, rx) = channel.snapshot_and_subscribe();
-
-    let backlog_stream = stream::iter(backlog);
-    let live_stream = BroadcastStream::new(rx).filter_map(|r| async move { r.ok() });
-
-    let stream = backlog_stream.chain(live_stream).map(|ev: RunEvent| {
-        Ok(Event::default()
-            .json_data(&ev)
-            .unwrap_or_else(|_| Event::default()))
-    });
-
-    Ok((
-        [(
-            axum::http::HeaderName::from_static("x-accel-buffering"),
-            "no",
-        )],
-        Sse::new(stream).keep_alive(KeepAlive::default()),
-    ))
-}
-
 /// `GET /logs/{run_id}` — persisted stdout lines for a run (durable history).
-///
-/// Accepts the server-side polling handle and resolves it to the DB run id
-/// (which `execution::execute` generates and surfaces in the completed result);
-/// also accepts a raw DB run id directly.
 pub async fn logs(
     State(state): State<AppState>,
     Path(run_id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    // Map a polling handle to its DB run id if we know it; otherwise treat the
-    // path param as a DB run id.
-    let db_run_id = state
-        .runs
-        .get(&run_id)
-        .and_then(|r| {
-            r.db_run_id
-                .clone()
-                .or_else(|| r.result.as_ref().map(|res| res.run_id.clone()))
-        })
-        .unwrap_or(run_id);
-
-    let entries = if state.config.read_only {
-        let snap = snapshot_db(&state).await?;
-        db::get_logs(&snap.path, &db_run_id).await?
-    } else {
-        let cfg = &state.config.resolved;
-        db::ensure_env_dirs(&cfg.env)?;
-        // Ensure the schema exists — /logs may be hit before any run, since the
-        // server inits the DB lazily on first execution.
-        db::init_db(&cfg.db_path).await?;
-        db::get_logs(&cfg.db_path, &db_run_id).await?
-    };
-
+    let snap = snapshot_db(&state).await?;
+    let entries = db::get_logs(&snap.path, &run_id).await?;
     Ok(Json(json!({ "logs": entries })))
 }
 
-/// Which core command a background run executes.
-enum RunKind {
-    /// `commands::get` with an optional target (assets).
-    Get(Option<String>),
-    /// `commands::run` for a task target, with how its upstream assets are treated.
-    Task(String, CachePolicy),
-}
-
-/// Insert a `Pending` run, spawn the background execution task, and return the
-/// server-side handle. The real DB run id is surfaced in the completed payload.
-/// `target` is the name as given and `node` the full id it resolved to; both are
-/// `None` for a run of every asset and sensor.
-pub(crate) fn start_run(state: AppState, target: Option<String>, node: Option<String>) -> String {
-    spawn_run(state, RunKind::Get(target), node)
-}
-
-/// Insert a `Pending` run for a task, spawn the background execution via
-/// `commands::run`, and return the server-side handle. `node` is the full id
-/// `target` resolved to.
-pub(crate) fn start_run_task(state: AppState, target: String, node: String) -> String {
-    spawn_run(
-        state,
-        RunKind::Task(target, CachePolicy::RefreshAll),
-        Some(node),
-    )
-}
-
-/// A cron tick for a scheduled task: the task runs, as a task always does, and each upstream
-/// asset is recomputed only if something on its input side changed (what `barca run <task>`
-/// does). A scheduled asset already goes through the cache-aware [`start_run`].
-pub(crate) fn start_scheduled_task(state: AppState, target: String) -> String {
-    let node = Some(target.clone());
-    spawn_run(state, RunKind::Task(target, CachePolicy::CacheAware), node)
-}
-
-fn spawn_run(state: AppState, kind: RunKind, node: Option<String>) -> String {
-    let handle = db::generate_run_id();
-    // Child of the server-wide shutdown token: DELETE /run/{id} cancels just
-    // this run; graceful shutdown cancels all of them.
-    let cancel = state.shutdown.child_token();
-    state.runs.insert(
-        handle.clone(),
-        RunState {
-            handle: handle.clone(),
-            db_run_id: None,
-            command: match &kind {
-                RunKind::Get(_) => "get",
-                RunKind::Task(_, _) => "run",
-            }
-            .into(),
-            target: match &kind {
-                RunKind::Get(target) => target.clone(),
-                RunKind::Task(target, _) => Some(target.clone()),
-            },
-            node,
-            status: RunStatus::Pending,
-            result: None,
-            error: None,
-            started_at: now_ts(),
-            finished_at: None,
-            cancel: cancel.clone(),
-        },
-    );
-    let channel = RunChannel::new();
-    state.events.insert(handle.clone(), channel.clone());
-
-    let st = state.clone();
-    let h = handle.clone();
-    tokio::spawn(async move {
-        // Bound concurrency: acquire a run slot. Runs execute in parallel; the
-        // shared metadata.db is kept safe by barca-core's process-wide DB lock.
-        let _permit = st.run_slots.acquire().await.ok();
-
-        // Cancelled while queued — never started, nothing to clean up.
-        if cancel.is_cancelled() {
-            if let Some(mut r) = st.runs.get_mut(&h) {
-                r.status = RunStatus::Cancelled;
-                r.error = Some("run cancelled".to_string());
-                r.finished_at = Some(now_ts());
-            }
-            channel.emit(RunEvent::RunFinished {
-                run_id: h.clone(),
-                ok: false,
-            });
-            return;
-        }
-
-        if let Some(mut r) = st.runs.get_mut(&h) {
-            r.status = RunStatus::Running;
-        }
-        channel.emit(RunEvent::RunStarted { run_id: h.clone() });
-
-        // Core streams RunEvents over an unbounded channel (sync send from
-        // inside the worker-pool loop). A drain task forwards them onto the
-        // run's broadcast/backlog channel.
-        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<RunEvent>();
-        let drain_ch = channel.clone();
-        let drain_state = st.clone();
-        let drain_handle = h.clone();
-        let drain = tokio::spawn(async move {
-            while let Some(ev) = event_rx.recv().await {
-                if let RunEvent::RunStarted { run_id } = ev {
-                    if let Some(mut run) = drain_state.runs.get_mut(&drain_handle) {
-                        run.db_run_id = Some(run_id);
-                    }
-                } else {
-                    drain_ch.emit(ev);
-                }
-            }
-        });
-
-        let files = st.config.files.clone();
-        let python = st.config.python.clone();
-        let cfg = st.config.resolved.clone();
-
-        let mut timed_out = false;
-        let outcome: Result<GetResult, BarcaError> = {
-            let fut = async {
-                let dag = st.current_dag().await?;
-                match &kind {
-                    RunKind::Get(target) => {
-                        commands::get_streaming_from_dag(
-                            (*dag).clone(),
-                            &cfg,
-                            target.as_deref(),
-                            &files,
-                            &python,
-                            CachePolicy::CacheAware,
-                            true,
-                            cancel.clone(),
-                            Some(event_tx),
-                        )
-                        .await
-                    }
-                    RunKind::Task(target, policy) => {
-                        commands::run_streaming_from_dag(
-                            (*dag).clone(),
-                            &cfg,
-                            target,
-                            &files,
-                            &python,
-                            policy.clone(),
-                            true,
-                            cancel.clone(),
-                            Some(event_tx),
-                        )
-                        .await
-                    }
-                }
-            };
-            tokio::pin!(fut);
-
-            // On timeout, cancel the token and keep awaiting: the run observes the
-            // cancellation, terminates its workers, persists partial results, and
-            // returns — nothing is left running in the background.
-            tokio::select! {
-                res = &mut fut => res,
-                _ = tokio::time::sleep(RUN_TIMEOUT) => {
-                    // An operator cancel that is still unwinding when the deadline
-                    // hits stays classified as cancelled, not as a timeout.
-                    timed_out = !cancel.is_cancelled();
-                    cancel.cancel();
-                    fut.await
-                }
-            }
-            // `fut` (and with it the event sender) is dropped here.
-        };
-
-        // The run has returned and its event sender is gone — await the drain
-        // so trailing logs land before RunFinished.
-        drain.await.ok();
-        let ok = outcome.is_ok();
-
-        if let Some(mut r) = st.runs.get_mut(&h) {
-            r.finished_at = Some(now_ts());
-            match outcome {
-                Ok(result) => {
-                    r.status = RunStatus::Complete;
-                    r.result = Some(result);
-                }
-                Err(BarcaError::Cancelled) if timed_out => {
-                    r.status = RunStatus::Failed;
-                    r.error = Some(format!("run timed out after {}s", RUN_TIMEOUT.as_secs()));
-                }
-                Err(BarcaError::Cancelled) => {
-                    r.status = RunStatus::Cancelled;
-                    r.error = Some("run cancelled".to_string());
-                }
-                Err(e) => {
-                    r.status = RunStatus::Failed;
-                    r.error = Some(e.to_string());
-                }
-            }
-        }
-        channel.emit(RunEvent::RunFinished {
-            run_id: h.clone(),
-            ok,
-        });
-        // The run slot is released here, freeing capacity for a queued run.
-    });
-
-    handle
-}
-
-/// Evict completed/failed runs older than `max_age` from the in-memory runs map.
-/// Intended to be spawned as a background task from `serve_async`.
-pub async fn evict_finished_runs(state: AppState, interval: Duration, max_age: Duration) {
-    loop {
-        tokio::time::sleep(interval).await;
-        let cutoff = now_ts() - max_age.as_secs_f64();
-        state.runs.retain(|handle, run| {
-            let keep = match run.status {
-                RunStatus::Complete | RunStatus::Failed | RunStatus::Cancelled => {
-                    // Keep if it finished recently (or hasn't finished yet somehow).
-                    run.finished_at.is_none_or(|t| t > cutoff)
-                }
-                _ => true,
-            };
-            if !keep {
-                // Drop the live event channel too; subscribers' streams end.
-                state.events.remove(handle);
-            }
-            keep
-        });
-    }
-}
-
-/// Any request no route matches: `404` with the same `{"error": ...}` body as every other
-/// error, naming what was asked for. A trigger with nothing after `/get/` or `/run/` is told
-/// what is missing.
+/// Any request no route matches: `404` with the error envelope every other error has,
+/// naming what was asked for. A trigger with nothing after `/get/` or `/run/` is told what is
+/// missing.
 pub async fn no_route(method: axum::http::Method, uri: axum::http::Uri) -> ApiError {
     let path = uri.path();
     match (method.as_str(), path) {
         ("POST", "/get/" | "/get") => ApiError::NotFound(
-            "POST /get/{target} needs a target: an asset or sensor name or its full id".into(),
+            "POST /get/{target} needs a target: an asset or sensor name or its full id\nPOST /runs with {\"command\": \"get\", \"targets\": [...]} is the run route.".into(),
         ),
         ("POST", "/run/") => ApiError::NotFound(
             "POST /run/{target} needs a target: a task or sensor name or its full id \
-             (POST /run, without the slash, gets every asset and sensor)"
+             (POST /run, without the slash, gets every asset and sensor)\nPOST /runs with {\"command\": \"run\", \"targets\": [...]} is the run route."
                 .into(),
         ),
-        _ => ApiError::NotFound(format!("no such endpoint: {method} {path}")),
+        _ => ApiError::NotFound(format!(
+            "no such endpoint: {method} {path}\nThe routes are listed at https://barca.sh/reference/server-api/."
+        )),
     }
 }
 
-/// A known path asked with a method it does not take: `405` with the `{"error": ...}` body
-/// and the methods it does take, also in the `Allow` header.
-pub async fn wrong_method(method: axum::http::Method, uri: axum::http::Uri) -> Response {
-    let path = uri.path();
-    let allowed = if path == "/run" || path.starts_with("/get/") {
+/// The methods `path` takes, for a `405`.
+fn allowed_methods(path: &str) -> &'static str {
+    let runs_item = path
+        .strip_prefix("/runs/")
+        .is_some_and(|rest| !rest.is_empty() && !rest.contains('/'));
+    if path == "/runs" {
+        "GET, POST"
+    } else if runs_item {
+        "GET, DELETE"
+    } else if path == "/run"
+        || path.starts_with("/get/")
+        || (path.starts_with("/schedule/")
+            && (path.ends_with("/pause") || path.ends_with("/resume")))
+    {
         "POST"
     } else if path.starts_with("/run/") {
         "POST, DELETE"
     } else {
         "GET"
-    };
+    }
+}
+
+/// A known path asked with a method it does not take: `405` with the error envelope and the
+/// methods it does take, also in the `Allow` header.
+pub async fn wrong_method(method: axum::http::Method, uri: axum::http::Uri) -> Response {
+    let path = uri.path();
+    let allowed = allowed_methods(path);
+    let error = ApiError::BadRequest(format!(
+        "{method} is not allowed on {path}: use {}",
+        allowed.replace(", ", " or ")
+    ));
+    let (_, envelope) = error.parts();
     (
         axum::http::StatusCode::METHOD_NOT_ALLOWED,
         [(axum::http::header::ALLOW, allowed)],
-        Json(json!({
-            "error": format!("{method} is not allowed on {path}: use {}", allowed.replace(", ", " or "))
-        })),
+        Json(envelope.to_json()),
     )
         .into_response()
 }
@@ -835,6 +431,9 @@ mod duration_tests {
         }
     }
 
+    use crate::state::RunStatus;
+    use std::time::Duration;
+
     #[tokio::test]
     async fn a_queued_run_revalidates_source_before_any_worker_starts() {
         let dir = tempfile::tempdir().unwrap();
@@ -859,9 +458,20 @@ mod duration_tests {
             read_only: false,
         });
         state.run_slots = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
-        assert!(check_target(&state, "target", "get").await.is_ok());
+        assert!(
+            crate::runs::check_target(&state, "target", "get")
+                .await
+                .is_ok()
+        );
         let held = state.run_slots.acquire().await.unwrap();
-        let handle = start_run(state.clone(), Some("target".into()), None);
+        let handle = crate::runs::start(
+            state.clone(),
+            crate::runs::RunSpec::api(
+                barca_core::outcome::RunCommand::Get,
+                vec!["target".into()],
+                vec![],
+            ),
+        );
         assert_eq!(state.runs.get(&handle).unwrap().status, RunStatus::Pending);
         std::fs::write(&file, "from barca import asset\ndef broken(: pass\n").unwrap();
         drop(held);

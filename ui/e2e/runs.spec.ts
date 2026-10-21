@@ -1,5 +1,5 @@
 import { expect, test, type APIRequestContext } from '@playwright/test'
-import { seedRuns } from './helpers/seed'
+import { isStartRun, seedRuns, startRun, waitForRun } from './helpers/seed'
 
 const API = process.env.BARCA_E2E_API ?? 'http://127.0.0.1:8274'
 type HistoryRun = { id: string; target: string | null; status: string }
@@ -10,13 +10,9 @@ async function history(request: APIRequestContext): Promise<HistoryRun[]> {
   return (await response.json()).runs
 }
 
-async function finishedRun(request: APIRequestContext, target: string, verb = 'run') {
+async function finishedRun(request: APIRequestContext, target: string, verb: 'run' | 'get' = 'run') {
   const before = new Set((await history(request)).map((run) => run.id))
-  const response = await request.post(`${API}/${verb}/${target}`)
-  expect(response.ok()).toBeTruthy()
-  const { run_id } = await response.json()
-  await expect.poll(async () => (await (await request.get(`${API}/status/${run_id}`)).json()).status,
-    { timeout: 30_000 }).not.toMatch(/running|queued|pending/)
+  await waitForRun(request, await startRun(request, target, verb))
   const run = (await history(request)).find((entry) => !before.has(entry.id) && entry.target === target)
   expect(run, `durable history entry for ${target}`).toBeDefined()
   return run!
@@ -50,8 +46,7 @@ test.describe('run history', () => {
     const before = new Set((await history(request)).map((run) => run.id))
     await page.goto('/ui/#/graph')
     await page.locator('.react-flow__node[data-id="pipeline.py:history_asset"]').click()
-    const started = page.waitForResponse((response) => response.request().method() === 'POST'
-      && decodeURIComponent(response.url()).endsWith('/get/pipeline.py:history_asset'))
+    const started = page.waitForResponse((response) => isStartRun(response.request(), 'get', 'pipeline.py:history_asset'))
     await page.getByRole('banner').getByRole('button', { name: 'Run', exact: true }).click()
     expect((await started).ok()).toBeTruthy()
     await expect(page).toHaveURL(/#\/assets\?.*view=graph/)
@@ -81,8 +76,7 @@ test.describe('run history', () => {
     const before = new Set((await history(request)).map((run) => run.id))
     await page.goto('/ui/#/graph')
     await page.locator('.react-flow__node[data-id="pipeline.py:numbers"]').click()
-    const started = page.waitForResponse((response) => response.request().method() === 'POST'
-      && decodeURIComponent(response.url()).endsWith('/get/pipeline.py:numbers'))
+    const started = page.waitForResponse((response) => isStartRun(response.request(), 'get', 'pipeline.py:numbers'))
     await page.getByRole('banner').getByRole('button', { name: 'Run', exact: true }).click()
     expect((await started).ok()).toBeTruthy()
     await page.getByRole('link', { name: 'View run', exact: true }).click()

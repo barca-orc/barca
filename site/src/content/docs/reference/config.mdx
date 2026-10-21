@@ -91,6 +91,10 @@ include = ["pipelines/**/*.py"]            # only these files (replaces the walk
 # filesystem, or "off". Default: 10% of the filesystem. See "Cache size" below.
 max_size = "20GB"
 
+[server]
+# Seconds `barca serve` waits for runs in flight on SIGTERM or SIGINT before cancelling them.
+drain_timeout = 30
+
 [remote]
 # Root of the remote store. Setting it turns remote storage on:
 # artifacts at {uri}/{env}/artifacts, backups of the history at {uri}/{env}/state/backups/.
@@ -106,6 +110,12 @@ transfer_timeout = 600      # seconds one transfer attempt may run (at least 1)
 # Passed to fsspec.filesystem(protocol, ...), one table per protocol: s3, gcs, abfs.
 [remote.storage_options.s3]
 endpoint_url = "https://<account-id>.r2.cloudflarestorage.com"
+
+[server]
+# The barca serve that is the team's ledger (experimental). get and run still run here,
+# read cache hits from its ledger and post what they compute (needs [remote] with the
+# server's store); status, history and stats answer from it; --server runs a command there.
+url = "https://barca.internal.example.com"
 ```
 
 | Key | Default | Meaning |
@@ -114,18 +124,20 @@ endpoint_url = "https://<account-id>.r2.cloudflarestorage.com"
 | `[discovery].include` | none | Glob patterns; only matching files are discovered. See [Discovery](/reference/discovery/). |
 | `[discovery].exclude` | none | Glob patterns skipped in addition to the built-in list. |
 | `[cache].max_size` | 10% of the filesystem | Size limit for `.barca/`; past it barca evicts down to 80% of it. `"off"` for no limit. See [Cache size](#cache-size). |
+| `[server].drain_timeout` | 30 | Seconds `barca serve` waits for runs in flight once stopped with SIGTERM or SIGINT, before it cancels them and exits 1. `0` cancels at once. `--drain-timeout` overrides it. |
 | `[remote].uri` | none | Root of the remote store. |
 | `[remote].artifacts_uri` | `{uri}/{env}/artifacts` | Artifact location, used as written. |
 | `[remote].transfer_concurrency` | 4 | Transfers in flight at once. |
 | `[remote].transfer_timeout` | 600 | Seconds one transfer attempt may run. |
 | `[remote.storage_options.<protocol>]` | none | Options for the fsspec filesystem of that protocol. |
+| `[server].url` | none | The `barca serve` that is the team's ledger (`BARCA_SERVER` overrides it): `http://` or `https://`, with any proxy path prefix. `get` and `run` run here and read and post through its ledger (requires `[remote]` pointing at the server's store); `status`, `history` and `stats` answer from it; a bare `--server` runs the command there; `--local` ignores it. See [Server mode](#server-mode) and [Remote Storage](/reference/remote-storage/#a-server-as-the-ledger). |
 
 An unknown key or a malformed file is a usage error (exit 2) that names the key and lists the
 valid ones:
 
 ```
 invalid ./barca.toml: TOML parse error at line 1, column 1
-unknown field `defualt_env`, expected one of `default_env`, `remote`, `discovery`, `cache`
+unknown field `defualt_env`, expected one of `default_env`, `remote`, `discovery`, `cache`, `server`
 ```
 
 Keep credentials out of `barca.toml`; they come from the environment.
@@ -185,6 +197,7 @@ Variables that override `barca.toml`:
 | `BARCA_TRANSFER_TIMEOUT` | `[remote].transfer_timeout` | Positive integer seconds, per attempt. In 0.18.0 an invalid value exits 3, not 2. |
 | `BARCA_STORAGE_OPTIONS` | `[remote.storage_options.*]` | JSON keyed by protocol, merged over the toml tables key by key. |
 | `FSSPEC_<PROTOCOL>_<OPTION>` | one storage option | fsspec's own convention (`FSSPEC_S3_ENDPOINT_URL`, `FSSPEC_GCS_PROJECT`). Overridden by both of the above. |
+| `BARCA_SERVER` | `[server].url` | The server a bare `--server` uses. Overridden by `--server <url>`. |
 | `BARCA_ARTIFACT_URI` | the artifact location | Used as written, with no environment name added, and history stays local. Kept from 0.4.0. Warns when combined with a non-default environment. No backups are taken. Prefer `BARCA_REMOTE_URI`. |
 
 An empty value counts as unset. `BARCA_REMOTE=off` overrides the URI, transfer and
@@ -210,6 +223,36 @@ worker processes; do not set them.
 Credentials are read by the storage libraries from their usual variables (`AWS_*`,
 `GOOGLE_APPLICATION_CREDENTIALS`, `AZURE_STORAGE_*`). `BARCA_REMOTE_URI` plus those is a
 complete remote setup with no `barca.toml`. See [Remote Storage](/reference/remote-storage/).
+
+## Server mode
+
+A configured server is the team's ledger (experimental; `barca docs server-mode`,
+[Deploying](/deploying/), [RFC-0007](/rfcs/0007-server-mode/)). Which server:
+
+**`--server <url>` > `BARCA_SERVER` > `[server].url` in `barca.toml`**
+
+What a command does with it:
+
+| Command | Without a flag | `--server [<url>]` | `--local` |
+|---|---|---|---|
+| `get`, `run` | runs here; cache hits from the server's ledger, results posted to it | runs on the server, printed here | runs here against this machine's ledger; nothing sent |
+| `status`, `history`, `stats` | answered by the server (`status` adds `local` per node) | answered by the server | this machine's records |
+| `list` | this machine's files | the deployed nodes | this machine's files |
+
+```bash
+barca get total                                                # here, against the ledger
+barca get total --server https://barca.internal.example.com   # that server, for this command
+export BARCA_SERVER=https://barca.internal.example.com
+barca get total --server                                       # the configured server
+barca get total --local                                        # this machine only
+```
+
+A bare `--server` with no server configured is a usage error (exit 2). When the URL came from
+`BARCA_SERVER` or `barca.toml`, barca prints `[barca] server <url> (<source>)` once on stderr.
+`--local` is a usage error with `--server`. A local `get`/`run` against the ledger needs
+`[remote]` pointing at the server's store (a usage error otherwise, naming both stores); a server
+that cannot be reached is exit 3 naming it, with `--local` as the remediation. `--env` with
+`--server` must name the server's environment.
 
 ## Environments (`--env`)
 

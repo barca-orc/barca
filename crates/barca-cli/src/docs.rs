@@ -37,6 +37,11 @@ pub const TOPICS: &[Topic] = &[
     ),
     topic!("logs", "Read a run's recorded step stdout", "logs.md"),
     topic!(
+        "server-mode",
+        "One server as the team's ledger; --server runs a command there; [server] url, BARCA_SERVER, --local",
+        "server-mode.md"
+    ),
+    topic!(
         "groups",
         "Organizational groups, nesting and outputs",
         "groups.md"

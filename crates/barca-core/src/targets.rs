@@ -119,7 +119,7 @@ fn dag_nodes(dag: &Dag) -> impl Iterator<Item = (&str, crate::NodeKind)> {
 /// The single node a target name identifies, whatever its kind. No match is `AssetNotFound`;
 /// several matches (the same function name in two files) is a usage error that lists the full
 /// ids to choose from.
-pub(crate) fn find_target_id(dag: &Dag, name: &str) -> Result<String, BarcaError> {
+pub fn find_target_id(dag: &Dag, name: &str) -> Result<String, BarcaError> {
     Ok(resolve_target_among(dag_nodes(dag), name, "")?)
 }
 
@@ -194,10 +194,23 @@ pub(crate) fn is_task(dag: &Dag, id: &str) -> bool {
 /// tasks were skipped and how to run one. `None` when there is no task to mention.
 pub(crate) fn skipped_tasks_note(dag: &Dag, file_args: &[String]) -> Option<String> {
     let order = dag.topo_order();
+    let kinds: Vec<(&str, crate::NodeKind)> = order
+        .iter()
+        .filter_map(|id| dag.get_node(id).map(|n| (*id, n.kind())))
+        .collect();
+    skipped_tasks_note_among(&kinds, file_args)
+}
+
+/// [`skipped_tasks_note`] from the nodes in topological order with their kinds, as
+/// `barca list --json` gives them (a `--server` dry run prints it from the server's list).
+pub fn skipped_tasks_note_among(
+    order: &[(&str, crate::NodeKind)],
+    file_args: &[String],
+) -> Option<String> {
     let tasks: Vec<&str> = order
         .iter()
-        .filter(|id| is_task(dag, id))
-        .map(|id| short_name(id))
+        .filter(|(_, kind)| *kind == crate::NodeKind::Task)
+        .map(|(id, _)| short_name(id))
         .collect();
     let first = tasks.first()?;
     let run_hint = format!("barca run {first} {}", file_args.join(" "));

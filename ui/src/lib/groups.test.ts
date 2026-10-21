@@ -12,7 +12,7 @@ import {
 } from './groups'
 const tree = groupTree(metadata)
 
-import type { AssetSummary, NodeState } from './types'
+import type { ListNode, NodeState } from './types'
 
 function state(id: string): NodeState {
   const task = id.includes(':validate__')
@@ -92,26 +92,26 @@ describe('organizational groups', () => {
   })
 
   it('preserves dependencies crossing a collapsed boundary even through a non-output member', () => {
-    const assets: AssetSummary[] = [
+    const assets: ListNode[] = [
       {
         id: 'modeling.py:data__raw_rows',
         kind: 'asset',
         inputs: [],
-        freshness: { type: 'Always' },
+        freshness: 'always',
         env: [],
       },
       {
         id: 'modeling.py:data__train_rows',
         kind: 'asset',
         inputs: ['modeling.py:data__raw_rows'],
-        freshness: { type: 'Always' },
+        freshness: 'always',
         env: [],
       },
       {
         id: 'modeling.py:cv__fold_01__train_rows',
         kind: 'asset',
         inputs: ['modeling.py:data__raw_rows', 'modeling.py:data__train_rows'],
-        freshness: { type: 'Always' },
+        freshness: 'always',
         env: [],
       },
     ]

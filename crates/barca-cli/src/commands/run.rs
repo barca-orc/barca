@@ -17,8 +17,11 @@ pub(crate) async fn run_cmd(
     mode: OutputMode,
     agent: bool,
     fields: Option<&[String]>,
+    ledger: Option<barca_core::ledger::Ledger>,
 ) -> Result<(), barca_core::BarcaError> {
-    let cfg = barca_core::config::resolve(env)?;
+    let mut cfg = barca_core::config::resolve(env)?;
+    // The configured server's ledger, unless --local (RFC-0007 section 4.1).
+    cfg.ledger = ledger;
     if let Some(line) = cfg.startup_line() {
         barca_core::errln!("{line}");
     }

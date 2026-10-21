@@ -1,5 +1,5 @@
 import { match } from 'ts-pattern'
-import type { StatusKind, RunStatus, Freshness, NodeKind } from './types'
+import type { StatusKind, ListNode, NodeKind } from './types'
 
 export interface StatusMeta {
   /** CSS var for the status color */
@@ -62,25 +62,12 @@ export function statusMeta(status: StatusKind): StatusMeta {
     .exhaustive()
 }
 
-/** Collapse the server's run lifecycle into a visual status. */
-export function runStatusToVisual(status: RunStatus): StatusKind {
-  return match<RunStatus, StatusKind>(status)
-    .with('pending', () => 'queued')
-    .with('running', () => 'running')
-    .with('complete', () => 'success')
-    .with('failed', () => 'failed')
-    // Stopped by the operator (DELETE /run/{id}) or server shutdown — inert,
-    // not an error.
-    .with('cancelled', () => 'skipped')
-    .exhaustive()
-}
-
-/** Human-readable freshness summary. */
-export function freshnessLabel(freshness: Freshness): string {
-  return match(freshness)
-    .with({ type: 'Always' }, () => 'always')
-    .with({ type: 'Manual' }, () => 'manual')
-    .with({ type: 'Schedule' }, (f) => f.value)
+/** Human-readable freshness summary: the cron expression for a scheduled node. */
+export function freshnessLabel(node: Pick<ListNode, 'freshness' | 'schedule'>): string {
+  return match(node.freshness)
+    .with('always', () => 'always')
+    .with('manual', () => 'manual')
+    .with('schedule', () => node.schedule ?? 'schedule')
     .exhaustive()
 }
 

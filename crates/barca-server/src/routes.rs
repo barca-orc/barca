@@ -2,9 +2,8 @@
 //! auth) would layer in here. The web UI is served under `/ui/`, beside the API
 //! routes rather than in front of them, so API paths stay what the contract says.
 
-use crate::handlers;
 use crate::state::AppState;
-use crate::ui;
+use crate::{handlers, inspect, ledger, pause, runs, ui};
 use axum::Router;
 use axum::routing::{get, post};
 
@@ -12,27 +11,42 @@ use axum::routing::{get, post};
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(handlers::health))
+        .route("/project", get(inspect::project))
         .route("/plan", get(handlers::plan))
         .route("/groups", get(handlers::groups))
+        // Inspection in the CLI's `--json` shapes.
+        .route("/list", get(inspect::list))
+        .route("/nodes", get(inspect::nodes))
+        .route("/history", get(inspect::history))
+        .route("/stats/{name}", get(inspect::stats))
         .route("/assets", get(handlers::assets))
         .route("/assets/{name}", get(handlers::asset_detail))
         .route("/assets/{name}/schema", get(handlers::asset_schema))
-        .route("/run", post(handlers::run))
-        .route("/runs", get(crate::runs::list))
-        .route("/runs/{id}", get(crate::runs::detail))
-        // POST starts a task run; DELETE cancels an in-flight run by handle.
+        // The ledger: what a local run on another machine asks and posts (RFC-0007).
+        .route("/ledger/lookup", post(ledger::lookup))
+        .route("/ledger/runs", post(ledger::post_run))
+        // The run contract.
+        .route("/runs", get(runs::list).post(runs::create))
+        .route("/runs/{run_id}", get(runs::detail).delete(runs::cancel))
+        .route("/runs/{run_id}/events", get(runs::events))
+        .route("/runs/{run_id}/output", get(runs::output))
+        .route("/logs/{run_id}", get(handlers::logs))
+        .route("/state", get(handlers::state))
+        .route("/schedule", get(handlers::schedule))
+        // A schedule id is a node id: percent-encode a `/` in it.
+        .route("/schedule/{id}/pause", post(pause::pause))
+        .route("/schedule/{id}/resume", post(pause::resume))
+        // Aliases of the run routes, kept for one minor release.
+        .route("/run", post(runs::run_all))
         // The target takes the rest of the path, so a full node id with a directory in it
         // (`sub/pipeline.py:orders`) works with its `/` percent-encoded or not.
         .route(
             "/run/{*target}",
-            post(handlers::run_target).delete(handlers::cancel_run),
+            post(runs::run_target).delete(runs::cancel),
         )
-        .route("/get/{*target}", post(handlers::get_target))
-        .route("/status/{run_id}", get(handlers::status))
-        .route("/state", get(handlers::state))
-        .route("/events/{run_id}", get(handlers::events))
-        .route("/logs/{run_id}", get(handlers::logs))
-        .route("/schedule", get(handlers::schedule))
+        .route("/get/{*target}", post(runs::get_target))
+        .route("/status/{run_id}", get(runs::status))
+        .route("/events/{run_id}", get(runs::events))
         // The web UI: `/` and `/ui` redirect to `ui/` (relative, so a reverse
         // proxy prefix is kept); the app and its assets live under `/ui/`.
         .route("/", get(ui::redirect_to_ui))

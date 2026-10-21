@@ -62,6 +62,7 @@ pub async fn get(
         interrupt: cancel.into(),
         event_tx: None,
         partition: None,
+        options: Default::default(),
     })
     .await?
     .into_single()
@@ -90,6 +91,7 @@ pub async fn run(
         interrupt: cancel.into(),
         event_tx: None,
         partition: None,
+        options: Default::default(),
     })
     .await?
     .into_single()
@@ -122,6 +124,7 @@ pub async fn get_streaming(
         interrupt: cancel.into(),
         event_tx,
         partition,
+        options: Default::default(),
     })
     .await?
     .into_single()
@@ -151,6 +154,7 @@ pub async fn run_streaming(
         interrupt: cancel.into(),
         event_tx,
         partition: None,
+        options: Default::default(),
     })
     .await?
     .into_single()
@@ -207,6 +211,7 @@ pub async fn get_many_streaming(
         interrupt: cancel.into(),
         event_tx,
         partition,
+        options: Default::default(),
     })
     .await
     .map(Executed::into_multi)
@@ -260,68 +265,59 @@ pub async fn run_many_streaming(
         interrupt: cancel.into(),
         event_tx,
         partition: None,
+        options: Default::default(),
     })
     .await
     .map(Executed::into_multi)
 }
 
-/// Execute a served asset graph without reparsing excluded definitions.
-#[allow(clippy::too_many_arguments)]
-pub async fn get_streaming_from_dag(
-    dag: crate::dag::Dag,
-    cfg: &crate::config::ResolvedConfig,
-    target_name: Option<&str>,
-    file_args: &[String],
-    python: &std::path::Path,
-    policy: CachePolicy,
-    agent_mode: bool,
-    cancel: CancellationToken,
-    event_tx: Option<UnboundedSender<crate::RunEvent>>,
-) -> Result<GetResult, BarcaError> {
-    let names: Vec<String> = target_name.map(str::to_string).into_iter().collect();
-    execute(ExecuteRequest {
-        dag: Some(dag),
-        cfg,
-        target_names: &names,
-        file_args,
-        python,
-        agent_mode,
-        policy,
-        command_label: "get",
-        interrupt: cancel.into(),
-        event_tx,
-        partition: None,
-    })
-    .await?
-    .into_single()
+/// What a run produced: one target's result, or the result of several targets.
+#[derive(Debug)]
+pub enum RunResult {
+    Single(GetResult),
+    Multi(MultiResult),
 }
 
-/// Execute a served task graph without reparsing excluded definitions.
-#[allow(clippy::too_many_arguments)]
-pub async fn run_streaming_from_dag(
-    dag: crate::dag::Dag,
-    cfg: &crate::config::ResolvedConfig,
-    target_name: &str,
-    file_args: &[String],
-    python: &std::path::Path,
-    policy: CachePolicy,
-    agent_mode: bool,
-    cancel: CancellationToken,
-    event_tx: Option<UnboundedSender<crate::RunEvent>>,
-) -> Result<GetResult, BarcaError> {
-    execute(ExecuteRequest {
-        dag: Some(dag),
-        cfg,
-        target_names: &[target_name.to_string()],
-        file_args,
-        python,
-        agent_mode,
-        policy,
-        command_label: "run",
-        interrupt: cancel.into(),
-        event_tx,
-        partition: None,
+/// A run `barca serve` starts over its loaded graph (no source is parsed again). Progress
+/// lines are printed as for `--agent` and streamed as `line` events to `event_tx`.
+pub struct ServedRun<'a> {
+    pub dag: crate::dag::Dag,
+    pub cfg: &'a crate::config::ResolvedConfig,
+    pub command: crate::outcome::RunCommand,
+    /// As given; one target is a single-target run, several a multi-target run, none every
+    /// asset and sensor.
+    pub targets: &'a [String],
+    pub files: &'a [String],
+    pub python: &'a std::path::Path,
+    pub policy: CachePolicy,
+    pub cancel: CancellationToken,
+    pub event_tx: Option<UnboundedSender<crate::RunEvent>>,
+    pub options: crate::outcome::RunOptions,
+    /// `--partition`: the keys of the targets to compute and return (all keys when `None`).
+    pub partition: Option<crate::selection::PartitionSelection>,
+}
+
+/// Execute a [`ServedRun`]. A single-target run that stops at a failed step is an `Err`, as
+/// for [`get`]; a multi-target run reports failures per target.
+pub async fn serve_run(run: ServedRun<'_>) -> Result<RunResult, BarcaError> {
+    let executed = execute(ExecuteRequest {
+        dag: Some(run.dag),
+        cfg: run.cfg,
+        target_names: run.targets,
+        file_args: run.files,
+        python: run.python,
+        agent_mode: true,
+        policy: run.policy,
+        command_label: run.command.as_str(),
+        interrupt: run.cancel.into(),
+        event_tx: run.event_tx,
+        partition: run.partition,
+        options: run.options,
     })
-    .await?
-    .into_single()
+    .await?;
+    if run.targets.len() > 1 {
+        Ok(RunResult::Multi(executed.into_multi()))
+    } else {
+        executed.into_single().map(RunResult::Single)
+    }
 }

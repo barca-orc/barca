@@ -4,7 +4,7 @@ use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode},
 };
-use barca_server::{ServeConfig, app};
+use barca_server::{ServeConfig, app, draining_app};
 use futures::StreamExt;
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, path::Path, sync::OnceLock, time::Duration};
@@ -100,6 +100,23 @@ async fn request(router: &Router, method: &str, path: &str) -> axum::response::R
         )
         .await
         .unwrap()
+}
+async fn request_json(router: &Router, method: &str, path: &str, body: Value) -> (u16, Value) {
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri(path)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status().as_u16();
+    let bytes = to_bytes(resp.into_body(), 8 * 1024 * 1024).await.unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap())
 }
 async fn checked(router: &Router, method: &str, url: &str, path: &str, status: u16) -> Value {
     let resp = request(router, method, url).await;
@@ -231,15 +248,39 @@ fn spec_matches_router_paths_and_methods_and_all_schemas_compile() {
         &json!({"node_id":"p.py:a", "run_hash":"h", "created_at":"2026-10-15 00:00:00"})
     ));
     let health = validator(&json!({"$ref":"#/components/schemas/Health"}));
-    assert!(health.is_valid(
-        &json!({"status":"ok","version":"1","read_only":false,"scheduler":false,"load_errors":[]})
-    ));
+    let ok = json!({"status":"ok","version":"1","api_version":1,"env":"default","store_uri":null,"read_only":false,"scheduler":false,"load_errors":[]});
+    assert!(health.is_valid(&ok));
+    let mut draining = ok.clone();
+    draining["status"] = json!("draining");
+    assert!(health.is_valid(&draining));
+    let mut stopping = ok.clone();
+    stopping["status"] = json!("stopping");
+    assert!(!health.is_valid(&stopping));
+    let mut missing = ok.clone();
+    missing.as_object_mut().unwrap().remove("api_version");
+    assert!(!health.is_valid(&missing));
+    let mut invented = ok.clone();
+    invented["invented"] = json!(true);
+    assert!(!health.is_valid(&invented));
+    // Every error is the CLI envelope: a kind with its exit code.
+    let error = validator(&json!({"$ref":"#/components/schemas/Error"}));
+    assert!(error.is_valid(&json!({"error":"no","code":2,"kind":"usage","remediation":null})));
+    assert!(!error.is_valid(&json!({"error":"no"})));
+    assert!(!error.is_valid(&json!({"error":"no","code":2,"kind":"invented","remediation":null})));
+    // An outcome is tagged by status; cancelled and error carry the envelope only.
+    let outcome = validator(&json!({"$ref":"#/components/schemas/Outcome"}));
+    let envelope =
+        json!({"error":"run cancelled","code":130,"kind":"cancelled","remediation":null});
+    assert!(outcome.is_valid(&json!({"status":"cancelled","envelope":envelope})));
+    assert!(!outcome.is_valid(&json!({"status":"cancelled"})));
+    assert!(!outcome.is_valid(&json!({"status":"invented","envelope":envelope})));
+    let request = validator(&json!({"$ref":"#/components/schemas/RunRequest"}));
+    assert!(request.is_valid(&json!({"command":"get","targets":["a"]})));
     assert!(
-        !health.is_valid(&json!({"status":"ok","version":"1","read_only":false,"scheduler":false}))
+        request.is_valid(&json!({"command":"get","targets":["a"],"values":true,"partition":"k=a"}))
     );
-    assert!(!health.is_valid(
-        &json!({"status":"ok","version":"1","read_only":false,"scheduler":false,"load_errors":[],"invented":true})
-    ));
+    assert!(!request.is_valid(&json!({"command":"sql"})));
+    assert!(!request.is_valid(&json!({"command":"get","invented":1})));
     let load_error = validator(&json!({"$ref":"#/components/schemas/LoadError"}));
     assert!(!load_error.is_valid(&json!({"file":"p.py","error":"broken"})));
     assert!(!load_error.is_valid(&json!({"file":"p.py","error":"broken","affected_nodes":[1]})));
@@ -252,6 +293,7 @@ fn spec_matches_router_paths_and_methods_and_all_schemas_compile() {
         barca_core::RunEvent::StepFinished {
             node_id: "p.py:a".into(),
             ok: false,
+            cached: false,
             elapsed_seconds: Some(1.0),
             error: Some("failed".into()),
             import_seconds: Some(1.25),
@@ -259,6 +301,29 @@ fn spec_matches_router_paths_and_methods_and_all_schemas_compile() {
         barca_core::RunEvent::RunFinished {
             run_id: "r".into(),
             ok: false,
+            outcome: None,
+        },
+        barca_core::RunEvent::Line {
+            line: "[barca] step:p.py:a cached".into(),
+            when: barca_core::lines::LineWhen::Agent,
+        },
+        barca_core::RunEvent::StepFinished {
+            node_id: "p.py:a".into(),
+            ok: true,
+            cached: true,
+            elapsed_seconds: None,
+            error: None,
+            import_seconds: None,
+        },
+        barca_core::RunEvent::RunFinished {
+            run_id: "r".into(),
+            ok: false,
+            outcome: Some(
+                serde_json::value::RawValue::from_string(
+                    json!({"status":"error","envelope":{"error":"x","code":3,"kind":"infra","remediation":null}}).to_string(),
+                )
+                .unwrap(),
+            ),
         },
     ] {
         validate(
@@ -308,6 +373,13 @@ async fn inspection_methods_errors_read_only_and_ui_match_contract() {
         ("/schedule", "/schedule"),
         ("/runs?limit=0", "/runs"),
         ("/logs/missing", "/logs/{run_id}"),
+        ("/project", "/project"),
+        ("/list", "/list"),
+        ("/nodes", "/nodes"),
+        ("/nodes?targets=first&sample=1", "/nodes"),
+        ("/history?limit=5", "/history"),
+        ("/history?all=1", "/history"),
+        ("/stats/first", "/stats/{name}"),
     ] {
         checked(&router, "GET", url, path, 200).await;
         checked(&router, "HEAD", url, path, 200).await;
@@ -321,8 +393,12 @@ async fn inspection_methods_errors_read_only_and_ui_match_contract() {
         ("/assets/missing", "/assets/{name}"),
         ("/assets/missing/schema", "/assets/{name}/schema"),
         ("/status/missing", "/status/{run_id}"),
-        ("/runs/missing", "/runs/{id}"),
+        ("/runs/missing", "/runs/{run_id}"),
+        ("/runs/missing/events", "/runs/{run_id}/events"),
+        ("/runs/missing/output", "/runs/{run_id}/output"),
         ("/events/missing", "/events/{run_id}"),
+        ("/stats/missing", "/stats/{name}"),
+        ("/nodes?targets=missing", "/nodes"),
     ] {
         checked(&router, "GET", url, path, 404).await;
     }
@@ -332,9 +408,24 @@ async fn inspection_methods_errors_read_only_and_ui_match_contract() {
         ("POST", "/run/publish", "/run/{target}"),
         ("POST", "/get/first", "/get/{target}"),
         ("DELETE", "/run/missing", "/run/{target}"),
+        ("DELETE", "/runs/missing", "/runs/{run_id}"),
+        ("POST", "/schedule/missing/pause", "/schedule/{id}/pause"),
+        ("POST", "/schedule/missing/resume", "/schedule/{id}/resume"),
     ] {
         checked(&router, method, url, path, 403).await;
     }
+    let refused = request_json(
+        &router,
+        "POST",
+        "/runs",
+        json!({"command":"get","targets":["first"]}),
+    )
+    .await;
+    assert_eq!(refused.0, 403);
+    validate(
+        &contract()["paths"]["/runs"]["post"]["responses"]["403"]["content"]["application/json"]["schema"],
+        &refused.1,
+    );
     for path in ["/", "/ui"] {
         checked(&router, "GET", path, path, 303).await;
         checked(&router, "HEAD", path, path, 303).await;
@@ -445,7 +536,7 @@ async fn actual_runs_events_failure_cancel_and_restart_match_contract() {
         &router,
         "GET",
         &format!("/runs/{handle}"),
-        "/runs/{id}",
+        "/runs/{run_id}",
         200,
     )
     .await;
@@ -489,18 +580,165 @@ async fn actual_runs_events_failure_cancel_and_restart_match_contract() {
     )
     .await;
     assert_eq!(wait(&router, &slow).await["status"], "cancelled");
+    // The run contract: POST /runs, its stream, its outcome, its output.
+    for (body, status) in [
+        (json!({"command":"get","targets":["missing"]}), 404),
+        (json!({"command":"get","targets":["publish"]}), 400),
+        (json!({"command":"run","targets":[]}), 400),
+        (json!({"command":"get","invented":true}), 400),
+    ] {
+        let (got, error) = request_json(&router, "POST", "/runs", body.clone()).await;
+        assert_eq!(got, status, "{body}: {error}");
+        validate(
+            &contract()["paths"]["/runs"]["post"]["responses"][status.to_string()]["content"]["application/json"]
+                ["schema"],
+            &error,
+        );
+    }
+    let (got, dry) = request_json(
+        &router,
+        "POST",
+        "/runs",
+        json!({"command":"get","targets":["second"],"dry_run":true}),
+    )
+    .await;
+    assert_eq!(got, 200);
+    validate(&contract()["components"]["schemas"]["Explain"], &dry);
+    let (got, accepted) = request_json(
+        &router,
+        "POST",
+        "/runs",
+        json!({"command":"get","targets":["second"]}),
+    )
+    .await;
+    assert_eq!(got, 202);
+    validate(&contract()["components"]["schemas"]["RunHandle"], &accepted);
+    let run_id = accepted["run_id"].as_str().unwrap().to_owned();
+    let events = request(&router, "GET", &format!("/runs/{run_id}/events")).await;
+    assert_eq!(events.status(), StatusCode::OK);
+    assert_eq!(events.headers()["x-accel-buffering"], "no");
+    let text = String::from_utf8(
+        to_bytes(events.into_body(), 8 * 1024 * 1024)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    let mut finished = Value::Null;
+    for frame in text.split("\n\n").filter(|f| f.contains("data: ")) {
+        assert!(
+            frame.lines().any(|l| l.starts_with("id: ")),
+            "every event has an id: {frame}"
+        );
+        let data: Value = serde_json::from_str(
+            frame
+                .lines()
+                .find_map(|l| l.strip_prefix("data: "))
+                .unwrap(),
+        )
+        .unwrap();
+        validate(&contract()["components"]["schemas"]["RunEvent"], &data);
+        if data["type"] == "run_finished" {
+            finished = data;
+        }
+    }
+    assert_eq!(finished["outcome"]["status"], "success", "{text}");
+    let view = checked(
+        &router,
+        "GET",
+        &format!("/runs/{run_id}"),
+        "/runs/{run_id}",
+        200,
+    )
+    .await;
+    assert_eq!(view["outcome"], finished["outcome"]);
+    checked(
+        &router,
+        "GET",
+        &format!("/runs/{run_id}/output"),
+        "/runs/{run_id}/output",
+        200,
+    )
+    .await;
+    checked(
+        &router,
+        "HEAD",
+        &format!("/runs/{run_id}/output"),
+        "/runs/{run_id}/output",
+        200,
+    )
+    .await;
+    checked(
+        &router,
+        "DELETE",
+        &format!("/runs/{run_id}"),
+        "/runs/{run_id}",
+        409,
+    )
+    .await;
+    checked(
+        &router,
+        "GET",
+        &format!("/runs/{broken}"),
+        "/runs/{run_id}",
+        200,
+    )
+    .await;
+    checked(
+        &router,
+        "GET",
+        &format!("/runs/{broken}/output"),
+        "/runs/{run_id}/output",
+        404,
+    )
+    .await;
+    checked(
+        &router,
+        "GET",
+        &format!("/runs/{slow}"),
+        "/runs/{run_id}",
+        200,
+    )
+    .await;
+    for url in ["/history", "/list", "/nodes", "/stats/second"] {
+        let path = if url.starts_with("/stats") {
+            "/stats/{name}"
+        } else {
+            url
+        };
+        checked(&router, "GET", url, path, 200).await;
+    }
     let restarted = app(cfg);
     let detail = checked(
         &restarted,
         "GET",
         &format!("/runs/{durable}"),
-        "/runs/{id}",
+        "/runs/{run_id}",
         200,
     )
     .await;
-    assert!(detail["result"].is_null());
-    assert_eq!(detail["run"]["status"], "success");
+    assert_eq!(detail["status"], "success");
+    assert_eq!(
+        detail["outcome"]["status"], "success",
+        "the outcome survives a restart"
+    );
     assert!(!detail["steps"].as_array().unwrap().is_empty());
+    checked(
+        &restarted,
+        "GET",
+        &format!("/runs/{run_id}/output"),
+        "/runs/{run_id}/output",
+        200,
+    )
+    .await;
+    checked(
+        &restarted,
+        "GET",
+        &format!("/runs/{run_id}/events"),
+        "/runs/{run_id}/events",
+        404,
+    )
+    .await;
     checked(
         &restarted,
         "GET",
@@ -666,4 +904,191 @@ async fn declared_asset_name_matches_schema_state_and_get_target() {
         wait(&router, handle["run_id"].as_str().unwrap()).await["status"],
         "complete"
     );
+}
+
+#[tokio::test]
+async fn a_draining_server_refuses_runs_and_says_so_on_health() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = draining_app(config(dir.path(), false));
+    let health = checked(&router, "GET", "/health", "/health", 200).await;
+    assert_eq!(health["status"], "draining");
+    for (url, path) in [
+        ("/run", "/run"),
+        ("/run/publish", "/run/{target}"),
+        ("/get/first", "/get/{target}"),
+    ] {
+        let resp = request(&router, "POST", url).await;
+        assert_eq!(
+            resp.headers()["retry-after"].to_str().unwrap(),
+            "30",
+            "the default drain timeout"
+        );
+        let body = checked(&router, "POST", url, path, 503).await;
+        assert!(
+            body["error"].as_str().unwrap().contains("shutting down"),
+            "{body}"
+        );
+    }
+    // `POST /runs` is refused the same way.
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/runs")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"command": "get"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 503);
+    assert_eq!(resp.headers()["retry-after"].to_str().unwrap(), "30");
+    // Reads stay available while the runs in flight finish.
+    checked(&router, "GET", "/runs?limit=0", "/runs", 200).await;
+    assert!(
+        !dir.path().join("metadata.db").exists(),
+        "a refused run touched history"
+    );
+}
+
+#[tokio::test]
+async fn schedule_pause_and_resume_match_contract() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = config(dir.path(), false);
+    std::fs::write(
+        &cfg.files[0],
+        "from barca import asset, Schedule\n@asset(freshness=Schedule('0 5 * * *'))\ndef daily() -> int:\n    return 1\n",
+    )
+    .unwrap();
+    let router = app(cfg);
+    let paused = checked(
+        &router,
+        "POST",
+        "/schedule/daily/pause",
+        "/schedule/{id}/pause",
+        200,
+    )
+    .await;
+    assert_eq!(paused["paused"], true);
+    checked(
+        &router,
+        "POST",
+        "/schedule/daily/pause?until=2999-01-01T00:00:00Z",
+        "/schedule/{id}/pause",
+        200,
+    )
+    .await;
+    checked(
+        &router,
+        "POST",
+        "/schedule/daily/pause?until=yesterday",
+        "/schedule/{id}/pause",
+        400,
+    )
+    .await;
+    checked(
+        &router,
+        "POST",
+        "/schedule/missing/pause",
+        "/schedule/{id}/pause",
+        404,
+    )
+    .await;
+    let resumed = checked(
+        &router,
+        "POST",
+        "/schedule/daily/resume",
+        "/schedule/{id}/resume",
+        200,
+    )
+    .await;
+    assert_eq!(resumed["paused"], false);
+    checked(
+        &router,
+        "GET",
+        "/schedule/daily/pause",
+        "/schedule/{id}/pause",
+        405,
+    )
+    .await;
+    checked(&router, "PUT", "/runs", "/runs", 405).await;
+    checked(&router, "PUT", "/runs/x", "/runs/{run_id}", 405).await;
+}
+
+#[tokio::test]
+async fn ledger_lookup_and_post_match_contract() {
+    use sha2::Digest;
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = config(dir.path(), false);
+    config.resolved.artifact_root = dir
+        .path()
+        .join("store/default/artifacts")
+        .display()
+        .to_string();
+    config.resolved.local_artifact_dir = dir.path().join("local").display().to_string();
+    let router = barca_server::app(config.clone());
+    let response = |path: &str, status: u16| {
+        contract()["paths"][path]["post"]["responses"][status.to_string()]["content"]["application/json"]
+            ["schema"]
+            .clone()
+    };
+    let lookup = json!({"hashes": [{"node_id": "pipeline.py:first", "run_hash": "h1"}]});
+    validate(
+        &contract()["paths"]["/ledger/lookup"]["post"]["requestBody"]["content"]["application/json"]
+            ["schema"],
+        &lookup,
+    );
+    let (status, body) = request_json(&router, "POST", "/ledger/lookup", lookup.clone()).await;
+    assert_eq!(status, 200, "{body}");
+    validate(&response("/ledger/lookup", 200), &body);
+    let (status, body) =
+        request_json(&router, "POST", "/ledger/lookup", json!({"hashes": 1})).await;
+    assert_eq!(status, 400);
+    validate(&response("/ledger/lookup", 400), &body);
+
+    let bytes = br#"{"n": 1}"#;
+    let object = Path::new(&config.resolved.artifact_root).join("first/h1.json");
+    let post = json!({
+        "run": {"run_id": "c-1", "command": "get", "files": ["pipeline.py"], "target": "first",
+                "status": "success", "steps_total": 1, "steps_executed": 1, "steps_cached": 0,
+                "started_at": "2026-10-20 12:00:00", "finished_at": "2026-10-20 12:00:01",
+                "elapsed_seconds": 1.0, "host": "laptop"},
+        "steps": [{"node_id": "pipeline.py:first", "run_hash": "h1", "status": "success",
+                   "path": object.display().to_string(), "format": "json",
+                   "size_bytes": bytes.len(), "digest": format!("{:x}", sha2::Sha256::digest(bytes)),
+                   "elapsed_seconds": 0.1, "attempts": 1, "error": null}]
+    });
+    validate(
+        &contract()["paths"]["/ledger/runs"]["post"]["requestBody"]["content"]["application/json"]
+            ["schema"],
+        &post,
+    );
+    let (status, body) = request_json(&router, "POST", "/ledger/runs", post.clone()).await;
+    assert_eq!(status, 409, "{body}");
+    validate(&response("/ledger/runs", 409), &body);
+    std::fs::create_dir_all(object.parent().unwrap()).unwrap();
+    std::fs::write(&object, bytes).unwrap();
+    let (status, body) = request_json(&router, "POST", "/ledger/runs", post.clone()).await;
+    assert_eq!(status, 201, "{body}");
+    validate(&response("/ledger/runs", 201), &body);
+    let (status, body) = request_json(&router, "POST", "/ledger/lookup", lookup).await;
+    assert_eq!(status, 200);
+    validate(&response("/ledger/lookup", 200), &body);
+    assert_eq!(body["results"][0]["exists"], true);
+    let (status, body) = request_json(&router, "POST", "/ledger/runs", json!([])).await;
+    assert_eq!(status, 400);
+    validate(&response("/ledger/runs", 400), &body);
+    // History rows carry client_run_id.
+    let history = checked(&router, "GET", "/history?limit=5", "/history", 200).await;
+    assert_eq!(history["runs"][0]["client_run_id"], "c-1");
+    assert_eq!(history["runs"][0]["triggered_by"], "client");
+
+    let mut read_only = config.clone();
+    read_only.read_only = true;
+    let (status, body) =
+        request_json(&barca_server::app(read_only), "POST", "/ledger/runs", post).await;
+    assert_eq!(status, 403);
+    validate(&response("/ledger/runs", 403), &body);
+    checked(&router, "GET", "/ledger/runs", "/ledger/runs", 405).await;
 }

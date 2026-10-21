@@ -24,11 +24,11 @@ Three facts shape every deployment:
 - **One instance per project.** Runs in progress and their live events are held in the
   server's memory. Do not run two servers on one project or load-balance across several.
 
-## What ships in v0.24.0
+## What ships today
 
 The working deployment is one `barca serve` with its pipeline code, Python dependencies
-and persistent `.barca/` directory on the server. Users trigger runs through the web UI,
-HTTP API or `barca.Client`; the work executes on that server's machine.
+and persistent `.barca/` directory on the server. Users trigger runs through the web UI, the
+HTTP API or the CLI's `--server` flag; the work executes on that server's machine.
 
 ```bash
 # On the server, from the project directory; install the pipeline's dependencies too.
@@ -36,24 +36,60 @@ uv add 'barca==0.24.0'
 uv run barca serve pipeline.py --timezone utc
 ```
 
-Open `http://127.0.0.1:8274/ui/`. From the same machine, start an asset and poll its run:
+Open `http://127.0.0.1:8274/ui/`. From the same machine, start an asset and follow its run:
 
 ```bash
-curl -X POST http://127.0.0.1:8274/get/daily_report
-# Copy run_id from the response into the status URL:
-curl http://127.0.0.1:8274/status/RETURNED_RUN_ID
+curl -X POST http://127.0.0.1:8274/runs -d '{"command": "get", "targets": ["daily_report"]}'
+# Copy run_id from the response:
+curl -N http://127.0.0.1:8274/runs/RETURNED_RUN_ID/events   # its progress, then its outcome
+curl http://127.0.0.1:8274/runs/RETURNED_RUN_ID             # the run and its outcome
 ```
 
 Replace `daily_report` with an asset in the deployed pipeline. Remote users reach the
-same API through the authenticating proxy described below. See the
-[Python client](/reference/server-api/#python-client) for the equivalent SDK calls.
+same API through the proxy described below.
 
-The broader [server-ledger design (RFC-0007)](/rfcs/0007-server-mode/) is accepted but
-**not implemented in v0.24.0**. `[server] url`, `BARCA_SERVER`, the CLI `--server`/`--local`
-flags and laptop runs sharing the server's ledger are pending #393, #394 and #402.
-Ordinary `barca get` and `barca.get()` still run locally. A remote artifact store does
-not give another machine access to this server's cache/history; with a remote store the
-server backs its history up there, as described below.
+## Running commands on the server from another machine
+
+The CLI runs `get`, `run`, `status`, `list`, `history` and `stats` on the server with
+`--server`, and prints what the same command prints locally: the same stdout JSON, the same
+stderr lines, the same exit codes. Ctrl-C cancels the run on the server. It is experimental.
+
+```bash
+# On a laptop, in a checkout of the same project (or anywhere: files are optional).
+barca get daily_report --server https://barca.internal.example.com
+export BARCA_SERVER=https://barca.internal.example.com   # or [server] url in barca.toml
+barca run publish --server --agent       # the configured server; agent progress lines
+barca history -l 20                      # the server's runs (configured server)
+```
+
+```python
+import barca
+
+barca.get("daily_report", server=True)   # runs on the configured server, returns the value
+```
+
+The server runs its deployed files, never yours. When a file you name differs from the
+deployed one, barca prints `[barca] note: <file> differs from the deployment; the server runs
+the deployed version` and continues; deploy the change to run it there. Use the proxy's URL,
+path prefix included (`https://example.com/barca`). A server that cannot be reached, or one
+that is not barca or runs another API version, is exit 3 naming the URL; nothing runs locally
+instead. If the connection drops during a run, the client exits 3 naming the run id, and the
+run continues on the server (`barca history --server`). `barca docs server-mode` has the full
+rules, and the few declared differences from a local run (the server's paths, `triggered_by`).
+
+The client sends no credentials. Reach the server over a private network (a VPN, Tailscale,
+an internal load balancer), or through a proxy that admits the client's network.
+
+## The server as the team's ledger
+
+The [server-ledger design (RFC-0007)](/rfcs/0007-server-mode/) is accepted and implemented:
+the run contract over HTTP (#393), the CLI's `--server` (#394) and the ledger (#402). A laptop
+with `[server] url` (or `BARCA_SERVER`) pointing at this server and `[remote]` pointing at its
+store runs `barca get` locally, reads cache hits from the server's ledger and posts what it
+computes ([Remote Storage](/reference/remote-storage/#a-server-as-the-ledger)); `barca status`,
+`history` and `stats` answer from the server. `--local` runs against the laptop's own ledger
+and sends nothing. With a remote store the server backs its history up there, as described below.
+`barca.Client` is deprecated in favour of `barca.get(..., server=True)`.
 
 ## Listen on another interface
 
@@ -88,6 +124,8 @@ services:
       - ./project:/project
       - barca-state:/project/.barca
     restart: unless-stopped
+    # Longer than the drain timeout (30 s), so runs in flight finish on `docker compose stop`.
+    stop_grace_period: 40s
     ports:
       - "127.0.0.1:8080:8080"
     healthcheck:
@@ -150,7 +188,13 @@ What each part is for:
   waits out its timeout and then kills the process. Later releases shut down the same way on
   SIGTERM as on SIGINT, as process 1 too: with them the line can be removed, and leaving it in
   changes nothing.
+- **`stop_grace_period`.** On `docker compose stop` (and on a redeploy) barca drains: runs in
+  flight get up to 30 seconds to finish (`--drain-timeout`, `[server] drain_timeout`). Docker
+  kills the container after 10 seconds unless told otherwise, so give it longer than the drain
+  timeout. With `docker stop` that is `-t 40`; in Kubernetes, `terminationGracePeriodSeconds`
+  (default 30) should exceed it too.
 - **The health check.** `GET /health` returns 200 with the JSON above when the server is up.
+  While it drains it still returns 200, with `"status": "draining"`.
   The check runs inside the container, so it can use `127.0.0.1`. The slim image has no
   `curl`, so the check uses Python.
 - **The port.** With the default loopback address, publishing barca's own port
@@ -208,17 +252,66 @@ Pin `barca==0.21.0` in that image. Without a compatible wheel, pip can fall back
 source build requiring Rust; `--only-binary=:all:` makes an unavailable wheel explicit.
 The legacy override is unnecessary for the verified v0.24.0 Linux targets above.
 
+### Logs
+
+`barca serve` writes its lines as text on stderr. A container log collector that files stderr as
+errors (Datadog's does) tags all of them, `step:... completed` included, as errors. Set
+`BARCA_LOG=json` and each line is one JSON object on stdout, with a real `level` (`info`,
+`warning` or `error`), the `run_id` and `node` it is about, and a step's printed output as
+`info` lines of its run:
+
+```yaml
+    environment:
+      BARCA_LOG: json
+      BARCA_TELEMETRY: datadog   # optional: adds dd.trace_id and dd.span_id to each run's lines
+```
+
+```
+{"ts":"2026-10-20T19:45:44.067Z","level":"info","msg":"step:pipeline.py:orders completed 0.0s (1/2)","run_id":"2b585c3e0785","node":"pipeline.py:orders","dd.trace_id":"8371769010332850555","dd.span_id":"1894635935906895539"}
+```
+
+With the Datadog integration on, the `dd.trace_id` and `dd.span_id` of a run's lines are its
+trace's ids, so a failing `barca.run` span leads to that run's lines and back. What a step writes
+to its own stderr (Python's `logging`, by default) stays on stderr. The fields and their
+limits are in [Telemetry](/reference/telemetry/#logs-under-barca-serve).
+
+### Traces and metrics in Datadog
+
+With `BARCA_TELEMETRY=datadog` every run the server starts is one APM trace, sent to the
+Datadog Agent's trace port, and the server reports itself as DogStatsD metrics on the Agent's
+DogStatsD port. Point both at the Agent and name the service once; everything barca sends,
+Python and opted-in library spans included, is that one service:
+
+```yaml
+    environment:
+      BARCA_TELEMETRY: datadog
+      DD_AGENT_HOST: datadog-agent    # traces on 8126, DogStatsD on 8125
+      DD_SERVICE: pipelines
+      DD_ENV: production
+      DD_VERSION: "2026.10.20"        # your deploy; barca's own version is barca.version
+```
+
+In APM, the `barca.run` resource is the command and the targets (`run publish`), and the
+`barca.step` resources are the node names, so a monitor on `barca.run` errors per resource is a
+monitor per job, and the trace list says which asset failed and why. A monitor on the
+`barca.serve.up` gauge that alerts when it stops arriving or reads 0 catches a server that is
+down or was stopped; it is sent every five minutes. Tags, the partition cap and opt-in library
+tracing are in [Telemetry](/reference/telemetry/#datadog).
+
 ### What happens on restart
 
 - **Stopped with SIGINT or SIGTERM** (`docker compose stop`, `docker stop`, `systemctl stop`,
-  Ctrl-C; SIGTERM from 0.20.0, see `stop_signal` above): runs in progress are cancelled,
-  their workers are stopped, and they are recorded as `cancelled`. The process exits with
-  code 0, normally in less than a second. From 0.20.0 the shutdown also ends open `/events`
-  streams (in 0.19.0 and earlier a browser tab left on a run page keeps a stopping server
-  alive until Docker kills it) and is bounded at about 12 seconds: runs get 10 seconds to
-  stop, open connections 2 more. Docker's default stop timeout is 10 seconds; a step that
-  does not stop when its worker is told to can outlast it, and Docker then kills the
-  container.
+  Ctrl-C; SIGTERM from 0.20.0, see `stop_signal` above). From 0.27.0 the server drains: new
+  runs get `503` with `Retry-After`, the scheduler stops, `/health` reports `draining`, and the
+  runs in progress finish and are recorded, artifact uploads included, for up to
+  `--drain-timeout` seconds (default 30). The process then exits 0. If the deadline passes or
+  a second signal arrives first, the runs left are cancelled: their workers are stopped, the
+  steps that finished are kept, and they are recorded as `cancelled` with reason
+  `server shutdown`. The process then exits 1, after at most about 12 more seconds (10 for
+  the runs to stop, 2 for open connections). Before 0.27.0 the first signal cancelled the runs
+  in progress at once and the process exited 0. Give the supervisor a grace period longer
+  than the drain timeout (`stop_grace_period` above); otherwise Docker kills the container
+  mid-drain, as in the next case.
 - **Killed** (SIGKILL, out of memory, host lost): steps that had finished are already recorded
   and are served from cache next time. In 0.19.0 and earlier the run in progress stays in
   `barca history` with status `running` for good: those versions look for the run's process
@@ -234,8 +327,10 @@ The legacy override is unnecessary for the verified v0.24.0 Linux targets above.
 - **Schedules catch up once.** If a tick passed while the server was down, the job fires once
   at startup (`[barca] catch-up run pipeline.py:report → ...`). Several missed ticks of one
   job still produce one run.
-- **In-memory run handles are lost.** A `run_id` returned by `POST /run` before the restart
-  is unknown to `GET /status/{run_id}` afterwards. Finished runs are in `barca history`.
+- **Finished runs are kept, runs in flight are not resumed.** `GET /runs/{run_id}` answers
+  from the metadata DB, so a run that finished before the restart shows the same outcome after
+  it; its live event stream is gone (`404`). A run still queued at the restart never started.
+  A paused schedule stays paused.
 
 ### With a remote store
 
@@ -272,7 +367,7 @@ location /barca/ {
 Open `https://your-host/barca/`. It redirects to `/barca/ui/`, and the UI finds the API under
 the same prefix. There is no base-path setting.
 
-- **Live logs.** The run event stream (`GET /events/{run_id}`) sends `X-Accel-Buffering: no`,
+- **Live logs.** The run event stream (`GET /runs/{run_id}/events`) sends `X-Accel-Buffering: no`,
   which makes nginx pass it through as it is produced. Do not add
   `proxy_ignore_headers X-Accel-Buffering`: with it nginx buffers the stream and the UI shows
   no logs until the run ends. An idle stream carries a keep-alive every 15 seconds, which is

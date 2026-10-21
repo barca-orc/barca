@@ -2,8 +2,10 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 
 /**
- * Trigger a task run (POST /run/{target}) — the canonical verb for tasks, which
- * always re-execute (never cached). Returns the run handle.
+ * Trigger a task run (`POST /runs` with
+ * `{"command":"run","targets":[target],"refresh_all":true}`) — the canonical
+ * verb for tasks, which always re-execute along with their upstream assets.
+ * Returns the run id.
  */
 export function useTriggerRun() {
   const queryClient = useQueryClient()

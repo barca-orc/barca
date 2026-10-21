@@ -1,4 +1,4 @@
-.barca-run-table { min-width: 780px; }
+.barca-run-table { min-width: 860px; }
 .barca-run-table td { white-space: nowrap; }
 .barca-run-target { display: block; max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
 .barca-run-link { border: 0; padding: 0; background: transparent; color: var(--signal); font: inherit; cursor: pointer; text-align: left; white-space: nowrap; }

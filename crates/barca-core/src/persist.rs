@@ -425,33 +425,57 @@ pub(crate) fn canonical_job(target_ids: &[&str]) -> String {
     }
 }
 
-/// The run as telemetry integrations see it: every step that ran, was served from cache, or
-/// failed. A step that ran is placed by the worker's own clock; a cached step is a zero-length
-/// mark at the start of the run. A failed step spans from its first attempt to its permanent
-/// failure, retries included; one whose failure was not timed (an upload that failed after the
-/// step ran) is placed by the worker's clock, or as a zero-length mark at the end of the run.
+/// What the engine knows about a run besides its ledger, for [`telemetry_report`].
+pub(crate) struct TelemetryRun<'a> {
+    /// When the run started.
+    pub started: std::time::SystemTime,
+    /// Per step: when its worker finished it (Unix seconds) and how long it took.
+    pub clocks: &'a HashMap<String, (f64, f64)>,
+    /// Nodes that were planned but did not run (an upstream failed, or the run stopped).
+    pub skipped: &'a std::collections::HashSet<String>,
+    /// The pipeline files the command was given.
+    pub files: &'a [String],
+    /// The barca environment the run used (`--env`, `BARCA_ENV`, ...), when known.
+    pub env: Option<&'a str>,
+}
+
+/// The run as telemetry integrations see it: every step that ran, was served from cache,
+/// failed, or was skipped. A step that ran is placed by the worker's own clock; a cached step
+/// is a zero-length mark at the start of the run. A failed step spans from its first attempt
+/// to its permanent failure, retries included; one whose failure was not timed (an upload that
+/// failed after the step ran) is placed by the worker's clock, or as a zero-length mark at the
+/// end of the run, where a skipped step is marked too.
 pub(crate) fn telemetry_report(
     l: &RunLedger<'_>,
     dag: &Dag,
-    started: std::time::SystemTime,
-    clocks: &HashMap<String, (f64, f64)>,
-    env: Option<&str>,
+    run: TelemetryRun<'_>,
 ) -> crate::telemetry::RunReport {
-    use crate::telemetry::{RunReport, StepOutcome, StepReport};
+    use crate::telemetry::{NodeContext, RunReport, StepOutcome, StepReport};
+    use std::sync::Arc;
 
+    let TelemetryRun {
+        started,
+        clocks,
+        skipped,
+        files,
+        env,
+    } = run;
+    let job = l.job;
     let ns = |seconds: f64| (seconds.max(0.0) * 1e9) as u64;
     let start_unix_ns = started
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)
         .unwrap_or(0);
     let duration_ns = ns(l.elapsed);
-    let kind = |node_id: &str| match dag
-        .get_node(crate::StepId::parse(node_id).base_id())
-        .map(|n| n.kind())
-    {
-        Some(crate::NodeKind::Task) => "task",
-        Some(crate::NodeKind::Sensor) => "sensor",
-        Some(crate::NodeKind::Asset) | None => "asset",
+    let contexts: HashMap<String, Arc<NodeContext>> = crate::telemetry::node_contexts(dag)
+        .into_iter()
+        .map(|(id, ctx)| (id, Arc::new(ctx)))
+        .collect();
+    let context = |base: &str| {
+        contexts
+            .get(base)
+            .cloned()
+            .unwrap_or_else(|| Arc::new(NodeContext::unknown(base)))
     };
     // Attempts are counted per step, not per partition key, so they are only attributed to
     // an unpartitioned step.
@@ -466,7 +490,36 @@ pub(crate) fn telemetry_report(
         })
     };
 
+    let upstream = |base: &str| {
+        let mut ids: Vec<String> = dag.upstream(base).into_iter().map(str::to_string).collect();
+        ids.sort();
+        ids.dedup();
+        ids
+    };
+    let step = |node_id: &str, outcome, start, duration| {
+        let id = crate::StepId::parse(node_id);
+        StepReport {
+            node_id: node_id.to_string(),
+            node: context(id.base_id()),
+            partition: (!id.partition.is_empty()).then(|| id.partition.suffix()),
+            outcome,
+            start_unix_ns: start,
+            duration_ns: duration,
+            attempts: None,
+            run_hash: l.run_hashes.get(node_id).cloned(),
+            upstream: upstream(id.base_id()),
+            size_bytes: None,
+            digest: None,
+            cpu_seconds: None,
+            max_rss_bytes: None,
+            error_type: None,
+            error_message: None,
+            error_traceback: None,
+        }
+    };
+
     let mut steps: Vec<StepReport> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for (node_id, oref) in l.all_outputs {
         let cached = l.cached_node_ids.contains(node_id);
         let (step_start, step_duration) = match clocks.get(node_id) {
@@ -476,25 +529,27 @@ pub(crate) fn telemetry_report(
         };
         let (cpu_seconds, max_rss_bytes) =
             l.all_timings.get(node_id).copied().unwrap_or((None, None));
+        let outcome = if cached {
+            StepOutcome::Cached
+        } else {
+            StepOutcome::Ran
+        };
         steps.push(StepReport {
-            node_id: node_id.clone(),
-            kind: kind(node_id),
-            outcome: if cached {
-                StepOutcome::Cached
-            } else {
-                StepOutcome::Ran
-            },
-            start_unix_ns: step_start,
-            duration_ns: step_duration,
             attempts: if cached { None } else { attempts(node_id) },
-            run_hash: l.run_hashes.get(node_id).cloned(),
             size_bytes: Some(oref.size_bytes),
+            digest: if cached {
+                None
+            } else {
+                l.output_hashes
+                    .get(node_id)
+                    .or(oref.content_hash.as_ref())
+                    .cloned()
+            },
             cpu_seconds,
             max_rss_bytes,
-            error_type: None,
-            error_message: None,
-            error_traceback: None,
+            ..step(node_id, outcome, step_start, step_duration)
         });
+        seen.insert(crate::StepId::parse(node_id).base_id().to_string());
     }
     for failure in l.all_failures {
         let (error_type, error_message, error_traceback) = exception_of(&failure.error);
@@ -508,29 +563,48 @@ pub(crate) fn telemetry_report(
             _ => (start_unix_ns + duration_ns, 0),
         };
         steps.push(StepReport {
-            node_id: failure.node_id.clone(),
-            kind: kind(&failure.node_id),
-            outcome: StepOutcome::Failed,
-            start_unix_ns: step_start,
-            duration_ns: step_duration,
             attempts: Some(failure.error.attempts),
-            run_hash: l.run_hashes.get(&failure.node_id).cloned(),
-            size_bytes: None,
-            cpu_seconds: None,
-            max_rss_bytes: None,
             error_type: Some(error_type),
             error_message: Some(error_message),
             error_traceback,
+            ..step(
+                &failure.node_id,
+                StepOutcome::Failed,
+                step_start,
+                step_duration,
+            )
         });
+        seen.insert(crate::StepId::parse(&failure.node_id).base_id().to_string());
+    }
+    // A node that did not run at all; one with some keys done is reported by those keys.
+    let mut not_run: Vec<&String> = skipped.iter().filter(|b| !seen.contains(*b)).collect();
+    not_run.sort();
+    for base in not_run {
+        steps.push(step(
+            base,
+            StepOutcome::Skipped,
+            start_unix_ns + duration_ns,
+            0,
+        ));
     }
     steps.sort_by(|a, b| (a.start_unix_ns, &a.node_id).cmp(&(b.start_unix_ns, &b.node_id)));
+
+    let mut targets: Vec<String> = if job == "all" {
+        Vec::new()
+    } else {
+        job.split(',').map(|id| context(id).name.clone()).collect()
+    };
+    targets.sort();
+    targets.dedup();
 
     RunReport {
         run_id: l.run_id.to_string(),
         command: l.command.to_string(),
         target: l.target.map(str::to_string),
-        job: l.job.to_string(),
+        job: job.to_string(),
         env: env.map(str::to_string),
+        targets,
+        files: files.to_vec(),
         status: l.status.to_string(),
         reason: None,
         in_flight_run: None,
@@ -540,6 +614,7 @@ pub(crate) fn telemetry_report(
         steps_executed: l.steps_executed,
         steps_cached: l.steps_cached,
         steps,
+        trigger: Default::default(),
     }
 }
 
@@ -737,6 +812,27 @@ mod persist_tests {
     }
 
     const EXECUTED: [&str; 3] = ["f.py:a", "f.py:part[k=1]", "f.py:part[k=2]"];
+
+    fn no_clocks() -> HashMap<String, (f64, f64)> {
+        HashMap::new()
+    }
+
+    /// A `get` of everything in `f.py`, started at `started`.
+    fn at(
+        started: std::time::SystemTime,
+        clocks: &HashMap<String, (f64, f64)>,
+    ) -> TelemetryRun<'_> {
+        static NONE: std::sync::LazyLock<HashSet<String>> = std::sync::LazyLock::new(HashSet::new);
+        static FILES: std::sync::LazyLock<Vec<String>> =
+            std::sync::LazyLock::new(|| vec!["f.py".to_string()]);
+        TelemetryRun {
+            started,
+            clocks,
+            skipped: &NONE,
+            files: &FILES,
+            env: None,
+        }
+    }
 
     fn oref(node: &str) -> OutputRef {
         OutputRef {
@@ -1505,6 +1601,74 @@ sys.exit(_state.main())
     }
 
     #[test]
+    fn step_reports_name_their_upstream_and_the_digest_of_what_ran() {
+        let mut fx = Fixture::new();
+        fx.outputs.get_mut("f.py:a").unwrap().content_hash = Some("sha-a".to_string());
+        fx.outputs.get_mut("f.py:cached").unwrap().content_hash = Some("sha-c".to_string());
+        let source = "from barca import asset\n@asset()\ndef raw(): return 1\n@asset()\ndef rates(): return 2\n\
+                      @asset(inputs={\"rates\": rates, \"raw\": raw})\ndef a(rates, raw): return raw\n\
+                      @asset(inputs={\"raw\": raw})\ndef cached(raw): return raw\n\
+                      @asset(inputs={\"a\": a})\ndef bad(a): return a\n";
+        let dag = crate::Dag::build(&crate::parse::extract_nodes(source, "f.py").unwrap()).unwrap();
+        let report = telemetry_report(
+            &fx.ledger("r1"),
+            &dag,
+            at(std::time::UNIX_EPOCH, &no_clocks()),
+        );
+        let step = |id: &str| report.steps.iter().find(|s| s.node_id == id).unwrap();
+        assert_eq!(step("f.py:a").upstream, ["f.py:rates", "f.py:raw"]);
+        assert_eq!(step("f.py:a").digest.as_deref(), Some("sha-a"));
+        // A cached step names its upstream but carries no digest: nothing was written.
+        assert_eq!(step("f.py:cached").upstream, ["f.py:raw"]);
+        assert_eq!(step("f.py:cached").digest, None);
+        assert_eq!(step("f.py:bad").upstream, ["f.py:a"]);
+        assert_eq!(step("f.py:bad").digest, None);
+    }
+
+    #[test]
+    fn step_reports_place_each_node_in_the_pipeline_and_mark_what_was_skipped() {
+        let fx = Fixture::new();
+        let source = "from barca import asset, partitions, Schedule\n\
+                      @asset(freshness=Schedule(\"0 6 * * *\"))\ndef a(): return 1\n\
+                      @asset(partitions={\"k\": partitions([\"1\", \"2\"])})\ndef part(k): return 1\n\
+                      @asset()\ndef cached(): return 1\n\
+                      @asset(inputs={\"a\": a})\ndef bad(a): return a\n\
+                      @asset(inputs={\"bad\": bad})\ndef after(bad): return bad\n";
+        let dag = crate::Dag::build(&crate::parse::extract_nodes(source, "f.py").unwrap()).unwrap();
+        let skipped = HashSet::from(["f.py:after".to_string(), "f.py:part".to_string()]);
+        let clocks = no_clocks();
+        let files = vec!["f.py".to_string()];
+        let mut ledger = fx.ledger("r1");
+        ledger.job = "f.py:after,f.py:a";
+        let report = telemetry_report(
+            &ledger,
+            &dag,
+            TelemetryRun {
+                started: std::time::UNIX_EPOCH,
+                clocks: &clocks,
+                skipped: &skipped,
+                files: &files,
+                env: None,
+            },
+        );
+        assert_eq!(report.targets, ["a", "after"]);
+        assert_eq!(report.files, ["f.py"]);
+        let step = |id: &str| report.steps.iter().find(|s| s.node_id == id).unwrap();
+        assert_eq!(step("f.py:a").node.name, "a");
+        assert_eq!(step("f.py:a").node.freshness, "schedule");
+        assert_eq!(step("f.py:a").node.schedule.as_deref(), Some("0 6 * * *"));
+        assert_eq!(step("f.py:a").partition, None);
+        assert_eq!(step("f.py:part[k=1]").node.base_id, "f.py:part");
+        assert_eq!(step("f.py:part[k=1]").partition.as_deref(), Some("k=1"));
+        // `after` never ran: it is a skipped step. `part` ran some keys: those report it.
+        let after = step("f.py:after");
+        assert_eq!(after.outcome, crate::telemetry::StepOutcome::Skipped);
+        assert_eq!(after.duration_ns, 0);
+        assert_eq!(after.upstream, ["f.py:bad"]);
+        assert!(!report.steps.iter().any(|s| s.node_id == "f.py:part"));
+    }
+
+    #[test]
     fn a_failed_step_span_lasts_its_recorded_elapsed_time() {
         let mut fx = Fixture::new();
         let started = 1_700_000_000_000_000_000u64;
@@ -1513,7 +1677,7 @@ sys.exit(_state.main())
         fx.failures[0].error.attempts = 3;
         let dag = crate::Dag::build(&[]).unwrap();
         let run_started = std::time::UNIX_EPOCH + std::time::Duration::from_nanos(started);
-        let report = telemetry_report(&fx.ledger("r1"), &dag, run_started, &HashMap::new(), None);
+        let report = telemetry_report(&fx.ledger("r1"), &dag, at(run_started, &no_clocks()));
         let bad = report
             .steps
             .iter()
@@ -1527,7 +1691,7 @@ sys.exit(_state.main())
         // A failure with no time of its own (an upload) is still a mark at the end of the run.
         fx.failures[0].error.started_unix_ns = None;
         fx.failures[0].error.elapsed_seconds = None;
-        let report = telemetry_report(&fx.ledger("r1"), &dag, run_started, &HashMap::new(), None);
+        let report = telemetry_report(&fx.ledger("r1"), &dag, at(run_started, &no_clocks()));
         let bad = report
             .steps
             .iter()
@@ -1539,7 +1703,7 @@ sys.exit(_state.main())
         // ... unless its worker reported a clock: the function ran, and its upload failed.
         let finished = started as f64 / 1e9 + 1.0;
         let clocks = HashMap::from([("f.py:bad".to_string(), (finished, 0.25))]);
-        let report = telemetry_report(&fx.ledger("r1"), &dag, run_started, &clocks, None);
+        let report = telemetry_report(&fx.ledger("r1"), &dag, at(run_started, &clocks));
         let bad = report
             .steps
             .iter()

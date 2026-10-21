@@ -150,8 +150,16 @@ pub fn stdout_str(text: &str) {
     );
 }
 
-/// Write text to stderr as it is (no newline added), without panicking.
+/// Write text to stderr as it is (no newline added), without panicking. With structured
+/// lines on (`barca serve` under `BARCA_LOG=json`), each line is a JSON object on stdout
+/// ([`crate::jsonlog`]).
 pub fn stderr_str(text: &str) {
+    if crate::jsonlog::enabled() {
+        for line in text.lines().filter(|l| !l.trim().is_empty()) {
+            stdout_line(format_args!("{}", crate::jsonlog::render(line, None, None)));
+        }
+        return;
+    }
     let _order = ChildOutput::copy_pending();
     let _one = locked(&STDERR_WRITER);
     write_to(
@@ -163,8 +171,18 @@ pub fn stderr_str(text: &str) {
 }
 
 /// `eprintln!` that does not panic. Use [`errln!`](crate::errln). Child output
-/// written before this call is copied first, so the line keeps its place.
+/// written before this call is copied first, so the line keeps its place. With structured
+/// lines on (`barca serve` under `BARCA_LOG=json`), the line is a JSON object on stdout
+/// instead ([`crate::jsonlog`]).
 pub fn stderr_line(args: fmt::Arguments<'_>) {
+    if crate::jsonlog::enabled() {
+        let text = fmt::format(args);
+        stdout_line(format_args!(
+            "{}",
+            crate::jsonlog::render(&text, None, None)
+        ));
+        return;
+    }
     let _order = ChildOutput::copy_pending();
     let _one = locked(&STDERR_WRITER);
     write_to(&mut Stream(libc::STDERR_FILENO), &STDERR, args, true);
@@ -198,7 +216,9 @@ impl ChildOutput {
     fn get() -> Option<&'static ChildOutput> {
         CHILD_OUTPUT
             .get_or_init(|| {
-                if !can_lose_its_reader(libc::STDERR_FILENO) {
+                // With structured lines on, barca reads its children's output even when
+                // stderr is a terminal or a file: their `[barca] ` lines become JSON objects.
+                if !can_lose_its_reader(libc::STDERR_FILENO) && !crate::jsonlog::enabled() {
                     return None;
                 }
                 let (reader, writer) = std::io::pipe().ok()?;
@@ -275,8 +295,55 @@ impl ChildOutput {
     }
 }
 
-/// Write the children's bytes to stderr as they are; drop them once stderr is closed.
+/// A partial line of the children's output, held while structured lines are on.
+static PARTIAL: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+/// A partial line longer than this is written as it is: a progress bar redrawn with `\r`
+/// never ends its line.
+const MAX_PARTIAL: usize = 64 * 1024;
+
+/// Write the children's bytes to stderr as they are; drop them once stderr is closed. With
+/// structured lines on, a whole line that starts with `[barca] ` (a notice from a worker or the
+/// transfer helper) is a JSON object on stdout instead; every other line stays on stderr.
 fn forward(bytes: &[u8]) {
+    if crate::jsonlog::enabled() {
+        let mut partial = PARTIAL.lock().unwrap_or_else(|e| e.into_inner());
+        partial.extend_from_slice(bytes);
+        let mut start = 0;
+        while let Some(end) = partial[start..].iter().position(|&b| b == b'\n') {
+            forward_line(&partial[start..start + end + 1]);
+            start += end + 1;
+        }
+        partial.drain(..start);
+        if partial.len() > MAX_PARTIAL {
+            let rest = std::mem::take(&mut *partial);
+            write_stderr(&rest);
+        }
+        return;
+    }
+    write_stderr(bytes);
+}
+
+/// One whole line of child output (with its newline) under structured lines.
+fn forward_line(line: &[u8]) {
+    match line.strip_prefix(b"[barca] ") {
+        Some(_) => {
+            let text = String::from_utf8_lossy(line);
+            let text = text.trim_end_matches(['\n', '\r']);
+            stdout_line(format_args!("{}", crate::jsonlog::render(text, None, None)));
+        }
+        None => write_stderr(line),
+    }
+}
+
+/// Write what is left of a partial child line, before the process exits.
+fn flush_partial() {
+    let rest = std::mem::take(&mut *PARTIAL.lock().unwrap_or_else(|e| e.into_inner()));
+    if !rest.is_empty() {
+        write_stderr(&rest);
+    }
+}
+
+fn write_stderr(bytes: &[u8]) {
     if STDERR.load(Ordering::Relaxed) != OPEN {
         return;
     }
@@ -300,6 +367,7 @@ pub fn child_output() -> Stdio {
 /// goes through here: `std::process::exit` alone would leave their last lines in the pipe.
 pub fn exit(code: i32) -> ! {
     drop(ChildOutput::copy_pending());
+    flush_partial();
     std::process::exit(code)
 }
 

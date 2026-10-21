@@ -47,7 +47,7 @@ barca plan [file.py|dir/ ...]                Emit the execution plan as JSON (ex
 barca history [-l N | --all] [--json|--pretty]  Show recent runs
 barca stats <target> [file.py|dir/ ...]       Show timing/cache stats for an asset
 barca gc [--dry-run] [--max-size SIZE] [--json]  Evict cached results to keep .barca/ under its size limit (experimental)
-barca serve [file.py|dir/ ...] [--port N] [--host IP] [--watch] [--no-schedule] [--timezone TZ] [--read-only]
+barca serve [file.py|dir/ ...] [--port N] [--host IP] [--watch] [--no-schedule] [--timezone TZ] [--read-only] [--drain-timeout SECONDS]
                                                Run the HTTP API server
 barca list [file.py|dir/ ...] [-l N | --all] [--json]  List discovered definitions and their deps
 barca status [target[,target...]] [file.py|dir/ ...] [--json] [--sample N]
@@ -61,6 +61,11 @@ barca docs [topic] [--all] [--json]           Built-in manual
 barca version                                 Print version
 barca --help                                  Show help
 ```
+
+`get`, `run`, `status`, `list`, `history` and `stats` also take `--server [<url>]`, which runs
+the command on a `barca serve` and prints it here as the local command would, and `--local`,
+which ignores a configured server (experimental; [Server mode](/reference/config/#server-mode),
+`barca docs server-mode`).
 
 `barca pipeline.py` is read as `barca get pipeline.py`. It is kept for compatibility; write
 `barca get`.
@@ -351,10 +356,15 @@ RUN_ID         CMD     STATUS      STEPS CACHED   TIME STARTED
 ```
 
 Times are UTC. `--fields` takes `run_id`, `command`, `files`, `target`, `status`,
-`steps_total`, `steps_executed`, `steps_cached`, `started_at`, `finished_at`,
-`elapsed_seconds`.
+`steps_total`, `steps_executed`, `steps_cached`, `attempts`, `started_at`, `finished_at`,
+`elapsed_seconds`, `triggered_by`, `scheduled_at`, `schedule_id`. `triggered_by` says what
+started the run: `manual` (a command typed on a machine), `api` (an HTTP request to
+`barca serve`), `schedule` (a cron tick, with the tick in `scheduled_at`, RFC 3339 in UTC, and
+the scheduled node in `schedule_id`) or `client`; it is `null` for runs recorded before barca
+recorded it.
 
 ```bash
+barca history --fields run_id,triggered_by,scheduled_at   # what started each run
 barca history -l 25               # last 25; human default 10, JSON default every run
 barca history --json              # {"runs": [...], "total": N, "truncated": bool, "hint"?: "..."}
 barca history --fields run_id,status   # JSON with only these keys per run
@@ -451,6 +461,7 @@ endpoints and [Deploying](/deploying/) for running it behind nginx.
 barca serve pipeline.py                 # default port 8274
 barca serve pipeline.py --host 0.0.0.0  # every interface (containers, VMs); no auth
 barca serve --timezone utc              # every file in the project; cron evaluated in UTC
+barca serve pipeline.py --drain-timeout 120   # on SIGTERM, runs in flight get 2 minutes
 ```
 
 | Flag | Default | Meaning |
@@ -461,7 +472,14 @@ barca serve --timezone utc              # every file in the project; cron evalua
 | `--no-schedule` | off | Do not fire `Schedule(...)` nodes. |
 | `--timezone <TZ>` | `local` | Timezone for cron: `local`, `utc` or an IANA name such as `America/New_York`. Any other value is a usage error (exit 2). |
 | `--read-only` | off | Refuse runs, never schedule, read the metadata DB from copies. |
+| `--drain-timeout <SECONDS>` | `[server] drain_timeout`, else `30` | On SIGTERM or SIGINT, how long runs in flight get to finish before they are cancelled. `0` cancels them at once. |
 | `--env <name>` | `default` | Use a named environment's cache and history. |
+
+SIGTERM or SIGINT drains the server: new runs get `503` with `Retry-After`, the scheduler stops,
+`/health` reports `draining`, and runs in flight finish, uploads included. The exit code is `0`
+when they all finished. When `--drain-timeout` passes or a second signal arrives first, the runs
+left are cancelled (recorded as `cancelled`, reason `server shutdown`) and the exit code is `1`.
+See [Server API](/reference/server-api/#stopping-the-drain).
 
 With a remote store, `barca serve` backs its metadata DB up every minute it changed (not with
 `--read-only`), and `barca state restore` refuses to run while it is up. See

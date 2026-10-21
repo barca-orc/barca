@@ -170,6 +170,11 @@ jobs:
           maturin build --release --out "$WHEELS"
           WHEEL=$(ls "$WHEELS"/*.whl)
           pip install "${WHEEL}[test]"
+          # Datadog's APM test agent checks barca's trace payloads; its own venv keeps its
+          # dependencies (an older protobuf) out of the test environment.
+          python -m venv /tmp/dd-test-agent
+          /tmp/dd-test-agent/bin/pip install ddapm-test-agent
+          echo "BARCA_DD_TEST_AGENT=/tmp/dd-test-agent/bin/ddapm-test-agent" >> "$GITHUB_ENV"
 
       - name: Wait for emulators
         run: |
@@ -187,3 +192,6 @@ jobs:
 
       - name: barca serve behind nginx (prefix, embedded UI, live events)
         run: bash tests/integration/test_reverse_proxy.sh
+
+      - name: --server through nginx with a path prefix
+        run: bash tests/integration/test_server_mode.sh

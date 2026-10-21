@@ -19,7 +19,7 @@ const assets = names.map((name) => ({
   inputs: name.startsWith('validate__')
     ? [`modeling.py:${name.replace(/^validate__/, '')}`]
     : [],
-  freshness: { type: 'Always' },
+  freshness: 'always',
   env: [],
 }))
 
@@ -169,9 +169,9 @@ test('flat comparison exposes all 152 original nodes and group mode restores fiv
 
 test('a different Python pipeline uses server groups and keeps ungrouped nodes visible', async ({ page }) => {
   const nodes = [
-    { id: 'forecast.py:rows', kind: 'asset', inputs: [], freshness: { type: 'Always' }, env: [] },
-    { id: 'forecast.py:model', kind: 'asset', inputs: ['forecast.py:rows'], freshness: { type: 'Always' }, env: [] },
-    { id: 'forecast.py:other', kind: 'asset', inputs: [], freshness: { type: 'Always' }, env: [] },
+    { id: 'forecast.py:rows', kind: 'asset', inputs: [], freshness: 'always', env: [] },
+    { id: 'forecast.py:model', kind: 'asset', inputs: ['forecast.py:rows'], freshness: 'always', env: [] },
+    { id: 'forecast.py:other', kind: 'asset', inputs: [], freshness: 'always', env: [] },
   ]
   await page.route('**/assets', route => route.fulfill({ json: nodes }))
   await page.route('**/groups', route => route.fulfill({ json: [

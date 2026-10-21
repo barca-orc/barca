@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-const assets=['source','normalize','validate','score','report'].map((name,i,names)=>({id:`demo.py:${name}`,kind:'asset',freshness:{type:'Always'},env:[],inputs:i?[`demo.py:${names[i-1]}`]:[]}))
+const assets=['source','normalize','validate','score','report'].map((name,i,names)=>({id:`demo.py:${name}`,kind:'asset',freshness: 'always',env:[],inputs:i?[`demo.py:${names[i-1]}`]:[]}))
 test('linear intermediates remain visible with persistent status and deep links',async({page})=>{
   await page.route('**/assets',route=>route.fulfill({json:assets}))
   await page.route('**/state',route=>route.fulfill({json:assets.map((a,i)=>({...a,name:a.id.split(':')[1],partitioned:false,cache:{state:i===4?'never_run':'cached',reason:'materialized',detail:'demo'},last_materialization:i===2?{status:'failed',error:'validation failed',created_at:'today',elapsed_seconds:null,run_hash:null,artifact:null,format:null,size_bytes:null}:null,shape:null,env:[],durations:null,next_run:null}))}))

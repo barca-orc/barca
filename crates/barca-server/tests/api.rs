@@ -1092,10 +1092,16 @@ async fn runs_inspection_survives_server_restart_and_never_mutates_history() {
         assert_eq!(list["runs"][0]["status"], "failed");
         let (status, detail) = send(&router, "GET", "/runs/cli").await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(detail["run"]["files"], serde_json::json!(["old.py"]));
-        assert_eq!(detail["run"]["steps_cached"], 1);
+        assert_eq!(detail["run_id"], "cli");
+        assert_eq!(detail["files"], serde_json::json!(["old.py"]));
+        assert_eq!(detail["steps_cached"], 1);
+        assert_eq!(detail["triggered_by"], "manual");
+        assert!(
+            detail["outcome"].is_null(),
+            "a CLI run has no stored outcome"
+        );
         assert_eq!(detail["logs"][0]["line"], "from cli");
-        assert!(detail["run"]["started_at"].as_str().unwrap().ends_with('Z'));
+        assert!(detail["started_at"].as_str().unwrap().ends_with('Z'));
         assert_eq!(
             send(&router, "GET", "/runs/missing").await.0,
             StatusCode::NOT_FOUND
@@ -1232,4 +1238,936 @@ async fn groups_use_the_healthy_subset_beside_invalid_sources_and_definitions() 
             .iter()
             .any(|error| error["error"].as_str().unwrap().contains("invalid group"))
     );
+}
+
+// ─── the run contract (RFC-0007 §3.4, #393) ─────────────────────────────────
+
+/// A pipeline whose runs need a Python worker: an asset chain, a failing asset, a task that
+/// prints a few thousand lines, and a scheduled asset.
+const CONTRACT_FIXTURE: &str = r#"
+from barca import asset, task, Schedule
+
+@asset()
+def first() -> dict:
+    return {"n": 1}
+
+@asset(inputs={"first": first})
+def second(first: dict) -> dict:
+    return {"n": first["n"] + 1}
+
+@asset()
+def broken() -> dict:
+    raise ValueError("expected failure")
+
+@task()
+def chatty() -> None:
+    for i in range(3000):
+        print("line", i)
+
+@asset(freshness=Schedule("* * * * * *"))
+def ticking() -> int:
+    return 1
+"#;
+
+/// A config whose workers import this checkout's python/ tree, with the DB and artifacts in
+/// `dir`.
+#[cfg(unix)]
+fn runnable_config(dir: &std::path::Path) -> ServeConfig {
+    use std::os::unix::fs::PermissionsExt;
+    let mut config = isolated_config(dir, false);
+    let source = dir.join("pipeline.py");
+    std::fs::write(&source, CONTRACT_FIXTURE).unwrap();
+    let py_tree = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../python");
+    let wrapper = dir.join("python");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\nPYTHONPATH=\"{}${{PYTHONPATH:+:$PYTHONPATH}}\" exec python3 \"$@\"\n",
+            py_tree.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    config.files = vec![source.display().to_string()];
+    config.python = wrapper;
+    config.timezone = "utc".into();
+    config.resolved.local_artifact_dir = config.resolved.artifact_root.clone();
+    std::fs::create_dir_all(&config.resolved.artifact_root).unwrap();
+    config
+}
+
+/// Send `body` as JSON.
+async fn send_json(
+    app: &axum::Router,
+    method: &str,
+    uri: &str,
+    body: serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri(uri)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    (status, body_json(resp).await)
+}
+
+/// Every event of a run's stream, `(id, event)`, reading it to its end. `pause` waits before
+/// each read, as a slow client does.
+async fn read_events(
+    app: &axum::Router,
+    uri: &str,
+    pause: std::time::Duration,
+) -> Vec<(u64, serde_json::Value)> {
+    use futures::StreamExt;
+    let resp = app
+        .clone()
+        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "{uri}");
+    let mut stream = resp.into_body().into_data_stream();
+    let mut text = String::new();
+    let read = async {
+        while let Some(chunk) = stream.next().await {
+            if !pause.is_zero() {
+                tokio::time::sleep(pause).await;
+            }
+            text.push_str(std::str::from_utf8(&chunk.unwrap()).unwrap());
+        }
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(60), read)
+        .await
+        .expect("the stream ends after run_finished");
+    text.split("\n\n")
+        .filter_map(|frame| {
+            let id = frame.lines().find_map(|l| l.strip_prefix("id: "))?;
+            let data = frame.lines().find_map(|l| l.strip_prefix("data: "))?;
+            Some((id.parse().unwrap(), serde_json::from_str(data).unwrap()))
+        })
+        .collect()
+}
+
+/// Start `request` with `POST /runs` and return its run id.
+async fn start_run(app: &axum::Router, request: serde_json::Value) -> String {
+    let (status, body) = send_json(app, "POST", "/runs", request).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    body["run_id"].as_str().expect("a run id").to_string()
+}
+
+#[tokio::test]
+async fn post_runs_refuses_what_the_cli_refuses_before_anything_starts() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = trigger_config(dir.path());
+    let app = app(config.clone());
+    let deployed = config.files[0].clone();
+    for (body, want, says) in [
+        (
+            serde_json::json!({"command": "get", "targets": ["nope"]}),
+            StatusCode::NOT_FOUND,
+            "Asset 'nope' not found",
+        ),
+        (
+            serde_json::json!({"command": "get", "targets": ["first"]}),
+            StatusCode::CONFLICT,
+            "'first' matches more than one node",
+        ),
+        (
+            serde_json::json!({"command": "get", "targets": ["publish"]}),
+            StatusCode::BAD_REQUEST,
+            "'publish' is a task",
+        ),
+        (
+            serde_json::json!({"command": "run", "targets": []}),
+            StatusCode::BAD_REQUEST,
+            "a target task is required",
+        ),
+        (
+            serde_json::json!({"command": "get", "invented": 1}),
+            StatusCode::BAD_REQUEST,
+            "the request body is not a run request",
+        ),
+        (
+            serde_json::json!({"command": "sql"}),
+            StatusCode::BAD_REQUEST,
+            "the request body is not a run request",
+        ),
+        (
+            serde_json::json!({"command": "get", "files": ["elsewhere.py"]}),
+            StatusCode::BAD_REQUEST,
+            "'elsewhere.py' is not one of the deployed files",
+        ),
+    ] {
+        let (status, error) = send_json(&app, "POST", "/runs", body.clone()).await;
+        assert_eq!(status, want, "{body}: {error}");
+        // The CLI's error envelope, with a kind and the exit code a local command has.
+        assert_eq!(error["kind"], "usage", "{error}");
+        assert_eq!(error["code"], 2, "{error}");
+        assert!(
+            error["error"].as_str().unwrap().starts_with(says),
+            "{body}: {error}"
+        );
+        assert!(error.get("remediation").is_some(), "{error}");
+    }
+    // A request naming a deployed file is accepted as far as the files go.
+    let (status, _) = send_json(
+        &app,
+        "POST",
+        "/runs",
+        serde_json::json!({"command": "get", "targets": ["nope"], "files": [deployed]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    // A dry run answers at once with the `--dry-run` JSON, and starts nothing.
+    let (status, plan) = send_json(
+        &app,
+        "POST",
+        "/runs",
+        serde_json::json!({"command": "run", "targets": ["publish"], "dry_run": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{plan}");
+    assert!(plan["steps"].is_array(), "{plan}");
+    assert!(plan["summary"]["will_run"].is_number(), "{plan}");
+    assert!(
+        app.clone()
+            .oneshot(Request::builder().uri("/runs").body(Body::empty()).unwrap())
+            .await
+            .is_ok()
+    );
+    assert!(!dir.path().join("metadata.db").exists(), "nothing ran");
+    // A read-only server refuses to run, but still answers a dry run.
+    config.read_only = true;
+    let read_only = barca_server::app(config);
+    let (status, error) = send_json(
+        &read_only,
+        "POST",
+        "/runs",
+        serde_json::json!({"command": "run", "targets": ["publish"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{error}");
+    let (status, _) = send_json(
+        &read_only,
+        "POST",
+        "/runs",
+        serde_json::json!({"command": "run", "targets": ["publish"], "dry_run": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+/// The whole contract on a real run: `POST /runs` answers the database id; the stream carries
+/// `run_started`, the progress lines tagged with `when`, step results (cached ones too) and
+/// `run_finished` with the outcome; `GET /runs/{id}` and `/output` answer from the DB after a
+/// restart.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_run_streams_its_lines_and_outcome_and_is_answered_after_a_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = runnable_config(dir.path());
+    let app = app(config.clone());
+
+    let id = start_run(
+        &app,
+        serde_json::json!({"command": "get", "targets": ["second"], "agent": true}),
+    )
+    .await;
+    let events = read_events(&app, &format!("/runs/{id}/events"), Default::default()).await;
+    let ids: Vec<u64> = events.iter().map(|(n, _)| *n).collect();
+    assert_eq!(
+        ids,
+        (0..events.len() as u64).collect::<Vec<_>>(),
+        "numbered from 0"
+    );
+    assert_eq!(
+        events[0].1,
+        serde_json::json!({"type": "run_started", "run_id": id})
+    );
+    let lines: Vec<&serde_json::Value> = events
+        .iter()
+        .map(|(_, e)| e)
+        .filter(|e| e["type"] == "line")
+        .collect();
+    assert!(
+        lines.iter().any(|l| l["when"] == "agent"
+            && l["line"].as_str().unwrap().starts_with("[barca] step:")
+            && l["line"].as_str().unwrap().contains(":second completed")),
+        "{lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l["when"] == "always" && l["line"].as_str().unwrap().contains("done in")),
+        "the end-of-run line: {lines:?}"
+    );
+    let (_, last) = events.last().unwrap();
+    assert_eq!(last["type"], "run_finished");
+    assert_eq!(last["ok"], true);
+    let outcome = last["outcome"].clone();
+    assert_eq!(outcome["status"], "success");
+    assert_eq!(
+        outcome["run_id"],
+        id.as_str(),
+        "the run id is the database id"
+    );
+    // As `barca get --json` prints it: a pointer to the artifact (paths by default, #404).
+    let pointer = &outcome["final_output"]["_barca_artifact"];
+    assert_eq!(pointer["format"], "json");
+    let value: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(pointer["path"].as_str().unwrap()).unwrap())
+            .unwrap();
+    assert_eq!(value, serde_json::json!({"n": 2}));
+
+    // The same answer from GET /runs/{id}, and the run is in the history as an API run.
+    let (status, run) = send(&app, "GET", &format!("/runs/{id}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(run["status"], "success");
+    assert_eq!(run["triggered_by"], "api");
+    assert_eq!(run["outcome"], outcome);
+    assert_eq!(run["target"], "second");
+    let (_, history) = send(&app, "GET", "/history").await;
+    assert_eq!(history["runs"][0]["run_id"], id.as_str());
+    assert_eq!(history["runs"][0]["triggered_by"], "api");
+
+    // A second get serves both steps from cache, and says so in the stream.
+    let again = start_run(
+        &app,
+        serde_json::json!({"command": "get", "targets": ["second"]}),
+    )
+    .await;
+    let events = read_events(&app, &format!("/runs/{again}/events"), Default::default()).await;
+    let cached: Vec<_> = events
+        .iter()
+        .filter(|(_, e)| e["type"] == "step_finished" && e["cached"] == true)
+        .collect();
+    assert_eq!(cached.len(), 2, "{events:?}");
+
+    // A failed step: the outcome carries the failed-run body and the envelope.
+    let failed = start_run(
+        &app,
+        serde_json::json!({"command": "get", "targets": ["broken"]}),
+    )
+    .await;
+    let events = read_events(&app, &format!("/runs/{failed}/events"), Default::default()).await;
+    let outcome = &events.last().unwrap().1["outcome"];
+    assert_eq!(outcome["status"], "failed");
+    assert!(
+        outcome["failed_node"]
+            .as_str()
+            .unwrap()
+            .ends_with(":broken")
+    );
+    assert_eq!(outcome["envelope"]["kind"], "step_failed");
+    assert_eq!(outcome["envelope"]["code"], 1);
+    assert!(
+        outcome["envelope"]["traceback"]
+            .as_str()
+            .unwrap()
+            .contains("expected failure")
+            || outcome["error"]
+                .as_str()
+                .unwrap()
+                .contains("expected failure")
+    );
+    let (status, _) = send(&app, "DELETE", &format!("/runs/{failed}")).await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "a finished run cannot be cancelled"
+    );
+    let (status, _) = send(&app, "GET", &format!("/runs/{failed}/output")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "a failed run has no output");
+
+    let output = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/runs/{id}/output"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(output.status(), StatusCode::OK);
+    assert_eq!(output.headers()["content-type"], "application/json");
+    assert_eq!(body_json(output).await, serde_json::json!({"n": 2}));
+
+    // A restart: the in-memory run state is gone, the answers are not.
+    let restarted = barca_server::app(config);
+    for (run_id, status) in [(&id, "success"), (&failed, "failed")] {
+        let (code, run) = send(&restarted, "GET", &format!("/runs/{run_id}")).await;
+        assert_eq!(code, StatusCode::OK, "{run}");
+        assert_eq!(run["status"], status, "{run}");
+        assert_eq!(run["triggered_by"], "api");
+        assert_eq!(run["outcome"]["status"], status, "{run}");
+        assert!(!run["steps"].as_array().unwrap().is_empty(), "{run}");
+    }
+    let output = restarted
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/runs/{id}/output"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(output.status(), StatusCode::OK);
+    assert_eq!(body_json(output).await, serde_json::json!({"n": 2}));
+    let (status, error) = send(&restarted, "GET", &format!("/runs/{id}/events")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{error}");
+    assert!(
+        error["remediation"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("GET /runs/{id}"))
+    );
+}
+
+/// A client that reads slowly receives every event once, in order, and a client that
+/// reconnects receives the run again from its first event, every event once.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_lagging_and_a_reconnecting_subscriber_receive_every_event_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app(runnable_config(dir.path()));
+    let id = start_run(
+        &app,
+        serde_json::json!({"command": "run", "targets": ["chatty"]}),
+    )
+    .await;
+    let uri = format!("/runs/{id}/events");
+    // Reads one chunk per millisecond while the task prints 3000 lines.
+    let slow = read_events(&app, &uri, std::time::Duration::from_millis(1)).await;
+    let reconnect = read_events(&app, &uri, Default::default()).await;
+    for events in [&slow, &reconnect] {
+        let ids: Vec<u64> = events.iter().map(|(n, _)| *n).collect();
+        assert_eq!(ids, (0..events.len() as u64).collect::<Vec<_>>());
+        let logs: Vec<&str> = events
+            .iter()
+            .filter(|(_, e)| e["type"] == "log")
+            .map(|(_, e)| e["line"].as_str().unwrap())
+            .collect();
+        assert_eq!(logs.len(), 3000, "every printed line, once");
+        assert_eq!(logs[2999], "line 2999");
+        assert_eq!(events.last().unwrap().1["type"], "run_finished");
+    }
+    assert_eq!(slow, reconnect);
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn delete_runs_cancels_a_run_and_its_outcome_says_cancelled() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = runnable_config(dir.path());
+    std::fs::write(&config.files[0], SLOW_FIXTURE).unwrap();
+    let app = app(config);
+    let id = start_run(
+        &app,
+        serde_json::json!({"command": "get", "targets": ["slow_one"]}),
+    )
+    .await;
+    let t0 = std::time::Instant::now();
+    loop {
+        let (_, run) = send(&app, "GET", &format!("/runs/{id}")).await;
+        if run["status"] == "running" {
+            break;
+        }
+        assert!(t0.elapsed() < std::time::Duration::from_secs(30), "{run}");
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let (status, body) = send(&app, "DELETE", &format!("/runs/{id}")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["status"], "cancelling");
+    let events = read_events(&app, &format!("/runs/{id}/events"), Default::default()).await;
+    let outcome = &events.last().unwrap().1["outcome"];
+    assert_eq!(outcome["status"], "cancelled");
+    assert_eq!(outcome["envelope"]["code"], 130);
+    let (_, run) = send(&app, "GET", &format!("/runs/{id}")).await;
+    assert_eq!(run["status"], "cancelled");
+}
+
+/// Inspection in the CLI's shapes: `/list`, `/nodes`, `/history`, `/stats/{name}`,
+/// `/project`, and `/health` with the API version, environment and store.
+#[tokio::test]
+async fn inspection_routes_answer_in_the_cli_shapes() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = isolated_config(dir.path(), false);
+    config.resolved.local_artifact_dir = config.resolved.artifact_root.clone();
+    let app = app(config.clone());
+    let (status, list) = send(&app, "GET", "/list").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(list["total"], 2);
+    assert_eq!(list["truncated"], false);
+    assert_eq!(list["nodes"][0]["freshness"], "always");
+    assert!(list["root"].is_string());
+    let (status, nodes) = send(&app, "GET", "/nodes?targets=second").await;
+    assert_eq!(status, StatusCode::OK, "{nodes}");
+    assert!(
+        nodes["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["id"].as_str().unwrap().ends_with(":second"))
+    );
+    let (status, all) = send(&app, "GET", "/nodes").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(all["nodes"].as_array().unwrap().len(), 2);
+    let (status, error) = send(&app, "GET", "/nodes?targets=nope").await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{error}");
+    assert_eq!(error["kind"], "usage");
+    let (status, history) = send(&app, "GET", "/history?limit=5").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(history["runs"], serde_json::json!([]));
+    assert_eq!(history["total"], 0);
+    let (status, stats) = send(&app, "GET", "/stats/first").await;
+    assert_eq!(status, StatusCode::OK, "{stats}");
+    assert!(
+        stats["id"].as_str().unwrap().ends_with(":first"),
+        "the CLI's `id` key: {stats}"
+    );
+    assert_eq!(stats["total_runs"], 0);
+    let (status, _) = send(&app, "GET", "/stats/nope").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, project) = send(&app, "GET", "/project").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(project["api_version"], 1);
+    assert_eq!(project["env"], config.resolved.env.as_str());
+    let files = project["files"].as_array().unwrap();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0]["sha256"].as_str().unwrap().len(), 64);
+    let (_, health) = send(&app, "GET", "/health").await;
+    assert_eq!(health["api_version"], 1);
+    assert_eq!(health["env"], config.resolved.env.as_str());
+    assert!(health["store_uri"].is_null(), "no separate store: {health}");
+    let mut stored = config.clone();
+    stored.resolved.artifact_root = "s3://team-bucket/barca/default/artifacts".into();
+    let (_, health) = send(&barca_server::app(stored), "GET", "/health").await;
+    assert_eq!(
+        health["store_uri"],
+        "s3://team-bucket/barca/default/artifacts"
+    );
+    // `/assets` and `/assets/{name}` in the CLI's shapes too.
+    let (_, assets) = send(&app, "GET", "/assets").await;
+    assert_eq!(assets[0]["freshness"], "always");
+    let (_, asset) = send(&app, "GET", "/assets/first").await;
+    assert_eq!(asset["asset"]["freshness"], "always");
+    assert!(
+        asset["stats"]["id"].as_str().unwrap().ends_with(":first"),
+        "{asset}"
+    );
+    assert!(asset["stats"].get("node_id").is_none(), "{asset}");
+    assert!(
+        !dir.path().join("metadata.db").exists(),
+        "inspection created the DB"
+    );
+}
+
+// ─── pausing a schedule (#435) ──────────────────────────────────────────────
+
+const SCHEDULED_FIXTURE: &str = r#"
+from barca import asset, Schedule
+
+@asset(freshness=Schedule("* * * * * *"))
+def every_second() -> int:
+    return 1
+
+@asset()
+def plain() -> int:
+    return 2
+"#;
+
+/// Wait for `GET /schedule` to show a skipped tick of the only job.
+async fn skipped_tick(app: &axum::Router) -> serde_json::Value {
+    let t0 = std::time::Instant::now();
+    loop {
+        let (_, schedule) = send(app, "GET", "/schedule").await;
+        if let Some(job) = schedule
+            .as_array()
+            .and_then(|jobs| jobs.first())
+            .filter(|job| !job["last_skipped"].is_null())
+        {
+            return job.clone();
+        }
+        assert!(
+            t0.elapsed() < std::time::Duration::from_secs(30),
+            "{schedule}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_paused_schedule_skips_its_ticks_and_stays_paused_across_a_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = isolated_config(dir.path(), false);
+    std::fs::write(&config.files[0], SCHEDULED_FIXTURE).unwrap();
+    config.schedule = true;
+    config.timezone = "utc".into();
+
+    let app = app(config.clone());
+    for (uri, want) in [
+        ("/schedule/nope/pause", StatusCode::NOT_FOUND),
+        ("/schedule/plain/pause", StatusCode::NOT_FOUND),
+        (
+            "/schedule/every_second/pause?until=tomorrow",
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "/schedule/every_second/pause?until=2001-01-01T00:00:00Z",
+            StatusCode::BAD_REQUEST,
+        ),
+    ] {
+        let (status, error) = send(&app, "POST", uri).await;
+        assert_eq!(status, want, "{uri}: {error}");
+        assert_eq!(error["kind"], "usage", "{error}");
+    }
+    let (status, job) = send(&app, "POST", "/schedule/every_second/pause").await;
+    assert_eq!(status, StatusCode::OK, "{job}");
+    assert_eq!(job["paused"], true);
+    assert!(job["paused_until"].is_null(), "until resumed");
+
+    // A restart: the scheduler starts with the job paused, and its ticks are skipped.
+    let (restarted, start_scheduler) = barca_server::app_with_scheduler(config.clone());
+    let scheduler = start_scheduler();
+    let job = skipped_tick(&restarted).await;
+    assert_eq!(job["paused"], true, "{job}");
+    assert_eq!(job["skip_reason"], "paused", "{job}");
+    assert!(
+        job["last_run"].is_null(),
+        "a paused job started a run: {job}"
+    );
+    assert!(job["skipped_for"].is_null(), "{job}");
+
+    // Paused until a time: reported, and resumed by hand.
+    let until = (chrono::Utc::now() + chrono::Duration::hours(1))
+        .format("%Y-%m-%dT%H:%M:%SZ")
+        .to_string();
+    let (status, job) = send(
+        &restarted,
+        "POST",
+        &format!("/schedule/every_second/pause?until={until}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{job}");
+    assert_eq!(job["paused"], true);
+    let until_epoch = chrono::DateTime::parse_from_rfc3339(&until)
+        .unwrap()
+        .timestamp();
+    assert_eq!(job["paused_until"], until_epoch);
+    let (status, job) = send(&restarted, "POST", "/schedule/every_second/resume").await;
+    assert_eq!(status, StatusCode::OK, "{job}");
+    assert_eq!(job["paused"], false);
+    assert!(job["paused_until"].is_null());
+    scheduler.abort();
+    let _ = scheduler.await;
+
+    // Resumed stays resumed across a restart.
+    let again = barca_server::app(config.clone());
+    let (status, job) = send(&again, "POST", "/schedule/every_second/resume").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(job["paused"], false);
+    let (_, schedule) = send(&again, "GET", "/schedule").await;
+    assert_eq!(
+        schedule,
+        serde_json::json!([]),
+        "no scheduler started on this one"
+    );
+
+    // A read-only server neither pauses nor resumes.
+    config.read_only = true;
+    let read_only = barca_server::app(config);
+    let (status, _) = send(&read_only, "POST", "/schedule/every_second/pause").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn every_error_body_is_the_cli_envelope() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app(trigger_config(dir.path()));
+    for (method, uri, status) in [
+        ("GET", "/runs/missing", StatusCode::NOT_FOUND),
+        ("GET", "/runs/missing/events", StatusCode::NOT_FOUND),
+        ("GET", "/runs/missing/output", StatusCode::NOT_FOUND),
+        ("DELETE", "/runs/missing", StatusCode::NOT_FOUND),
+        ("GET", "/assets/first", StatusCode::CONFLICT),
+        ("GET", "/nowhere", StatusCode::NOT_FOUND),
+        ("PUT", "/runs", StatusCode::METHOD_NOT_ALLOWED),
+        ("POST", "/get/publish", StatusCode::BAD_REQUEST),
+    ] {
+        let (got, body) = send(&app, method, uri).await;
+        assert_eq!(got, status, "{method} {uri}: {body}");
+        assert_eq!(body["kind"], "usage", "{method} {uri}: {body}");
+        assert_eq!(body["code"], 2, "{method} {uri}: {body}");
+        assert!(body["error"].is_string(), "{method} {uri}: {body}");
+        assert!(body.get("remediation").is_some(), "{method} {uri}: {body}");
+    }
+}
+
+// ─── the ledger (#402) ──────────────────────────────────────────────────────
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    format!("{:x}", sha2::Sha256::digest(bytes))
+}
+
+/// A server whose store is a directory beside its local artifact directory, as a deployment
+/// with `[remote] uri` has.
+fn ledger_config(dir: &std::path::Path) -> ServeConfig {
+    let mut config = runnable_config(dir);
+    config.resolved.artifact_root = dir.join("store/default/artifacts").display().to_string();
+    config.resolved.local_artifact_dir = dir.join("local").display().to_string();
+    config
+}
+
+/// Put `bytes` in the store at `{node}/{run_hash}.json` and return its store path.
+fn store_object(config: &ServeConfig, node: &str, run_hash: &str, bytes: &[u8]) -> String {
+    let dir =
+        std::path::Path::new(&config.resolved.artifact_root).join(node.replace([':', '/'], "_"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(format!("{run_hash}.json"));
+    std::fs::write(&path, bytes).unwrap();
+    path.display().to_string()
+}
+
+fn ledger_post(
+    client_run_id: &str,
+    node: &str,
+    run_hash: &str,
+    path: &str,
+    bytes: &[u8],
+) -> serde_json::Value {
+    serde_json::json!({
+        "run": {
+            "run_id": client_run_id,
+            "command": "get",
+            "files": ["pipeline.py"],
+            "target": "first",
+            "status": "success",
+            "steps_total": 1,
+            "steps_executed": 1,
+            "steps_cached": 0,
+            "started_at": "2026-10-20 12:00:00",
+            "finished_at": "2026-10-20 12:00:01",
+            "elapsed_seconds": 1.0,
+            "host": "laptop-a"
+        },
+        "steps": [{
+            "node_id": node,
+            "run_hash": run_hash,
+            "status": "success",
+            "path": path,
+            "format": "json",
+            "size_bytes": bytes.len(),
+            "digest": sha256_hex(bytes),
+            "elapsed_seconds": 0.5,
+            "attempts": 1
+        }]
+    })
+}
+
+async fn lookup_one(app: &axum::Router, node: &str, run_hash: &str) -> serde_json::Value {
+    let (status, body) = send_json(
+        app,
+        "POST",
+        "/ledger/lookup",
+        serde_json::json!({"hashes": [{"node_id": node, "run_hash": run_hash}]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["results"].as_array().unwrap().len(), 1, "{body}");
+    body["results"][0].clone()
+}
+
+#[tokio::test]
+async fn the_ledger_records_only_posts_whose_objects_are_in_the_store() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = ledger_config(dir.path());
+    let app = app(config.clone());
+    let node = "pipeline.py:first";
+    let hash = "a1b2c3d4e5f60718";
+
+    // Nothing recorded yet.
+    let miss = lookup_one(&app, node, hash).await;
+    assert_eq!(miss["exists"], false, "{miss}");
+    assert!(miss.get("path").is_none(), "{miss}");
+
+    // The object is not in the store: 409 naming the node, and nothing recorded.
+    let bytes = br#"{"n": 1}"#;
+    let path = std::path::Path::new(&config.resolved.artifact_root)
+        .join("pipeline.py_first")
+        .join(format!("{hash}.json"))
+        .display()
+        .to_string();
+    let (status, error) = send_json(
+        &app,
+        "POST",
+        "/ledger/runs",
+        ledger_post("c-1", node, hash, &path, bytes),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{error}");
+    assert_eq!(error["kind"], "usage");
+    assert_eq!(error["code"], 2);
+    assert!(
+        error["error"].as_str().unwrap().starts_with(node),
+        "{error}"
+    );
+    assert!(
+        error["error"].as_str().unwrap().contains("no object"),
+        "{error}"
+    );
+    assert!(error["remediation"].is_string(), "{error}");
+    assert_eq!(lookup_one(&app, node, hash).await["exists"], false);
+    let (_, history) = send(&app, "GET", "/history?limit=5").await;
+    assert_eq!(
+        history["total"], 0,
+        "a refused post records nothing: {history}"
+    );
+
+    // The same post once the object is there: 201, and the ledger has it.
+    let path = store_object(&config, node, hash, bytes);
+    let (status, accepted) = send_json(
+        &app,
+        "POST",
+        "/ledger/runs",
+        ledger_post("c-1", node, hash, &path, bytes),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{accepted}");
+    let run_id = accepted["run_id"].as_str().unwrap().to_string();
+    assert_eq!(accepted["bytes_changed"], serde_json::json!([]));
+    let hit = lookup_one(&app, node, hash).await;
+    assert_eq!(hit["exists"], true, "{hit}");
+    assert_eq!(hit["path"], path.as_str());
+    assert_eq!(hit["format"], "json");
+    assert_eq!(hit["size_bytes"], bytes.len());
+    assert_eq!(hit["digest"], sha256_hex(bytes).as_str());
+
+    // The run is in the server's history, posted by a client, under the server's run id.
+    let (_, history) = send(&app, "GET", "/history?limit=5").await;
+    assert_eq!(history["total"], 1, "{history}");
+    assert_eq!(history["runs"][0]["run_id"], run_id.as_str());
+    assert_eq!(history["runs"][0]["triggered_by"], "client");
+    assert_eq!(history["runs"][0]["client_run_id"], "c-1");
+    assert_eq!(history["runs"][0]["status"], "success");
+
+    // A repeated post of the same run (its answer was lost) is the run already recorded.
+    let (status, again) = send_json(
+        &app,
+        "POST",
+        "/ledger/runs",
+        ledger_post("c-1", node, hash, &path, bytes),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(again["run_id"], run_id.as_str());
+    let (_, history) = send(&app, "GET", "/history?limit=5").await;
+    assert_eq!(history["total"], 1, "{history}");
+
+    // A second machine posts the same run hash with other bytes: the ledger keeps its row and
+    // says so.
+    let other = br#"{"n": 2}"#;
+    store_object(&config, node, hash, other);
+    let (status, changed) = send_json(
+        &app,
+        "POST",
+        "/ledger/runs",
+        ledger_post("c-2", node, hash, &path, other),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{changed}");
+    assert_eq!(changed["bytes_changed"], serde_json::json!([node]));
+    assert_eq!(
+        lookup_one(&app, node, hash).await["digest"],
+        sha256_hex(bytes).as_str()
+    );
+
+    // A digest that does not match the object is refused.
+    let (status, error) = send_json(
+        &app,
+        "POST",
+        "/ledger/runs",
+        ledger_post("c-3", node, hash, &path, bytes),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{error}");
+    assert!(
+        error["error"].as_str().unwrap().contains("digest"),
+        "{error}"
+    );
+
+    // An object outside the server's store is refused.
+    let outside = dir.path().join("elsewhere.json");
+    std::fs::write(&outside, bytes).unwrap();
+    let (status, error) = send_json(
+        &app,
+        "POST",
+        "/ledger/runs",
+        ledger_post("c-4", node, hash, &outside.display().to_string(), bytes),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{error}");
+    assert!(
+        error["error"]
+            .as_str()
+            .unwrap()
+            .contains("not in this server's artifact store"),
+        "{error}"
+    );
+
+    // Not a post at all.
+    let (status, error) =
+        send_json(&app, "POST", "/ledger/runs", serde_json::json!({"run": 1})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    assert_eq!(error["kind"], "usage");
+}
+
+#[tokio::test]
+async fn a_server_without_a_store_or_a_read_only_one_takes_no_posts() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = runnable_config(dir.path());
+    let app = app(config.clone());
+    let (status, error) = send_json(
+        &app,
+        "POST",
+        "/ledger/runs",
+        ledger_post("c-1", "pipeline.py:first", "h", "/x.json", b"1"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    assert!(
+        error["error"]
+            .as_str()
+            .unwrap()
+            .contains("no artifact store"),
+        "{error}"
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = ledger_config(dir.path());
+    config.read_only = true;
+    let app = barca_server::app(config);
+    let (status, error) = send_json(
+        &app,
+        "POST",
+        "/ledger/runs",
+        ledger_post("c-1", "pipeline.py:first", "h", "/x.json", b"1"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{error}");
+    // A read-only server answers lookups from a snapshot, and creates no database.
+    assert_eq!(
+        lookup_one(&app, "pipeline.py:first", "h").await["exists"],
+        false
+    );
+    assert!(!dir.path().join("metadata.db").exists());
 }

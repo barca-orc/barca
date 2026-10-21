@@ -26,9 +26,12 @@ pub fn warn_once(message: &str) -> bool {
         .lock()
         .map(|mut seen| seen.insert(message.to_string()))
         .unwrap_or(true);
+    let line = format!("[barca] warning: {message}");
     if first {
-        crate::errln!("[barca] warning: {message}");
+        crate::errln!("{line}");
     }
+    // A served run's client prints it every time, as a local run would.
+    crate::lines::Lines::current().emit(crate::lines::LineWhen::Always, &line);
     first
 }
 

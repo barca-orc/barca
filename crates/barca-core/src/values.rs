@@ -46,6 +46,48 @@ pub async fn read_values(
         .collect()
 }
 
+/// What `barca get -o value --json` returns as `final_output`: the value of the returned
+/// artifact, or for a partitioned target an object of values keyed by partition key. An
+/// artifact that cannot be read is returned as its pointer, with a warning, as `get` does.
+/// `None` when the run returned nothing.
+pub async fn returned_values(
+    python: &std::path::Path,
+    cfg: &crate::config::ResolvedConfig,
+    single: Option<&OutputRef>,
+    keys: Option<&[(String, OutputRef)]>,
+) -> Option<Value> {
+    let items: Vec<(Option<&str>, &OutputRef)> = match keys {
+        Some(keys) => keys.iter().map(|(k, o)| (Some(k.as_str()), o)).collect(),
+        None => single.into_iter().map(|o| (None, o)).collect(),
+    };
+    let refs: Vec<&OutputRef> = items.iter().map(|(_, o)| *o).collect();
+    let values: Vec<Value> = read_values(python, cfg, &refs)
+        .await
+        .into_iter()
+        .zip(&refs)
+        .map(|(value, oref)| {
+            value.unwrap_or_else(|e| {
+                crate::errln!(
+                    "[barca] warning: could not read the value of {}: {e}; its path is \
+                     returned instead",
+                    oref.path
+                );
+                crate::report::artifact_metadata(oref)
+            })
+        })
+        .collect();
+    match keys {
+        Some(_) => Some(Value::Object(
+            items
+                .iter()
+                .zip(values)
+                .map(|((key, _), v)| (key.unwrap_or_default().to_string(), v))
+                .collect(),
+        )),
+        None => values.into_iter().next(),
+    }
+}
+
 /// `python -m barca._value`, with the resolved storage options (reads and signing alike).
 fn helper(
     python: &std::path::Path,

@@ -13,6 +13,7 @@ pub mod history;
 pub mod slack;
 
 pub use history::JobHistory;
+pub mod dogstatsd;
 
 use std::future::Future;
 use std::pin::Pin;
@@ -30,6 +31,9 @@ pub enum StepOutcome {
     Cached,
     /// The step failed (its own error, or its artifact could not be stored).
     Failed,
+    /// The step was planned but did not run: something it depends on failed, or the run
+    /// stopped before reaching it.
+    Skipped,
 }
 
 impl StepOutcome {
@@ -38,8 +42,119 @@ impl StepOutcome {
             StepOutcome::Ran => "ran",
             StepOutcome::Cached => "cached",
             StepOutcome::Failed => "failed",
+            StepOutcome::Skipped => "skipped",
         }
     }
+}
+
+/// Where a node sits in the pipeline: what every report of one of its steps says about it,
+/// whichever partition key or attempt the step is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodeContext {
+    /// The node id without a partition key, e.g. `pipeline.py:orders`.
+    pub base_id: String,
+    /// The node's short name, `orders`, unique within the pipeline. When two files define a
+    /// node of the same name, both are named by their id, `pipeline.py:orders`.
+    pub name: String,
+    /// The file that defines the node, as barca names it (`pipeline.py`).
+    pub file: String,
+    /// The names of the `group()`s the node is in, outermost first, joined by `/`
+    /// (`Experiment/Training`). `None` for a node outside every group.
+    pub group: Option<String>,
+    /// `asset`, `task` or `sensor`.
+    pub kind: &'static str,
+    /// `always`, `manual` or `schedule`.
+    pub freshness: &'static str,
+    /// The cron expression of a scheduled node.
+    pub schedule: Option<String>,
+}
+
+impl NodeContext {
+    /// A context for an id barca has no definition for (a node removed while a server ran).
+    pub fn unknown(base_id: &str) -> Self {
+        Self {
+            base_id: base_id.to_string(),
+            name: short_name(base_id).to_string(),
+            file: base_id
+                .rsplit_once(':')
+                .map_or("", |(file, _)| file)
+                .to_string(),
+            group: None,
+            kind: "asset",
+            freshness: "always",
+            schedule: None,
+        }
+    }
+}
+
+/// The part of a node id after its file: `orders` for `pipeline.py:orders`.
+pub fn short_name(base_id: &str) -> &str {
+    base_id.rsplit_once(':').map_or(base_id, |(_, name)| name)
+}
+
+/// The [`NodeContext`] of every node of `dag`, by base id.
+pub fn node_contexts(dag: &crate::dag::Dag) -> std::collections::HashMap<String, NodeContext> {
+    use crate::model::{Freshness, NodeKind};
+    use std::collections::HashMap;
+
+    let mut name_count: HashMap<&str, usize> = HashMap::new();
+    for id in dag.topo_order() {
+        *name_count.entry(short_name(id)).or_default() += 1;
+    }
+    // Groups name their members by node id or group id; a member has at most one parent.
+    let mut parent: HashMap<&str, &crate::groups::NodeGroup> = HashMap::new();
+    for group in &dag.groups {
+        for member in &group.members {
+            parent.insert(member.as_str(), group);
+        }
+    }
+    let group_path = |id: &str| {
+        let mut names = Vec::new();
+        let mut at = id;
+        while let Some(group) = parent.get(at) {
+            if names.len() > dag.groups.len() {
+                break; // a cycle; groups are validated against these, but never loop
+            }
+            names.push(group.name.as_str());
+            at = group.id.as_str();
+        }
+        names.reverse();
+        (!names.is_empty()).then(|| names.join("/"))
+    };
+
+    let mut out = HashMap::new();
+    for id in dag.topo_order() {
+        let Some(node) = dag.get_node(id) else {
+            continue;
+        };
+        let short = short_name(id);
+        let (freshness, schedule) = match &node.extracted.freshness {
+            Freshness::Always => ("always", None),
+            Freshness::Manual => ("manual", None),
+            Freshness::Schedule(cron) => ("schedule", Some(cron.0.clone())),
+        };
+        out.insert(
+            id.to_string(),
+            NodeContext {
+                base_id: id.to_string(),
+                name: if name_count.get(short).copied().unwrap_or(0) > 1 {
+                    id.to_string()
+                } else {
+                    short.to_string()
+                },
+                file: id.rsplit_once(':').map_or("", |(file, _)| file).to_string(),
+                group: group_path(id),
+                kind: match node.kind() {
+                    NodeKind::Asset => "asset",
+                    NodeKind::Task => "task",
+                    NodeKind::Sensor => "sensor",
+                },
+                freshness,
+                schedule,
+            },
+        );
+    }
+    out
 }
 
 /// One step of a finished run. Times are Unix nanoseconds.
@@ -47,8 +162,11 @@ impl StepOutcome {
 pub struct StepReport {
     /// Display id, e.g. `pipeline.py:orders` or `pipeline.py:weekly[week=w1]`.
     pub node_id: String,
-    /// `asset`, `task` or `sensor`.
-    pub kind: &'static str,
+    /// The node this step is a step of.
+    pub node: std::sync::Arc<NodeContext>,
+    /// The partition key, `week=w1` (`key=value` pairs joined by `,`), for one partition of a
+    /// partitioned node.
+    pub partition: Option<String>,
     pub outcome: StepOutcome,
     pub start_unix_ns: u64,
     pub duration_ns: u64,
@@ -56,7 +174,11 @@ pub struct StepReport {
     /// partitioned step: attempts are counted per step, not per key.
     pub attempts: Option<u32>,
     pub run_hash: Option<String>,
+    /// The node's direct upstream node ids, sorted.
+    pub upstream: Vec<String>,
     pub size_bytes: Option<u64>,
+    /// SHA-256 of the result's bytes, for a step that ran.
+    pub digest: Option<String>,
     pub cpu_seconds: Option<f64>,
     pub max_rss_bytes: Option<u64>,
     pub error_type: Option<String>,
@@ -75,6 +197,11 @@ pub struct RunReport {
     pub job: String,
     /// The barca environment the run used (`--env`, `BARCA_ENV`, ...), when known.
     pub env: Option<String>,
+    /// The targets' short names (see [`NodeContext::name`]), sorted; empty for a run of
+    /// everything in its files.
+    pub targets: Vec<String>,
+    /// The pipeline files the command was given, as given.
+    pub files: Vec<String>,
     /// `success`, `failed` or `cancelled`; `skipped` for a `barca serve` tick that did not
     /// start a run.
     pub status: String,
@@ -88,6 +215,9 @@ pub struct RunReport {
     pub steps_executed: usize,
     pub steps_cached: usize,
     pub steps: Vec<StepReport>,
+    /// What started the run (`barca.trigger`), and for a scheduled run the tick
+    /// (`barca.scheduled_at`) and the schedule (`barca.schedule_id`).
+    pub trigger: crate::outcome::Trigger,
 }
 
 /// A server lifecycle signal, independent of materialization runs.
@@ -207,6 +337,14 @@ pub fn configured() -> Vec<(String, Box<dyn Integration>)> {
         }
     }
     out
+}
+
+/// Whether `BARCA_TELEMETRY` switches integration `name` on and its settings let it run.
+/// Says nothing: [`configured`] warns about a misconfiguration when a run starts.
+pub fn is_on(name: &str) -> bool {
+    std::env::var("BARCA_TELEMETRY").is_ok_and(|raw| {
+        parse_names(&raw).iter().any(|n| n == name) && matches!(build(name), Some(Ok(Some(_))))
+    })
 }
 
 /// Send `run` to every integration, each bounded by [`EXPORT_TIMEOUT`].

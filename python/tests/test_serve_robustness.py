@@ -8,6 +8,7 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
+from email.message import Message
 from pathlib import Path
 
 import pytest
@@ -22,6 +23,7 @@ WAIT = 30.0
 
 PIPELINE = """
 import time
+from email.message import Message
 from pathlib import Path
 
 from barca import asset, task, Schedule
@@ -112,12 +114,17 @@ class Server:
 
     def request(self, method: str, path: str) -> tuple[int, object]:
         """One request: the HTTP status and the decoded JSON body, error responses included."""
+        status, _, body = self.exchange(method, path)
+        return status, body
+
+    def exchange(self, method: str, path: str) -> tuple[int, Message, object]:
+        """[`request`], with the response headers."""
         req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", method=method)
         try:
             with urllib.request.urlopen(req, timeout=10) as resp:
-                return resp.status, json.loads(resp.read())
+                return resp.status, resp.headers, json.loads(resp.read())
         except urllib.error.HTTPError as e:
-            return e.code, json.loads(e.read())
+            return e.code, e.headers, json.loads(e.read())
 
     def stop(self) -> None:
         if self.proc.poll() is None:
@@ -213,7 +220,9 @@ def test_a_trigger_for_a_target_that_cannot_run_is_an_error_response(project):
         for method, path, want, says in cases:
             status, body = server.request(method, path)
             assert status == want, (path, body)
-            assert set(body) == {"error"}, (path, body)
+            # The CLI's error envelope.
+            assert {"error", "code", "kind", "remediation"} <= set(body), (path, body)
+            assert (body["kind"], body["code"]) == ("usage", 2), (path, body)
             assert body["error"].startswith(says), (path, body)
 
         # The Python client raises with the server's message.
@@ -235,10 +244,28 @@ def test_a_trigger_for_a_target_that_cannot_run_is_an_error_response(project):
 # ─── stopping the server ─────────────────────────────────────────────────────
 
 
+def start_slow_run(server: Server, project: Path) -> str:
+    """Start the run of `slow` and wait until its step is executing; return its handle."""
+    going = server.request("POST", "/get/slow")[1]["run_id"]
+    wait_for(lambda: (project / "slow.started").exists(), "the slow step to start")
+    return going
+
+
+def draining(server: Server) -> bool:
+    return server.request("GET", "/health")[1]["status"] == "draining"
+
+
+def run_logs(cwd: Path, run_id: str) -> str:
+    out = barca(cwd, "logs", run_id, "--json")
+    assert out.returncode == 0, out.stderr
+    return out.stdout + out.stderr
+
+
 @pytest.mark.parametrize("sig", [signal.SIGTERM, signal.SIGINT])
-def test_a_stop_signal_cancels_the_runs_and_exits_0(project, serve, sig):
-    """SIGTERM used to keep its default action (and was discarded when barca was process 1 of
-    a container); and an open /events stream kept a server stopped with SIGINT alive for ever."""
+def test_a_stop_signal_drains_the_runs_in_flight_and_exits_0(project, serve, sig):
+    """#190: the first signal stops admission and waits for the runs in flight. SIGTERM used
+    to be discarded when barca was process 1 of a container (#289), and an open /events
+    stream kept a stopped server alive for ever."""
     server = serve("--no-schedule")
     base = f"http://127.0.0.1:{server.port}"
 
@@ -249,24 +276,107 @@ def test_a_stop_signal_cancels_the_runs_and_exits_0(project, serve, sig):
         lambda: server.request("GET", f"/status/{done}")[1]["status"] == "complete",
         "the quick run to complete",
     )
-    going = server.request("POST", "/get/slow")[1]["run_id"]
-    wait_for(lambda: (project / "slow.started").exists(), "the slow step to start")
+    going = start_slow_run(server, project)
     streams = [
         urllib.request.urlopen(f"{base}/events/{run}", timeout=WAIT) for run in (done, going)
     ]
     for stream in streams:
-        assert stream.readline().startswith(b"data:"), "the stream has started"
+        # Each event is numbered: `id: 0`, then its data.
+        assert stream.readline() == b"id: 0\n", "the stream has started"
+        assert stream.readline().startswith(b"data:")
 
     server.proc.send_signal(sig)
+    wait_for(lambda: draining(server), "/health to report draining")
+
+    # No new run is admitted, whatever the route; reads and the run in flight go on.
+    for path in ("/run", "/get/quick", "/run/nightly"):
+        status, headers, body = server.exchange("POST", path)
+        assert status == 503, (path, body)
+        assert headers["Retry-After"] == "30", headers
+        assert "shutting down" in body["error"], body
+    assert server.request("GET", f"/status/{going}")[1]["status"] == "running"
+    assert server.proc.poll() is None, "the server waits for the run"
+
+    (project / "release").write_text("")
     assert server.proc.wait(timeout=WAIT) == 0, server.log.read_text()
-    assert f"[barca] {sig.name} received: stopping runs and shutting down" in server.log.read_text()
+    log = server.log.read_text()
+    assert f"[barca] {sig.name} received: draining" in log, log
+    assert "[barca] drained: every run finished; shutting down" in log, log
 
-    # Both streams ended, and the one of the cancelled run delivered its last event first.
+    # Both streams ended, and the drained run's delivered its successful end first.
     tails = [stream.read().decode() for stream in streams]
-    assert f'{{"type":"run_finished","run_id":"{going}","ok":false}}' in tails[1]
+    assert f'{{"type":"run_finished","run_id":"{going}","ok":true,' in tails[1]
+    assert '"status":"success"' in tails[1], "with its outcome"
 
-    # The run in flight recorded itself as cancelled; it was not left `running`.
-    assert [r["status"] for r in history(project)] == ["cancelled", "success"]
+    # The run finished and was recorded; the refused requests started none.
+    assert [r["status"] for r in history(project)] == ["success", "success"]
+
+
+@pytest.mark.parametrize("setting", ["flag", "barca.toml"])
+def test_the_drain_timeout_cancels_the_runs_left_with_reason_server_shutdown_and_exits_1(
+    project, serve, setting
+):
+    if setting == "flag":
+        server = serve("--no-schedule", "--drain-timeout", "1")
+    else:
+        (project / "barca.toml").write_text("[server]\ndrain_timeout = 1\n")
+        server = serve("--no-schedule")
+    start_slow_run(server, project)
+
+    started = time.monotonic()
+    server.proc.send_signal(signal.SIGTERM)
+    assert server.proc.wait(timeout=WAIT) == 1, server.log.read_text()
+    assert time.monotonic() - started < 15
+    log = server.log.read_text()
+    assert "the drain timeout (1s) passed: cancelling 1 run (server shutdown)" in log, log
+    assert "stopped before the runs in flight finished: 1 run cancelled (server shutdown)" in log
+
+    # Recorded `cancelled`, with the reason in its logs; the step that finished is kept.
+    (run,) = history(project)
+    assert run["status"] == "cancelled", run
+    assert "[barca] run cancelled: server shutdown" in run_logs(project, run["run_id"])
+    assert run["steps_executed"] >= 1, run
+
+
+def test_a_second_signal_stops_the_drain_at_once(project, serve):
+    server = serve("--no-schedule")  # the default drain timeout: 30 s
+    start_slow_run(server, project)
+    server.proc.send_signal(signal.SIGTERM)
+    wait_for(lambda: draining(server), "/health to report draining")
+
+    started = time.monotonic()
+    server.proc.send_signal(signal.SIGINT)
+    assert server.proc.wait(timeout=WAIT) == 1, server.log.read_text()
+    assert time.monotonic() - started < 15, "the second signal did not wait out the drain"
+    assert "SIGINT received again: cancelling 1 run (server shutdown)" in server.log.read_text()
+    assert [r["status"] for r in history(project)] == ["cancelled"]
+
+
+def test_a_tick_during_the_drain_starts_no_run(project, serve):
+    (project / "pipeline.py").write_text(
+        PIPELINE
+        + """
+
+@asset(freshness=Schedule("* * * * * *"))
+def ticker() -> int:
+    with open("ticks", "a") as f:
+        f.write("tick\\n")
+    return 1
+"""
+    )
+    server = serve()
+    wait_for(lambda: (project / "ticks").exists(), "a first scheduled run")
+    start_slow_run(server, project)
+    server.proc.send_signal(signal.SIGTERM)
+    wait_for(lambda: draining(server), "/health to report draining")
+    time.sleep(3)  # three ticks fall in the drain
+
+    log = server.log.read_text()
+    assert "[barca] scheduler stopped: the server is draining" in log, log
+    after = log.split("received: draining", 1)[1]
+    assert "scheduled run" not in after, log
+    (project / "release").write_text("")
+    assert server.proc.wait(timeout=WAIT) == 0, server.log.read_text()
 
 
 @pytest.mark.parametrize("stop_signal", [signal.SIGTERM, signal.SIGINT])
@@ -276,6 +386,7 @@ def test_stop_reaps_parallel_parent_and_active_children(project, stop_signal):
 import os
 import time
 from functools import partial
+from email.message import Message
 from pathlib import Path
 from barca import asset, parallel
 

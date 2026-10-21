@@ -33,6 +33,9 @@ Options:
       --read-only
           Inspect only: refuse runs, never schedule, read the metadata DB from snapshots
 
+      --drain-timeout <SECONDS>
+          Seconds to wait for runs in flight after SIGTERM or SIGINT before cancelling them (exit 1). Default: [server] drain_timeout in barca.toml, else 30. 0 cancels at once
+
       --env <ENV>
           Environment name (separates cache/state per environment)
 
@@ -41,6 +44,8 @@ Options:
 
 Examples:
   BARCA_REMOTE=off barca serve pipeline.py   # local artifacts and history
+  BARCA_LOG=json barca serve pipeline.py     # each line a JSON object on stdout, with run_id and node
+  BARCA_TELEMETRY=datadog barca serve pipeline.py   # a trace per run; barca.serve.up via DogStatsD
   barca serve                                # every file in the project; files added later need a restart
   barca serve pipeline.py                    # HTTP API on 127.0.0.1:8274 plus the scheduler
   barca serve pipeline.py --port 8400        # custom port
@@ -50,14 +55,21 @@ Examples:
   barca serve pipeline.py --timezone utc     # evaluate cron in UTC (default: local)
   barca serve pipeline.py --timezone America/New_York   # an IANA zone name
   barca serve pipeline.py --read-only        # inspect only: no runs, no scheduler, DB never written
+  barca serve pipeline.py --drain-timeout 120   # on SIGTERM, give runs in flight 2 minutes
 
 Binds to 127.0.0.1 by default. There is no authentication: with --host 0.0.0.0, anyone who
 can reach the port can trigger runs, so keep it on a private network or behind a proxy.
 Invalid sources and their graph dependents are excluded; healthy definitions and schedules
 continue. Startup logs, /health load_errors and the UI show unloaded files and affected nodes.
 --watch restores repaired configured sources; one-shot commands remain strict.
-Trigger deployed runs through HTTP or barca.Client. Ordinary get/run commands execute locally;
-CLI --server, server URL configuration and the shared-ledger design are not implemented yet.
+From another machine, `--server <url>` on get, run, status, list, history and stats runs the
+command on this server and prints it there as a local run would (barca docs server-mode).
+`serve` itself always runs here: --server on it is a usage error.
 With a store ([remote] uri), the metadata DB is backed up there every minute it changed
 (barca docs remote); barca state restore refuses to run while the server is up.
+SIGTERM or SIGINT drains: new runs get 503 with Retry-After, the scheduler stops, /health
+says draining, and runs in flight finish (uploads included) for up to --drain-timeout seconds
+(default 30, [server] drain_timeout in barca.toml). Exit 0 when they all finished. The deadline
+or a second signal cancels the rest with reason "server shutdown": exit 1.
+Lines go to stderr as text; BARCA_LOG=json writes them to stdout as JSON (barca docs telemetry).
 More: barca docs scheduling

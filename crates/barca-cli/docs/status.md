@@ -76,7 +76,7 @@ two cannot disagree. In JSON the states are snake_case, spelled exactly like the
 | state | meaning | `reason` |
 |---|---|---|
 | `cached` | a successful result matches this code and these inputs; `get` serves it | `materialized` |
-| `unsynced` | cached, but with an artifact store this machine's copy, the store's object and the recorded digest do not all agree (`barca docs remote`, "`cached` and `unsynced` with a store"). `get` on it repairs that without running a step | `local_only`, `store_only`, `mismatch` (the table prints `local only`, `store only`, `mismatch`) |
+| `unsynced` | cached, but not where it should be: with an artifact store, this machine's copy, the store's object and the recorded digest do not all agree (`barca docs remote`, "`cached` and `unsynced` with a store"), and `get` on it repairs that without running a step; with a configured server, the server has no result but this machine computed one whose post to the server's ledger is pending (`barca docs server-mode`) | `local_only`, `store_only`, `mismatch`, `not_in_ledger` (the table prints `local only`, `store only`, `mismatch`, `not in ledger`) |
 | `stale` | it ran before, but `get` would run it again | `changed`, `upstream_stale`, `failed`, `artifact_missing`, `evicted` |
 | `never_run` | no successful materialization is recorded | `no_record`, `failed` |
 | `partial` | a partitioned asset with some keys cached | `partitions_missing` |
@@ -118,6 +118,18 @@ two cannot disagree. In JSON the states are snake_case, spelled exactly like the
 
 `cache.run_hash` is the cache key for the current code and inputs; `cache.artifact` is the file a
 `get` would serve (only when `cached` or `unsynced`).
+
+### With a server configured
+
+With `BARCA_SERVER` or `[server] url` set, `barca status` (without `--server` or `--local`) is
+answered by the server's ledger for its deployed code, after `[barca] server <url> (<source>)`
+on stderr (`barca docs server-mode`). Each node gets `local`: `true` when this machine has a copy
+of the result the server would serve, which is what `barca sql` can query here. A node the
+server has no result for, but whose result this machine computed and has not posted yet (the
+post was refused or the server could not be reached), is `unsynced` with reason `not_in_ledger`
+and `local: true`; the next `get` or `run` against the server posts it. `summary.unsynced`
+counts unsynced nodes. A partitioned node's `local` is `false` (it has no single artifact).
+`barca status --local` shows this machine's own state.
 
 ## Last materialization
 
@@ -253,3 +265,16 @@ attempts per recorded materialization and its stored final-attempt duration.
 Timeout errors name the step id, including its partition key.
 
 Older read-only snapshots without attempt metadata report a null history attempt total.
+
+## What started a run
+
+`barca history --json` rows carry `triggered_by`: `manual` for a command typed on a machine
+(`barca get`, `barca run`), `api` for a run started over HTTP on `barca serve`, `schedule` for a
+cron tick, and `client` for a run a laptop posted to a server's ledger. A scheduled run also
+carries the tick it was started for in `scheduled_at` (RFC 3339, UTC) and the scheduled node in
+`schedule_id`; both are `null` otherwise. Runs recorded before barca recorded this have
+`triggered_by: null`.
+
+```bash
+barca history --json --fields run_id,triggered_by,scheduled_at,schedule_id
+```
