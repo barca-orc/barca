@@ -12,6 +12,14 @@ reconciliation, and verified shared DuckDB worker lifetime. See
 upgrade and breaking-change notes. Releases between the historical entries below
 and these tags are available on the same releases page.
 
+## Pending
+
+### Bug Fixes
+
+- The end-of-run line `[barca] N/M steps | done in Xs` shows the run's wall time. It showed the
+  sum of the steps' times, so a run of parallel steps reported several times its real duration
+  (`done in 8.2s` for a 1.9 s run).
+
 ## 0.28.1 (2026-10-21)
 
 ### Bug Fixes
