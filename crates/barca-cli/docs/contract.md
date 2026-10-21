@@ -1809,7 +1809,8 @@ with the remediation before the final run summary.
 stably; any other error has no `reason` key. The one value so far is `metadata_unusable`
 (`kind` `infra`, exit 3): the metadata DB is there but this barca cannot use it (empty, not a
 SQLite file, a newer format, a malformed schema). `error` names the file and `remediation` says
-to upgrade barca, put a backup back with `barca state restore`, or move the file aside. The HTTP
+to upgrade barca, put a backup back with `barca state restore`, or start over with
+`barca state reset` (the UI's Reset database button under `barca serve`). The HTTP
 API returns the same envelope (`500`).
 
 ### --agent lines

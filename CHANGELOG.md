@@ -28,7 +28,7 @@ and these tags are available on the same releases page.
   (exit 2) naming that command. A `Manual` task named as the target of `barca run` runs. The older
   `POST /get/{target}`, `POST /run/{target}` and `POST /run` aliases are unchanged.
 - **Breaking:** a writer `barca serve` whose metadata DB cannot be set up exits 3 before it binds,
-  naming the file and what to do (upgrade barca, `barca state restore`, or move the file aside),
+  naming the file and what to do (upgrade barca, `barca state restore`, or `barca state reset`),
   where it used to keep serving with the scheduler off and one `scheduler disabled` line (#513).
   A database barca cannot use (empty, not SQLite, a newer format, a malformed schema) is now one
   error, `reason: "metadata_unusable"` in the envelope (new optional key; CLI and HTTP), instead

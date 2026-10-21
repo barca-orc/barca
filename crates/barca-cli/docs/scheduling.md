@@ -255,7 +255,7 @@ the file and what to do:
 ```
 the metadata DB .barca/envs/prod/metadata.db cannot be used: it is empty (0 bytes)
 
-Not a problem in your code. If a newer barca wrote this database, upgrade barca. Otherwise put a backup back with `barca state restore` (it moves .barca/envs/prod/metadata.db aside first), or stop every barca process using it and move .barca/envs/prod/metadata.db aside to start an empty history.
+Not a problem in your code. If a newer barca wrote this database, upgrade barca. Otherwise put a backup back with `barca state restore` (it moves .barca/envs/prod/metadata.db aside first), or start an empty history with `barca state reset` (the Reset database button in the web UI of a running `barca serve`), which moves .barca/envs/prod/metadata.db aside and prints how to undo it.
 ```
 
 A database barca cannot use is one that is empty (0 bytes), is not a SQLite file, was written in

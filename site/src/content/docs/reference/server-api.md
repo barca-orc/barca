@@ -621,10 +621,10 @@ says what to do, instead of a SQL error such as `Parse error: no such column`:
 ```json
 { "error": "the metadata DB .barca/envs/prod/metadata.db cannot be used: metadata schema version 2 is not supported by barca 0.28.0 (supports version 1 and legacy version 0); use a compatible Barca release. The database was not migrated or reset",
   "code": 3, "kind": "infra", "reason": "metadata_unusable",
-  "remediation": "Not a problem in your code. If a newer barca wrote this database, upgrade barca. Otherwise put a backup back with `barca state restore` (it moves .barca/envs/prod/metadata.db aside first), or stop every barca process using it and move .barca/envs/prod/metadata.db aside to start an empty history." }
+  "remediation": "Not a problem in your code. If a newer barca wrote this database, upgrade barca. Otherwise put a backup back with `barca state restore` (it moves .barca/envs/prod/metadata.db aside first), or start an empty history with `barca state reset` (the Reset database button in the web UI of a running `barca serve`), which moves .barca/envs/prod/metadata.db aside and prints how to undo it." }
 ```
 
-The UI shows the remediation under "Can't load pipeline".
+The UI shows the remediation under "Can't load pipeline", above its Reset database button.
  The HTTP status
 follows the kind: `usage` is `400` (parse and DAG errors, a target of the wrong kind, a bad
 request body), `404` for something that does not exist (an unknown node, run or route), `409`

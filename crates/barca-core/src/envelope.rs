@@ -128,7 +128,8 @@ pub fn metadata_remediation(path: &str) -> String {
     format!(
         "Not a problem in your code. If a newer barca wrote this database, upgrade barca. \
          Otherwise put a backup back with `barca state restore` (it moves {path} aside first), \
-         or stop every barca process using it and move {path} aside to start an empty history."
+         or start an empty history with `barca state reset` (the Reset database button in the \
+         web UI of a running `barca serve`), which moves {path} aside and prints how to undo it."
     )
 }
 
