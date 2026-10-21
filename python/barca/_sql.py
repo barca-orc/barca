@@ -41,17 +41,6 @@ _QUERYABLE = ("parquet", "json", "csv")
 DEFAULT_CACHE_DIR = os.path.join(".barca", "sql-cache")
 # Remote artifacts fetched at once.
 MAX_FETCHERS = 8
-# What identifies one version of an object, across s3fs, gcsfs, adlfs and memory://.
-_VERSION_KEYS = (
-    "size",
-    "ETag",
-    "etag",
-    "generation",
-    "LastModified",
-    "last_modified",
-    "updated",
-    "created",
-)
 
 
 def _quote_str(s: str) -> str:
@@ -118,8 +107,7 @@ def cache_path(cache_dir: str, uri: str) -> str:
 
 
 def _version(info: dict) -> str:
-    seen = {k: str(info[k]) for k in _VERSION_KEYS if info.get(k) is not None}
-    return json.dumps(seen, sort_keys=True)
+    return _storage.object_version(info)
 
 
 def fetch(uri: str, cache_dir: str) -> tuple[str, int]:

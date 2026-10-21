@@ -1,4 +1,5 @@
-"""Lazy inputs read a remote artifact in place: only what the step's query uses moves (#234).
+"""Lazy inputs read a remote artifact in place: only what the step's query uses moves (#234),
+and only once per machine: the ranges read are kept in `.barca/range-cache/` (#577).
 
 A step that annotates an input `duckdb.DuckDBPyRelation` or `pl.LazyFrame` is asking for the
 subset its query touches. With a remote store the worker used to download the whole object
@@ -63,6 +64,12 @@ class CountingStore(MemoryFileSystem):
     def get_file(self, rpath, lpath, **kwargs):
         self.downloads += 1
         return super().get_file(rpath, lpath, **kwargs)
+
+    def cat_file(self, path, start=None, end=None, **kwargs):
+        # A ranged GET, as barca's range cache fetches what it does not hold.
+        data = super().cat_file(path, start=start, end=end, **kwargs)
+        self.fetched += len(data)
+        return data
 
 
 @pytest.fixture
@@ -242,3 +249,93 @@ def test_the_users_own_remote_queries_keep_their_own_filesystem(store, tmp_path,
     registered = set(_duckdb.connection().list_filesystems())
     assert "memory" not in registered
     assert any(name.startswith("barca") for name in registered), registered
+
+
+def _range_cache_dirs() -> list[Path]:
+    root = Path(_storage.RANGE_CACHE_DIR)
+    return sorted(p for p in root.iterdir() if p.is_dir()) if root.is_dir() else []
+
+
+@pytest.mark.parametrize("body,frame_type", [(_DUCKDB_SUM, "duckdb"), (_POLARS_SUM, "polars_lazy")])
+def test_a_second_lazy_read_on_the_machine_fetches_nothing(
+    store, tmp_path, monkeypatch, body, frame_type
+):
+    """#577: the ranges a lazy input fetched are kept under `.barca/range-cache/<run hash>-...`
+    and serve the next read of the same object, in another worker process or a later run."""
+    _run_step(tmp_path, monkeypatch, body, "total", {"orders": SRC}, {"orders": frame_type})
+    first = store.step_fetched
+    assert first > 0
+    [kept] = _range_cache_dirs()
+    assert kept.name.startswith("h1-")
+    assert sum(f.stat().st_size for f in kept.iterdir()) == first
+    # As a new worker would: nothing in memory is reused (`_run_step` passes a new LRU).
+    store.fetched = 0
+    out = _run_step(tmp_path, monkeypatch, body, "total", {"orders": SRC}, {"orders": frame_type})
+    assert _artifacts.deserialize(out, "json") == sum(range(200000))
+    assert store.step_fetched == 0
+    assert store.step_downloads == 0
+
+
+def test_a_query_reading_more_fetches_only_what_is_not_kept(store, tmp_path, monkeypatch):
+    body = """
+        import duckdb
+
+        def total(orders: duckdb.DuckDBPyRelation):
+            return orders.aggregate("sum(a)").fetchone()[0]
+
+        def both(orders: duckdb.DuckDBPyRelation):
+            return orders.aggregate("sum(a), sum(c)").fetchone()[0]
+        """
+    _run_step(tmp_path, monkeypatch, body, "total", {"orders": SRC}, {"orders": "duckdb"})
+    one_column = store.step_fetched
+    store.fetched = 0
+    _run_step(tmp_path, monkeypatch, body, "both", {"orders": SRC}, {"orders": "duckdb"})
+    assert 0 < store.step_fetched
+    # Column `a` and the footer were kept: the second query fetched only column `c`.
+    store.fetched = 0
+    _run_step(tmp_path, monkeypatch, body, "both", {"orders": SRC}, {"orders": "duckdb"})
+    assert store.step_fetched == 0
+    assert one_column > 0
+
+
+def test_a_rewritten_object_is_kept_apart_and_fetched_again(store, tmp_path, monkeypatch):
+    """The cache is keyed by the run hash and the object's version, so a rewritten object at
+    the same path is never served from the ranges of the old one."""
+    body = """
+        import duckdb
+
+        def n(orders: duckdb.DuckDBPyRelation):
+            return orders.aggregate("count(*)").fetchone()[0]
+        """
+    _run_step(tmp_path, monkeypatch, body, "n", {"orders": SRC}, {"orders": "duckdb"})
+    duckdb.sql("copy (select 1::bigint as a) to 'one.parquet' (format parquet)")
+    store.put_file("one.parquet", SRC)
+    store.fetched = 0
+    out = _run_step(tmp_path, monkeypatch, body, "n", {"orders": SRC}, {"orders": "duckdb"})
+    assert _artifacts.deserialize(out, "json") == 1
+    assert store.step_fetched > 0
+    assert len(_range_cache_dirs()) == 2
+
+
+def test_an_evicted_range_is_fetched_again(store, tmp_path, monkeypatch):
+    _run_step(tmp_path, monkeypatch, _DUCKDB_SUM, "total", {"orders": SRC}, {"orders": "duckdb"})
+    first = store.step_fetched
+    for d in _range_cache_dirs():
+        for f in d.iterdir():
+            f.unlink()
+        d.rmdir()
+    store.fetched = 0
+    out = _run_step(
+        tmp_path, monkeypatch, _DUCKDB_SUM, "total", {"orders": SRC}, {"orders": "duckdb"}
+    )
+    assert _artifacts.deserialize(out, "json") == sum(range(200000))
+    assert store.step_fetched == first
+
+
+def test_the_range_cache_key_needs_a_version_and_a_run_hash():
+    info = {"size": 10, "ETag": '"abc"'}
+    key = _storage.range_cache_key("bucket/arts/n/abc123.parquet", info)
+    assert key is not None and key.startswith("abc123-")
+    assert _storage.range_cache_key("bucket/arts/n/abc123.parquet", {"size": 10}) is None
+    other = _storage.range_cache_key("bucket/arts/n/abc123.parquet", {**info, "ETag": '"def"'})
+    assert other != key

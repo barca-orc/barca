@@ -15,8 +15,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   (`os.environ[...]`, `os.environ.get(...)`, `os.getenv(...)`, pydantic settings fields), and
   reported as one `[barca] warning:` summary line per command, an `undeclared_env` item per
   variable in the `warnings` array, and `undeclared_env` on each `get`/`run`/`--dry-run` step and
-  `status` node (experimental). Run hashes do not change: switching such a variable still serves the cached
-  result, and the warning names the `env=` fix.
+  `status` node (experimental). Run hashes do not change: switching such a variable still serves
+  the cached result, and the warning names the `env=` fix.
 
 ### Bug Fixes
 
@@ -48,6 +48,13 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   On a 9-node project with two file sensors and a MinIO store on localhost (under `taskset`), a
   warm `barca get` took 216 ms with the store and 54 ms without before this change, and 43 ms
   and 42 ms after it: the store adds about 1 ms instead of 160 ms, with no helper started.
+
+- A lazy input read from the store (`duckdb.DuckDBPyRelation`, `pl.LazyFrame`) fetches its
+  byte ranges once per machine (#577). The ranges are kept in
+  `.barca/range-cache/<run_hash>-<version>/`, keyed by the result's run hash and the store
+  object's version, so a later run that reads the same ranges fetches nothing and a rewritten
+  object is never served from stale bytes. The cache size limit counts the directories and
+  evicts them with the leftovers, least recently used first.
 
 ### Testing
 

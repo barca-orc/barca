@@ -51,6 +51,7 @@ backups of the metadata database.
 | `.barca/metadata.db.base`, `.prev`, `.pull-*`, `.push-*` | Left by barca 0.25 and earlier, which shared history through the store. Not used. | Yes. |
 | `.barca/run-owners/<token>.fifo` | From 0.20.0: a marker (a named pipe, no data) that a barca process holds open while it has a run in flight. A killed run is recognised by its marker having nobody at the other end. The process removes it when its runs have ended; one left by a killed process is removed by a later run an hour after no `running` run names it. | When `barca history` shows no `running` run. While one does, its marker is what can show that it was killed. |
 | `.barca/sql-cache/` | With remote storage: copies of remote results that `barca sql` downloaded, laid out by URI (`sql-cache/s3/<bucket>/...`), each with a `.version` file. The first thing the cache size limit evicts, least recently used first. | Yes, always. |
+| `.barca/range-cache/<run_hash>-<version>/` | With remote storage: the byte ranges lazy inputs (`duckdb.DuckDBPyRelation`, `pl.LazyFrame`) read from a store object, one file per range, reused by later runs on this machine. Evicted with the leftovers, least recently used first. | Yes, always; the ranges are fetched again when read. |
 | `.barca/staging/<pid>/` | Temporary files of a running worker writing to a remote `@sink` or fetching a remote input. Directories of dead workers are removed when a worker starts. | Yes, when no barca command is running. |
 | `.barca/gc-state.json` | From 0.25: what the last full measurement of `.barca/` found, so the check after each command does not walk the artifact directories ([Cache size](#cache-size)). | Yes; the next check measures again. |
 | `.barca/.gitignore` | Written by barca, containing `*`, so git ignores everything under `.barca/`. | It is written again. |
@@ -165,7 +166,8 @@ until `.barca/` is at or below 80% of the limit:
 
 1. **Leftovers**: staging directories of processes that are no longer running, `*.moved-aside*`
    directories, artifact files no metadata row names (what `barca state reset` and
-   `barca state restore` leave behind), and `sql-cache/` copies (least recently used first).
+   `barca state restore` leave behind), `sql-cache/` copies and `range-cache/` directories
+   (least recently used first).
 2. **Superseded results**: a result whose node (or partition key) has a newer successful
    result. Oldest first.
 3. **Local copies the artifact store holds**: downloaded again when needed. Least recently read
