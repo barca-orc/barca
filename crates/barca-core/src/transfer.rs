@@ -147,9 +147,9 @@ pub struct TransferReport {
     pub failures: Vec<TransferFailure>,
     /// SHA-256 of each uploaded artifact, by the caller's key.
     pub hashes: HashMap<String, String>,
-    /// Fetches (key, store location) whose store copy does not have the
-    /// recorded hash. The store's copy was used.
-    pub mismatched: Vec<(String, String)>,
+    /// Fetches (key, store location, the store copy's SHA-256) whose store copy does not have
+    /// the recorded hash. The store's copy was used.
+    pub mismatched: Vec<(String, String, Option<String>)>,
 }
 
 /// A finished transfer: the local file's size and hash, and whether bytes moved
@@ -486,7 +486,7 @@ impl TransferClient {
                         report.bytes += t.bytes;
                     }
                     if t.mismatch {
-                        report.mismatched.push((p.key, p.store));
+                        report.mismatched.push((p.key, p.store, t.sha256));
                     }
                 }
                 Err(f) => report.failures.push(TransferFailure {

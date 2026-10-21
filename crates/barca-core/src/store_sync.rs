@@ -23,6 +23,9 @@ pub(crate) struct StoreSync {
     /// Base step id -> what was found, for each store copy fetched in this run that does not
     /// have its recorded hash. Put on the step reports when the run ends ([`crate::mismatch`]).
     pub(crate) mismatched: HashMap<String, String>,
+    /// Store location -> SHA-256 of the store's copy, for each of those fetches: the copy now in
+    /// use, recorded as the result's digest when the run ends ([`crate::db::adopt_store_digests`]).
+    pub(crate) adopted: Vec<(String, String)>,
     /// Local mirror paths of fetches the store answered with "no such object",
     /// until [`Self::take_missing`] collects them.
     missing: Vec<String>,
@@ -50,6 +53,7 @@ impl StoreSync {
             client,
             fetchable: HashMap::new(),
             mismatched: HashMap::new(),
+            adopted: Vec::new(),
             missing: Vec::new(),
             present: None,
             cancel,
@@ -198,7 +202,10 @@ impl StoreSync {
         // the same step overwrites it; the store's copy is as valid a result as the recorded
         // one. Say so rather than fail.
         let mut differing: Vec<(String, &str, usize)> = Vec::new();
-        for (node, at) in &report.mismatched {
+        for (node, at, sha256) in &report.mismatched {
+            if let Some(sha256) = sha256 {
+                self.adopted.push((at.clone(), sha256.clone()));
+            }
             let base = crate::StepId::parse(node).base_id().to_string();
             match differing.iter_mut().find(|(b, _, _)| *b == base) {
                 Some((_, _, count)) => *count += 1,

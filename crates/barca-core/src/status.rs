@@ -471,7 +471,8 @@ pub(crate) fn classify(
         (Some((size, sha)), true) => {
             if recorded.is_some_and(|r| r != sha) {
                 Copies::Mismatch(
-                    "this machine's copy is not the one recorded; get fetches the store's copy"
+                    "this machine's copy is not the one recorded; get fetches the store's copy and records \
+                     it"
                         .to_string(),
                 )
             } else if store.size_bytes.is_some_and(|s| s != size) {

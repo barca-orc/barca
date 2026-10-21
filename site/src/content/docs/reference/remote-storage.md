@@ -400,7 +400,7 @@ reason in `cache.reason` (WHY in the table):
 |---|---|---|---|
 | `local_only` | local only | here, not in the store (or its upload is pending) | uploads this machine's copy |
 | `store_only` | store only | in the store, not here | fetches the store's copy |
-| `mismatch` | mismatch | both are there and differ, or this machine's copy is not the recorded one | keeps the recorded copy and uploads it again |
+| `mismatch` | mismatch | both are there and differ, or this machine's copy is not the recorded one | when this machine's copy is the recorded one, uploads it again; otherwise fetches the store's copy and records its digest ("Checking a local copy against the store") |
 
 A result in neither place is `stale` with reason `artifact_missing`. A store that cannot be
 asked leaves the states as they are, with a note in `cache.detail`.
@@ -456,8 +456,14 @@ metadata DB. Barca uses that hash to decide whether a local copy is current:
   --refresh pipeline.py:total.` This is not an error and the exit code does not change: an
   artifact's path is `<node>/<run_hash>`, which identifies the computation and not the bytes,
   so a `--refresh`, or another project writing to the same store, overwrites the object.
-  `--refresh <file.py:name>` recomputes the step, uploads the new bytes over the object and
-  records their hash, which clears the warning.
+  Without a server, the run then records the store copy's hash as the result's: the store's
+  copy wins, so the warning is printed by this run only, and the next `barca get` and
+  `barca status` find the result `cached`. That is also how a `--refresh` killed after its
+  upload and before its result was recorded settles: the store and this machine hold the new
+  bytes, the record names the old ones, and the next `get` that returns or reads the result
+  records the new ones. `--refresh <file.py:name>` recomputes the step instead, uploads the new
+  bytes over the object and records their hash. With a server, its ledger keeps its record
+  ([`barca docs server-mode`](/reference/server-mode/)).
 
 The JSON result carries the same finding, so a script or agent does not have to read stderr:
 

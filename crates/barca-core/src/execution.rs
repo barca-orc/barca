@@ -1777,6 +1777,13 @@ async fn return_outputs(
         &session.state.skipped_bases,
         &mut session.store,
         &session.started.cancel,
+        // With a server, its ledger holds the record (#576).
+        session
+            .request
+            .cfg
+            .ledger
+            .is_none()
+            .then_some(session.request.cfg.db_path.as_str()),
     )
     .await?;
 
@@ -2149,6 +2156,7 @@ async fn finalize_outputs(
     skipped_bases: &std::collections::HashSet<String>,
     store: &mut Option<StoreSync>,
     cancel: &CancellationToken,
+    adopt_digests_in: Option<&str>,
 ) -> Result<
     (
         Vec<StepReport>,
@@ -2245,6 +2253,11 @@ async fn finalize_outputs(
             return Err(BarcaError::Other(e));
         }
         crate::mismatch::mark(dag, &mut step_reports, &s.mismatched);
+        // A fetched store copy that is not the recorded one was used: record its digest, so
+        // the finding is this run's only (#576).
+        if let Some(db_path) = adopt_digests_in {
+            db::adopt_store_digests(db_path, &s.adopted).await;
+        }
     }
 
     Ok((step_reports, outcomes, final_output, partitions))
