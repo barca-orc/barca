@@ -450,6 +450,29 @@ pub fn render_run(
     )
 }
 
+/// Width of the `barca history` TARGET column; longer targets end in `…`.
+const TARGET_WIDTH: usize = 24;
+
+/// A run's TARGET cell: its job's function names (`kpis`, `country_report,weekly_summary`), or
+/// `all` for a run without targets. Runs recorded before the job was stored show the target as
+/// typed. Cut to [`TARGET_WIDTH`] characters with a trailing `…`.
+pub fn history_target(run: &crate::db::RunRecord) -> String {
+    let names = match run.job.as_deref().or(run.target.as_deref()) {
+        None | Some("all") => "all".to_string(),
+        Some(ids) => ids
+            .split(',')
+            .map(|id| crate::telemetry::short_name(id.trim()))
+            .collect::<Vec<_>>()
+            .join(","),
+    };
+    if names.chars().count() > TARGET_WIDTH {
+        let cut: String = names.chars().take(TARGET_WIDTH - 1).collect();
+        format!("{cut}…")
+    } else {
+        names
+    }
+}
+
 pub fn render_history(
     runs: &[crate::db::RunRecord],
     total: usize,
@@ -480,16 +503,17 @@ pub fn render_history(
     // Table header.
     line!(
         rendered,
-        "{:<14} {:<7} {:<11} {:>5} {:>6} {:>6} {:<20}",
+        "{:<14} {:<7} {:<TARGET_WIDTH$} {:<11} {:>5} {:>6} {:>6} {:<20}",
         "RUN_ID",
         "CMD",
+        "TARGET",
         "STATUS",
         "STEPS",
         "CACHED",
         "TIME",
         "STARTED"
     );
-    line!(rendered, "{}", "-".repeat(77));
+    line!(rendered, "{}", "-".repeat(78 + TARGET_WIDTH));
     for r in runs {
         let elapsed_str = r
             .elapsed_seconds
@@ -497,9 +521,10 @@ pub fn render_history(
             .unwrap_or_else(|| "-".to_string());
         line!(
             rendered,
-            "{:<14} {:<7} {:<11} {:>5} {:>6} {:>6} {:<20}",
+            "{:<14} {:<7} {:<TARGET_WIDTH$} {:<11} {:>5} {:>6} {:>6} {:<20}",
             r.run_id,
             r.command,
+            history_target(r),
             r.status,
             r.steps_executed,
             r.steps_cached,
@@ -1074,4 +1099,50 @@ pub fn render_plan(result: &PlanResult) -> RenderedOutput {
         serde_json::to_string_pretty(result).unwrap()
     );
     rendered
+}
+
+#[cfg(test)]
+mod history_target_tests {
+    use super::history_target;
+
+    fn run(target: Option<&str>, job: Option<&str>) -> crate::db::RunRecord {
+        crate::db::RunRecord {
+            run_id: "r".into(),
+            command: "get".into(),
+            files: vec![],
+            target: target.map(str::to_string),
+            job: job.map(str::to_string),
+            status: "success".into(),
+            steps_total: None,
+            steps_executed: 0,
+            steps_cached: 0,
+            attempts: None,
+            started_at: String::new(),
+            finished_at: None,
+            elapsed_seconds: None,
+            triggered_by: None,
+            scheduled_at: None,
+            schedule_id: None,
+            client_run_id: None,
+        }
+    }
+
+    #[test]
+    fn the_job_by_function_name_else_the_typed_target_else_all() {
+        assert_eq!(history_target(&run(None, Some("all"))), "all");
+        assert_eq!(
+            history_target(&run(Some("kpis"), Some("p/r.py:kpis"))),
+            "kpis"
+        );
+        assert_eq!(
+            history_target(&run(Some("b,a"), Some("p.py:a,p.py:b"))),
+            "a,b"
+        );
+        // Rows recorded before the job was stored.
+        assert_eq!(history_target(&run(Some("p.py:kpis"), None)), "kpis");
+        assert_eq!(history_target(&run(None, None)), "all");
+        let long = history_target(&run(None, Some("p.py:country_report,p.py:weekly_summary")));
+        assert_eq!(long, "country_report,weekly_s…");
+        assert_eq!(long.chars().count(), 24);
+    }
 }

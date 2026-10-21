@@ -1,6 +1,6 @@
 # Task output and recorded stdout
 
-Status: implemented. Specification version: 1.
+Status: implemented. Specification version: 2 (2: `RUN_ID` is optional).
 Scope: local CLI get/run stdout routing and recorded-log inspection.
 Conformance: `python/tests/test_task_logs.py`, CLI contract/help snapshots,
 log transaction tests in `crates/barca-core/src/db.rs`.
@@ -12,7 +12,9 @@ contains only the selected result. JSON mode suppresses captured step stdout on 
 Other modes render each captured stdout line on stderr as `[<node_id>] <line>`. Framework
 agent lines remain `[barca]`-prefixed. Log capture and persistence do not depend on display.
 
-`barca logs RUN_ID [--step NAME] [--json|--pretty] [--env ENV]` reads local recorded stdout.
+`barca logs [RUN_ID] [--step NAME] [--json|--pretty] [--env ENV]` reads local recorded stdout.
+Without `RUN_ID` it reads the newest run in local history (running or finished) and names that
+run in one line on stderr; stdout is the same as with the id. No recorded run is exit 2.
 JSON is an array of objects with exactly `node_id` and `line`, both strings. No sequence
 field is exposed by this CLI. Text is the lines alone, each followed by newline, including
 blank lines. The shared CLI format-selection rule applies. Ordering is recorded arrival

@@ -7,6 +7,7 @@ runs[].command : string
 runs[].elapsed_seconds : null
 runs[].files : array
 runs[].finished_at : null
+runs[].job : null
 runs[].run_id : string
 runs[].schedule_id : null
 runs[].scheduled_at : null

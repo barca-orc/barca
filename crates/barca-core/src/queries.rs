@@ -80,6 +80,24 @@ pub async fn reconcile_run(
     db::reconcile_run(&cfg.db_path, run_id).await
 }
 
+/// The most recent run (the newest row of `barca history`), for `barca logs` without a run id.
+/// A usage error when no run is recorded in this environment.
+pub async fn latest_run(cfg: &crate::config::ResolvedConfig) -> Result<db::RunRecord, BarcaError> {
+    db::ensure_env_dirs(&cfg.env)?;
+    db::init_db(&cfg.db_path).await?;
+    db::get_recent_runs(&cfg.db_path, 1)
+        .await?
+        .into_iter()
+        .next()
+        .ok_or_else(|| {
+            BarcaError::Usage(
+                "no run is recorded in this environment yet\nRun `barca get` or `barca run` \
+                 first, then `barca logs`."
+                    .to_string(),
+            )
+        })
+}
+
 /// Read recorded stdout without loading user source or contacting remote state.
 pub async fn logs(
     cfg: &crate::config::ResolvedConfig,

@@ -10,6 +10,14 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Features
 
+- "What did my last run do?" is one command (#555). `barca history` has a TARGET column between
+  CMD and STATUS: the run's job by function name (`kpis`, `country_report,weekly_summary`), `all`
+  for a run without targets, cut at 24 characters with `…`. History JSON gains `job` (additive):
+  `all` or the resolved node ids, sorted and comma-separated, `null` for older runs; `--fields`
+  accepts it, and `GET /history` carries it (OpenAPI specification 7). `barca logs` without a
+  run id reads the most recent run and names it on stderr
+  (`barca: logs of the most recent run: <run_id> (run notify, success, started ...)`).
+
 - The web UI shows which pipelines and assets are running now, whoever started the run (the
   scheduler, `POST /runs` from another client, `barca get --server`, or a `barca get` / `barca run`
   in a shell on the same `.barca/`): a running node pulses on the graph and the pipeline page,
