@@ -133,8 +133,6 @@ barca.duckdb_connection().execute("SET threads = 4")   # runs once per worker pr
 - Everything is materialized between steps. To cache several results from one computation,
   define several assets or return the one you want cached.
 
-See also: `barca docs big-inputs`, `barca docs cache`, `barca docs examples/duckdb`.
-
 ## CSV outputs
 
 Use `@asset(serializer="csv")`, `@sensor(serializer="csv")` or
@@ -162,3 +160,5 @@ def orders() -> pd.DataFrame:
 ```
 
 The CSV boundary is specified in `specs/artifact-formats.md`.
+
+See also: `barca docs big-inputs`, `barca docs cache`, `barca docs examples/duckdb`.

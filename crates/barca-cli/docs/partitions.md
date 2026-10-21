@@ -107,8 +107,8 @@ barca get margin pipeline.py --partition '{"region":"apac"}'           # a JSON 
 - When a key fails, the run fails (exit 1, `failed_node` names the key). The keys that succeeded
   are returned; a failed key has no artifact and runs again on the next `get`.
 
-See also: `barca docs sinks` (one file per partition), `barca docs examples/partitions`.
-
 `barca plan` uses the same worker-pool size as execution: available cores, overridden
 by a positive `BARCA_POOL_SIZE`. Warnings sort by node, parameter and kind. Key previews
 list the first twenty keys in lexical order, independently of worker chunking.
+
+See also: `barca docs sinks` (one file per partition), `barca docs examples/partitions`.

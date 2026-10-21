@@ -66,6 +66,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   0.18.0 stamps (re-checked, including a multi-file example that needed a qualified import),
   and the comparison pages say their numbers are from 2026-06 and point at #65.
 
+- `barca docs` lists the manual in reading order (overview first, the contract last); the
+  overview's Topics list and Commands table are complete (`logs`, `state`, `version`), and every
+  topic, `cache` included, ends with its See also (#498).
+
 ## 0.28.1 (2026-10-21)
 
 ### Bug Fixes

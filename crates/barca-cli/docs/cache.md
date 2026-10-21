@@ -904,3 +904,6 @@ format version and refuses a database it does not support rather than rebuilding
 
 A barca release that changes how run hashes are computed recomputes the affected steps once, on
 the first run after upgrading; the release notes say so (`CHANGELOG.md`, GitHub Releases).
+
+See also: `barca docs remote`, `barca docs types`, `barca docs partitions`, `barca docs status`,
+`barca docs server-mode`, `barca docs contract`.

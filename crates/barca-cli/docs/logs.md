@@ -34,3 +34,5 @@ A task's returned value remains its run's final output, independent of its print
 Lines flushed before ordinary failure are retained. A process killed before emitting
 or flushing a line cannot promise that line. Logs are published at run completion;
 this command does not tail an in-flight worker. Writes of one run's log stream are atomic.
+
+See also: `barca docs tasks`, `barca docs status`, `barca docs agents`.
