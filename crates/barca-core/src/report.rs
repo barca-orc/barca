@@ -619,9 +619,16 @@ pub(crate) fn report_for(
                 word_run
             }
         }
-        Decision::Cached { oref, stale_root } => {
+        Decision::Cached {
+            oref,
+            stale_root,
+            held,
+        } => {
             r.run_hash = step.run_hashes.get(&display_id).cloned();
             r.artifact = Some(oref.path.clone());
+            if let Some(held) = held {
+                r.detail = Some(held.detail().to_string());
+            }
             if let Some(root) = stale_root {
                 r.warning = Some(stale_warning(&display_id, root, dry));
             }

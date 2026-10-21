@@ -9,7 +9,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use tokio::sync::Semaphore;
 
@@ -373,6 +373,11 @@ pub struct JobStatus {
     pub skipped_for: Option<String>,
     /// Why the last due tick was skipped: `in_flight` or `paused`.
     pub skip_reason: Option<&'static str>,
+    /// Consecutive failed ticks (RFC-0008 rule 9); persisted in `schedule_failures`.
+    pub failures: u32,
+    /// `Schedule(..., max_failures=N)`: at this many consecutive failed ticks the job is
+    /// skipped and reported `failing`.
+    pub max_failures: u32,
 }
 
 /// Cloneable application state shared across all axum handlers.
@@ -411,6 +416,12 @@ pub struct AppState {
     pub pauses: Arc<tokio::sync::OnceCell<RwLock<HashMap<String, db::SchedulePause>>>>,
     /// When this server started (unix seconds), for `GET /project`'s `deployed_at`.
     pub started_at: i64,
+    /// Why the metadata DB cannot be used, while it cannot: set when a read-only server finds
+    /// it unusable (it keeps serving) or the scheduler stops on a metadata error, cleared when a
+    /// read-only request reads it again. `GET /health` `metadata_error`.
+    pub metadata_error: Arc<RwLock<Option<String>>>,
+    /// Set when the scheduler stopped on an error; `GET /health` `scheduler_enabled`.
+    pub scheduler_stopped: Arc<AtomicBool>,
 }
 
 impl AppState {
@@ -432,11 +443,45 @@ impl AppState {
             dag_generation: Arc::new(AtomicU64::new(0)),
             pauses: Arc::new(tokio::sync::OnceCell::new()),
             started_at: chrono::Utc::now().timestamp(),
+            metadata_error: Arc::new(RwLock::new(None)),
+            scheduler_stopped: Arc::new(AtomicBool::new(false)),
         }
     }
 }
 
 impl AppState {
+    /// Whether this server fires `Schedule(...)` nodes: configured to (not `--no-schedule`,
+    /// not `--read-only`) and the scheduler has not stopped on an error.
+    pub fn scheduler_enabled(&self) -> bool {
+        self.config.schedule
+            && !self.config.read_only
+            && !self.scheduler_stopped.load(Ordering::Relaxed)
+    }
+
+    /// The scheduler stopped for `why`, a metadata DB error: `/health` says so.
+    pub fn scheduler_failed(&self, why: String) {
+        self.scheduler_stopped.store(true, Ordering::Relaxed);
+        *self.metadata_error.write().unwrap() = Some(why);
+    }
+
+    /// Record what reading the metadata DB found: an unusable database is reported on
+    /// `/health` until a read succeeds again. Other errors (a lock, I/O) leave it as it was.
+    pub fn note_metadata<T>(
+        &self,
+        read: Result<T, barca_core::BarcaError>,
+    ) -> Result<T, barca_core::BarcaError> {
+        match &read {
+            Ok(_) if !self.scheduler_stopped.load(Ordering::Relaxed) => {
+                *self.metadata_error.write().unwrap() = None;
+            }
+            Err(e @ barca_core::BarcaError::MetadataUnusable { .. }) => {
+                *self.metadata_error.write().unwrap() = Some(e.to_string());
+            }
+            _ => {}
+        }
+        read
+    }
+
     /// Whether the server is draining (or past it): no new run is admitted.
     pub fn is_draining(&self) -> bool {
         self.draining.is_cancelled()

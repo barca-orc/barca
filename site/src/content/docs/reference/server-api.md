@@ -101,6 +101,7 @@ client prints it as it would print the local command's.
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET`  | `/state` | Every node: its `barca status` entry plus typical durations and next run. |
+| `POST` | `/state/reset` | Start the metadata database over, as `barca state reset`: it moves aside to `metadata.db.reset-<UTC>`, nothing is deleted. See [Resetting the database](#resetting-the-database). |
 | `GET`  | `/groups` | Organizational groups as `[{id, name, description, members, output}]`; separate from execution edges. |
 | `GET`  | `/assets` | Every node as `barca list --json` shows it. |
 | `GET`  | `/assets/{name}` | One node's `barca list --json` entry with its `barca stats --json` body. |
@@ -304,8 +305,8 @@ GET /health
 
 ```json
 { "status": "ok", "version": "0.27.0", "api_version": 1, "env": "default", "store_uri": null,
-  "read_only": false, "scheduler": true, "load_errors": [],
-  "cache": { "size_bytes": 1830000000, "limit_bytes": 20000000000 } }
+  "read_only": false, "scheduler": true, "scheduler_enabled": true, "metadata_error": null,
+  "load_errors": [], "cache": { "size_bytes": 1830000000, "limit_bytes": 20000000000 } }
 ```
 
 `status` is `ok`, or `draining` from the first SIGTERM or SIGINT until the server exits (see
@@ -324,7 +325,14 @@ gains `cache: {size_bytes, limit_bytes, evicted_files, evicted_bytes}` when the 
 found `.barca/` over its limit.
 
 `scheduler` is `true` when this server fires `Schedule(...)` nodes: on by default, `false` with
-`--no-schedule` or `--read-only`.
+`--no-schedule` or `--read-only`. `scheduler_enabled` (from 0.28) is the same, and `false` once
+the scheduler stopped on an error; `metadata_error` then says why.
+
+`metadata_error` (from 0.28) is why the metadata DB cannot be used, while it cannot, and `null`
+otherwise. A writer server sets its database up before it binds, and exits 3 when it cannot,
+so on a writer it is set only when the scheduler stopped on a database error later. A
+`--read-only` server whose database is unusable (empty, not SQLite, a newer format, a malformed
+schema) keeps serving and reports it here; it goes back to `null` once a read succeeds again.
 
 `load_errors` is an additive array of `{file, error, affected_nodes}`. `file` names
 an unloaded source, `error` describes the failure, and `affected_nodes` names the
@@ -352,6 +360,37 @@ fire time in unix seconds for scheduled nodes. `cache` is the `barca status` cac
 reading artifact shapes starts a reader process, too slow for an endpoint the UI polls. The cache
 check reads a private copy of the metadata DB, so this endpoint never writes it.
 
+### Resetting the database
+
+```
+POST /state/reset      → { database, moved_to, moved, undo }
+```
+
+What the web UI's **Reset database** button calls (on the "Can't load pipeline" panel, and in
+the sidebar), behind a dialog that says what happens and how to undo it. It works as `barca state
+reset` does: under the database's lock, the metadata database and its `-wal` and `-shm` move to
+`metadata.db.reset-<UTC>` (and `<that>-wal`, `<that>-shm`) in the same directory, and an empty
+database takes its place, so the next request sees an empty history. Nothing is deleted;
+artifacts are left alone. A database that cannot be opened or migrated (the case that makes
+`/state` fail with `Database error: ...`) moves as it is. The server keeps no connection open
+between requests, so the next one opens the new file; the paused schedules and the finished runs
+it remembered are cleared with the database.
+
+```json
+{
+  "database": ".barca/metadata.db",
+  "moved_to": ".barca/metadata.db.reset-2026-10-20T18-02-11.482Z",
+  "moved": [".barca/metadata.db.reset-2026-10-20T18-02-11.482Z", ".barca/metadata.db.reset-2026-10-20T18-02-11.482Z-wal"],
+  "undo": "barca state restore --from .barca/metadata.db.reset-2026-10-20T18-02-11.482Z"
+}
+```
+
+`moved_to` and `undo` are `null` when there was no database. Undo with `undo`, run with the
+server stopped. `409` while a run is pending or running (this server's, or a local run's on this
+machine), naming it, with nothing changed; `403` under `--read-only`; `503` while the server
+drains. There is no authentication (`barca serve` has none by design): anyone who can open the UI
+can reset.
+
 ### Logs
 
 ```
@@ -365,8 +404,8 @@ empty list. A run in progress streams them as `log` events.
 
 The first SIGTERM or SIGINT starts a drain. Until the server exits:
 
-- `POST /runs` (except a `dry_run`) and the older `POST /run`, `POST /run/{target}` and
-  `POST /get/{target}` return `503` with the error envelope
+- `POST /runs` (except a `dry_run`), `POST /state/reset` and the older `POST /run`,
+  `POST /run/{target}` and `POST /get/{target}` return `503` with the error envelope
   (`"error": "this server is shutting down: ..."`, `kind: infra`) and a `Retry-After` header: the drain
   timeout in seconds, at least 1. No run is started.
 - `GET /health` returns `200` with `"status": "draining"`.
@@ -386,8 +425,9 @@ for supervisor grace periods.
 
 ### Read-only mode
 
-With `--read-only`, every route that runs, cancels or pauses (`POST /runs` other than a dry
-run, `DELETE /runs/{run_id}`, the schedule pause and resume, and the older trigger routes)
+With `--read-only`, every route that runs, cancels, pauses or resets (`POST /runs` other than a
+dry run, `DELETE /runs/{run_id}`, the schedule pause and resume, `POST /state/reset`, and the older
+trigger routes)
 returns `403`, the scheduler does not start, and every read goes through a private copy of the
 metadata DB — the database is never opened in place, created or written.
 
@@ -418,17 +458,31 @@ there are none (the same items as `result.warnings` above).
 ## Scheduling
 
 `barca serve` runs a cron scheduler for nodes declared with `freshness=Schedule("...")`. It is
-on by default; pass `--no-schedule` to turn it off. `Schedule` is the only freshness value the
-server acts on. `Always` and `Manual` are recorded and shown (`barca list`, `/assets`) and
-cause no runs.
+on by default; pass `--no-schedule` to turn it off.
 
 Each second, every job whose cron matches triggers a run through the same run pool as the
-`POST` endpoints:
+`POST` endpoints. The run's targets are the scheduled node and every `Always` node below it; the
+walk down goes past a `Manual` node, which is not updated, and stops at a node with its own
+`Schedule`. Each target is brought up to date, not forced:
 
-- **Assets and sensors** go through the `get` path, cache-aware. A sensor's tick runs the
-  sensor and does not trigger the assets that read it.
-- **Tasks** go through the `run` path. A tick reuses cached upstream assets, as
-  `barca run <task>` does; the older `POST /run/{task}` alias recomputes every upstream asset.
+- **The scheduled node.** A sensor is polled; an asset and its upstream cone are checked
+  against the cache; a task runs, reusing cached upstream assets as `barca run <task>` does
+  (the older `POST /run/{task}` alias recomputes every upstream asset).
+- **`Always` assets below** are computed when they have no cached result for their current run
+  hash.
+- **`Always` tasks below** run when their inputs changed since their last successful run (code,
+  an asset input's result, a sensor input's value), when a task they read ran successfully
+  since, or when they never ran.
+- **`Manual` nodes** are read as they are, never run by a tick. When one has never been
+  computed, the nodes that read it are reported as `skipped` steps with reason `blocked` (and
+  as `blocked` targets), and the tick is not an error on that account.
+
+A tick with `Always` nodes below its scheduled node is a multi-target run: its outcome in
+`GET /runs/{run_id}` has a `targets` entry per target and `steps` for all of them. A failing
+node stops only what depends on it; the other targets still run, and the run's `status` is then
+`failed`, its error envelope naming the first node that failed. `POST /runs` reads a `Manual`
+node as it is, as `barca get` and `barca run` do; the older `POST /get/{node}`,
+`POST /run/{task}` and `POST /run` compute `Manual` upstreams as before.
 
 Each scheduled run gets a `run_id`, is visible via `GET /runs/{run_id}`, and is written to
 `.barca/metadata.db` (`barca history`), like a run requested over HTTP. Independent runs
@@ -457,7 +511,10 @@ Each `ScheduleEntry` is:
   "skipped_for": "7c0d5e2a91f4",
   "skip_reason": "in_flight",
   "paused": false,
-  "paused_until": null
+  "paused_until": null,
+  "failures": 0,
+  "max_failures": 5,
+  "failing": false
 }
 ```
 
@@ -475,6 +532,17 @@ sensors, not tasks), and while the job is paused. `last_skipped` is the time of 
 tick (unix epoch seconds), `skip_reason` why (`in_flight` or `paused`) and `skipped_for` the
 `run_id` of the run that was in flight (`null` for a pause); they are `null` until a tick is
 skipped, and a restart clears them.
+
+`failures` (integer) is the number of consecutive failed ticks of the node, `max_failures`
+(integer) its cap from `Schedule(cron, max_failures=N)` (default 5), and `failing` (boolean)
+whether the count has reached the cap. While `failing` is `true` the node's ticks are skipped,
+and the server logs `[barca] pipeline.py:inbox failing: 3 consecutive failed ticks
+(max_failures=3); skipped until an explicit request or a change in its inputs`. The count is
+kept in the metadata DB and survives a restart. It resets on a successful tick, and when the
+scheduled node, a node that failed, or a direct input of a failed node succeeds in another run
+(an explicit request or a change in its inputs). A tick skipped while the job is paused or while
+a run of its node is in flight is not a failed tick and is not counted. A failing job that is
+also paused reports `skip_reason: "paused"`.
 
 Each scheduled run is recorded with `triggered_by: "schedule"`, the tick in `scheduled_at` and
 the job's id in `schedule_id` (`GET /runs/{run_id}`, `barca history --json`).
@@ -545,7 +613,19 @@ Every error body is the CLI's stderr error envelope ([CLI contract](/reference/c
   "remediation": "Run `barca list` to see available assets and tasks." }
 ```
 
-`kind` and `code` are those a local command exits with (`usage` 2, `infra` 3). The HTTP status
+`kind` and `code` are those a local command exits with (`usage` 2, `infra` 3). `reason` is
+present only on an error a client may handle on its own. `metadata_unusable` (from 0.28) means
+the metadata DB is there but this barca cannot use it; `error` names the file and `remediation`
+says what to do, instead of a SQL error such as `Parse error: no such column`:
+
+```json
+{ "error": "the metadata DB .barca/envs/prod/metadata.db cannot be used: metadata schema version 2 is not supported by barca 0.28.0 (supports version 1 and legacy version 0); use a compatible Barca release. The database was not migrated or reset",
+  "code": 3, "kind": "infra", "reason": "metadata_unusable",
+  "remediation": "Not a problem in your code. If a newer barca wrote this database, upgrade barca. Otherwise put a backup back with `barca state restore` (it moves .barca/envs/prod/metadata.db aside first), or start an empty history with `barca state reset` (the Reset database button in the web UI of a running `barca serve`), which moves .barca/envs/prod/metadata.db aside and prints how to undo it." }
+```
+
+The UI shows the remediation under "Can't load pipeline", above its Reset database button.
+ The HTTP status
 follows the kind: `usage` is `400` (parse and DAG errors, a target of the wrong kind, a bad
 request body), `404` for something that does not exist (an unknown node, run or route), `409`
 for a name that matches several nodes or a request that conflicts with a run's state

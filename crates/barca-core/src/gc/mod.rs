@@ -241,16 +241,21 @@ struct EnvDb {
     layout: Option<ArtifactLayout>,
 }
 
-/// Every environment with a metadata DB under `.barca/`.
+/// Every environment with a metadata DB under `.barca/`. An empty `metadata.db` records no
+/// results and is left alone (`serve` warns about a stray one).
 fn envs(project: &Project) -> Vec<EnvDb> {
+    let has_db = |dir: &Path| {
+        let db = dir.join("metadata.db");
+        db.is_file() && !crate::db::empty_file(&db.display().to_string())
+    };
     let mut names = Vec::new();
-    if project.barca.join("metadata.db").is_file() {
+    if has_db(&project.barca) {
         names.push(crate::config::DEFAULT_ENV.to_string());
     }
     if let Ok(entries) = std::fs::read_dir(project.barca.join("envs")) {
         let mut found: Vec<String> = entries
             .flatten()
-            .filter(|e| e.path().join("metadata.db").is_file())
+            .filter(|e| has_db(&e.path()))
             .filter_map(|e| e.file_name().to_str().map(String::from))
             .collect();
         found.sort();

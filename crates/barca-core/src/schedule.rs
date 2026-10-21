@@ -71,6 +71,12 @@ pub struct ScheduledJob {
     /// Parsed cron (5-field minute-granular, or 6-field seconds-granular),
     /// evaluated in the scheduler's configured timezone.
     pub cron: Cron,
+    /// The `Always` nodes a tick of this job reconciles in the same run
+    /// ([`crate::freshness::followers`]). Empty for a job built from summaries.
+    pub followers: Vec<String>,
+    /// `Schedule(..., max_failures=N)`: consecutive failed ticks before the job is skipped and
+    /// reported `failing`.
+    pub max_failures: u32,
 }
 
 /// Enumerate every node whose freshness is `Schedule(cron)` and parse each cron.
@@ -100,12 +106,28 @@ pub fn jobs_from_summaries(summaries: Vec<AssetSummary>) -> Vec<ScheduledJob> {
                 kind: s.kind,
                 cron_str: expr.0.clone(),
                 cron,
+                followers: Vec::new(),
+                max_failures: crate::freshness::DEFAULT_MAX_FAILURES,
             }),
             Err(e) => crate::errln!(
                 "[barca] skipping '{}': invalid cron {:?}: {e}",
                 s.id,
                 expr.0
             ),
+        }
+    }
+    jobs
+}
+
+/// The scheduled jobs of a loaded DAG, each with the `Always` nodes its ticks reconcile and its
+/// `max_failures`. This is what `barca serve` schedules; it is computed when the DAG is loaded
+/// (and again on a `--watch` reload), not per tick.
+pub fn jobs_from_dag(dag: &crate::dag::Dag) -> Vec<ScheduledJob> {
+    let mut jobs = jobs_from_summaries(queries::list_assets_from_dag(dag));
+    for job in &mut jobs {
+        job.followers = crate::freshness::followers(dag, &job.id);
+        if let Some(n) = dag.get_node(&job.id).and_then(|n| n.extracted.max_failures) {
+            job.max_failures = n;
         }
     }
     jobs

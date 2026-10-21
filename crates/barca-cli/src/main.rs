@@ -520,6 +520,11 @@ async fn run_cli(
                     .await
                     .map_err(engine)
             }
+            StateCommand::Reset { yes, format, env } => {
+                state_reset_cmd(env.as_deref(), yes, is_json(format))
+                    .await
+                    .map_err(engine)
+            }
         },
         Cli::Doctor { files, format, env } => {
             doctor_cmd(files, env.as_deref(), &python, is_json(format)).await

@@ -874,7 +874,7 @@ pub fn render_explain(
 
 pub fn first_multi_failure(result: &MultiResult) -> Option<crate::BarcaError> {
     // The first failed target becomes the run's error: exit 1 with the error envelope.
-    if let Some((name, t)) = result.targets.iter().find(|(_, t)| t.status != "success") {
+    if let Some((name, t)) = result.targets.iter().find(|(_, t)| t.failed()) {
         return Some(crate::BarcaError::WorkerFailed(Box::new(
             crate::FailedStep {
                 node: t.failed_node.clone().unwrap_or_else(|| name.clone()),

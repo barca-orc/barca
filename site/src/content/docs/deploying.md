@@ -32,7 +32,7 @@ HTTP API or the CLI's `--server` flag; the work executes on that server's machin
 
 ```bash
 # On the server, from the project directory; install the pipeline's dependencies too.
-uv add 'barca==0.27.0'
+uv add 'barca==0.28.0'
 uv run barca serve pipeline.py --timezone utc
 ```
 
@@ -104,13 +104,13 @@ network. An nginx upstream can then be `http://barca:8274/`, with no shared netw
 
 ## In a container
 
-This example pins barca 0.27.0. It has two services: barca, and an nginx that shares
+This example pins barca 0.28.0. It has two services: barca, and an nginx that shares
 barca's network namespace so that it can reach `127.0.0.1:8274`.
 
 ```dockerfile
 # Dockerfile
 FROM python:3.13-slim
-RUN pip install --no-cache-dir --only-binary=:all: 'barca==0.27.0'
+RUN pip install --no-cache-dir --only-binary=:all: 'barca==0.28.0'
 WORKDIR /project
 CMD ["barca", "serve", "--timezone", "utc"]
 ```
@@ -160,7 +160,7 @@ server {
 ```
 $ docker compose up -d
 $ curl -s http://127.0.0.1:8080/health
-{"api_version":1,"cache":{"limit_bytes":3351192780,"size_bytes":284484},"env":"default","load_errors":[],"read_only":false,"scheduler":true,"status":"ok","store_uri":null,"version":"0.27.0"}
+{"api_version":1,"cache":{"limit_bytes":3351192780,"size_bytes":284484},"env":"default","load_errors":[],"metadata_error":null,"read_only":false,"scheduler":true,"scheduler_enabled":true,"status":"ok","store_uri":null,"version":"0.28.0"}
 ```
 
 `docker compose ps` shows the `barca` service as `healthy` once the first check passes, and
@@ -194,7 +194,19 @@ What each part is for:
   timeout. With `docker stop` that is `-t 40`; in Kubernetes, `terminationGracePeriodSeconds`
   (default 30) should exceed it too.
 - **The health check.** `GET /health` returns 200 with the JSON above when the server is up.
-  While it drains it still returns 200, with `"status": "draining"`.
+  While it drains it still returns 200, with `"status": "draining"`. Alert on
+  `scheduler_enabled: false` for a server that should schedule, and on a non-null
+  `metadata_error`.
+- **The metadata DB.** The first line `serve` prints names the environment, the artifact store
+  and the database with its format, e.g. `[barca] env prod (--env); artifact store local
+  (.barca/envs/prod/artifacts); metadata .barca/envs/prod/metadata.db (db format 1)`. Check it
+  names the environment you meant: with `default_env` in `barca.toml` and no `--env`, it is that
+  one. A writer server that cannot set the database up (empty, not SQLite, written by a newer
+  barca, a malformed schema, or not openable) exits 3 before it binds, naming the file and what
+  to do, so the restart policy and the health check show it; before 0.28 it kept serving with
+  the scheduler off. A `--read-only` admin server keeps serving and reports the error in
+  `metadata_error`. An empty or invalid `.barca/metadata.db` left beside the env's database
+  gets a warning naming both; remove it.
   The check runs inside the container, so it can use `127.0.0.1`. The slim image has no
   `curl`, so the check uses Python.
 - **The port.** With the default loopback address, publishing barca's own port
@@ -227,7 +239,7 @@ For an Alpine core deployment, use the same Compose configuration with this imag
 
 ```dockerfile
 FROM python:3.13-alpine
-RUN pip install --no-cache-dir --only-binary=:all: 'barca==0.27.0'
+RUN pip install --no-cache-dir --only-binary=:all: 'barca==0.28.0'
 WORKDIR /project
 CMD ["barca", "serve", "--timezone", "utc"]
 ```

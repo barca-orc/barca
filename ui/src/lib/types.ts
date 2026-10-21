@@ -37,6 +37,7 @@ export type { CacheStatus } from './generated/CacheStatus'
 export type { PartitionState } from './generated/PartitionState'
 export type { LastMaterialization } from './generated/LastMaterialization'
 export type { Durations } from './generated/Durations'
+export type { ResetResult } from './generated/ResetResult'
 
 import type { LoadError } from './generated/LoadError'
 
@@ -54,6 +55,10 @@ export interface Health {
   read_only: boolean
   /** Whether this server fires `Schedule(...)` nodes. */
   scheduler: boolean
+  /** `scheduler`, and false once the scheduler stopped on an error. */
+  scheduler_enabled: boolean
+  /** Why the metadata DB cannot be used, while it cannot; null otherwise. */
+  metadata_error: string | null
   /** Unloaded sources and graph-invalid definitions; healthy node routes remain available. */
   load_errors: LoadError[]
   /** Major version of the HTTP API; a client refuses another. */
@@ -76,6 +81,8 @@ export interface ErrorEnvelope {
   node?: string | null
   traceback?: string | null
   artifact_dir?: string | null
+  /** A stable name for an error a client may handle: `metadata_unusable`. Absent otherwise. */
+  reason?: 'metadata_unusable'
 }
 
 /**
@@ -112,6 +119,12 @@ export interface ScheduleJob {
   paused: boolean
   /** Unix seconds when a timed pause ends; null for an open-ended pause. */
   paused_until: number | null
+  /** Consecutive failed ticks (RFC-0008); kept across restarts. */
+  failures: number
+  /** `Schedule(cron, max_failures=N)`, default 5. */
+  max_failures: number
+  /** `failures >= max_failures`: ticks are skipped until an explicit request or an input change. */
+  failing: boolean
 }
 
 /** POST /runs — `202 { run_id }`, the database run id. */

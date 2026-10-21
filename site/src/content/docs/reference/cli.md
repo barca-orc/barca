@@ -57,7 +57,8 @@ barca sql "<query>" [file.py|dir/ ...] [--json] [-l N | --all]
                                                Query cached results with DuckDB (experimental)
                                                (install: uv add 'barca[sql]')
 barca state backups [--json]                  List the metadata backups, local and in the store
-barca state restore [--from N|NAME]           Put a metadata backup back (the current DB is kept aside)
+barca state restore [--from N|NAME|PATH]      Put a metadata backup back (the current DB is kept aside)
+barca state reset [--yes]                     Start the metadata DB over (the old one is moved aside)
 barca docs [topic] [--all] [--json]           Built-in manual
 barca version                                 Print version
 barca --help                                  Show help
@@ -662,6 +663,8 @@ barca state backups                  # newest first: # NAME WHERE SIZE ROWS RUN
 barca state backups --json           # {backups: [{index, name, where, size_bytes, run_id, rows, digest, agree, barca_version, db_format}], local_dir, store}
 barca state restore                  # put the newest backup back
 barca state restore --from 2         # by index; or --from 2026-10-14T18-02-11.482Z-3f9a1c2e
+barca state reset --yes              # move .barca/metadata.db aside to metadata.db.reset-<UTC>, start empty
+barca state restore --from .barca/metadata.db.reset-2026-10-20T18-02-11.482Z  # undo a reset
 ```
 
 `restore` checks the copy first (a whole SQLite file, integrity, barca's tables, a usable
@@ -671,6 +674,15 @@ restored and from where, and `--json` adds `{restored, from, source, pre_restore
 on stdout. It never runs by itself. Exit 2: no backup, an unknown `--from`, or a copy that fails
 the check (nothing is changed). Exit 3: `barca serve` is running on the environment. See
 [Remote storage](/reference/remote-storage/#backups-and-restore).
+
+`reset` (experimental) needs no store: it moves the database and its `-wal` and `-shm` aside to
+`.barca/metadata.db.reset-<UTC>` in the same directory and creates an empty one, for a database
+that cannot be opened or migrated or a history you want to start over. Nothing is deleted and
+artifacts are left alone. It asks first in a terminal; `--yes` skips the question and is required
+when stdin is not a terminal (exit 2 otherwise). `--json` prints `{database, moved_to, moved,
+undo}`. Exit 3: a run is in progress on this machine, or `barca serve` is running on the
+environment (use its UI's **Reset database** button or `POST /state/reset`). Undo with
+`barca state restore --from <the moved file>`, which also takes any database file's path.
 
 ## docs
 
@@ -769,7 +781,7 @@ barca 0.27.0
 
 ## --env
 
-`get`, `run`, `status`, `sql`, `history`, `stats`, `serve`, `state backups` and `state restore` accept `--env <name>` (default:
+`get`, `run`, `status`, `sql`, `history`, `stats`, `serve`, `state backups`, `state restore` and `state reset` accept `--env <name>` (default:
 `BARCA_ENV`, then `default_env` in `barca.toml`, then `default`). `plan` and `list` read no
 state and reject it. Each environment has its own cache, artifacts, history and remote
 location. `get`, `run` and `serve` print the environment and artifact store once at startup

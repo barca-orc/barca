@@ -3,7 +3,7 @@ title: 'RFC-0008: Freshness Propagation in barca serve'
 description: 'What Always and Manual do at run time: a scheduled tick brings the Always nodes below it up to date in one run; Manual is refreshed by hand only and pins itself.'
 ---
 
-- **Status:** Accepted, implementation in 0.28.0. Nothing of it has shipped in 0.27.0: `Always` and `Manual` are still parsed and shown only, and `max_failures=` does not exist yet.
+- **Status:** Implemented (0.28.0). A partitioned `Manual` node is not pinned yet (section 4.6).
 - **Date:** 2026-10-07 (accepted 2026-10-14)
 - **Touches:** HTTP server | barca-core
 - **Supersedes / Related:** [RFC-0001](/rfcs/0001-node-kinds-and-freshness/) (defines `Always`/`Manual`/`Schedule`; this RFC gives the first two their run-time meaning), [RFC-0004](/rfcs/0004-http-server-api/) (the scheduler and its per-job rules). Issues #253 and #80; closed attempt #261. Decisions recorded in [DIRECTION.md](https://github.com/barca-orc/barca/blob/main/DIRECTION.md#decided-october-2026).
@@ -243,6 +243,25 @@ a task.
   #253; see section 11.
 - **A task with no recorded run.** It is out of date, so it fires at the first tick that
   reaches it (rule 10).
+
+### 4.6 Implementation notes
+
+Implemented in #253 (PR #470). Decisions taken there, on 2026-10-20:
+
+- **A `Manual` target is pinned too.** `barca get baseline` without `--refresh baseline`
+  returns its current result, with the stale note; one that was never computed is the same
+  usage error (exit 2) as a never-computed upstream. Only `--refresh <name>` or `--refresh-all`
+  recomputes it. A `Manual` task named as the target of `barca run` runs, since `--refresh`
+  names assets only.
+- **Ticks reach through `Manual` nodes.** As in section 3.3 (`publish` reads only `baseline`),
+  the walk from a scheduled node goes past a `Manual` node, which is not a target, and the
+  up-to-date rules decide what runs. Rule 7's "only through `Always` nodes" is read that way.
+- **Failures are counted per scheduled node** (section 4.2): a tick counts as failed when any
+  of its targets failed, and the job is skipped at its `max_failures`.
+- **`max_failures` is not hashed.** Freshness does not count in the definition hash, the cron
+  included, so neither does `max_failures` (section 4.2 assumed the cron did).
+- A partitioned `Manual` node is not pinned yet, and a partitioned task below a tick always
+  fires.
 
 ## 5. Determinism, Caching & Testing
 

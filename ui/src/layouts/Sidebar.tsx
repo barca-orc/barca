@@ -1,6 +1,7 @@
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router'
 import { Layers } from 'lucide-react'
-import { StatusDot } from '@/components'
+import { ResetDatabaseButton, StatusDot } from '@/components'
+import { useHealth } from '@/hooks/useHealth'
 import { useAssetStates } from '@/hooks/useAssetStates'
 import { severityStatus } from '@/lib/assetTable'
 import { pipelineSummaries } from '@/lib/pipeline'
@@ -11,6 +12,7 @@ const FILTERABLE = ['/assets', '/graph', '/tasks', '/sensors', '/schedules']
 
 export function Sidebar() {
   const { data: nodes } = useAssetStates()
+  const { data: health } = useHealth()
   const pipelines = pipelineSummaries(nodes ?? [])
   const location = useLocation()
   const navigate = useNavigate()
@@ -74,7 +76,10 @@ export function Sidebar() {
           </button>
         ))}
       </div>
-      <div className="barca-side-foot"><Link className="barca-nav" to="/docs">Docs</Link></div>
+      <div className="barca-side-foot">
+        <Link className="barca-nav" to="/docs">Docs</Link>
+        <ResetDatabaseButton readOnly={health?.read_only ?? false} />
+      </div>
     </aside>
   )
 }

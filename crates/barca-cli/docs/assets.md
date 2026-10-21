@@ -16,7 +16,7 @@ def clean(data: dict) -> dict:
     return {"x": data["x"] + 1}
 
 
-@asset(freshness=Manual)                   # recorded freshness; CLI caching is unchanged
+@asset(freshness=Manual)                   # computed only when named in --refresh
 def pinned() -> dict:
     return {"x": 0}
 
@@ -68,7 +68,7 @@ Star-import dependency hashing remains conservative.
 |---|---|
 | `inputs={"param": upstream}` | Wire upstream nodes to parameters. The param name must match a function parameter. |
 | `name="..."` | Explicit node name (the default is the function name). |
-| `freshness=` | `Always` (default), `Manual`, or `Schedule("<cron>")`. |
+| `freshness=` | `Always` (default), `Manual`, or `Schedule("<cron>", max_failures=5)`. See `barca docs scheduling`. |
 | `serializer=` | Force `"json"`, `"pickle"`, `"parquet"` or `"csv"`. See `barca docs types`. |
 | `partitions=` | Fan one asset out over keys. See `barca docs partitions`. |
 | `timeout_seconds=` | Per-attempt time limit (default 300). |
@@ -99,7 +99,7 @@ These are all the arguments barca's decorators and helpers take:
 | `partitions_from()` | one | none |
 | `collect()` | one | none |
 | `asset_ref()` | one | none |
-| `Schedule()` | one | none |
+| `Schedule()` | one | `max_failures` |
 
 Every argument in the table does something, on each decorator it is listed for: on `@task` and
 `@sensor`, `partitions=` runs the function once per key and `serializer=` forces the format its
@@ -372,8 +372,9 @@ turns the warning off.
 `@sensor` takes the arguments in the table under "Accepted arguments" (`@asset`'s without
 `inputs`). `@sensor` observes external state and returns `(update_detected: bool, value)`. Sensors have no
 inputs. Their default freshness is `Manual`; `Always` is also accepted. Only
-`Schedule(...)` causes automatic ticks under `barca serve`. `Always` and `Manual` do not
-change execution or cache policy (`barca docs scheduling`).
+`Schedule(...)` gives a sensor ticks of its own under `barca serve`, and a tick also updates the
+`Always` nodes below it (`barca docs scheduling`). Whatever its freshness, a sensor is polled
+whenever a run needs its value: `Manual` does not pin a sensor.
 
 A sensor always runs, and its `value` is part of the run hash of every asset that reads it: when
 the value changes, those assets and everything downstream of them re-run; when it is the same,

@@ -55,6 +55,9 @@ function job(id: string, over: Partial<ScheduleJob> = {}): ScheduleJob {
     skip_reason: null,
     paused: false,
     paused_until: null,
+    failures: 0,
+    max_failures: 5,
+    failing: false,
     ...over,
   }
 }

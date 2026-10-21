@@ -185,16 +185,37 @@ impl ResolvedConfig {
         if self.env_source != EnvSource::DefaultEnv && !self.remote_artifacts() {
             return None;
         }
+        Some(self.env_and_store())
+    }
+
+    /// The line `serve` prints on stderr at startup, always: [`Self::startup_line`]'s env and
+    /// store, then the metadata DB and its format, e.g. `; metadata .barca/metadata.db (db format
+    /// 1)`. `format` is `None` when there is no database yet (`serve` creates none at startup)
+    /// and `Some(Err(()))` when it cannot be used.
+    pub fn serve_startup_line(&self, format: Option<Result<i64, ()>>) -> String {
+        let format = match format {
+            Some(Ok(n)) => format!("db format {n}"),
+            Some(Err(())) => "unusable".to_string(),
+            None => "not created yet".to_string(),
+        };
+        format!(
+            "{}; metadata {} ({format})",
+            self.env_and_store(),
+            self.db_path
+        )
+    }
+
+    fn env_and_store(&self) -> String {
         let store = if self.remote_artifacts() {
             crate::transfer::diagnostic_uri(&self.artifact_root)
         } else {
             format!("local ({})", self.local_artifact_dir)
         };
-        Some(format!(
+        format!(
             "[barca] env {} ({}); artifact store {store}",
             self.env,
             self.env_source.describe()
-        ))
+        )
     }
 }
 
@@ -951,6 +972,29 @@ uri = "abfss://cont@acct.dfs.core.windows.net/proj"
         assert_eq!(
             cfg.startup_line().unwrap(),
             "[barca] env dev (--env); artifact store s3://<redacted>@bucket/proj/dev/artifacts"
+        );
+    }
+
+    #[test]
+    fn the_serve_startup_line_adds_the_metadata_db_and_its_format() {
+        let _e = clean_env();
+        let dir = tempfile::tempdir().unwrap();
+        // `serve` always prints it, even with nothing configured.
+        let cfg = resolve_in(None, dir.path()).unwrap();
+        assert_eq!(
+            cfg.serve_startup_line(Some(Ok(1))),
+            "[barca] env default (built-in default); artifact store local (.barca/artifacts); \
+             metadata .barca/metadata.db (db format 1)"
+        );
+        let cfg = resolve_in(Some("prod"), dir.path()).unwrap();
+        assert_eq!(
+            cfg.serve_startup_line(None),
+            "[barca] env prod (--env); artifact store local (.barca/envs/prod/artifacts); \
+             metadata .barca/envs/prod/metadata.db (not created yet)"
+        );
+        assert!(
+            cfg.serve_startup_line(Some(Err(())))
+                .ends_with("(unusable)")
         );
     }
 

@@ -203,7 +203,8 @@ pub(crate) fn json_output(cli: &Cli) -> bool {
         | Cli::Gc { format, .. } => is_json(*format),
         Cli::State { command } => match command {
             crate::StateCommand::Backups { format, .. }
-            | crate::StateCommand::Restore { format, .. } => is_json(*format),
+            | crate::StateCommand::Restore { format, .. }
+            | crate::StateCommand::Reset { format, .. } => is_json(*format),
         },
         Cli::Serve { .. } | Cli::Version => false,
     }

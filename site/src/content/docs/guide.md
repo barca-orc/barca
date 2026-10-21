@@ -461,10 +461,11 @@ barca serve job.py --timezone utc     # scheduler, HTTP API and web UI on 127.0.
 
 A scheduled task runs on every tick. A scheduled asset is brought up to date on every tick,
 so it runs only if it is not cached: outside data still has to come in through a sensor
-(section 4). The other two freshness values, `Always` (the default) and `Manual`, are
-recorded and shown by `barca list` and have no effect at run time today.
+(section 4). The same tick also brings up to date every `Always` node below the scheduled
+one (`Always` is the default), so a schedule on a sensor keeps what reads it current. A `Manual`
+node is refreshed by hand only: ticks skip it, and what reads it uses its last result.
 
-[Scheduling](/scheduling/) covers what a tick does and the limits, and
+[Scheduling](/scheduling/) covers what a tick does, `Always` and `Manual`, and failed ticks, and
 [Deploying](/deploying/) covers running the server.
 
 ## Where to go next

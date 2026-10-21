@@ -112,7 +112,7 @@ def envelope(proc: subprocess.CompletedProcess) -> dict:
         (
             "@asset(freshness=Schedule(cron='0 5 * * *'))",
             "`cron` is passed by keyword to Schedule(), which takes it by position only. "
-            "Schedule() takes no keyword arguments",
+            "Schedule() accepts: max_failures",
             'Pass the value as the first argument, without `cron=`, like `Schedule("0 5 * * *")`. '
             "See `barca docs scheduling`.",
         ),

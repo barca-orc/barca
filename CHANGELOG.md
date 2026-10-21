@@ -8,6 +8,57 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Breaking
+
+- **Breaking:** unscheduled `Always` nodes below a scheduled node, tasks included, now run at its
+  ticks under `barca serve` (RFC-0008, #253): a tick of a scheduled node is one run that brings it
+  and every `Always` node below it up to date. To keep a node out of its ticks, make it `Manual` or
+  give it its own `Schedule`.
+
+- **Breaking:** `barca get`, `barca run`, `POST /runs` (so `--server` too) and ticks no longer
+  recompute a stale `Manual` node, upstream or the target of `barca get`, unless `--refresh` names
+  it (RFC-0008, #253): they read its latest result and print
+  `[barca] note: <name> is Manual and stale; ...`. Name it in `--refresh` (or use
+  `--refresh-all`) to recompute it. A `Manual` node that has never been computed is a usage error
+  (exit 2) naming that command. A `Manual` task named as the target of `barca run` runs. The older
+  `POST /get/{target}`, `POST /run/{target}` and `POST /run` aliases are unchanged.
+
+- **Breaking:** a writer `barca serve` whose metadata DB cannot be set up exits 3 before it binds,
+  naming the file and what to do (upgrade barca, `barca state restore`, or `barca state reset`),
+  where it used to keep serving with the scheduler off and one `scheduler disabled` line (#513).
+  A database barca cannot use (empty, not SQLite, a newer format, a malformed schema) is now one
+  error, `reason: "metadata_unusable"` in the envelope (new optional key; CLI and HTTP), instead
+  of a raw SQL error such as `Parse error: no such column`; `get` and `run` on a 0-byte
+  `metadata.db` now exit 3 instead of starting a new history in it. A `--read-only` server keeps
+  serving and reports the error. `GET /health` gains `scheduler_enabled` and `metadata_error`.
+  `serve`'s startup line is always printed and ends with `; metadata <path> (db format <n>)`, and
+  a stray empty or invalid `.barca/metadata.db` beside a named env's database gets a warning
+  naming both. A writer now waits for another process's DB lock (up to 60 s) before it binds.
+
+### Features
+
+- `barca serve` gives `Always` and `Manual` their run-time meaning (RFC-0008, #253). A tick of a
+  scheduled node is one run with several targets: an asset is computed when it has no result for
+  its current code and inputs, a task fires when its last successful run used other inputs (or a
+  task it reads ran since, or it never ran). The tick's run keeps `triggered_by: schedule` and
+  `scheduled_at`, and its `barca.run` span names every target. A failing scheduled node retries at
+  every tick up to the new `Schedule(cron, max_failures=N)` (default 5), then is skipped and
+  reported `failing` (`failures`, `max_failures`, `failing` in `GET /schedule`) until an explicit
+  request or an input change; ticks skipped while a job is paused or still in flight do not count.
+  Consecutive failures are kept in a new `schedule_failures` table, added in place within metadata
+  format 1.
+
+- **Reset the metadata database** from the web UI and with `barca state reset` (#508). A
+  **Reset database** button on the "Can't load pipeline" panel and in the sidebar, behind a dialog
+  that says what happens and how to undo it, calls the new `POST /state/reset`. The database and
+  its `-wal` and `-shm` move aside to `metadata.db.reset-<UTC>` in the same directory and an empty
+  one takes its place; nothing is deleted, artifacts stay, and a database that cannot be opened
+  or migrated moves as it is. Refused with `409` (exit 3 on the CLI) while a run is pending or
+  running, `403` under `--read-only`, `503` while draining. `barca state reset` asks in a
+  terminal (`--yes` otherwise) and refuses while `barca serve` holds the environment. Undo with
+  `barca state restore --from <the moved file>`: `--from` now also takes a database file's path.
+  Experimental.
+
 ### Bug Fixes
 
 - Usage errors point at `barca list` only when the target is the problem (#492): an unknown or
@@ -87,9 +138,9 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 - RFC statuses say what shipped (#502): the RFC template gains `Implemented (X.Y.Z)` and
   `Partially implemented (X.Y.Z)`; RFC-0007 is Implemented (0.27.0), with the route aliases'
-  removal left; RFC-0008 is Accepted, implementation in 0.28.0; RFC-0009, 0010 and 0011 are
+  removal left; RFC-0008 is Implemented (0.28.0); RFC-0009, 0010 and 0011 are
   Implemented (0.26.0) and RFC-0012 Implemented (0.25.0); RFC-0006 is Superseded in part.
-  `deploying.md` pins 0.27.0, the guide, scheduling and core-constraints pages lose their
+  `deploying.md` pins 0.28.0, the guide, scheduling and core-constraints pages lose their
   0.18.0 stamps (re-checked, including a multi-file example that needed a qualified import),
   and the comparison pages say their numbers are from 2026-06 and point at #65.
 

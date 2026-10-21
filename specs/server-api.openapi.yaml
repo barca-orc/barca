@@ -2,12 +2,12 @@
 openapi: 3.1.0
 info:
   title: Barca current HTTP API
-  version: '4'
-  description: 'Normative current wire contract; specification version 4 is independent of package versions.
+  version: '5'
+  description: 'Normative current wire contract; specification version 5 is independent of package versions.
     Scope: registered barca-server routes and fallback responses. No authentication is implemented (security
     is empty); read-only is an operating mode. The run contract and inspection routes of RFC-0007 section
     3.4 are shipped (POST /runs, GET /runs/{run_id}, its events, output and cancel; /list, /nodes, /history,
-    /stats/{name}, /project), and so are its ledger routes (POST /ledger/lookup, POST /ledger/runs). Every error body is the CLI error
+    /stats/{name}, /project), and so are its ledger routes (POST /ledger/lookup, POST /ledger/runs) and POST /state/reset. Every error body is the CLI error
     envelope. Routes marked deprecated are aliases kept for one minor release. Conformance: crates/barca-server/tests/openapi.rs
     and python/tests/test_http_openapi_client.py.'
 jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
@@ -43,7 +43,9 @@ paths:
         response stays 200. Read-only mode refuses mutating routes; it does not restrict inspection access.
         load_errors reports unloaded sources and excluded dependent definitions from
         the selected served graph. Healthy loads return an empty array; healthy
-        definitions remain inspectable beside those diagnostics.
+        definitions remain inspectable beside those diagnostics. scheduler_enabled is
+        false when the scheduler does not run or stopped on an error; metadata_error says why
+        the metadata DB cannot be used, while it cannot.
     head:
       summary: Server liveness and operating modes (headers only)
       operationId: head_health
@@ -707,6 +709,65 @@ paths:
         '405':
           description: Registered path with unsupported method; Allow header identifies supported methods
           headers: *id018
+  /state/reset:
+    post:
+      summary: Start the metadata database over (the old one is moved aside, never deleted)
+      operationId: post_state_reset
+      description: 'Moves the metadata database and its -wal and -shm aside to <db>.reset-<UTC> in
+        the same directory and creates an empty database in its place, as barca state reset does.
+        Run history, cache records, partition keys and schedule pauses start over; artifacts are
+        left alone. Works on a database that cannot be opened or migrated (it is moved as it is).
+        Undo with barca state restore --from <moved_to> while the server is stopped. No request body.'
+      responses:
+        '200':
+          description: What was moved and how to undo it
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResetResult'
+        '403':
+          description: Read-only server refuses mutation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: A run is pending or running (this server's, or a local run's on this machine); the
+            error names it and nothing was changed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: The database could not be moved aside or created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: The server is draining before it stops
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                pattern: ^[1-9][0-9]*$
+              description: Seconds to wait before retrying, the server's drain timeout
+                (at least 1)
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          headers:
+            Allow:
+              schema:
+                type: string
+              description: Methods accepted by this route
   /schedule:
     get:
       summary: Scheduler job registry
@@ -2083,6 +2144,14 @@ components:
         node: *id042
         traceback: *id042
         artifact_dir: *id042
+        reason:
+          description: A stable name for an error a client may handle on its own, present
+            only when barca has one. metadata_unusable means the metadata DB is there but this
+            barca cannot use it (empty, not SQLite, a newer format or a malformed schema); the
+            error names the file and the remediation says what to do.
+          type: string
+          enum:
+          - metadata_unusable
     Health:
       type: object
       additionalProperties: false
@@ -2095,6 +2164,8 @@ components:
       - api_version
       - env
       - store_uri
+      - scheduler_enabled
+      - metadata_error
       properties:
         status:
           description: ok, or draining once the server was told to stop (SIGTERM or
@@ -2108,6 +2179,17 @@ components:
         read_only: &id043
           type: boolean
         scheduler: *id043
+        scheduler_enabled:
+          type: boolean
+          description: Whether the scheduler is running. scheduler (configured on, not
+            --no-schedule or --read-only), and false once the scheduler stopped on an error.
+        metadata_error:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Why the metadata DB cannot be used, while it cannot; null otherwise. A
+            writer whose database cannot be set up at startup exits 3 instead of serving; a
+            read-only server keeps serving and reports it here until a read succeeds again.
         load_errors:
           type: array
           items:
@@ -2750,6 +2832,9 @@ components:
       - skip_reason
       - paused
       - paused_until
+      - failures
+      - max_failures
+      - failing
       properties:
         id: *id003
         cron: *id003
@@ -2803,6 +2888,18 @@ components:
           - type: 'null'
           description: When the pause ends (unix epoch seconds); null when paused until resumed, or not
             paused.
+        failures:
+          description: Consecutive failed ticks (RFC-0008); persisted across restarts
+          type: integer
+          minimum: 0
+        max_failures:
+          description: Schedule(..., max_failures=N), default 5
+          type: integer
+          minimum: 1
+        failing:
+          description: failures >= max_failures; ticks are skipped until an explicit request
+            or an input change
+          type: boolean
     Log:
       type: object
       additionalProperties: false
@@ -2994,6 +3091,35 @@ components:
           ok: *id043
           outcome:
             $ref: '#/components/schemas/Outcome'
+    ResetResult:
+      type: object
+      additionalProperties: false
+      required:
+      - database
+      - moved_to
+      - moved
+      - undo
+      properties:
+        database:
+          description: The metadata database, now a new empty one
+          type: string
+        moved_to:
+          description: Where the database it replaced was moved (<db>.reset-<UTC>); null when there was
+            none
+          anyOf:
+          - type: string
+          - type: 'null'
+        moved:
+          description: Every file moved, the database first, then its -wal and -shm when they were there
+          type: array
+          items:
+            type: string
+        undo:
+          description: The command that puts the moved database back, with barca serve stopped; null when
+            nothing was moved
+          anyOf:
+          - type: string
+          - type: 'null'
     PauseResult:
       description: The job's GET /schedule entry, or, when the scheduler has not published it (scheduling
         is off or starting), what the pause is.
