@@ -42,6 +42,10 @@ pub enum ServeError {
     Timezone(String),
     #[error("source loading failed: {0}")]
     Load(#[from] barca_core::BarcaError),
+    /// A writer server could not set up its metadata DB; nothing was bound. `barca serve`
+    /// exits 3 with this error's envelope.
+    #[error("{0}")]
+    Metadata(barca_core::BarcaError),
 }
 
 /// Check a `--timezone` value: `local`, `utc`, or an IANA name such as `America/New_York`.
@@ -120,6 +124,9 @@ pub async fn serve(config: ServeConfig) -> Result<Stopped, ServeError> {
         .then(|| (config.python.clone(), config.resolved.clone()));
 
     let state = AppState::new(config);
+    // Before the sources load and before anything binds: a writer whose metadata DB cannot be
+    // set up stops here (exit 3), instead of serving with its scheduler off (#513).
+    metadata_startup(&state).await?;
     state.loaded_dag().await?;
 
     // With a store, back the metadata DB up every minute it changed (RFC-0009). Runs back up
@@ -231,6 +238,81 @@ pub async fn serve(config: ServeConfig) -> Result<Stopped, ServeError> {
         telemetry.finish().await;
     }
     Ok(stopped)
+}
+
+/// Set up (writer, when the file exists) or check (read-only) the metadata DB, and print the startup line naming it
+/// and its format. A writer that cannot use its database fails with [`ServeError::Metadata`];
+/// a read-only server keeps serving and reports the error on `/health` (`metadata_error`).
+async fn metadata_startup(state: &AppState) -> Result<(), ServeError> {
+    use barca_core::{BarcaError, db};
+    let cfg = &state.config.resolved;
+    let path = cfg.db_path.clone();
+    let format = if state.config.read_only {
+        db::probe_metadata(&path).await
+    } else if !std::path::Path::new(&path).exists() {
+        // Nothing to check: the first run (or the scheduler) creates it, as before.
+        Ok(None)
+    } else {
+        let set_up = match db::ensure_env_dirs(&cfg.env) {
+            Ok(_) => db::init_db_as(&path, &path).await.map(Some),
+            Err(e) => Err(e),
+        };
+        // A lock or I/O failure names the database too.
+        set_up.map_err(|e| match e {
+            BarcaError::Db(msg) => {
+                BarcaError::Db(format!("cannot set up the metadata DB {path}: {msg}"))
+            }
+            BarcaError::Io(io) => {
+                BarcaError::Db(format!("cannot set up the metadata DB {path}: {io}"))
+            }
+            e => e,
+        })
+    };
+    barca_core::errln!(
+        "{}",
+        cfg.serve_startup_line(match &format {
+            Ok(Some(n)) => Some(Ok(*n)),
+            Ok(None) => None,
+            Err(_) => Some(Err(())),
+        })
+    );
+    stray_root_db_warning(cfg);
+    match format {
+        Ok(_) => Ok(()),
+        Err(e) if !state.config.read_only => Err(ServeError::Metadata(e)),
+        Err(e) => {
+            let fix = match &e {
+                BarcaError::MetadataUnusable { path, .. } => {
+                    format!(" {}", barca_core::envelope::metadata_remediation(path))
+                }
+                _ => String::new(),
+            };
+            barca_core::errln!(
+                "[barca] warning: {e}; serving read-only without its history (GET /health \
+                 metadata_error).{fix}"
+            );
+            *state.metadata_error.write().unwrap() = Some(e.to_string());
+            Ok(())
+        }
+    }
+}
+
+/// Warn when this server uses a named environment's database and the default environment's
+/// `.barca/metadata.db` is there but empty or not a database: a stray file, often left by a
+/// container that started once without `--env`, that is easy to mistake for this one.
+fn stray_root_db_warning(cfg: &barca_core::config::ResolvedConfig) {
+    let root = barca_core::db::env_local_paths(barca_core::config::DEFAULT_ENV).db_path;
+    if cfg.db_path == root {
+        return;
+    }
+    if let Some(why) = barca_core::db::unusable_file(&root) {
+        barca_core::errln!(
+            "[barca] warning: {root} is not this server's metadata DB (env {} uses {}) and \
+             cannot be used ({why}); remove it if nothing else needs it",
+            cfg.env,
+            cfg.db_path
+        );
+    }
 }
 
 /// Once a minute, evict if `.barca/` is over its size limit ([`barca_core::gc::checkpoint`]).

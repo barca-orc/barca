@@ -19,10 +19,11 @@ The default follows the usual terminal/pipe output choice. Exit 0 means every ch
 exit 3 means at least one prerequisite failed, with the normal error envelope on stderr.
 Argument errors still exit 2. Check names and provider-specific `data` are experimental.
 
-`get`, `run` and `serve` also print the selected environment and artifact store once at
-startup, on stderr, when the environment comes from `default_env` in `barca.toml` or a store
-is configured: `[barca] env prod (default_env in barca.toml); artifact store <store>`
-(`barca docs cache`, "Environments").
+`get` and `run` also print the selected environment and artifact store once at startup, on
+stderr, when the environment comes from `default_env` in `barca.toml` or a store is configured:
+`[barca] env prod (default_env in barca.toml); artifact store <store>` (`barca docs cache`,
+"Environments"). `serve` always prints it, with the metadata DB and its format added
+(`barca docs scheduling`, "The metadata DB at startup").
 
 The Python probe has a 30-second overall deadline. It lists stores and looks up the
 identity behind the selected credentials where supported: AWS STS caller, Azure token

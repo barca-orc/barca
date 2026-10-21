@@ -2983,7 +2983,11 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
                 );
                 publish_error = Some(why);
             }
-            Err(e @ (BarcaError::Cancelled | BarcaError::Db(_))) => return Err(e),
+            Err(
+                e @ (BarcaError::Cancelled
+                | BarcaError::Db(_)
+                | BarcaError::MetadataUnusable { .. }),
+            ) => return Err(e),
             Err(e) => {
                 let e = e.to_string();
                 let e = e.lines().next().unwrap_or_default().to_string();

@@ -95,6 +95,14 @@ pub enum BarcaError {
     #[error("Database error: {0}")]
     Db(String),
 
+    /// The metadata DB at `path` is there but this barca cannot use it: it is empty, not a
+    /// SQLite file, written by a newer release, or its schema is malformed. Infra (exit 3);
+    /// its envelope's `reason` is `metadata_unusable`. A lock or I/O failure stays [`Db`].
+    ///
+    /// [`Db`]: BarcaError::Db
+    #[error("{}", metadata_unusable(path, why))]
+    MetadataUnusable { path: String, why: String },
+
     /// The caller's mistake: the command or its configuration is wrong (task/asset misuse,
     /// unknown `--refresh` name, invalid config). Re-running the same invocation cannot
     /// succeed; the CLI exits 2.
@@ -104,6 +112,14 @@ pub enum BarcaError {
     /// Anything else: barca or its environment failed (remote state, worker spawn, I/O).
     #[error("{0}")]
     Other(String),
+}
+
+fn metadata_unusable(path: &str, why: &str) -> String {
+    if path.is_empty() {
+        format!("the metadata DB cannot be used: {why}")
+    } else {
+        format!("the metadata DB {path} cannot be used: {why}")
+    }
 }
 
 /// A step that failed permanently, as reported by its worker.

@@ -3,11 +3,13 @@
 import fcntl
 import json
 import subprocess
+import time
+import urllib.request
 
 import pytest
 from barca.api import _find_binary
 
-from .test_serve_robustness import Server, _env, wait_for
+from .test_serve_robustness import Server, _env, _free_port, wait_for
 
 PIPELINE = """from pathlib import Path
 from barca import asset, task, asset_ref, Schedule
@@ -119,32 +121,50 @@ def test_watch_repair_and_break_refresh_one_selected_graph(project):
         server.stop()
 
 
-def test_watch_repair_during_scheduler_startup_db_admission_is_not_lost(project):
+def test_watch_repair_during_startup_db_admission_is_not_lost(project):
+    # A writer sets its metadata DB up before it binds (#513), so while another process holds
+    # the DB lock it waits, unbound. A repair made meanwhile is in the graph it then schedules.
+    # A database to admit: a writer with none yet creates none at startup.
+    seed = project / "seed.py"
+    seed.write_text("from barca import asset\n@asset()\ndef seed(): return 1\n")
+    created = subprocess.run(
+        [_find_binary(), "get", "seed", "seed.py"], cwd=project, env=_env(), capture_output=True
+    )
+    assert created.returncode == 0, created.stderr
+    seed.unlink()
     metadata = project / ".barca"
-    metadata.mkdir()
-    server = None
+    port = _free_port()
+    log = project / "serve.log"
     with (metadata / "metadata.db.lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
+        proc = subprocess.Popen(
+            [_find_binary(), "serve", ".", "--watch", "--port", str(port)],
+            cwd=project,
+            stdout=subprocess.DEVNULL,
+            stderr=log.open("w"),
+            env=_env(),
+        )
         try:
-            server = Server(project, ".", "--watch")
-            wait_for(
-                lambda: "scheduling 1 task:" in server.log.read_text(),
-                "initial schedule selected before DB admission",
-            )
+            time.sleep(1.0)
+            assert proc.poll() is None, log.read_text()
+            assert "serving on" not in log.read_text(), "it binds only after DB admission"
             (project / "broken.py").write_text(REPAIRED)
-            wait_for(lambda: errors(server) == [], "repair while scheduler DB admission is blocked")
-            assert "broken.py:bad" in loaded(server)
             fcntl.flock(lock, fcntl.LOCK_UN)
+            wait_for(lambda: "serving on" in log.read_text(), "the server to bind")
+
+            def schedule() -> list:
+                url = f"http://127.0.0.1:{port}/schedule"
+                with urllib.request.urlopen(url, timeout=10) as resp:
+                    return json.loads(resp.read())
+
             wait_for(
-                lambda: any(
-                    job["id"] == "broken.py:bad" for job in server.request("GET", "/schedule")[1]
-                ),
-                "startup repair reaches scheduler on its next tick",
+                lambda: any(job["id"] == "broken.py:bad" for job in schedule()),
+                "the repair reaches the scheduler",
             )
         finally:
             fcntl.flock(lock, fcntl.LOCK_UN)
-            if server is not None:
-                server.stop()
+            proc.kill()
+            proc.wait(timeout=30)
 
 
 def test_all_broken_sources_are_inspectable_without_fake_nodes(project):

@@ -434,10 +434,13 @@ pub async fn run_scheduler(state: AppState) {
     let db_path = match db::ensure_env_dirs(&state.config.resolved.env) {
         Ok(_) => {
             let path = state.config.resolved.db_path.clone();
+            // `serve` initialized it before binding and exits 3 when it cannot; this is for a
+            // caller that spawned the scheduler on its own, or a database broken since.
             if let Err(error) = db::init_db(&path).await {
                 barca_core::errln!(
                     "[barca] scheduler disabled: metadata initialization failed: {error}"
                 );
+                state.scheduler_failed(error.to_string());
                 return;
             }
             Some(path)
@@ -468,6 +471,7 @@ pub async fn run_scheduler(state: AppState) {
                 barca_core::errln!(
                     "[barca] scheduler disabled: cannot read schedule history: {error}"
                 );
+                state.scheduler_failed(format!("cannot read schedule history: {error}"));
                 return;
             }
         },

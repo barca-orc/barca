@@ -43,7 +43,9 @@ paths:
         response stays 200. Read-only mode refuses mutating routes; it does not restrict inspection access.
         load_errors reports unloaded sources and excluded dependent definitions from
         the selected served graph. Healthy loads return an empty array; healthy
-        definitions remain inspectable beside those diagnostics.
+        definitions remain inspectable beside those diagnostics. scheduler_enabled is
+        false when the scheduler does not run or stopped on an error; metadata_error says why
+        the metadata DB cannot be used, while it cannot.
     head:
       summary: Server liveness and operating modes (headers only)
       operationId: head_health
@@ -2083,6 +2085,14 @@ components:
         node: *id042
         traceback: *id042
         artifact_dir: *id042
+        reason:
+          description: A stable name for an error a client may handle on its own, present
+            only when barca has one. metadata_unusable means the metadata DB is there but this
+            barca cannot use it (empty, not SQLite, a newer format or a malformed schema); the
+            error names the file and the remediation says what to do.
+          type: string
+          enum:
+          - metadata_unusable
     Health:
       type: object
       additionalProperties: false
@@ -2095,6 +2105,8 @@ components:
       - api_version
       - env
       - store_uri
+      - scheduler_enabled
+      - metadata_error
       properties:
         status:
           description: ok, or draining once the server was told to stop (SIGTERM or
@@ -2108,6 +2120,17 @@ components:
         read_only: &id043
           type: boolean
         scheduler: *id043
+        scheduler_enabled:
+          type: boolean
+          description: Whether the scheduler is running. scheduler (configured on, not
+            --no-schedule or --read-only), and false once the scheduler stopped on an error.
+        metadata_error:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Why the metadata DB cannot be used, while it cannot; null otherwise. A
+            writer whose database cannot be set up at startup exits 3 instead of serving; a
+            read-only server keeps serving and reports it here until a read succeeds again.
         load_errors:
           type: array
           items:

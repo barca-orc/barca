@@ -24,9 +24,8 @@ pub(crate) async fn serve_cmd(
     if let Some(secs) = drain_timeout {
         resolved.drain_timeout_secs = secs;
     }
-    if let Some(line) = resolved.startup_line() {
-        barca_core::errln!("{line}");
-    }
+    // `serve` prints its startup line (env, store and the metadata DB) once the database is
+    // set up.
     let config = barca_server::ServeConfig {
         files: files.iter().map(|p| p.display().to_string()).collect(),
         host,
@@ -39,10 +38,11 @@ pub(crate) async fn serve_cmd(
         read_only,
     };
     let secs = config.resolved.drain_timeout_secs;
-    match barca_server::serve(config)
-        .await
-        .map_err(|e| engine(barca_core::BarcaError::Other(e.to_string())))?
-    {
+    match barca_server::serve(config).await.map_err(|e| match e {
+        // Exit 3 with the database named and what to do (#513).
+        barca_server::ServeError::Metadata(e) => engine(e),
+        e => engine(barca_core::BarcaError::Other(e.to_string())),
+    })? {
         barca_server::Stopped::Drained => Ok(()),
         // Exit 1, so deploy tooling can tell a forced stop from a clean drain.
         barca_server::Stopped::Forced { cancelled } => {

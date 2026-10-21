@@ -13,7 +13,8 @@ use serde_json::{Value, json};
 
 /// `GET /health` — liveness (or `draining`), version, the API version a client checks, the
 /// environment and artifact store this server uses, whether it is read-only, whether it runs
-/// the scheduler, and the cache size against its limit. No core work.
+/// the scheduler (and whether it is still running), why the metadata DB cannot be used if it
+/// cannot, and the cache size against its limit. No core work.
 pub async fn health(State(state): State<AppState>) -> Json<Value> {
     let cfg = &state.config.resolved;
     Json(json!({
@@ -30,6 +31,10 @@ pub async fn health(State(state): State<AppState>) -> Json<Value> {
         // Whether this server fires `Schedule(...)` nodes: the same rule `serve`
         // uses to start the scheduler (on unless --no-schedule or --read-only).
         "scheduler": state.config.schedule && !state.config.read_only,
+        // `scheduler`, and false once the scheduler stopped on an error.
+        "scheduler_enabled": state.scheduler_enabled(),
+        // Why the metadata DB cannot be used, while it cannot; null otherwise.
+        "metadata_error": *state.metadata_error.read().unwrap(),
         // `.barca/` against its size limit, as last measured after a run or on the minute
         // checkpoint (RFC-0012); null before the first measurement or with the limit off.
         "cache": barca_core::gc::last_measured()
@@ -49,20 +54,24 @@ pub(crate) struct SnapshotDb {
 }
 
 pub(crate) async fn snapshot_db(state: &AppState) -> Result<SnapshotDb, ApiError> {
-    let (snapshot, scratch, path) =
-        match db::DbSnapshot::take(&state.config.resolved.db_path).await? {
-            Some(s) => {
-                let path = s.path().to_string();
-                (Some(s), None, path)
-            }
-            None => {
-                let dir = tempfile::tempdir()
-                    .map_err(|e| BarcaError::Db(format!("failed to create scratch dir: {e}")))?;
-                let path = dir.path().join("metadata.db").display().to_string();
-                (None, Some(dir), path)
-            }
-        };
-    db::init_db(&path).await?;
+    Ok(state.note_metadata(snapshot_of(&state.config.resolved.db_path).await)?)
+}
+
+async fn snapshot_of(db_path: &str) -> Result<SnapshotDb, BarcaError> {
+    db::directory_check(db_path)?;
+    let (snapshot, scratch, path) = match db::DbSnapshot::take(db_path).await? {
+        Some(s) => {
+            let path = s.path().to_string();
+            (Some(s), None, path)
+        }
+        None => {
+            let dir = tempfile::tempdir()
+                .map_err(|e| BarcaError::Db(format!("failed to create scratch dir: {e}")))?;
+            let path = dir.path().join("metadata.db").display().to_string();
+            (None, Some(dir), path)
+        }
+    };
+    db::init_db_as(&path, db_path).await?;
     Ok(SnapshotDb {
         _snapshot: snapshot,
         _scratch: scratch,
@@ -77,9 +86,9 @@ pub async fn state(State(state): State<AppState>) -> Result<Json<Vec<NodeState>>
     let cfg = &state.config;
     let zone = crate::scheduler::zone_of(cfg);
     let dag = state.current_dag().await?;
-    Ok(Json(
-        node_states_in(&cfg.resolved, &dag, &cfg.python, &zone).await?,
-    ))
+    Ok(Json(state.note_metadata(
+        node_states_in(&cfg.resolved, &dag, &cfg.python, &zone).await,
+    )?))
 }
 
 /// Every node's [`NodeState`], in topological order: its `barca status` entry
@@ -107,7 +116,12 @@ async fn node_states_in(
     python: &std::path::Path,
     zone: &crate::scheduler::Zone,
 ) -> Result<Vec<NodeState>, BarcaError> {
+    db::directory_check(&cfg.db_path)?;
     let snapshot = db::DbSnapshot::take(&cfg.db_path).await?;
+    // A database this release cannot use is one error naming it, not a failed query.
+    if let Some(s) = &snapshot {
+        db::init_db_as(s.path(), &cfg.db_path).await?;
+    }
     let scratch = tempfile::tempdir()
         .map_err(|e| BarcaError::Db(format!("failed to create scratch dir: {e}")))?;
     let mut snap_cfg = cfg.clone();

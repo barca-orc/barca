@@ -27,12 +27,20 @@ class ApiError extends Error {
   status: number
   /** The error envelope's `remediation`: what to do about it, when the server says. */
   remediation: string | null
+  /** The envelope's `reason`, e.g. `metadata_unusable`, when the server has one. */
+  reason: string | null
 
-  constructor(status: number, message: string, remediation: string | null = null) {
+  constructor(
+    status: number,
+    message: string,
+    remediation: string | null = null,
+    reason: string | null = null,
+  ) {
     super(message)
     this.name = 'ApiError'
     this.status = status
     this.remediation = remediation
+    this.reason = reason
   }
 }
 
@@ -44,15 +52,21 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!res.ok) {
     let message = res.statusText
     let remediation: string | null = null
+    let reason: string | null = null
     try {
       // Every error body is the CLI error envelope `{error, code, kind, remediation, ...}`.
-      const body = (await res.json()) as { error?: string; remediation?: string | null }
+      const body = (await res.json()) as {
+        error?: string
+        remediation?: string | null
+        reason?: string
+      }
       if (body.error) message = body.error
       if (body.remediation) remediation = body.remediation
+      if (body.reason) reason = body.reason
     } catch {
       // non-JSON error body; keep statusText
     }
-    throw new ApiError(res.status, message, remediation)
+    throw new ApiError(res.status, message, remediation, reason)
   }
   return res.json() as Promise<T>
 }

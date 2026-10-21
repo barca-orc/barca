@@ -248,8 +248,13 @@ fn spec_matches_router_paths_and_methods_and_all_schemas_compile() {
         &json!({"node_id":"p.py:a", "run_hash":"h", "created_at":"2026-10-15 00:00:00"})
     ));
     let health = validator(&json!({"$ref":"#/components/schemas/Health"}));
-    let ok = json!({"status":"ok","version":"1","api_version":1,"env":"default","store_uri":null,"read_only":false,"scheduler":false,"load_errors":[]});
+    let ok = json!({"status":"ok","version":"1","api_version":1,"env":"default","store_uri":null,"read_only":false,"scheduler":false,"load_errors":[],"scheduler_enabled":false,"metadata_error":null});
     assert!(health.is_valid(&ok));
+    let mut unusable = ok.clone();
+    unusable["metadata_error"] = json!("the metadata DB .barca/metadata.db cannot be used: x");
+    assert!(health.is_valid(&unusable));
+    unusable["metadata_error"] = json!(1);
+    assert!(!health.is_valid(&unusable));
     let mut draining = ok.clone();
     draining["status"] = json!("draining");
     assert!(health.is_valid(&draining));
@@ -768,8 +773,10 @@ async fn ambiguous_targets_and_snapshot_failure_keep_error_envelopes() {
     std::fs::create_dir(&not_a_database).unwrap();
     cfg.resolved.db_path = not_a_database.display().to_string();
     let broken_store = app(cfg);
-    checked(&broken_store, "GET", "/runs", "/runs", 500).await;
-    checked(&broken_store, "GET", "/health", "/health", 200).await;
+    let error = checked(&broken_store, "GET", "/runs", "/runs", 500).await;
+    assert_eq!(error["reason"], "metadata_unusable", "{error}");
+    let health = checked(&broken_store, "GET", "/health", "/health", 200).await;
+    assert!(health["metadata_error"].is_string(), "{health}");
 }
 
 #[tokio::test]

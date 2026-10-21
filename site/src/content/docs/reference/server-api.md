@@ -304,8 +304,8 @@ GET /health
 
 ```json
 { "status": "ok", "version": "0.27.0", "api_version": 1, "env": "default", "store_uri": null,
-  "read_only": false, "scheduler": true, "load_errors": [],
-  "cache": { "size_bytes": 1830000000, "limit_bytes": 20000000000 } }
+  "read_only": false, "scheduler": true, "scheduler_enabled": true, "metadata_error": null,
+  "load_errors": [], "cache": { "size_bytes": 1830000000, "limit_bytes": 20000000000 } }
 ```
 
 `status` is `ok`, or `draining` from the first SIGTERM or SIGINT until the server exits (see
@@ -324,7 +324,14 @@ gains `cache: {size_bytes, limit_bytes, evicted_files, evicted_bytes}` when the 
 found `.barca/` over its limit.
 
 `scheduler` is `true` when this server fires `Schedule(...)` nodes: on by default, `false` with
-`--no-schedule` or `--read-only`.
+`--no-schedule` or `--read-only`. `scheduler_enabled` (from 0.28) is the same, and `false` once
+the scheduler stopped on an error; `metadata_error` then says why.
+
+`metadata_error` (from 0.28) is why the metadata DB cannot be used, while it cannot, and `null`
+otherwise. A writer server sets its database up before it binds, and exits 3 when it cannot,
+so on a writer it is set only when the scheduler stopped on a database error later. A
+`--read-only` server whose database is unusable (empty, not SQLite, a newer format, a malformed
+schema) keeps serving and reports it here; it goes back to `null` once a read succeeds again.
 
 `load_errors` is an additive array of `{file, error, affected_nodes}`. `file` names
 an unloaded source, `error` describes the failure, and `affected_nodes` names the
@@ -545,7 +552,19 @@ Every error body is the CLI's stderr error envelope ([CLI contract](/reference/c
   "remediation": "Run `barca list` to see available assets and tasks." }
 ```
 
-`kind` and `code` are those a local command exits with (`usage` 2, `infra` 3). The HTTP status
+`kind` and `code` are those a local command exits with (`usage` 2, `infra` 3). `reason` is
+present only on an error a client may handle on its own. `metadata_unusable` (from 0.28) means
+the metadata DB is there but this barca cannot use it; `error` names the file and `remediation`
+says what to do, instead of a SQL error such as `Parse error: no such column`:
+
+```json
+{ "error": "the metadata DB .barca/envs/prod/metadata.db cannot be used: metadata schema version 2 is not supported by barca 0.28.0 (supports version 1 and legacy version 0); use a compatible Barca release. The database was not migrated or reset",
+  "code": 3, "kind": "infra", "reason": "metadata_unusable",
+  "remediation": "Not a problem in your code. If a newer barca wrote this database, upgrade barca. Otherwise put a backup back with `barca state restore` (it moves .barca/envs/prod/metadata.db aside first), or stop every barca process using it and move .barca/envs/prod/metadata.db aside to start an empty history." }
+```
+
+The UI shows the remediation under "Can't load pipeline".
+ The HTTP status
 follows the kind: `usage` is `400` (parse and DAG errors, a target of the wrong kind, a bad
 request body), `404` for something that does not exist (an unknown node, run or route), `409`
 for a name that matches several nodes or a request that conflicts with a run's state

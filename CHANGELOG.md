@@ -46,6 +46,17 @@ and these tags are available on the same releases page.
   `barca.serve.heartbeat` and `barca.serve.stop` traces are replaced by the `barca.serve.up`
   gauge (1, and 0 on stop) and its siblings: move monitors on those traces to the metric.
   Span `type` is `worker` (was `custom`).
+- **Breaking:** a writer `barca serve` whose metadata DB cannot be set up exits 3 before it binds,
+  naming the file and what to do (upgrade barca, `barca state restore`, or move the file aside),
+  where it used to keep serving with the scheduler off and one `scheduler disabled` line (#513).
+  A database barca cannot use (empty, not SQLite, a newer format, a malformed schema) is now one
+  error, `reason: "metadata_unusable"` in the envelope (new optional key; CLI and HTTP), instead
+  of a raw SQL error such as `Parse error: no such column`; `get` and `run` on a 0-byte
+  `metadata.db` now exit 3 instead of starting a new history in it. A `--read-only` server keeps
+  serving and reports the error. `GET /health` gains `scheduler_enabled` and `metadata_error`.
+  `serve`'s startup line is always printed and ends with `; metadata <path> (db format <n>)`, and
+  a stray empty or invalid `.barca/metadata.db` beside a named env's database gets a warning
+  naming both. A writer now waits for another process's DB lock (up to 60 s) before it binds.
 
 ### Features
 

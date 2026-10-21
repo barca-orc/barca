@@ -56,7 +56,10 @@ impl ErrorKind {
             | BarcaError::Parse(_)
             | BarcaError::Dag(_) => ErrorKind::Usage,
             BarcaError::Cancelled => ErrorKind::Cancelled,
-            BarcaError::Io(_) | BarcaError::Db(_) | BarcaError::Other(_) => ErrorKind::Infra,
+            BarcaError::Io(_)
+            | BarcaError::Db(_)
+            | BarcaError::MetadataUnusable { .. }
+            | BarcaError::Other(_) => ErrorKind::Infra,
         }
     }
 }
@@ -116,6 +119,19 @@ impl Context {
     }
 }
 
+/// The envelope `reason` of [`BarcaError::MetadataUnusable`]: the metadata DB is there but this
+/// barca cannot use it.
+pub const METADATA_UNUSABLE: &str = "metadata_unusable";
+
+/// What to do about a metadata DB at `path` that barca cannot use.
+pub fn metadata_remediation(path: &str) -> String {
+    format!(
+        "Not a problem in your code. If a newer barca wrote this database, upgrade barca. \
+         Otherwise put a backup back with `barca state restore` (it moves {path} aside first), \
+         or stop every barca process using it and move {path} aside to start an empty history."
+    )
+}
+
 /// The wire representation is the existing JSON error schema. Human prose is local presentation
 /// state and is not serialized: deserialization reconstructs prose from the error and traceback,
 /// then appends remediation once. A wire round trip preserves fields, not the original prose.
@@ -132,6 +148,9 @@ pub struct ErrorEnvelope {
     pub traceback: Option<String>,
     /// `step_failed` only: the failing step's artifact directory (local path or URI).
     pub artifact_dir: Option<String>,
+    /// A stable name for an error a client may handle on its own, when barca has one:
+    /// `metadata_unusable` (the metadata DB cannot be used). Absent from the JSON otherwise.
+    pub reason: Option<String>,
     /// Human-mode text (the existing prose).
     prose: String,
     /// Whether `prose` already contains the remediation (so it is not printed twice).
@@ -160,6 +179,8 @@ impl<'de> Deserialize<'de> for ErrorEnvelope {
             traceback: Option<String>,
             #[serde(default)]
             artifact_dir: Option<String>,
+            #[serde(default)]
+            reason: Option<String>,
         }
         let wire = WireEnvelope::deserialize(deserializer)?;
         if wire.code != wire.kind.exit_code() {
@@ -197,6 +218,7 @@ impl<'de> Deserialize<'de> for ErrorEnvelope {
             node: wire.node,
             traceback: wire.traceback,
             artifact_dir: wire.artifact_dir,
+            reason: wire.reason,
             prose,
             prose_has_remediation: false,
             run_failure_line: None,
@@ -220,6 +242,7 @@ impl ErrorEnvelope {
             node: None,
             traceback: None,
             artifact_dir: None,
+            reason: None,
             prose_has_remediation: true,
             run_failure_line: None,
             prose: prose.trim_end().to_string(),
@@ -251,6 +274,7 @@ impl ErrorEnvelope {
                 node: Some(step.node.clone()),
                 traceback: step.traceback().map(str::to_string),
                 artifact_dir: step.artifact_dir.clone(),
+                reason: None,
                 prose: e.to_string(),
                 prose_has_remediation: false,
                 run_failure_line: Some(format!(
@@ -283,6 +307,7 @@ impl ErrorEnvelope {
             BarcaError::Cancelled => "Re-run the same command; steps that finished before the \
                                       cancel are cached and will not re-run."
                 .to_string(),
+            BarcaError::MetadataUnusable { path, .. } => metadata_remediation(path),
             BarcaError::Db(_) => "Not a problem in your code. Retry the command; if it keeps \
                                   failing, check that .barca/ is writable and that no other \
                                   program holds the metadata DB."
@@ -294,7 +319,9 @@ impl ErrorEnvelope {
             }
         };
         let prose = e.to_string();
-        match &e {
+        let reason =
+            matches!(e, BarcaError::MetadataUnusable { .. }).then(|| METADATA_UNUSABLE.to_string());
+        let mut out = match &e {
             // These messages put the fix after the first line (e.g. the valid `--refresh`
             // names, or what to close when the DB is locked): split it out.
             BarcaError::Usage(_)
@@ -313,11 +340,14 @@ impl ErrorEnvelope {
                 node: None,
                 traceback: None,
                 artifact_dir: None,
+                reason: None,
                 prose: prose.trim_end().to_string(),
                 prose_has_remediation: false,
                 run_failure_line: None,
             },
-        }
+        };
+        out.reason = reason;
+        out
     }
 
     /// Append a final line to the remediation (and to the human prose when it already carries
@@ -356,6 +386,9 @@ impl ErrorEnvelope {
         m.insert("code".into(), json!(self.code()));
         m.insert("kind".into(), json!(self.kind.as_str()));
         m.insert("remediation".into(), json!(self.remediation));
+        if let Some(reason) = &self.reason {
+            m.insert("reason".into(), json!(reason));
+        }
         if self.kind == ErrorKind::StepFailed {
             m.insert("node".into(), json!(self.node));
             m.insert("traceback".into(), json!(self.traceback));
