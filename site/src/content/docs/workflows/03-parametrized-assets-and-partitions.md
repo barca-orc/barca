@@ -128,11 +128,11 @@ and `partial` when some are (see "When a key fails" below). With `--json` the no
 counts: `"partitions": {"cached": 3, "missing": 0, "missing_keys": [], "total": 3}`.
 
 ```
-NAME          KIND    STATE        WHY           LAST RUN                           SHAPE          DEPS
-feed_version  sensor  always-runs  sensor        success 2026-10-07 18:22:28 0.00s  str            -
-prices        asset   cached       materialized  success 2026-10-07 18:22:28 0.00s  dict (3 keys)  feed_version
-signal        asset   cached       materialized  success 2026-10-07 18:22:28 0.00s  dict (2 keys)  prices
-report        asset   cached       materialized  success 2026-10-07 18:22:28 0.00s  dict (2 keys)  signal
+NAME          KIND    STATE        WHY           LAST RUN                               SHAPE          DEPS
+feed_version  sensor  always-runs  sensor        success 2026-10-21 21:07:49 UTC 0.00s  str            -
+prices        asset   cached       materialized  success 2026-10-21 21:07:49 UTC 0.00s  dict (3 keys)  feed_version
+signal        asset   cached       materialized  success 2026-10-21 21:07:49 UTC 0.00s  dict (2 keys)  prices
+report        asset   cached       materialized  success 2026-10-21 21:07:49 UTC 0.00s  dict (2 keys)  signal
 ```
 
 SHAPE describes one key's artifact (a dict with three fields), not the number of partitions.
@@ -351,14 +351,14 @@ does not run, and the command exits 1:
 [barca] step:pipeline.py:sales[region=emea] completed 0.0s (1/4)
 [barca] step:pipeline.py:sales[region=apac] completed 0.0s (2/4)
 [barca] step:pipeline.py:sales[region=amer] failed: RuntimeError: amer feed not ready
-[barca] 2/4 steps | failed in 0.0s
+[barca] 2/4 steps | failed in 0.1s
 ```
 
 ```
 $ barca status pipeline.py
-NAME     KIND   STATE      WHY                                     LAST RUN                    SHAPE  DEPS
-sales    asset  partial    2 of 3 keys cached; partitions_missing  failed 2026-10-07 18:21:44  -      -
-summary  asset  never-run  no_record                               -                           -      sales
+NAME     KIND   STATE      WHY                                     LAST RUN                        SHAPE  DEPS
+sales    asset  partial    2 of 3 keys cached; partitions_missing  failed 2026-10-21 21:07:49 UTC  -      -
+summary  asset  never-run  no_record                               -                               -      sales
 ```
 
 The next run executes only the failed key and the fan-in (`2/4 steps`).

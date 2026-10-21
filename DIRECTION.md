@@ -1,6 +1,6 @@
 # Direction
 
-Last reset: 2026-10-10, at v0.22.0; re-triaged 2026-10-20 at v0.24.1, and re-planned the same day at v0.24.2 for three new requests. The pinned [Direction issue](https://github.com/barca-orc/barca/issues/395) mirrors this file; it replaced the roadmap issue (#344) and the adoption tracker (#108).
+Last reset: 2026-10-10, at v0.22.0; re-triaged 2026-10-20 at v0.24.1, re-planned the same day at v0.24.2 for three new requests, and brought up to date on 2026-10-21 at v0.29.1, when everything planned had shipped. The pinned [Direction issue](https://github.com/barca-orc/barca/issues/395) mirrors this file; it replaced the roadmap issue (#344) and the adoption tracker (#108).
 
 ## What barca is
 
@@ -22,30 +22,37 @@ An embedded orchestrator. You mark Python functions with `@asset`, `@sensor`, `@
 
 An issue's milestone is the release it ships in; the items below are the order.
 
-1. **Correctness and recovery.** Shipped at 0.24.2: the last two hash holes (#295), a worker killed by the kernel named by its signal (#433), failed steps' real duration in telemetry (#437), a tick that duplicated an API-started run (#432). Left: superlinear cold partition scaling (#345, fixed in #456), a partitioned target that returns one key (#287), and a disk that `.barca/` fills because nothing is ever deleted (#457). The corrupt shared-history blob (#243) closes when the pull is removed (#403).
-2. **Everyday use.** Left: paths by default in `barca get` output (#404), a remote store that fails soft after the work is done (#390), a metadata backup with a restore command (RFC-0009, #403), signed links to results in a bucket (RFC-0011, #452), a Slack message when a job starts failing or recovers (RFC-0010, #450), logs you can join to a trace under `serve` (#434), current numbers on the comparison pages (#65). Later: a limit on how many heavy workers run at once (#436); UI work once it is defined.
-3. **Server mode.** The server is the ledger (RFC-0007): drain on shutdown (#190), one run contract over HTTP (#393) with pause and resume for a schedule (#435), `--server` on the CLI with a parity suite (#394), and local runs that read the server's ledger and write back to it (#402).
-4. **Freshness under serve.** `Always` and `Manual` get their run-time meaning (RFC-0008, #253): a tick reconciles the `Always` nodes below it, `Manual` pins itself, failures retry up to `max_failures`.
+The four priorities set at the 2026-10-20 re-triage have shipped, in 0.24.2 to 0.29.1 (2026-10-20 and 2026-10-21):
+
+1. **Correctness and recovery.** Shipped: the last two hash holes (#295), a worker killed by the kernel named by its signal (#433), failed steps' real duration in telemetry (#437), a tick that duplicated an API-started run (#432), all in 0.24.2; linear cold partition scaling (#345) in 0.24.3; a partitioned target that returns every key (#287) and a size limit for `.barca/` (#457) in 0.25.0; the corrupt shared-history blob (#243), gone with the pull in 0.26.0.
+2. **Everyday use.** Shipped: paths by default in `barca get` output (#404) in 0.25.0; a remote store that fails soft after the work is done (#390), metadata backups with `barca state restore` (RFC-0009, #403), signed links to results in a bucket (RFC-0011, #452) and Slack messages when a job starts failing or recovers (RFC-0010, #450) in 0.26.0; logs you can join to a trace under `serve` (#434) in 0.27.0; current numbers on the comparison pages (#65) in 0.28.3; a limit on how many heavy steps run at once (#436), what changed in a stale node (#558) and the last run's target in `barca history` (#555) in 0.29.0.
+3. **Server mode.** Shipped in 0.27.0: the server is the ledger (RFC-0007), with drain on shutdown (#190), one run contract over HTTP (#393) with pause and resume for a schedule (#435), `--server` on the CLI with a parity suite (#394), and local runs that read the server's ledger and write back to it (#402).
+4. **Freshness under serve.** Shipped in 0.28.0: `Always` and `Manual` have their run-time meaning (RFC-0008, #253): a tick reconciles the `Always` nodes below it, `Manual` pins itself, failures retry up to `max_failures`.
+
+Next: the 0.29.2 patch (below). No new priority has been set; the next one is chosen at the next re-triage. Known work without a release yet: removing the route aliases #393 kept (see "Open questions"), and duckdb 2 (#567).
 
 ### Release sequence
 
-Each release is a GitHub milestone with a due date; the milestone page is the schedule. Each minor carries its breaking changes and is followed by a cleanup release (below). Dates are targets, not promises.
+Each release is a GitHub milestone with a due date; the milestone page is the schedule, and a shipped release's milestone is closed with its ship date. Each minor carries its breaking changes and is followed by a cleanup release (below).
 
-| Milestone | Due | Theme | Issues, in order |
+| Milestone | Shipped | Theme | Issues |
 |---|---|---|---|
-| 0.24.2 | shipped 2026-10-20 | Patch: the three production reports | #437, #432, #433, #295, #439 |
-| 0.24.3 cleanup | 2026-10-30 | Linear partition scaling, current comparison numbers, last Dependabot alert | #345 (#456), #65, #445, #448 |
-| 0.25.0 | 2026-11-06 | Breaking: output shape, and a size limit for `.barca` | #287 with #404 (#447), #457 |
-| 0.25.1 cleanup | 2026-11-13 | | |
-| 0.26.0 | 2026-11-27 | Breaking: the store is a backup, `optimistic` is gone; signed URLs; Slack | #390 (#444), #403 (closes #243), #452, #450 |
-| 0.26.1 cleanup | 2026-12-04 | Delete the state-sync modules and optimistic paths | |
-| 0.27.0 | 2026-12-30 | The server is the ledger | #190, #393 with #435, #394, #402; #250 small fixture and #434 alongside |
-| 0.27.1 cleanup | 2027-01-07 | Drop the route aliases from #393 | |
-| 0.28.0 | 2027-01-28 | Breaking: freshness propagation | #253 |
+| 0.24.2 | 2026-10-20 | Patch: the three production reports, the last hash holes, Dependabot | #437, #432, #433, #295, #439 |
+| 0.24.3 cleanup | 2026-10-20 | Linear partition scaling, the last Dependabot alert, metadata DBs from 0.21 to 0.23 open | #345 (#456), #445, #448 |
+| 0.25.0 | 2026-10-20 | Breaking: output shape, and a size limit for `.barca` | #287 with #404, #457 |
+| 0.25.1 cleanup | 2026-10-20 | A stable last-result key in `status`, the release workflow's PyPI check | #475, #480 |
+| 0.26.0 | 2026-10-20 | Breaking: the store is a backup, `optimistic` is gone; signed URLs; Slack | #390, #403 (closes #243), #452, #450 |
+| 0.26.1 cleanup | 2026-10-20 | The state-sync modules and optimistic paths deleted | #487 |
+| 0.27.0 | 2026-10-20 | The server is the ledger; drain; JSON logs; Datadog traces | #190, #393 with #435, #394, #402, #434, #482 |
+| 0.27.1 cleanup | not released as 0.27.1 | Its fixes shipped in 0.28.3 | #492, #507 |
+| 0.28.0 | 2026-10-21 | Breaking: freshness propagation; database reset; loud metadata failures; generated site reference pages | #253, #508, #513, #479, #500, #501, #505 |
+| 0.28.1, 0.28.2 | 2026-10-21 | Patches: metadata DB lock and empty DB; duckdb below 2 | #537 |
+| 0.28.1 cleanup (shipped as 0.28.3) | 2026-10-21 | Docs and site, new-user fixes, faster start-up, running state in the UI | #495 to #499, #502, #504, #529, #534, #560, #65 |
+| 0.29.0 | 2026-10-21 | Breaking: parameters checked at planning, retries in the same worker; heavy-step capacity; what changed | #549, #523, #436, #558, #555, #553, #250 and others |
+| 0.29.1 | 2026-10-21 | Store and env fixes from the realistic fixture | #574, #575, #576, #577, #593, #595 |
+| 0.29.2 | next | Bookkeeping and stale output samples | #503 |
 
-**Why this order for the new requests.** The disk limit (#457) is a production outage, so it joins the next minor. Signed URLs (#452) read the store states #444 and #403 define, so they ship with them. Slack (#450) moves ahead of server mode into 0.26.0: it is what tells a team a deployed job is broken, and 0.27.0 is already the largest release. Whichever of #450 and #394 lands first brings the HTTPS client; the other reuses it.
-
-An open issue with no milestone is unscheduled on purpose (#436); it is scheduled when it becomes the next most important thing.
+An open issue with no milestone is unscheduled on purpose (#567); it is scheduled when it becomes the next most important thing.
 
 ### Cleanup releases
 
@@ -63,10 +70,9 @@ After every minor, a `0.x.1 cleanup` milestone: one week, no features. The check
 
 Design questions nobody has answered yet, the issue each blocks, and the release it must be decided by. Proposals in issue status lines are proposals until they appear under "Decided".
 
-- **Drain defaults** (#190): the default grace, the config key (`[server] drain_timeout` is proposed), and the exit code after a forced stop. By 0.27.0.
-- **Pause persistence** (#435): whether a paused schedule stays paused across a server restart. Proposed yes. By 0.27.0.
-- **Route aliases and resume** (#393): how long the old routes stay as aliases, and when `Last-Event-ID` resume replaces the drop-is-infra-error rule. By 0.27.0.
-- **Fixture home** (#250): `examples/planning_pipeline/` or `benchmarks/planning_pipeline/`. By 0.27.0.
+- **Route aliases and resume** (#393): 0.27.0 kept `POST /run`, `POST /run/{target}`, `POST /get/{target}`, `DELETE /run/{run_id}`, `GET /status/{run_id}` and `GET /events/{run_id}` as aliases "for one minor release", and 0.29.1 still serves them. Their removal is breaking, so it needs a minor; when, and whether `Last-Event-ID` resume replaces the drop-is-infra-error rule, is undecided. By 0.30.0.
+
+Settled by what shipped, and documented in the manual: drain defaults (#190: `--drain-timeout` and `[server] drain_timeout`, 30 s, exit 1 after a forced stop; 0.27.0), pause persistence (#435: a pause survives a restart; 0.27.0) and the fixture home (#250: `benchmarks/planning_pipeline/`; 0.29.0).
 
 ## Decided, October 2026
 

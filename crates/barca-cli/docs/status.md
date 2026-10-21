@@ -168,7 +168,7 @@ finished in.
 the same code and inputs (the same run hash): `{node_id, run_hash, content_hash, created_at}`,
 with the exact node id (a partition key included). It is absent when that never happened. The
 table prints one line per such node under the rows:
-`total: different bytes for the same code and inputs at 2026-10-02 11:56:43 (pipeline.py:total)`.
+`total: different bytes for the same code and inputs at 2026-10-02 11:56:43 UTC (pipeline.py:total)`.
 It means the function is not deterministic (`barca docs cache`).
 
 ## Artifact shape

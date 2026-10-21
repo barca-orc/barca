@@ -68,10 +68,10 @@ barca sql "select * from cleaned"
 ```
 
 ```
-NAME        KIND   STATE   WHY           LAST RUN                           SHAPE            DEPS
-raw_orders  asset  cached  materialized  success 2026-10-07 18:12:41 0.00s  3 rows x 2 cols  -
-cleaned     asset  cached  materialized  success 2026-10-07 18:12:41 0.00s  2 rows x 2 cols  raw_orders
-summary     asset  cached  materialized  success 2026-10-07 18:12:41 0.00s  dict (2 keys)    cleaned
+NAME        KIND   STATE   WHY           LAST RUN                               SHAPE            DEPS
+raw_orders  asset  cached  materialized  success 2026-10-21 21:07:49 UTC 0.00s  3 rows x 2 cols  -
+cleaned     asset  cached  materialized  success 2026-10-21 21:07:49 UTC 0.00s  2 rows x 2 cols  raw_orders
+summary     asset  cached  materialized  success 2026-10-21 21:07:49 UTC 0.00s  dict (2 keys)    cleaned
 
 3 cached, 0 stale, 0 never run, 0 partial, 0 unknown, 0 always run
 ```
