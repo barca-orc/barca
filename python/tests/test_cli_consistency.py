@@ -167,3 +167,23 @@ def test_python_api_get_shares_the_refresh_vocabulary(project, monkeypatch):
         barca.get("total", "pipeline.py", no_cache=True)
     assert barca.stats("total", "pipeline.py")["id"] == "pipeline.py:total"
     assert barca.history(1)[0]["files"] == ["pipeline.py"]
+
+
+def test_end_of_run_line_is_the_wall_time_not_the_sum_of_steps(tmp_path):
+    # Four one-second steps on four workers take about a second, not four.
+    (tmp_path / "pipeline.py").write_text(
+        "import time\nfrom barca import asset\n"
+        + "".join(f"@asset()\ndef s{i}() -> int:\n    time.sleep(1)\n    return {i}\n" for i in range(4))
+    )
+    proc = subprocess.run(
+        [_find_binary(), "get", "pipeline.py", "--json", "--agent"],
+        cwd=tmp_path,
+        env={**{k: v for k, v in os.environ.items() if k != "BARCA_OUTPUT"}, "BARCA_POOL_SIZE": "4"},
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    line = next(l for l in proc.stderr.splitlines() if "steps | done in" in l)
+    seconds = float(line.rsplit(" ", 1)[1].rstrip("s"))
+    assert 1.0 <= seconds < 3.0, line
+    assert seconds <= json.loads(proc.stdout)["elapsed_seconds"] + 0.05, (line, proc.stdout)

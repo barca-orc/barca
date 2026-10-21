@@ -1673,7 +1673,6 @@ async fn record_and_publish(
             steps_executed: session.state.steps_executed,
             completed_steps: session.state.completed_steps,
             total_steps: session.state.total_steps,
-            elapsed_so_far: session.state.elapsed_so_far,
             cancel: &session.started.cancel,
             phase_error: &session.state.phase_error,
             step_failure: &session.state.step_failure,
@@ -3045,7 +3044,6 @@ struct FinalizeRun<'a> {
     steps_executed: usize,
     completed_steps: usize,
     total_steps: usize,
-    elapsed_so_far: f64,
     cancel: &'a CancellationToken,
     phase_error: &'a Option<String>,
     step_failure: &'a Option<(String, String)>,
@@ -3094,7 +3092,6 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
         steps_executed,
         completed_steps,
         total_steps,
-        elapsed_so_far,
         cancel,
         phase_error,
         step_failure,
@@ -3142,7 +3139,8 @@ async fn finalize_run(ctx: FinalizeRun<'_>, trace: impl Fn(&str)) -> Result<f64,
             steps_executed,
             completed_steps,
             total_steps,
-            elapsed_so_far,
+            // The run's wall time so far, not the sum of its steps' times (they overlap).
+            wall_seconds: t0.elapsed().as_secs_f64(),
             cancel,
             phase_error,
             step_failure,
@@ -3399,7 +3397,7 @@ struct StopProgress<'a> {
     steps_executed: usize,
     completed_steps: usize,
     total_steps: usize,
-    elapsed_so_far: f64,
+    wall_seconds: f64,
     cancel: &'a CancellationToken,
     phase_error: &'a Option<String>,
     step_failure: &'a Option<(String, String)>,
@@ -3412,7 +3410,7 @@ async fn stop_workers(ctx: StopProgress<'_>, trace: &impl Fn(&str)) {
         steps_executed,
         completed_steps,
         total_steps,
-        elapsed_so_far,
+        wall_seconds,
         cancel,
         phase_error,
         step_failure,
@@ -3454,7 +3452,7 @@ async fn stop_workers(ctx: StopProgress<'_>, trace: &impl Fn(&str)) {
         crate::run_line!(
             Always,
             "{}",
-            end_of_run_line(completed_steps, total_steps, elapsed_so_far, outcome)
+            end_of_run_line(completed_steps, total_steps, wall_seconds, outcome)
         );
     }
 }

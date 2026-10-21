@@ -60,6 +60,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   different bytes for the same code and inputs; the function is not deterministic", and
   `barca status` no longer keeps that event for it. The byte check now applies to assets only.
 
+- The end-of-run line `[barca] N/M steps | done in Xs` shows the run's wall time. It showed the
+  sum of the steps' times, so a run of parallel steps reported several times its real duration
+  (`done in 8.2s` for a 1.9 s run).
+
 ### Performance
 
 - Small pipelines start faster (#560). Workers start together: when ready work has no idle
