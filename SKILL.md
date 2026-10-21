@@ -141,3 +141,5 @@ barca run report pipeline.py | jq '.status'
 
 Use these spellings. Older ones still parse for compatibility (`-o json`, `barca pipeline.py`
 for `barca get pipeline.py`); don't use them.
+
+See also: `barca docs agents`, `barca docs contract`.

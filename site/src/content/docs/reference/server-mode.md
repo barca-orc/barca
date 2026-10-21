@@ -265,4 +265,4 @@ A repeated post of a run the server already recorded (same `run.run_id`) answers
 run it recorded. The full schemas are in `specs/server-api.openapi.yaml`; every route is
 described at https://barca.sh/reference/server-api/.
 
-More: barca docs scheduling, barca docs remote, barca docs contract.
+See also: [`barca docs scheduling`](/scheduling/), [`barca docs remote`](/reference/remote-storage/), [`barca docs contract`](/reference/cli-contract/).

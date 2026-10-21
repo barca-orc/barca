@@ -208,8 +208,6 @@ on a validation error, raise an exception. A `parallel()` branch that raises fai
 if the calling step raises; a branch whose return value cannot be passed back fails the calling
 step (see above). Exit codes: `barca docs agents`.
 
-See also: `barca docs cache`, `barca docs examples/deploy-task`.
-
 Parallel branch results, including small JSON values, are always passed as file references.
 Protocol v3 batches result metadata into columnar arrays and uses transient metadata receipts
 so a crashed later item does not replay earlier completions. Old worker packages are refused
@@ -227,3 +225,5 @@ Use `barca logs RUN_ID --pretty` for only the recorded lines, or `--json` for
 `[{node_id, line}]`. Complete lines and trailing partial lines flushed on return/failure
 are recorded. `--step report` selects a function name; exact node ids disambiguate.
 See `barca docs logs` for the full contract.
+
+See also: `barca docs cache`, `barca docs examples/deploy-task`, `barca docs logs`.

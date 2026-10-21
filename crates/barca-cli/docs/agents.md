@@ -530,3 +530,5 @@ Plan documents include `plan_version: 1`, independent of the package and databas
 Workers and the transfer helper negotiate their socket protocol before receiving work.
 A version mismatch exits 3 and names the helper version and expected version; reinstall
 Barca in the Python environment used for the run. The handshake does not import pipeline code.
+
+See also: `barca docs skill`, `barca docs contract`, `barca docs status`.
