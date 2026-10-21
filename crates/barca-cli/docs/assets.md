@@ -266,9 +266,20 @@ barca get summary pipeline.py --agent     # raw and summary run again
   computed name) is a parse error. It is also accepted on `@task` and `@sensor`, which always
   run: there it only records the values used.
 
-**Limitation:** barca cannot see environment variables your code reads without declaring them.
-Those are not part of the cache key and are not reported, so a changed value does not
-invalidate the asset.
+**Undeclared reads are reported, not hashed.** A variable your code reads without declaring it
+is not part of the cache key, so changing it does not re-run anything. Barca finds such reads
+statically, in the function and in the project helpers it reaches (`os.environ["NAME"]`,
+`os.environ.get("NAME")`, `os.getenv("NAME")`, pydantic settings fields), and prints one
+line for the command before anything runs:
+
+```text
+[barca] warning: 1 step reads environment variables not declared in env=: REGION; barca status lists them
+```
+
+The JSON result lists them per step as `undeclared_env` (also in `--dry-run` and in
+`barca status --json`), and the `warnings` array has one `undeclared_env` item per variable.
+Declare the variable to make it count, or ignore the warning if the value never changes the
+result. `barca docs cache`, "Environment variables", has the exact rules and what is not seen.
 
 ## Heavy steps: `weight=`
 

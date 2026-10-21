@@ -989,6 +989,7 @@ mod tests {
             parallel_calls: Vec::new(),
             env: Vec::new(),
             unused_inputs: Vec::new(),
+            env_reads: Vec::new(),
         }
     }
 

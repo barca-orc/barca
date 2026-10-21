@@ -66,7 +66,9 @@ Like `list`, status returns every node in JSON unless `--limit N` is explicit. T
 table shows at most 100 nodes unless you pass `--limit N` or `--all`. The
 `summary` still counts every node, and the JSON adds `total` and `truncated` (with a `hint` when
 truncated). Each node also lists `env`, the environment variables it declares with `env=[...]`
-(`barca docs assets`). `--fields` keeps only the named keys on each node.
+(`barca docs assets`), and, when its code reads variables it does not declare, `undeclared_env`
+(experimental; `barca docs cache`, "Environment variables"). `--fields` keeps only the named keys
+on each node.
 
 ## Cache state
 

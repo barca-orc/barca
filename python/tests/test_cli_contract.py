@@ -36,6 +36,8 @@ UPDATE_HINT = (
 )
 
 PIPELINE = """
+import os
+
 import pandas as pd
 from barca import asset, collect, partitions, task, group
 
@@ -72,11 +74,12 @@ def flaky(k: str) -> dict:
     return {"key": k}
 
 
-# `rows` is never used: the one plan warning of the fixture (`unused_input`), so the commands
-# that plan `report` show a filled `warnings` array and the others an empty one.
+# `rows` is never used and `CONTRACT_REPORT_TITLE` is read without being declared: the plan
+# warnings of the fixture (`unused_input`, `undeclared_env`), so the commands that plan `report`
+# show a filled `warnings` array and the others an empty one.
 @task(inputs={"t": total, "rows": numbers})
 def report(t: dict, rows: list) -> dict:
-    print("task output")
+    print("task output" + os.environ.get("CONTRACT_REPORT_TITLE", ""))
     return {"reported": t["total"]}
 
 
@@ -723,9 +726,10 @@ def test_schema_reduction_names_partition_keys():
     assert schema({"final_output": {"total": 6}}) == {"final_output": ("<user value>", True)}
 
 
-def test_warnings_is_always_an_array_filled_only_where_the_plan_has_an_unused_input(runs):
+def test_warnings_is_always_an_array_filled_only_where_the_plan_has_report(runs):
     """`barca docs contract`, "Plan warnings": the key is on every plan/get/run document; the
-    fixture's one unused input (`report`'s `rows`) fills it exactly where `report` is planned."""
+    fixture's unused input (`report`'s `rows`) and undeclared environment read
+    (`CONTRACT_REPORT_TITLE`) fill it exactly where `report` is planned."""
     with_warning = {"plan", "run", "run_dry_run_multi_target", "run_multi_target_failed"}
     without = {
         "get_dry_run",
@@ -753,9 +757,15 @@ def test_warnings_is_always_an_array_filled_only_where_the_plan_has_an_unused_in
             item if case in with_warning else {}
         ), case
         doc = json.loads(proc.stdout)
-        expected = [("pipeline.py:report", "rows")] if case in with_warning else []
-        assert [(w["node"], w["param"]) for w in doc["warnings"]] == expected, case
-        assert all(w["kind"] == "unused_input" for w in doc["warnings"]), case
+        expected = (
+            [
+                ("undeclared_env", "pipeline.py:report", "CONTRACT_REPORT_TITLE"),
+                ("unused_input", "pipeline.py:report", "rows"),
+            ]
+            if case in with_warning
+            else []
+        )
+        assert [(w["kind"], w["node"], w["param"]) for w in doc["warnings"]] == expected, case
     for case, *_ in CASES:
         if case not in with_warning | without:
             assert "warnings" not in runs[case][0], case

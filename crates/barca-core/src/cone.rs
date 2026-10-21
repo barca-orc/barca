@@ -303,11 +303,23 @@ pub fn cone_hash_and_parts(
     function_name: &str,
     modules: &dyn ModuleSource,
 ) -> (String, Vec<(String, String)>) {
+    let (hash, parts, _) = cone_hash_parts_and_sources(pipeline, function_name, modules);
+    (hash, parts)
+}
+
+/// [`cone_hash_and_parts`], and the source of every definition in the cone (for static checks
+/// over the code a step reaches, such as [`crate::env_reads`]; not part of any hash).
+pub fn cone_hash_parts_and_sources(
+    pipeline: &Module,
+    function_name: &str,
+    modules: &dyn ModuleSource,
+) -> (String, Vec<(String, String)>, Vec<Rc<str>>) {
     let Some(cone) = collect(pipeline, function_name, modules) else {
-        return (String::new(), Vec::new());
+        return (String::new(), Vec::new(), Vec::new());
     };
     let parts = cone.digests();
-    (cone.hash(), parts)
+    let sources = cone.parts.iter().map(|(_, text)| text.clone()).collect();
+    (cone.hash(), parts, sources)
 }
 
 fn collect<'a>(

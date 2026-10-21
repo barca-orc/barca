@@ -598,6 +598,10 @@ pub(crate) fn report_for(
         id: base_id.to_string(),
         kind: kind_str(dag.get_node(base_id).map(|n| n.kind())),
         env: env_report(dag, base_id),
+        undeclared_env: dag
+            .get_node(base_id)
+            .map(|n| n.extracted.undeclared_env())
+            .filter(|names| !names.is_empty()),
         ..Default::default()
     };
     let (word_cached, word_run, word_partial) = if dry {

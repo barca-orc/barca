@@ -27,7 +27,7 @@
 
 use crate::cone::{self, Module, ModuleSource};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -602,6 +602,26 @@ impl PipelineCones<'_> {
     /// ([`cone::cone_hash_and_parts`]).
     pub fn hash_and_parts(&self, function_name: &str) -> (String, Vec<(String, String)>) {
         cone::cone_hash_and_parts(&self.module, function_name, self.modules)
+    }
+
+    /// [`Self::hash_and_parts`], and the environment variables the definitions of the cone
+    /// read ([`crate::env_reads`]). `scanned` keeps each source's reads across the steps of a
+    /// load, so a helper reached by many steps is parsed once.
+    pub fn hash_parts_and_env_reads(
+        &self,
+        function_name: &str,
+        scanned: &mut HashMap<Rc<str>, Rc<BTreeSet<String>>>,
+    ) -> (String, Vec<(String, String)>, BTreeSet<String>) {
+        let (hash, parts, sources) =
+            cone::cone_hash_parts_and_sources(&self.module, function_name, self.modules);
+        let mut reads = BTreeSet::new();
+        for source in sources {
+            let found = scanned
+                .entry(source.clone())
+                .or_insert_with(|| Rc::new(crate::env_reads::in_source(&source)));
+            reads.extend(found.iter().cloned());
+        }
+        (hash, parts, reads)
     }
 }
 

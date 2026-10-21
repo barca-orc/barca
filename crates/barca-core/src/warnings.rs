@@ -38,6 +38,15 @@ pub fn warn_once(message: &str) -> bool {
 /// The `kind` of the unused-input warning.
 pub const UNUSED_INPUT: &str = "unused_input";
 
+/// The `kind` of the undeclared-environment warning (#574).
+pub const UNDECLARED_ENV: &str = "undeclared_env";
+
+/// At most this many variable names are spelled out in a step's message; JSON has them all.
+const NAMES_IN_LINE: usize = 6;
+
+/// At most this many names or patterns are spelled out in the stderr summary line.
+const NAMES_IN_SUMMARY: usize = 5;
+
 /// A plan-time warning about one step, found by static analysis (no user code is imported).
 ///
 /// `get`, `run`, their `--dry-run` and `plan` report the same list for the same plan: one line
@@ -45,17 +54,18 @@ pub const UNUSED_INPUT: &str = "unused_input";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct PlanWarning {
-    /// What was found. `unused_input` is the only kind so far.
+    /// What was found: `unused_input` or `undeclared_env`.
     pub kind: String,
     /// The step's node id (`file.py:name`).
     pub node: String,
-    /// The parameter concerned.
+    /// The parameter concerned (`unused_input`), or the environment variable (`undeclared_env`).
     pub param: String,
     /// The warning in words, with what to do about it.
     pub message: String,
 }
 
-/// The warnings for the steps of `plan`, sorted by node, parameter and kind: one per (step, unused input).
+/// The warnings for the steps of `plan`, sorted by node, parameter and kind: one per (step,
+/// unused input) and one per (step, undeclared environment variable).
 ///
 /// Only planned steps are looked at, so a command warns about the cone it was asked for and
 /// not about the rest of the file. A partitioned step is one step here, whatever its key
@@ -76,6 +86,7 @@ pub fn for_plan(dag: &Dag, plan: &ExecutionPlan) -> Vec<PlanWarning> {
         }
         if let Some(node) = dag.get_node(id) {
             out.extend(unused_input_warnings(dag, node));
+            out.extend(undeclared_env_warnings(node));
         }
     }
     out.sort_by(|a, b| (&a.node, &a.param, &a.kind).cmp(&(&b.node, &b.param, &b.kind)));
@@ -125,11 +136,91 @@ pub fn unused_input_warnings(dag: &Dag, node: &DagNode) -> Vec<PlanWarning> {
         .collect()
 }
 
-/// Print each warning on stderr as `[barca] warning: <message>`, once per process.
+/// One warning per environment variable `node`'s code reads without declaring it
+/// ([`crate::env_reads`]). Every item of a step carries the same message, naming all of them;
+/// stderr gets one summary line for the whole command instead ([`print`]).
+pub fn undeclared_env_warnings(node: &DagNode) -> Vec<PlanWarning> {
+    let names = node.extracted.undeclared_env();
+    if names.is_empty() {
+        return Vec::new();
+    }
+    let message = undeclared_env_message(&node.id, &names);
+    names
+        .into_iter()
+        .map(|name| PlanWarning {
+            kind: UNDECLARED_ENV.to_string(),
+            node: node.id.clone(),
+            param: name,
+            message: message.clone(),
+        })
+        .collect()
+}
+
+/// `<id> reads environment variables it does not declare: A, B. ...`
+fn undeclared_env_message(id: &str, names: &[String]) -> String {
+    let shown = names.iter().take(NAMES_IN_LINE).map(String::as_str);
+    let mut list = shown.collect::<Vec<_>>().join(", ");
+    if names.len() > NAMES_IN_LINE {
+        list.push_str(&format!(" and {} more", names.len() - NAMES_IN_LINE));
+    }
+    let (noun, them) = if names.len() == 1 {
+        ("an environment variable", "it")
+    } else {
+        ("environment variables", "them")
+    };
+    let pattern = if names.iter().any(|n| n.contains('*')) {
+        " (a name with * is built at run time: declare each full name the step reads)"
+    } else {
+        ""
+    };
+    format!(
+        "{id} reads {noun} it does not declare: {list}. Changing {them} does not re-run the \
+         step, which keeps serving its cached result; add {them} to env=[...]{pattern} so \
+         that it does (`barca docs cache`, \"Environment variables\")"
+    )
+}
+
+/// Print the warnings on stderr as `[barca] warning: <message>`, once per process: one line per
+/// warning, except `undeclared_env`, which is one summary line for the whole command
+/// ([`undeclared_env_summary`]); its per-step detail is in the JSON.
 pub fn print(warnings: &[PlanWarning]) {
-    for w in warnings {
+    for w in warnings.iter().filter(|w| w.kind != UNDECLARED_ENV) {
         warn_once(&w.message);
     }
+    if let Some(line) = undeclared_env_summary(warnings) {
+        warn_once(&line);
+    }
+}
+
+/// `N steps read environment variables not declared in env=: A, B, C (+K more); barca status
+/// lists them`, with at most [`NAMES_IN_SUMMARY`] names or patterns, sorted. `None` when no
+/// step has an undeclared read.
+pub fn undeclared_env_summary(warnings: &[PlanWarning]) -> Option<String> {
+    let mut steps = HashSet::new();
+    let mut names = std::collections::BTreeSet::new();
+    for w in warnings.iter().filter(|w| w.kind == UNDECLARED_ENV) {
+        steps.insert(w.node.as_str());
+        names.insert(w.param.as_str());
+    }
+    if steps.is_empty() {
+        return None;
+    }
+    let mut list = names
+        .iter()
+        .take(NAMES_IN_SUMMARY)
+        .copied()
+        .collect::<Vec<_>>()
+        .join(", ");
+    if names.len() > NAMES_IN_SUMMARY {
+        list.push_str(&format!(" (+{} more)", names.len() - NAMES_IN_SUMMARY));
+    }
+    let subject = match steps.len() {
+        1 => "1 step reads".to_string(),
+        n => format!("{n} steps read"),
+    };
+    Some(format!(
+        "{subject} environment variables not declared in env=: {list}; barca status lists them"
+    ))
 }
 
 #[cfg(test)]
@@ -195,6 +286,33 @@ def unrelated(raw):
             .iter()
             .map(|w| (w.node.as_str(), w.param.as_str()))
             .collect()
+    }
+
+    #[test]
+    fn undeclared_env_prints_one_summary_line_per_command() {
+        let w = |node: &str, param: &str| PlanWarning {
+            kind: UNDECLARED_ENV.to_string(),
+            node: node.to_string(),
+            param: param.to_string(),
+            message: String::new(),
+        };
+        assert_eq!(undeclared_env_summary(&[]), None);
+        let one = [w("p.py:a", "B"), w("p.py:a", "A")];
+        assert_eq!(
+            undeclared_env_summary(&one).unwrap(),
+            "1 step reads environment variables not declared in env=: A, B; barca status lists them"
+        );
+        let many: Vec<PlanWarning> = ["F", "*_CSV", "E", "D", "C", "B", "A"]
+            .iter()
+            .enumerate()
+            .map(|(i, v)| w(if i % 2 == 0 { "p.py:a" } else { "p.py:b" }, v))
+            .chain([w("p.py:c", "A")])
+            .collect();
+        assert_eq!(
+            undeclared_env_summary(&many).unwrap(),
+            "3 steps read environment variables not declared in env=: *_CSV, A, B, C, D (+2 more); \
+             barca status lists them"
+        );
     }
 
     #[test]
