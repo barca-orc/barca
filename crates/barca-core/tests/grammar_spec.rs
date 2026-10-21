@@ -1222,12 +1222,12 @@ fn the_helpers_take_their_argument_by_position_only() {
     ));
     assert!(
         err.contains(
-            "`timezone` is not an argument of Schedule(). Schedule() takes no keyword arguments"
+            "`timezone` is not an argument of Schedule(). Schedule() accepts: max_failures"
         ),
         "{err}"
     );
     assert!(
-        err.contains("\nRemove `timezone`: write it like `Schedule(\"0 5 * * *\")`."),
+        err.contains("\nRemove `timezone`, or replace it with an argument Schedule() accepts."),
         "{err}"
     );
     // The positional argument given by position and again by name.

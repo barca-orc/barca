@@ -132,7 +132,8 @@ environment other than `default`).
 Its tables are `materializations` (one row per step result: node id, run hash, status,
 artifact path, timings, attempts, error), `runs` (one row per run), `logs` (captured stdout of
 steps), `cost_estimates` (the time estimate per node, used to size batches) and
-`schedule_state` (when each scheduled node last fired).
+`schedule_state` (when each scheduled node last fired, and whether it is paused) and
+`schedule_failures` (the consecutive failed ticks of a scheduled node).
 
 Artifacts are files at `.barca/artifacts/{node}/{run_hash}{ext}`, in json, pickle or parquet.
 They are cached by run hash: the hash covers the function's code, the helper code it reaches

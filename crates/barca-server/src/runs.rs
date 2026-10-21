@@ -49,6 +49,9 @@ pub(crate) struct RunSpec {
     pub values: bool,
     /// `get --partition`.
     pub partition: Option<barca_core::selection::PartitionSelection>,
+    /// The freshness rules (RFC-0008): a `Manual` node read as it is (`POST /runs`, as the CLI
+    /// does), and whether this is a scheduled tick.
+    pub rules: barca_core::freshness::RunRules,
 }
 
 impl RunSpec {
@@ -63,6 +66,8 @@ impl RunSpec {
             trigger: Trigger::api(),
             values: false,
             partition: None,
+            // The older trigger routes compute what they are asked for, as before RFC-0008.
+            rules: barca_core::freshness::RunRules::default(),
         }
     }
 }
@@ -254,6 +259,8 @@ async fn create_run(state: AppState, body: &[u8]) -> Result<Response, ApiError> 
             trigger: Trigger::api(),
             values: request.values,
             partition,
+            // The run contract runs what `barca get` / `barca run` would run here.
+            rules: barca_core::freshness::RunRules::request(),
         },
     );
     Ok((StatusCode::ACCEPTED, Json(json!({ "run_id": run_id }))).into_response())
@@ -462,6 +469,7 @@ async fn execute(
                     trigger: spec.trigger.clone(),
                 },
                 partition: spec.partition.clone(),
+                rules: spec.rules.clone(),
             })
             .await
         };

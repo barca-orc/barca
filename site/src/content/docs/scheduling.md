@@ -1,13 +1,13 @@
 ---
 title: Scheduling
-description: Run assets, tasks and sensors on a cron schedule with barca serve, what a tick does, and the limits of scheduling in 0.18.0.
+description: Run assets, tasks and sensors on a cron schedule with barca serve, what a tick does, how Always and Manual nodes below a schedule behave, and what happens when ticks fail.
 ---
 
 A node declared with `freshness=Schedule("<cron>")` runs on that cron schedule while
 `barca serve` is running. The scheduler is part of the server and is on unless you pass
 `--no-schedule`. `barca get` and `barca run` never fire schedules.
 
-Output on this page is from barca 0.18.0.
+The run output in the examples on this page is from barca 0.18.0.
 
 ## Run a function every 10 minutes
 
@@ -38,31 +38,135 @@ barca serve job.py
 
 ## What a tick does
 
-A tick starts one run for the scheduled node, the same run `barca get <asset>` or
-`barca run <task>` would start. It brings the node up to date. It does not force anything to
-recompute.
+A tick of a scheduled node is one run with several targets: the scheduled node, then every
+`Always` node below it. The walk down from the scheduled node goes past a `Manual` node, which
+is not updated, and stops at a node with a `Schedule` of its own, which follows its own ticks.
+Nodes with no scheduled node above them are never touched by a tick; they are computed only when
+a target needs them as an input and they have no cached result.
 
-| Scheduled node | On each tick |
+A tick brings each target up to date. It does not force anything to recompute.
+
+| Node in the tick | On each tick |
 |---|---|
-| asset | Sensors upstream of it run. Each asset upstream of it, and the asset itself, runs only if there is no cached result for its current code and inputs. |
-| task | The task runs. Its upstream sensors and assets are handled as above. |
-| sensor | The sensor runs and its value is recorded. The assets that read it are not triggered. |
+| the scheduled sensor | The sensor is polled and its value is recorded. |
+| the scheduled asset | Sensors upstream of it are polled. Each asset upstream of it, and the asset itself, runs only if there is no cached result for its current code and inputs. |
+| the scheduled task | The task runs. Its upstream sensors and assets are handled as above. |
+| an `Always` asset below | Computed if it has no cached result for its current run hash; otherwise up to date. |
+| an `Always` task below | Runs if its last successful run used other versions of its inputs (other code, another result of an asset it reads, another value of a sensor it reads), if a task it reads has run successfully since, or if it has never run. Otherwise it does not run. |
 
-So outside data must come in through a sensor: a scheduled asset that fetches data in its own
-body is computed once and then served from cache on every tick
-([Sensors](/guide/#4-sensors-data-from-outside)). And the schedule belongs on the node whose
-result you want, not on the sensor: the tick of an asset or task at the end of the pipeline
-runs the sensors above it and computes whatever their values made stale.
+So a schedule on a sensor is enough to keep everything below it current: when the sensor returns
+the same value nothing else runs, and when it returns a new one the same run computes the assets
+that read it and fires the tasks below them.
+
+Outside data must come in through a sensor. The cache is keyed by the sensor's value, not by
+time: return something that identifies the version of the data, such as an etag or a
+last-modified time. A scheduled asset that fetches data in its own body, with no sensor
+upstream, is computed once and then served from cache on every tick
+([Sensors](/guide/#4-sensors-data-from-outside)).
 
 The older `POST /run/{task}` alias on the server is different from a tick: it recomputes every
 upstream asset. `POST /runs` with `{"command": "run"}` behaves like a tick.
 
 ## `Always` and `Manual`
 
-Only `Schedule` causes runs. `Always` (the default for assets and tasks) and `Manual` (the
-default for sensors) are recorded and shown by `barca list`, and nothing acts on them. What
-they should do in `barca serve` is proposed in RFC-0008
-([PR #276](https://github.com/barca-orc/barca/pull/276)).
+`Always` (the default for assets and tasks) and `Manual` (the default for sensors) say how a
+node follows the schedules above it.
+
+| Freshness | Meaning |
+|---|---|
+| `Schedule("<cron>")` | Fires on a cron schedule while `barca serve` is running. |
+| `Always` | Brought up to date at each tick of a scheduled node above it, in that tick's run. |
+| `Manual` | Refreshed by hand only: never by a tick, and never by a request for something below it, which reads its current result. |
+
+```python
+# pipeline.py
+from pathlib import Path
+
+from barca import Manual, Schedule, asset, sensor, task
+
+
+@sensor(freshness=Schedule("*/5 * * * *"))
+def prices() -> tuple[bool, str]:
+    return True, Path("prices.txt").read_text()
+
+
+@asset(inputs={"etag": prices}, freshness=Manual)
+def baseline(etag: str) -> dict:                 # only an explicit request updates it
+    return {"baseline": etag}
+
+
+@asset(inputs={"baseline": baseline, "etag": prices})
+def report(baseline: dict, etag: str) -> dict:   # recomputed when prices changes
+    return {"baseline": baseline["baseline"], "etag": etag}
+
+
+@task(inputs={"baseline": baseline})
+def publish(baseline: dict) -> None:             # fires only when baseline is refreshed
+    print("publish", baseline["baseline"])
+```
+
+When `prices` changes, the tick computes `report` reading the pinned `baseline`, and `publish`
+does not fire.
+
+### `Manual` pins itself
+
+A `Manual` asset or task is never run by a tick, and `barca get` or `barca run` of something
+below it does not recompute it: whatever reads it reads its latest successful result, even when
+its inputs or code have changed since. Nodes below it are hashed against that result, so it does
+not make them stale until it changes. When it is stale, `barca get report` says so on stderr:
+
+```
+[barca] note: baseline is Manual and stale; barca get baseline pipeline.py --refresh baseline to recompute
+```
+
+Only naming it in `--refresh` recomputes it: `--refresh baseline` or `--refresh-all`, also when
+it is the target (`barca get baseline` alone returns its current result, with the note when it
+is stale). A `Manual` task named as the target of `barca run` runs. The next tick then finds what reads it out of date and updates it.
+
+- A `Manual` node that has never been computed cannot be read. `barca get report` is then a
+  usage error (exit 2) whose remediation is that command. Under a tick, the nodes that read it
+  are reported as `skipped` steps with reason `blocked`, and the tick is not an error.
+- Sensors are polled whenever a run needs them, whatever their freshness.
+- A partitioned `Manual` node is not pinned yet: it is computed like an `Always` node.
+- `POST /get/{node}`, `POST /run/{task}` and `POST /run` compute `Manual` upstreams as before.
+
+### Upgrading
+
+Two changes are breaking:
+
+- An `Always` node below a scheduled node, tasks included, now runs at that node's ticks. Before,
+  only the scheduled node ran. Mark a node `Manual` to keep it out of the ticks.
+- `barca get` and `barca run` no longer recompute a stale `Manual` upstream; they read its last
+  result. Name it with `--refresh` to recompute it.
+
+## Failures and `max_failures`
+
+A node that fails in a tick's run stops only what depends on it; the other targets still run.
+The run's status is then `failed`. The failed node is still out of date, so the next tick tries
+it again.
+
+`Schedule(cron, max_failures=N)` caps the consecutive failed ticks of a scheduled node. The
+default is 5; the value must be a positive integer literal, passed by keyword. Past the cap the
+node's ticks are skipped, the server logs
+
+```
+[barca] pipeline.py:inbox failing: 3 consecutive failed ticks (max_failures=3); skipped until an explicit request or a change in its inputs
+```
+
+and `GET /schedule` reports `failing: true` with `failures` and `max_failures`. The count is kept
+in the metadata DB, so it survives a restart. It resets on a successful tick, and when something
+the tick failed on succeeds in another run: an explicit request for the scheduled node or for a
+node that failed (`barca get`, `barca run`, `POST /get`, `POST /run`), or a new result of one of
+that node's direct inputs.
+
+```python
+@sensor(freshness=Schedule("*/5 * * * *", max_failures=3))
+def inbox() -> tuple[bool, str]:
+    ...
+```
+
+`max_failures`, like the rest of the freshness, is not part of the definition hash: changing it
+does not invalidate a cached result.
 
 ## Example: one scheduled task below a sensor
 
@@ -114,10 +218,9 @@ publishing {'rows': 3}
 
 Each scheduled node gets its own run. Two scheduled nodes that are due at the same tick and
 share an upstream run separately, and both may compute the shared upstream; the sensor also
-runs twice, so the two runs can see different data. This is a known limitation
-([issue #253](https://github.com/barca-orc/barca/issues/253)). Until it is fixed, give nodes
-that share an upstream one scheduled node below them, as above, or schedules that do not
-coincide.
+runs twice, so the two runs can see different data
+([issue #80](https://github.com/barca-orc/barca/issues/80)). Schedule the sensor once instead
+and leave the nodes below it `Always`: one tick then updates all of them in one run.
 
 ## Cron reference
 
@@ -169,7 +272,8 @@ for `0 5 * * *` it shows 05:00 local, while a server running with `--timezone ut
 05:00 UTC.
 
 While the server is running, `GET /schedule` returns each job's next fire time, last fire time,
-last run id and last status ([Server API](/reference/server-api/#scheduling)), and the web UI at
+last run id, last status and consecutive failed ticks
+([Server API](/reference/server-api/#scheduling)), and the web UI at
 `/ui/` shows the next scheduled run of each node. Both are computed in the server's
 `--timezone`, so they are the times the job will fire at.
 
@@ -204,5 +308,5 @@ last run id and last status ([Server API](/reference/server-api/#scheduling)), a
   its metadata DB up every minute it changed; see
   [Deploying](/deploying/#with-a-remote-store).
 
-[Freshness and Schedules](/workflows/05-schedule-driven-reconciliation-and-effects/) shows
-ticks of scheduled, `Always` and `Manual` nodes side by side.
+[Freshness and Schedules](/workflows/05-schedule-driven-reconciliation-and-effects/) walks
+through a pipeline with scheduled, `Always` and `Manual` nodes.

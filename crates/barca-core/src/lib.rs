@@ -21,6 +21,7 @@ pub mod envdeps;
 pub mod envelope;
 pub mod events;
 pub(crate) mod execution;
+pub mod freshness;
 pub mod gc;
 pub mod groups;
 pub mod hash;

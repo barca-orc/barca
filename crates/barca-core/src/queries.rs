@@ -270,9 +270,16 @@ pub async fn explain(
     {
         crate::errln!("{note}");
     }
-    let result =
-        crate::execution::explain_dag(&dag, cfg, target_names, policy, command_label, partition)
-            .await?;
+    let result = crate::execution::explain_dag(
+        &dag,
+        cfg,
+        target_names,
+        policy,
+        command_label,
+        partition,
+        file_args,
+    )
+    .await?;
     crate::warnings::print(&result.warnings);
     Ok(result)
 }

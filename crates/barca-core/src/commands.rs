@@ -63,6 +63,7 @@ pub async fn get(
         event_tx: None,
         partition: None,
         options: Default::default(),
+        rules: crate::freshness::RunRules::request(),
     })
     .await?
     .into_single()
@@ -92,6 +93,7 @@ pub async fn run(
         event_tx: None,
         partition: None,
         options: Default::default(),
+        rules: crate::freshness::RunRules::request(),
     })
     .await?
     .into_single()
@@ -125,6 +127,7 @@ pub async fn get_streaming(
         event_tx,
         partition,
         options: Default::default(),
+        rules: crate::freshness::RunRules::request(),
     })
     .await?
     .into_single()
@@ -155,6 +158,7 @@ pub async fn run_streaming(
         event_tx,
         partition: None,
         options: Default::default(),
+        rules: crate::freshness::RunRules::request(),
     })
     .await?
     .into_single()
@@ -212,6 +216,7 @@ pub async fn get_many_streaming(
         event_tx,
         partition,
         options: Default::default(),
+        rules: crate::freshness::RunRules::request(),
     })
     .await
     .map(Executed::into_multi)
@@ -266,6 +271,7 @@ pub async fn run_many_streaming(
         event_tx,
         partition: None,
         options: Default::default(),
+        rules: crate::freshness::RunRules::request(),
     })
     .await
     .map(Executed::into_multi)
@@ -295,6 +301,10 @@ pub struct ServedRun<'a> {
     pub options: crate::outcome::RunOptions,
     /// `--partition`: the keys of the targets to compute and return (all keys when `None`).
     pub partition: Option<crate::selection::PartitionSelection>,
+    /// The freshness rules (RFC-0008): [`crate::freshness::RunRules::request`] for a run
+    /// asked for with the CLI's flags (`POST /runs`), [`crate::freshness::RunRules::tick`] for
+    /// a scheduled tick, the default (nothing pinned) for the older trigger routes.
+    pub rules: crate::freshness::RunRules,
 }
 
 /// Execute a [`ServedRun`]. A single-target run that stops at a failed step is an `Err`, as
@@ -313,6 +323,7 @@ pub async fn serve_run(run: ServedRun<'_>) -> Result<RunResult, BarcaError> {
         event_tx: run.event_tx,
         partition: run.partition,
         options: run.options,
+        rules: run.rules,
     })
     .await?;
     if run.targets.len() > 1 {

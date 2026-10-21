@@ -29,6 +29,12 @@ pub enum ParseError {
     },
 
     #[error(
+        "{file}: {function}: invalid Schedule max_failures — write a positive integer literal, \
+         e.g. Schedule(\"0 * * * *\", max_failures=3)"
+    )]
+    InvalidMaxFailures { file: String, function: String },
+
+    #[error(
         "{file}: {function}: invalid env= — {reason}. Declare environment variables as a literal \
          list of strings, e.g. env=[\"SOURCE_CSV\", \"API_TOKEN\"]"
     )]
@@ -261,8 +267,9 @@ fn try_extract_function(
         });
     }
 
-    let freshness = extract_freshness(&keywords, file_path, func.name.as_str(), &names.barca)?
-        .unwrap_or(Freshness::default_for(kind));
+    let (freshness, max_failures) =
+        extract_freshness(&keywords, file_path, func.name.as_str(), &names.barca)?
+            .unwrap_or((Freshness::default_for(kind), None));
     let inputs = extract_inputs(&keywords, names);
     let partitions = extract_partitions(&keywords, source, names);
     let explicit_name = extract_string_kwarg(&keywords, "name");
@@ -305,6 +312,7 @@ fn try_extract_function(
         function_name: func.name.to_string(),
         explicit_name,
         freshness,
+        max_failures,
         inputs,
         partitions,
         sinks,
@@ -463,12 +471,13 @@ pub(crate) fn match_node_decorator<'a>(
     Some((kind, keywords))
 }
 
+/// The `freshness=` argument, with `Schedule(..., max_failures=N)` when it is written.
 fn extract_freshness(
     keywords: &[&Keyword],
     file_path: &str,
     function_name: &str,
     barca: &crate::decorator_args::BarcaNames,
-) -> Result<Option<Freshness>, ParseError> {
+) -> Result<Option<(Freshness, Option<u32>)>, ParseError> {
     for kw in keywords {
         let Some(ref ident) = kw.arg else { continue };
         if ident.as_str() != "freshness" {
@@ -478,6 +487,7 @@ fn extract_freshness(
             Expr::Call(call) => (call.func.as_ref(), Some(call)),
             expr => (expr, None),
         };
+        let mut max_failures = None;
         let freshness = match barca.recognized(callee) {
             Some("Always") => Freshness::Always,
             Some("Manual") => Freshness::Manual,
@@ -497,11 +507,27 @@ fn extract_freshness(
                         reason,
                     });
                 }
+                let written: Vec<&Keyword> = call.arguments.keywords.iter().collect();
+                if written.iter().any(|kw| {
+                    kw.arg
+                        .as_ref()
+                        .is_some_and(|a| a.as_str() == "max_failures")
+                }) {
+                    match extract_int_kwarg(&written, "max_failures").filter(|n| *n > 0) {
+                        Some(n) => max_failures = Some(n),
+                        None => {
+                            return Err(ParseError::InvalidMaxFailures {
+                                file: file_path.to_string(),
+                                function: function_name.to_string(),
+                            });
+                        }
+                    }
+                }
                 Freshness::Schedule(CronExpr(cron))
             }
             _ => return Ok(None),
         };
-        return Ok(Some(freshness));
+        return Ok(Some((freshness, max_failures)));
     }
     Ok(None)
 }
@@ -1102,6 +1128,34 @@ def b(a: str) -> str:
         assert_eq!(nodes[1].inputs.len(), 1);
         assert_eq!(nodes[1].inputs[0].param_name, "a");
         assert!(!nodes[1].inputs[0].collected);
+    }
+
+    #[test]
+    fn schedule_max_failures_is_read_and_checked() {
+        let src = |arg: &str| {
+            format!(
+                "from barca import asset, Schedule\n\n@asset(freshness=Schedule(\"0 * * * *\"{arg}))\ndef a():\n    return 1\n"
+            )
+        };
+        let nodes = extract_nodes(&src(", max_failures=3"), "test.py").unwrap();
+        assert_eq!(nodes[0].max_failures, Some(3));
+        assert_eq!(
+            nodes[0].freshness,
+            Freshness::Schedule(CronExpr("0 * * * *".into()))
+        );
+        let nodes = extract_nodes(&src(""), "test.py").unwrap();
+        assert_eq!(nodes[0].max_failures, None);
+        for bad in [
+            ", max_failures=0",
+            ", max_failures=\"3\"",
+            ", max_failures=n",
+        ] {
+            let err = extract_nodes(&src(bad), "test.py").unwrap_err().to_string();
+            assert!(
+                err.contains("invalid Schedule max_failures"),
+                "{bad}: {err}"
+            );
+        }
     }
 
     #[test]

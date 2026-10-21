@@ -430,7 +430,10 @@ task/asset misuse, a `.py` file that does not parse, a decorator called with an 
 not define (`@asset(after=x)`, `input=` for `inputs=`, `@asset(**options)`; `barca docs assets`,
 "Accepted arguments"), a DAG that cannot be built (an input that
 names no definition, a cycle, a partitioned asset in an unpartitioned asset's `inputs=` without
-`collect()`, a `partitions_from()` the asset cannot mirror), invalid `--env` or `barca.toml`. `infra`:
+`collect()`, a `partitions_from()` the asset cannot mirror), invalid `--env` or `barca.toml`, a
+`get`/`run` that reads (or a `get` that targets) a `Manual` node that has never been computed,
+without naming it in `--refresh` (the remediation is the command that computes it;
+`barca docs cache`). `infra`:
 barca or its environment failed (metadata DB, workers, the store, I/O); retrying may help.
 `cancelled`: stopped by Ctrl-C (SIGINT) or by SIGTERM (what a supervisor, a CI timeout or
 `docker stop` sends), at any point of a `get` or `run`: while steps run, and
@@ -464,7 +467,7 @@ objects on stdout instead of text on stderr. Exit codes do not change. `get`, `r
 other command keep progress and errors on stderr whatever `BARCA_LOG` says.
 
 An error in a pipeline file (a syntax error, a decorator argument barca does not define, an
-invalid `env=` or cron) fails every command that reads that file, whatever the target: `list`,
+invalid `env=`, cron or `max_failures=`) fails every command that reads that file, whatever the target: `list`,
 `plan`, `status`, `get`, `run`, `stats` and `sql` exit 2 and run nothing. With no file arguments
 that is every pipeline file of the project. The envelope's `error` starts with `Parse error:
 <file>:<function> (line <n>):` for a decorator argument, and its `remediation` says what to
@@ -614,7 +617,10 @@ the set of `kind` values grows additively.
 - `steps[]`: `status` is `ran`, `cached`, `partial` or `failed`; `reason` (why it ran) is one of
   `task`, `sensor`, `refresh`, `refresh_cascade`, `refresh_all`, `not_materialized`,
   `artifact_missing`, `evicted`, `partitions_unknown`, `sensor_output_unknown`, with `detail` in
-  words. `artifact_missing` is a step that has a cached result whose artifact file is gone
+  words. A `cached` step of a `Manual` node read as it is (not recomputed, though it may be
+  stale; `barca docs cache`) carries a `detail` starting `Manual`. Breaking in this release: a
+  stale `Manual` upstream used to be recomputed; it is now read as it is, with a note on stderr.
+  `artifact_missing` is a step that has a cached result whose artifact file is gone
   and is needed (`barca docs cache`); `evicted` is the same when the cache size limit deleted
   the file (experimental, "Disk use").
 - `cache` (experimental) appears only when the check after the run found `.barca/` over its
