@@ -5,8 +5,10 @@ skeleton, with seeded data a few hundred rows per table. These tests check that 
 whole graph, runs it cold and then from cache, invalidates exactly the steps that use an edited
 helper, and keeps steps that reuse the same DuckDB names on the shared connection apart.
 
-Not covered yet (#250): the store and hybrid source modes, a second machine reading what the
-first one wrote, bytes fetched per step, peak RSS, the large size.
+It also checks what barca sees when a registry's source variable is switched. The store side
+(source modes, a second machine, bytes fetched, peak RSS) is in test_planning_pipeline_remote.py,
+the overwrite scenarios in test_planning_pipeline_overwrite.py, and the large size is a
+benchmark (benchmarks/planning_pipeline/bench.sh).
 """
 
 from __future__ import annotations
@@ -27,9 +29,14 @@ NODES, ASSETS, TASKS, EDGES, ROOTS, LEAVES = 116, 74, 42, 262, 14, 44
 LEAF_ASSETS = {"forecast_reconciled_base_units", "channel_account"}
 
 
-def barca(cwd: Path, *args: str, pool: int = 4) -> dict:
+def barca(cwd: Path, *args: str, pool: int = 4, env: dict | None = None) -> dict:
     # A bounded pool: every worker imports duckdb, pandas, polars and pyarrow.
-    env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "BARCA_POOL_SIZE": str(pool)}
+    env = {
+        **os.environ,
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "BARCA_POOL_SIZE": str(pool),
+        **(env or {}),
+    }
     proc = subprocess.run(
         [_find_binary(), *args],
         cwd=cwd,
@@ -216,3 +223,89 @@ def test_steps_reusing_duckdb_names_do_not_see_each_others_rows(planning_pipelin
         "driver_rollout_item": {2},
         "driver_retirement_item": {3},
     }
+
+
+# ─── Registry source switches (#156, #231) ────────────────────────────────────
+
+V2_CSV = "registries/account_exit_v2.csv"
+
+
+def exited(root: Path, csv: str | None = None) -> set[int]:
+    """The accounts in `exited_accounts`' current result, as barca sees it with `csv` set."""
+    import pandas as pd
+
+    env = {"ACCOUNT_EXIT_REGISTRY_CSV": csv} if csv else {}
+    node = barca(root, "status", "assets.py", "--json", env=env)["nodes"]
+    path = next(n for n in node if short(n["id"]) == "exited_accounts")["cache"]["artifact"]
+    return set(pd.read_parquet(root / path)["account_id"])
+
+
+def get_exited(root: Path, csv: str | None = None) -> dict:
+    env = {"ACCOUNT_EXIT_REGISTRY_CSV": csv} if csv else {}
+    out = barca(root, "get", "exited_accounts", "assets.py", "--json", env=env)
+    return {short(s["id"]): s for s in out["steps"]}
+
+
+def test_a_registry_source_switch_is_seen_only_when_declared(planning_pipeline):
+    """The account-exit registry reads its CSV path from `ACCOUNT_EXIT_REGISTRY_CSV`.
+
+    Undeclared, as in the original pipeline: switching the variable changes nothing barca sees.
+    The step stays cached with the old rows, and no output names the variable (#574).
+    Operators re-read with `--refresh`. Declared with `env=[...]`, the switch re-runs the
+    registry and its consumer, and the step reports the value. But barca reads the variable from
+    its own environment: a value the pipeline loads from its `.env` at import is not the one
+    hashed or reported (#575)."""
+    root = planning_pipeline.root
+    (root / V2_CSV).write_text("account_id,item_id,week,rate,kind\n1,,2,1.0,exit\n2,,3,1.0,exit\n")
+    first = get_exited(root)
+    assert first["account_exit_registry"]["status"] == "ran"
+    original = exited(root)
+    assert original == {4}
+
+    # Undeclared: not detected, not reported.
+    switched = get_exited(root, V2_CSV)
+    assert {s["status"] for s in switched.values()} == {"cached"}
+    assert all("env" not in s for s in switched.values())
+    assert exited(root) == original  # stale: the rows of the old CSV
+    out = barca(
+        root,
+        "get",
+        "exited_accounts",
+        "assets.py",
+        "--refresh",
+        "account_exit_registry",
+        "--json",
+        env={"ACCOUNT_EXIT_REGISTRY_CSV": V2_CSV},
+    )
+    assert out["steps_executed"] == 2
+    assert exited(root, V2_CSV) == {1, 2}
+
+    # Declared: the switch changes the run hash and the value is reported.
+    assets = root / "assets.py"
+    source = assets.read_text()
+    old = "@asset()\ndef account_exit_registry("
+    assert source.count(old) == 1
+    assets.write_text(
+        source.replace(old, '@asset(env=["ACCOUNT_EXIT_REGISTRY_CSV"])\ndef account_exit_registry(')
+    )
+    declared = get_exited(root, V2_CSV)
+    assert {s: declared[s]["status"] for s in declared} == {
+        "account_exit_registry": "ran",
+        "exited_accounts": "ran",
+    }
+    assert declared["account_exit_registry"]["env"] == {"ACCOUNT_EXIT_REGISTRY_CSV": V2_CSV}
+    assert exited(root, V2_CSV) == {1, 2}
+    back = get_exited(root, "registries/account_exit.csv")
+    assert back["account_exit_registry"]["status"] == "ran"
+    assert exited(root, "registries/account_exit.csv") == original
+
+    # Declared, but switched in `.env`, which only the pipeline reads: barca hashes and reports
+    # the variable as unset, and serves the result computed from the other CSV.
+    unset = get_exited(root)
+    assert unset["account_exit_registry"]["env"] == {"ACCOUNT_EXIT_REGISTRY_CSV": None}
+    dotenv = root / ".env"
+    dotenv.write_text(dotenv.read_text().replace("registries/account_exit.csv", V2_CSV))
+    after_edit = get_exited(root)
+    assert {s["status"] for s in after_edit.values()} == {"cached"}
+    assert after_edit["account_exit_registry"]["env"] == {"ACCOUNT_EXIT_REGISTRY_CSV": None}
+    assert exited(root) == original  # the `.env` now names the v2 CSV
