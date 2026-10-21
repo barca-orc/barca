@@ -685,9 +685,9 @@ mod tests {
         cones.validate_imports(&nodes);
         (0..sources.len())
             .map(|index| {
-                cones.broken_import(index).map(|b| {
-                    (b.file.clone(), b.imported_by.clone(), b.problem.to_string())
-                })
+                cones
+                    .broken_import(index)
+                    .map(|b| (b.file.clone(), b.imported_by.clone(), b.problem.to_string()))
             })
             .collect()
     }
@@ -695,23 +695,35 @@ mod tests {
     #[test]
     fn a_helper_that_does_not_parse_is_recorded_for_the_files_that_import_it() {
         let project = Project::new(&[
-            ("helpers.py", "def compute()
+            (
+                "helpers.py",
+                "def compute()
     return 1
-"),
+",
+            ),
             ("uses.py", USES_HELPERS),
-            ("other.py", "import json
+            (
+                "other.py",
+                "import json
 
 
 def step():
     return json.dumps(1)
-"),
+",
+            ),
             ("pkg/__init__.py", ""),
-            ("pkg/deep.py", "from helpers import compute
-"),
-            ("indirect.py", "def step():
+            (
+                "pkg/deep.py",
+                "from helpers import compute
+",
+            ),
+            (
+                "indirect.py",
+                "def step():
     from pkg.deep import compute
     return compute()
-"),
+",
+            ),
         ]);
         let found = broken(&project, &["uses.py", "other.py", "indirect.py"]);
         let position = "line 1, column 14: Expected `:`, found newline".to_string();
@@ -719,7 +731,10 @@ def step():
             found[0],
             Some(("helpers.py".into(), "uses.py".into(), position.clone()))
         );
-        assert_eq!(found[1], None, "a file that does not import it is not affected");
+        assert_eq!(
+            found[1], None,
+            "a file that does not import it is not affected"
+        );
         // Through another project module, from an import inside a function.
         assert_eq!(
             found[2],

@@ -26,7 +26,7 @@ def normalize(rows)
 """
 
 PIPELINE = """\
-from barca import asset
+from barca import asset, task
 from helpers import normalize
 
 
@@ -38,6 +38,11 @@ def raw() -> list:
 @asset(inputs={"rows": raw})
 def amounts(rows: list) -> list:
     return normalize(rows)
+
+
+@task(inputs={"amounts": amounts})
+def publish(amounts: list) -> None:
+    print(amounts)
 """
 
 OTHER = """\
@@ -51,11 +56,15 @@ def fine() -> int:
 
 
 def barca_cmd(cwd: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run([_find_binary(), *args], cwd=cwd, capture_output=True, text=True, timeout=120)
+    return subprocess.run(
+        [_find_binary(), *args], cwd=cwd, check=False, capture_output=True, text=True, timeout=120
+    )
 
 
 def envelope(proc: subprocess.CompletedProcess) -> dict:
-    return json.loads(next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{")))
+    return json.loads(
+        next(line for line in reversed(proc.stderr.splitlines()) if line.startswith("{"))
+    )
 
 
 @pytest.fixture
@@ -92,7 +101,7 @@ def test_the_error_names_the_helper_its_position_and_the_step(project: Path) -> 
         ("get", "pipeline.py"),
         ("get", "amounts", "pipeline.py"),
         ("get", "amounts", "pipeline.py", "--dry-run"),
-        ("run", "amounts", "pipeline.py"),
+        ("run", "publish", "pipeline.py"),
         ("get", "amounts"),
     ],
 )
@@ -123,7 +132,8 @@ def test_a_helper_reached_through_another_module_inside_a_function(project: Path
     (project / "pkg" / "wrap.py").write_text("from helpers import normalize\n")
     (project / "pipeline.py").write_text(
         PIPELINE.replace("from helpers import normalize\n", "").replace(
-            "    return normalize(rows)", "    from pkg.wrap import normalize\n\n    return normalize(rows)"
+            "    return normalize(rows)",
+            "    from pkg.wrap import normalize\n\n    return normalize(rows)",
         )
     )
     proc = barca_cmd(project, "get", "amounts", "pipeline.py", "--json")
