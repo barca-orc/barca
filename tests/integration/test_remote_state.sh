@@ -239,8 +239,9 @@ fi
 echo "── a wiped machine: nothing comes back by itself; barca state restore brings the history"
 # Every directory here backs up to the same prefix, so name A's newest backup (the other
 # machines' interleave with it: one store per machine is the supported setup). The store keeps
-# the five newest across all of them, so A runs once more first and its copy is the newest.
-(cd "$TMP/machine-a" && $BARCA get pipeline.py --agent -o value --json > /dev/null 2> last-a.log) \
+# the five newest across all of them, so A runs once more first and its copy is the newest. That
+# run recomputes: one that recorded no new result takes no backup (#554).
+(cd "$TMP/machine-a" && $BARCA get pipeline.py --refresh-all --agent -o value --json > /dev/null 2> last-a.log) \
     || { cat "$TMP/machine-a/last-a.log"; exit 1; }
 A_BACKUP=$(basename "$(ls "$TMP"/machine-a/.barca/backups/*.db | tail -1)")
 rm -rf "$TMP/machine-a/.barca"
