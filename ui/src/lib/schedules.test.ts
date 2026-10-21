@@ -75,6 +75,7 @@ function state(id: string, over: Partial<NodeState> = {}): NodeState {
     env: [],
     durations: null,
     next_run: null,
+    running: null,
     ...over,
   }
 }

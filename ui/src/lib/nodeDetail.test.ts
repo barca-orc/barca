@@ -15,6 +15,7 @@ function node(id: string, inputs: string[] = []): NodeState {
     env: [],
     durations: null,
     next_run: null,
+    running: null,
   }
 }
 

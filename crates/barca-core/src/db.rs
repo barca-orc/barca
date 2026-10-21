@@ -2088,9 +2088,16 @@ pub struct AliveRun {
 /// is left out too, so it never holds a schedule back for ever. One query of the `running`
 /// rows (`idx_runs_status`); best effort: empty when nothing can be read.
 pub async fn alive_running_runs(db_path: &str) -> Vec<AliveRun> {
+    alive_running_runs_in(db_path, db_path).await
+}
+
+/// [`alive_running_runs`], with the `running` rows read from `read_path`: a snapshot of the
+/// metadata database at `db_path` ([`DbSnapshot`]), so a polled reader (`GET /state`) never
+/// opens the real one. The owners are judged against `db_path`'s marker directory.
+pub async fn alive_running_runs_in(read_path: &str, db_path: &str) -> Vec<AliveRun> {
     let running = {
         let _g = db_guard().await;
-        let Ok((_db, conn)) = open_conn(db_path).await else {
+        let Ok((_db, conn)) = open_conn(read_path).await else {
             return Vec::new();
         };
         running_runs(&conn).await

@@ -41,6 +41,7 @@ function node(
     env: [],
     durations: null,
     next_run: null,
+    running: null,
     ...rest,
   }
 }

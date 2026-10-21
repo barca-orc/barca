@@ -3,6 +3,7 @@ import type { BytesChange } from "./BytesChange";
 import type { CacheStatus } from "./CacheStatus";
 import type { Durations } from "./Durations";
 import type { LastMaterialization } from "./LastMaterialization";
+import type { NodeRunning } from "./NodeRunning";
 import type { PartitionState } from "./PartitionState";
 
 /**
@@ -18,6 +19,10 @@ durations: Durations | null,
  * Next cron fire time (unix epoch seconds) in the server's `--timezone`, if scheduled.
  */
 next_run: number | null,
+/**
+ * The run working on this node now, whoever started it (`null` when none is).
+ */
+running: NodeRunning | null,
 /**
  * Node id, e.g. `pipeline.py:clean`.
  */

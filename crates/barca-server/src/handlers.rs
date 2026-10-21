@@ -87,7 +87,7 @@ pub async fn state(State(state): State<AppState>) -> Result<Json<Vec<NodeState>>
     let zone = crate::scheduler::zone_of(cfg);
     let dag = state.current_dag().await?;
     Ok(Json(state.note_metadata(
-        node_states_in(&cfg.resolved, &dag, &cfg.python, &zone).await,
+        node_states_in(&cfg.resolved, &dag, &cfg.python, &zone, Some(&state)).await,
     )?))
 }
 
@@ -106,15 +106,17 @@ pub async fn node_states(
     python: &std::path::Path,
 ) -> Result<Vec<NodeState>, BarcaError> {
     let dag = barca_core::load::build_dag(files, python).await?;
-    node_states_in(cfg, &dag, python, &crate::scheduler::Zone::Local).await
+    node_states_in(cfg, &dag, python, &crate::scheduler::Zone::Local, None).await
 }
 
-/// [`node_states`] with cron evaluated in `zone`.
-async fn node_states_in(
+/// [`node_states`] with cron evaluated in `zone`, and, for a server, what its runs and the
+/// CLI runs on the same project are working on now ([`crate::running`]).
+pub(crate) async fn node_states_in(
     cfg: &barca_core::config::ResolvedConfig,
     dag: &barca_core::dag::Dag,
     python: &std::path::Path,
     zone: &crate::scheduler::Zone,
+    server: Option<&AppState>,
 ) -> Result<Vec<NodeState>, BarcaError> {
     db::directory_check(&cfg.db_path)?;
     let snapshot = db::DbSnapshot::take(&cfg.db_path).await?;
@@ -144,12 +146,20 @@ async fn node_states_in(
         .filter_map(|s| s.next_fire.map(|t| (s.id, t)))
         .collect();
 
-    Ok(status?
-        .nodes
+    let nodes = status?.nodes;
+    let mut running = match server {
+        Some(state) => {
+            let runs = crate::running::in_flight(state, snapshot.as_ref().map(|s| s.path())).await;
+            crate::running::by_node(&runs, &nodes, dag)
+        }
+        None => Default::default(),
+    };
+    Ok(nodes
         .into_iter()
         .map(|n| NodeState {
             durations: durations.get(&n.id).cloned(),
             next_run: next_run.get(&n.id).copied(),
+            running: running.remove(&n.id),
             status: n,
         })
         .collect())
@@ -301,10 +311,31 @@ pub async fn asset_detail(
     let stats = db::get_asset_stats(&snap.path, &summary.id).await?;
 
     let next_fire = next_fires(&dag).remove(&summary.id);
+    let running = running_node(&state, &dag, &snap.path, &summary.id).await?;
     Ok(Json(json!({
         "asset": barca_core::report::list_node_json(&summary, next_fire.as_ref()),
         "stats": barca_core::report::stats_json(&stats),
+        "running": running,
     })))
+}
+
+/// The run working on node `id` now ([`crate::running`]), read from the snapshot at
+/// `read_path`. The cache state it needs is computed only while some run is in flight.
+async fn running_node(
+    state: &AppState,
+    dag: &barca_core::dag::Dag,
+    read_path: &str,
+    id: &str,
+) -> Result<Option<crate::running::NodeRunning>, ApiError> {
+    let runs = crate::running::in_flight(state, Some(read_path)).await;
+    if runs.is_empty() {
+        return Ok(None);
+    }
+    let mut cfg = state.config.resolved.clone();
+    cfg.db_path = read_path.to_string();
+    let status =
+        barca_core::status::status_from_dag(&cfg, &[], dag, &state.config.python, 0, false).await?;
+    Ok(crate::running::by_node(&runs, &status.nodes, dag).remove(id))
 }
 
 /// `GET /schedule` — list scheduled jobs with next fire time and last run status.

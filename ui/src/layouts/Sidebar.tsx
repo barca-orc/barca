@@ -70,8 +70,13 @@ export function Sidebar() {
             aria-pressed={selected === p.file}
             onClick={() => select(selected === p.file ? null : p.file)}
           >
-            <StatusDot status={severityStatus(p.worst)} size={6} />
+            <StatusDot status={p.running ? 'running' : severityStatus(p.worst)} size={6} />
             <span className="barca-pipe-name">{p.name}</span>
+            {p.running > 0 && (
+              <span className="barca-pipe-running" title={`${p.running} running now`}>
+                {p.running} running
+              </span>
+            )}
             <span className="barca-pipe-count">{p.total}</span>
           </button>
         ))}

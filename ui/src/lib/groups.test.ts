@@ -38,6 +38,7 @@ function state(id: string): NodeState {
     },
     durations: null,
     next_run: null,
+    running: null,
     env: [],
     shape: null,
   }

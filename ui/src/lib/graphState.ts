@@ -1,13 +1,17 @@
 import { match } from 'ts-pattern'
 import { severityOf } from './assetTable'
 import { statusMeta } from './status'
+import { runningGraphState } from './running'
 import type { NodeState, StatusKind } from './types'
 
 export interface GraphState { status: StatusKind; label: string; hint: string }
 export const UNKNOWN_GRAPH_STATE: GraphState = { status: 'skipped', label: 'State unavailable', hint: 'Asset state has not been loaded.' }
 
-/** Resting colors describe cache state; a failed latest attempt takes priority. */
+/** Resting colors describe cache state; a failed latest attempt takes priority. A node a run
+ * is working on pulses (running) or waits (queued) instead. */
 export function graphState(node: NodeState): GraphState {
+  // A run working on the node now (whoever started it) outranks its resting state.
+  if (node.running) return runningGraphState(node.running)
   const state = match(severityOf(node))
     .with('failed', () => ({ status: 'failed' as const, label: 'Last attempt failed' }))
     .with('cached', () => ({ status: 'success' as const, label: 'Cached' }))

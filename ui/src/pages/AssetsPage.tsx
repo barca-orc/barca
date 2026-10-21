@@ -5,6 +5,7 @@ import {
   Chip,
   ChipGroup,
   ConnectionBadge,
+  RunningBadge,
   SearchInput,
   Select,
   Skeleton,
@@ -318,8 +319,12 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
                     </div>
                     <div className="barca-cell-sub">{r.file}</div>
                   </td>
-                  <td title={r.stateHint}>
-                    <StatusBadge status={severityStatus(r.severity)} label={r.stateLabel} size="sm" />
+                  <td title={r.running ? undefined : r.stateHint}>
+                    {r.running ? (
+                      <RunningBadge running={r.running} nowMs={now} />
+                    ) : (
+                      <StatusBadge status={severityStatus(r.severity)} label={r.stateLabel} size="sm" />
+                    )}
                   </td>
                   <td>
                     {r.last ? (

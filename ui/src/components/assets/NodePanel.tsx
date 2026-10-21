@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { GitBranch, X } from 'lucide-react'
-import { Button, IconButton, KeyValue, Section, SidePanel, Skeleton, StatusBadge, Tag } from '@/components'
+import { Button, IconButton, KeyValue, RunningBadge, Section, SidePanel, Skeleton, StatusBadge, Tag } from '@/components'
+import { startedBy } from '@/lib/running'
 import { ArtifactSchema } from './ArtifactSchema'
 import { useAssetSchema } from '@/hooks/useAssetSchema'
 import { useAssetDetail } from '@/hooks/useAssetDetail'
@@ -63,6 +64,12 @@ export function NodePanel({ node, nodes, nowMs, onSelect, onOpenGraph, onClose }
     >
       <div className="barca-node-summary">
         {row && <StatusBadge status={severityStatus(row.severity)} label={row.stateLabel} />}
+        {node.running && (
+          <KeyValue label="now">
+            <RunningBadge running={node.running} nowMs={nowMs} />{' '}
+            <span className="barca-cell-sub">started by {startedBy(node.running.triggered_by)}</span>
+          </KeyValue>
+        )}
         <p className="barca-note">{node.cache.detail}</p>
         {node.partitions && (
           <>
