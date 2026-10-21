@@ -230,8 +230,13 @@ pub fn run(topic: Option<&str>, all: bool, json: bool) -> Result<String, String>
                 body
             }),
             None => {
-                // No fuzzy "did you mean": a guess can read as confirmation. List every topic.
+                // The closest topic, if one is close, then every topic.
                 let mut msg = format!("error: unknown docs topic '{name}'");
+                if let Some(meant) =
+                    barca_core::suggest::suggestion(name, TOPICS.iter().map(|t| t.name))
+                {
+                    msg.push_str(&format!("\n\n{meant}"));
+                }
                 msg.push_str("\n\nValid topics (run `barca docs` for summaries):\n");
                 for t in TOPICS {
                     msg.push_str(&format!("  {}\n", t.name));
@@ -425,10 +430,12 @@ mod tests {
     }
 
     #[test]
-    fn unknown_topic_lists_every_topic_without_guessing() {
+    fn unknown_topic_suggests_the_closest_and_lists_every_topic() {
         let err = run(Some("typs"), false, false).unwrap_err();
         assert!(err.contains("unknown docs topic 'typs'"));
-        assert!(!err.to_lowercase().contains("did you mean"), "{err}");
+        assert!(err.contains("\n\nDid you mean 'types'?\n"), "{err}");
+        let far = run(Some("zzzzzzzz"), false, false).unwrap_err();
+        assert!(!far.to_lowercase().contains("did you mean"), "{far}");
         for t in TOPICS {
             assert!(err.contains(&format!("\n  {}\n", t.name)), "{err}");
         }

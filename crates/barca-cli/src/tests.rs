@@ -232,20 +232,87 @@ fn correct_order_and_files_only_are_not_wrong_order() {
 
 /// barca never offers fuzzy suggestions (`barca docs agents`): a guess can read as
 /// confirmation. clap is built without its `suggestions` feature.
+/// The usage error for `argv` as JSON, by the same path `main` takes.
+fn clap_error_json(argv: &str) -> Value {
+    let argv: Vec<String> = argv.split_whitespace().map(str::to_string).collect();
+    let Err(e) = Cli::try_parse_from(&argv) else {
+        panic!("`{argv:?}` must not parse");
+    };
+    let err = CliError::from_clap(&e, &argv);
+    assert_eq!(err.code(), 2, "a suggestion never changes the exit code");
+    serde_json::from_str(&err.render(true)).unwrap()
+}
+
 #[test]
-fn argument_errors_carry_no_similar_argument_tip() {
-    for argv in [
-        "barca get total p.py --jsn",
-        "barca run t p.py --refesh a",
-        "barca lst p.py",
+fn a_mistyped_flag_or_subcommand_gets_did_you_mean() {
+    for (argv, meant) in [
+        ("barca run t p.py --refesh a", "Did you mean '--refresh'?"),
+        ("barca get total p.py --jsn", "Did you mean '--json'?"),
+        ("barca lst p.py", "Did you mean 'list'?"),
+        // `stats` and `status` tie, one edit each: both, nothing else.
+        ("barca statsu", "Did you mean 'stats' or 'status'?"),
+        ("barca state rest", "Did you mean 'reset'?"),
     ] {
-        let Err(e) = Cli::try_parse_from(argv.split_whitespace()) else {
-            panic!("`{argv}` must not parse");
-        };
-        let text = CliError::from_clap(&e).render(true).to_lowercase();
-        assert!(!text.contains("similar"), "{argv}: {text}");
-        assert!(!text.contains("did you mean"), "{argv}: {text}");
+        let json = clap_error_json(argv);
+        let remediation = json["remediation"].as_str().unwrap();
+        assert!(remediation.starts_with(meant), "{argv}: {json}");
+        assert_eq!(json["kind"], "usage", "{argv}");
+        // clap's `-- --flag` tip is wrong advice for a typo.
+        assert!(!json.to_string().contains("as a value"), "{argv}: {json}");
+        // The human output has it on its own line, after the error line.
+        let argv: Vec<String> = argv.split_whitespace().map(str::to_string).collect();
+        let e = Cli::try_parse_from(&argv).unwrap_err();
+        let human = CliError::from_clap(&e, &argv).render(false);
+        assert!(human.contains(&format!("\n\n{meant}\n")), "{human}");
     }
+}
+
+#[test]
+fn an_unrelated_flag_or_subcommand_gets_no_guess() {
+    for argv in ["barca get total p.py --frobnicate", "barca zzzzzz"] {
+        let json = clap_error_json(argv);
+        assert!(
+            !json.to_string().to_lowercase().contains("did you mean"),
+            "{argv}: {json}"
+        );
+        assert!(!json.to_string().contains("similar"), "{argv}: {json}");
+    }
+}
+
+#[test]
+fn an_unknown_target_suggests_the_closest_node() {
+    let files = vec!["pipeline.py".to_string()];
+    let e = CliError::from_barca(
+        barca_core::BarcaError::AssetNotFound(
+            "amount".into(),
+            "pipeline.py:raw, pipeline.py:amounts, pipeline.py:report".into(),
+        ),
+        &Context {
+            command: "get",
+            files: files.clone(),
+        },
+    );
+    assert_eq!(e.code(), 2);
+    assert_eq!(
+        e.remediation.as_deref(),
+        Some(
+            "Did you mean 'amounts'? Run `barca list pipeline.py` to see available assets and tasks."
+        )
+    );
+    // The `barca list` pointer replaces the remediation and keeps the suggestion.
+    let e = e.with_final_hint(list_hint(&files));
+    assert_eq!(
+        e.remediation.as_deref(),
+        Some(
+            "Did you mean 'amounts'? Run `barca list pipeline.py` to see available assets and tasks."
+        )
+    );
+    let human = e.render(false);
+    assert!(
+        human.starts_with("Asset 'amount' not found. Available: "),
+        "{human}"
+    );
+    assert!(human.ends_with("\n\nDid you mean 'amounts'? Run `barca list pipeline.py` to see available assets and tasks."), "{human}");
 }
 
 #[test]
