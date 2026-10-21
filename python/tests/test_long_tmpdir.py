@@ -79,6 +79,8 @@ def test_a_run_with_a_150_character_tmpdir_succeeds(tmp_path, long_tmpdir, remot
     # The sockets went to the short private directory, and the run removed its own.
     mode = stat.S_IMODE(_socket_dir().stat().st_mode)
     assert mode == 0o700, oct(mode)
-    assert _our_sockets() - before == set()
+    # Other tests running in parallel bind their own sockets there; look for this run's only.
+    run_id = out["run_id"]
+    assert {name for name in _our_sockets() - before if run_id in name} == set()
     if remote:
         assert any(store.rglob("*.json")), "the transfer helper uploaded nothing"
