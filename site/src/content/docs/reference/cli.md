@@ -27,8 +27,6 @@ barca run <task> [files]      # tasks: the task always runs
   error: the target comes before the files
 
     barca run notify pipeline.py
-
-  Run `barca list pipeline.py` to see available assets and tasks.
   ```
 
 `barca list`, `barca status`, `--dry-run` and `barca sql` show what barca sees without running
@@ -178,10 +176,10 @@ returns the last asset's artifact. Tasks are skipped, and stderr names them and 
 command. A sensor nothing depends on still runs. A file with only tasks gets nothing: exit 0,
 `"steps": []`, and a stderr note pointing at `barca run`.
 
-Every `get`/`run` usage error (wrong order, unknown target, `get` on a task or `run` on an
-asset, an unknown `--refresh` name) exits 2 and ends with
-``Run `barca list <files>` to see available assets and tasks.`` There is no "did you mean"
-matching.
+Every `get`/`run` usage error exits 2. An unknown or ambiguous target (and `run` without one)
+ends with ``Run `barca list <files>` to see available assets and tasks.``; the others state
+their own fix: the corrected command for the wrong order, `barca run` for a task given to
+`get`, the valid names for an unknown `--refresh` name. There is no "did you mean" matching.
 
 | Flag | Meaning |
 |---|---|

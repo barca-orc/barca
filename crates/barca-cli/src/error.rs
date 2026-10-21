@@ -13,7 +13,7 @@
 //! The schema is documented in `barca docs agents` (crates/barca-cli/docs/agents.md).
 
 pub use barca_core::envelope::{
-    Context, ErrorEnvelope as CliError, ErrorKind, list_hint, shell_quote,
+    Context, ErrorEnvelope as CliError, ErrorKind, list_hint, names_a_target, shell_quote,
 };
 
 pub trait CliErrorExt {

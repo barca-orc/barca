@@ -69,6 +69,7 @@ impl ApiError {
 fn engine(err: BarcaError, ctx: &Context) -> (StatusCode, ErrorEnvelope) {
     let status = match &err {
         BarcaError::AssetNotFound(..) => StatusCode::NOT_FOUND,
+        BarcaError::AmbiguousTarget(_) => StatusCode::CONFLICT,
         e => match ErrorKind::of(e) {
             ErrorKind::Usage => StatusCode::BAD_REQUEST,
             ErrorKind::Cancelled => StatusCode::CONFLICT,

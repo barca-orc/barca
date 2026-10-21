@@ -527,14 +527,9 @@ fn get_shape(mode: ResultFormat) -> report::GetShape {
 }
 
 /// The envelope a local `barca get` / `barca run` prints for `error`.
+/// Only an unknown or ambiguous target ends with the `barca list` hint (#492).
 pub fn envelope_of(error: BarcaError, ctx: &Context) -> ErrorEnvelope {
-    let usage = matches!(error, BarcaError::Usage(_) | BarcaError::AssetNotFound(..));
-    let envelope = ErrorEnvelope::from_barca(error, ctx);
-    if usage {
-        envelope.with_final_hint(crate::envelope::list_hint(&ctx.files))
-    } else {
-        envelope
-    }
+    ErrorEnvelope::from_barca(error, ctx)
 }
 
 /// `body` with `"envelope": ...` added as its last key.
@@ -777,11 +772,14 @@ mod tests {
         assert_eq!(usage.exit_code(), 2);
         let value: Value = serde_json::from_str(usage.text()).unwrap();
         assert_eq!(value["envelope"]["kind"], "usage");
-        assert!(
-            value["envelope"]["remediation"]
-                .as_str()
-                .unwrap()
-                .contains("barca list")
+        // Only a target error points at `barca list` (#492).
+        assert_eq!(value["envelope"]["remediation"], "See `barca get --help`.");
+        let unknown =
+            Outcome::of_error(BarcaError::AssetNotFound("x".into(), "a.py:y".into()), &ctx);
+        let value: Value = serde_json::from_str(unknown.text()).unwrap();
+        assert_eq!(
+            value["envelope"]["remediation"],
+            "Run `barca list` to see available assets and tasks."
         );
         let (out, _) = usage
             .render(RunCommand::Get, &[], ResultFormat::Json, false, None)
