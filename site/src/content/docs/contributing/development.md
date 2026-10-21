@@ -56,12 +56,11 @@ barca/
 ├── tests/integration/        # shell tests that run the installed CLI
 ├── examples/                 # example projects
 ├── benchmarks/               # benchmarks against other orchestrators
-├── scripts/                  # check-version-sync.sh, update-cli-snapshots.sh
+├── scripts/                  # check-version-sync.sh, update-cli-snapshots.sh, changelog-section.py
 ├── site/                     # this documentation site (Astro Starlight)
 ├── SKILL.md                  # the agent skill, also `barca docs skill`
 ├── pyproject.toml            # maturin build configuration and extras
-├── prek.toml                 # pre-commit hooks
-└── cliff.toml                # git-cliff configuration for release notes
+└── prek.toml                 # pre-commit hooks
 ```
 
 [Architecture](/architecture/#layout) lists the modules inside each crate.

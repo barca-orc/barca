@@ -181,20 +181,12 @@ CLI contract/snapshot ownership remains in place.
 
 Use [conventional commits](https://www.conventionalcommits.org/): `type: description` or `type(scope): description`.
 
-git-cliff groups commits into changelog sections by type:
+Types: `feat`, `fix`, `refactor`, `polish`, `doc`, `test`, `perf`, `remove`, `chore`.
 
-| Type       | Changelog group |
-|------------|-----------------|
-| `feat`     | Features        |
-| `fix`      | Bug Fixes       |
-| `refactor` | Refactor        |
-| `polish`   | Polish          |
-| `doc`      | Documentation   |
-| `test`     | Testing         |
-| `perf`     | Performance     |
-| `remove`   | Removed         |
-
-Non-conventional commits appear under "Changes". Co-Authored-By trailers are stripped automatically.
+Release notes are not generated from commits: `CHANGELOG.md` is their source. A change adds one
+bullet under `## Pending` (`### Breaking`, `### Features`, `### Bug Fixes`, `### Performance`,
+`### Removed` or `### Documentation`), and the release workflow publishes the version's
+`## <version> (<date>)` section as the GitHub release body.
 
 ## Versioning
 
