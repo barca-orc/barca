@@ -124,13 +124,18 @@ pub(crate) async fn record(db_path: &str, uploads: &[PendingUpload]) -> Result<(
         .await
         .map_err(failed("creating the table"))?;
     let host = db::local_host();
-    for u in uploads {
-        conn.execute(
-            "INSERT INTO pending_uploads (store_path, node_id, run_hash, run_id, local_path, host, error, attempts) \
+    let mut insert = db::prepare(
+        &conn,
+        "INSERT INTO pending_uploads (store_path, node_id, run_hash, run_id, local_path, host, error, attempts) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1) \
              ON CONFLICT(store_path) DO UPDATE SET node_id = ?2, run_hash = ?3, run_id = ?4, \
              local_path = ?5, host = ?6, error = ?7, attempts = attempts + 1, updated_at = datetime('now')",
-            [
+    )
+    .await
+    .map_err(failed("recording"))?;
+    for u in uploads {
+        insert
+            .execute([
                 Value::Text(u.store_path.clone()),
                 Value::Text(u.node_id.clone()),
                 u.run_hash.clone().map_or(Value::Null, Value::Text),
@@ -138,10 +143,9 @@ pub(crate) async fn record(db_path: &str, uploads: &[PendingUpload]) -> Result<(
                 Value::Text(u.local_path.clone()),
                 Value::Text(host.clone()),
                 u.error.clone().map_or(Value::Null, Value::Text),
-            ],
-        )
-        .await
-        .map_err(failed("recording"))?;
+            ])
+            .await
+            .map_err(failed("recording"))?;
     }
     Ok(())
 }

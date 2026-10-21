@@ -35,6 +35,31 @@ use turso::Builder;
 /// a persistent connection.
 static DB_LOCK: Mutex<()> = Mutex::const_new(());
 
+/// Prepare `sql` once for a loop that runs it per row. Turso parses and plans the SQL of every
+/// `Connection::execute` again, which dominated recording thousands of rows (#460); a prepared
+/// statement is parsed once and rebound for each row. Every per-row write statement goes
+/// through here, so tests can count preparations ([`prepares`]).
+pub(crate) async fn prepare(
+    conn: &turso::Connection,
+    sql: &str,
+) -> Result<turso::Statement, turso::Error> {
+    #[cfg(test)]
+    PREPARES.with(|n| n.set(n.get() + 1));
+    conn.prepare(sql).await
+}
+
+#[cfg(test)]
+thread_local! {
+    static PREPARES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many statements [`prepare`] has prepared on this thread. Tests run on a current-thread
+/// runtime, so this counts only their own writes.
+#[cfg(test)]
+pub(crate) fn prepares() -> u64 {
+    PREPARES.with(std::cell::Cell::get)
+}
+
 /// Acquire the process-wide DB lock. Hold the returned guard only across a
 /// single database operation; never across Python execution.
 pub async fn db_guard() -> MutexGuard<'static, ()> {
@@ -908,19 +933,24 @@ pub async fn insert_logs(
         .await
         .map_err(|e| BarcaError::Db(format!("failed to begin log write: {e}")))?;
     let result = async {
+        let mut insert = prepare(
+            &conn,
+            "INSERT INTO logs (run_id, node_id, seq, line) VALUES (?1, ?2, ?3, ?4)",
+        )
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to record stdout: {e}")))?;
         for (seq, (node_id, line)) in lines.iter().enumerate() {
-            conn.execute(
-                "INSERT INTO logs (run_id, node_id, seq, line) VALUES (?1, ?2, ?3, ?4)",
-                (
+            insert
+                .execute((
                     run_id.to_string(),
                     node_id.clone(),
                     seq as i64,
                     line.clone(),
-                ),
-            )
-            .await
-            .map_err(|e| BarcaError::Db(format!("failed to record stdout: {e}")))?;
+                ))
+                .await
+                .map_err(|e| BarcaError::Db(format!("failed to record stdout: {e}")))?;
         }
+        drop(insert);
         conn.execute("COMMIT", ())
             .await
             .map_err(|e| BarcaError::Db(format!("failed to commit recorded stdout: {e}")))?;
@@ -1580,18 +1610,22 @@ pub(crate) async fn touch_read(db_path: &str, paths: &[String]) {
         return;
     }
     let mut ok = true;
-    for path in paths {
-        ok &= conn
-            .execute(
-                "UPDATE materializations SET last_read_at = datetime('now'), evicted_at = NULL \
-                 WHERE artifact_path = ?1 AND status = 'success'",
-                [path.as_str()],
-            )
-            .await
-            .is_ok();
-        if !ok {
-            break;
+    match prepare(
+        &conn,
+        "UPDATE materializations SET last_read_at = datetime('now'), evicted_at = NULL \
+         WHERE artifact_path = ?1 AND status = 'success'",
+    )
+    .await
+    {
+        Ok(mut touch) => {
+            for path in paths {
+                ok &= touch.execute([path.as_str()]).await.is_ok();
+                if !ok {
+                    break;
+                }
+            }
         }
+        Err(_) => ok = false,
     }
     let end = if ok { "COMMIT" } else { "ROLLBACK" };
     let _ = conn.execute(end, ()).await;

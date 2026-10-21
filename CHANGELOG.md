@@ -148,6 +148,17 @@ and these tags are available on the same releases page.
   0.18/0.19 upgrade notes moved to this file; its implementation guarantees to
   `specs/cache-decisions.md` (#500).
 
+## Pending
+
+### Performance
+
+- Recording a run in the metadata database prepares each per-row statement once instead of
+  re-parsing its SQL for every row (#460): the step rows the recorder writes during the run, the
+  terminal ledger's success and failure rows, the read stamps (`last_read_at`/`evicted_at`),
+  pending uploads, captured logs and the cost estimates, which now commit in one transaction
+  instead of one per partition key. A cold three-level partition chain at 20,000 keys goes from
+  12.0 s to 7.1 s, and the warm run from 3.3 s to 2.5 s. The rows written are unchanged.
+
 ## 0.26.1 (2026-10-20)
 
 ### Removed

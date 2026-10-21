@@ -107,29 +107,40 @@ impl StepRow {
             output_hash: str_of("content_hash").map(str::to_string),
         }
     }
+}
 
-    async fn insert(&self, conn: &turso::Connection, run_id: &str) -> Result<u64, turso::Error> {
+/// Appends successful steps' rows, unless the run already has a row for the node. Prepared once
+/// per transaction and rebound for each row (#460).
+struct StepInsert(turso::Statement);
+
+impl StepInsert {
+    // Turso otherwise intersects the node and run indexes, scanning this run
+    // for each partition. Bound deduplication to the node's own history.
+    const SQL: &'static str = "INSERT INTO materializations (node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, elapsed_seconds, status, attempts, sinks_json, cpu_seconds, max_rss_bytes, output_hash, bytes_changed, run_id) SELECT ?1, ?2, ?3, ?4, ?5, NULLIF(?6, ''), 'success', ?7, NULLIF(?8, ''), NULLIF(?9, ''), NULLIF(?10, ''), NULLIF(?11, ''), COALESCE((SELECT output_hash FROM materializations INDEXED BY idx_mat_node_run WHERE node_id = ?1 AND run_hash = ?2 AND status = 'success' AND output_hash IS NOT NULL ORDER BY id DESC LIMIT 1) != NULLIF(?11, ''), 0), ?12 WHERE NOT EXISTS (SELECT 1 FROM materializations INDEXED BY idx_mat_node_run WHERE node_id = ?1 AND run_id = ?12)";
+
+    async fn prepare(conn: &turso::Connection) -> Result<Self, turso::Error> {
+        db::prepare(conn, Self::SQL).await.map(Self)
+    }
+
+    /// Rows written: 1, or 0 when the run already recorded the node.
+    async fn run(&mut self, row: &StepRow, run_id: &str) -> Result<u64, turso::Error> {
         let opt = |v: Option<String>| v.unwrap_or_default();
-        // Turso otherwise intersects the node and run indexes, scanning this run
-        // for each partition. Bound deduplication to the node's own history.
-        conn.execute(
-            "INSERT INTO materializations (node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, elapsed_seconds, status, attempts, sinks_json, cpu_seconds, max_rss_bytes, output_hash, bytes_changed, run_id) SELECT ?1, ?2, ?3, ?4, ?5, NULLIF(?6, ''), 'success', ?7, NULLIF(?8, ''), NULLIF(?9, ''), NULLIF(?10, ''), NULLIF(?11, ''), COALESCE((SELECT output_hash FROM materializations INDEXED BY idx_mat_node_run WHERE node_id = ?1 AND run_hash = ?2 AND status = 'success' AND output_hash IS NOT NULL ORDER BY id DESC LIMIT 1) != NULLIF(?11, ''), 0), ?12 WHERE NOT EXISTS (SELECT 1 FROM materializations INDEXED BY idx_mat_node_run WHERE node_id = ?1 AND run_id = ?12)",
-            [
-                self.node_id.clone(),
-                self.run_hash.clone(),
-                self.path.clone(),
-                self.format.clone(),
-                self.size_bytes.to_string(),
-                opt(self.elapsed_seconds.map(|e| e.to_string())),
-                self.attempts.to_string(),
-                opt(self.sinks_json.clone()),
-                opt(self.cpu_seconds.map(|c| c.to_string())),
-                opt(self.max_rss_bytes.map(|r| r.to_string())),
-                opt(self.output_hash.clone()),
+        self.0
+            .execute([
+                row.node_id.clone(),
+                row.run_hash.clone(),
+                row.path.clone(),
+                row.format.clone(),
+                row.size_bytes.to_string(),
+                opt(row.elapsed_seconds.map(|e| e.to_string())),
+                row.attempts.to_string(),
+                opt(row.sinks_json.clone()),
+                opt(row.cpu_seconds.map(|c| c.to_string())),
+                opt(row.max_rss_bytes.map(|r| r.to_string())),
+                opt(row.output_hash.clone()),
                 run_id.to_string(),
-            ],
-        )
-        .await
+            ])
+            .await
     }
 }
 
@@ -347,12 +358,13 @@ async fn record_steps_with_until(
         .await
         .map_err(|e| BarcaError::Db(format!("failed to begin progress batch: {e}")))?;
     let result = async {
+        let failed = |e| BarcaError::Db(format!("failed to record progress step: {e}"));
         let mut written = 0u64;
+        let mut insert = StepInsert::prepare(&conn).await.map_err(failed)?;
         for row in rows {
-            written += row.insert(&conn, run_id).await.map_err(|e| {
-                BarcaError::Db(format!("failed to record progress step: {e}"))
-            })?;
+            written += insert.run(row, run_id).await.map_err(failed)?;
         }
+        drop(insert);
         let updated = conn.execute(
             "UPDATE runs SET steps_executed = steps_executed + ?1 WHERE run_id = ?2 AND status = 'running'",
             [written.to_string(), run_id.to_string()],
@@ -646,26 +658,37 @@ pub(crate) async fn persist_run(db_path: &str, l: &RunLedger<'_>) -> Result<(), 
 
     // Persist the measured-cost EWMA so the next run starts pre-warmed and
     // skips the cold-start probe entirely. (Inline — this fn already holds
-    // the process-wide DB guard.)
-    for (node_id, est) in l.cost_snapshot {
-        let base = crate::StepId::parse(node_id).base_id().to_string();
-        conn.execute(
+    // the process-wide DB guard.) Best effort, in one transaction of its own after the
+    // ledger's: one commit instead of one per partition key (#460).
+    if !l.cost_snapshot.is_empty() && conn.execute("BEGIN", ()).await.is_ok() {
+        if let Ok(mut upsert) = db::prepare(
+            &conn,
             "INSERT INTO cost_estimates (node_id, base_id, estimate_seconds, cpu_seconds, max_rss_bytes, samples, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))
              ON CONFLICT(node_id) DO UPDATE SET
                  estimate_seconds = ?3, cpu_seconds = ?4, max_rss_bytes = ?5,
                  samples = ?6, updated_at = datetime('now')",
-            [
-                node_id.clone(),
-                base,
-                est.estimate_seconds.to_string(),
-                est.cpu_seconds.to_string(),
-                est.max_rss_bytes.to_string(),
-                est.samples.to_string(),
-            ],
         )
         .await
-        .ok();
+        {
+            for (node_id, est) in l.cost_snapshot {
+                let base = crate::StepId::parse(node_id).base_id().to_string();
+                upsert
+                    .execute([
+                        node_id.clone(),
+                        base,
+                        est.estimate_seconds.to_string(),
+                        est.cpu_seconds.to_string(),
+                        est.max_rss_bytes.to_string(),
+                        est.samples.to_string(),
+                    ])
+                    .await
+                    .ok();
+            }
+        }
+        if conn.execute("COMMIT", ()).await.is_err() {
+            conn.execute("ROLLBACK", ()).await.ok();
+        }
     }
 
     Ok(())
@@ -713,6 +736,7 @@ async fn write_terminal_ledger(
     // What the [`StepRecorder`] wrote during the run.
     let already = steps_of_run(conn, l.run_id).await?;
 
+    let mut insert = None;
     for (node_id, oref) in l.all_outputs {
         if l.cached_node_ids.contains(node_id) || already.contains(node_id) {
             continue;
@@ -741,36 +765,52 @@ async fn write_terminal_ledger(
             .get(node_id)
             .or(oref.content_hash.as_ref())
             .cloned();
-        row.insert(conn, l.run_id)
-            .await
-            .map_err(|e| BarcaError::Db(format!("failed to record terminal step: {e}")))?;
+        let failed = |e| BarcaError::Db(format!("failed to record terminal step: {e}"));
+        let insert = match &mut insert {
+            Some(insert) => insert,
+            None => insert.insert(StepInsert::prepare(conn).await.map_err(failed)?),
+        };
+        insert.run(&row, l.run_id).await.map_err(failed)?;
     }
+    drop(insert);
 
     // Persist permanently-failed steps as `status='failed'` rows (artifact
     // columns NULL). Failed rows are never served as cache hits.
+    let mut insert_failed = None;
     for failure in l.all_failures {
         let node_id = &failure.node_id;
         if already.contains(node_id) {
             continue;
         }
         let run_h = l.run_hashes.get(node_id).cloned().unwrap_or_default();
+        let failed = |e| BarcaError::Db(format!("failed to record failed step: {e}"));
+        let insert = match &mut insert_failed {
+            Some(insert) => insert,
+            None => insert_failed.insert(
+                db::prepare(
+                    conn,
+                    "INSERT INTO materializations (node_id, run_hash, status, error_type, error_message, error_traceback, attempts, run_id) VALUES (?1, ?2, 'failed', ?3, ?4, ?5, ?6, ?7)",
+                )
+                .await
+                .map_err(failed)?,
+            ),
+        };
         // Each failure carries its own attempt count: dispatches for a worker
         // failure, transfer attempts for an upload failure.
-        conn.execute(
-                "INSERT INTO materializations (node_id, run_hash, status, error_type, error_message, error_traceback, attempts, run_id) VALUES (?1, ?2, 'failed', ?3, ?4, ?5, ?6, ?7)",
-                [
-                    node_id.clone(),
-                    run_h,
-                    failure.error.error_type.clone(),
-                    failure.error.message.clone(),
-                    failure.error.traceback.clone(),
-                    failure.error.attempts.to_string(),
-                    l.run_id.to_string(),
-                ],
-            )
+        insert
+            .execute([
+                node_id.clone(),
+                run_h,
+                failure.error.error_type.clone(),
+                failure.error.message.clone(),
+                failure.error.traceback.clone(),
+                failure.error.attempts.to_string(),
+                l.run_id.to_string(),
+            ])
             .await
-            .map_err(|e| BarcaError::Db(format!("failed to record failed step: {e}")))?;
+            .map_err(failed)?;
     }
+    drop(insert_failed);
     let updated = conn.execute(
             "UPDATE runs SET status = ?1, steps_executed = ?2, steps_cached = ?3, elapsed_seconds = ?4, finished_at = datetime('now'), job = NULLIF(?6, '') WHERE run_id = ?5",
             [
@@ -1295,6 +1335,104 @@ sys.exit(_state.main())
         assert_eq!(run_record(&cfg.db_path, "r1").await.steps_executed, 1);
     }
 
+    async fn count(db_path: &str, sql: &str) -> i64 {
+        let _g = db::db_guard().await;
+        let (_db, conn) = db::open_conn(db_path).await.unwrap();
+        let mut rows = conn.query(sql, ()).await.unwrap();
+        rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap()
+    }
+
+    /// Statements prepared by recording `keys` partitions of `part` through the recorder, the
+    /// terminal ledger (`keys` more outputs and `keys` failures, with a cost snapshot per key),
+    /// and the read stamps of every recorded path.
+    async fn prepares_to_record(keys: usize) -> (u64, u64, u64) {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = fresh_db(&dir, "m.db").await;
+        let mut fx = Fixture::new();
+        let mut recorded = Vec::new();
+        for k in 0..keys {
+            for (step, node) in [
+                ("p", format!("f.py:p[k={k}]")),
+                ("q", format!("f.py:q[k={k}]")),
+            ] {
+                fx.run_hashes
+                    .insert(node.clone(), format!("hash-{step}{k}"));
+                fx.outputs.insert(node.clone(), oref(&node));
+            }
+            let failed = format!("f.py:r[k={k}]");
+            fx.run_hashes.insert(failed.clone(), format!("hash-r{k}"));
+            let mut failure = fx.failures[0].clone();
+            failure.node_id = failed;
+            fx.failures.push(failure);
+            recorded.push(fx.row(&format!("f.py:p[k={k}]")));
+        }
+        let estimate = crate::cost::NodeEstimate {
+            estimate_seconds: 0.1,
+            cpu_seconds: 0.1,
+            max_rss_bytes: 1,
+            samples: 1,
+        };
+        let snapshot: Vec<_> = (0..keys)
+            .map(|k| (format!("f.py:q[k={k}]"), estimate))
+            .collect();
+        db::create_run(&db_path, "r1", "get", "[]", None, Some(3 * keys + 5))
+            .await
+            .unwrap();
+
+        let before = db::prepares();
+        assert_eq!(
+            record_steps(&db_path, "r1", &recorded).await.unwrap(),
+            keys as u64
+        );
+        let recorder = db::prepares() - before;
+
+        let before = db::prepares();
+        let mut ledger = fx.ledger("r1");
+        ledger.cost_snapshot = &snapshot;
+        persist_run(&db_path, &ledger).await.unwrap();
+        let terminal = db::prepares() - before;
+
+        let paths: Vec<String> = fx.outputs.values().map(|o| o.path.clone()).collect();
+        let before = db::prepares();
+        db::touch_read(&db_path, &paths).await;
+        let touched = db::prepares() - before;
+
+        // Every row landed: the cached node has none, `bad` and each `r` key a failed one.
+        let success = count(
+            &db_path,
+            "SELECT COUNT(*) FROM materializations WHERE status = 'success'",
+        )
+        .await;
+        assert_eq!(success, (EXECUTED.len() + 2 * keys) as i64);
+        let failed = count(
+            &db_path,
+            "SELECT COUNT(*) FROM materializations WHERE status = 'failed'",
+        )
+        .await;
+        assert_eq!(failed, (1 + keys) as i64);
+        let estimates = count(&db_path, "SELECT COUNT(*) FROM cost_estimates").await;
+        assert_eq!(estimates, keys as i64);
+        let read = count(
+            &db_path,
+            "SELECT COUNT(*) FROM materializations WHERE last_read_at IS NOT NULL",
+        )
+        .await;
+        assert_eq!(read, success);
+        (recorder, terminal, touched)
+    }
+
+    /// Turso parses the SQL of every `execute` again; at 20k keys that was most of the run's
+    /// metadata time (#460). Each row-writing statement is prepared once per write, however
+    /// many rows it writes: a regression to per-row `execute` (or per-row prepare) changes
+    /// these counts without a wall-clock threshold.
+    #[tokio::test]
+    async fn recording_a_run_prepares_each_statement_once_whatever_the_key_count() {
+        // Recorder: the success insert. Ledger: success insert, failure insert and the cost
+        // upsert. Read stamps: the update.
+        assert_eq!(prepares_to_record(2).await, (1, 3, 1));
+        assert_eq!(prepares_to_record(300).await, (1, 3, 1));
+    }
+
     #[tokio::test]
     async fn progress_batch_replay_keeps_one_row_and_one_count_per_node() {
         let dir = tempfile::tempdir().unwrap();
@@ -1431,8 +1569,10 @@ sys.exit(_state.main())
             )
             .await
             .unwrap();
-            fx.row("f.py:part[k=1]")
-                .insert(&conn, "blocker")
+            StepInsert::prepare(&conn)
+                .await
+                .unwrap()
+                .run(&fx.row("f.py:part[k=1]"), "blocker")
                 .await
                 .unwrap();
         }
