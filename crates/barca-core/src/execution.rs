@@ -399,6 +399,11 @@ async fn execute_started(
     let mut read: Vec<String> = session.state.read_paths.iter().cloned().collect();
     read.sort();
     db::touch_read(&request.cfg.db_path, &read).await;
+    trace_point!(
+        session.started.trace,
+        "touch_read_done ({} paths)",
+        read.len()
+    );
     let elapsed = record_and_publish(&mut session).await?;
     let mut executed = return_outputs(&mut session, elapsed).await?;
     let own = cache_check_inputs(&session, &executed);
