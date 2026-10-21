@@ -66,7 +66,7 @@ def _free_port() -> int:
 def _rows(root: Path) -> dict[str, int]:
     """Successful materializations per node; empty while the database is not there yet."""
     try:
-        db = sqlite3.connect(root / ".barca" / "metadata.db")
+        db = sqlite3.connect(f"file:{root / '.barca' / 'metadata.db'}?mode=ro", uri=True)
         try:
             return {
                 node.rsplit(":", 1)[1]: count
@@ -195,7 +195,7 @@ def _running(root: Path) -> list[tuple[str, str]]:
     """The `running` rows of the project's history: (run_id, job). The connection is closed
     before returning: barca refuses a database another program holds open."""
     try:
-        db = sqlite3.connect(root / ".barca" / "metadata.db")
+        db = sqlite3.connect(f"file:{root / '.barca' / 'metadata.db'}?mode=ro", uri=True)
         try:
             return list(db.execute("SELECT run_id, job FROM runs WHERE status = 'running'"))
         finally:
