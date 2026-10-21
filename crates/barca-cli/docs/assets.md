@@ -82,6 +82,12 @@ hash: changing one runs the asset again. The other options, the partition keys a
 formatting of the decorator are not: editing them re-runs nothing. `barca docs cache` ("Which
 decorator arguments count") has the full list and the reason for each.
 
+A step that raises an exception fails without stopping its worker: the same Python process
+runs the next step, or the retry, so module-level state carries over from a failed attempt. A
+worker is replaced by a fresh one only when the step called `sys.exit()`, raised `MemoryError`,
+was still running at its `timeout_seconds`, failed while its module was imported, or crashed
+the interpreter.
+
 These are the only options: any other is an error ("Accepted arguments" below).
 
 ## Accepted arguments
